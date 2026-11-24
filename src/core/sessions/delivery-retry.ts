@@ -23,6 +23,10 @@
  * An archived session's rows are left alone, as a reconnect leaves them, and so are a completed
  * task's: a send would start its session again on finished work.
  *
+ * A row parked because its session's folder was gone is not tried on this clock's own rule (its
+ * refusal repeats until the folder is back): when one is due, the same lap looks at the folder and
+ * puts it back in line once the folder is there, however it came back (folder-wait.ts).
+ *
  * A row a failure left pending with nothing to send it (a transient error that set no timer of its
  * own, claude-code-session.ts processNext) is asked for again the same way: a session whose oldest
  * pending row waited STUCK_PENDING_MS with no turn running gets a send, on the same growing clock
@@ -32,6 +36,7 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { AFTER_TURN_REASON, COLD_HOLD_REASON, MOVE_HELD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from '../relay-fates.js';
 import { leaveParked } from '../queue-held-spans.js';
+import { _resetFolderLooksForTesting, folderIsBackFor, waitsForFolder } from './folder-wait.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage } from '../session-queue-store.js';
 
 /** The wait before each automatic try, by how many came before it; then RETRY_EVERY_MS for good. */
@@ -140,14 +145,22 @@ async function retrySession(sessionId: string, rows: QueuedMessage[], now: numbe
   let fence: string | null;
   try { fence = (await sessionStops.fence(sessionId)) ?? null; } catch { return null; }
   const codeOf = await reasonCode();
-  const due = new Set(rows.filter((r) => retriesBySelf(r, fence, codeOf) && nextRetryAt(r) <= now).map((r) => r.id));
+  // A row parked on a gone folder is due by the same clock, once its folder is there again however it
+  // came back (folder-wait.ts); the clock's growing wait keeps a refusal the folder check contradicts
+  // from looping.
+  const onFolder = (r: QueuedMessage) => waitsForFolder(r, fence, now);
+  const folderDue = rows.filter((r) => onFolder(r) && nextRetryAt(r) <= now);
+  const folderBack = folderDue.length > 0 && !await leftAlone(sessionId) && await folderIsBackFor(sessionId, now, { delayMs: retryDelayMs });
+  const goes = (r: QueuedMessage) => retriesBySelf(r, fence, codeOf) || (folderBack && onFolder(r));
+  const due = new Set(rows.filter((r) => goes(r) && nextRetryAt(r) <= now).map((r) => r.id));
   if (due.size === 0) return [];
   if (await leftAlone(sessionId)) return [];
+  if (folderBack) await clearFolderGoneMark(sessionId);
   const { randomUUID } = await import('node:crypto');
   const ids = await mutateStore((s) => {
     const done: string[] = [];
     for (const msg of s.queues[sessionId] ?? []) {
-      if (!due.has(msg.id) || !retriesBySelf(msg, fence, codeOf)) continue;
+      if (!due.has(msg.id) || !goes(msg)) continue;
       const why = msg.parkedReason;
       msg.status = 'pending';
       delete msg.unansweredResent;
@@ -247,9 +260,16 @@ export function startDeliveryRetry(o: { ownOnly?: boolean; keptFires?: boolean }
   if (fires) sweepKeptFires();
 }
 
+/** The gone-folder mark of a session whose folder is back (its panel's banner goes). */
+async function clearFolderGoneMark(sessionId: string): Promise<void> {
+  const { clearFolderGone } = await import('./folder-gone.js');
+  await clearFolderGone(sessionId).catch(() => {});
+}
+
 /** Test seam. */
 export function stopDeliveryRetry(): void {
   if (sweep) clearInterval(sweep);
+  _resetFolderLooksForTesting();
   sweep = null;
   ownOnly = false;
   kicked.clear();

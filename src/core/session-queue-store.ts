@@ -55,6 +55,12 @@ export interface QueuedMessage {
   /** The delivery verdict's code a park came with (providers/delivery-failure.ts), e.g. cwd_missing. Goes with the park. */
   parkedCode?: string;
   /**
+   * Parked because the session's folder was gone, by a Walnut that sends such a row by itself once
+   * the folder is back (sessions/folder-wait.ts). Set and cleared with the park (queue-held-spans.ts).
+   * Absent on rows an older Walnut parked: those wait for a person.
+   */
+  folderWait?: true;
+  /**
    * Process-monotonic enqueue counter: the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
    * existed don't have it. See compareEnqueueOrder.

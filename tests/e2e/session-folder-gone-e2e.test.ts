@@ -320,3 +320,56 @@ describe('the start\'s look takes back only what the gap stopped', () => {
   }, 90_000)
 })
 
+
+describe('the folder comes back by a way no remake knows of', () => {
+  // 2026-11-24: rows parked on a gone folder stayed parked after the folder was back, while the
+  // session itself ran in it again (src/core/sessions/folder-wait.ts).
+  it('the next message takes the one that waited with it, ahead of it, once; a row an older Walnut parked waits for a person', async () => {
+    const cwd = path.join(scratch, 'handmade', 'orchard')
+    await fs.mkdir(cwd, { recursive: true })
+    const { sid } = await startIn('Orchard planner', cwd)
+    await writeTranscript(sid, cwd)
+    await fs.rm(cwd, { recursive: true, force: true })
+
+    // A row an older Walnut parked on the folder: the same words, no mark.
+    const { enqueueMessage, parkMessages } = await import('../../src/core/session-message-queue.js')
+    const { mutateStore } = await import('../../src/core/session-queue-store.js')
+    const older = await enqueueMessage(sid, 'An older park', { sentBy: 'person' })
+    await parkMessages([older], { reason: `Working directory no longer exists: ${cwd}`, code: 'cwd_missing' })
+    await mutateStore((s) => { delete s.queues[sid]!.find((m) => m.id === older.id)!.folderWait })
+
+    await sendMessageToSession(sid, 'Sent while the folder was gone', { source: 'user' })
+    await vi.waitFor(async () => {
+      resetCache()
+      expect((await getQueue(sid)).map((m) => `${m.message.includes('An older park') ? 'older' : 'waited'}:${m.status}:${m.folderWait === true}`))
+        .toEqual(['older:parked:false', 'waited:parked:true'])
+    }, { timeout: 15_000 })
+
+    // Made again by hand: no remake, no button, no host restart.
+    await fs.mkdir(cwd, { recursive: true })
+    await writeTranscript(sid, cwd)
+    const since = mark()
+    await sendMessageToSession(sid, 'Sent after the folder came back', { source: 'user' })
+    await vi.waitFor(() => {
+      const lines = linesTo(sid, since).map((l) => l.message)
+      const waited = lines.findIndex((m) => m.includes('Sent while the folder was gone'))
+      const after = lines.findIndex((m) => m.includes('Sent after the folder came back'))
+      expect(waited).toBeGreaterThanOrEqual(0)
+      expect(after).toBeGreaterThanOrEqual(0)
+      // Ahead of the new one: in the same line before it, or in an earlier line.
+      if (waited === after) expect(lines[waited]!.indexOf('Sent while the folder was gone')).toBeLessThan(lines[waited]!.indexOf('Sent after the folder came back'))
+      else expect(waited).toBeLessThan(after)
+    }, { timeout: 20_000 })
+    await vi.waitFor(async () => {
+      resetCache()
+      expect((await getQueue(sid)).map((m) => `${m.id}:${m.status}`)).toEqual([`${older.id}:parked`])
+    }, { timeout: 15_000 })
+    // Each went as one line (a resend of it carries the same uuid, which the CLI takes once); the
+    // older park never went.
+    const sends = daemon.getCommandHistoryFor('send').slice(since.send).filter((c) => c.payload.sid === sid)
+    const uuidsOf = (text: string) => new Set(sends.filter((c) => String(c.payload.message).includes(text)).map((c) => c.payload.uuid))
+    expect(uuidsOf('Sent while the folder was gone').size).toBe(1)
+    expect(uuidsOf('Sent after the folder came back').size).toBe(1)
+    expect(linesTo(sid, since).some((l) => l.message.includes('An older park'))).toBe(false)
+  }, 90_000)
+})

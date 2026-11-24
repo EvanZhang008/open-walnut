@@ -6,7 +6,7 @@
  *    hour) with no limit on tries, and the runner is asked to send it;
  *  - never a park a person or a hold decided (a Stop, a cold hold, a move, a running turn, start
  *    recovery), nor a row a Stop came after, nor one Claude Code read and left unanswered, nor one
- *    only a person can fix (a deleted folder, too large), nor an archived session's;
+ *    only a person can fix (a folder still gone, too large), nor an archived session's;
  *  - pending rows nothing sends are asked for again;
  *  - every park reason in src/ is classified: a new one is tried again unless it is listed.
  *
@@ -122,7 +122,9 @@ describe('never a park a person or a hold decided, nor one only a person can fix
     ];
     for (const r of kept) await parked(r.slice(0, 20), r);
     for (const code of NEEDS_A_PERSON_CODES) await parked(code, { reason: `failed: ${code}`, code });
-    // Parked before the code was kept: the reason's own words say the folder is gone.
+    // Parked before the code was kept: the reason's own words say the folder is gone. While the
+    // session's folder is still gone it waits (once it is back it goes: folder-wait.test.ts).
+    await updateSessionRecord(SID, { cwd: '/gone' } as never);
     await parked('old row', 'Not sent: the working directory no longer exists (/gone)');
     expect(await sweepDeliveryRetries(Date.now() + 10 * RETRY_EVERY_MS)).toEqual([]);
     expect(sends).toEqual([]);

@@ -97,6 +97,7 @@ export type SessionQueuePort = Pick<MessageQueue,
   | 'settleStartRecoveryHeld'
   | 'unmarkUnwritten'
   | 'unparkAgentWaitRows'
+  | 'unparkRowsAhead'
 >;
 
 /** The hints a start or a send carries (core/hints/hint-send.ts). */

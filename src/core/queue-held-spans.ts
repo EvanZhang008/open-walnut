@@ -24,6 +24,7 @@
 
 import type { QueuedMessage } from './session-queue-store.js';
 import { START_RECOVERY_HELD_REASON } from './relay-fates.js';
+import { folderWaitMark } from './sessions/folder-wait.js';
 
 export interface HeldSpan { start: number; end: number }
 
@@ -50,12 +51,18 @@ function recordParked(row: QueuedMessage, now: number): void {
   addHeldSpan(row, Date.parse(row.parkedAt), now);
 }
 
-/** Park `row` under `reason` at `at`, in place. A row parked already keeps its earlier hold. */
+/**
+ * Park `row` under `reason` at `at`, in place. A row parked already keeps its earlier hold. A park on
+ * a gone folder marks the row as one Walnut sends by itself once the folder is back
+ * (sessions/folder-wait.ts); any other park drops that mark.
+ */
 export function parkRow(row: QueuedMessage, reason: string, at: string = new Date().toISOString()): void {
   if (row.status === 'parked') recordParked(row, Date.parse(at));
   row.status = 'parked';
   row.parkedAt = at;
   row.parkedReason = reason;
+  if (folderWaitMark(reason)) row.folderWait = true;
+  else delete row.folderWait;
 }
 
 /** A parked row becomes deliverable: its parked time is recorded and the park fields go, in place. */
@@ -65,9 +72,11 @@ export function leaveParked(row: QueuedMessage, now: number = Date.now()): void 
   delete row.parkedReason;
   // What an agent-wait park waited on (QueuedMessage.waitsFor) goes with the park.
   delete row.waitsFor;
-  // So does what a cold hold kept of its send (QueuedMessage.coldSend), and the verdict's code.
+  // So does what a cold hold kept of its send (QueuedMessage.coldSend), the verdict's code, and the
+  // gone folder's mark (sessions/folder-wait.ts).
   delete row.coldSend;
   delete row.parkedCode;
+  delete row.folderWait;
 }
 
 /** The same as leaveParked, on a copy. */

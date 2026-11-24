@@ -12,6 +12,7 @@ import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
 import { AFTER_TURN_REASON, COLD_HOLD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from './relay-fates.js';
 import { leaveParked, parkRow } from './queue-held-spans.js';
+import { waitsForFolder } from './sessions/folder-wait.js';
 
 /**
  * Age backstop for the parking policy: a pending row this old is parked instead
@@ -216,14 +217,43 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
 export async function unparkAgentWaitRows(
   sessionId: string, stopFence: string | null, opts?: { onlyWithPending?: boolean },
 ): Promise<string[]> {
-  const ids = await mutateStore((s) => {
+  const ids = await unparkWhere(sessionId, (msg) => !!msg.waitsFor && (msg.stopFence ?? null) === stopFence, opts?.onlyWithPending === true);
+  if (ids.length > 0) log.session.info('parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
+  return ids;
+}
+
+/**
+ * A row of the session goes out now (a delivery is about to take it): the rows parked only on
+ * something that delivery itself proves or refuses again ride ahead of it, in their own order. The
+ * same CLI, in the same folder, takes all of them or refuses all of them. Those are a row waiting
+ * for the agent to run (`waitsFor`, agent-wait-resend.ts) and a row waiting for the session's gone
+ * folder (sessions/folder-wait.ts waitsForFolder: marked, not too old, no Stop after it). Nothing
+ * when no row is pending. `fence` omitted: the session's stop fence now. Every delivery take calls
+ * it first (tests/core/sessions/folder-wait-ratchet.test.ts).
+ */
+export async function unparkRowsAhead(sessionId: string, fence?: string | null): Promise<string[]> {
+  // The caller's fence, or the session's now (a Stop not settled yet: nothing rides).
+  let stopFence: string | null;
+  if (fence !== undefined) stopFence = fence;
+  else {
+    const { sessionStops } = await import('./sessions/session-stop.js');
+    try { stopFence = await sessionStops.fence(sessionId); } catch { return []; }
+  }
+  const now = Date.now();
+  const ids = await unparkWhere(sessionId, (msg) => (!!msg.waitsFor && (msg.stopFence ?? null) === stopFence) || waitsForFolder(msg, stopFence, now), true);
+  if (ids.length > 0) log.session.info('parked messages go out ahead of the row going out now', { sessionId, messageIds: ids });
+  return ids;
+}
+
+/** Put back in line, as a Retry would, the parked rows `pick` chooses (`withPending`: only beside a pending row). */
+async function unparkWhere(sessionId: string, pick: (msg: QueuedMessage) => boolean, withPending: boolean): Promise<string[]> {
+  return mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [] as string[];
-    if (opts?.onlyWithPending && !queue.some((m) => m.status === 'pending')) return [] as string[];
+    if (withPending && !queue.some((m) => m.status === 'pending')) return [] as string[];
     const done: string[] = [];
     for (const msg of queue) {
-      if (msg.status !== 'parked' || !msg.waitsFor) continue;
-      if ((msg.stopFence ?? null) !== stopFence) continue;
+      if (msg.status !== 'parked' || !pick(msg)) continue;
       msg.status = 'pending';
       delete msg.unansweredResent;
       if (!msg.lineUuid && !msg.userUuid) {
@@ -235,8 +265,6 @@ export async function unparkAgentWaitRows(
     }
     return done;
   });
-  if (ids.length > 0) log.session.info('parked messages sent again: the agent can run now', { sessionId, messageIds: ids });
-  return ids;
 }
 
 /**

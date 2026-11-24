@@ -65,7 +65,7 @@ export type { MessageStatus, QueuedMessage } from './session-queue-store.js';
 export { QueueNotStoredError, resetCache } from './session-queue-store.js';
 // The dead-letter API and the identity move (session-queue-park.ts), re-exported: callers know one module.
 export {
-  MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage, unparkAgentWaitRows, sessionsWithAgentWaitRows, type ParkCause,
+  MAX_PENDING_AGE_MS, parkIfQueued, parkMessages, parkStalePending, unparkMessage, unparkAgentWaitRows, unparkRowsAhead, sessionsWithAgentWaitRows, type ParkCause,
   START_RECOVERY_HELD_REASON, holdForStartRecovery, startRecoveryHeld, sessionsWithStartRecoveryHeld, settleStartRecoveryHeld, removeStartRecoveryRows,
   migrateSessionQueue, rollbackSessionQueueMigration, type SessionQueueMigration,
 } from './session-queue-park.js';

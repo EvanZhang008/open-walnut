@@ -44,6 +44,7 @@ const PROBE_MS = 5_000
 import { isFolderGoneReason } from './folder-gone-words.js'
 import { frameAsWalnut } from './send-frame.js'
 import { readHostOf } from './session-row-owner.js'
+import { goesOnFolder, stopFenceOf, type FolderWaitPick } from './folder-wait.js'
 export { FOLDER_GONE_RE, isFolderGoneReason } from './folder-gone-words.js'
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -239,6 +240,9 @@ const continuing = new Map<string, Promise<ContinueResult>>()
 
 async function continueNow(sessionId: string, opts: { by?: string }): Promise<ContinueResult> {
   const by = opts.by ?? 'human'
+  // A person's press sends every row that waited on the folder; Walnut's own (a remake's end) only
+  // the rows that wait by the rule (folder-wait.ts), never an old one a person may have sent again.
+  const pick: FolderWaitPick = by.startsWith('walnut:') ? 'waited' : 'all'
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) throw new SessionControlError('Session not found', 404)
@@ -259,7 +263,7 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   if (state === 'present') {
     // Pressed twice, or the folder came back: whatever still waits on a gone folder goes
     // out now, so the button never leaves a message stuck behind a refusal.
-    const sent = await folderIsBack(sessionId, record.taskId)
+    const sent = await folderIsBack(sessionId, record.taskId, { pick })
     if (sent > 0) return { status: 'continued', sessionId, cwd: from, from: record.folderMoved?.from ?? from, history: 'kept', sent }
     throw new SessionControlError(`The folder ${from} is there; send a message to continue in it`, 409, { code: 'folder_present' })
   }
@@ -282,14 +286,15 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   if (historyInFolder(record)) {
     const moved = await moveConversation(record, to)
     if (moved === 'unknown') throw new SessionControlError(`Could not look for this conversation's history on ${record.host ?? 'this machine'}; try again, or move the task to another host (task_move)`, 503, { code: 'host_unreachable' })
-    if (moved === 'missing') return startFresh(record, from, to, by)
+    if (moved === 'missing') return startFresh(record, from, to, by, pick)
   }
 
   const at = new Date().toISOString()
   // Told now when a waiting message will carry the notice (sendWaiting below), so a send
   // arriving meanwhile does not carry a second one.
   const { getQueue } = await import('../session-message-queue.js')
-  const willCarry = (await getQueue(sessionId)).some(waitsOnTheFolder)
+  const fence = await stopFenceOf(sessionId)
+  const willCarry = (await getQueue(sessionId)).some((m) => goesOnFolder(m, pick, fence))
   const updated = await updateSessionRecord(sessionId, {
     cwd: to,
     cwdGone: undefined,
@@ -305,7 +310,7 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   } catch { /* no runner in this process (a replica, a test): the record decides the next spawn */ }
   await moveTaskCwd(record.taskId, from, to)
 
-  const sent = await sendWaiting(sessionId, record.taskId, folderMovedNotice({ from, to }, 'kept'))
+  const sent = await sendWaiting(sessionId, record.taskId, folderMovedNotice({ from, to }, 'kept'), undefined, pick)
   // Nothing waited after all (it went meanwhile): the next message carries the notice.
   if (willCarry && sent === 0) await updateSessionRecord(sessionId, { folderMoved: { from, to, at, by } }).catch(() => {})
   log.session.info('folder gone: continued in a new folder', { sessionId, taskId: record.taskId, from, to, sent, by })
@@ -398,20 +403,20 @@ async function moveTaskCwd(taskId: string, from: string, to: string): Promise<vo
  * notice first. The button's answer for a folder that is present, and the start's own look
  * (folder-back.ts), which passes `since` so only what was parked from then on goes.
  */
-export async function folderIsBack(sessionId: string, taskId: string, opts: { since?: number } = {}): Promise<number> {
+export async function folderIsBack(sessionId: string, taskId: string, opts: { since?: number; pick?: FolderWaitPick } = {}): Promise<number> {
   await clearFolderGone(sessionId)
   const remake = await import('../workspaces/remake.js')
   const notice = await remake.workspaceRemakeNotice(sessionId)
-  const sent = await sendWaiting(sessionId, taskId, notice?.text ?? null, opts.since)
+  const sent = await sendWaiting(sessionId, taskId, notice?.text ?? null, opts.since, opts.pick ?? 'waited')
   if (sent > 0 && notice) await notice.markTold()
   await remake.settleRemakeResume(taskId)
   return sent
 }
 
-async function sendWaiting(sessionId: string, taskId: string, notice: string | null, since?: number): Promise<number> {
-  const here = await sendWaitingHere(sessionId, taskId, notice, since)
+async function sendWaiting(sessionId: string, taskId: string, notice: string | null, since: number | undefined, pick: FolderWaitPick): Promise<number> {
+  const here = await sendWaitingHere(sessionId, taskId, notice, since, pick)
   // A session its host runs: what its host parked on the folder waits there (its own queue).
-  return here + await sendWaitingOnHost(sessionId, here > 0 ? null : notice, since)
+  return here + await sendWaitingOnHost(sessionId, here > 0 ? null : notice, since, pick)
 }
 
 /**
@@ -419,12 +424,13 @@ async function sendWaiting(sessionId: string, taskId: string, notice: string | n
  * sendFolderWaiting). 0 for a session this server runs, or a host that could not be asked (an older
  * one answers no_such_member): logged, its rows wait for the button there.
  */
-async function sendWaitingOnHost(sessionId: string, notice: string | null, since?: number): Promise<number> {
+async function sendWaitingOnHost(sessionId: string, notice: string | null, since: number | undefined, pick: FolderWaitPick): Promise<number> {
   const { judgingHostOf } = await import('./judge-of.js')
   if (!judgingHostOf(sessionId)) return 0
   try {
     const { onJudgingHost } = await import('./host-judged-controls.js')
-    const sent = await onJudgingHost(sessionId, 'sendFolderWaiting', [notice, since ?? null])
+    // `pick` is a fourth argument: a host before it ignores it and sends every row on the folder.
+    const sent = await onJudgingHost(sessionId, 'sendFolderWaiting', [notice, since ?? null, pick])
     return typeof sent === 'number' ? sent : 0
   } catch (err) {
     log.session.warn('folder gone: the host that runs the session did not send what waited on the folder (a host before this step answers no_such_member: its rows wait there until it is updated, or for the button)', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -434,20 +440,25 @@ async function sendWaitingOnHost(sessionId: string, notice: string | null, since
 
 /**
  * On the host that runs `sessionId` (its leader's sendWaiting asks it, host-lifecycle.ts): the
- * folder is there again, so its mark goes and what this host parked on it goes out.
+ * folder is there again, so its mark goes and what this host parked on it goes out. `pick` 'all'
+ * only for a person's press on the leader; a leader before the argument leaves it out, which reads
+ * as Walnut's own ('waited').
  */
-export async function sendFolderWaiting(sessionId: string, notice?: string | null, since?: number | null): Promise<number> {
+export async function sendFolderWaiting(sessionId: string, notice?: string | null, since?: number | null, pick?: string | null): Promise<number> {
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const record = await getSessionByClaudeId(sessionId)
   if (!record) return 0
   await clearFolderGone(sessionId)
-  return sendWaitingHere(sessionId, record.taskId ?? '', typeof notice === 'string' && notice ? notice : null, typeof since === 'number' ? since : undefined)
+  return sendWaitingHere(sessionId, record.taskId ?? '', typeof notice === 'string' && notice ? notice : null, typeof since === 'number' ? since : undefined, pick === 'all' ? 'all' : 'waited')
 }
 
-async function sendWaitingHere(sessionId: string, taskId: string, notice: string | null, since?: number): Promise<number> {
+async function sendWaitingHere(sessionId: string, taskId: string, notice: string | null, since: number | undefined, pick: FolderWaitPick): Promise<number> {
   const { getQueue, unparkMessage } = await import('../session-message-queue.js')
   const { mutateStore } = await import('../session-queue-store.js')
-  const rows = (await getQueue(sessionId)).filter(waitsOnTheFolder)
+  // A Stop not settled yet: Walnut sends nothing by itself (a person's press still goes, as a Retry).
+  const fence = await stopFenceOf(sessionId)
+  if (fence === undefined && pick === 'waited') return 0
+  const rows = (await getQueue(sessionId)).filter((m) => goesOnFolder(m, pick, fence ?? null))
     .filter((m) => since === undefined || m.status === 'pending' || Date.parse((m as { parkedAt?: string }).parkedAt ?? '') >= since)
   if (rows.length === 0) return 0
   const first = rows[0]
@@ -465,14 +476,15 @@ async function sendWaitingHere(sessionId: string, taskId: string, notice: string
 }
 
 /** History gone too: a new conversation for the task in the new folder, carrying what waited. */
-async function startFresh(record: SessionRecord, from: string, to: string, by: string): Promise<ContinueResult> {
+async function startFresh(record: SessionRecord, from: string, to: string, by: string, pick: FolderWaitPick): Promise<ContinueResult> {
   const sid = record.claudeSessionId
   const { getTask, clearSession, clearSessionSlot } = await import('../task-manager.js')
   const task = await getTask(record.taskId!).catch(() => null)
   if (!task) throw new SessionControlError('Associated task not found', 404)
   const { getQueue, deleteMessage } = await import('../session-message-queue.js')
   const { stripInstructionNotice } = await import('./instruction-notice.js')
-  const rows = (await getQueue(sid)).filter(waitsOnTheFolder)
+  const fence = await stopFenceOf(sid)
+  const rows = (await getQueue(sid)).filter((m) => goesOnFolder(m, pick, fence ?? null))
   const waiting = rows.map((m) => stripInstructionNotice(m.message)).filter(Boolean).join('\n\n')
   const recorded = [task.summary, record.title && !task.summary ? `Earlier session: ${record.title}` : ''].filter(Boolean).join('\n').slice(0, 4000)
   const message = `${folderMovedNotice({ from, to }, 'fresh', { recorded })}\n\n${waiting || frameAsWalnut('Continue this task.', 'folder moved')}`
@@ -536,6 +548,7 @@ async function relinkTaskSession(taskId: string, sid: string): Promise<void> {
 function waitsOnTheFolder(m: { status: string; parkedReason?: string }): boolean {
   return m.status === 'pending' || (m.status === 'parked' && isFolderGoneReason(m.parkedReason))
 }
+
 
 /**
  * A move no waiting message carried the notice for: the next message into the session

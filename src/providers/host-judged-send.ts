@@ -131,7 +131,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     scheduleRedeliver(sid)
     throw err
   }
-  const { takeLinesForHost, parkMessages, peekLinesForHost } = await import('../core/session-message-queue.js')
+  const { takeLinesForHost, parkMessages, peekLinesForHost, unparkRowsAhead } = await import('../core/session-message-queue.js')
   // A send that wakes its CLI at rest on the host (a kick, a line that runs): its folder is made
   // ready here first, as a spawn here would (a released workspace made again); the host's service
   // cannot. Never waited for here: this session's command chain (a Stop too) would wait behind it.
@@ -146,6 +146,9 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
       return
     }
   }
+  // Rows parked here on the gone folder (or on the agent) ride ahead of the lines that go now, in
+  // their own order (core/sessions/folder-wait.ts); the host's runner does the same with its own.
+  if (wakes) await unparkRowsAhead(sid).catch(() => [])
   let taken: Awaited<ReturnType<typeof takeLinesForHost>>
   try { taken = await takeLinesForHost(sid) } catch (err) {
     // Not taken (the queue file could not be written): the lines are still queued here.

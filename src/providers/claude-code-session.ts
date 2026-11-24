@@ -68,7 +68,7 @@ const migrateSessionQueue = queueFn('migrateSessionQueue')
 const removeProcessed = queueFn('removeProcessed')
 const revertToPending = queueFn('revertToPending')
 const parkMessages = queueFn('parkMessages')
-const unparkAgentWaitRows = queueFn('unparkAgentWaitRows')
+const unparkRowsAhead = queueFn('unparkRowsAhead')
 const parkStalePending = queueFn('parkStalePending')
 const loadQueue = queueFn('loadQueue')
 const getAllSessionsWithPending = queueFn('getAllSessionsWithPending')
@@ -14269,6 +14269,9 @@ export class SessionRunner {
     }).catch((err) => log.session.warn('acp: settling a stranded queue row failed', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     }))
+    // Rows parked on the agent or on the gone folder ride ahead of the row going out now, as on the
+    // native drain (core/sessions/folder-wait.ts). A Stop not settled yet sends nothing of them.
+    await unparkRowsAhead(queueSid).catch(() => [])
     if (session.activity === 'processing') {
       const steered = await this.steerAcpQueued(session, sessionId)
       if (!steered) {
@@ -15449,6 +15452,9 @@ export class SessionRunner {
     const { ready, release } = this.holdMidTurnWrite(sessionId)
     try {
       await ready
+      // The rows that waited on the agent or the gone folder ride ahead into the running CLI
+      // (core/sessions/folder-wait.ts), as on processNext's take.
+      await unparkRowsAhead(sessionId, stopFence).catch(() => [])
       const newMsgs = await markProcessing(sessionId, stopFence, { tracked: targetSession.reportsLineLifecycle, midTurn: true })
       if (newMsgs.length === 0) return
       // The rest go back to pending and ride the turn's end (its processNext).
@@ -16659,7 +16665,7 @@ export class SessionRunner {
       turnInFlight: (sid) => this.activeProcessing.has(sid) || this.midTurnWrites.has(sid),
       restartInFlight: (sid) => this.nativeSessionReinitializations.has(sid),
       preparing: (sid) => this.nativeDeliveryPreps.has(sid),
-      unparkWaiting: (sid) => unparkAgentWaitRows(sid, stopFence, { onlyWithPending: true }),
+      unparkWaiting: (sid) => unparkRowsAhead(sid, stopFence),
       dropDeadWrapper: (sid) => {
         // The same test the hand-over passed (wrapperLive above): every object of it that holds no
         // live process goes, its transport let go (the CLI is the host's now), so no lookup answers it.
@@ -17159,10 +17165,10 @@ export class SessionRunner {
       log.session.warn('processNext: a cancelled line is not settled yet; the queue waits for Retry', { sessionId })
       return
     }
-    // A row parked only because the agent could not run (QueuedMessage.waitsFor) goes out
-    // ahead of a row that is going out now, in its own order: the same agent takes both, and
-    // the parked words were told they wait for it (core/sessions/agent-wait-resend.ts).
-    await unparkAgentWaitRows(sessionId, stopFence, { onlyWithPending: true }).catch(() => [])
+    // A row parked only because the agent could not run (QueuedMessage.waitsFor), or because the
+    // session's folder was gone (core/sessions/folder-wait.ts), goes out ahead of a row that is going
+    // out now, in its own order: the same CLI in the same folder takes both, or refuses both.
+    await unparkRowsAhead(sessionId, stopFence).catch(() => [])
     const msgs = await markProcessing(sessionId, stopFence, { tracked, midTurn: inTurn })
     if (msgs.length === 0) return
     // A Restart registered during the awaits above: no preparation may run beside it.
