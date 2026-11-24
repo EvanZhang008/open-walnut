@@ -148,8 +148,10 @@ describe('GET /api/v1/config — allowlist projection', () => {
     const flags = (await request(createApp()).get('/api/v1/config')).body.config.experimental
     expect(flags.chat_reading_split).toBe(false)
     expect(flags.every_experiment).toBe(true)
-    // The few that copy or download all of the data keep their own switch (keepsOwnSwitch).
-    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(flags[feature.id]).toBe(!keepsOwnSwitch(feature.id))
+    // The few that copy or download all of the data keep their own switch (keepsOwnSwitch): each
+    // stays at its own default (host_runs_sessions is on by default, so the phone reads it on).
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(flags[feature.id]).toBe(!keepsOwnSwitch(feature.id) || feature.default)
+    expect(flags.host_runs_sessions).toBe(true)
   })
 })
 

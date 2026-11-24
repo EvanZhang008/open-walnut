@@ -1,6 +1,6 @@
 /**
  * A host replica reads the switch from its leader's config copy only (switch.ts configNow): with no
- * copy yet it reads off, whatever the experiment's registry default says, so a host whose leader
+ * copy yet it reads off, though the experiment's registry default is on, so a host whose leader
  * stored `host_runs_sessions: false` never starts a session side in the moments after its boot.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,9 +16,6 @@ vi.mock('../../../src/core/replication/kinds/config.js', async (orig) => ({
 
 import { _resetServerRoleForTesting, isHostReplicaProgram } from '../../../src/core/server-role.js'
 import { hostRunsSessionsAnyNow } from '../../../src/core/session-channel/switch.js'
-import { EXPERIMENTAL_FEATURES } from '../../../src/core/experimental.js'
-
-const REGISTRY_DEFAULT = EXPERIMENTAL_FEATURES.find((f) => f.id === 'host_runs_sessions')!.default
 
 const KEYS = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER', 'WALNUT_HOST_KEY', 'WALNUT_HOST_RUNS_SESSIONS'] as const
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
@@ -41,11 +38,11 @@ describe('a host replica reads the switch from its leader\'s copy only', () => {
     expect(await hostRunsSessionsAnyNow()).toBe(false)
   })
 
-  it('a copy with nothing stored: the registry default', async () => {
+  it('a copy with nothing stored: on by the default', async () => {
     copy = { version: 1, experimental: {} }
-    expect(await hostRunsSessionsAnyNow()).toBe(REGISTRY_DEFAULT)
+    expect(await hostRunsSessionsAnyNow()).toBe(true)
     copy = { version: 1 }
-    expect(await hostRunsSessionsAnyNow()).toBe(REGISTRY_DEFAULT)
+    expect(await hostRunsSessionsAnyNow()).toBe(true)
   })
 
   it('a copy that says the leader turned it off: off, unless the copy-only row names a host', async () => {

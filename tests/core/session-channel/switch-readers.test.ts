@@ -84,12 +84,26 @@ describe('the per-host switch', () => {
   const on = { host_runs_sessions: true }
   const host = (runs?: boolean) => ({ hostname: 'h', ...(runs === undefined ? {} : { runs_sessions: runs }) })
 
-  it('off everywhere by default: no experiment, no host entry (today\'s behaviour)', () => {
+  it('on everywhere by default: nothing stored, no host entry (the registry default)', () => {
     const c = { hosts: { 'devbox-a': host(), 'devbox-b': host() } }
-    expect(hostRunsSessionsFor(c, 'devbox-a')).toBe(false)
-    expect(hostRunsSessionsAny(c)).toBe(false)
-    expect(hostRunsSessionsAny(null)).toBe(false)
+    expect(hostRunsSessionsFor(c, 'devbox-a')).toBe(true)
+    expect(hostRunsSessionsFor(c, 'not-configured')).toBe(true)
+    expect(hostRunsSessionsAny(c)).toBe(true)
+    expect(hostRunsSessionsAny({})).toBe(true)
+    // "Every experiment on" stored false does not turn it off: only its own switch does.
+    expect(hostRunsSessionsAny({ experimental: { every_experiment: false } })).toBe(true)
   })
+
+  it('a stored false stays off: the experiment off, or one host off, whatever the default', () => {
+    const off = { experimental: { host_runs_sessions: false }, hosts: { 'devbox-a': host(), 'devbox-b': host() } }
+    expect(hostRunsSessionsFor(off, 'devbox-a')).toBe(false)
+    expect(hostRunsSessionsAny(off)).toBe(false)
+    expect(hostRunsSessionsAny({ experimental: { host_runs_sessions: false, every_experiment: true } })).toBe(false)
+    const oneOff = { hosts: { 'devbox-a': host(false), 'devbox-b': host() } }
+    expect(hostRunsSessionsFor(oneOff, 'devbox-a')).toBe(false)
+    expect(hostRunsSessionsFor(oneOff, 'devbox-b')).toBe(true)
+  })
+
 
   it('the experiment alone turns every host on, as before', () => {
     const c = { experimental: on, hosts: { 'devbox-a': host() } }
@@ -99,7 +113,7 @@ describe('the per-host switch', () => {
   })
 
   it('runs_sessions true turns one host on with the experiment off; the others stay off', () => {
-    const c = { hosts: { 'devbox-a': host(true), 'devbox-b': host() } }
+    const c = { experimental: { host_runs_sessions: false }, hosts: { 'devbox-a': host(true), 'devbox-b': host() } }
     expect(hostRunsSessionsFor(c, 'devbox-a')).toBe(true)
     expect(hostRunsSessionsFor(c, 'devbox-b')).toBe(false)
     expect(hostRunsSessionsAny(c)).toBe(true)
@@ -114,8 +128,9 @@ describe('the per-host switch', () => {
   })
 
   it('a host replica reads "any" from the copy-only row', () => {
-    expect(hostRunsSessionsAny({ hosts_run_sessions: ['devbox-a'] })).toBe(true)
-    expect(hostRunsSessionsAny({ hosts_run_sessions: [] })).toBe(false)
+    const off = { host_runs_sessions: false }
+    expect(hostRunsSessionsAny({ experimental: off, hosts_run_sessions: ['devbox-a'] })).toBe(true)
+    expect(hostRunsSessionsAny({ experimental: off, hosts_run_sessions: [] })).toBe(false)
   })
 
   it('WALNUT_HOST_RUNS_SESSIONS decides both questions for its process', () => {

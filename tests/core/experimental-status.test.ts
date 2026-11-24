@@ -24,8 +24,9 @@ function facts(tasks: Task[], enabled: boolean): StatusFacts {
 
 describe('experimental choices', () => {
   it('every registered experiment starts as its registry default and only a boolean overrides it', () => {
-    // No experiment is on by default now (follower_on_every_host ended on, into GRADUATED_EXPERIMENTS).
-    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual([]);
+    // An experiment that graduated by its default keeps its switch: a stored false still turns it off
+    // (follower_on_every_host ended on, into GRADUATED_EXPERIMENTS).
+    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual(['host_runs_sessions']);
     for (const feature of EXPERIMENTAL_FEATURES) {
       expect(experimentalEnabled(undefined, feature.id)).toBe(feature.default);
       expect(experimentalEnabled({}, feature.id)).toBe(feature.default);
@@ -42,7 +43,8 @@ describe('experimental choices', () => {
     const [first, ...rest] = EXPERIMENTAL_FEATURES;
     const flags = { [EVERY_EXPERIMENT]: true, [first.id]: false };
     expect(experimentalEnabled(flags, first.id)).toBe(false);
-    for (const feature of rest) expect(experimentalEnabled(flags, feature.id)).toBe(!keepsOwnSwitch(feature.id));
+    // One that keeps its own switch stays at its registry default (off, or on for one that graduated by its default).
+    for (const feature of rest) expect(experimentalEnabled(flags, feature.id)).toBe(!keepsOwnSwitch(feature.id) || feature.default);
     for (const feature of EXPERIMENTAL_FEATURES) expect(experimentalEnabled({ [EVERY_EXPERIMENT]: false }, feature.id)).toBe(feature.default);
     expect(validExperimentalFlags(flags)).toBe(true);
   });
@@ -55,9 +57,13 @@ describe('experimental choices', () => {
     const own = EXPERIMENTAL_FEATURES.filter((f) => keepsOwnSwitch(f.id)).map((f) => f.id);
     expect(own.sort()).toEqual(['host_runs_sessions', 'host_service_sets', 'restore_drill', 'switchable_leader']);
     for (const id of own) {
-      expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true }, id)).toBe(false);
-      expect(effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true })[id]).toBe(false);
+      // "Every experiment on" changes none of them: each stays at its own default (host_runs_sessions
+      // graduated by its default, so it is on with or without it), and its own choice wins either way.
+      const byDefault = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!.default;
+      expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true }, id)).toBe(byDefault);
+      expect(effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true })[id]).toBe(byDefault);
       expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true, [id]: true }, id)).toBe(true);
+      expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true, [id]: false }, id)).toBe(false);
       // Its row says so, since the switch above it says "every experiment is on".
       expect(EXPERIMENTAL_FEATURES.find((f) => f.id === id)!.description).toContain('keeps its own switch');
     }
@@ -77,7 +83,7 @@ describe('experimental choices', () => {
     const out = effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true, chat_reading_split: false, future_flag: false });
     expect(out.future_flag).toBe(false);
     expect(out.chat_reading_split).toBe(false);
-    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(!keepsOwnSwitch(feature.id));
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(!keepsOwnSwitch(feature.id) || feature.default);
     const none = effectiveExperimentalFlags(undefined);
     for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(feature.default);
     for (const id of GRADUATED_EXPERIMENTS) expect(none[id]).toBe(true);

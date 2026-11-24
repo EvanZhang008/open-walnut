@@ -98,3 +98,37 @@ test('"Every experiment on" turns on every switch never set alone, keeps one tur
     await expect.poll(async () => (await flags()).every_experiment).toBe(false);
   } finally { await request.put('/api/config', { data: reset }); }
 });
+
+test('"Each computer runs its own sessions" is on with nothing stored; a stored off stays off, "Every experiment on" included', async ({ page, request }) => {
+  const hostId = '#experimental-host_runs_sessions';
+  const everyId = '#experimental-every_experiment';
+  const flags = async () => (await (await request.get('/api/config')).json()).config.experimental ?? {};
+  const reset = { experimental: { every_experiment: false, host_runs_sessions: null } };
+  await request.put('/api/config', { data: reset });
+  try {
+    await page.goto('/settings');
+    await page.getByTestId('settings-nav-experimental').click();
+    const host = page.locator(hostId);
+    // On by its registry default, and nothing is written for it.
+    await expect(host).toHaveAttribute('aria-checked', 'true', AFTER_RELOAD);
+    expect((await flags()).host_runs_sessions).toBeUndefined();
+    await host.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);
+    await page.screenshot({ scale: 'css', path: `${SHOTS}/experimental-host-runs-sessions-default.png` });
+    await host.click();
+    await expect(host).toHaveAttribute('aria-checked', 'false');
+    await expect.poll(async () => (await flags()).host_runs_sessions).toBe(false);
+    await page.reload();
+    await expect(host).toHaveAttribute('aria-checked', 'false', AFTER_RELOAD);
+    // "Every experiment on" never turns it back on: it keeps its own switch.
+    const every = page.locator(everyId);
+    await every.click();
+    await expect(every).toHaveAttribute('aria-checked', 'true');
+    await expect(host).toHaveAttribute('aria-checked', 'false');
+    await every.click();
+    await expect(every).toHaveAttribute('aria-checked', 'false');
+    await host.click();
+    await expect(host).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await flags()).host_runs_sessions).toBe(true);
+  } finally { await request.put('/api/config', { data: reset }); }
+});

@@ -526,8 +526,8 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
      that host take today's path at once; the sessions it already runs keep running and reporting
      through the channel until they end (`tests/e2e/host-judge-per-host-e2e.test.ts` P2).
-  2. Every host: the experiment `host_runs_sessions` off (and no host entry set to true). The same, for
-     all hosts (S6).
+  2. Every host: the experiment `host_runs_sessions` turned off (Settings, Experimental: a stored
+     `false`; it is on by default) and no host entry set to true. The same, for all hosts (S6).
   3. An older release, once those sessions ended or were stopped.
 - **Going back lifts every ban.** A leader older than the ban (before land 9) does not know a revoked
   host: it reads a revoked credential record (one that keeps no key) as one never issued, and issues

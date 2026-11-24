@@ -258,9 +258,11 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'host_runs_sessions',
     name: 'Each computer runs its own sessions',
-    description: 'A new session on another computer is run and watched by Walnut\'s service on that computer, which sends this Walnut what happened in it, so the session keeps going and keeps being watched while this Walnut is away. Only computers whose Walnut is new enough take it; others run their sessions as before. Sessions started before you turn this off keep reporting. "Every experiment on" does not turn this on: it changes which machine runs your sessions, so it keeps its own switch.',
+    description: 'A new session on another computer is run and watched by Walnut\'s service on that computer, which sends this Walnut what happened in it, so the session keeps going and keeps being watched while this Walnut is away. On unless you turn it off. Only computers whose Walnut is new enough take it; others run their sessions as before. Off: new sessions run as before, and sessions started before you turn it off keep reporting. "Every experiment on" does not change it: it changes which machine runs your sessions, so it keeps its own switch.',
     summary: 'A new session on another computer is run by that computer\'s Walnut, so it keeps going while this one is away.',
-    default: false,
+    // On by default since phase 2 was proven (docs/plan/one-service-every-host.md): a stored false,
+    // here or `hosts.<name>.runs_sessions: false` for one host, keeps it off (session-channel/switch.ts).
+    default: true,
     ownSwitchOnly: true,
   },
   {

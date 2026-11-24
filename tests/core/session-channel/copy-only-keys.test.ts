@@ -30,7 +30,8 @@ const stored = async () => yaml.load(await fsp.readFile(CONFIG_FILE, 'utf8')) as
 
 describe('the leader never honours a copy-only key in its own config', () => {
   it('a stray hosts_run_sessions in config.yaml is left out of the read: the switch stays off', async () => {
-    await fsp.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } }, hosts_run_sessions: ['devbox-a'] }))
+    // The experiment stored off (it is on by default): only the stray key could turn it on.
+    await fsp.writeFile(CONFIG_FILE, yaml.dump({ version: 1, experimental: { host_runs_sessions: false }, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } }, hosts_run_sessions: ['devbox-a'] }))
     const config = await getConfig()
     expect(config.hosts_run_sessions).toBeUndefined()
     expect(await hostRunsSessionsAnyNow()).toBe(false)
@@ -62,9 +63,11 @@ describe('S2: the leader says it speaks the session channel in its copy (leader_
     delete process.env.WALNUT_LEADER_SESSION_CHANNELS
     expect(capsOf({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example', runs_sessions: true } } })).toEqual(['session-channel-v1'])
     expect(capsOf({ version: 1, experimental: { host_runs_sessions: true } })).toEqual(['session-channel-v1'])
-    expect(capsOf({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } } })).toBeUndefined()
+    // On by default (the experiment's registry default): a leader with nothing stored says it.
+    expect(capsOf({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } } })).toEqual(['session-channel-v1'])
+    expect(capsOf({ version: 1, experimental: { host_runs_sessions: false }, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } } })).toBeUndefined()
     // A value in config.yaml itself is never copied.
-    expect(capsOf({ version: 1, leader_capabilities: ['session-channel-v1'] })).toBeUndefined()
+    expect(capsOf({ version: 1, experimental: { host_runs_sessions: false }, leader_capabilities: ['session-channel-v1'] })).toBeUndefined()
   })
 
   it('a leader run as one from before the channel says nothing', () => {

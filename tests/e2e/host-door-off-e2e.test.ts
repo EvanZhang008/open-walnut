@@ -1,9 +1,9 @@
 /**
  * The real upgrade handler (src/web/ws/handler.ts) and the leader door (src/core/leader-doors.ts) on
- * a real server: with the experiment host_runs_sessions off (its default) `/host-door` never
- * upgrades and nothing answers a hello; turned on, the same server's door opens and answers a
- * hello for a machine it keeps no credential for with unknown_credential (4004); turned off again,
- * it is shut again.
+ * a real server: with nothing stored the experiment host_runs_sessions is on (its registry default),
+ * so the door is open and answers a hello for a machine it keeps no credential for with
+ * unknown_credential (4004); turned off (a stored false) `/host-door` never upgrades and nothing
+ * answers a hello; turned on again, it opens again.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import net, { type AddressInfo } from 'node:net'
@@ -54,18 +54,19 @@ async function setExperiment(on: boolean): Promise<void> {
 }
 
 describe('/host-door on a real server', () => {
-  it('with the experiment off, never upgrades', async () => {
-    expect(openLeaderDoor('/host-door')).toBeNull()
-    expect(await upgrades()).toBe(false)
-  })
+  it('with nothing stored (on by default), opens and tells a machine it keeps no credential for 4004', async () => {
+    await vi.waitFor(() => expect(openLeaderDoor('/host-door')).not.toBeNull(), { timeout: 20_000 })
+    expect(await upgrades()).toBe(true)
+    expect(await helloCode()).toBe(4004)
+  }, 60_000)
 
-  it('turned on, opens and tells a machine it keeps no credential for 4004; turned off, shuts again', async () => {
+  it('turned off, never upgrades; turned on again, opens', async () => {
+    await setExperiment(false)
+    await vi.waitFor(() => expect(openLeaderDoor('/host-door')).toBeNull(), { timeout: 20_000 })
+    expect(await upgrades()).toBe(false)
     await setExperiment(true)
     await vi.waitFor(() => expect(openLeaderDoor('/host-door')).not.toBeNull(), { timeout: 20_000 })
     expect(await upgrades()).toBe(true)
     expect(await helloCode()).toBe(4004)
-    await setExperiment(false)
-    await vi.waitFor(() => expect(openLeaderDoor('/host-door')).toBeNull(), { timeout: 20_000 })
-    expect(await upgrades()).toBe(false)
   }, 60_000)
 })

@@ -664,17 +664,28 @@ A service on a host can run and judge the sessions started there itself (phase 2
 `docs/plan/one-service-every-host.md`, `src/core/session-channel/`). Two levels decide it, read in one
 place (`src/core/session-channel/switch.ts`):
 
-- the experiment `host_runs_sessions` (Settings, off by default): on for every host;
+- the experiment `host_runs_sessions` (Settings, on by default: its registry default is `true`): on
+  for every host; a stored `false` turns it off for every host, and "Every experiment on" changes
+  neither (it keeps its own switch);
 - `hosts.<name>.runs_sessions` in the leader's config.yaml (config only, no Settings control): `true` turns that one host on even with the experiment off,
-  `false` keeps it off even with the experiment on, absent follows the experiment. So one host is
-  turned on at a time, and default-on later needs no entry per host.
+  `false` keeps it off even with the experiment on, absent follows the experiment. A person's stored
+  `false` at either level stays off across the upgrade that made the default on; nothing is written
+  for a person who stored nothing.
 
-A host replica with no config copy yet reads the switch as off (`switch.ts` configNow): it starts its
-session side only after the leader's first copy round says on, so a stored `false` never starts one
-there, not even for the moments after a boot. Its door and companion dialers read the same: a host
-that ran sessions before (its fact log keeps the session side up) but has no copy on disk dials
-neither until the first round. The copy is kept on disk (`cache/replica/config.json`), so only a
-deleted cache file or a forced `WALNUT_HOST_RUNS_SESSIONS` reaches that.
+The switch alone moves nothing: a host takes a session only from its one Walnut service (the
+follower and the session runtime in one process), which a host runs only when the leader offers it
+(`service_launcher` and `host_service_offer`, below). A host on the plain daemon keeps today's path
+whatever the switch says. An older release reads the unset experiment as unknown: 0.6.37 has no
+session channel at all, and judges every session itself (the downgrade in
+`docs/plan/one-service-every-host.md`). A host replica with no config copy yet reads the switch as off
+(`switch.ts` configNow): it starts its session side only after the leader's first copy round says
+on, so a stored `false` never starts one there, not even for the moments after a boot. Its door and
+companion dialers read the same: a host that ran sessions before (its fact log keeps the session
+side up) but has no copy on disk dials neither until the first round. The copy is kept on disk
+(`cache/replica/config.json`), so only a deleted cache file or a forced `WALNUT_HOST_RUNS_SESSIONS`
+reaches that. With the default on, every leader's copy names `leader_capabilities`, which a host
+replica older than the row refuses alone: it logs "config copy: refused a row" and the round runs
+again after 35 s, on every such round, until the leader updates that host's server to its own build.
 
 Only the leader's start decision reads it per host (`hostRunsSessionsFor`, the start probe of
 `judge-of.ts`): a new start on a host goes to its service when the switch is on for that host and the

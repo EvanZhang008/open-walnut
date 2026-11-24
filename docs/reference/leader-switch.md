@@ -712,7 +712,7 @@ daemon link (`link(host)`, `src/core/hosts/link.ts`).
 
 | Feature | Through the door | Why |
 |---|---|---|
-| Session start, send, interrupt, allowlisted calls, drops (host-judged) | works | `/host-api/sessions/*` on the call frames, with `session.host_runs_sessions` on and the host's `session-judge-v1` |
+| Session start, send, interrupt, allowlisted calls, drops (host-judged) | works | `/host-api/sessions/*` on the call frames, with the experiment `host_runs_sessions` on (its default) and the host's `session-judge-v1` |
 | Session facts and rows | works | the session channel runs on the same socket |
 | The host's witness of the write permission | works | `/host-api/witness/*` on the call frames (above) |
 | Start prechecks (make the folder, check the cwd, the task dir, cancel an unconfirmed start) | no | `ensure-cwd.ts`, `cwd-check.ts`, `task-dir-place.ts`, `task-start.ts` send daemon commands before the start call |
