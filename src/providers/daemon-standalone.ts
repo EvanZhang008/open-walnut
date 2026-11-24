@@ -78,7 +78,7 @@ import {
   BUDGET_CHECKING_TEXT,
   type BudgetGate,
 } from './daemon-core.js'
-import { isServiceSetRuntimeTreesDir } from './service-set.js'
+import { setRuntimeTreesDirOf } from './service-set.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
 import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
@@ -514,7 +514,7 @@ const SPAWN_JOURNAL = daemonEnv.WALNUT_SPAWN_JOURNAL
 // Before the journal: one empty file per session id (2026-09-23 to 09-26).
 const LEGACY_SPAWN_LEDGER_DIR = path.join(daemonEnv.HOME || HOME_DIR, '.open-walnut', 'tmp', 'spawned-sessions')
 // The walnut file's runtime place a session keeps: a set's own (service-set.ts), never a deploy stage's.
-const SESSION_RUNTIME_DIR = SET_ID && isServiceSetRuntimeTreesDir(daemonEnv.WALNUT_RUNTIME_DIR, daemonEnv, fs.realpathSync) ? daemonEnv.WALNUT_RUNTIME_DIR : undefined
+const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf(daemonEnv, fs.realpathSync)
 const SPAWN_JOURNAL_LINE_MAX = 4096
 interface SpawnInfo { kind: 'new' | 'fork' | 'resume'; parent?: string; cwd?: string; home?: string; task?: string; walnut?: string }
 let journaledSids: Set<string> | null = null

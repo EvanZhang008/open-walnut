@@ -169,6 +169,20 @@ export function isServiceSetRuntimeTreesDir(
 }
 
 /**
+ * The runtime-trees dir a set's service names in `env` (serviceSetEnv), when it is that set's own;
+ * else undefined. Everything a set's service starts from its file (its sessions' CLIs, the
+ * server's boot warm-up, a terminal's `walnut`) keeps it, so none unpacks into or prunes the
+ * default Walnut's `~/.open-walnut/local/runtime`; any other WALNUT_RUNTIME_DIR (a deploy stage)
+ * is dropped as before.
+ */
+export function setRuntimeTreesDirOf(
+  env: Readonly<Record<string, string | undefined>>, realpath?: (p: string) => string,
+): string | undefined {
+  const dir = env[RUNTIME_DIR_ENV]
+  return isServiceSetId(env[SERVICE_SET_ENV]) && isServiceSetRuntimeTreesDir(dir, env, realpath) ? dir : undefined
+}
+
+/**
  * The env only a set's service carries (its unit, plist, boot script and launcher), after the
  * default's: its id, and the walnut file's runtime place under its own install root, so a start of
  * the file never unpacks into, or prunes, the default Walnut's `~/.open-walnut/local/runtime`

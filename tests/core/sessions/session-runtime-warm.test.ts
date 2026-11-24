@@ -23,9 +23,11 @@ const read = (rel: string) => fs.readFileSync(path.join(repo, rel), 'utf8')
 
 /** Where the source proves a session-side run of the file has no such key. */
 const DROPPED_FOR_SESSIONS: Record<(typeof RUNTIME_PLACE_ENV)[number], Array<{ file: string; proof: RegExp }>> = {
-  // Every CLI the daemon starts gets no runtime dir.
+  // Every CLI the daemon starts gets no runtime dir, but a service set's own trees dir
+  // (setRuntimeTreesDirOf): a set's sessions read the set's trees, never the default's.
   WALNUT_RUNTIME_DIR: [
-    { file: 'src/providers/daemon-standalone.ts', proof: /WALNUT_RUNTIME_DIR: undefined/ },
+    { file: 'src/providers/daemon-standalone.ts', proof: /const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf\(daemonEnv, fs\.realpathSync\)/ },
+    { file: 'src/providers/daemon-standalone.ts', proof: /WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,/ },
   ],
   // The local daemon starts with no data home of the server's, so neither do its CLIs.
   OPEN_WALNUT_HOME: [
@@ -34,8 +36,10 @@ const DROPPED_FOR_SESSIONS: Record<(typeof RUNTIME_PLACE_ENV)[number], Array<{ f
 }
 
 describe('which env keys move the runtime tree', () => {
-  it('RUNTIME_PLACE_ENV is every env key runtime-tree.ts reads', () => {
-    const src = read('src/binary/runtime-tree.ts')
+  it('RUNTIME_PLACE_ENV is every env key runtimeRootsFor reads', () => {
+    // Only the place: the prune's own keys (prunesRuntimePlace, the trial flag) move no tree.
+    const src = read('src/binary/runtime-tree.ts').match(/export function runtimeRootsFor\([\s\S]*?\n\}\n/)?.[0] ?? ''
+    expect(src).toContain('WALNUT_RUNTIME_DIR')
     const read_ = new Set([...src.matchAll(/\benv\.([A-Z][A-Z0-9_]+)/g)].map((m) => m[1]))
     expect([...read_].sort()).toEqual([...RUNTIME_PLACE_ENV].sort())
   })
@@ -51,6 +55,27 @@ describe('which env keys move the runtime tree', () => {
     expect(sessionRuntimeEnv(server)).toEqual({ HOME: os.homedir() })
     expect(sessionRuntimeRoot('0.6.28-abc', server)).toBe(runtimeRootsFor({}, '0.6.28-abc')[0])
     expect(sessionRuntimeRoot('0.6.28-abc', server)).toBe(path.join(os.homedir(), '.open-walnut', 'local', 'runtime', '0.6.28-abc'))
+  })
+})
+
+describe('a service set\'s server warms the set\'s own trees', () => {
+  // 2026-11-24 review: a set's serve service stripped its WALNUT_RUNTIME_DIR here, so its
+  // boot warm-up unpacked into, and pruned, the default Walnut's ~/.open-walnut/local/runtime.
+  const SET = '0123456789abcdef'
+  const setDir = path.join(os.homedir(), '.open-walnut-host', 'walnuts', SET, 'daemon', 'runtime')
+
+  it('keeps the set\'s own trees dir, as the set\'s daemon gives its sessions', () => {
+    const server = { HOME: os.homedir(), WALNUT_SERVICE_SET: SET, WALNUT_RUNTIME_DIR: setDir, OPEN_WALNUT_HOME: '/custom/home' }
+    expect(sessionRuntimeEnv(server)).toEqual({ HOME: os.homedir(), WALNUT_SERVICE_SET: SET, WALNUT_RUNTIME_DIR: setDir })
+    expect(sessionRuntimeRoot('0.6.28-abc', server)).toBe(path.join(setDir, '0.6.28-abc'))
+  })
+
+  it.each([
+    ['another set\'s dir', { WALNUT_SERVICE_SET: SET, WALNUT_RUNTIME_DIR: setDir.replace(SET, 'fedcba9876543210') }],
+    ['a deploy stage', { WALNUT_SERVICE_SET: SET, WALNUT_RUNTIME_DIR: '/stage/runtime' }],
+    ['a set dir without a set env', { WALNUT_RUNTIME_DIR: setDir }],
+  ])('drops %s', (_label, extra) => {
+    expect(sessionRuntimeEnv({ HOME: os.homedir(), ...extra }).WALNUT_RUNTIME_DIR).toBeUndefined()
   })
 })
 
@@ -91,6 +116,17 @@ describe('warmSessionRuntime', () => {
     expect(calls[0]!.args.slice(-2)).toEqual(['/$bunfs/root/walnut', '--version'])
     expect(calls[0]!.env.OPEN_WALNUT_HOME).toBeUndefined()
     expect(calls[0]!.env.WALNUT_RUNTIME_DIR).toBe(dir)
+  })
+
+  it('a set\'s server unpacks into the set\'s trees dir, never the default tree', async () => {
+    const SET = '0123456789abcdef'
+    const setDir = path.join(dir, 'home', '.open-walnut-host', 'walnuts', SET, 'daemon', 'runtime')
+    const calls: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv }> = []
+    const env = { HOME: path.join(dir, 'home'), WALNUT_SERVICE_SET: SET, WALNUT_RUNTIME_DIR: setDir }
+    const bare = { command: FILE, args: ['/$bunfs/root/walnut', 'mcp'] }
+    const out = await warmSessionRuntime({ isolated: false, info, mount: bare, execPath: FILE, env, spawnFn: fakeSpawn(calls) })
+    expect(out).toMatchObject({ state: 'warmed', root: path.join(setDir, ID) })
+    expect(calls[0]!.env.WALNUT_RUNTIME_DIR).toBe(setDir)
   })
 
   it('starts nothing when the tree is already complete', async () => {

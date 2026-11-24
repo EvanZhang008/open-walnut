@@ -153,7 +153,10 @@ describe('remote write paths ratchet', () => {
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/terminal-route.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
     const daemon = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR', 'WALNUT_DAEMON_STATE_DIR']) expect(daemon, k).toContain(`${k}: undefined,`)
+    for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_DAEMON_STATE_DIR']) expect(daemon, k).toContain(`${k}: undefined,`)
+    // The runtime dir only as a service set's own trees dir (service-set.ts setRuntimeTreesDirOf): undefined otherwise.
+    expect(daemon).toContain('WALNUT_RUNTIME_DIR: SESSION_RUNTIME_DIR,')
+    expect(daemon).toMatch(/const SESSION_RUNTIME_DIR = setRuntimeTreesDirOf\(daemonEnv, fs\.realpathSync\)/)
     const local = fs.readFileSync(path.join(ROOT, 'src/providers/local-daemon.ts'), 'utf-8')
     for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME']) expect(local).toContain(`delete env.${k}`)
   })

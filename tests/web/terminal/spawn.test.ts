@@ -207,6 +207,15 @@ describe('terminalEnv', () => {
     expect(env.WALNUT_RUNTIME_DIR).toBeUndefined()
     expect(env).toMatchObject({ PATH: userPath, HOME: '/home/acme', TERM: 'xterm-256color' })
   })
+
+  it('keeps a service set\'s own trees dir, so its walnut never unpacks into the default tree', () => {
+    // 2026-11-24 review: a set's server dropped it here too, and the terminal's `walnut`
+    // then unpacked into, and pruned, the default Walnut's ~/.open-walnut/local/runtime.
+    const set = '0123456789abcdef'
+    const dir = `/home/acme/.open-walnut-host/walnuts/${set}/daemon/runtime`
+    expect(terminalEnv({ HOME: '/home/acme', WALNUT_SERVICE_SET: set, WALNUT_RUNTIME_DIR: dir }).WALNUT_RUNTIME_DIR).toBe(dir)
+    expect(terminalEnv({ HOME: '/home/acme', WALNUT_SERVICE_SET: set, WALNUT_RUNTIME_DIR: '/tmp/open-walnut-stage.1.2/runtime' }).WALNUT_RUNTIME_DIR).toBeUndefined()
+  })
 })
 
 describe('a terminal whose folder is gone (a removed workspace) still opens', () => {

@@ -55,6 +55,7 @@ import { testServerRemoteTermRoot, ownRootGuardSh } from '../../providers/remote
 import { assertDemoAdmission } from '../../core/sessions/demo-admission.js'
 import { ensureDemoTerminalDir } from '../../lib/demo-terminal-dir.js'
 import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
+import { setRuntimeTreesDirOf } from '../../providers/service-set.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 import { dtachPidFileFor, dtachRecordScript } from './dtach-master.js'
@@ -387,7 +388,9 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
  */
 export function terminalEnv(base: NodeJS.ProcessEnv = process.env, sessionId?: string): Record<string, string> {
   const env = { ...base, TERM: 'xterm-256color' } as Record<string, string>
-  delete env.WALNUT_RUNTIME_DIR
+  // A service set's own trees dir stays: without it the terminal's walnut would unpack into,
+  // and prune, the default Walnut's tree (setRuntimeTreesDirOf).
+  if (!setRuntimeTreesDirOf(base, fs.realpathSync)) delete env.WALNUT_RUNTIME_DIR
   // Which task's terminal this is, for `walnut approve` (its card names the task; the
   // server checks the asking process descends from this terminal's shell) and the host's
   // port scan (a server started here is this session's). Never

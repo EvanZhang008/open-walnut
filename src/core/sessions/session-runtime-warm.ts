@@ -5,7 +5,7 @@
  * daemon's PATH shim behind `walnut ...`, the CLI hooks that call it) runs with
  * neither WALNUT_RUNTIME_DIR nor OPEN_WALNUT_HOME: the local daemon starts with no
  * OPEN_WALNUT_HOME (local-daemon.ts) and hands every CLI no WALNUT_RUNTIME_DIR
- * (daemon-standalone.ts), because the server's own tree lives in
+ * (daemon-standalone.ts; a service set's own trees dir excepted, which stays), because the server's own tree lives in
  * a deploy stage that a later deploy deletes. So they use the account's default
  * tree, `~/.open-walnut/local/runtime/<build>`, and the first one after a deploy
  * unpacks it (448 files, 28 MB) and prunes old builds' trees before it does
@@ -21,16 +21,24 @@
  * session, then exits. Isolated servers (tests, ephemeral, a smoke boot) skip it.
  */
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import { isComplete, runtimeRootsFor, RUNTIME_PLACE_ENV } from '../../binary/runtime-tree.js'
 import { singleFile, type SingleFile } from '../../lib/single-file.js'
 import { withUtilityQosClamp } from '../../lib/background-qos.js'
 import { walnutMcpProfile } from './profiles.js'
+import { setRuntimeTreesDirOf } from '../../providers/service-set.js'
 
-/** The env a session-side run of the file has, as far as its runtime tree goes: none of RUNTIME_PLACE_ENV. */
+/**
+ * The env a session-side run of the file has, as far as its runtime tree goes: none of
+ * RUNTIME_PLACE_ENV, but a service set's own trees dir, which the set's daemon gives its
+ * sessions too (daemon-standalone.ts SESSION_RUNTIME_DIR).
+ */
 export function sessionRuntimeEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const setDir = setRuntimeTreesDirOf(base, fs.realpathSync)
   const env = { ...base }
   for (const key of RUNTIME_PLACE_ENV) delete env[key]
+  if (setDir) env.WALNUT_RUNTIME_DIR = setDir
   return env
 }
 

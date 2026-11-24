@@ -149,6 +149,27 @@ describe('every default place a set\'s service program derives is decided for a 
     }
   })
 
+  it('every env that drops WALNUT_RUNTIME_DIR for what it starts keeps a set\'s own trees dir', () => {
+    // The class (2026-11-24 review, B1): a set's service hands an env on to a run of the walnut
+    // file (a session's CLI, the server's boot warm-up, a terminal's shell) and drops the
+    // runtime dir there as a deploy stage's, so that run unpacks into, and prunes, the default
+    // Walnut's tree. Each such place keeps it when it is the set's own (setRuntimeTreesDirOf).
+    const DROPS = /delete [\w.]+\.WALNUT_RUNTIME_DIR\b|WALNUT_RUNTIME_DIR: undefined\b|of RUNTIME_PLACE_ENV\) delete\b/
+    const files: string[] = []
+    const walk = (rel: string): void => {
+      for (const e of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+        const r = path.join(rel, e.name)
+        if (e.isDirectory()) walk(r)
+        else if (r.endsWith('.ts') && DROPS.test(fs.readFileSync(path.join(ROOT, r), 'utf8'))) files.push(r)
+      }
+    }
+    walk('src')
+    for (const file of files) {
+      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), `${file} drops WALNUT_RUNTIME_DIR without keeping a set's own`).toMatch(/setRuntimeTreesDirOf\(/)
+    }
+    expect(files.sort()).toEqual(['src/core/sessions/session-runtime-warm.ts', 'src/web/terminal/spawn.ts'])
+  })
+
   it('a set\'s service env leaves the walnut file no default place to unpack its runtime into', () => {
     const set = serviceSet('linux', HOME, ID, { uid: 1000 })
     const R = path.dirname(set.installRoot)
