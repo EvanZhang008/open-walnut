@@ -64,6 +64,12 @@ DQ_PREBUILD="${WALNUT_DEPLOY_PREBUILD_SECS:-420}"
 # the commits waiting go out together in one build.
 DQ_BUSY_GAP="${WALNUT_DEPLOY_BUSY_GAP_SECS:-1200}"
 [[ "$DQ_BUSY_GAP" =~ ^[0-9]+$ ]] || DQ_BUSY_GAP=1200
+# Tight memory alone waits less, up to WALNUT_DEPLOY_MEM_GAP_SECS (600) after the last restart
+# (2026-11-24: this Mac's swap stayed over 90% for hours, every deploy waited the whole 20 minutes
+# for it to ease and it never did; with the web/ type check off the Mac a deploy adds far less).
+DQ_MEM_GAP="${WALNUT_DEPLOY_MEM_GAP_SECS:-600}"
+[[ "$DQ_MEM_GAP" =~ ^[0-9]+$ ]] || DQ_MEM_GAP=600
+(( DQ_MEM_GAP <= DQ_BUSY_GAP )) || DQ_MEM_GAP=$DQ_BUSY_GAP
 DQ_BUSY_LOAD="${WALNUT_DEPLOY_BUSY_LOAD:-4}"
 [[ "$DQ_BUSY_LOAD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || DQ_BUSY_LOAD=4
 # The 1-minute load when it is over the busy line, else nothing. WALNUT_DEPLOY_LOAD_TEST stands in
@@ -79,8 +85,8 @@ dq_busy_load() {
 
 # Memory tight, in words, else nothing (2026-11-11: a deploy's web build adds about 1.4 GB, and the
 # Mac logged memory tight 150 to 190 times a day): macOS memory pressure at warn or worse, or swap
-# 90% used; on Linux under 5% of memory available. Same wait as a busy load, bounded by the busy
-# gap. WALNUT_DEPLOY_MEM_TEST stands in for the reading in tests ("" = read the machine).
+# 90% used; on Linux under 5% of memory available. It waits like a busy load, bounded by the
+# shorter DQ_MEM_GAP. WALNUT_DEPLOY_MEM_TEST stands in for the reading in tests ("" = read the machine).
 dq_busy_mem() {
   local t="${WALNUT_DEPLOY_MEM_TEST-}" pl su st
   if [[ -n "$t" ]]; then [[ "$t" == ok ]] || echo "$t"; return 0; fi
@@ -316,7 +322,7 @@ dq_runner() {
   dq_lock "$q" || return 0
   trap 'dq_unlock "'"$q"'"' EXIT
   dq_log "runner $$ started (gap ${DQ_GAP}s)"
-  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving hold_since=""
+  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving lim hold_since=""
   while :; do
     served="$(dq_served)"; served_sha="${served%% *}"; built="${served##* }"
     # Requests production already carries are answered.
@@ -351,12 +357,14 @@ dq_runner() {
     fi
     if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_BUSY_GAP > now )); then
       busy="$(dq_busy_load)"; bwhy="load $busy, over $DQ_BUSY_LOAD per CPU"; [[ -z "$busy" ]] || busy="load $busy"
-      [[ -n "$busy" ]] || { busy="$(dq_busy_mem)"; bwhy="$busy"; }
+      lim=$DQ_BUSY_GAP
+      if [[ -z "$busy" ]] && (( last + DQ_MEM_GAP > now )); then busy="$(dq_busy_mem)"; bwhy="$busy"; lim=$DQ_MEM_GAP; fi
       if [[ -n "$busy" ]]; then
-        [[ -n "${busy_said:-}" ]] || dq_log "the Mac is busy ($bwhy): the deploy waits for it to ease, until $(dq_clock "$(( last + DQ_BUSY_GAP ))") at the latest"
-        busy_said=1
-        dq_put "$q/next-at" "$(( last + DQ_BUSY_GAP ))"; dq_put "$q/busy" "$busy"
-        wait=$(( last + DQ_BUSY_GAP - now ))
+        # Said again when the bound moves (memory tight, then a busy load, or the other way).
+        [[ "${busy_said:-}" == "$lim" ]] || dq_log "the Mac is busy ($bwhy): the deploy waits for it to ease, until $(dq_clock "$(( last + lim ))") at the latest"
+        busy_said=$lim
+        dq_put "$q/next-at" "$(( last + lim ))"; dq_put "$q/busy" "$busy"
+        wait=$(( last + lim - now ))
         sleep $(( wait < 10 ? wait : 10 ))
         continue
       fi

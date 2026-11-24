@@ -248,6 +248,14 @@ describe('the deploy queue', () => {
     expect(busy.stdout).toMatch(/Deploy queued: this Mac is busy \(load 9999\); the next deploy goes once it eases, at .* at the latest, with the newest commit then, which includes /)
     expect(fs.existsSync(path.join(f.queue, 'busy'))).toBe(false)
     await runnerGone(f)
+    // A busy load waits its whole gap even past the shorter memory gap.
+    const h = fixture()
+    stampNow(h)
+    const t2 = Math.floor(Date.now() / 1000)
+    const loaded = await call(h, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '12', WALNUT_DEPLOY_MEM_GAP_SECS: '3', WALNUT_DEPLOY_LOAD_TEST: '9999' }).done
+    expect(loaded.code, loaded.stderr).toBe(0)
+    expect(deploys(h).filter((d) => d.kind === 'start')[0].at).toBeGreaterThanOrEqual(t2 + 12)
+    await runnerGone(h)
     // An easy Mac: only the plain gap.
     const g = fixture()
     stampNow(g)
@@ -268,7 +276,17 @@ describe('the deploy queue', () => {
     expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the Mac is busy \(memory pressure level 2\): the deploy waits/)
     expect(tight.stdout).toMatch(/Deploy queued: this Mac is busy \(memory pressure level 2\); the next deploy goes once it eases/)
     await runnerGone(f)
-  }, 90_000)
+    // Tight memory waits only up to its own, shorter gap (2026-11-24: swap stayed over 90% for hours).
+    const g = fixture()
+    stampNow(g)
+    const t1 = Math.floor(Date.now() / 1000)
+    const short = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '120', WALNUT_DEPLOY_MEM_GAP_SECS: '8', WALNUT_DEPLOY_MEM_TEST: 'swap 95/100 MB used' }).done
+    expect(short.code, short.stderr).toBe(0)
+    const at = deploys(g).filter((d) => d.kind === 'start')[0].at
+    expect(at).toBeGreaterThanOrEqual(t1 + 8)
+    expect(at).toBeLessThan(t1 + 60)
+    await runnerGone(g)
+  }, 120_000)
 
   it('a move production runs holds the deploy until it ends, at most the hold; a dead or old marker holds nothing (2026-11-12)', async () => {
     // A move to a remote host takes 10 to 15 minutes; a deploy every 10 to 20 cut each one.
