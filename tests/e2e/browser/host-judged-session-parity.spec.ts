@@ -409,7 +409,7 @@ test('host-judged: a session on devbox run and judged by its host, driven in the
   walks.host = await walk(page, 'host')
 })
 
-test('legacy: the same walk with the switch off', async ({ page }) => {
+test('switch off: the same walk, the session run over the daemon link and judged on the Mac (judge here)', async ({ page }) => {
   test.setTimeout(900_000)
   await setSwitch('legacy')
   walks.legacy = await walk(page, 'legacy')

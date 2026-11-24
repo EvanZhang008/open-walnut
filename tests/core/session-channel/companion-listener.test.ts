@@ -217,12 +217,12 @@ describe('operating a host\'s session through its link', () => {
 
   it('a stop is the host\'s own terminateSession, answered with the stop it recorded; its refusal keeps the host\'s code', async () => {
     const { t, answer } = await operated()
-    const p = stopViaHost(t, true, 1000)
+    const p = stopViaHost(t, { force: true, by: 'human' }, 1000)
     await settle()
     const stopRequest = { id: 'st1', requestedAt: 'x', state: 'confirmed' }
-    expect(answer(200, { ok: true, value: { status: 'terminated', sessionId: 's1', stopRequest } })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'lifecycle', member: 'terminateSession', args: [{ force: true }] } })
+    expect(answer(200, { ok: true, value: { status: 'terminated', sessionId: 's1', stopRequest } })).toMatchObject({ path: '/host-api/sessions/call', body: { sid: 's1', target: 'lifecycle', member: 'terminateSession', args: [{ force: true, by: 'human' }] } })
     expect(await p).toEqual({ ok: true, result: { status: 'terminated', sessionId: 's1', stopRequest, viaHost: true } })
-    const q = stopViaHost(t, false, 1000)
+    const q = stopViaHost(t, { force: false, by: 'human' }, 1000)
     await settle()
     answer(409, { ok: false, error: 'Session has armed crons', code: 'crons_armed' })
     const refused = await q
@@ -234,7 +234,7 @@ describe('operating a host\'s session through its link', () => {
     const { t, answer } = await operated()
     // What an older host's listener answers for a call its LISTENER_CALLS does not list (companion-dialer.ts).
     const old = { ok: false, error: 'not_callable' }
-    const stop = stopViaHost(t, false, 1000)
+    const stop = stopViaHost(t, { force: false, by: 'human' }, 1000)
     await settle()
     await answer(403, old)
     const refused = await stop

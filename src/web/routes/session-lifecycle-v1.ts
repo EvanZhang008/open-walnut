@@ -88,11 +88,6 @@ async function refuseSessionControl(req: Request, res: Response, sessionId: stri
   return false
 }
 
-/** The frozen { session } row for a mode the companion applied on the session's host. */
-function modeOnlyRow(row: { id: string; process_status: string; title?: string }, mode: string): Record<string, unknown> {
-  return { claudeSessionId: row.id, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode }
-}
-
 /** The answer's pictures for the Mac: this box's uploads cannot be read there, so all go inline. */
 async function relayedPictures(body: Record<string, unknown>): Promise<{ images?: Array<{ data: string; mediaType: string }> }> {
   if (body.images === undefined && body.imageRefs === undefined) return {}
@@ -316,15 +311,8 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
           res.status(applied.answer.status).json(applied.answer.body)
           return
         }
-        const rest: Record<string, unknown> = { ...patch }
-        delete rest.mode
-        if (Object.keys(rest).length === 0) {
-          res.status(200).json({ session: modeOnlyRow(lead.target.row, applied.mode), viaCompanion: true })
-          return
-        }
-        const { keepSessionPatch } = await import('../../core/control-queue.js')
-        const opId = await keepSessionPatch(sessionId, rest)
-        res.status(200).json({ session: { ...modeOnlyRow(lead.target.row, applied.mode), ...rest }, viaCompanion: true, ...(opId ? { queued: true } : {}) })
+        const taken = await (await import('../../core/session-channel/companion-host-ops.js')).modeTakenAnswer(sessionId, lead.target.row, applied.mode, patch, 'viaCompanion')
+        res.status(taken.status).json(taken.body)
         return
       }
       const { callPrimaryControl } = await import('./v1-control-relay.js')

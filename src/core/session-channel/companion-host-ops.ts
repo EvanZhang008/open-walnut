@@ -298,8 +298,8 @@ export async function interruptViaHost(t: OperatedSession, timeoutMs = 15_000): 
  * own session (session-lifecycle.ts terminateSession), as the Mac hands it over. Answers the host's
  * TerminateResult (a `pending` one is the route's stop_pending), or the refusal.
  */
-export async function stopViaHost(t: OperatedSession, force: boolean, timeoutMs = 30_000): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; answer: HostAnswer }> {
-  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'terminateSession', ...callArgsOut([{ force }]) }, timeoutMs)
+export async function stopViaHost(t: OperatedSession, opts: { force: boolean; by: string }, timeoutMs = 30_000): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; answer: HostAnswer }> {
+  const r = await call(t, '/host-api/sessions/call', { sid: t.row.claudeSessionId, target: 'lifecycle', member: 'terminateSession', ...callArgsOut([{ force: opts.force, by: opts.by }]) }, timeoutMs)
   if (!r.ok) return r
   const value = r.body.value && typeof r.body.value === 'object' ? r.body.value as Record<string, unknown> : {}
   return { ok: true, result: { ...value, viaHost: true } }
@@ -332,12 +332,20 @@ export async function patchModeViaHost(sid: string, mode: unknown, patch: Record
   if (typeof mode !== 'string' || !VALID_SESSION_MODE_IDS.has(mode)) return v1Error(400, 'bad_request', `mode must be one of ${[...VALID_SESSION_MODE_IDS].join(', ')}`)
   const applied = await modeViaHost(route.t, mode)
   if (!applied.ok) return applied.answer
+  return modeTakenAnswer(sid, route.t.row, applied.mode, patch, 'viaHost')
+}
+
+/**
+ * The phone's answer once a mode was taken on the session's host, by the companion's listener link
+ * (`viaHost`) or while the companion leads that host (`viaCompanion`): the frozen { session } row
+ * with the mode the host kept. The rest of the patch is metadata, kept for the Mac (control-queue.ts).
+ */
+export async function modeTakenAnswer(sid: string, row: { process_status: string; title?: string }, mode: string, patch: Record<string, unknown>, by: 'viaHost' | 'viaCompanion'): Promise<HostAnswer> {
   const { mode: _mode, ...rest } = patch
   const { keepSessionPatch } = await import('../control-queue.js')
   const opId = Object.keys(rest).length > 0 ? await keepSessionPatch(sid, rest) : null
-  const row = route.t.row
-  const session = { claudeSessionId: sid, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode: applied.mode, ...rest }
-  return { status: 200, body: { session, viaHost: true, ...(opId ? { queued: true } : {}) } }
+  const session = { claudeSessionId: sid, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode, ...rest }
+  return { status: 200, body: { session, [by]: true, ...(opId ? { queued: true } : {}) } }
 }
 
 /**

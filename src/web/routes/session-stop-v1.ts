@@ -60,7 +60,8 @@ export async function cloudTerminate(res: Response, sessionId: string, force: bo
   // A session its host judges, the Mac away: its host stops it over its listener link, as the Mac
   // hands a stop to it (companion-host-ops.ts stopViaHost); the Mac reads the stop from the host's row.
   if (route.kind === 'operated') {
-    const a = await ops.stopViaHost(route.t, force)
+    // A person's stop from a paired device (a session caller was refused before: refuseSessionControl).
+    const a = await ops.stopViaHost(route.t, { force, by: 'human' })
     if (!a.ok) {
       // Refused by the host (crons armed, not its session) or a host too old to take it: nothing was noted there.
       const code = (a.answer.body.error as { code?: unknown } | undefined)?.code
