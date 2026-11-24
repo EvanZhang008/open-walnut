@@ -46,6 +46,8 @@ const NOT_MEMBERS: Record<string, string> = {
   'src/core/session-health-monitor': 'the leader\'s monitor (boot policy: no replica runs it); a host repairs its own rows\' dead processes with session-channel/host-stale-repair.ts',
   'src/core/sessions/auto-recover-env': 'restart recovery\'s inputs (boot policy: leader only); a host takes its own sessions again after a restart of its service by the boot attach and the told-line replay (host-judged-lines.ts)',
   'src/providers/daemon-connection': 'the reconnect rescue pass of the leader\'s daemon links',
+  'src/core/session-tracker': 'the session command gate\'s filters (stale-row repair, capacity eviction, the orphan sweep): a host-judged row is its host\'s to repair, evict or sweep, so these leave it out; no job of the resend family',
+  'src/providers/service-set-move-checks': 'a service set move\'s list of sessions to move: a host-judged one is its host service\'s already; no job of the resend family',
 }
 
 function code(file: string): string {
