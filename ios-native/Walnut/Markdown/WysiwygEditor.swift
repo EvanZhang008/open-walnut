@@ -73,10 +73,10 @@ struct WysiwygEditor: UIViewRepresentable {
         textView.allowsEditing = isEditable
         // Don't clobber isEditable mid-session — the tap that entered edit
         // mode owns it until textViewDidEndEditing hands it back. Going
-        // read-only (offline) does force the session closed.
+        // read-only (offline) does force the session closed, after this update (`followFocus`).
         if !isEditable, textView.isEditable {
             textView.isEditable = false
-            _ = textView.resignFirstResponder()
+            textView.followFocus { false }
         }
         // Identity check first: text the coordinator itself just pushed into
         // the binding comes back as the SAME instance — skipping the O(n)

@@ -89,12 +89,9 @@ struct LongDraftEditor: UIViewRepresentable {
             }
         }
         // Focus is driven from SwiftUI (`appendToDraft` sets it after a voice
-        // transcription). Guarded both ways so we never fight the user.
-        if isFocused, !view.isFirstResponder {
-            view.becomeFirstResponder()
-        } else if !isFocused, view.isFirstResponder {
-            view.resignFirstResponder()
-        }
+        // transcription). Guarded both ways so we never fight the user, and moved
+        // after this update (`followFocus`).
+        view.followFocus { isFocused }
     }
 
     /// CONSTANT height — the whole point. `visibleLines` × the font's line height

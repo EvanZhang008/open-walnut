@@ -88,11 +88,7 @@ struct LetterReplyField: UIViewRepresentable {
             view.selectedRange = NSRange(location: end, length: 0)
             view.scrollRangeToVisible(view.selectedRange)
         }
-        if isFocused, !view.isFirstResponder, view.window != nil {
-            view.becomeFirstResponder()
-        } else if !isFocused, view.isFirstResponder {
-            view.resignFirstResponder()
-        }
+        view.followFocus { isFocused }
     }
 
     /// Top and bottom inset: one line of body text at the default size makes a
@@ -363,5 +359,26 @@ final class LetterReplyFieldController {
         let s = squash(sent)
         guard !e.isEmpty, !s.isEmpty else { return false }
         return s.contains(e)
+    }
+}
+
+extension UIView {
+    /// Gives this view the keyboard focus, or takes it away, to match what SwiftUI wants, on the
+    /// next turn of the main queue: never inside the `updateUIView` that asked. A first responder
+    /// change there walks SwiftUI's focus bridge, which reads the view graph that is being
+    /// updated: AttributeGraph found a cycle and printed it on every pass, and the main thread
+    /// spent minutes writing it out (a Follow up box reopened on a VP's page; UI tests timed out
+    /// with "main thread busy for 30 s"). `wanted` is read again when the turn comes.
+    func followFocus(_ wanted: @escaping () -> Bool) {
+        guard wanted() != isFirstResponder else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let want = wanted()
+            if want, !self.isFirstResponder, self.window != nil {
+                self.becomeFirstResponder()
+            } else if !want, self.isFirstResponder {
+                self.resignFirstResponder()
+            }
+        }
     }
 }
