@@ -81,7 +81,7 @@ const PLACES: Array<['binary' | 'daemon', string, Verdict]> = [
   ['daemon', '"$HOME/.cache/open-walnut"', 'the user PATH shim\'s text: written by the production dir\'s daemon only (IS_PROD_DAEMON_DIR)'],
   ['daemon', "'# ~/.cache/open-walnut (a daemon moved there", 'the user PATH shim\'s text: written by the production dir\'s daemon only (IS_PROD_DAEMON_DIR)'],
   ['daemon', "path.join(HOME_DIR, '.claude', 'teams', team", 'a session\'s own team inbox in the engine\'s place, written for that session only'],
-  ['daemon', "path.join(os.homedir(), '.claude', 'debug', sid", 'read only: the CLI\'s own debug file of that session'],
+  ['daemon', "path.join(HOME_DIR, '.claude', 'debug', sid", 'read only: the CLI\'s own debug file of that session'],
   // The modules the daemon builds its parts from.
   ['daemon', "const DEFAULT_RUNTIME_DIR = '/tmp/open-walnut'", 'the default set\'s runtime dir: a set\'s is serviceSetRuntimeDir'],
   ['daemon', "path.join(homeDir, '.open-walnut', 'tmp', 'spawned-sessions')", 'read only: an external session scan'],

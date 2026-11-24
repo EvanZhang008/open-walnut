@@ -9,7 +9,6 @@
  * read the verdict. The code is the runtime's as it was; deps carry the runtime's own names.
  */
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { hasDiskCronInterest, lockLiveFifo, type DaemonCore } from './daemon-core.js'
 import { Subscribers, type SessionData, type TaskState, type DaemonCronRuntime } from './daemon-session-types.js'
@@ -26,6 +25,8 @@ export interface SessionProtection {
 
 export interface DaemonIdleScanDeps<W extends object> {
   daemonEnv: DaemonEnv
+  /** The daemon's home (WALNUT_HOME_OVERRIDE, else HOME): where its CLIs write ~/.claude/debug. */
+  HOME_DIR: string
   SERVICE_MODE: boolean
   STREAMS_DIR: string
   sessions: Map<string, SessionData<W>>
@@ -50,7 +51,7 @@ export interface DaemonIdleScanDeps<W extends object> {
 }
 
 export function createDaemonIdleScan<W extends object>(deps: DaemonIdleScanDeps<W>) {
-  const { daemonEnv, SERVICE_MODE, STREAMS_DIR, sessions, core, cliOwner, codeServer, cronRuntime, daemonCommands, isProcessGroupAlive, killProcessGroup, killSessionProcessGroup, namedSessionId, readStartTime, reapSession, rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl, startOrphanPoll, logMsg } = deps
+  const { daemonEnv, HOME_DIR, SERVICE_MODE, STREAMS_DIR, sessions, core, cliOwner, codeServer, cronRuntime, daemonCommands, isProcessGroupAlive, killProcessGroup, killSessionProcessGroup, namedSessionId, readStartTime, reapSession, rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl, startOrphanPoll, logMsg } = deps
 
   // ── Session idle scanner ──
   // Runs every 60s, kills orphaned sessions per the decision tree:
@@ -103,7 +104,7 @@ export function createDaemonIdleScan<W extends object>(deps: DaemonIdleScanDeps<
   // rare kill path, never on the per-minute scan of healthy sessions.
   const CRON_DEBUG_TAIL_BYTES = 64 * 1024
   function hasRecentSchedulerFiring(sid: string, withinMs: number): boolean {
-    const debugPath = path.join(os.homedir(), '.claude', 'debug', sid + '.txt')
+    const debugPath = path.join(HOME_DIR, '.claude', 'debug', sid + '.txt')
     let fd: number
     try { fd = fs.openSync(debugPath, 'r') } catch { return false }
     try {

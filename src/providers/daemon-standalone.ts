@@ -5867,16 +5867,8 @@ function sendFrame(ws: ServerWebSocket<WsData>, frame: Record<string, unknown>, 
   safeSend(ws, JSON.stringify(frame))
 }
 
-// ── FIFO write logger ──
-// Wraps writeFifoRaw so every FIFO write attempt is observable — essential
-// for debugging "message sent but CLI never replied" bugs. Success, EAGAIN
-// backpressure, and ENXIO (dead reader) are all distinct signals.
-function logFifoWrite(sid: string, bytes: number, result: 'ok' | 'EAGAIN' | 'ENXIO' | 'error', err?: string) {
-  logMsg(result === 'ok' ? 'debug' : 'warn', 'fifo_write', { sid, bytes, result, ...(err ? { err } : {}) })
-}
-
 // ── The session idle scanner, the keep-alive verdict, the cron evidence, the boot adoption (daemon-idle-scan.ts) ──
-const idleScan = createDaemonIdleScan({ daemonEnv, SERVICE_MODE, STREAMS_DIR, sessions, core, cliOwner, codeServer, cronRuntime: () => cronRuntime, daemonCommands,
+const idleScan = createDaemonIdleScan({ daemonEnv, HOME_DIR, SERVICE_MODE, STREAMS_DIR, sessions, core, cliOwner, codeServer, cronRuntime: () => cronRuntime, daemonCommands,
   isProcessGroupAlive, killProcessGroup, killSessionProcessGroup, namedSessionId, readStartTime, reapSession, rebuildFoldStateFromJsonl, rebuildTaskStateFromJsonl,
   startOrphanPoll, logMsg })
 const { SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS, SESSION_SCAN_INTERVAL_MS, SESSION_IDLE_SCAN_MS, hasRecentSchedulerFiring, deriveSessionProtection,
