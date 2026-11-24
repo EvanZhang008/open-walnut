@@ -21,6 +21,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BUILTIN_ALARMS, logLineOwners } from '../../../src/core/health-monitor/alarms.js'
 import { healthSeriesNamesOf, RESUME_MACHINE_METRIC } from '../../../src/core/health-monitor/collect.js'
+import { LINK_LOST_METRIC } from '../../../src/providers/link-lost-metric.js'
 import { parseSeriesKey } from '../../../src/core/health-monitor/evaluate.js'
 import { signatureKey } from '../../../src/core/health-monitor/signature.js'
 import * as stallCause from '../../../src/core/stall-cause.js'
@@ -47,6 +48,7 @@ const INDEPENDENT_LINES: Record<string, string> = {
 const CONSTANTS: Record<string, string> = {
   ...Object.fromEntries(Object.entries(stallCause).filter(([, v]) => typeof v === 'string')) as Record<string, string>,
   RESUME_MACHINE_METRIC,
+  LINK_LOST_METRIC,
 }
 
 function srcFiles(dir: string, out: string[] = []): string[] {
