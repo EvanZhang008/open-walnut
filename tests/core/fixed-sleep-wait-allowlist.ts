@@ -28,6 +28,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/browser-control/extension-agent-input.test.ts", sleep: "await sleep(600)", reason: "time under test: 600 ms after the look the restarted hold still holds the debugger" },
   { file: "tests/core/browser-control/extension-view-stream.test.ts", sleep: "await new Promise((r) => setTimeout(r, BEHIND_EVERY_MS + 50))", reason: "time under test: a picture of a tab behind the agent's may switch to it again only once BEHIND_EVERY_MS has passed" },
   { file: "tests/core/browser-control/hub.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the second browser's poll must be more recent than the first" },
+  { file: "tests/core/claude-settings-watcher.test.ts", sleep: "await sleep(300)", reason: "negative: a file written beside the settings file must not call back" },
+  { file: "tests/core/claude-settings-watcher.test.ts", sleep: "await sleep(300)", reason: "negative: one rename-replace calls back once, never a second time after the debounce" },
   { file: "tests/core/cloud-chat-outbox.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: the second turn file must be stamped later than the first" },
   { file: "tests/core/cloud-ingest.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: no more than 2 requests may be in flight while held" },
   { file: "tests/core/cloud-ingest.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "already a bounded poll loop: releases held answers until all 6 were seen; the results are then awaited" },
