@@ -121,16 +121,31 @@ export type PageRequestHow = 'rejected' | 'failed' | 'timed out' | 'refused'
 /** A fetch that threw for the network (Chromium, WebKit, Firefox), not for the request itself. */
 const NETWORK_ERROR_RE = /Failed to fetch|Load failed|NetworkError|network connection was lost|Could not connect|ERR_[A-Z_]{4,}/i
 
+/** A page kind of a request that went wrong on its way, as pageErrorKind writes it: its route, then how. */
+const PAGE_REQUEST_KIND_RE = /^((?:GET|POST|PUT|PATCH|DELETE) (?:\/\S*|unknown request)) (failed|rejected|timed out) in the page$/
+
 /**
- * Whether a page kind is the page's own failure. A request that failed for the network never
- * reached the server (it was restarting for a deploy, asleep, or the network was down), and one
- * the page's connection queue rejected was never sent: their cause is judged where it happened
- * (the route's slow reads and server errors, Walnut Health's server alarms), never on the page
- * that showed it (2026-11-24: two deploy restarts made 253 page kinds on the session page, and a
- * watch on it read 253 errors). Matches the words pageErrorKind writes.
+ * The request a page kind names when it went wrong on its way, with how: its route's template
+ * (`GET /api/sessions/:sessionId/supervision`, or `GET unknown request`), else null (an error thrown
+ * in the page, or a request the browser itself refused to send: the page's own).
+ */
+export function pageRequestOf(kind: string): { route: string; how: 'failed' | 'rejected' | 'timed out' } | null {
+  const m = PAGE_REQUEST_KIND_RE.exec(kind)
+  return m ? { route: m[1]!, how: m[2] as 'failed' | 'rejected' | 'timed out' } : null
+}
+
+/**
+ * Whether a page kind can be the page's own failure. A request that failed for the network never
+ * reached the server (a deploy restart, sleep, the network), and one the page's connection queue
+ * rejected was never sent: never the page's (2026-11-24: two deploy restarts made 253 page kinds on
+ * the session page, and a watch on it read 253 errors). A timed-out one is the page's only while its
+ * route answered in time (the page's own connections held the pool); while the route read slowly or
+ * failed, it is the route's (watches.ts judgeTarget decides it per hour: 2026-11-24, 15 supervision
+ * timeouts fell in the minutes its server read slowly, and failed three tasks' page:session watches).
  */
 export function pageKindIsPagesOwn(kind: string): boolean {
-  return !/ (?:failed|rejected) in the page$/.test(kind)
+  const r = pageRequestOf(kind)
+  return r === null || r.how === 'timed out'
 }
 
 /**

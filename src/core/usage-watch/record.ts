@@ -45,8 +45,11 @@ let watchedOps = new Set<string>()
 export function setWatchedOps(ops: Iterable<string>): void {
   watchedOps = new Set(ops)
 }
-/** Server errors by route this hour, so a page failure of the same cause is not alarmed twice. */
-const routeErrorsAt = new Map<string, number>()
+/**
+ * When each route last answered with a server error or read slowly, so a page failure of the same
+ * cause is not alarmed twice: it rings on the route's own alarm (watches.ts judges the same per hour).
+ */
+const routeTroubleAt = new Map<string, number>()
 
 /**
  * A page request that timed out is held this long before it may ring: when several different
@@ -62,7 +65,7 @@ const MAX_HELD = 2_000
 export const STALL_KIND = 'page requests timed out together'
 let startedAt = 0
 /** In arrival order; a judged entry is context only (a failure that never rings, or one already counted). */
-let held: { at: number; kind: string; judged: boolean }[] = []
+let held: { at: number; kind: string; route?: string; judged: boolean }[] = []
 let lastStallAt = -Infinity
 
 function hourOf(t: number): number {
@@ -179,11 +182,12 @@ export function recordHttp(r: HttpRequest): void {
   if (serverError) {
     agg.serverErrors++
     count('usage.http.server_errors', 1, labels)
-    routeErrorsAt.set(name, now)
+    routeTroubleAt.set(name, now)
     event({ at: now, kind: 'http', name, problem: 'server_error', code: `http_${r.status}`, ms: r.ms })
   }
   if (!r.waits && r.method === 'GET' && r.ms > SLOW_READ_MS) {
     agg.slow++
+    routeTroubleAt.set(name, now)
     count('usage.http.slow', 1, labels)
     event({ at: now, kind: 'http', name, problem: 'slow', ms: r.ms })
   }
@@ -194,15 +198,15 @@ export function recordPageError(k: PageErrorKind, now = Date.now()): void {
   if (!active) return
   const agg = bucket('page', k.kind, now)
   addCall(agg, { cls: 'error', chars: 0, ms: 0 })
-  // The same cause rang on its route this hour (server errors): counted here, alarmed there.
-  const sameCause = k.route ? now - (routeErrorsAt.get(k.route) ?? 0) < HOUR_MS : false
+  // The same cause rang on its route this hour (server errors, slow reads): counted here, alarmed there.
+  const sameCause = k.route ? now - (routeTroubleAt.get(k.route) ?? 0) < HOUR_MS : false
   // A request the page's connection queue gave up on (rejected) was never sent, and one that
   // failed never reached the server (a network error: it was down, restarting or asleep, or the
   // network was): their cause rings on its own (slow reads, server errors, Walnut Health's server
   // alarms) or is not Walnut's. Shown in the table, never rung (2026-11-22: a restart made 19 at
   // once, and a sleeping Mac's page nine at one instant). A timed-out one can be its route's: it
   // waits a minute (settlePageFailures). A thrown error, or a request the browser refused, rings.
-  const hold = (judged: boolean) => { if (held.length < MAX_HELD) held.push({ at: now, kind: k.kind, judged }) }
+  const hold = (judged: boolean) => { if (held.length < MAX_HELD) held.push({ at: now, kind: k.kind, ...(k.route ? { route: k.route } : {}), judged }) }
   if (!k.request || k.how === 'refused') { if (!sameCause) count('usage.page.errors', 1, { kind: labelValue(k.kind) }) }
   else if (k.how === 'rejected') { /* a hung route fills the queue: never context for its own timeouts */ }
   // Context for the window only: what failed with it, what came right after a restart.
@@ -217,6 +221,8 @@ export function settlePageFailures(now = Date.now()): void {
     const f = held[i]!
     if (f.judged || now - f.at < OUTAGE_WINDOW_MS) continue
     f.judged = true
+    // Its route read slowly or failed around it (its answer lands after the page gave up): the route's.
+    if (f.route && Math.abs(f.at - (routeTroubleAt.get(f.route) ?? -Infinity)) < HOUR_MS) continue
     if (kindsNear(i) < OUTAGE_KINDS) count('usage.page.errors', 1, { kind: labelValue(f.kind) })
     else if (f.at - lastStallAt > OUTAGE_WINDOW_MS) {
       lastStallAt = f.at
@@ -249,7 +255,7 @@ export function flushUsage(now = Date.now()): void {
   addToolErrors(errs)
   markAlive(now)
   if (now - lastPrune > HOUR_MS) { lastPrune = now; pruneStore(now) }
-  for (const [route, at] of routeErrorsAt) if (now - at > HOUR_MS) routeErrorsAt.delete(route)
+  for (const [route, at] of routeTroubleAt) if (now - at > HOUR_MS) routeTroubleAt.delete(route)
   // The gauge's alarm reads it every 5 minutes: a day of hour rows is read no more often.
   if (now - lastBadArgs >= BAD_ARGS_EVERY_MS) { lastBadArgs = now; reportBadArgShares(now) }
 }
@@ -301,7 +307,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0): void {
   pending = new Map()
   events = []
   toolErrors = []
-  routeErrorsAt.clear()
+  routeTroubleAt.clear()
   badArgGauges.clear()
   lastPrune = 0
   lastBadArgs = 0

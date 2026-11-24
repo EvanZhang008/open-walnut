@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { emptyAgg, mergeAgg, msPercentile, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readHours, usageDb } from './store.js'
-import { pageKindIsPagesOwn } from './normalize.js'
+import { pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -84,7 +84,12 @@ export function targetProblem(t: string): string | null {
   return TARGET_RE.test(t) ? null : `"${t.slice(0, 80)}" is not a target: use op:<op name>, route:<METHOD> <route template> (route:GET /api/tasks/:id), or page:<chunk or kind>`
 }
 
-/** Whether a recorded name is covered by a watch target. */
+/**
+ * Whether a recorded name is covered by a watch target: what its verdict judges, whose alarm comes
+ * to it, what its report shows. A page target never covers a request that never reached the server
+ * or was never sent (normalize.ts pageKindIsPagesOwn); a timed-out one it covers, and its verdict
+ * gives it to the route in an hour the route read slowly (judgeTarget).
+ */
 export function targetCovers(target: string, kind: UsageKind, name: string): boolean {
   if (target.startsWith('op:')) return kind === 'op' && name === target.slice(3)
   if (target.startsWith('route:')) {
@@ -92,7 +97,30 @@ export function targetCovers(target: string, kind: UsageKind, name: string): boo
     const want = target.slice(6)
     return want.includes(' ') ? name === want : name.endsWith(` ${want}`)
   }
-  return kind === 'page' && name.includes(target.slice(5))
+  return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
+}
+
+/** A route's hour that explains its page timeouts: it read slowly, timed out or failed on the server. */
+const troubledHour = (a: Agg): boolean => a.slow > 0 || a.timeouts > 0 || a.serverErrors > 0
+
+/**
+ * A page target's errors over [since, until): the page's own, and those that were its routes'
+ * (a request that never reached the server or was never sent, or one that timed out in an hour
+ * its route's server read slowly or failed).
+ */
+function pageErrorsOf(word: string, since: number, until: number): { own: number; theirs: number } {
+  const from = Math.floor(since / HOUR_MS) * HOUR_MS
+  const troubled = new Set(readHours(from, { kind: 'http' }).filter((r) => r.hour < until && troubledHour(r.agg)).map((r) => `${r.hour}\t${r.name}`))
+  let own = 0
+  let theirs = 0
+  for (const r of readHours(from, { kind: 'page' })) {
+    if (r.hour >= until || !r.name.includes(word)) continue
+    const req = pageRequestOf(r.name)
+    if (!req) own += r.agg.calls
+    else if (req.how === 'timed out' && !troubled.has(`${r.hour}\t${req.route}`)) own += r.agg.calls
+    else theirs += r.agg.calls
+  }
+  return { own, theirs }
 }
 
 function row(r: Record<string, unknown>): Watch {
@@ -148,12 +176,12 @@ export function armedWatchesFor(kind: UsageKind, name: string, now = Date.now())
     .sort((a, b) => (b.shipAt ?? b.createdAt) - (a.shipAt ?? a.createdAt))
 }
 
-function mergedFor(target: string, since: number, until: number, keep: (name: string) => boolean = () => true): Agg {
+function mergedFor(target: string, since: number, until: number): Agg {
   const kind: UsageKind = target.startsWith('op:') ? 'op' : target.startsWith('route:') ? 'http' : 'page'
   let out = emptyAgg()
   const from = Math.floor(since / HOUR_MS) * HOUR_MS
   for (const r of readHours(from, { kind })) {
-    if (r.hour >= until || !targetCovers(target, r.kind, r.name) || !keep(r.name)) continue
+    if (r.hour >= until || !targetCovers(target, r.kind, r.name)) continue
     out = mergeAgg(out, r.agg)
   }
   return out
@@ -165,14 +193,12 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   const agg = mergedFor(target, since, until)
   const notes: string[] = []
   if (target.startsWith('page:')) {
-    // Only the page's own failures fail it; requests that never reached the server or were never
-    // sent are named, not judged (pageKindIsPagesOwn).
-    const own = mergedFor(target, since, until, pageKindIsPagesOwn).calls
-    const away = agg.calls - own
+    // Only the page's own failures fail it; its routes' are named, not judged (pageErrorsOf).
+    const { own, theirs } = pageErrorsOf(target.slice(5), since, until)
     if (own > 0) notes.push(`${own} page error${own === 1 ? '' : 's'}`)
     const ok = notes.length === 0
-    if (away > 0) notes.push(`${away} request${away === 1 ? '' : 's'} that never reached the server or were never sent (a restart, sleep or the network; not counted)`)
-    return { target, uses: agg.calls, ok, notes }
+    if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} its routes' (never reached the server, never sent, or timed out while the route read slowly; not counted)`)
+    return { target, uses: own + theirs, ok, notes }
   }
   const fails = agg.errors + agg.timeouts + agg.badArgs
   const failPct = agg.calls ? Math.round((fails / agg.calls) * 1000) / 10 : 0
