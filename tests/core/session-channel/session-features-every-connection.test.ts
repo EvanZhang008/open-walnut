@@ -102,6 +102,7 @@ const NOT_A_CONTROL: Record<string, string> = {
   'lifecycle.readSessionSupervision': 'a read of the cron supervision state, asked by the leader instead of the daemon',
   'lifecycle.lineAlreadyRan': 'a resend\'s check of a line\'s fate, asked by the leader instead of the daemon',
   'lifecycle.cancelPendingStart': 'an unconfirmed start\'s cancel, the leader\'s own retry step',
+  'lifecycle.sendFolderWaiting': 'the leader\'s ask, after it made a released workspace again, that the host send the lines it parked for the gone folder (folder-gone.ts)',
 }
 
 const testsOf = (file: string): string[] => {
