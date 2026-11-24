@@ -125,7 +125,8 @@ test('R2-1: a Lock elsewhere reaches an open Passwords page within a second, and
   expect(made.ok(), await made.text()).toBe(true)
   await page.reload()
   await expect(page.getByTestId('pw-app')).toBeVisible({ timeout: 30_000 })
-  await page.getByLabel(/^Search/).first().fill(title)
+  // The page's own search: a hidden "Search tasks" field of the task panel comes first in the page.
+  await page.getByTestId('pw-app').getByLabel('Search passwords').fill(title)
   await expect(page.getByTestId('pw-row').filter({ hasText: title })).toBeVisible({ timeout: 10_000 })
 
   const t0 = Date.now()

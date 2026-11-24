@@ -83,7 +83,8 @@ test('"Every experiment on" turns on every switch never set alone, keeps one tur
       await expect(page.locator(`#experimental-${id}`)).toHaveAttribute('aria-checked', 'false');
       expect((await flags())[id]).toBeUndefined();
     }
-    await expect(page.getByText('keep their own switch')).toBeVisible();
+    // The help names what it leaves out since 8da4150cbe ("ones that copy your data or move sessions").
+    await expect(page.getByText('ones that copy your data or move sessions')).toBeVisible();
     await page.reload();
     await expect(every).toHaveAttribute('aria-checked', 'true', AFTER_RELOAD);
     await expect(voice).toHaveAttribute('aria-checked', 'true');

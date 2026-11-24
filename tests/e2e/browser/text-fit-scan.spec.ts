@@ -68,10 +68,17 @@ test.afterAll(async ({ request }) => {
   for (const id of made.tasks) await request.delete(`/api/tasks/${id}?force=true`)
 })
 
-async function expectNoCutTitle(page: Page, scopes: string[], where: string): Promise<void> {
+/**
+ * An Org list row is one line since 91214a493b (the user: the watch rows should be slim): its name
+ * is metadata (.wn-meta) that cuts and shows whole in place on hover (truncation-peek-surfaces).
+ * The list's own title and every other name there still never cut.
+ */
+const ORG_ROW_NAME = ['.org-channel > .org-channel-name.wn-meta']
+
+async function expectNoCutTitle(page: Page, scopes: string[], where: string, skip: string[] = []): Promise<void> {
   // Rows draw after the list's first answer; give a late row its chance before measuring.
   await page.waitForTimeout(400)
-  const bad = violations(await findCutTitles(page, scopes))
+  const bad = violations(await findCutTitles(page, scopes, skip))
   expect(bad.map((b) => `${where}: .${b.className.split(' ')[0]} hides ${Math.round(b.hidden * 100)}%${b.metaKeptRoom ? ' while metadata kept its room' : ''}: "${b.text}"`), 'A title is cut. Make it .wn-title (web/src/styles/text-fit.css) and cut metadata instead').toEqual([])
 }
 
@@ -98,7 +105,7 @@ for (const [width, height] of [[1512, 920], [1280, 800], [1024, 768]] as const) 
     await page.getByTestId('sidebar-org').click()
     await expect(page.getByTestId('org-page')).toBeVisible()
     await expect(page.getByTestId('org-page').getByText(VP).first()).toBeVisible({ timeout: 20_000 })
-    await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list ${width}`)
+    await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list ${width}`, ORG_ROW_NAME)
 
     // The Org chart's cards: names, current task and project rows.
     await page.getByTestId('org-open-chart').click()
@@ -171,7 +178,7 @@ test('the Org list dragged to its narrowest still cuts no name', async ({ page, 
   await page.mouse.up()
   const width = (await list.boundingBox())!.width
   expect(width).toBeLessThan(260)
-  await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list at ${Math.round(width)} px`)
+  await expectNoCutTitle(page, ['[data-testid="org-page"] .org-list'], `Org list at ${Math.round(width)} px`, ORG_ROW_NAME)
 })
 
 // The Tasks page: the project rail and the table's rows (they wrap, and the window measures them).

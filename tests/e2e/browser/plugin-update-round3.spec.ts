@@ -190,11 +190,12 @@ test('(N3-7)(N3-9)(N3-17) pills share one height, the header link is text-safe, 
     expect(Math.abs(b.height - c.height), `${id}: tag ${b.height} vs chip ${c.height}`).toBeLessThanOrEqual(0.5)
     await backToApps(page)
   }
-  // Check now reads in the same text-safe accent as the chip (4.5:1 on the light card).
+  // Check now is a text action, so the family's grey key (433e9e9265), not an accent link: its
+  // label is the text colour (--fg), legible on the light card.
   const link = page.getByTestId('plugin-updates-check-now')
   const colours = await link.evaluate((el) => {
     const probe = document.createElement('span')
-    probe.style.color = 'var(--accent-text)'
+    probe.style.color = 'var(--fg)'
     document.body.appendChild(probe)
     const expected = getComputedStyle(probe).color
     probe.remove()

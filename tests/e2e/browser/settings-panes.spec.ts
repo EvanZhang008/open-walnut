@@ -295,7 +295,8 @@ test('C25: every nav tile is a 20px tinted square; the active entry is accent wi
   for (const t of tiles) {
     expect(t.w).toBeCloseTo(20, 0)
     expect(t.h).toBeCloseTo(20, 0)
-    expect(t.radius).toBe('5px')
+    // The corner scale's small mark (--radius-xs, 4px) since 24c5c5b1de moved the 5px literal onto it.
+    expect(t.radius).toBe('4px')
     expect(t.bg).not.toBe('rgba(0, 0, 0, 0)')
     expect(t.svg).toBe(true)
   }
@@ -736,19 +737,32 @@ for (const theme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: theme })
     await openSettings(page)
     await expect(page.locator('#general.settings-section')).toBeVisible({ timeout: 20_000 })
+    const filterEdge = () => page.getByTestId('settings-filter').evaluate((el) => getComputedStyle(el.closest('.wn-field')!).borderTopColor)
+    const restEdge = await filterEdge()
     await page.getByTestId('settings-filter').focus()
+    // The focus edge is a real change from the resting edge, so the edge check below means focus.
+    await expect.poll(filterEdge).not.toBe(restEdge)
     const missing: string[] = []
     for (let i = 0; i < 40; i++) {
       const info = await page.evaluate(() => {
         const el = document.activeElement as HTMLElement | null
         if (!el || !el.closest('.settings-layout')) return null
         const cs = getComputedStyle(el)
-        // A field's words show keyboard focus on the field box they sit in: its 2 px ring
-        // (styles/input-box.css, "Fields"). A faint edge is not a ring.
-        const field = el.closest('.wn-field')
-        const box = field ? getComputedStyle(field) : null
-        const ring = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || cs.boxShadow !== 'none'
-          || (!!box && box.outlineStyle !== 'none' && parseFloat(box.outlineWidth) >= 2)
+        // A field's words show focus on the field box they sit in. Since 6f4a477964 (the user: no
+        // ring round a focused field) that is the box's edge turning --input-focus-edge, the
+        // darker edge (styles/input-box.css, "Fields"); the resting faint edge is not focus.
+        const field = el.closest('.wn-field') as HTMLElement | null
+        let edge = false
+        if (field) {
+          const probe = document.createElement('span')
+          probe.style.borderTop = '1px solid var(--input-focus-edge)'
+          field.appendChild(probe)
+          const focusEdge = getComputedStyle(probe).borderTopColor
+          probe.remove()
+          const box = getComputedStyle(field)
+          edge = parseFloat(box.borderTopWidth) > 0 && box.borderTopColor === focusEdge
+        }
+        const ring = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || cs.boxShadow !== 'none' || edge
         return { ring, name: el.getAttribute('data-testid') ?? el.id ?? el.tagName, inNav: !!el.closest('.settings-nav') }
       })
       if (!info) break

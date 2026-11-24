@@ -323,11 +323,14 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
     await expect(tracker).toHaveAttribute('data-update-kind', 'dirty', { timeout: 30_000 })
     await expect(disabled).toBeDisabled()
     const dead = await styleOf(disabled)
-    expect(dead.color, `${theme}: disabled text differs from an enabled button`).not.toBe(live.color)
+    // The button family (8c22324753) replaced Update's own disabled look: every disabled key is
+    // the plain key at half strength, no border (walnut-ui-requirements standard, `.btn`).
+    expect(dead.opacity, `${theme}: disabled is drawn at half strength`).toBe('0.5')
+    expect(live.opacity, `${theme}: enabled is drawn at full strength`).toBe('1')
     expect(alphaOf(dead.border), `${theme}: disabled has no border (${dead.border})`).toBe(0)
-    expect(alphaOf(live.border), `${theme}: enabled has a border (${live.border})`).toBeGreaterThan(0)
-    // Legible (not faded out): the label is real text at full opacity in a muted token.
-    expect(dead.opacity).toBe('1')
+    expect(alphaOf(live.border), `${theme}: enabled has no border either (${live.border})`).toBe(0)
+    expect(alphaOf(live.background), `${theme}: enabled has the key's solid fill (${live.background})`).toBe(1)
+    expect(dead.background, `${theme}: disabled keeps the plain key's fill`).toBe(live.background)
     await page.getByTestId('plugin-version-acme-tracker').screenshot({ path: path.join(SHOT_DIR, `disabled-update-${theme.toLowerCase()}.png`) })
     await backToApps(page)
   }

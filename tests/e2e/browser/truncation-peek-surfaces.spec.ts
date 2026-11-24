@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
 import { openSection, openTasksBy, taskRow } from './org-view-helpers'
-import { expectStill, expectTooltipNotPeek, followingOf, topsOf } from './truncation-peek-helpers'
+import { expectStill, followingOf, peekMarks, peekPill, topsOf } from './truncation-peek-helpers'
 
 // Real list/card components with long team names, at both panel widths and themes. The Org page and
 // a Board are no peek zone (2026-11-23, the user: only very narrow places widen; widening everything
@@ -83,13 +83,24 @@ test('Org rows and Board cards open nothing on hover and show cut text in a nati
         await card.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%'; }, width)
         await card.scrollIntoViewIfNeeded()
         const before = (await card.boundingBox())!
-        // The title is a three-line clamp; at both widths this real title must be cut.
-        expect(await card.locator('.kanban-card-title').evaluate((el) => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth)).toBe(true)
+        // The title wraps whole since d670f86000 dropped its three-line clamp (titles never cut):
+        // at both widths it takes the lines it needs, with no clamp and no ellipsis.
+        expect(await card.locator('.kanban-card-title').evaluate((el) => {
+          const cs = getComputedStyle(el)
+          return el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1 && cs.textOverflow !== 'ellipsis' && cs.getPropertyValue('-webkit-line-clamp') === 'none'
+        }), `board ${theme} ${width}: the title is whole`).toBe(true)
         const next = await followingOf(card, `board-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
-        // The clamped title stays clamped in its own box, its whole text in a native title.
-        await expectTooltipNotPeek(card.locator('.kanban-card-title'), 'all the next steps for the platform rewrite', `board ${theme} ${width}`, { position: { x: 5, y: 5 } })
-        await card.locator('.kanban-card-title').hover({ position: { x: 5, y: 5 } })
+        // Hovering the whole title opens nothing and moves nothing. Nothing is cut, so no native
+        // title is needed: its words, the end too, are on the card itself.
+        const cardTitle = card.locator('.kanban-card-title')
+        await expect(cardTitle).toContainText('all the next steps for the platform rewrite')
+        const titleBox = (await cardTitle.boundingBox())!
+        await cardTitle.hover({ position: { x: 5, y: 5 } })
+        await page.waitForTimeout(400) // past the row's open delay (truncation-peek.ts ROW_OPEN_MS)
+        expect(await peekMarks(page), `board ${theme} ${width}: hovering opens nothing`).toBe(0)
+        await expect(peekPill(page), `board ${theme} ${width}: no floating text pill`).toHaveCount(0)
+        expectSameBox((await cardTitle.boundingBox())!, titleBox, `board ${theme} ${width}: the title`)
         await page.screenshot({ path: info.outputPath(`board-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)
         expectSameBox((await card.boundingBox())!, before, `board ${theme} ${width}: the card`)

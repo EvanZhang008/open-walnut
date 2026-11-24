@@ -727,11 +727,12 @@ test('C59: the API provider is one group with a segmented choice; every model la
   await clickNav(page, 'sessions')
   await collect()
   // A bare "Model" names no owner. Sessions' "Default model" is Walnut's own default for Claude Code
-  // sessions (Settings > Sessions, under Default engine), so its line has to name Claude Code.
+  // sessions (Settings > Sessions, under Default engine), so its row has to name Claude Code. Since
+  // ea0bd746c2 its help is one short line and the owner is named by the picker's "Not set" choice.
   expect(labels.map((l) => l.trim()).filter((l) => l === 'Model')).toEqual([])
   const sessionsPane = page.locator('[id="sessions"].settings-section')
   const defaultModel = row(sessionsPane, 'Default model')
-  if (await defaultModel.count()) await expect(defaultModel).toContainText('Claude Code sessions')
+  if (await defaultModel.count()) await expect(defaultModel.getByTestId('default-claude-model').locator('option').first()).toHaveText(/^Not set \(Claude Code decides/)
   expect(labels).toContain('API model')
   expect(labels).toContain('Default engine')
 })

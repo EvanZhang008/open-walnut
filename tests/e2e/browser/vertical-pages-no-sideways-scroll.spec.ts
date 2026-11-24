@@ -102,7 +102,9 @@ test.beforeAll(async ({ request }) => {
   fs.writeFileSync(`${walnutHome}/org/threads/${ids.lead}.json`, JSON.stringify({ version: 1, taskId: ids.lead, threads }))
   const brief = await request.put(`/api/v1/tasks/${ids.lead}/brief`, { data: { content: `### Needs you\n\n${md}\n\n### Working\n\n${md}\n\n### Waiting\n\n${TOKEN}` } })
   expect(brief.ok(), await brief.text()).toBe(true)
-  const letter = await request.post('/api/v1/human-inbox', { data: { subject: TITLE, type: 'info', markdown: md } })
+  // An info letter enters the inbox only as a report the user asked for (520fd93f76); unmarked it
+  // becomes a notice, and the inbox pages below would have no letter to show.
+  const letter = await request.post('/api/v1/human-inbox', { data: { subject: TITLE, type: 'info', markdown: md, user_asked: true } })
   expect(letter.status(), await letter.text()).toBe(201)
   ids.letter = (await letter.json()).id
   const note = await request.put(`/api/notes-v2/content/${NOTE}.md`, { data: { content: `# ${TITLE}\n\n${md}` } })

@@ -246,11 +246,16 @@ test('N13: plugin page controls are centred on the row like every pane', async (
 test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on the nav highlight', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'advanced')
-  await expandAll(page)
-  const heights = await page.locator('.settings-pane .settings-row').evaluateAll((rows) => rows
-    .filter((r) => r.getBoundingClientRect().height > 0 && !r.querySelector('.settings-row-help') && !r.hasAttribute('data-wide'))
-    .map((r) => Math.round(r.getBoundingClientRect().height)))
+  // Since 86d5796a5a nearly every setting carries its one short help line, so Advanced alone keeps
+  // only two single-line rows; Backup's five join them to measure the one height.
+  const heights: number[] = []
+  for (const id of ['advanced', 'backup']) {
+    await clickNav(page, id)
+    await expandAll(page)
+    heights.push(...await page.locator('.settings-pane .settings-row').evaluateAll((rows) => rows
+      .filter((r) => r.getBoundingClientRect().height > 0 && !r.querySelector('.settings-row-help') && !r.hasAttribute('data-wide'))
+      .map((r) => Math.round(r.getBoundingClientRect().height))))
+  }
   expect(heights.length).toBeGreaterThan(3)
   expect(new Set(heights), JSON.stringify(heights)).toEqual(new Set([44]))
   const nav = await page.getByTestId(NAV('advanced')).evaluate((el) => getComputedStyle(el).transitionDuration)

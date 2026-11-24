@@ -13,6 +13,8 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { hostRow, openHostDetails } from './host-problems-fixture-helpers'
+// The fixture server names its own machine as the app does (2f0091c005): This Mac on macOS, else This computer.
+import { LOCAL_NAME } from './project-first-start-helpers'
 
 test.setTimeout(120_000)
 
@@ -100,7 +102,7 @@ test('grants read in words under their own host, and Revoke drops one', async ({
   await expect(macRows.nth(0)).toContainText('Allowed (it runs on one of your hosts)')
   await expect(macRows.nth(0)).toContainText('4 uses, last')
   await expect(macRows.nth(0)).toContainText('xcodebuild test -scheme Walnut')
-  await expect(macRows.nth(0)).not.toContainText('This Mac')
+  await expect(macRows.nth(0)).not.toContainText(LOCAL_NAME)
   await expect(mac.locator('[data-denied]')).toHaveCount(0)
   // A long command never pushes the row past its part.
   expect(await macRows.nth(0).evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
@@ -137,7 +139,7 @@ test('grants read in words under their own host, and Revoke drops one', async ({
 
   // Back on This Mac: its one grant revoked the same way.
   const macAgain = await thisHost(page, '__local__')
-  await macAgain.getByRole('button', { name: 'Revoke Run the iOS tests on This Mac' }).click()
+  await macAgain.getByRole('button', { name: `Revoke Run the iOS tests on ${LOCAL_NAME}` }).click()
   await expect(macAgain.locator('[data-grant-id]')).toHaveCount(0)
   await expect(macAgain).toContainText('No task from another host has used it yet')
   expect(deleted).toEqual(['DELETE xg-bbbb', 'DELETE xg-cccc', 'DELETE xg-aaaa'])
@@ -178,7 +180,7 @@ test('each host has a hard stop switch that sends the PUT and sticks', async ({ 
 
   const mac = await thisHost(page, '__local__')
   const row = mac.locator('[data-exec-host="__local__"]')
-  const sw = row.getByRole('switch', { name: 'Tasks on other hosts may use This Mac' })
+  const sw = row.getByRole('switch', { name: `Tasks on other hosts may use ${LOCAL_NAME}` })
   await expect(sw).toHaveAttribute('aria-checked', 'true')
   await sw.click()
   await expect(sw).toHaveAttribute('aria-checked', 'false')
