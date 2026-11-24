@@ -269,13 +269,16 @@ async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
     const at = th.replyAt ?? th.updatedAt ?? th.messages[th.messages.length - 1]?.at;
     if (!at || at <= p.floor || p.now - Date.parse(at) < ANSWER_GRACE_MS) continue;
     const text = cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options);
-    // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
-    const key = `card:${th.id}:${th.askId ?? sha12(cardText('', th.reply ?? '', th.options))}`;
-    if (has(p, key)) continue;
     // From before the card: a card judged days later still shows what he had said by then.
     const since = new Date(Math.min(p.now, Date.parse(at)) - EVIDENCE_MS).toISOString();
     const evidence = th.messages.filter((m) => m.at > since).slice(-EVIDENCE_MAX)
       .map((m) => ({ id: m.id, at: m.at, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
+    // Once per decision: a summary rewritten for the same ask is not judged again (each rewrite would spend a call).
+    // With no ask id, once per message of his it follows: a card rewritten five times after one complaint of his
+    // was judged five times on the same words (2026-11-24 audit); with none of his, once per wording.
+    const newest = evidence[evidence.length - 1]?.id;
+    const key = `card:${th.id}:${th.askId ?? (newest ? `after:${newest}` : sha12(cardText('', th.reply ?? '', th.options)))}`;
+    if (has(p, key)) continue;
     const sessionId = th.replySid ?? '';
     p.out.push({
       key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: at, to: at,
@@ -300,7 +303,6 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   if (!words && !decisionId) return null;
   // The card as he reads it, buttons included; keyed by its words alone, so a key never moves.
   const form = r.askForm;
-  const text = form ? cardText('', [form.summary, form.more ?? ''].filter(Boolean).join('\n\n'), form.options, form.kind) : cardText('', words, undefined);
   const askAt = r.at ?? r.checkedAt;
   if (askAt && askAt <= p.floor) return null;
   const key = decisionId ? `ask:${task.id}:${decisionId}` : `ask:${task.id}:${r.source}:${sha12(words)}`;
@@ -308,12 +310,20 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   const since = new Date(Math.min(p.now, askAt ? Date.parse(askAt) : p.now) - EVIDENCE_MS).toISOString();
   const own = (await p.deps.readMessages(task.id)).filter((m) => m.at > since);
   const holders = [...new Set([(managerOf(task, all) ?? node).id, node.id])];
+  // A thread card waiting on him for this task is where he reads the ask, buttons and links included
+  // (2026-11-24 audit: six findings said "no buttons, no draft" of an ask whose card had both): a card
+  // of its own is judged as that card (threadCardCandidates); a card that shows this ask is what is judged here.
+  const cards = (await Promise.all(holders.map((id) => p.threadsOf(id)))).flat().filter((th) => th.state === 'needs' && !th.closed && th.tasks?.includes(task.id));
+  if (cards.some((th) => !th.cardOfOther)) return null;
+  const card = cards[0];
   const inThreads = (await Promise.all(holders.map(async (id) => (await p.threadsOf(id))
     .filter((th) => th.tasks?.includes(task.id))
     .flatMap((th) => th.messages.filter((m) => m.at > since).map((m) => ({ id: m.id, at: m.at, text: `[in the thread "${th.title}"] ${m.text}` })))))).flat();
   const evidence = [...own.map((m) => ({ id: m.id, at: m.at, text: m.text })), ...inThreads]
     .sort((a, b) => a.at.localeCompare(b.at)).slice(-EVIDENCE_MAX)
     .map((m) => ({ ...m, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
+  const text = form ? cardText('', [form.summary, form.more ?? ''].filter(Boolean).join('\n\n'), form.options, form.kind)
+    : card ? cardText(`Thread card: ${card.title}`, card.reply || words, card.options) : cardText('', words, undefined);
   const sessionId = r.askSessionId ?? '';
   const at = askAt ?? new Date(p.now).toISOString();
   return {

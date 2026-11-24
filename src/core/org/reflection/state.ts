@@ -23,7 +23,7 @@ export interface ReflectionState {
    * - `budgetDropped`: moments of an earlier date the budget left unjudged: marked seen
    *   ('skipped_dropped'), so never judged.
    * - `chatSends`: on a Main or lead task's own state, the corrections sent to its chat today (the
-   *   user's own chat), from any node's reflection: at most CHAT_SENDS_PER_DAY_MAX.
+   *   user's own chat), from any node's reflection: at most CHAT_SENDS_PER_DAY_MAX, one an hour.
    */
   day: { date: string; calls: number; budgetLeft?: string[]; budgetLeftCount?: number; budgetDropped?: number; chatSends?: number };
   /** Guidance lines the reflection wrote (normalized text), to see which ones the user deleted since. */
@@ -56,7 +56,14 @@ export interface ReflectionState {
   tidyAsked?: string;
   /** When the node's high judge days began (dailyCallsMax). */
   callsFrom?: string;
+  /** Corrections this node held for a later send (one a pass per task, a lead chat's spacing), oldest first (held-corrections.ts). */
+  held?: HeldCorrection[];
+  /** On a Main or lead task's own state: when a reflection's correction last went to its chat. */
+  lastChatSendAt?: string;
 }
+
+/** One correction held for a later send: its task, its day entry (date and time) and the point it makes. */
+export interface HeldCorrection { taskId: string; at: string; date: string; entryAt: string; text: string }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
 export const SEEN_KEEP_MS = 45 * 24 * 3600_000;
@@ -82,8 +89,13 @@ export function dailyCallsMax(fromIso: string | undefined, nowMs: number): numbe
 }
 /** Of those, the calls only the specific signals (asks, defects, not his to answer, overrules) may spend. */
 export const DAILY_CALLS_RESERVED = 15;
-/** Corrections a Main or lead task's chat (the user's own) may get a day from reflections; the rest go to the nightly note only. */
-export const CHAT_SENDS_PER_DAY_MAX = 2;
+/**
+ * Corrections a Main or lead task's chat (the user's own) may get a day from reflections, at most one
+ * an hour; what waits is held and goes with the next one (held-corrections.ts). 2026-11-24 audit: at
+ * 2 a day, 14 of 16 different corrections about the lead's own chat in 35 minutes were never sent.
+ */
+export const CHAT_SENDS_PER_DAY_MAX = 12;
+export const CHAT_SEND_GAP_MS = 60 * 60_000;
 /** Keys of `budgetLeft` kept; past it a pass that meets one counts it again. */
 export const BUDGET_LEFT_KEPT = 200;
 
@@ -119,6 +131,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
     ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),
+    ...(Array.isArray(r.held) ? { held: r.held.filter((h): h is HeldCorrection => !!h && typeof h.taskId === 'string' && typeof h.at === 'string' && typeof h.text === 'string' && typeof h.date === 'string' && typeof h.entryAt === 'string').slice(-100) } : {}),
+    ...(typeof r.lastChatSendAt === 'string' ? { lastChatSendAt: r.lastChatSendAt } : {}),
     ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),
   };
 }
@@ -192,11 +206,13 @@ export async function markSeen(nodeId: string, keys: readonly string[], verdict:
   }, nowMs);
 }
 
-/** Take one of today's corrections to a Main or lead task's chat, kept on that task's own state; false when spent. */
+/** Take one of today's corrections to a Main or lead task's chat, kept on that task's own state; false when spent or sent less than an hour ago. */
 export async function takeChatSend(targetId: string, nowMs = Date.now(), max = CHAT_SENDS_PER_DAY_MAX): Promise<boolean> {
   return updateReflectionState(targetId, (s) => {
     if ((s.day.chatSends ?? 0) >= max) return false;
+    if (s.lastChatSendAt && nowMs - Date.parse(s.lastChatSendAt) < CHAT_SEND_GAP_MS) return false;
     s.day.chatSends = (s.day.chatSends ?? 0) + 1;
+    s.lastChatSendAt = new Date(nowMs).toISOString();
     return true;
   }, nowMs);
 }

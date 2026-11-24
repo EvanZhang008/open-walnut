@@ -80,6 +80,14 @@ export async function turnsAround(
   return kept;
 }
 
+/** The session's newest turns, after `afterAt` and up to now: what it did since a late judgment's window ends. */
+export const LATER_TURNS = 2;
+const LATER_TEXT_MAX = 1500;
+export async function turnsSince(sessionId: string, afterAt: string, read: ReadTranscript = readTranscriptDefault, max = LATER_TURNS): Promise<TurnText[]> {
+  const turns = toTurns(await read(sessionId, { visible: 40 }));
+  return turns.filter((t) => t.role === 'assistant' && t.at > afterAt).slice(-max).map((t) => ({ ...t, text: clip(t.text, LATER_TEXT_MAX) }));
+}
+
 /** The session's last text turn before `at` (what he answered), or undefined. */
 export function lastAssistantBefore(turns: readonly TurnText[], at: string): string | undefined {
   for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'assistant' && turns[i].at < at) return turns[i].text;

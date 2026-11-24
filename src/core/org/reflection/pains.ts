@@ -147,7 +147,7 @@ export function renderPains(nodeName: string, entries: readonly PainEntry[], run
     '',
     `Every complaint of the user the reflection found, one entry a pain. ${entries.length} pain${entries.length === 1 ? '' : 's'}: `
       + PAIN_STATUSES.map((s) => `${entries.filter((e) => statusOf(e) === s).length} ${s.replace('_', ' ')}`).join(', ') + '.',
-    `Guard tests last run: ${run ? `${run.at}${run.commit ? ` on ${run.commit.slice(0, 12)}` : ''}` : 'never'}. pains.json holds the same entries for scripts; edits to it are kept.`,
+    `Guard tests last run: ${run ? `${run.at}${run.commit ? ` on ${run.commit.slice(0, 12)}` : ''}: ${guardCountsLine(run)}` : 'never'}. pains.json holds the same entries for scripts; edits to it are kept.`,
     '',
   ];
   // What needs someone first: unowned, then in progress, then live.
@@ -159,6 +159,14 @@ export function renderPains(nodeName: string, entries: readonly PainEntry[], run
 }
 
 const GUARD_RESULTS: readonly GuardResult[] = ['passed', 'ci_only', 'failed', 'no_file', 'no_test', 'not_run'];
+
+/** A run's results counted, in GUARD_RESULTS order ("31 passed, 5 ci only, 2 no test"): a run that passed is seen too. Pure. */
+export function guardCountsLine(run: GuardRun): string {
+  const n = new Map<GuardResult, number>();
+  for (const g of Object.values(run.results)) n.set(g.result, (n.get(g.result) ?? 0) + 1);
+  const parts = GUARD_RESULTS.filter((r) => n.get(r)).map((r) => `${n.get(r)} ${r.replace('_', ' ')}`);
+  return parts.length ? parts.join(', ') : 'no results';
+}
 
 /** A guard run read from a file or a request: what is malformed is left out, a run with no time is none. Pure. */
 export function guardRunOf(raw: unknown): GuardRun | null {
@@ -230,8 +238,10 @@ export function painsReport(entries: readonly PainEntry[], run: GuardRun | null,
 
 /** The registry's part of the nightly note: '' when nothing in it needs the node. Pure. */
 export function painsNightlyText(file: string, r: PainsReport, run: GuardRun | null): string {
-  if (!r.unowned.length && !r.guards.length) return '';
-  const lines = [`Pain registry (${r.total} pains, ${file}):`];
+  // A run that passed is said in one line too (2026-11-24 audit: a passing run showed nowhere but the file).
+  const ran = run && !r.guards.some((g) => g.result === 'stale') ? `- Guard tests ran ${run.at}${run.commit ? ` on ${run.commit.slice(0, 12)}` : ''}: ${guardCountsLine(run)}.` : '';
+  if (!r.unowned.length && !r.guards.length) return ran ? `Pain registry (${r.total} pains, ${file}):\n${ran}` : '';
+  const lines = [`Pain registry (${r.total} pains, ${file}):`, ...(ran ? [ran] : [])];
   if (r.unowned.length) {
     lines.push(`- ${r.unowned.length} with no rule or no guard test yet: hand each to the task that owns its area, and write the rule and the test into the entry when they land.`);
     for (const e of r.unowned.slice(0, 12)) lines.push(`  - ${e.id} ${e.title}${e.owner ? ` (owner: ${e.owner.title}, ${e.owner.taskId})` : ' (no owner)'}`);

@@ -76,7 +76,7 @@ export async function readGuidanceStrict(nodeId: string): Promise<GuidanceLine[]
 
 /**
  * Add one lesson unless an existing line or a removed one says it already (same text once
- * normalized), the day's new lines are spent, or the file is full. The line is appended: what the
+ * normalized; an existing line also when it says nearly the same, nearlySame), the day's new lines are spent, or the file is full. The line is appended: what the
  * user wrote in the file (a heading, notes, other lists) stays as it is.
  */
 export async function addGuidance(
@@ -89,7 +89,9 @@ export async function addGuidance(
   return withFileLock(file, async () => {
     const had = await fsp.readFile(file, 'utf-8').catch(() => null);
     const lines = parseGuidance(had ?? '');
-    if (lines.some((l) => normalizeForQuote(l.text) === key)) return 'known';
+    // A line that says nearly the same is the lesson already (2026-11-24 audit: the backfill wrote two
+    // near-identical lines on one day; lessons of several tasks said the same in other words).
+    if (lines.some((l) => normalizeForQuote(l.text) === key || nearlySame(l.text, line.text))) return 'known';
     if (opts.addedToday >= GUIDANCE_NEW_PER_DAY_MAX) return 'day_full';
     if (lines.length >= GUIDANCE_LINES_MAX) return 'file_full';
     await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -98,6 +100,17 @@ export async function addGuidance(
     else await fsp.appendFile(file, `${had.endsWith('\n') || !had ? '' : '\n'}${row}\n`, 'utf-8');
     return 'added';
   });
+}
+
+/** Two lessons that say much the same: most of the shorter one's character pairs are in the other (any script). */
+export function nearlySame(a: string, b: string): boolean {
+  const pairs = (t: string) => { const x = normalizeForQuote(t).replace(/\s+/g, ''); const out = new Set<string>(); for (let i = 0; i < x.length - 1; i++) out.add(x.slice(i, i + 2)); return out; };
+  const [p, q] = [pairs(a), pairs(b)];
+  if (!p.size || !q.size) return false;
+  const [small, big] = p.size <= q.size ? [p, q] : [q, p];
+  let hit = 0;
+  for (const x of small) if (big.has(x)) hit++;
+  return hit / small.size >= 0.6;
 }
 
 /**
@@ -147,8 +160,10 @@ export interface DayEntry {
   finding: Finding;
   /** `held`: a real correction kept from the session (`held` says why), in the record and the nightly note only. */
   corrected: 'sent' | 'already_fixed' | 'failed' | 'off' | 'held';
-  /** own_cap: past a Main or lead chat's few a day; one_per_pass: its session got one this pass; no_asking_session / no_session: no known session to send to. */
-  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session';
+  /** own_cap: past a Main or lead chat's spacing; one_per_pass: its session got one this pass (both wait for a later send); no_asking_session / no_session: no known session to send to; answered_since: the session wrote again while it was judged (never sent: it may have done it). */
+  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session' | 'answered_since';
+  /** A held correction sent later, with others held for the same task (held-corrections.ts): when. */
+  sentLater?: string;
   /** With `off`: why it was not sent (pipeline.ts SendCheck). */
   notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off';
   /** Sent to the task's session now, about a turn of an earlier one. */
@@ -275,6 +290,23 @@ export async function appendDayNote(nodeId: string, nodeName: string, date: stri
     // never one that would start over a day the Markdown already holds (recordDayPass says why).
     if (had && (await readDayJson(nodeId, date)).state !== 'ok') return;
     await writeDayJson(nodeId, nodeName, date, (d) => { d.notes = [...(d.notes ?? []), { at: new Date(nowMs).toISOString(), text: line }]; });
+  });
+}
+
+/** Whether the day's record already holds a note that starts with `prefix` (its Markdown, which every note goes to). */
+export async function dayNoteSaid(nodeId: string, date: string, prefix: string): Promise<boolean> {
+  const text = await fsp.readFile(reflectionDayFileOf(nodeId, date), 'utf-8').catch(() => '');
+  return text.includes(`> Note: ${prefix}`);
+}
+
+/** Held entries of a day sent later: each marked with when (its JSON; the Markdown gets a note). */
+export async function markSentLater(nodeId: string, nodeName: string, date: string, taskId: string, entryAts: readonly string[], nowMs = Date.now()): Promise<void> {
+  const file = reflectionDayFileOf(nodeId, date);
+  await withFileLock(file, async () => {
+    if ((await readDayJson(nodeId, date)).state !== 'ok') return;
+    await writeDayJson(nodeId, nodeName, date, (d) => {
+      for (const e of d.entries) if (e.task.id === taskId && e.corrected === 'held' && entryAts.includes(e.at)) e.sentLater = new Date(nowMs).toISOString();
+    });
   });
 }
 

@@ -13,9 +13,9 @@ import fsp from 'node:fs/promises';
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { judge, callModelDefault, normalizeForQuote, PRODUCT_DEFECT_KINDS, type CallModel, type Finding, type JudgeInput, type Verdict } from './judge.js';
-import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, type TurnText } from './context.js';
+import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, turnsSince, type TurnText } from './context.js';
 import { parseCardAnswer, type ReflectionSignal, type SpokenMessage } from './signals.js';
-import { addGuidance, appendDayEntry, appendDayNote, deletedSince, recordDayPass, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
+import { addGuidance, appendDayEntry, appendDayNote, dayNoteSaid, deletedSince, nearlySame, recordDayPass, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
 import { claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { managedTasks } from './team.js';
@@ -29,8 +29,10 @@ import { alignGuidance } from './guidance-align.js';
 import { recordPain } from './pain-record.js';
 
 export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates.js';
+export { nearlySame } from './records.js';
 import { MOMENT_MAX_AGE_MS } from './candidates.js';
 import { askTidy } from './guidance-tidy.js';
+import { heldPoint, holdCorrection, sendHeld } from './held-corrections.js';
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
 const TURNS_BEFORE: Record<ReflectionSignal, number> = {
@@ -98,11 +100,15 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
   const turns: TurnText[] = c.context ?? splitCardAnswers(
     c.sessionId ? await turnsAround(c.sessionId, c.from, c.to, deps.readTranscript, { turnsBefore: TURNS_BEFORE[c.signal] }).catch(() => []) : []);
   const cardAsks = c.messages.map((m) => parseCardAnswer(m.text)?.ask).filter((a): a is string => !!a);
+  // What the session did since the window ends (2026-11-24 audit: judged 6 to 18 hours late, a third of
+  // the "not done" findings were done by then): its newest turns, for already_fixed only.
+  const seenTo = turns[turns.length - 1]?.at ?? c.to;
+  const later = c.sessionId && !c.context ? await turnsSince(c.sessionId, seenTo > c.to ? seenTo : c.to, deps.readTranscript).catch(() => []) : [];
   return {
     signal: c.signal, ...(c.also?.length ? { also: c.also } : {}), taskTitle: c.task.title, ...(c.thread ? { threadTitle: c.thread.title } : {}),
-    turnsText: renderTurns(turns), momentAt: c.to,
+    turnsText: renderTurns(turns), ...(later.length ? { laterText: renderTurns(later) } : {}), momentAt: c.to,
     // The agent's words: its turns, the ask it put to him, the card asks he answered.
-    sessionText: [...(c.ask?.text ? [c.ask.text] : []), ...cardAsks, ...turns.filter((t) => t.role === 'assistant').map((t) => t.text)].join('\n\n'),
+    sessionText: [...(c.ask?.text ? [c.ask.text] : []), ...cardAsks, ...[...turns, ...later].filter((t) => t.role === 'assistant').map((t) => t.text)].join('\n\n'),
     // What he said up to the moment, and only that: a later message of his is a candidate of its own.
     // His messages are his record even where the transcript clipped them, so they count too.
     // A card answer's ask is the agent's words, never his: only his words are quotable as his.
@@ -161,17 +167,6 @@ async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, 
   return { ...rule, text: `${rule.text}; skill ${f.skill.name} not written (${wrote === 'day_full' ? 'today\'s skill is written already' : wrote})` };
 }
 
-/** Two lessons that say much the same: most of the shorter one's character pairs are in the other (any script). */
-export function nearlySame(a: string, b: string): boolean {
-  const pairs = (t: string) => { const x = normalizeForQuote(t).replace(/\s+/g, ''); const out = new Set<string>(); for (let i = 0; i < x.length - 1; i++) out.add(x.slice(i, i + 2)); return out; };
-  const [p, q] = [pairs(a), pairs(b)];
-  if (!p.size || !q.size) return false;
-  const [small, big] = p.size <= q.size ? [p, q] : [q, p];
-  let hit = 0;
-  for (const x of small) if (big.has(x)) hit++;
-  return hit / small.size >= 0.6;
-}
-
 /** The verdict on one candidate: the judge's, or the fixed language finding (no model call). Sends nothing. */
 export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps, 'readTranscript' | 'callModel' | 'rulesText' | 'replyLanguage'>, guidance: readonly string[]): Promise<Verdict> {
   if (c.signal === 'wrong_language') return { verdict: 'bad_decision', finding: languageFinding(c, await deps.replyLanguage(), guidance) };
@@ -186,6 +181,10 @@ export async function reflectOnCandidate(
   // What this pass did already: a task id it sent a correction to, `lesson:<task>:<kind>:<text>` a lesson it kept.
   node: Task, nodeName: string, c: Candidate, deps: ReflectDeps, guidance: readonly string[], thisPass: Set<string> = new Set(),
 ): Promise<{ verdict: Verdict; entry?: DayEntry }> {
+  // The session's newest answer after the moment, before the judge reads: one written while it judged was
+  // not read (2026-11-24 audit: a correction went 9 seconds after the session had answered).
+  const newestTurn = async () => (c.sessionId && !c.context ? (await turnsSince(c.sessionId, c.to, deps.readTranscript, 1).catch(() => []))[0]?.at ?? '' : '');
+  const before = await newestTurn();
   const verdict = await verdictOf(node, c, deps, guidance);
   if (verdict.verdict !== 'bad_decision') return { verdict };
   const f = verdict.finding;
@@ -205,6 +204,8 @@ export async function reflectOnCandidate(
     if (c.hold) { corrected = 'held'; held = c.hold; }
     // One a pass per task: a task's old session and its current one are the same reader now.
     else if (thisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
+    // It had not answered his message when the judge read, and has now: what the judge called missing may be in that answer.
+    else if (!before && (await newestTurn())) { corrected = 'held'; held = 'answered_since'; }
     else {
       const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
       if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
@@ -240,6 +241,11 @@ export async function reflectOnCandidate(
     if (pain) entry.pain = pain;
   }
   await appendDayEntry(node.id, nodeName, localDate(now), entry);
+  // One a pass or a chat's spacing: it waits for the task's next send, with the others held for it.
+  if (held === 'one_per_pass' || held === 'own_cap') {
+    await holdCorrection(node.id, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text: heldPoint(f) }, now)
+      .catch((err) => log.task.warn('reflection: a held correction was not kept', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) }));
+  }
   return { verdict, entry };
 }
 
@@ -299,13 +305,16 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     const { count: leftToday, first } = await recordBudgetLeft(node.id, left, dropped, now);
     log.task.info('reflection: the day\'s judge budget is spent', { nodeId: node.id, leftForLater: left.length, dropped: dropped.length, leftToday });
     // Said in the day's record, which the audit and the nightly note read: once a day, and for each drop.
-    if (first || dropped.length) {
+    // Read from the record, not only the state's flag: a flag an older build spent left a day unsaid (2026-11-24 audit).
+    if (first || dropped.length || !(await dayNoteSaid(node.id, today, 'Judge budget'))) {
       const used = (await readReflectionState(node.id, now)).day.calls;
       const kind = used < callsMax ? `the judge calls anger and long talks may use (${used} of ${callsMax}; the last ${DAILY_CALLS_RESERVED} are kept for asks and defects)` : `the day's ${callsMax} judge calls`;
       await appendDayNote(node.id, nodeName, today, `Judge budget: ${kind} were spent at ${new Date(now).toISOString().slice(11, 16)} UTC; ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`, now)
         .catch(() => {});
     }
   }
+  // What was held for a later send goes now where it may: one message per task.
+  await sendHeld(node, nodeName, all, thisPass, deps, now).catch((err) => log.task.warn('reflection: held corrections not sent', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // Every pass is counted in the day's JSON: a node with nothing to judge still shows it ran.
   await recordDayPass(node.id, nodeName, today, { candidates: result.candidates, judged: result.judged, skipped: result.skipped }, now)
     .catch((err) => log.task.warn('reflection: the pass was not counted in the day record', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));

@@ -169,7 +169,8 @@ describe('the ask to tidy a full guidance', () => {
     await write(lines)
     const room = guidanceRoomLeft('Marina VP', lines)
     expect(room).toBeGreaterThanOrEqual(200)
-    const lesson = long(99, Math.min(300, room + 40))
+    // A lesson no line says (a waiting lesson a line nearly says is not waiting: guidance-tidy.ts distinctWaiting).
+    const lesson = `Name the thread and the card the user answers in, with its link, ${'before any choice is put to him there, '.repeat(8)}`.slice(0, Math.min(300, room + 40))
     await appendDayEntry(vp.id, 'Marina VP', localDate(NOW), waitingEntry(lesson))
     const { d, sent } = deps()
     expect(guidanceRoomLeft('Marina VP', [...lines, lesson])).toBeLessThan(0)

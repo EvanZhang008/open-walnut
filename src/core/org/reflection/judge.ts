@@ -59,6 +59,8 @@ export interface JudgeInput {
   evidenceText?: string;
   /** The turns, rendered (context.ts renderTurns). */
   turnsText: string;
+  /** The session's latest turns, written after `turnsText` ends and up to now, rendered: what it did since (a late judgment reads them). */
+  laterText?: string;
   /** When the moment is: the user's message judged (the last of them), or the decision ask's turn end. */
   momentAt: string;
   /** The session's turns only, and the user's only: what quotes are checked against. */
@@ -114,7 +116,9 @@ export const JUDGE_SYSTEM = [
   'Judge what the user\'s message is ABOUT: the session actions it reacts to (usually the last SESSION turn before it, sometimes the run of turns that led to it; for an ask, THE ASK and the last SESSION turn; for many rounds, the rounds listed). A problem in an older turn the message is not about is no_issue here.',
   'NOT a bad decision (answer no_issue): the user simply preferred another reasonable option the session could not have known; the user is angry at himself, another person, a tool or the world, not at the session\'s work; the user is only asking to understand or for a summary; the session already did what was asked; the listed rules pull both ways on it (one says decide, another says ask him); anything you cannot quote.',
   'Evidence: session_quote is a short passage copied EXACTLY from a SESSION turn\'s text (not from a tool line); user_quote one copied exactly from a USER turn or his recent messages ("" only for an ask he has not answered); rule_quote one copied exactly from RULES, or "" when no listed rule covers it and the lesson is a missing fact. Copy, never paraphrase: the quotes are checked word for word and a finding with a quote that does not match is thrown away.',
-  'already_fixed: true when the session\'s turns after the user\'s message already took up the right way in full (it agreed and is doing all of it, or did it).',
+  'already_fixed: true when the session\'s turns after the user\'s message, the LATER turns included, already took up the right way in full (it agreed and is doing all of it, or did it, or answered what he asked).',
+  'correct_action and correction never tell the session to take a step that is not an agent\'s to take: turning on, approving or promoting a change in a production system, using the user\'s own browser, accounts or sign-ins, or anything the RULES say needs a person\'s approval or belongs to someone else (an on-call, a colleague, the user). For such a step the right way is to ask the person the RULES name, or the user, never to do it (2026-11-24: a correction told a session to open prod promotions in the user\'s browser, which his rules forbid).',
+  'A Needs-you line on a task is only a status line: its buttons, links and draft live on its thread card. Never call an ask unclear for missing buttons, links or a draft unless THE ASK you read is the card itself (it starts with "Thread card:").',
   'correction: 2 to 5 sentences to the session itself, in the language the reply-language line names: what was wrong, the right way, and what to do now. When the session already took up part of the right way, name only what it still misses; "" when nothing is missing. Write it only for the session to act on; never ask it to contact anyone.',
   'guidance: one or two sentences, in the language the reply-language line names, a general rule that would have prevented this in any session (no names from this case: no package, project or person names). It never contradicts his RULES: where they changed, the newer wording wins, and a lesson that would go against them is "". "" also when a GUIDANCE line already says it; then same_as is that line\'s number.',
   'pain: only when the user\'s words complain about something (not for an ask he has not answered): {"same_as": the id of the PAINS line that is the same problem (one fix would end both) or "", "title": a few words naming the problem in general terms, in the language the reply-language line names, "scope": "all_users" when any user of the product would meet it (a product defect, a default, an agent habit), "only_him" when it depends on his own account, machine, setup or habits}; otherwise null.',
@@ -140,6 +144,7 @@ export function judgePrompt(input: JudgeInput): string {
       ? ['', 'THE USER\'S MESSAGES FROM 48 HOURS BEFORE THE ASK ON (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
       : []),
     '', 'THE SESSION (oldest first):', input.turnsText || '(no turns)',
+    ...(input.laterText ? ['', 'LATER (the session\'s latest turns, written after the ones above, up to now: read them for already_fixed and for what the correction still misses, never as the moment judged):', input.laterText] : []),
   ].join('\n');
 }
 
