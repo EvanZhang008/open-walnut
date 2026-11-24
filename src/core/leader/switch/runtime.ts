@@ -159,19 +159,20 @@ const tick = (ms: number) => new Promise((r) => { setTimeout(r, ms).unref?.() })
  * A majority answered but holds no one record: each witness kept a different one of THIS machine's records (a
  * renew that reached some of them while the others were cut off). Nobody else can end that, and waiting does
  * not either: no new record comes while no record has a majority. A grant ends it, and is safe: each witness
- * takes it only once the record it holds ran out there. A handover to this machine counts as its own only when
- * another answer holds a renew of this machine above it: this machine committed that switch already. Any other
- * record of another machine, or a handover not yet committed, among the answers: null, as before (that is a
- * switch's to settle, never a takeover).
+ * takes it only once the record it holds ran out there. A handover this machine is a side of (to it, or from it)
+ * counts as its own only when another answer holds a renew or grant of this machine above it: that witness took
+ * this machine's record after the handover, so the switch is settled (committed to this machine, or rolled back
+ * and taken back by it). Any other record of another machine, or a handover nothing of this machine's is above,
+ * among the answers: null, as before (that is a switch's to settle, never a takeover).
  */
 function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null | undefined; replies: PermitReply[] }, me: string): ReturnType<typeof wantFor> | null {
   if (read.standing !== undefined) return null
   const list = h.client.witnessList()
   const answers = read.replies.filter((r) => list.includes(r.witness) && r.list)
   if (answers.length < majorityOf(list)) return null
-  const renewedAbove = (n: number) => answers.some((a) => a.held?.kind === 'renew' && a.held.holder === me && a.held.number > n)
+  const mineAbove = (n: number) => answers.some((a) => (a.held?.kind === 'renew' || a.held?.kind === 'grant') && a.held.holder === me && a.held.number > n)
   const own = (r: PermitReply) => !r.held || (r.held.kind === 'release' ? r.held.by === me
-    : r.held.kind === 'handover' ? r.held.holder === me && renewedAbove(r.held.number)
+    : r.held.kind === 'handover' ? (r.held.holder === me || r.held.from === me) && mineAbove(r.held.number)
       : (r.held.kind === 'renew' || r.held.kind === 'grant') && r.held.holder === me)
   if (!answers.every(own)) return null
   const numbers = answers.map((r) => r.held?.number ?? 0)

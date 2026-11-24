@@ -815,12 +815,14 @@ an approved mail is sent once by the reconcile.
 different record of its own (a renew that reached some of them while the others were cut off):
 no record has a majority, so no renew can stand and nothing ends that by waiting. When a
 majority answered and every answer is this machine's (a renew or grant it holds, its own
-release, or the handover of a switch to it that a renew of its own above it shows committed),
+release, or the handover of a switch it is a side of, to it or from it, with a renew or grant of its own
+above it, which shows that switch settled),
 the runtime asks for a grant, which each witness takes once the record it holds ran out there
 (`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). A record of another machine, or a
-handover to this machine not yet committed, among the answers: it waits, as before (a switch's
-to settle). The remote rehearsal's `two-down` and `cut-after-commit` meet both cases (after the
-switch back, w-k still held the handover).
+handover with nothing of this machine's above it, among the answers: it waits, as before (a
+switch's to settle). The remote rehearsal meets each case: `two-down` and `cut-after-commit` (after
+the switch back, w-k still held the handover to A), and `trial-fails` (after the rollback, w-a still
+held A's handover to B, the others two grants of A).
 
 ## Outward doors
 
