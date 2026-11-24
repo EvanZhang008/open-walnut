@@ -226,7 +226,7 @@ export const ENGINE_RETRY_BOUNDS = {
   },
   'acp-adapter': {
     signals: ["each adapter's retry frames (ACP_RETRY_SHAPES)", 'no session/update while a prompt is open'],
-    bound: 'acp-worker/adapter-turn-watch.ts AdapterTurnWatch (made in worker.ts opInitialize): a TurnWatch per turn; the turn fails with Walnut words, the adapter is cancelled, and one that does not end the turn is ended (SIGTERM, then SIGKILL) before the next prompt.',
+    bound: 'acp-worker/adapter-turn-watch.ts AdapterTurnWatch (made in worker.ts opInitialize): a TurnWatch per turn; the turn fails with Walnut words, the adapter is cancelled, and one that keeps going is stopped (SIGTERM, then SIGKILL) before the next prompt.',
   },
 } as const
 
