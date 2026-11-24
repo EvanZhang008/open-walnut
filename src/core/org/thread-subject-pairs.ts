@@ -16,14 +16,15 @@
  *             (thread-popup.ts, with `carries`), and the node's thread waits behind it;
  *   read      he read that result there (his reaction, his Acknowledge, whatever state that left it
  *             in): the node's thread stays quiet until the node writes it again.
- * Asking outranks a carried result, which outranks a quiet one. A node's thread holding news of its
- * own he has not read, or a word of his newer than the task's result, never waits behind it: the
+ * Asking outranks a carried result, which outranks a quiet one. A node's thread he sees now (news
+ * of its own unread, his word unanswered past the reminder), or with a word of his newer than the
+ * task's result, never waits behind it: the
  * result is listed beside it, so a pairing on a few shared words can add a card, never hide one
  * (2026-11-24 review: "mark the margins live + revert the status icon" paired with "status icon:
  * reverted" would have hidden the margins). Pure.
  */
 import { sameTaskArea, type AreaScoped } from '../router/same-area.js';
-import { hasUnseenAnswer, shownToHim, threadReactionAt, type ThreadAskedIn } from './thread-view.js';
+import { shownToHim, threadReactionAt, type ThreadAskedIn } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
 import { candidatesIn, sharedPlaces, subjectIndex, type SubjectIndex } from './thread-same-subject.js';
 import type { AskPointerFacts, AskTask, OwnThread } from './thread-task-ask.js';
@@ -105,11 +106,13 @@ const seenThereAt = (x: OwnThread): string =>
  */
 const readThere = (x: OwnThread): boolean => !!x.reply?.trim() && seenThereAt(x) > lastWrittenAt(x);
 
-/** The node's thread has something of its own for him he has not read: its summary, or an answer of the node's on it. */
-const ownNews = (t: OrgThread, now: number): boolean => shownToHim(t, undefined, now) && (t.state === 'answered' || hasUnseenAnswer(t));
-
-/** A result `after` may stand for the node's thread `t`: nothing of `t`'s own is unread, and no word of his on `t` is newer. */
-const waitsBehind = (t: OrgThread, after: string, now: number): boolean => !ownNews(t, now) && hisLastAt(t as OwnThread) < after;
+/**
+ * A result `after` may stand for the node's thread `t`: `t` is out of his sight now (nothing of its
+ * own unread, no word of his left unanswered past the reminder), and no word of his on `t` is newer.
+ * A card he sees stays, beside the result (review 2: an overdue card's unanswered question was hidden
+ * behind a result of the same task on another subject, and its reminder stopped).
+ */
+const waitsBehind = (t: OrgThread, after: string, now: number): boolean => !shownToHim(t, undefined, now) && hisLastAt(t as OwnThread) < after;
 
 /** A result is paired on this many shared telling words with the task's thread, standing in this many places of its title. */
 const RESULT_SHARED = 3;

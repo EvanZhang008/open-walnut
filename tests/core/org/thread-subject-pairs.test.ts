@@ -21,12 +21,13 @@ const task = (id: string, over: Partial<Task> = {}): Task => ({ id, title: `Task
 const byId = (...ts: Task[]) => new Map(ts.map((t) => [t.id, t] as const))
 
 /** His request to the lead, handed to the task: the lead's card, in progress. */
-const asked = (over: Partial<OrgThread> = {}): OrgThread => ({
+const askedCard = (over: Partial<OrgThread> = {}): OrgThread => ({
   id: 'th-lead01', title: 'Threads panel flashes when opened on the lead page', titled: true, state: 'working', tasks: [FIX],
   messages: [{ id: 'tm-lead0101', at: iso(30), text: 'the panel flashes every time I open it', via: 'chat' }],
   createdAt: iso(30), updatedAt: iso(29), by: 'task:lead-1', ...over,
 }) as OrgThread
 /** Another request of his handed to the same task. */
+const asked = askedCard
 const other = (over: Partial<OrgThread> = {}): OrgThread => asked({ id: 'th-lead02', title: 'Spring seed budget for the orchard rows', state: 'pending', ...over })
 /** The task's own card: its result, written two hours ago, not read yet. */
 const fixed = (over: Partial<OrgThread> = {}): OrgThread => ({
@@ -42,6 +43,8 @@ const listed = (x: OrgThread, carries: string) => ({ ...x, owner: { task_id: FIX
 
 describe('a task\'s result on the subject of its lead\'s own thread', () => {
   it('is listed above the lead, and the lead\'s card waits behind it on every view', () => {
+    // The lead's card set aside while the task works, as his VP's four such cards were on 11-24.
+    const asked = (over: Partial<OrgThread> = {}) => askedCard({ state: 'pending', ...over })
     const r = pairs([asked(), other()], [fixed()])
     expect(r.carried.map((c) => [c.thread.id, c.carries])).toEqual([['th-fix001', 'th-lead01']])
     expect(r.held.get('th-lead01')).toEqual({ task: FIX, title: `Task ${FIX}`, ask: fixed().title, via: 'thread', thread: 'th-fix001', result: true })
@@ -103,10 +106,12 @@ describe('a task\'s result on the subject of its lead\'s own thread', () => {
       const r = pairs([older], [x])
       expect(r.carried).toEqual([])
       expect(r.held.get('th-lead01')).toMatchObject({ via: 'thread', thread: 'th-fix001', result: true, answered: true })
-      // An overdue card in progress (shown as having no reply) waits too: the result was its reply.
+      // A card he sees as having no reply stays in his sight, and its reminder runs: a few shared
+      // words may pair another subject of the same task (review 2, "Mac app build fails" and "Mac app
+      // release notes: written").
       const overdue = asked()
       expect(shownToHim(overdue, undefined, NOW)).toBe(true)
-      expect(pairs([overdue], [x]).held.get('th-lead01')).toMatchObject({ result: true, answered: true })
+      expect(pairs([overdue], [x]).held.size).toBe(0)
     }
     // The lead writing its card again after he read it is news: it shows.
     expect(pairs([{ ...older, replyAt: iso(0.5), updatedAt: iso(0.5) }], [acked]).held.size).toBe(0)
@@ -123,6 +128,10 @@ describe('a task\'s result on the subject of its lead\'s own thread', () => {
     expect(r.held.size).toBe(0)
     // Nor after he read the result: the margins stay on his card.
     expect(pairs([news], [fixed({ closed: { how: 'acked', at: iso(1), by: 'human' } as never })]).held.size).toBe(0)
+    // Nor a card shown as having no reply: the result is listed beside it.
+    const unanswered = pairs([asked()], [fixed()])
+    expect(unanswered.held.size).toBe(0)
+    expect(unanswered.carried).toHaveLength(1)
     // His word on the lead card after the task's result is a new ask: it stays.
     const asksAgain = asked({ messages: [{ id: 'tm-lead0102', at: iso(1), text: 'it still flashes on the phone', via: 'chat' }] as never })
     expect(pairs([asksAgain], [fixed()]).held.size).toBe(0)
