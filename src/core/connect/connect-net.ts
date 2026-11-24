@@ -155,6 +155,17 @@ async function localNetStatus(): Promise<{ protocol: number; node: NodeStatus | 
   return value
 }
 
+/** Relay URLs once each: the configured one and the one walnut-net reports differ by a final slash. */
+export function uniqueRelays(urls: string[]): string[] {
+  const seen = new Set<string>()
+  return urls.filter((u) => {
+    const key = u.trim().replace(/\/+$/, '').toLowerCase()
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 /** Addresses a phone may dial directly: no loopback or link-local (another device's would be). */
 export function dialableAddrs(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
@@ -185,7 +196,7 @@ export async function connectRoute(instance: string): Promise<ConnectRoute | nul
     const home = typeof st.node.homeRelay === 'string' && /^https:\/\//.test(st.node.homeRelay) ? [st.node.homeRelay] : []
     // custom: the user's own relays (the companion's), and the roots its address discovery needs;
     // public: the relay this Mac is homed on, so the phone needs no lookup to find it.
-    const relays = mode === 'custom' ? [...new Set([...net.relays, ...home])] : mode === 'public' ? home : []
+    const relays = mode === 'custom' ? uniqueRelays([...net.relays, ...home]) : mode === 'public' ? home : []
     const peer: ConnectPeer = {
       id, relayMode: mode, relays, addrs: dialableAddrs(st.node.addrs),
       ...(mode === 'custom' && net.relayRoots.length ? { relayRoots: net.relayRoots } : {}),

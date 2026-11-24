@@ -60,7 +60,7 @@ vi.mock('../../../src/core/connect/connect-phones.js', async (orig) => ({
 let flagOn = true
 vi.mock('../../../src/core/config-manager.js', () => ({ getConfig: vi.fn(async () => ({ experimental: { walnut_connect: flagOn } })) }))
 
-import { connectNetFields, dialableAddrs, resetConnectForTest, setConnectDoor } from '../../../src/core/connect/connect-net.js'
+import { connectNetFields, dialableAddrs, resetConnectForTest, setConnectDoor, uniqueRelays } from '../../../src/core/connect/connect-net.js'
 
 describe('what the leader tells its walnut-net', () => {
   beforeEach(() => { resetConnectForTest(); flagOn = true })
@@ -84,5 +84,12 @@ describe('what the leader tells its walnut-net', () => {
       .toEqual(['10.0.0.2:5', '76.104.1.2:5', '[2601::1]:5'])
     expect(dialableAddrs(Array.from({ length: 20 }, (_, i) => `10.0.0.${i}:5`))).toHaveLength(8)
     expect(dialableAddrs(null)).toEqual([])
+  })
+})
+
+describe('uniqueRelays', () => {
+  it('lists a relay once when the config and walnut-net write it with and without the final slash', () => {
+    expect(uniqueRelays(['https://relay.example.net', 'https://relay.example.net/', 'https://other.example.net/'])).toEqual(['https://relay.example.net', 'https://other.example.net/'])
+    expect(uniqueRelays(['', ' '])).toEqual([])
   })
 })
