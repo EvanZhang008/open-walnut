@@ -17,6 +17,7 @@ import { isFollower } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { hostProblemNeedsYou } from '../notifications/audience.js'
+import { noteDaemonUpdateWait } from './daemon-update-wait-health.js'
 import type { HostStatus } from './host-status.js'
 import type { HostCapabilities } from './capabilities.js'
 import type { HostConnectErrorKind } from '../sessions/host-connect-hint.js'
@@ -94,7 +95,11 @@ export async function reportHostDownGauges(): Promise<string[]> {
   const next = new Map<string, HostStatus>()
   const down: string[] = []
   for (const { key, def } of listStatusHosts(await getConfig())) {
-    const status = buildHostStatus(key, def, getDaemonConnectState(key))
+    const state = getDaemonConnectState(key)
+    const status = buildHostStatus(key, def, state)
+    // The same sweep tells Walnut Health of an update that has waited long (daemon-update-wait-health.ts);
+    // a host away says nothing new about it.
+    if (state.connected) noteDaemonUpdateWait(key, state.daemonUpdateWait ?? null)
     // The machine's facts are read only for a host already down (a file read, rare).
     const isDown = walnutHostDown(status) && !mayBeAsleep(status, await readMachine(key))
     reportGauge(`${HOST_DOWN_METRIC}{host=${key}}`, isDown ? 1 : 0)

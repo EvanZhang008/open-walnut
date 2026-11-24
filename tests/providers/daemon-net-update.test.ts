@@ -1187,3 +1187,62 @@ describe('defaultAutofixOff', () => {
     expect(await defaultAutofixOff('pc', async () => ({ hosts: { other: { autofix: false } } }))).toBeNull()
   })
 })
+
+// What a postponed or skipped update waits for reaches the host's status (daemon-update-wait.ts):
+// before, NetDaemonUpdater's 'postponed' and 'skipped' phases showed nowhere but the log.
+describe('NetDaemonUpdater: what its update waits for, and since when', () => {
+  let dir = ''
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-wait-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+  })
+  afterEach(async () => {
+    setAcpUpgradeHoldFileForTest(null)
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('postponed: the wait, from its first postpone across rechecks and a leader restart, gone once the update lands', async () => {
+    let clock = 1_000_000
+    let runs = [{ jobId: 'hx-ios', running: true }]
+    const base = link()
+    const busy = () => link({
+      async send(cmd, params) {
+        if (cmd === 'exec.list') { base.sends.push(cmd); return { ok: true, jobs: runs } }
+        return base.send(cmd, params)
+      },
+    })
+    const conn = busy()
+    const { u } = updater({ now: () => clock }, conn)
+    expect(u.wait).toBeNull()
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+    expect(u.wait).toEqual({ kind: 'postponed', why: 'waiting: 1 host_exec run on the host would end with the daemon', since: 1_000_000, expected: NEW })
+    clock += 120_000
+    await vi.waitFor(() => expect(u.state.at).toBe(1_120_000))
+    expect(u.wait?.since).toBe(1_000_000)
+    u.stop()
+    // A new server (a deploy) finds the same wait's start.
+    const next = updater({ now: () => clock }, busy()).u
+    next.schedule(0)
+    await vi.waitFor(() => expect(next.state.phase).toBe('postponed'))
+    expect(next.wait?.since).toBe(1_000_000)
+    runs = []
+    await vi.waitFor(() => expect(next.state.phase).toBe('updated'))
+    expect(next.wait).toBeNull()
+    next.stop()
+  })
+
+  it('held by the host setting: a wait of its own kind; a host on the build has none', async () => {
+    const { u } = updater({ autofixOff: async () => 'config' })
+    u.schedule(0)
+    await vi.waitFor(() => expect(u.state.phase).toBe('held'))
+    expect(u.wait).toMatchObject({ kind: 'held', expected: NEW })
+    u.stop()
+    const current = updater({}, link({ daemonVersion: NEW })).u
+    current.schedule(0)
+    await vi.waitFor(() => expect(current.state.phase).toBe('skipped'))
+    expect(current.state.skip).toBe('current')
+    expect(current.wait).toBeNull()
+    current.stop()
+  })
+})

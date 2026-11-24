@@ -18,6 +18,7 @@
  */
 
 import type { DaemonConnectState } from '../../providers/daemon-connection.js'
+import type { DaemonUpdateWaitKind } from '../../providers/daemon-update-wait.js'
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import { claudeCliFloorFor, claudeVersionAtLeast, type ClaudeCliFloor } from './claude-version-floor.js'
 import { decideReconnectStep } from '../../providers/daemon-reconnect-cause.js'
@@ -48,6 +49,8 @@ export interface FixtureHostSpec {
   enabled?: boolean
   /** false: no project or open task uses the host for sessions (default: used, as the specs were written). */
   usedForSessions?: boolean
+  /** A connected host whose daemon update waits (daemon-update-wait.ts): why, and how many minutes ago it began. */
+  daemonUpdateWait?: { kind: DaemonUpdateWaitKind; why: string; sinceMinutesAgo?: number }
 }
 
 export interface FixtureFile {
@@ -247,6 +250,8 @@ export function fixtureConnectState(host: string, now = fixtureNow()): DaemonCon
   // A standing reconnect cause (auth / host_key / dns) has its own slow probe; credential re-dials ride extra.credentialRetryAt.
   if (phase === 'failed' && typeof h.probeAt === 'number') { state.retryAt = h.probeAt; if (h.kind) state.kind = h.kind }
   if (phase === 'connected' && h.connectedAt) state.connectedAt = h.connectedAt
+  const wait = h.spec.daemonUpdateWait
+  if (phase === 'connected' && wait) state.daemonUpdateWait = { kind: wait.kind, why: wait.why, since: now - (wait.sinceMinutesAgo ?? 0) * 60_000, expected: 'fixture-build' }
   if (phase === 'reconnecting') {
     state.reconnectSince = h.reconnectSince ?? now
     state.attemptStartedAt = now

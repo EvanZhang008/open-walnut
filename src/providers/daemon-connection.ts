@@ -76,6 +76,7 @@ import { pastSetHold, SetHold } from './service-set-hold.js'
 import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
 import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
+import { endUpdateWait, noteUpdateWait, type DaemonUpdateWait } from './daemon-update-wait.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { setDaemonFileFence } from './daemon-file-fence.js'
@@ -916,6 +917,8 @@ export class DaemonConnection {
   private readonly ownWalnutKey = walnutKeyOf(WALNUT_HOME)
   /** The last kept shared daemon logged, `<running>><expected>`, so a reconnect loop logs it once. */
   private _sharedKeptLogged: string | null = null
+  /** SSH: what this host's daemon update waits for now (a postpone, a shared daemon kept), and since when (daemon-update-wait.ts). */
+  private _updateWait: DaemonUpdateWait | null = null
   /** When this server last replaced a daemon another Walnut used (the replace breaker, daemon-shared.ts). */
   private _sharedReplacedAt: number | null = null
   /** The last verdict was to replace a shared daemon; a replace that goes through starts the breaker. */
@@ -1651,6 +1654,12 @@ export class DaemonConnection {
       : this._connected ? (this._daemonVersion !== f.expected ? { state: 'failed' as const, at: f.at, message: f.message } : null)
         : f.down ? { state: 'down' as const, at: f.at, message: f.message } : null
     return this._netUpdaterInstance?.view ?? own
+  }
+
+  /** What this host's daemon update waits for now, on either path; none on a link down or a host that runs that build. */
+  get daemonUpdateWait(): DaemonUpdateWait | null {
+    const w = this._netUpdaterInstance ? this._netUpdaterInstance.wait : this._updateWait
+    return w && this._connected && this._daemonVersion !== w.expected ? w : null
   }
 
   /** No SSH to this host at all: the cloud box, or a machine on the host network. */
@@ -5285,6 +5294,7 @@ export class DaemonConnection {
       if (verdict.missing) log.session.info('DaemonConnection: updating a daemon another Walnut shares, it lacks what this build needs', { host: this.hostKey, running: runningVersion, expected, missing: verdict.missing })
       return false
     }
+    this._updateWait = noteUpdateWait(this.hostKey, 'shared', verdict.why, expected, now)
     const key = `${runningVersion}>${expected}`
     if (this._sharedKeptLogged !== key) {
       this._sharedKeptLogged = key
@@ -5380,6 +5390,7 @@ export class DaemonConnection {
       // an update left on the host when its answer came late is read and removed.
       if (remoteVersion === expected) {
         this.clearUpgradeRecheck(); this._busyRefusals = null
+        endUpdateWait(this.hostKey)
         if (this._unreadUpdate !== null) void this.readBackUnreadUpdate()
       }
 
@@ -5815,6 +5826,7 @@ export class DaemonConnection {
    */
   private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number; delayMs?: number } = {}): void {
     if (this.isReadOnlyRemote || this._destroyed) return
+    this._updateWait = noteUpdateWait(this.hostKey, 'postponed', reason, expected)
     // Work in progress ends on its own: ask again every minute. No answer may
     // last a while: back off. A known wait (the update gap) is its own clock.
     const delays = UPGRADE_RECHECK_DELAYS_MS
@@ -5845,6 +5857,8 @@ export class DaemonConnection {
     if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
     this.upgradeRecheckTimer = null
     this._upgradeRecheckAttempt = 0
+    // A decision is made again: what it waits for, if anything, is said again (its clock stays on disk).
+    this._updateWait = null
   }
 
   /**
@@ -11102,6 +11116,8 @@ export interface DaemonConnectState {
   drops?: number[]
   /** A host network machine's daemon update: under way with the link down, not back, or failed. */
   daemonUpdate?: DaemonUpdateView
+  /** What this host's daemon update waits for now, on either path (daemon-update-wait.ts). */
+  daemonUpdateWait?: DaemonUpdateWait
   /** In the `upload` step: how far the daemon's file has got onto the host, sent or downloaded there. */
   transfer?: ConnectTransfer
   /** The host's first connect is running (DaemonConnection.firstConnectRunning). */
@@ -11146,6 +11162,8 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
   if (drops) state.drops = drops
   const update = conn?.daemonUpdateView
   if (update) state.daemonUpdate = update
+  const wait = conn?.daemonUpdateWait
+  if (wait) state.daemonUpdateWait = wait
   if (conn?.handoverPending) return handoverState(state)
   return state
 }

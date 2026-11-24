@@ -10,6 +10,7 @@ import { twinMachineLabelOf } from './daemon-twins.js'
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
 import { ptyStreamMissingSentence } from './terminal-link.js'
 import { daemonUpdateHowSentence, type DaemonLinkKind } from '../../providers/daemon-update-paths.js'
+import { clockTime, daemonUpdateWaitSentence } from '../../providers/daemon-update-wait.js'
 import type { SeenRuntime } from '../../providers/remote-runtime.js'
 import { MIN_DAEMON_FREE_MB, daemonDirWarning, displayDaemonDir } from '../../providers/remote-daemon-dir.js'
 import type { Config } from '../types.js'
@@ -313,12 +314,6 @@ export function buildHostStatus(
   return status
 }
 
-/** 04:07, in this server's own time zone (the frame's reader is its user). */
-function clockTime(at: number): string {
-  const d = new Date(at)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
 /** What a host's own daemon update makes the status say (daemon-net-update-record.ts). */
 export function daemonUpdateSentence(label: string, update: { state: 'updating' | 'lost' | 'failed' | 'down'; at: number; message?: string }): string {
   if (update.state === 'updating') return `Updating the daemon on ${label} (since ${clockTime(update.at)}); it reconnects once the new one is up`
@@ -334,8 +329,11 @@ export function daemonUpdateSentence(label: string, update: { state: 'updating' 
  * a record that says no daemon runs there (down) makes it a daemon failure (kind 'daemon':
  * "The session daemon on X did not start"); a host just away keeps its connect error's kind.
  * Back with an update that did not go through: a line in Settings, the reason included.
+ * Connected with an update that waits (postponed, or skipped for now): a plain line in Settings
+ * saying what it waits for and since when, never a warning (daemon-update-wait.ts).
  */
 function foldDaemonUpdate(status: HostStatus, state: DaemonConnectState, label: string): void {
+  if (state.connected && state.daemonUpdateWait) status.warnings = [...(status.warnings ?? []), daemonUpdateWaitSentence(label, state.daemonUpdateWait)]
   const update = state.daemonUpdate
   if (!update) return
   if (update.state === 'failed') {

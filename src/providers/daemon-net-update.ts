@@ -54,6 +54,7 @@ import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-sourc
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy } from './daemon-update-claim.js'
 import { serviceSetWords, setWordsDue, type LinkStanding, type SetAsk } from './service-set-leader.js'
 import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
+import { endUpdateWait, noteUpdateWait, waitKindOf, type DaemonUpdateWait } from './daemon-update-wait.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
 
@@ -315,6 +316,8 @@ export class NetDaemonUpdater {
   /** The update this server started there, until its record is read (daemon-net-update-record.ts), and the read's timer. */
   private readonly launched: LaunchedNetUpdate
   private readTimer: ReturnType<typeof setTimeout> | null = null
+  /** What the update waits for now, and since when (daemon-update-wait.ts). */
+  private waiting: DaemonUpdateWait | null = null
   state: NetUpdateState
 
   constructor(private readonly d: NetUpdaterDeps) {
@@ -324,6 +327,11 @@ export class NetDaemonUpdater {
 
   /** Its daemon update for the host's status. Read on every status frame: fields only, never expectedVersion() (a sync hash). */
   get view(): DaemonUpdateView | null { return this.launched.view(this.d.conn.connected, this.d.conn.daemonVersion) }
+
+  /** What its update waits for now (none once the host runs that build); fields only, as `view`. */
+  get wait(): DaemonUpdateWait | null {
+    return this.waiting && this.d.conn.daemonVersion !== this.waiting.expected ? this.waiting : null
+  }
 
   /** The link came up: decide once it settled (a new link's first seconds carry its copies). */
   schedule(delayMs = this.d.settleMs ?? 20_000): void {
@@ -435,6 +443,12 @@ export class NetDaemonUpdater {
   private set(phase: NetUpdatePhase, message: string, extra: Partial<NetUpdateState> = {}): NetUpdateState {
     const c = this.d.conn
     this.state = { phase, host: c.host, running: c.daemonVersion, expected: this.d.expectedVersion(), message, at: (this.d.now ?? Date.now)(), ...extra }
+    const kind = waitKindOf(phase, extra.skip)
+    if (kind !== 'keep') {
+      const expected = this.state.expected
+      this.waiting = kind && expected ? noteUpdateWait(c.host, kind, message, expected, this.state.at) : null
+      if (!kind && (phase === 'updated' || extra.skip === 'current')) endUpdateWait(c.host)
+    }
     if (phase !== 'checking') for (const w of this.waiters.splice(0)) w()
     return this.state
   }
