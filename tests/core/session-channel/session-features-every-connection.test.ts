@@ -97,6 +97,13 @@ const CALL_FEATURE: Record<string, Feature> = {
   'acp.resolvePermissionRequest': 'permission',
 }
 
+/** The lifecycle members that are no person's control: the leader's checks its session command gate asks the host (session-command-gate.ts). */
+const NOT_A_CONTROL: Record<string, string> = {
+  'lifecycle.readSessionSupervision': 'a read of the cron supervision state, asked by the leader instead of the daemon',
+  'lifecycle.lineAlreadyRan': 'a resend\'s check of a line\'s fate, asked by the leader instead of the daemon',
+  'lifecycle.cancelPendingStart': 'an unconfirmed start\'s cancel, the leader\'s own retry step',
+}
+
 const testsOf = (file: string): string[] => {
   const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
   return [...src.matchAll(/\bit\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g)].map((m) => m[2]!.replace(/\\'/g, '\''))
@@ -132,8 +139,10 @@ describe('every session feature on every connection', () => {
     const controls = [
       ...HOST_CALL_ALLOWLIST.lifecycle.map((m) => `lifecycle.${m}`),
       ...(['session', 'acp'] as const).flatMap((t) => (HOST_CALL_ALLOWLIST[t] as readonly string[]).filter((m) => m === 'resolvePermissionRequest').map((m) => `${t}.${m}`)),
-    ].sort()
+    ].filter((c) => !(c in NOT_A_CONTROL)).sort()
     expect(controls).toEqual(Object.keys(CALL_FEATURE).sort())
+    // Each one listed as no control is still a host call (a removed one leaves the list).
+    for (const c of Object.keys(NOT_A_CONTROL)) expect(HOST_CALL_ALLOWLIST.lifecycle as readonly string[], c).toContain(c.slice('lifecycle.'.length))
   })
 
   it('the bridge offers exactly the features its listener calls carry', () => {

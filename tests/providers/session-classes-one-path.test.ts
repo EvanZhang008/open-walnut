@@ -92,6 +92,8 @@ const RAW_PLACE_ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/human-inbox/credential-ask.ts': { count: 1, why: 'a credential ask names a host by name, not a session row' },
   'src/core/human-inbox/letter-check.ts': { count: 1, why: 'a credential ask names a host by name, not a session row' },
   'src/core/router/session-policy.ts': { count: 1, why: 'a router area is matched by the machine name the area names' },
+  'src/core/session-tracker.ts': { count: 1, why: 'handSeedToHost compares a start seed\'s host name with the host it is handed to (two names of one machine): names, not a place' },
+  'src/core/sessions/judge-of.ts': { count: 1, why: 'the boot seed of host-judged ACP runtimes skips a row of no host or of this host\'s own key: names, not a place' },
   'src/core/session-db.ts': { count: 1, why: 'a start claims a row of no host or of this host\'s key: it compares the row with that key itself' },
   'src/core/sessions/cloud-chat-lane.ts': { count: 1, why: 'the companion\'s own chat lanes, which run on no host' },
   'src/core/sessions/engine-switch-context.ts': { count: 1, why: `a model window learned on a machine, ${KEYS_BY_NAME}` },

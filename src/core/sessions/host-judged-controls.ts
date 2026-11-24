@@ -53,7 +53,7 @@ export async function onJudgingHost(sessionId: string, member: HostLifecycleMemb
  * against an older record of the same stop that still says `pending`.
  */
 export async function terminateOnHost(sessionId: string, opts: { force?: boolean; by?: string }): Promise<TerminateResult> {
-  const result = await (await proxyOf(sessionId)).call('terminateSession', [opts], 'lifecycle') as TerminateResult
+  const result = await onJudgingHost(sessionId, 'terminateSession', [opts]) as TerminateResult
   await takeAnsweredStop(sessionId, result)
   return result
 }
