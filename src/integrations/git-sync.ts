@@ -1244,7 +1244,7 @@ async function carryLocalCommitsAcrossRewrite(localHead: string, remoteRef: stri
  */
 export async function stageAllForCommit(
   opts: { cwd?: string; cloudMode?: boolean } = {},
-): Promise<{ deferred: PendingFile[] }> {
+): Promise<{ deferred: PendingFile[]; cloudMode: boolean }> {
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
@@ -1273,7 +1273,8 @@ export async function stageAllForCommit(
     });
   }
   await afterStage(gitOpts, cloudMode);
-  return { deferred };
+  // cloudMode travels with the deferred files: the lane's own checks follow the same answer.
+  return { deferred, cloudMode };
 }
 
 /** The checks every add of the auto-commit is followed by. */
@@ -1351,10 +1352,10 @@ async function fileAddTimeout(root: string, file: string): Promise<number> {
  */
 export async function commitDeferredLargeFiles(
   deferred: PendingFile[],
-  opts: { cwd?: string; cloudMode?: boolean; message: (count: number) => string },
+  opts: { cwd?: string; cloudMode: boolean; message: (count: number) => string },
 ): Promise<number> {
   if (deferred.length === 0) return 0;
-  const cloudMode = opts.cloudMode ?? CLOUD_MODE;
+  const { cloudMode } = opts;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
   const lane = await runLargeFileLane(gitArgvRunnerAt(root), root, deferred, {
@@ -2649,6 +2650,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       }
       // Large files after the routine commit (git-sync-large-files.ts).
       const large = await commitDeferredLargeFiles(stage.deferred, {
+        cloudMode: stage.cloudMode,
         message: (count) => `open-walnut sync ${stamp()} (${count} large files)`,
       });
       if (large > 0) pushed = 1;
@@ -3563,7 +3565,7 @@ export async function commitIfDirty(): Promise<boolean> {
   // the status snapshot above (no extra git call), before anything is staged.
   await healConflictMarkeredJsonFromStatus(lines, 'commitIfDirty');
 
-  let stage: { deferred: PendingFile[] };
+  let stage: { deferred: PendingFile[]; cloudMode: boolean };
   try {
     stage = await stageAllForCommit();
   } catch (err) {
@@ -3587,6 +3589,7 @@ export async function commitIfDirty(): Promise<boolean> {
   }
   // Large files go after the routine commit, so they can never hold it back.
   const large = await commitDeferredLargeFiles(stage.deferred, {
+    cloudMode: stage.cloudMode,
     message: (count) => `auto-save ${stamp()} (${count} large files)`,
   });
   return committed || large > 0;
