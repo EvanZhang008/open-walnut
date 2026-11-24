@@ -32,7 +32,7 @@ import path from 'node:path'
 import { FactLog } from './fact-log.js'
 import { GoneRows } from './gone-rows.js'
 import { HostChannel } from './channel.js'
-import { SESSION_HOST_CHECKS_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { HOST_DOOR_CAP } from './door-wire.js'
 import { startHostDialer, type HostDialer } from './host-dialer.js'
 import { startCompanionDialer, type CompanionDialer } from './companion-dialer.js'
@@ -79,7 +79,7 @@ export function hostSessionRoutes(): HostSessionRoutes | null {
 
 /** What this host's service adds to the capabilities its report names. */
 export function hostSessionCapabilities(): string[] {
-  return current ? [SESSION_JUDGE_CAP, SESSION_RESUME_CAP, SESSION_RESUME_ACP_CAP, SESSION_HOST_CHECKS_CAP, HOST_DOOR_CAP] : []
+  return current ? [SESSION_JUDGE_CAP, SESSION_RESUME_CAP, SESSION_RESUME_ACP_CAP, SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, HOST_DOOR_CAP] : []
 }
 
 /**

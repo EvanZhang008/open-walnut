@@ -9,6 +9,8 @@ import { getSessionByClaudeId } from '../core/session-tracker.js';
 import { findSessionJsonlPath, extractPlanContent } from '../core/session-history.js';
 import { createFileReader, readSessionJsonlContent } from '../core/session-file-reader.js';
 import { CLAUDE_HOME } from '../constants.js';
+import type { SessionRecord } from '../core/types.js';
+import { noteTranscriptLinesParsed } from '../providers/line-parse-count.js';
 
 /**
  * Read the plan file from a completed session that produced a plan.
@@ -23,7 +25,13 @@ export async function readPlanFromSession(planSessionId: string): Promise<{ cont
   const record = await getSessionByClaudeId(planSessionId);
   if (!record) return { error: `Plan session not found: ${planSessionId}` };
   if (!record.planCompleted) return { error: `Session ${planSessionId} has not completed a plan (planCompleted is false). Wait for the session to finish and call ExitPlanMode.` };
+  // A session its host judges: the host finds its plan in its own files and transcript.
+  if (!record.host) return readPlanFromRecord(planSessionId, record);
+  const { viaJudgingHost } = await import('../core/sessions/host-history-reads.js');
+  return viaJudgingHost(planSessionId, record.host, 'readPlanFromSession', [], () => readPlanFromRecord(planSessionId, record));
+}
 
+async function readPlanFromRecord(planSessionId: string, record: SessionRecord): Promise<{ content: string; planFile: string } | { error: string }> {
   // Daemon-uniform reader: DaemonFileReader for both local (__local__) and remote.
   const reader = await createFileReader(record.host);
 
@@ -54,6 +62,7 @@ export async function readPlanFromSession(planSessionId: string): Promise<{ cont
       // Find the LAST slug in JSONL — sessions resumed with a new conversation get a new slug,
       // and the latest slug corresponds to the active plan file.
       let lastSlug: string | undefined;
+      noteTranscriptLinesParsed(lines.length);
       for (const line of lines) {
         try {
           const parsed = JSON.parse(line);

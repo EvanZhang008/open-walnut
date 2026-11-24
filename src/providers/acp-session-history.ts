@@ -9,6 +9,8 @@ import type { JournalRecord } from './acp-worker/protocol.js'
 import { isProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isByteCeilingError } from '../core/byte-ceiling.js'
 import { registerMemoryHolder } from '../core/observability/memory-ledger.js'
+import { viaJudgingHost } from '../core/sessions/host-history-reads.js'
+import { noteTranscriptLinesParsed } from './line-parse-count.js'
 
 interface JournalReader {
   readFile(filePath: string): Promise<string | null>
@@ -189,9 +191,18 @@ export async function readAcpSessionHistory(
   return (await readAcpSessionHistoryState(record, options)).messages
 }
 
-export async function readAcpSessionHistoryState(
+export function readAcpSessionHistoryState(
   record: AcpHistoryRecord,
   options: ReadAcpSessionHistoryOptions = {},
+): Promise<AcpSessionHistoryState> {
+  // A reader of its own (a test, a special caller) reads here; otherwise a host-judged session is read on its host.
+  if (options.reader) return readAcpSessionHistoryStateHere(record, options)
+  return viaJudgingHost(record.claudeSessionId, record.host, 'readAcpSessionHistoryState', [options], () => readAcpSessionHistoryStateHere(record, options))
+}
+
+async function readAcpSessionHistoryStateHere(
+  record: AcpHistoryRecord,
+  options: ReadAcpSessionHistoryOptions,
 ): Promise<AcpSessionHistoryState> {
   const runtimeId = record.acpRuntimeId
   const candidates = getAcpJournalPathCandidates(record)
@@ -485,6 +496,7 @@ function trackLegacyMarkers(rec: JournalRecord, entry: FoldCacheEntry): void {
 
 function parseJournalLine(line: string): JournalRecord | null {
   if (!line.trim()) return null
+  noteTranscriptLinesParsed(1)
   try {
     const rec = JSON.parse(line) as JournalRecord
     return rec?.kind === 'acp' || rec?.kind === 'meta' ? rec : null

@@ -20,6 +20,8 @@ import type { SessionHistoryMessage, SessionHistoryTool } from '../session-histo
 import type { SessionRecord } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { log } from '../../logging/index.js';
+import { noteTranscriptLinesParsed } from '../../providers/line-parse-count.js';
+import { viaJudgingHost } from './host-history-reads.js';
 
 /** The hint kind the carried context rides in (hints/hint-format.ts): display shows the user's words only. */
 export const ENGINE_SWITCH_HINT = 'engine-switch';
@@ -57,7 +59,11 @@ const tick = () => new Promise<void>((r) => setImmediate(r));
  * a history that cannot be read either throws (HistoryReadFailedError), so a
  * switch never carries an empty context in place of the real one.
  */
-export async function readActiveContext(record: SessionRecord): Promise<ActiveContext> {
+export function readActiveContext(record: SessionRecord): Promise<ActiveContext> {
+  return viaJudgingHost(record.claudeSessionId, record.host, 'readActiveContext', [], () => readActiveContextHere(record));
+}
+
+async function readActiveContextHere(record: SessionRecord): Promise<ActiveContext> {
   if (engineCaps(record.engine).historySource === 'acp-journal') {
     const { readProviderSessionHistory } = await import('./session-lifecycle.js');
     const { messages } = await readProviderSessionHistory(record.claudeSessionId, record, record.host, true);
@@ -135,6 +141,7 @@ async function readClaudeChain(record: SessionRecord): Promise<ActiveContext | n
     if (i % 2000 === 1999) await tick();
     const raw = rawLines[i];
     if (!raw.trim()) continue;
+    noteTranscriptLinesParsed(1);
     try { parsed.push(JSON.parse(raw)); raws.push(raw); } catch { /* a torn line: the CLI skips it too */ }
   }
   const { computeCliLoadedChain } = await import('../transcript-chain.js');

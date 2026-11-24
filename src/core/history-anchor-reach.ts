@@ -19,6 +19,7 @@
  * event-loop time than a full read already may (measured: 40-100 ms for 5-7 MB).
  */
 import type { SessionHistoryMessage } from './session-history.js';
+import { viaJudgingHost } from './sessions/host-history-reads.js';
 
 /** Bytes kept before the anchor's line, so cross-line passes see what precedes it. */
 const LOOKBEHIND_BYTES = 1024 * 1024;
@@ -57,7 +58,7 @@ export function readHistoryReachingAnchor(
   const key = `${sessionId}@${host ?? '__local__'}|${anchorMsgId}`;
   const existing = inflight.get(key);
   if (existing) return existing;
-  const run = reach(sessionId, cwd, host, anchorMsgId);
+  const run = viaJudgingHost(sessionId, host, 'readHistoryReachingAnchor', [anchorMsgId], () => reach(sessionId, cwd, host, anchorMsgId));
   inflight.set(key, run);
   void run.finally(() => { if (inflight.get(key) === run) inflight.delete(key); }).catch(() => {});
   return run;

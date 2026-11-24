@@ -41,6 +41,9 @@
  *         GET /loop?reset=   this process's event-loop delay since the last reset (max, p99, p50, mean ms)
  *         GET /profile?start=1, then ?to=<file>   a CPU profile of this process between the two (node:inspector)
  *         GET /judge?sid=    judgeOf and the judging host
+ *         GET /read?sid=&what=full|tail|plan|body[&legacy=1]   a transcript read of the session as
+ *                            its readers make it (the whole history, its tail, its plan, its search
+ *                            body); `legacy=1` reads it here, as before its host answered reads
  *         GET /holds?sid=    does the Mac's runner hold a live process of it (holdsLiveSession)
  *         GET /lose-answer?mode=taken|dropped   the Mac's next start or resume to a host gets no
  *                            answer: `taken`, the host gets it and its answer is lost; `dropped`, it
@@ -169,6 +172,9 @@ const ccs = await import(${url('src/providers/claude-code-session.ts')})
 const hho = await import(${url('src/providers/host-handover.ts')})
 const hom = await import(${url('src/core/session-channel/handover-marks.ts')})
 const scg = await import(${url('src/core/sessions/session-command-gate.ts')})
+const hhr = await import(${url('src/core/sessions/host-history-reads.ts')})
+const shm = await import(${url('src/core/session-history.ts')})
+const sbd = await import(${url('src/core/search/build.ts')})
 const probeFile = (await import('node:path')).join((await import('node:path')).dirname(c.WALNUT_HOME), 'mac-probe.json')
 // The permit number this leader tells its hosts (leader-permit.ts), as the leader switch's permit
 // system would number two leaders of one Walnut: WALNUT_CLUSTER_PERMIT_NUMBER, once the side is on.
@@ -208,6 +214,19 @@ await serveProbe({
     return { written: q.get('to'), samples: profile.samples.length }
   },
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
+  '/read': async (q) => {
+    const row = await trk.getSessionByClaudeId(q.get('sid'))
+    if (!row) return { error: 'no row' }
+    hhr._readHistoryHereForTesting(q.get('legacy') === '1')
+    try {
+      const what = q.get('what')
+      if (what === 'full') return { value: await shm.readSessionHistory(row.claudeSessionId, row.cwd, row.host, row.outputFile, { skipSubagents: true }) }
+      if (what === 'tail') return { value: await shm.readSessionHistoryTail(row.claudeSessionId, row.cwd, row.host, row.outputFile) }
+      if (what === 'plan') return { value: await shm.extractPlanContent(row.claudeSessionId, row.cwd, row.host) }
+      if (what === 'body') return { value: await sbd.readSessionBody(row) }
+      return { error: 'what is full, tail, plan or body' }
+    } finally { hhr._readHistoryHereForTesting(false) }
+  },
   '/holds': (q) => ({ live: ccs.sessionRunner.holdsLiveSession(q.get('sid')) }),
   '/lose-answer': (q) => {
     const side = lb.activeLeaderSide()

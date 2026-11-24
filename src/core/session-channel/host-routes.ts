@@ -5,9 +5,10 @@
  *   start      the bundle answers this start's leader reads (host-port.ts StartBundles), a large
  *              prompt is spilled to a file of this host's own, then the host's runner starts it
  *   send / interrupt   the very bus events the leader's own runner takes, on this host's bus
- *   call       one member of HOST_CALL_ALLOWLIST (host-calls.ts) on the runner, the native session
- *              or the ACP session; a member that returns an undo (markExpectedTeardown) gives back an
- *              id the leader undoes with `undoExpectedTeardown`; `bashCallMatchingOp` is
+ *   call       one member of HOST_CALL_ALLOWLIST (host-calls.ts) on the runner, the native session,
+ *              the ACP session, or a read of the session's own transcript (`history`); a member
+ *              that returns an undo (markExpectedTeardown) gives back an id the leader undoes with
+ *              `undoExpectedTeardown`; `bashCallMatchingOp` is
  *              bashCallMatching with the op and file the leader's predicate would test
  *   drop       the sessions the leader deleted: this host drops its rows of them (leader-drops.ts)
  *   channel    a WebSocket whose frames are the channel's (channel.ts HostChannel.attach)
@@ -95,6 +96,8 @@ export interface HostRoutesOptions {
   owns?(sid: string): Promise<boolean>
   /** The session controls of host-calls.ts `lifecycle` (sessions/host-lifecycle.ts); tests pass their own. */
   lifecycle?: Record<string, (sid: string, ...args: unknown[]) => Promise<unknown>>
+  /** The transcript reads of host-calls.ts `history` (sessions/host-history-answer.ts); tests pass their own. */
+  history?: { answerHistoryRead(sid: string, member: string, args: readonly unknown[], tag?: CallBody['read']): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> }
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
   commandRunsOp?(command: string, op: string, file?: string): boolean
   /** The door credential route (host-credential-file.ts); absent: it answers 404. */
@@ -312,6 +315,11 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       undos.delete(String(args[0] ?? ''))
       if (u) u.fn()
       return { status: 200, body: { ok: true, value: !!u } }
+    }
+    // A read of its own session's transcript: parsed here, the result answered (sessions/host-history-reads.ts).
+    if (body.target === 'history') {
+      const reads = o.history ?? await import('../sessions/host-history-answer.js')
+      return { status: 200, body: await reads.answerHistoryRead(body.sid, body.member, args, body.read) }
     }
     // A control the host carries out whole for its own session (host-calls.ts `lifecycle`).
     if (body.target === 'lifecycle') {

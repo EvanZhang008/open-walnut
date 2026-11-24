@@ -598,6 +598,37 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   answer and its link, and asks once more (if the switch is still on), within 15 s; never a third time
   (`session-channel/switch-catch-up.ts`). A start
   still refused fails as before; a resume is delivered here as before.
+- **Transcript reads.** A host-run session's history (the whole read, a tail window, the older pages'
+  byte ranges, a tool's full result), its plan, its search body, its workflow and subagent rows, the
+  anchor reach of a delta, an ACP journal and an engine switch's context are read and parsed on its host:
+  each reader starts with `viaJudgingHost` (`src/core/sessions/host-history-reads.ts`) and asks the host's
+  `history` call, which runs the same reader on the host's own row (`host-history-answer.ts`) and answers
+  the parsed result with the parse's marks (windowed, its start, source found, orphans). Each answer has a
+  version (a hash of it); the leader keeps the answer by reader and arguments (64 MB, the legacy parse
+  cache's size), sends the version back, and an unchanged transcript answers `same` with no body, so a
+  poll of an idle session moves a few bytes; reads of the same in one tick share one call. The host keeps
+  only each answer's version (by the rows array its cache handed out), never its JSON. An answer over 4 M
+  characters is parked (a reference to its rows) and comes in pages of whole rows the leader asks for, so
+  no frame on the channel socket the host's sessions share is larger; a parked answer being taken is never
+  dropped (each page renews it), and with 8 parked (or 64 M characters, two at the cap) a new large read is
+  refused `busy`, failing as that reader's failed read until its next try. The size limit is the legacy one: a whole read or a tail past
+  32 M characters (the legacy 32 MiB whole read) answers the same last-4-MiB window the legacy path falls
+  back to, marked windowed. The deadline is the legacy remote read's, 120 s a call; a leader that gives up
+  sends `cancelRead`, and the host drops the answer and its parked pages. A host whose service does not
+  name `session-history-v1` while running is read as before: an older service, or one whose own
+  `host_runs_sessions` switch is off (the one way back to parsing a host's session on the leader). Right
+  after a leader restart, until a host's first report arrives (a few seconds), its sessions read as stale
+  (below) and recover by themselves. **A host-judged session is never
+  parsed on the Mac otherwise:** while its host's service, which has answered reads (remembered on disk),
+  is not running or does not answer, a read answers the last kept answer (the whole history throws
+  `HistoryReadFailedError`, and its callers serve that copy marked stale), else the reader's failed read;
+  the next read once the host is back goes to it. Transcript lines a read parses on the leader count in the
+  per-session line count (`GET /api/diagnostics/line-parses`, `transcriptLines` beside `streamLines`), so
+  its 0 covers these reads; `tests/core/sessions/host-history-reads-ratchet.test.ts` lists every file that
+  fetches or parses a transcript, and `tests/e2e/host-judged-history-cluster-e2e.test.ts` proves 0 against
+  the old read's equal content. Not moved: the Changed tab's reader path (only when the host's daemon has
+  no `changes-v1`), and a rewind's commit, which asks the host's daemon (`transcript.rewindProbe`): a
+  lifecycle control not yet handed to the host.
 
 ## Phases
 

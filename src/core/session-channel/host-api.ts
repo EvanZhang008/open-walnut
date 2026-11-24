@@ -108,6 +108,8 @@ export interface CallBody {
   target: HostCallTarget
   member: string
   args?: unknown[]
+  /** A `history` read only: its id (for a cancel) and the version of its answer the leader holds (sessions/host-history-answer.ts). */
+  read?: { id: string; known?: string }
 }
 
 export type CallAnswer = { ok: true; value: unknown } | { ok: false; error: string }

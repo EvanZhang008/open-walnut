@@ -67,9 +67,11 @@ export interface HistoryParseHooks {
   debug(message: string, fields?: Record<string, unknown>): void;
   noteLineType(line: ParseCanaryLine, fallbackVersion?: string): void;
   noteBlockTypes(content: unknown, line: ParseCanaryLine, fallbackVersion?: string): void;
+  /** One parse took `lines` transcript lines (the server counts them per session: providers/line-parse-count.ts). */
+  noteLinesParsed(lines: number): void;
 }
 const quiet = (): void => {};
-const parseHooks: HistoryParseHooks = { warn: quiet, debug: quiet, noteLineType: quiet, noteBlockTypes: quiet };
+const parseHooks: HistoryParseHooks = { warn: quiet, debug: quiet, noteLineType: quiet, noteBlockTypes: quiet, noteLinesParsed: quiet };
 
 /** Point the parse's diagnostics at a logger (the server's, in session-history.ts). */
 export function setHistoryParseHooks(hooks: Partial<HistoryParseHooks>): void {
@@ -621,6 +623,7 @@ export function isRequestCopyLine(line: string): boolean {
 
 function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
+  parseHooks.noteLinesParsed(lines.length);
 
   // Parse all lines
   let rawMessages: RawJsonlLine[] = [];

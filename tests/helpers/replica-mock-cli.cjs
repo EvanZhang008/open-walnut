@@ -27,6 +27,9 @@
  * scripts/bench-host-judged-sessions.mts): "echo: streamed <what it wrote, by kind>". "...then hold
  * until <path>" holds the turn after that output, as above: "echo: streamed <...> then released".
  *
+ * "please plan <text>" answers "echo: planned" with an ExitPlanMode call whose plan is "# Plan" and
+ * the text, as a plan turn files it in the transcript.
+ *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
 'use strict'
@@ -163,11 +166,17 @@ function runNext() {
     streamLines(Number(stream[1]), Number(stream[2]), (n) => finish(`echo: streamed ${JSON.stringify(n)}`))
     return
   }
+  // "please plan <text>": the answer carries an ExitPlanMode call whose plan is the text, as a plan turn files it.
+  const plan = /^please plan (.+)$/i.exec(words.trim())
+  if (plan) {
+    setTimeout(() => finish('echo: planned', [{ type: 'tool_use', id: `toolu_${crypto.randomBytes(6).toString('hex')}`, name: 'ExitPlanMode', input: { plan: `# Plan\n\n${plan[1]}` } }]), THINK_MS)
+    return
+  }
   setTimeout(() => finish(`echo: ${words}`), THINK_MS)
-  function finish(reply) {
+  function finish(reply, blocks = []) {
     const message = {
       id: `msg_${crypto.randomBytes(6).toString('hex')}`, type: 'message', role: 'assistant', model: 'mock-model',
-      content: [{ type: 'text', text: reply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+      content: [...blocks, { type: 'text', text: reply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
     }
     out({ type: 'assistant', message, parent_tool_use_id: null })
     const answerUuid = crypto.randomUUID()

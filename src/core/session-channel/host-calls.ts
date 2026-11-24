@@ -14,6 +14,10 @@
  * member takes it as its first parameter, so the host puts it there; a `session` or `acp` member is
  * a method of that session's own object and takes `args` as they are.
  *
+ * `history` members are the transcript reads of core/sessions/host-history-reads.ts: the host reads
+ * and parses its own session's transcript and answers the parsed result (rows, a plan, a search
+ * text), so no line of it is parsed on the leader. They take no path: the host reads its own row.
+ *
  * Not forwarded at all: `respawnOnCurrentPrompt` takes a callback (its `stillWanted`), and a host
  * runs its own prompt refresh for its own sessions (host-resend.ts leaderPromptRunner); the leader's
  * runner refuses it for a host-run session by name (providers/host-judged-runner.ts).
@@ -36,9 +40,21 @@ export const HOST_CALL_ALLOWLIST = {
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
   lifecycle: ['terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart'],
-} as const satisfies Record<'session' | 'acp' | 'runner' | 'lifecycle', readonly string[]>
+  history: [
+    'readSessionHistory', 'readSessionHistoryTail', 'readSessionHistoryTailWindow', 'readSessionHistoryRange',
+    'readSessionRowToolResult', 'extractPlanContent', 'readSingleSubagentHistory', 'reconstructWorkflowProgress',
+    'readHistoryReachingAnchor', 'readAcpSessionHistoryState', 'readSessionBody', 'readPlanFromSession', 'readActiveContext',
+    // The wire of those reads, not readers: the next page of a large answer, and a read the leader gave up on.
+    'readNextPage', 'cancelRead',
+  ],
+} as const satisfies Record<'session' | 'acp' | 'runner' | 'lifecycle' | 'history', readonly string[]>
 
 export type HostCallTarget = keyof typeof HOST_CALL_ALLOWLIST
+
+/** The `history` members that are no reader: the paging and cancel of sessions/host-history-answer.ts. */
+export const HOST_HISTORY_WIRE = ['readNextPage', 'cancelRead'] as const
+/** A transcript reader a leader may route to the host (sessions/host-history-reads.ts). */
+export type HostHistoryRead = Exclude<(typeof HOST_CALL_ALLOWLIST.history)[number], (typeof HOST_HISTORY_WIRE)[number]>
 
 export function hostCallAllowed(target: string, member: string): target is HostCallTarget {
   if (!Object.hasOwn(HOST_CALL_ALLOWLIST, target)) return false

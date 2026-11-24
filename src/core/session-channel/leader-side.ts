@@ -28,7 +28,7 @@ import type { Duplex } from 'node:stream'
 import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { createLeaderApply, HostRevoked } from './leader-apply.js'
-import { SESSION_HOST_CHECKS_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
@@ -422,8 +422,8 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       return true
     },
     /** One allowlisted call on a session the host runs (POST /host-api/sessions/call): its value, or a throw. */
-    async callHost(hostKey: string, body: { sid: string; target: string; member: string; args: unknown[] }): Promise<unknown> {
-      const a = await request(hostKey, 'call', body, deps.callTimeoutMs ?? 60_000)
+    async callHost(hostKey: string, body: { sid: string; target: string; member: string; args: unknown[]; read?: { id: string; known?: string } }, timeoutMs?: number): Promise<unknown> {
+      const a = await request(hostKey, 'call', body, timeoutMs ?? deps.callTimeoutMs ?? 60_000)
       if (a.ok !== true) throw new Error(`${body.member} on ${hostKey}: ${a.error ?? 'refused'}`)
       return a.value
     },
@@ -488,6 +488,11 @@ export function reportResumesAcp(report: { capabilities?: unknown } | null | und
 /** Does it answer the checks of its own sessions as lifecycle calls (SESSION_HOST_CHECKS_CAP)? */
 export function reportHostChecks(report: { capabilities?: unknown } | null | undefined): boolean {
   return reportJudges(report) && reportNames(report, SESSION_HOST_CHECKS_CAP)
+}
+
+/** Does it answer the transcript reads of its sessions (sessions/host-history-reads.ts, SESSION_HISTORY_CAP)? */
+export function reportReadsHistory(report: { capabilities?: unknown } | null | undefined): boolean {
+  return reportJudges(report) && reportNames(report, SESSION_HISTORY_CAP)
 }
 
 function reportNames(report: { capabilities?: unknown } | null | undefined, cap: string): boolean {

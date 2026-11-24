@@ -11,7 +11,8 @@
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
-import { createLeaderSide, reportHostChecks, reportJudges, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
+import { createLeaderSide, reportHostChecks, reportJudges, reportReadsHistory, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
+import { noteHostReadsHistory, setHostHistoryCaller } from '../sessions/host-history-reads.js'
 import { noteHostSessionSide } from './host-side-health.js'
 import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
@@ -268,11 +269,14 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   setHostSwitchProbe((host) => side.switchOn(host))
   // The per-host switch is read now, not only at a host's first view or a config write.
   await side.refreshFlag()
-  // A runner call the host refuses because it does not own the session: the same recovery as a send's.
-  remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body).catch((err: unknown) => {
-    if (err instanceof Error && err.message.endsWith(`: ${NOT_OWN_SESSION}`)) void import('../../providers/host-judged-send.js').then((m) => m.confirmHostDisowns(body.sid, host)).catch(() => {})
+  // A runner call or a read the host refuses because it does not own the session: the same recovery as a send's.
+  const disowned = (host: string, sid: string) => (err: unknown): never => {
+    if (err instanceof Error && err.message.endsWith(`: ${NOT_OWN_SESSION}`)) void import('../../providers/host-judged-send.js').then((m) => m.confirmHostDisowns(sid, host)).catch(() => {})
     throw err
-  }))
+  }
+  remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body).catch(disowned(host, body.sid)))
+  // A host-judged session's transcript is read and parsed on its host (sessions/host-history-reads.ts).
+  setHostHistoryCaller((host, body, timeoutMs) => side.callHost(host, body, timeoutMs).catch(disowned(host, body.sid)))
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
@@ -280,6 +284,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     if (anyHostRevoked()) side.noteRevoked(view.hostKey)
     noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server), view.phase === 'running' && reportResumesAcp(view.server))
     noteHostTakesChecks(view.hostKey, view.phase === 'running' && reportHostChecks(view.server))
+    noteHostReadsHistory(view.hostKey, view.phase !== 'running' ? 'down' : reportReadsHistory(view.server) ? 'answers' : 'old')
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
     noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)
@@ -345,6 +350,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)
+    setHostHistoryCaller(null)
     if (active === side) { active = null; standing = null; pushDoors = null; forgetHostResumes() }
   }
 }

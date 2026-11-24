@@ -26,6 +26,7 @@ import { closeDb as closeTaskDb } from '../task-db.js';
 import { listSessions } from '../session-tracker.js';
 import { readSessionHistoryTail } from '../session-history.js';
 import { buildIndexedContent } from '../session-content-indexer.js';
+import { viaJudgingHost } from '../sessions/host-history-reads.js';
 import { markdownToDoc, sessionToDoc, taskToDoc } from './serializers.js';
 import type { SessionRecord, Task } from '../types.js';
 
@@ -88,7 +89,15 @@ async function fileDoc(
 
 /** Notes vault excludes global-notes.md (matches the old QMD collection). */
 
-export async function readSessionBody(
+export function readSessionBody(
+  session: SessionRecord,
+  tailBytes?: number,
+): Promise<{ body: string | null; commitShas?: string[] }> {
+  // A session its host judges: the host reads and parses it and answers the text only.
+  return viaJudgingHost(session.claudeSessionId, session.host, 'readSessionBody', [tailBytes], () => readSessionBodyHere(session, tailBytes));
+}
+
+async function readSessionBodyHere(
   session: SessionRecord,
   tailBytes?: number,
 ): Promise<{ body: string | null; commitShas?: string[] }> {

@@ -16,7 +16,9 @@ vi.mock('../../src/core/session-file-reader.js', () => ({
   readSessionJsonlContent: vi.fn(),
 }));
 
-vi.mock('../../src/constants.js', () => ({
+// A remote record's read asks whether its host answers it (core/sessions/host-history-reads.ts), which reads the server role: the whole constants.
+vi.mock('../../src/constants.js', async () => ({
+  ...(await import('../helpers/mock-constants.js')).createMockConstants('walnut-plan-message'),
   CLAUDE_HOME: '/home/user/.claude',
 }));
 

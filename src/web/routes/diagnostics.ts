@@ -5,8 +5,9 @@
  *   GET /api/diagnostics?format=text               → 200 text/plain, paste-ready
  *   ...&section=hosts                              → the hosts section only (text or JSON)
  *   ...&redact=0                                   → keep usernames and hostnames
- *   GET /api/diagnostics/line-parses[?session=<id>] → how many output lines of each session this
- *                                                    server parsed itself, and the frame parses
+ *   GET /api/diagnostics/line-parses[?session=<id>] → how many lines of each session this server
+ *                                                    parsed itself (`lines`; apart: `streamLines`, CLI
+ *                                                    output, `transcriptLines`, history reads), and the frame parses
  *                                                    (providers/line-parse-count.ts): a session its
  *                                                    host judges reads 0 here. In memory since boot.
  *
@@ -27,7 +28,7 @@ import { collectDiagnostics, type CollectOptions, type DiagnosticsReport } from 
 import { hostsSection, redactDiagnostics, renderDiagnosticsText } from '../../core/diagnostics/render.js'
 import { getWebAssetsReport } from './config.js'
 import { log } from '../../logging/index.js'
-import { frameParses, lineParsesAll, lineParsesOf } from '../../providers/line-parse-count.js'
+import { frameParses, lineParsesAll, lineParsesByKindOf, lineParsesOf } from '../../providers/line-parse-count.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
 
@@ -112,7 +113,7 @@ export function createDiagnosticsRouter(opts: DiagnosticsRouterOptions = {}): Ro
   router.get('/line-parses', (req: Request, res: Response) => {
     const sid = typeof req.query.session === 'string' ? req.query.session : ''
     const since = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString()
-    if (sid) { res.json({ since, sessionId: sid, lines: lineParsesOf(sid), frames: frameParses() }); return }
+    if (sid) { res.json({ since, sessionId: sid, lines: lineParsesOf(sid), ...lineParsesByKindOf(sid), frames: frameParses() }); return }
     res.json({ since, sessions: lineParsesAll(), frames: frameParses() })
   })
 

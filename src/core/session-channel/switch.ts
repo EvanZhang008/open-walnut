@@ -48,6 +48,13 @@ export const SESSION_RESUME_ACP_CAP = 'session-resume-acp-v1'
  */
 export const SESSION_HOST_CHECKS_CAP = 'session-host-checks-v1'
 
+/**
+ * Capability a host's service names when it answers the transcript reads of the sessions it runs
+ * (host-calls.ts `history`, sessions/host-history-reads.ts): a leader reads such a session's
+ * history there, parsed, instead of parsing the host's lines itself. Without it, read as before.
+ */
+export const SESSION_HISTORY_CAP = 'session-history-v1'
+
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 
 function forced(): boolean | null {

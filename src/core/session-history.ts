@@ -39,6 +39,8 @@ import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import { isByteCeilingError } from './byte-ceiling.js';
 import { registerMemoryHolder } from './observability/memory-ledger.js';
+import { noteTranscriptLinesParsed } from '../providers/line-parse-count.js';
+import { keptHostHistoryOf, keptHostHistoryState, shareHistoryBudget, shedKeptHostHistory, viaJudgingHost } from './sessions/host-history-reads.js';
 
 // The parser itself (parseSessionMessages and the row types) lives in history-parse.ts, pure, so
 // the session daemon can bundle it; this module re-exports all of it and gives it the logger.
@@ -53,6 +55,7 @@ setHistoryParseHooks({
   debug: (message, fields) => log.session.debug(message, fields),
   noteLineType: (line, version) => noteTranscriptLineType(line, version),
   noteBlockTypes: (content, line, version) => noteMessageBlockTypes(content, line, version),
+  noteLinesParsed: (lines) => noteTranscriptLinesParsed(lines),
 });
 
 /** Cached homedir — avoids repeated syscall on each history request */
@@ -271,11 +274,17 @@ function isFresh(entry: ParsedHistoryCacheEntry, mtimeMs: number, size: number |
   return entry.mtimeMs === mtimeMs && (entry.size === undefined || size === undefined || entry.size === size);
 }
 let historyCacheChars = 0;
+// One budget for the parsed history this server holds: its own parses, and the answers of the
+// hosts that parse their sessions (sessions/host-history-reads.ts kept answers).
 registerMemoryHolder({
   name: 'session-history.parsed',
   budgetBytes: MAX_HISTORY_CACHE_CHARS * 2,
-  read: () => ({ entries: parsedHistoryCache.size, chars: historyCacheChars }),
+  read: () => {
+    const host = keptHostHistoryState();
+    return { entries: parsedHistoryCache.size + host.entries, chars: historyCacheChars + host.chars };
+  },
 });
+shareHistoryBudget(() => ({ budget: historyCacheBudgetChars, other: historyCacheChars }));
 
 /**
  * Resolved remote path cache — sessionId@host → full remote path of the JSONL
@@ -366,6 +375,29 @@ function markSourceFound(messages: object): void { sourceFoundParses.add(message
 /** True when the transcript source behind `messages` was proven to exist. */
 export function isSourceFoundHistory(messages: object): boolean { return sourceFoundParses.has(messages); }
 
+/** What a parse says about itself beside its rows (the marks above), as JSON carries it. */
+export interface HistoryRowsMeta { windowed?: true; windowStart?: HistoryWindowStart; sourceFound?: true; orphans?: string[] }
+
+/** The marks of a parse, for a host answering it to its leader (sessions/host-history-reads.ts). */
+export function historyRowsMeta(messages: object): HistoryRowsMeta {
+  const orphans = getOrphanFinishedAgentIds(messages);
+  const start = windowedParses.get(messages);
+  return {
+    ...(windowedParses.has(messages) ? { windowed: true as const } : {}),
+    ...(start ? { windowStart: start } : {}),
+    ...(sourceFoundParses.has(messages) ? { sourceFound: true as const } : {}),
+    ...(orphans && orphans.size > 0 ? { orphans: [...orphans] } : {}),
+  };
+}
+
+/** Put a host's marks back on the rows it answered: every reader asks the array as if parsed here. */
+export function markHistoryRows(messages: object, meta: HistoryRowsMeta | undefined): void {
+  if (!meta) return;
+  if (meta.windowed) markWindowedRead(messages, meta.windowStart);
+  if (meta.sourceFound) markSourceFound(messages);
+  if (meta.orphans?.length) markOrphanFinishedAgentIds(messages, meta.orphans);
+}
+
 
 /** Compose cache key so local and remote entries for the same sessionId don't collide. */
 function cacheKey(sessionId: string, host?: string): string {
@@ -389,7 +421,8 @@ function cacheGet(sessionId: string, host?: string): ParsedHistoryCacheEntry | u
  * screen (inc-1783406628291). Returns undefined when never read this process.
  */
 export function getCachedSessionHistory(sessionId: string, host?: string): SessionHistoryMessage[] | undefined {
-  return cacheGet(sessionId, host)?.messages;
+  // A host-judged session is never parsed here: its copy is the last whole history its host answered.
+  return cacheGet(sessionId, host)?.messages ?? (host ? keptHostHistoryOf(sessionId) : undefined);
 }
 
 function cacheDelete(key: string): void {
@@ -539,6 +572,7 @@ let historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
 
 export function setHistoryCacheShedding(shedding: boolean): { dropped: number; chars: number } {
   setTailWindowShedding(shedding);
+
   historyCacheBudgetChars = shedding ? Math.floor(MAX_HISTORY_CACHE_CHARS / 4) : MAX_HISTORY_CACHE_CHARS;
   let dropped = 0;
   if (shedding) {
@@ -551,6 +585,8 @@ export function setHistoryCacheShedding(shedding: boolean): { dropped: number; c
       dropped += 1;
     }
   }
+  // After the parse cache shed its own: the kept host answers then fit what is left of the shared budget.
+  shedKeptHostHistory();
   return { dropped, chars: historyCacheChars };
 }
 
@@ -562,7 +598,7 @@ function cacheSet(sessionId: string, entry: ParsedHistoryCacheEntry, host?: stri
   // Evict LRU until BOTH bounds hold. The just-inserted entry is exempt (it may
   // alone exceed the budget — see MAX_HISTORY_CACHE_CHARS comment).
   for (const oldest of parsedHistoryCache.keys()) {
-    if (parsedHistoryCache.size <= MAX_HISTORY_CACHE && historyCacheChars <= historyCacheBudgetChars) break;
+    if (parsedHistoryCache.size <= MAX_HISTORY_CACHE && historyCacheChars + keptHostHistoryState().chars <= historyCacheBudgetChars) break;
     if (oldest === key) continue;
     cacheDelete(oldest);
   }
@@ -581,7 +617,12 @@ export { HOOK_CONTEXT_PREFIX, hookContextText } from '../lib/walnut-added.js';
  * `workflow=true` scans the nested subagents/workflows/<runId>/ layout used by
  * the dynamic-workflow tool; otherwise the flat subagents/ layout (Task/Team).
  */
-export async function readSingleSubagentHistory(
+export function readSingleSubagentHistory(sessionId: string, agentId: string, cwd?: string, host?: string, workflow?: boolean): Promise<SessionHistoryMessage[]> {
+  return viaJudgingHost(sessionId, host, 'readSingleSubagentHistory', [agentId, workflow === true],
+    () => readSingleSubagentHistoryHere(sessionId, agentId, cwd, host, workflow));
+}
+
+async function readSingleSubagentHistoryHere(
   sessionId: string,
   agentId: string,
   cwd?: string,
@@ -616,7 +657,11 @@ export async function readSingleSubagentHistory(
  * accumulator — the reconstructed payload is byte-for-byte what the live panel
  * would have shown at the end of the run.
  */
-export async function reconstructWorkflowProgress(
+export function reconstructWorkflowProgress(sessionId: string, cwd?: string, host?: string): Promise<SessionBackgroundTasksPayload | null> {
+  return viaJudgingHost(sessionId, host, 'reconstructWorkflowProgress', [], () => reconstructWorkflowProgressHere(sessionId, cwd, host));
+}
+
+async function reconstructWorkflowProgressHere(
   sessionId: string,
   cwd?: string,
   host?: string,
@@ -1357,14 +1402,15 @@ async function parseHistoryWindow(
  * one caller that passes it has a PRECOMPUTED dead set for the whole file (the
  * daemon's rewind probe), which is exactly the missing piece.
  */
-export async function readSessionHistoryTailWindow(
+export function readSessionHistoryTailWindow(
   sessionId: string,
   cwd?: string,
   host?: string,
   maxTailBytes = OVER_CEILING_TAIL_BYTES,
   parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
-  return (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, parseOpts))?.messages ?? null;
+  return viaJudgingHost(sessionId, host, 'readSessionHistoryTailWindow', [maxTailBytes, parseOpts],
+    async () => (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, parseOpts))?.messages ?? null);
 }
 
 /** A tail window as read: its parse, and the bytes the parse came from (for seeding incremental state). */
@@ -1504,13 +1550,25 @@ async function cacheWindowRead(
  * a session with in-place rewinds (their cut anchors resolve against the whole
  * file, the same reason readSessionHistoryTail skips its window for them).
  */
-export async function readSessionHistoryRange(
+export function readSessionHistoryRange(
   sessionId: string,
   cwd: string | undefined,
   host: string | undefined,
   start: number,
   end: number,
-): Promise<{ messages: SessionHistoryMessage[]; fileSize: number; epoch?: string; firstTimestamp?: string } | null> {
+): Promise<HistoryRange | null> {
+  return viaJudgingHost(sessionId, host, 'readSessionHistoryRange', [start, end], () => readSessionHistoryRangeHere(sessionId, cwd, host, start, end));
+}
+
+type HistoryRange = { messages: SessionHistoryMessage[]; fileSize: number; epoch?: string; firstTimestamp?: string };
+
+async function readSessionHistoryRangeHere(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  start: number,
+  end: number,
+): Promise<HistoryRange | null> {
   if (await getInPlaceRewinds(sessionId)) return null;
   const daemonHost = host ?? '__local__';
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
@@ -1563,7 +1621,18 @@ export async function readSessionHistoryRange(
  * Returns undefined when the window has no such tool (rewound away, compacted, or
  * outside the bounded window) — the caller keeps the capped text it already has.
  */
-export async function readSessionRowToolResult(
+export function readSessionRowToolResult(
+  sessionId: string,
+  toolUseId: string,
+  maxChars: number,
+  cwd?: string,
+  host?: string,
+): Promise<{ text: string; sourceChars: number } | undefined> {
+  return viaJudgingHost(sessionId, host, 'readSessionRowToolResult', [toolUseId, maxChars],
+    () => readSessionRowToolResultHere(sessionId, toolUseId, maxChars, cwd, host));
+}
+
+async function readSessionRowToolResultHere(
   sessionId: string,
   toolUseId: string,
   maxChars: number,
@@ -1586,13 +1655,25 @@ export async function readSessionRowToolResult(
   return undefined;
 }
 
-export async function readSessionHistoryTail(
+export function readSessionHistoryTail(
   sessionId: string,
   cwd?: string,
   host?: string,
   outputFile?: string,
   maxTailBytes = 4 * 1024 * 1024,
   /** The caller reads the same session again soon (the transcript sweep): keep its window. */
+  opts?: { poll?: boolean },
+): Promise<SessionHistoryMessage[] | null> {
+  return viaJudgingHost(sessionId, host, 'readSessionHistoryTail', [maxTailBytes, opts],
+    () => readSessionHistoryTailHere(sessionId, cwd, host, outputFile, maxTailBytes, opts));
+}
+
+async function readSessionHistoryTailHere(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  outputFile: string | undefined,
+  maxTailBytes: number,
   opts?: { poll?: boolean },
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
@@ -1652,6 +1733,11 @@ export async function readSessionHistoryTail(
 const historyInflightByKey = new Map<string, Promise<SessionHistoryMessage[]>>();
 
 export function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
+  return viaJudgingHost(sessionId, host, 'readSessionHistory', [options], () => readSessionHistoryShared(sessionId, cwd, host, outputFile, options));
+}
+
+/** readSessionHistory here, one read per key at a time. */
+function readSessionHistoryShared(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
   const key = `${sessionId}@${host ?? '__local__'}|${options?.skipSubagents ? 's' : ''}|w${options?.maxColdReadBytes ?? ''}`;
   const existing = historyInflightByKey.get(key);
   if (existing) return existing;
@@ -2152,6 +2238,7 @@ function foldPlanLines(lines: Iterable<string>): PlanFold {
   for (const line of lines) {
     if (!line) continue;
     let parsed: RawJsonlLine;
+    noteTranscriptLinesParsed(1);
     try {
       parsed = JSON.parse(line);
     } catch (err) {
@@ -2194,7 +2281,11 @@ function foldPlanLines(lines: Iterable<string>): PlanFold {
  *
  * Supports both local and remote sessions via readSessionJsonlContent().
  */
-export async function extractPlanContent(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
+export function extractPlanContent(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
+  return viaJudgingHost(sessionId, host, 'extractPlanContent', [], () => extractPlanContentHere(sessionId, cwd, host));
+}
+
+async function extractPlanContentHere(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
   // DAEMON-UNIFORM: read through readSessionJsonlContent (daemon for both local &
   // remote) — no findLocalJsonlPath + fsp.readFile bypass.
   //
@@ -2507,6 +2598,7 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
     const bgBackgrounded = new Set<string>();
     const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);
 
+    noteTranscriptLinesParsed(lines.length);
     for (const line of lines) {
       let parsed: Record<string, unknown>;
       try {
