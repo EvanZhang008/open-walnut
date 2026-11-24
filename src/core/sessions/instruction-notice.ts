@@ -107,6 +107,32 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
 
 type Found = { due: Due; views: Record<string, BlockView>; texts: string[] };
 
+type HeldAndDue = { views: Record<string, BlockView>; texts: string[]; found: Due | null };
+/**
+ * heldBeyondPrompt and dueChanges for one prompt, one set of current instructions and one record
+ * of what the session was told, worked out once. Both are pure in those inputs, and the host slice
+ * asks for every active session at every push (2026-11-24: the diff was a fifth of the server's
+ * CPU in a memory burst after a restart). Keyed by the parsed texts (parseInstructions hands back
+ * the same object per text) and the record fields heldNoted reads.
+ */
+const dueMemo = new WeakMap<Parsed, WeakMap<Parsed, Map<string, HeldAndDue>>>();
+const DUE_MEMO_PER_PAIR = 8;
+function heldAndDue(record: NoticeRecord, current: Parsed, prompt: Parsed, ignoreTold: boolean | undefined, cut: readonly string[] | undefined): HeldAndDue {
+  const key = JSON.stringify([record.taskRoutingNoted ?? null, record.lastCompactUuid ?? null, record.lastCompactAt ?? null, !!ignoreTold, cut ?? null]);
+  let byPrompt = dueMemo.get(current);
+  if (!byPrompt) dueMemo.set(current, byPrompt = new WeakMap());
+  let byKey = byPrompt.get(prompt);
+  if (!byKey) byPrompt.set(prompt, byKey = new Map());
+  const hit = byKey.get(key);
+  if (hit) return hit;
+  const { told, views, texts } = heldBeyondPrompt(record, current, prompt, ignoreTold);
+  const found = dueChanges(current, prompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {}, texts);
+  const out = { views, texts, found };
+  if (byKey.size >= DUE_MEMO_PER_PAIR) byKey.delete(byKey.keys().next().value!);
+  byKey.set(key, out);
+  return out;
+}
+
 /**
  * When the last notice reached this session, for the gap: one on its current prompt and boundary,
  * or one on an older prompt when the current one holds every line it told (a resume or a respawn
@@ -142,10 +168,9 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   if (!prompt.includes(WALNUT_PROMPT_MARK)) return null;
   const current = parseInstructions(defaultInstructions(task));
   const parsedPrompt = parseInstructions(prompt);
-  const { told, views, texts } = heldBeyondPrompt(record, current, parsedPrompt, ignoreTold);
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
-  const found = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {}, texts);
+  const { views, texts, found } = heldAndDue(record, current, parsedPrompt, ignoreTold, cut);
   // A replica's copy of the config has no Reply language (config-allowlist.ts): there it is
   // unknown, not gone, so a session it leads is never told the language rule stopped applying.
   const due = found && isFollower() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
