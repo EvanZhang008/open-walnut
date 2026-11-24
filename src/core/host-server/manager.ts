@@ -520,6 +520,18 @@ export function createHostServerManager(deps: ManagerDeps) {
     return servesThisWalnut(host?.servesAs?.(), deps.home)
   }
 
+  /**
+   * The host is, or is meant to be, this Walnut's one service: it runs as it now, or this Walnut offers
+   * it one (a hello that says daemon meanwhile: a start that fell back with the follower spec still
+   * kept, which a removed spec would make for good). A failure demotes neither. Not sure counts as
+   * offered; a failed read as not, so a host never offered keeps the old way.
+   */
+  async function oneServiceMeant(host: HostServerHost | undefined): Promise<boolean> {
+    if (oneServiceHere(host)) return true
+    if (!host?.oneServiceWanted) return false
+    return host.oneServiceWanted().then((w) => w !== false, () => false)
+  }
+
   /** The host runs as this Walnut's one service: the program last kept as working, sent as it is. */
   function serviceHolds(host: HostServerHost): { rec: HostRecord; working: WorkingProgram } | null {
     if (!oneServiceHere(host)) return null
@@ -588,9 +600,9 @@ export function createHostServerManager(deps: ManagerDeps) {
       return
     }
     if (!host.hasCapability('host-server-v1') || !host.hasCapability('follower-v1') || !host.hasCapability('stream-relay-v1')) {
-      // A host's one service of this Walnut runs the follower whatever its hello names: never "none" for it.
-      if (oneServiceHere(host)) {
-        set(hostKey, { enabled: true, phase: 'checking', message: 'This host\'s Walnut service did not name the features its server needs; Walnut looks again on its next connect.' })
+      // A host's one service of this Walnut (or one meant to be) is never "none" for a hello that lacks them.
+      if (await oneServiceMeant(host)) {
+        set(hostKey, { enabled: true, phase: 'checking', message: 'This host\'s Walnut did not name the features its server needs; Walnut looks again on its next connect.' })
         return
       }
       set(hostKey, { enabled: true, phase: 'unsupported', message: 'This host\'s Walnut daemon is older than this feature; it updates on its next connect.' })
@@ -731,7 +743,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       // The host's one service is this Walnut's follower (2026-11-24: a first report a lossy link
       // delayed past a minute took it down, and the host came back as two programs for good): a
       // failure leaves it running, never reads as "no follower there", and is only checked again.
-      const service = oneServiceHere(hosts.get(hostKey) ?? host)
+      const service = await oneServiceMeant(hosts.get(hostKey) ?? host)
       if (err instanceof UntilRetry) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host
         // that is on only by default, a file that does not run there means no follower there.
@@ -753,7 +765,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (byDefault) await takeDown(hostKey, hosts.get(hostKey), 'failed', { keepWait: true })
       // Its status is still read meanwhile: a report that comes late shows as running at once.
       if (service) startPoll(hostKey)
-      const later = retryingLater(hostKey, refused ? 'login' : 'failed', service ? `${message.replace(/\.$/, '')}; the host's Walnut service is left running` : message, { stopAtEnd: byDefault })
+      const later = retryingLater(hostKey, refused ? 'login' : 'failed', service ? `${message.replace(/\.$/, '')}; the Walnut server on the host is left running` : message, { stopAtEnd: byDefault })
       failedNow.set(hostKey, { message, triesAgain: later.at !== undefined })
       set(hostKey, { phase: 'error', message: later.message, retryAt: later.at })
     }
@@ -772,8 +784,8 @@ export function createHostServerManager(deps: ManagerDeps) {
    * switches it back. Any other reason leaves such a host as it is (false).
    */
   async function takeDown(hostKey: string, host: HostServerHost | undefined, why: 'off' | 'this-computer' | 'failed', o: { keepWait?: boolean } = {}): Promise<boolean> {
-    if (why !== 'off' && oneServiceHere(host)) {
-      log.session.warn('host server: left running, the host runs this Walnut as its one service', { host: hostKey, why })
+    if (why !== 'off' && (why === 'failed' ? await oneServiceMeant(host) : oneServiceHere(host))) {
+      log.session.warn('host server: left running, the host is (or is meant to be) this Walnut\'s one service', { host: hostKey, why })
       return false
     }
     stopPoll(hostKey)

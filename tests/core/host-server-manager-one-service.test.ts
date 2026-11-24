@@ -385,8 +385,28 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
     expect(m.view('devbox').phase).toBe('off')
   })
 
-  it('a host that runs as the daemon keeps the old way: a default host\'s failed start is taken down', async () => {
+  for (const offered of [true, null] as const) {
+    it(`a hello that says daemon on a host offered the one service (${offered === null ? 'not sure yet' : 'offered'}): a failed start leaves it, and tries again`, async () => {
+      // 2026-11-24 review: a start that fell back to the daemon keeps the follower spec; a failure that
+      // removed it then would make the fallback for good. The leader still means the host to be its one service.
+      const h = host()
+      await createHostServerManager(deps()).connected(h)
+      h.oneServiceWanted = async () => offered
+      settings = onByDefault()
+      h.reports = false
+      const m = createHostServerManager(deps({ firstReportMs: 10, tryLaterMs: { failed: [5] } }))
+      await m.connected(h)
+      await vi.waitFor(() => expect(h.calls.filter((c) => c === 'send server.configure').length).toBeGreaterThanOrEqual(4))
+      expect(removed(h)).toBe(0)
+      expect(m.view('devbox').message).not.toMatch(/stopped trying/)
+      expect(m.followerFact('devbox').kind).not.toBe('none')
+      m.stop()
+    })
+  }
+
+  it('a host that runs as the daemon and is not offered the one service keeps the old way: a default host\'s failed start is taken down', async () => {
     const h = host()
+    h.oneServiceWanted = async () => false
     await createHostServerManager(deps()).connected(h)
     settings = onByDefault()
     h.reports = false
@@ -429,7 +449,7 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
     ])
     // The one removal sits behind the gate.
     const removal = sends.find((x) => x[1]!.includes('spec: null'))!.index!
-    expect(src.slice(fnStart(removal), removal)).toMatch(/if \(why !== 'off' && oneServiceHere\(host\)\)[^]*return false/)
+    expect(src.slice(fnStart(removal), removal)).toMatch(/if \(why !== 'off' && \(why === 'failed' \? await oneServiceMeant\(host\) : oneServiceHere\(host\)\)\)[^]*return false/)
 
     // Every takeDown names why; only 'off' (the settings) may stop a host's one service.
     const downs = [...src.matchAll(/takeDown\(([^,]+), ([^,]+)(?:, '([a-z-]+)')?/g)].filter(notDef)
@@ -445,6 +465,9 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
       expect(`${headers}\n${before}`, d[3]).toMatch(downWhy[d[3]!]!)
     }
     expect(src).toMatch(/const byDefault = [^\n]*&& !service\n/)
+    // The failure paths read "is or is meant to be" (the offer too); the this-computer probe reads only the hello.
+    expect(src).toMatch(/const service = await oneServiceMeant\(/)
+    expect(src).toMatch(/why === 'failed' \? await oneServiceMeant\(host\) : oneServiceHere\(host\)/)
 
     // Every gate on the host is classified.
     const gates = [...src.matchAll(/notEligible\(([^,]+), ([^,]+),/g)].filter(notDef).map((x) => ({ reason: x[2]!, at: x.index! }))
@@ -473,7 +496,7 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
       const { headers, before } = scope(x.at)
       // 'off' only by the settings; 'unsupported' after a one-service host has left the block.
       if (x.phase === 'off') expect(headers).toMatch(/if \(!enabled\)/)
-      else expect(before).toMatch(/if \(oneServiceHere\(host\)\) \{[^]*return\n\s*\}/)
+      else expect(before).toMatch(/if \(await oneServiceMeant\(host\)\) \{[^]*return\n\s*\}/)
     }
 
     // A build is installed only after the held service is looked at.

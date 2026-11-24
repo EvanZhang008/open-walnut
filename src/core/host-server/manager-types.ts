@@ -53,6 +53,11 @@ export interface HostServerHost {
    * service, the follower of `serviceHome` itself. Absent (an older connection): the daemon.
    */
   servesAs?(): { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }
+  /**
+   * Whether this Walnut offers the host its one service now (the facts the connection's mode decision
+   * reads: hostServiceOfferWanted and service_launcher). null: not sure yet. Absent: never offered.
+   */
+  oneServiceWanted?(): Promise<boolean | null>
   /** This Walnut's follower there settled (manager.ts followerFact): a switch of the host's mode may be due. */
   serviceModeChanged?(): void
 }
