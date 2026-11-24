@@ -262,6 +262,8 @@ export async function listTree(root: string, opened?: Set<string>, rel = '', out
 
 /** Remove a dir that holds only (empty) dirs; throws ENOTEMPTY when any file is in it. */
 export async function removeEmptyDirs(p: string): Promise<void> {
+  // Never a chmod through a path that is no dir (a file the batch put where a dir was).
+  if (!(await fs.lstat(p)).isDirectory()) throw Object.assign(new Error(`${p} is not a dir`), { code: 'ENOTDIR' })
   await fs.chmod(p, OPEN_DIR_MODE)
   for (const e of await fs.readdir(p, { withFileTypes: true })) {
     if (!e.isDirectory()) throw Object.assign(new Error(`${p} is not empty`), { code: 'ENOTEMPTY' })

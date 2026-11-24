@@ -54,7 +54,8 @@ batch **reads first and fixes its moment after**, when little is left to read (`
    dir of git's object store (below). The listed files that changed since their copy are read
    too. Every read in the hold goes smallest first, up to 8 MB and 200 ms, into memory. Then
    writes go on, and the git objects new since the walk are read at once, before a repack can
-   remove them.
+   remove them: the small ones up to 16 MiB before the databases' copies, the rest after, so the
+   pins never wait on a large one.
 3. **Round: databases.** Copy each changed database as pinned (`sqlite3_serialize` inside its
    read transaction, in the worker's memory: page for page, so only the chunks whose pages
    changed are new); each pin ends once its database is copied.
@@ -101,7 +102,8 @@ dirs, and a copy without them is "not a git repository", so a leader started fro
 no history (the liveness test below met it, 2026-11-24; the copy never kept an empty dir before).
 A dir existed at the moment by its parent's names then, as a file does. A commit makes the
 batch's dirs before its state write and removes the ones the last batch listed once they hold
-nothing; verify makes again one the copy lost and reports it once. A receiver says which of a
+nothing; a commit rolled back after a crash puts back the last batch's (the swap removes one
+where the new batch puts a file); verify makes again one the copy lost and reports it once. A receiver says which of a
 batch's fields it keeps beyond its files (`reads` in its `init` answer); an older one says
 none, and the leader sends it batches without dirs, as before. Repositories nested inside the home (a clone under
 `repositories/`) take the general rule: correct, only more rounds when git writes there.

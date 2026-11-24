@@ -12,6 +12,7 @@
  * moment) is taken while it is there after the moment: an empty dir more is one no reader
  * misses, and an empty dir less is what this list is for.
  */
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { homePathClass } from '../home-manifest/index.js'
 import type { MomentNames } from './moment-names.js'
@@ -69,6 +70,8 @@ export async function removeStaleDirs(copyRoot: string, dirsBefore: readonly str
   for (const d of dirsAbove(files)) keep.add(d)
   const opened = new Set<string>()
   for (const d of stale.filter((x) => !keep.has(x))) {
+    // A dir the batch made a file of is the batch's file now.
+    if (!(await fs.lstat(path.join(copyRoot, d)).catch(() => null))?.isDirectory()) continue
     await openDirs(copyRoot, d, opened)
       .then(() => removeEmptyDirs(path.join(copyRoot, d)))
       .then(() => pruneEmptyParents(copyRoot, d, keep))

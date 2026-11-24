@@ -318,12 +318,16 @@ export class StandbyTarget {
         await openDirs(this.t.copy, step.p, opened)
         await removeTree(dest)
         await fs.rename(old, dest)
-      } else if (step.op === 'put' && !step.existed) {
+      } else if (step.op === 'put' && !step.existed && (await fs.lstat(dest).catch(() => null))?.isFile()) {
+        // Only the file the swap put: a dir there is the previous batch's, not yet replaced.
         await openDirs(this.t.copy, step.p, opened)
         await removeTree(dest)
       }
       // A step that existed and has no pre-image never moved: the old file is still in place.
     }
+    // The previous batch's dirs: the swap removed one where this batch put a file.
+    const { dirs } = await currentBatch(this.t, await readState(this.t))
+    for (const d of dirs) await openDirs(this.t.copy, `${d}/.`, opened)
     await closeDirs(opened)
     await removeTree(this.t.apply)
     await fs.rm(manifestPath(this.t, journal.batch), { force: true })

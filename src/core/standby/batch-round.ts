@@ -31,6 +31,8 @@ export { recordRead }
 
 /** Git's pack dir: a pack that came or went while a round placed paths fails it (an object moved into a pack the walk did not list). */
 const PACK_DIR = '.git/objects/pack'
+/** New git objects read while the databases stay pinned, at most (batch-round.ts runRound). */
+const FRESH_EARLY_BYTES = 16 * 1024 * 1024
 
 export interface RoundResult {
   files: Map<string, BatchFile>
@@ -106,15 +108,24 @@ export async function runRound(run: BatchRun, s1: ScanResult, scanClock: number,
     }
     const view = await holdRound(run, plan, worker, scanClock)
     await opts.hooks?.afterHold?.()
-    // The git objects new since the walk: read first, before a repack can remove them (a git
-    // object's copy holds at any time; each is small, and its chunks go to disk, not the link).
-    for (const rel of view.names.listed) {
-      if (isContentAddressed(rel) && !run.proofs.has(rel) && !run.prev.has(rel) && view.names.existed(rel) !== false) recordRead(run, await stageFile(rel, view.ctx, run.send), round, plan.failed)
+    // The git objects new since the walk, read before a repack can remove them (a git object's
+    // copy holds at any time): the small ones first, up to 16 MiB, the rest once the databases
+    // are copied, so their pins do not wait on a large one.
+    const fresh = await Promise.all(view.names.listed
+      .filter((rel) => isContentAddressed(rel) && !run.proofs.has(rel) && !run.prev.has(rel) && view.names.existed(rel) !== false)
+      .map(async (rel) => ({ rel, size: (await fs.lstat(path.join(home, rel)).catch(() => null))?.size ?? 0 })))
+    let early = FRESH_EARLY_BYTES
+    const later: string[] = []
+    for (const { rel, size } of fresh.sort((a, b) => a.size - b.size)) {
+      if (size > early) { later.push(rel); continue }
+      early -= size
+      recordRead(run, await stageFile(rel, view.ctx, run.send), round, plan.failed)
     }
     const out = new Map<string, BatchFile>()
     await copyDatabases(run, plan, view, worker, out)
     await worker.close()
     stats.pinMs = performance.now() - view.pinnedFrom
+    for (const rel of later) recordRead(run, await stageFile(rel, view.ctx, run.send), round, plan.failed)
     const s2 = await scanHome(home)
     stats.rescanMs = s2.ms
     if (s2.unreadable.length) throw new VoidBatch(`cannot read ${s2.unreadable.slice(0, 5).join(', ')}`)
