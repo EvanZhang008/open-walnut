@@ -821,7 +821,9 @@ describe('every cancellation return waits for durable deletion', () => {
     const source = await fs.readFile(new URL('../../src/providers/claude-code-session.ts', import.meta.url), 'utf8')
     const runner = source.slice(source.indexOf('export class SessionRunner'))
     expect(runner.match(/ClaudeCodeSession\.attachToExisting\(/g)).toHaveLength(1)
-    expect(runner.match(/this\.attachNativeRecord\(/g)).toHaveLength(5)
+    // Six entries, each through attachNativeRecord: on-demand probe, reconcile, send, the host's own-session
+    // attach (attachOwnLive, after a host service restart), ensure-for-send and the permission answer.
+    expect(runner.match(/this\.attachNativeRecord\(/g)).toHaveLength(6)
     expect(runner.match(/this\.nativeAttachPromises\.clear\(\)/g)).toHaveLength(2)
   })
 
