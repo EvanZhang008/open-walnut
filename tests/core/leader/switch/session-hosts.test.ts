@@ -1,7 +1,8 @@
 /**
  * Where sessions run after a switch between machines (src/core/leader/switch/session-hosts.ts): the old
  * leader's own daemon's sessions name the old machine, the new machine's name none, a host-judged row
- * keeps its key, and a second run of the same switch changes nothing.
+ * keeps its key, a router area's own conversation keeps its area's host, and a second run of the same
+ * switch changes nothing.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -9,7 +10,9 @@ import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import Database from '../../../../src/lib/sqlite.js'
-import { moveSessionHosts } from '../../../../src/core/leader/switch/session-hosts.js'
+import { AREA_PROFILE_SQL, moveSessionHosts } from '../../../../src/core/leader/switch/session-hosts.js'
+import { isRouterAreaSession, routerAreaProfile } from '../../../../src/core/router/session-policy.js'
+import { hasAreaProfile } from '../../../../src/core/router/history-write.js'
 import { promoteCopy } from '../../../../src/core/leader/switch/promote.js'
 
 let root = ''
@@ -162,5 +165,53 @@ describe('the offline check after the trial server ran (a resumed switch)', () =
     expect((await offlineCheck({ ...o, sizesAndRows: false })).problems).toEqual([])
     fs.rmSync(path.join(home, 'notes', 'a.md'))
     expect((await offlineCheck({ ...o, sizesAndRows: false })).problems.join('; ')).toMatch(/notes\/a\.md: missing/)
+  })
+})
+
+describe('a row whose host is the leader\'s role, not a machine', () => {
+  const area = { id: 'area-1', host: '__local__' } as Parameters<typeof isRouterAreaSession>[1]
+  const routerRow = (sid: string, host: string | null): Row => [sid, host, JSON.stringify({ profile: routerAreaProfile(area.id) })]
+  const recordOf = (home: string, sid: string) => {
+    const db = new Database(path.join(home, 'sessions.sqlite'), { readonly: true })
+    try {
+      const r = db.prepare('SELECT host, payload FROM sessions WHERE claude_session_id = ?').get(sid) as { host: string | null; payload: string }
+      return { host: r.host ?? undefined, profile: JSON.parse(r.payload).profile }
+    } finally { db.close() }
+  }
+
+  it('a router area\'s own conversation stays on its area\'s host, so the new leader still wakes it as the area\'s', () => {
+    const home = path.join(root, 'home')
+    // An older build's receiver profile ('work') reads as no area profile (history-write.ts): an ordinary row, it moves.
+    const workRow: Row = ['work-null', null, JSON.stringify({ profile: { areaId: area.id, areaRole: 'work', areaPolicyVersion: 1 } })]
+    sessionsDb(home, [...rows, routerRow('router-null', null), routerRow('router-local', '__local__'), workRow])
+    expect(isRouterAreaSession(recordOf(home, 'router-null'), area)).toBe(true)
+    const r = moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })
+    expect(r).toEqual({ toOldMachine: 5, toOwnDaemon: 1, alreadyDone: false })
+    expect(hosts(home)).toMatchObject({ 'router-null': null, 'router-local': '__local__', 'work-null': 'machine-a', 'own-null': 'machine-a', 'on-b': null })
+    // router/wake.ts refuses a router task with any row isRouterAreaSession does not take: both are still the area's.
+    expect(isRouterAreaSession(recordOf(home, 'router-null'), area)).toBe(true)
+    expect(isRouterAreaSession(recordOf(home, 'router-local'), area)).toBe(true)
+    // A switch back leaves them too, and a router row on the new machine's key (an area named after a host) keeps it.
+    const back = path.join(root, 'back')
+    sessionsDb(back, [routerRow('router-on-b', 'machine-b'), routerRow('router-null', null)])
+    expect(moveSessionHosts(back, 's2', { oldMachine: 'machine-a', newMachine: 'machine-b' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, alreadyDone: false })
+    expect(hosts(back)).toEqual({ 'router-null': null, 'router-on-b': 'machine-b' })
+  })
+
+  it('the step\'s SQL reads an area profile exactly as the router\'s history rule does', () => {
+    const profiles: unknown[] = [
+      undefined, null, 'router', {}, { slim: true }, routerAreaProfile('a'),
+      { areaId: 'a' }, { areaRole: 'router' }, { areaPolicyVersion: 1 }, { areaId: null }, { areaRole: 'work', areaId: 'a' },
+      { areaRole: 'work' }, { areaRole: null }, { areaRole: 'other', areaPolicyVersion: 2 }, { area: 'a' }, { areaIdx: 'a' },
+    ]
+    const db = new Database(':memory:')
+    try {
+      for (const profile of profiles) {
+        const payload = profile === undefined ? JSON.stringify({ engine: 'claude' }) : JSON.stringify({ profile })
+        const sql = (db.prepare(`SELECT CASE WHEN ${AREA_PROFILE_SQL} THEN 1 ELSE 0 END AS v FROM (SELECT ? AS payload)`).get(payload) as { v: number }).v === 1
+        expect(sql, JSON.stringify(profile)).toBe(hasAreaProfile({ profile: profile as never }))
+      }
+      expect((db.prepare(`SELECT CASE WHEN ${AREA_PROFILE_SQL} THEN 1 ELSE 0 END AS v FROM (SELECT ? AS payload)`).get('not json') as { v: number }).v).toBe(0)
+    } finally { db.close() }
   })
 })

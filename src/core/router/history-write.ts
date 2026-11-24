@@ -42,7 +42,7 @@ const hasOrigin = (r: SessionHistoryFields) => ORIGIN_KEYS.some((k) => r[k] !== 
  * Only a router's own conversation is isolated (2026-11-14): a receiver profile ('work') an older
  * build left on routed work reads as none, so that work and its history are ordinary again.
  */
-function hasAreaProfile(record: Pick<SessionRecord, 'profile'> | undefined): boolean {
+export function hasAreaProfile(record: Pick<SessionRecord, 'profile'> | undefined): boolean {
   const p = record?.profile;
   return !!p && p.areaRole !== 'work' && (p.areaId !== undefined || p.areaRole !== undefined || p.areaPolicyVersion !== undefined);
 }

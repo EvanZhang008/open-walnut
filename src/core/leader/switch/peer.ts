@@ -309,6 +309,10 @@ export class DaemonPeer implements SwitchPeer {
     // machine restarted), the same command again under a fresh id: the target job resumes from its state file.
     try {
       // The daemon's list of its runs says whether this one still runs (its output is no business of the switch).
+      // exec.list does not wait, as exec.read does, for a daemon just restarted to adopt the detached runs an earlier
+      // one left: for those few seconds a running job may be missing here, and a second one starts under `-r`. That
+      // one is refused by the running job's lock (target-job.ts runTargetJob, takeJobLock) and ends at once; the
+      // running job goes on writing the state file this source job follows.
       const listed = await this.call('exec.list', {})
       const job = Array.isArray(listed.jobs) ? (listed.jobs as Array<{ jobId?: unknown; running?: unknown }>).find((j) => j.jobId === jobId) : undefined
       if (job?.running === true) return { ok: true }

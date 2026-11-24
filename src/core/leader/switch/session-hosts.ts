@@ -14,6 +14,14 @@
  * (session_channel_cursor): it keeps its key, as do the channel's tables, which are keyed by hosts
  * that did not move.
  *
+ * A row whose host means the leader's role, not a machine, never moves either: a router area's own
+ * conversation (an area profile, as router/history-write.ts hasAreaProfile reads it) runs on its
+ * area's host, `__local__` (history-write.ts areaFor), whichever machine leads. Moved to the old
+ * machine, it would no longer be its area's isolated session (router/session-policy.ts
+ * isRouterAreaSession) and router/wake.ts would refuse every wake while the new machine leads.
+ * Kept, the router goes on on the new leader's own daemon: a resume whose transcript that daemon
+ * lacks starts that conversation there under the same id (claude-code-session.ts).
+ *
  * Run once per switch: the swap is not its own inverse, so a promotion resumed after a kill must not
  * run it twice. The switch id is kept in the same transaction (leader_switch_session_hosts).
  */
@@ -31,6 +39,17 @@ const LOCAL = "(host IS NULL OR host = '' OR host = '__local__')"
 // The rows the leader judges: all but those judgedByHost (session-row-owner.ts) names, judge 'host' on a named host.
 // A row with no host is the leader's whatever its payload says (judgedByHost needs a host).
 const LEADER_JUDGED = "NOT (host IS NOT NULL AND host <> '' AND payload IS NOT NULL AND instr(payload, '\"judge\"') > 0 AND json_valid(payload) AND json_extract(payload, '$.judge') = 'host')"
+/**
+ * The rows that carry an area profile, as router/history-write.ts hasAreaProfile reads the record: a profile with an
+ * area field (areaId, areaRole or areaPolicyVersion), whose role is not the receiver role 'work' an older build left.
+ * Their host is their area's, never the machine's (tests/core/leader/switch/session-hosts.test.ts checks the two agree).
+ */
+export const AREA_PROFILE_SQL = "(payload IS NOT NULL AND instr(payload, '\"area') > 0 AND json_valid(payload)"
+  + " AND json_type(payload, '$.profile') = 'object' AND json_extract(payload, '$.profile.areaRole') IS NOT 'work'"
+  + " AND (json_type(payload, '$.profile.areaId') IS NOT NULL OR json_type(payload, '$.profile.areaRole') IS NOT NULL"
+  + " OR json_type(payload, '$.profile.areaPolicyVersion') IS NOT NULL))"
+/** The rows this step moves: the leader judges them and their host is a machine. */
+const MOVES = `${LEADER_JUDGED} AND NOT ${AREA_PROFILE_SQL}`
 
 export interface SessionHostsMove {
   /** The old leader machine's host key, as the new leader's config names it in hosts. */
@@ -69,9 +88,9 @@ export function moveSessionHosts(home: string, switchId: string, move: SessionHo
         return { ...none, alreadyDone: true }
       }
       // Marked first, so the rows of the new machine set free below are not taken for the old leader's.
-      db.exec(`CREATE TEMP TABLE was_local AS SELECT claude_session_id FROM sessions WHERE ${LOCAL} AND ${LEADER_JUDGED}`)
+      db.exec(`CREATE TEMP TABLE was_local AS SELECT claude_session_id FROM sessions WHERE ${LOCAL} AND ${MOVES}`)
       const toOwnDaemon = move.newMachine
-        ? Number(db.prepare(`UPDATE sessions SET host = NULL WHERE host = ? AND ${LEADER_JUDGED}`).run(move.newMachine).changes ?? 0)
+        ? Number(db.prepare(`UPDATE sessions SET host = NULL WHERE host = ? AND ${MOVES}`).run(move.newMachine).changes ?? 0)
         : 0
       const toOldMachine = Number(db.prepare('UPDATE sessions SET host = ? WHERE claude_session_id IN (SELECT claude_session_id FROM temp.was_local)').run(move.oldMachine).changes ?? 0)
       db.exec('DROP TABLE temp.was_local')

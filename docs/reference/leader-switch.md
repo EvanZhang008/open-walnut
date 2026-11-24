@@ -1009,7 +1009,10 @@ leader's own daemon. Its folder is kept, and so is its host: the old machine, no
 `host_key` its `leader_switch.machines` entry gives it. A row on the new machine's `host_key` names no host now: that daemon is
 the new leader's own. A row its host's own service judges (`judge: 'host'` on a named host, as `judgedByHost` in
 `session-row-owner.ts` reads it) keeps its key, as the session channel's tables do; a row with no host is the leader's
-whatever its payload says, and moves. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
+whatever its payload says, and moves. A row whose host means the leader's role, not a machine, never moves: a router
+area's own conversation (an area profile, as `router/history-write.ts` `hasAreaProfile` reads it) keeps its area's host
+(`__local__`), so `isRouterAreaSession` still takes it and the router wakes on the new leader, whose own daemon goes on
+with that conversation (a resume whose transcript is not there starts it under the same id). The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
 resumed after a kill does not swap back). The trial's offline check does not compare that store's size with the
 copy's (`offlineCheck` `changed`); its rows must be the copy's table by table, plus the mark row in its own table
 (a row lost in one table and one added in another never cancel out), and its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,

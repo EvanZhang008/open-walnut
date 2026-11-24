@@ -35,7 +35,7 @@ const FIXED: Record<string, string> = {
   'core/task-db.ts#backfillNullTimestamps': 'Startup timestamp repair only.',
   'core/task-db.ts#normalizeStoredTags': 'Tag normalization only.',
   'core/inbox-migration.ts#migrateInboxProject': 'Startup project conversion only: files projectless rows and folders into the Inbox.',
-  'core/leader/switch/session-hosts.ts#moveSessionHosts': 'The leader switch moves the host column only, once per switch, in the promoted home with no server running on it; no task link or policy.',
+  'core/leader/switch/session-hosts.ts#moveSessionHosts': 'Changes host, a field the history rule checks (history-write.ts sessionHistoryWriteNeedsCheck), once per switch in the promoted home with no server running on it. It never moves a row with an area profile (session-hosts.ts AREA_PROFILE_SQL, tested against hasAreaProfile), whose host is its area\'s, so no area session leaves its isolated profile; the rows it moves carry no area profile, and their task, profile, engine and origin stay.',
   'hooks/on-compact.ts#updateSessionLastActive': 'Updates last_active_at only.',
   'hooks/session-status-store.ts#markSessionStoppedInSqlite': 'Updates the status projection only.',
   'core/session-db.ts#ensureSessionStatusColumns': 'Adds and backfills the status revision columns only.',
