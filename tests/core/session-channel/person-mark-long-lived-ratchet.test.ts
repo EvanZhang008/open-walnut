@@ -94,10 +94,14 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
     'sendAccepted timer': 'call', 'requestTurnCompleteSelfReport timer': 'call', 'runControlPrompt timer': 'call',
   },
   'src/providers/daemon-connection.ts': {
-    'constructor timer': 'call', 'drainJournalForMove timer': 'call', 'relinkForServiceSet timer': 'call',
+    'drainJournalForMove timer': 'call', 'relinkForServiceSet timer': 'call',
     'setConnected interval': 'no-send', 'pushBridgeConfig timer': 'no-send',
     'pushHostSlice timer': 'no-send', 'pushHostSlice timer #2': 'no-send', 'pushHostSlice timer #3': 'no-send',
     'startBridgeRepush interval': 'no-send', 'connect dial': 'outside',
+    // sharedJobVerdict: only drops a kept verdict from its map. opReadsJobNamed: the scanner's name
+    // for REAL_CLOCK.setTimeout just below it, a liveness check's own deadline (watchedDeadline).
+    // pushTriggersOnce: a retry of the trigger push, which is no person-only command.
+    'sharedJobVerdict timer': 'no-send', 'opReadsJobNamed timer': 'call', 'pushTriggersOnce timer': 'no-send',
     'sendOnce timer': 'call', 'sendOnce timer #2': 'call', 'sendOnce timer #3': 'call',
     'drainBeforeAnswering timer': 'call', 'sendGatewayResult timer': 'no-send', 'checkUpstream timer': 'call',
     // A stream the host opened toward this server: made in the link's own events.
@@ -107,7 +111,7 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
     'holdUpgradeForFoldPrewarm timer': 'call', 'holdUpgrade timer': 'call',
     'postponeUpgrade timer': 'link', 'startDeferredUpgrade timer': 'link', 'openHandoverWindow timer': 'link',
     'waitOverBusySwap timer': 'call', 'noteLinkDown timer': 'no-send',
-    '_sendHandshake timer': 'call', 'announceProbeRole timer': 'call', 'deployDaemon timer': 'call',
+    '_sendHandshake timer': 'call', 'announceProbeRole timer': 'call',
     'scheduleStayCheck timer': 'link', 'fetchWalnutFileOnHost timer': 'call', 'pipeChunked timer': 'call', 'pipeChunked timer #2': 'call',
     'createTunnel process': 'link', 'waitForTunnel socket': 'call', 'waitForTunnel timer': 'call', 'connectDirect dial': 'outside',
     'connectWebSocket socket': 'link', 'connectWebSocket timer': 'call',
