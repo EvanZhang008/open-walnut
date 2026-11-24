@@ -15,7 +15,7 @@ type HostLiveState = import('../../../web/src/components/sessions/path-selector/
 
 const connecting: HostLiveState = {
   status: 'loading', parent: '', exists: true, dirs: [],
-  pending: { phase: 'install-runtime', label: 'Installing the session daemon runtime on Dev box', elapsedMs: 1200 },
+  pending: { phase: 'upload', label: 'Uploading the session daemon to Dev box', elapsedMs: 1200 },
 };
 const loading: HostLiveState = { status: 'loading', parent: '', exists: true, dirs: [] };
 

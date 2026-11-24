@@ -12,6 +12,7 @@ import {
   CREDENTIAL_WAIT_KINDS,
   PROXY_LOGIN_EVIDENCE,
   describeConnectPhase,
+  connectPhaseNote,
   describeListingError,
   IN_PROGRESS_PHASES,
   type HostConnectErrorKind,
@@ -110,14 +111,15 @@ describe('classifyHostConnectError', () => {
 });
 
 describe('describeConnectPhase', () => {
-  const phases: DaemonConnectPhase[] = ['idle', 'ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake', 'connected', 'reconnecting', 'failed'];
+  const phases: DaemonConnectPhase[] = ['idle', 'ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake', 'connected', 'reconnecting', 'failed'];
 
   it('names the host in every phase', () => {
     for (const p of phases) expect(describeConnectPhase(p, 'Big dev box')).toContain('Big dev box');
   });
 
-  it('the install phase warns that a first connect takes a while', () => {
-    expect(describeConnectPhase('install-runtime', 'X')).toMatch(/first connect/);
+  it('the upload phase warns that a first connect takes a while', () => {
+    expect(describeConnectPhase('upload', 'X')).toBe('Uploading the session daemon to X');
+    expect(connectPhaseNote('upload', 'X')).toMatch(/First connect/);
   });
 
   it('IN_PROGRESS_PHASES excludes only the terminal states', () => {

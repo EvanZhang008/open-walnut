@@ -88,14 +88,14 @@ beforeEach(() => {
 
 describe('GET /api/sessions/list-dirs?pending=1 — remote host still connecting', () => {
   it('answers 200 { pending } with the connect phase after `wait` ms, dirs empty', async () => {
-    connectState = { phase: 'install-runtime', phaseElapsedMs: 4200, error: undefined, retryInMs: undefined };
+    connectState = { phase: 'upload', phaseElapsedMs: 4200, error: undefined, retryInMs: undefined };
     const res = await request(createApp()).get('/api/sessions/list-dirs')
       .query({ prefix: '~/', host: 'devbox', pending: '1', wait: '50' });
     expect(res.status).toBe(200);
     expect(res.body.dirs).toEqual([]);
     expect(res.body.exists).toBe(true);
-    expect(res.body.pending).toMatchObject({ phase: 'install-runtime', elapsedMs: 4200 });
-    expect(res.body.pending.label).toMatch(/Installing the session daemon runtime on Big dev box/);
+    expect(res.body.pending).toMatchObject({ phase: 'upload', elapsedMs: 4200 });
+    expect(res.body.pending.label).toMatch(/Uploading the session daemon to Big dev box/);
     expect(res.body.hostError).toBeUndefined();
     // The connect keeps running after the answer (the next poll picks it up).
     expect(connectGate).not.toBeNull();

@@ -3,8 +3,8 @@
 #
 # The fresh-machine harness one level up proves the Walnut server installs and
 # answers. This one proves Walnut can take a brand-new Linux dev box it has
-# never seen and provision it over real ssh: install the daemon runtime (Bun),
-# upload and start the daemon, tunnel to it, list folders, probe the terminal,
+# never seen and provision it over real ssh: upload and start the compiled
+# daemon (no runtime needed), tunnel to it, list folders, probe the terminal,
 # and report a precise reason when `claude` cannot run there.
 #
 # The dev box is a local container (Dockerfile next to this file) with no C

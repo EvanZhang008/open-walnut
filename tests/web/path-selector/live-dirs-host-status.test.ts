@@ -136,14 +136,14 @@ describe('mergeHostStateWithStatus — who may speak', () => {
 describe('mergeHostStateWithStatus — the phase sentence of a wait', () => {
   it('fills the connect phase from the push before the poll answers', () => {
     const merged = mergeHostStateWithStatus(loading(), hostStatus({
-      host: 'marina', phase: 'install-runtime',
-      phaseLabel: 'Installing the session daemon runtime on marina…',
+      host: 'marina', phase: 'upload',
+      phaseLabel: 'Uploading the session daemon to marina…',
       phaseElapsedMs: 12_000,
     }));
     expect(merged.status).toBe('loading');
     expect(merged.pending).toEqual({
-      phase: 'install-runtime',
-      label: 'Installing the session daemon runtime on marina…',
+      phase: 'upload',
+      label: 'Uploading the session daemon to marina…',
       elapsedMs: 12_000,
     });
   });
@@ -234,15 +234,15 @@ describe('mergeHostStatesWithStore', () => {
 });
 
 describe('connect steps', () => {
-  it('is the 7-link chain, in order', () => {
+  it('is the 6-link chain, in order', () => {
     expect(CONNECT_STEPS.map((s) => s.phase)).toEqual([
-      'ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake',
+      'ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake',
     ]);
   });
 
   it('marks everything before the phase done, the phase active, the rest todo', () => {
     const steps = stepsFromPhase('upload');
-    expect(steps.map((s) => s.status)).toEqual(['done', 'done', 'done', 'active', 'todo', 'todo', 'todo']);
+    expect(steps.map((s) => s.status)).toEqual(['done', 'done', 'active', 'todo', 'todo', 'todo']);
     expect(steps.find((s) => s.status === 'active')?.label).toBe('Upload daemon');
   });
 
@@ -263,7 +263,6 @@ describe('connect steps', () => {
   });
 
   it('explains the one-time work only while it is happening', () => {
-    expect(connectNote(undefined, stepsFromPhase('install-runtime'))).toBe(FIRST_CONNECT_NOTE);
     expect(connectNote(undefined, stepsFromPhase('upload'))).toBe(FIRST_CONNECT_NOTE);
     expect(connectNote(undefined, stepsFromPhase('handshake'))).toBeUndefined();
     // A server-sent note always wins.
@@ -272,7 +271,7 @@ describe('connect steps', () => {
   });
 
   it('knows which phases mean work is in flight', () => {
-    for (const p of ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake', 'reconnecting', 'queued']) {
+    for (const p of ['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake', 'reconnecting', 'queued']) {
       expect(isConnectingPhase(p)).toBe(true);
     }
     for (const p of ['idle', 'connected', 'failed', '', undefined]) {

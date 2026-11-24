@@ -80,7 +80,7 @@ type FoundHosts = NonNullable<Config['hosts']>;
 type FoundAnswer = { host: string; answer: 'yes' | 'not_now' };
 const connectionError = 'Could not reach this computer. Check its SSH address, then try again.';
 const connectSteps = [
-  ['ssh', 'SSH'], ['probe', 'Probe'], ['install-runtime', 'Install runtime'],
+  ['ssh', 'SSH'], ['probe', 'Probe'],
   ['upload', 'Upload daemon'], ['start', 'Start daemon'], ['tunnel', 'Tunnel'], ['handshake', 'Handshake'],
 ] as const;
 
@@ -89,7 +89,7 @@ function hostStatus(host: string, def: FoundHosts[string], phase: HostStatus['ph
   return {
     host, label: def.label ?? host, hostname: def.hostname, discovered: true,
     connected: phase === 'connected', phase,
-    phaseLabel: phase === 'install-runtime' ? 'Installing the session daemon runtime' : `Connection: ${phase}`,
+    phaseLabel: phase === 'upload' ? 'Uploading the session daemon' : `Connection: ${phase}`,
     steps: connectSteps.map(([step, label], i) => ({
       phase: step, label,
       status: phase === 'connected' || i < active ? 'done' : i === active ? 'active' : 'todo',
@@ -339,7 +339,7 @@ test('a found host that fails to connect is no row on Home, before or after a re
   expect(fixture.connects).toEqual([]);
 });
 
-for (const phase of ['install-runtime', 'failed'] as const) {
+for (const phase of ['upload', 'failed'] as const) {
   test(`consented ${phase} status is no row on Home across a task-panel remount and a reload`, async ({ page, baseURL }) => {
     const fixture = await mockFoundHosts(page);
     const events = await openFresh(page, baseURL!);

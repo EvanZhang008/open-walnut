@@ -19,7 +19,6 @@ export type DaemonConnectPhase =
   | 'idle'
   | 'ssh'
   | 'probe'
-  | 'install-runtime'
   | 'upload'
   | 'start'
   | 'tunnel'
@@ -83,11 +82,11 @@ export interface HostStatus {
   connected: boolean;
   /** 'off' = a test server that never dials remote hosts (by design). */
   phase: DaemonConnectPhase | 'off';
-  /** Sentence for the UI, e.g. "Installing the session daemon runtime on Big remote host…". */
+  /** Sentence for the UI, e.g. "Uploading the session daemon to Big remote host…". */
   phaseLabel: string;
-  /** The 7 user-visible steps, in order. */
+  /** The 6 user-visible steps, in order. */
   steps: HostConnectStep[];
-  /** First-connect explainer shown during install-runtime/upload. */
+  /** First-connect explainer shown during upload. */
   note?: string;
   /**
    * The host's first connect is running: no daemon was there when it was probed, and its link

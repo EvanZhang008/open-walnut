@@ -23,7 +23,7 @@ function status(host: string, phase: HostStatus['phase'], over: Partial<HostStat
     phaseElapsedMs: 0, connectElapsedMs: 0, at: T0, ...over,
   }
 }
-const first = (host: string, phase: HostStatus['phase'] = 'install-runtime', over: Partial<HostStatus> = {}) => status(host, phase, { firstConnect: true, ...over })
+const first = (host: string, phase: HostStatus['phase'] = 'upload', over: Partial<HostStatus> = {}) => status(host, phase, { firstConnect: true, ...over })
 const uploading = (host: string, done: number, total: number, over: Partial<HostStatus> = {}) => first(host, 'upload', {
   steps: stepsFromPhase('upload').map((s) => (s.status === 'active' ? { ...s, progress: { via: 'upload' as const, done, total } } : s)),
   ...over,
@@ -88,7 +88,7 @@ describe('which hosts the background card lists', () => {
   it('a failure drops the row at once; the failed attempt never brings it back, a new attempt does', () => {
     // The server stamps every attempt (attemptStartedAt): the failed one began at T0.
     const attempt1 = { attemptStartedAt: T0 }
-    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', attempt1)] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { ...attempt1, error: 'Connection refused', at: T0 + 1 })] }])
+    const r = run([{ now: T0, statuses: [first('build-box', 'upload', attempt1)] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { ...attempt1, error: 'Connection refused', at: T0 + 1 })] }])
     expect(r.rows).toEqual([])
     expect(r.memory.dropped).toEqual({ 'build-box': T0 })
     // Still that attempt: its failure again, the reconnect loop's pause after it, a Retry's reset to idle.
@@ -117,7 +117,7 @@ describe('which hosts the background card lists', () => {
   })
 
   it('a switched-off host: the retry loop\'s dials never bring its row back, however many', () => {
-    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
+    const r = run([{ now: T0, statuses: [first('build-box', 'upload', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
     expect(r.rows).toEqual([])
     // Every few minutes a dial of the loop walks ssh and probe, each a new attempt, each carrying
     // the loop's last failure or its start (host-status.ts); between them the loop waits.
@@ -138,7 +138,7 @@ describe('which hosts the background card lists', () => {
   })
 
   it('a person\'s retry brings it back, even over the loop\'s marks, and the loop\'s marks do not end that attempt', () => {
-    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
+    const r = run([{ now: T0, statuses: [first('build-box', 'upload', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })] }])
     const before = status('build-box', 'failed', { attemptStartedAt: T0, error: 'Connection timed out', at: T0 + 1 })
     const retry = run([
       { now: T0 + 10, ask: ['build-box'], askedOver: before, statuses: [before] },
@@ -151,7 +151,7 @@ describe('which hosts the background card lists', () => {
   })
 
   it('a host the card follows that the retry loop takes over (no ask here) goes', () => {
-    const r = run([{ now: T0, statuses: [first('build-box', 'install-runtime', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [first('build-box', 'ssh', { attemptStartedAt: T0 + 1, lastError: 'Connection refused', at: T0 + 1 })] }])
+    const r = run([{ now: T0, statuses: [first('build-box', 'upload', { attemptStartedAt: T0 })] }, { now: T0 + 1, statuses: [first('build-box', 'ssh', { attemptStartedAt: T0 + 1, lastError: 'Connection refused', at: T0 + 1 })] }])
     expect(r.rows).toEqual([])
     expect(r.memory.dropped).toEqual({ 'build-box': T0 + 1 })
   })
@@ -186,9 +186,9 @@ describe('the bar and the minimized line', () => {
     const bytes = run([{ now: T0, statuses: [uploading('build-box', 23 * MB, 67 * MB)] }]).rows[0]!
     expect(bytes.percent).toBe(34)
     expect(bytes.valueText).toBe('23 of 67 MB sent')
-    const steps = run([{ now: T0, statuses: [first('build-box', 'install-runtime')] }]).rows[0]!
-    expect(steps.percent).toBeCloseTo((2 / 7) * 100)
-    expect(steps.valueText).toBe('2 of 7 steps complete')
+    const steps = run([{ now: T0, statuses: [first('build-box', 'upload')] }]).rows[0]!
+    expect(steps.percent).toBeCloseTo((2 / 6) * 100)
+    expect(steps.valueText).toBe('2 of 6 steps complete')
     expect(steps.stepWords).toBe('Working on build-box')
   })
 

@@ -26,7 +26,7 @@ const jobOf = (percent: number | null, status: 'running' | 'done' | 'error' = 'r
 afterEach(() => { hostState.status = undefined; clearSttSetupJob(); });
 
 describe('host connect stage progress', () => {
-  it.each([['queued', 0], ['install-runtime', 2], ['upload', 3], ['connected', 7]])(
+  it.each([['queued', 0], ['upload', 2], ['start', 3], ['connected', 6]])(
     'the phase %s shows %s completed steps, never guessed download bytes', (phase, completed) => {
       hostState.status = {
         host: 'buildbox', label: 'Build box', hostname: 'build.example.com', connected: phase === 'connected',
@@ -36,8 +36,8 @@ describe('host connect stage progress', () => {
       const document = documentOf(createElement(HostConnectSteps, { hostKey: 'buildbox', label: 'Build box' }));
       const bar = document.querySelector('[role="progressbar"]')!;
       expect(document.querySelectorAll('[role="progressbar"]').length).toBe(1);
-      expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(completed / 7 * 100);
-      expect(bar.getAttribute('aria-valuetext')).toBe(`${completed} of 7 steps complete`);
+      expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(completed / 6 * 100);
+      expect(bar.getAttribute('aria-valuetext')).toBe(`${completed} of 6 steps complete`);
       expect(bar.getAttribute('aria-label')).toContain('Connecting to Build box:');
       expect(document.querySelectorAll('[data-status="done"]').length).toBe(completed);
     },
@@ -60,7 +60,7 @@ describe('host connect stage progress', () => {
     const document = documentOf(createElement(HostConnectSteps, {
       hostKey: 'buildbox', label: 'Build box', pending: { phase: 'upload', label: 'Uploading daemon', elapsedMs: 3000 },
     }));
-    expect(document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuetext')).toBe('3 of 7 steps complete');
+    expect(document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuetext')).toBe('2 of 6 steps complete');
     expect(document.querySelector('.setup-progress-label')?.textContent).toBe('Uploading daemon');
   });
 });

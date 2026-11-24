@@ -1063,7 +1063,7 @@ export function peekWorkingDirs(): WorkingDirsResult | null { return workingDirs
 
 export interface DirListingPending {
   phase: string;
-  /** Sentence for the UI ("Installing the session daemon runtime on X…"). */
+  /** Sentence for the UI ("Uploading the session daemon to X…"). */
   label: string;
   elapsedMs: number;
 }

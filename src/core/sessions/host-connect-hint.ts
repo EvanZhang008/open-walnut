@@ -18,14 +18,13 @@ import type { ConnectTransfer } from '../../providers/connect-transfer.js'
 
 /** Connect phases that mean "still working" (the client should keep polling). */
 export const IN_PROGRESS_PHASES: ReadonlySet<DaemonConnectPhase> = new Set<DaemonConnectPhase>([
-  'idle', 'ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake', 'reconnecting',
+  'idle', 'ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake', 'reconnecting',
 ])
 
 export function describeConnectPhase(phase: DaemonConnectPhase, hostLabel: string): string {
   switch (phase) {
     case 'ssh': return `Opening an SSH connection to ${hostLabel}`
     case 'probe': return `Checking whether the session daemon is running on ${hostLabel}`
-    case 'install-runtime': return `Installing the session daemon runtime on ${hostLabel} (first connect, usually under a minute)`
     case 'upload': return `Uploading the session daemon to ${hostLabel}`
     case 'start': return `Starting the session daemon on ${hostLabel}`
     case 'tunnel': return `Opening the tunnel to ${hostLabel}`
@@ -45,7 +44,7 @@ export function describeConnectPhase(phase: DaemonConnectPhase, hostLabel: strin
  * absent: a progress list needs exactly the things that happen in sequence.
  */
 export const DAEMON_CONNECT_STEPS: readonly DaemonConnectPhase[] = [
-  'ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake',
+  'ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake',
 ]
 
 /**
@@ -61,7 +60,6 @@ export const CONNECT_IN_FLIGHT_PHASES: ReadonlySet<DaemonConnectPhase> = new Set
 const STEP_LABELS: Record<string, string> = {
   'ssh': 'SSH',
   'probe': 'Probe',
-  'install-runtime': 'Install runtime',
   'upload': 'Upload daemon',
   'start': 'Start daemon',
   'tunnel': 'Tunnel',
@@ -122,11 +120,11 @@ export function describeConnectSteps(phase: DaemonConnectPhase): ConnectStep[] {
 }
 
 /**
- * Extra reassurance for the two steps that can take minutes on a fresh host.
+ * Extra reassurance for the step that can take minutes on a fresh host.
  * Returned only for those: a note on every phase becomes wallpaper.
  */
 export function connectPhaseNote(phase: DaemonConnectPhase, hostLabel: string): string | undefined {
-  if (phase !== 'install-runtime' && phase !== 'upload') return undefined
+  if (phase !== 'upload') return undefined
   // It runs in the server, so closing the picker or the dialog never stops it (2026-11-12, the
   // user: "make it clear that this will working in the background, feel free to close").
   return `First connect installs the session daemon on ${hostLabel}; this can take a few minutes. It keeps going in the background: you can close this.`

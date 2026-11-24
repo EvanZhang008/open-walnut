@@ -98,11 +98,11 @@ describe('host:status over WS', () => {
     const ws = await connectClient();
     const wait = waitForMatchingMessage(ws, isHostStatus);
 
-    bus.emit(EventNames.HOST_STATUS, status('devbox', 'install-runtime'), ['web-ui']);
+    bus.emit(EventNames.HOST_STATUS, status('devbox', 'upload'), ['web-ui']);
 
     const frame = await wait;
     expect(frame.name).toBe('host:status');
-    expect(frame.data).toMatchObject({ host: 'devbox', phase: 'install-runtime' });
+    expect(frame.data).toMatchObject({ host: 'devbox', phase: 'upload' });
   });
 
   it('reaches a LIGHTWEIGHT client filtered to an unrelated session', async () => {

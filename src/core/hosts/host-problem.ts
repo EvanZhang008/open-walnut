@@ -1,6 +1,6 @@
 /** Shared host problem model, import-free so the browser reads the same answer. */
 
-export const LOOP_DIAL_PHASES: ReadonlySet<string> = new Set(['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'])
+export const LOOP_DIAL_PHASES: ReadonlySet<string> = new Set(['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake'])
 /** Mirrors HostConnectErrorKind (host-connect-hint.ts), kept local so this file stays import-free. */
 export type HostFailureKind =
   | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy_login' | 'proxy' | 'shell_noise'
@@ -8,7 +8,7 @@ export type HostFailureKind =
   | 'ephemeral' | 'listing' | 'cloud_update' | 'cloud_exec_off' | 'cloud_other_mac' | 'cloud_tunnel' | 'unknown'
 
 export type HostPhaseWire =
-  | 'idle' | 'ssh' | 'probe' | 'install-runtime' | 'upload' | 'start' | 'tunnel'
+  | 'idle' | 'ssh' | 'probe' | 'upload' | 'start' | 'tunnel'
   | 'handshake' | 'connected' | 'reconnecting' | 'failed' | 'queued' | 'off'
 
 export interface HostReadinessProblemInput {

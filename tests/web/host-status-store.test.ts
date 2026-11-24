@@ -108,14 +108,14 @@ describe('host-status store — hydrate', () => {
   it('populates every host from one GET and serves both hooks and imperative reads', async () => {
     hostsApi.fetchHostStatus.mockResolvedValue([
       status({ host: 'devbox', connected: true, phase: 'connected', phaseLabel: 'Connected' }),
-      status({ host: 'marina', phase: 'install-runtime', phaseLabel: 'Installing the session daemon runtime on marina…' }),
+      status({ host: 'marina', phase: 'upload', phaseLabel: 'Uploading the session daemon to marina…' }),
     ]);
 
     await hydrateHostStatus();
 
     expect(hostsApi.fetchHostStatus).toHaveBeenCalledTimes(1);
     expect(getHostStatus('devbox')?.connected).toBe(true);
-    expect(getHostStatus('marina')?.phase).toBe('install-runtime');
+    expect(getHostStatus('marina')?.phase).toBe('upload');
     expect(getAllHostStatus().map((h) => h.host)).toEqual(['devbox', 'marina']);
     expect(getHostStatus('never-configured')).toBeUndefined();
   });

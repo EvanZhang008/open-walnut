@@ -1,11 +1,10 @@
 /**
  * The "still connecting" row of the folder picker, as a step chain.
  *
- * A first connect to a fresh host installs a runtime and uploads the daemon, which
- * can take a minute. The old row was one spinner and one sentence, so a long
- * install was indistinguishable from a hang. This shows the whole chain (SSH →
- * Probe → Install runtime → Upload daemon → Start daemon → Tunnel → Handshake),
- * marks where it is, and ticks the elapsed clock locally so the user can see it is
+ * A first connect to a fresh host uploads the daemon, which can take a minute.
+ * The old row was one spinner and one sentence, so a long upload was
+ * indistinguishable from a hang. This shows the whole chain (SSH → Probe →
+ * Upload daemon → Start daemon → Tunnel → Handshake), marks where it is, and ticks the elapsed clock locally so the user can see it is
  * still moving between pushes.
  *
  * Keeps the outer `.sps-host-connecting` class, `role="status"` and `data-host` of

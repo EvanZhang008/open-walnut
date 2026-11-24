@@ -9,8 +9,8 @@
  * This file runs the REAL DaemonConnection over REAL ssh against a container that
  * looks like that box (scripts/onboarding-test/remote-host/Dockerfile):
  *
- *   a. connect(): ssh, probe, install-runtime (Bun from bun.sh), upload, start,
- *      tunnel, handshake; the daemon runs under Bun and answers a ping
+ *   a. connect(): ssh, probe, upload (the compiled daemon), start, tunnel,
+ *      handshake; the daemon runs with no runtime installed and answers a ping
  *   b. the folder picker lists ~/workplace (flagged as a symlink) and ~/workspace,
  *      and ~/workplace/ lists proj-a and proj-b (pins f0799ff8 on a Linux daemon)
  *   c. the terminal probe reaches the host (never an ssh failure) and, by branch,
@@ -76,7 +76,7 @@ const describeIf = SSH_ALIAS ? describe : describe.skip
 /** Walnut's name for the host (the config.yaml key); SSH_ALIAS is ssh's name for it. */
 const HOST_KEY = 'devbox'
 const SSH_TARGET: SshTarget = { hostname: SSH_ALIAS }
-const CONNECT_STEPS = ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake', 'connected']
+const CONNECT_STEPS = ['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake', 'connected']
 const AUTOFIX_STEP = process.env.WALNUT_REMOTE_ONBOARDING_AUTOFIX === '1'
 const FIX_WAIT_MS = 6 * 60_000
 // Diagnosis first: no automatic host fix may run before step f (see the header).
@@ -152,31 +152,6 @@ function unreachableFromBox(urls: string[]): string | null {
     return `probe failed: ${errText(e)}`
   }
   return out.split('\n').find((l) => /^curl_exit=[1-9]/.test(l))?.trim() ?? null
-}
-
-/**
- * Step a failed: was it the network at install-runtime? Only when Bun never got
- * installed on the box AND there is download evidence: the box itself cannot
- * reach the installer or GitHub (where the installer downloads Bun from), or the
- * connect error, Walnut's log for the host, or the daemon start log names a
- * download failure. A reachable network with a failed install is a Walnut bug
- * and stays a plain failure. (Walnut's own evidence is thin: its install runs
- * `curl | bash`, whose exit code is bash's, so a failed curl reads as "success".)
- */
-async function networkCauseAtInstallRuntime(phases: string[], err: unknown): Promise<string | null> {
-  if (!phases.includes('install-runtime')) return null
-  let facts = ''
-  try {
-    facts = remote('[ -x "$HOME/.bun/bin/bun" ] && echo BUN_OK; tail -n 20 /tmp/open-walnut/daemon-start.log 2>/dev/null; true', 30_000)
-  } catch (e) {
-    facts = `probe failed: ${errText(e)}`
-  }
-  if (/^BUN_OK$/m.test(facts)) return null
-  const unreachable = unreachableFromBox(['https://bun.sh/install', 'https://github.com'])
-  if (unreachable) return `the box cannot reach the Bun installer (${unreachable})`
-  const evidence = [errText(err), ...facts.split('\n'), ...(await hostLogLines())]
-    .find((l) => DOWNLOAD_ERROR.test(l) || /bun\.sh/i.test(l))
-  return evidence ? `Bun was never installed and a download failed: ${evidence.trim().slice(0, 300)}` : null
 }
 
 function requireConn(): DaemonConnection {
@@ -321,7 +296,7 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     }
   }, 60_000)
 
-  it('a. connect() provisions the host: every step runs, the daemon runs under Bun and answers', async () => {
+  it('a. connect() provisions the host: every step runs, the compiled daemon runs and answers', async () => {
     const { getDaemonConnection, addOnDaemonPhaseChange } = await import('../../src/providers/daemon-connection.js')
     const phases: Array<{ phase: string; at: number }> = []
     const off = addOnDaemonPhaseChange((s: DaemonConnectState) => {
@@ -329,34 +304,28 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     })
     const t0 = Date.now()
     try {
-      try {
-        conn = await timed('a. connect (ssh ... handshake)', () => getDaemonConnection(HOST_KEY, SSH_TARGET))
-      } finally {
-        off()
-        log(`a. phases: ${phases.map((p, i) => `${p.phase} +${p.at - (i ? phases[i - 1].at : t0)}ms`).join(', ')}`)
-      }
-      const seen = phases.map((p) => p.phase)
-      expect(seen).not.toContain('failed')
-      const firsts = CONNECT_STEPS.map((step) => seen.indexOf(step))
-      expect(firsts.every((i) => i >= 0), `missing connect steps, saw: ${seen.join(' > ')}`).toBe(true)
-      expect([...firsts].sort((x, y) => x - y), `connect steps out of order: ${seen.join(' > ')}`).toEqual(firsts)
-      expect(seen.at(-1)).toBe('connected')
-      expect(conn.connected).toBe(true)
-
-      const pong = await timed('a. ping', () => conn!.send('ping', {}, 10_000))
-      expect(pong).toMatchObject({ ok: true, pong: true })
-
-      const proc = remote('pid=$(cat /tmp/open-walnut/daemon.pid) && ps -o args= -p "$pid"; [ -x "$HOME/.bun/bin/bun" ] && echo bun-installed; true')
-      log(`a. daemon process: ${proc}`)
-      expect(proc, 'the daemon should run as `<home>/.bun/bin/bun .../daemon.cjs`').toMatch(/\/\.bun\/bin\/bun \S*daemon\.cjs/)
-      expect(proc).toContain('bun-installed')
-    } catch (err) {
-      const cause = await networkCauseAtInstallRuntime(phases.map((p) => p.phase), err)
-      if (cause) {
-        throw new Error(`NETWORK: ${cause}. The box could not download the daemon runtime, so this is not a Walnut regression; rerun the job. Original failure: ${errText(err).slice(0, 400)}`)
-      }
-      throw err
+      conn = await timed('a. connect (ssh ... handshake)', () => getDaemonConnection(HOST_KEY, SSH_TARGET))
+    } finally {
+      off()
+      log(`a. phases: ${phases.map((p, i) => `${p.phase} +${p.at - (i ? phases[i - 1].at : t0)}ms`).join(', ')}`)
     }
+    const seen = phases.map((p) => p.phase)
+    expect(seen).not.toContain('failed')
+    const firsts = CONNECT_STEPS.map((step) => seen.indexOf(step))
+    expect(firsts.every((i) => i >= 0), `missing connect steps, saw: ${seen.join(' > ')}`).toBe(true)
+    expect([...firsts].sort((x, y) => x - y), `connect steps out of order: ${seen.join(' > ')}`).toEqual(firsts)
+    expect(seen.at(-1)).toBe('connected')
+    expect(conn.connected).toBe(true)
+
+    const pong = await timed('a. ping', () => conn!.send('ping', {}, 10_000))
+    expect(pong).toMatchObject({ ok: true, pong: true })
+
+    // The host gets the compiled daemon (a prebuilt binary, else the walnut file in its slot),
+    // so connect installs no runtime: no Bun appears on the box.
+    const proc = remote('pid=$(cat /tmp/open-walnut/daemon.pid) && ps -o args= -p "$pid"; [ -e "$HOME/.bun" ] && echo has=bun-dir; true')
+    log(`a. daemon process: ${proc}`)
+    expect(proc, 'the daemon should run as the compiled `.../daemon-linux-<arch>`').toMatch(/\/daemon-linux-\w+/)
+    expect(proc).not.toContain('has=bun-dir')
   }, 300_000)
 
   it('b. the folder picker offers ~/workplace (a symlink) and ~/workspace, and lists inside the link', async () => {

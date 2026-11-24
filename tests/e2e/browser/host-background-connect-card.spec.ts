@@ -28,7 +28,7 @@ test.setTimeout(180_000)
 const SHOTS = process.env.PW_SHOTS_DIR || '/tmp/wn-host-background-connect'
 const MB = 1_048_576
 const STEPS = [
-  ['ssh', 'SSH'], ['probe', 'Probe'], ['install-runtime', 'Install runtime'],
+  ['ssh', 'SSH'], ['probe', 'Probe'],
   ['upload', 'Upload daemon'], ['start', 'Start daemon'], ['tunnel', 'Tunnel'], ['handshake', 'Handshake'],
 ] as const
 
@@ -188,9 +188,9 @@ test('a reload during the connect shows the card again, at the same place in the
 })
 
 test('a failure lets the host go from the card, and a new attempt of it brings it back', async ({ page, baseURL }) => {
-  const fake = await serve(page, baseURL!, { statuses: { 'build-box': firstUpload('build-box'), 'lab-box': statusOf('lab-box', 'install-runtime', { firstConnect: true }) } })
+  const fake = await serve(page, baseURL!, { statuses: { 'build-box': firstUpload('build-box'), 'lab-box': statusOf('lab-box', 'upload', { firstConnect: true }) } })
   await expect(page.getByTestId('host-connect-row-build-box')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('host-connect-row-lab-box')).toContainText('2 of 7 steps complete')
+  await expect(page.getByTestId('host-connect-row-lab-box')).toContainText('2 of 6 steps complete')
   const firstTry = Date.now() - 60_000
   fake.push(failed('build-box', { attemptStartedAt: firstTry }))
   await expect(page.getByTestId('host-connect-row-build-box')).toHaveCount(0)

@@ -629,7 +629,7 @@ const STILL_CONNECTING = Symbol('still-connecting');
 
 export interface ListDirsPending {
   phase: string;
-  /** Sentence for the UI ("Installing the session daemon runtime on X…"). */
+  /** Sentence for the UI ("Uploading the session daemon to X…"). */
   label: string;
   /** How long the current phase has been running (ms). */
   elapsedMs: number;

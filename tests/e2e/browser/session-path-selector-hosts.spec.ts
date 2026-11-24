@@ -121,7 +121,7 @@ test('a bare "/" lists the filesystem root live', async ({ page }) => {
 test('remote host still connecting: the connect step is shown, then the folders land', async ({ page }) => {
   await injectHost(page)
   const remote = scriptRemoteListDirs(page, [
-    { kind: 'pending', phase: 'install-runtime', label: `Installing the session daemon runtime on ${HOST_LABEL} (first connect, usually under a minute)` },
+    { kind: 'pending', phase: 'upload', label: `Uploading the session daemon to ${HOST_LABEL}` },
     { kind: 'pending', phase: 'start', label: `Starting the session daemon on ${HOST_LABEL}` },
     { kind: 'dirs', dirs: ['projects', 'scratch'] },
   ])
@@ -132,7 +132,7 @@ test('remote host still connecting: the connect step is shown, then the folders 
 
   const connecting = list(page).locator('.sps-host-connecting')
   await expect(connecting).toBeVisible()
-  await expect(connecting).toContainText('Installing the session daemon runtime on Big dev box')
+  await expect(connecting).toContainText('Uploading the session daemon to Big dev box')
   // One wait, one indicator: the generic line must not stack on the host row.
   await expect(list(page).getByTestId('sps-loading')).toHaveCount(0)
   await expect(list(page).locator('.sps-host-note-failure')).toHaveCount(0)
@@ -196,14 +196,14 @@ test('All tab: local folders show at once while the remote host is still connect
 test('the connect step survives typing: no flash back to the generic spinner, follow-up polls wait less', async ({ page }) => {
   await injectHost(page)
   const remote = scriptRemoteListDirs(page, [
-    { kind: 'pending', phase: 'install-runtime', label: `Installing the session daemon runtime on ${HOST_LABEL} (first connect, usually under a minute)` },
+    { kind: 'pending', phase: 'upload', label: `Uploading the session daemon to ${HOST_LABEL}` },
   ])
   await remote.install()
   await openPicker(page)
   await page.locator('.sps-host-tab', { hasText: HOST_LABEL }).click()
   await input(page).fill('/home/')
   const connecting = list(page).locator('.sps-host-connecting')
-  await expect(connecting).toContainText('Installing the session daemon runtime')
+  await expect(connecting).toContainText('Uploading the session daemon')
 
   // Watch the list across the next keystrokes: the host row must stay, and the
   // generic "Loading paths..." must never take its place.
@@ -218,7 +218,7 @@ test('the connect step survives typing: no flash back to the generic spinner, fo
   })
   await input(page).pressSequentially('me/', { delay: 120 })
   await expect.poll(() => remote.calls.some(c => c.searchParams.get('prefix') === '/home/me/')).toBe(true)
-  await expect(connecting).toContainText('Installing the session daemon runtime')
+  await expect(connecting).toContainText('Uploading the session daemon')
   expect(await page.evaluate(() => (window as unknown as { __flash: number }).__flash)).toBe(0)
 
   // The first request for a host waits the server default; once the host is

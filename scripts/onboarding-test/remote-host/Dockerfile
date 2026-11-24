@@ -9,9 +9,9 @@
 #     `env: 'node': No such file or directory`, like the real one;
 #   - ~/workplace is a symlink to /workplace (next to a real ~/workspace dir).
 #
-# Deliberately absent: Bun. Installing the daemon runtime on a bare host (the
-# `install-runtime` connect step, `curl https://bun.sh/install | bash`) is part
-# of what is under test, so it must happen for real, from inside the container.
+# Deliberately absent: Bun (and every other JavaScript runtime). The host gets
+# the compiled daemon, which needs no runtime, so a bare box is what is under
+# test; a runtime here would hide a regression that needs one.
 #
 # No key is baked in. The runner (run.sh) generates a throwaway key pair per run
 # and passes the PUBLIC key in WALNUT_ONBOARDING_AUTHORIZED_KEY; entrypoint.sh

@@ -157,12 +157,12 @@ describe('GET /api/hosts/status', () => {
   });
 
   it('answers a mid-connect host with its step list and the first-connect note', async () => {
-    states.devbox = { phase: 'install-runtime', phaseElapsedMs: 8_000, connectElapsedMs: 21_000 };
+    states.devbox = { phase: 'upload', phaseElapsedMs: 8_000, connectElapsedMs: 21_000 };
     const res = await request(createApp()).get('/api/hosts/status');
     const devbox = byHost(res.body.hosts).devbox;
-    expect(devbox.phase).toBe('install-runtime');
+    expect(devbox.phase).toBe('upload');
     expect(devbox.phaseLabel).toContain('Big dev box');
-    expect(devbox.steps.find((s) => s.phase === 'install-runtime')?.status).toBe('active');
+    expect(devbox.steps.find((s) => s.phase === 'upload')?.status).toBe('active');
     expect(devbox.steps.find((s) => s.phase === 'ssh')?.status).toBe('done');
     expect(devbox.steps.find((s) => s.phase === 'tunnel')?.status).toBe('todo');
     expect(devbox.note).toContain('minute');

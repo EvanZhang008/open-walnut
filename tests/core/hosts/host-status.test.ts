@@ -65,7 +65,7 @@ describe('buildHostStatus: the upload step\'s progress bar', () => {
 
 describe('buildHostStatus: a host\'s first connect', () => {
   it('carries firstConnect on every step of the connect while it runs', () => {
-    for (const phase of ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'] as DaemonConnectPhase[]) {
+    for (const phase of ['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake'] as DaemonConnectPhase[]) {
       expect(buildHostStatus('devbox', devbox, state(phase, { firstConnect: true }), undefined, AT).firstConnect, phase).toBe(true);
     }
   });
@@ -102,10 +102,10 @@ describe('buildHostStatus — steps and wording per phase', () => {
     }
   });
 
-  it('adds the first-connect note ONLY on the two slow steps', () => {
+  it('adds the first-connect note ONLY on the slow upload step', () => {
     for (const phase of DAEMON_CONNECT_STEPS) {
       const s = buildHostStatus('devbox', devbox, state(phase), undefined, AT);
-      if (phase === 'install-runtime' || phase === 'upload') {
+      if (phase === 'upload') {
         expect(s.note).toContain('Big dev box');
         expect(s.note).toContain('minute');
       } else {

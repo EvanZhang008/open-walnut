@@ -14,7 +14,7 @@ import { serverNow } from '@/hooks/useHostStatus';
 // the helpers below are the phase/step sentences a few surfaces still read.
 
 /**
- * The 7 user-visible links in the first-connect chain, in order.
+ * The 6 user-visible links in the first-connect chain, in order.
  *
  * The server sends its own `steps` (with its own labels) and that wins; this list
  * is the fallback for the older list-dirs `pending` shape, which reports a phase
@@ -23,7 +23,6 @@ import { serverNow } from '@/hooks/useHostStatus';
 export const CONNECT_STEPS: ReadonlyArray<{ phase: DaemonConnectPhase; label: string }> = [
   { phase: 'ssh', label: 'SSH' },
   { phase: 'probe', label: 'Probe' },
-  { phase: 'install-runtime', label: 'Install runtime' },
   { phase: 'upload', label: 'Upload daemon' },
   { phase: 'start', label: 'Start daemon' },
   { phase: 'tunnel', label: 'Tunnel' },
@@ -141,7 +140,7 @@ export function hostStatusText(status: HostStatus | undefined, hydration?: HostS
 
 /**
  * Why the wait is long the first time. Used when the server sent no `note` of its
- * own: a minute of silence on "Install runtime" reads as a hang unless the UI says
+ * own: a minute of silence on "Upload daemon" reads as a hang unless the UI says
  * this is one-time work.
  */
 export const FIRST_CONNECT_NOTE = 'First connect to this host installs the session daemon; it only happens once. It keeps going in the background: you can close this.';
@@ -150,7 +149,7 @@ export const FIRST_CONNECT_NOTE = 'First connect to this host installs the sessi
 export function connectNote(status: HostStatus | undefined, steps: HostConnectStep[]): string | undefined {
   if (status?.note) return status.note;
   const active = steps.find((s) => s.status === 'active')?.phase;
-  return active === 'install-runtime' || active === 'upload' ? FIRST_CONNECT_NOTE : undefined;
+  return active === 'upload' ? FIRST_CONNECT_NOTE : undefined;
 }
 
 /**

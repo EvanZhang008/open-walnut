@@ -67,7 +67,7 @@ describe('remote-host fixture · the container stays the dev box it copies', () 
     expect(runSh).toMatch(/grep -Eiq "\$BASE_REFUSED_PATTERN" "\$WORK\/docker-build\.log" \|\| break/)
   })
 
-  it('installs exactly what sshd, the Bun installer and the daemon need, without recommends', () => {
+  it('installs exactly what sshd, the Claude Code installer and the daemon need, without recommends', () => {
     const pkgs = aptPackages(dockerfile)
     for (const need of ['openssh-server', 'curl', 'unzip', 'ca-certificates', 'git', 'bash', 'coreutils', 'procps', 'sudo']) {
       expect(pkgs, `the fixture must install ${need}`).toContain(need)
@@ -91,7 +91,7 @@ describe('remote-host fixture · the container stays the dev box it copies', () 
     expect(dockerCode).toContain("usermod -p '*' alice")
   })
 
-  it('does not preinstall Bun (Walnut installs it; that is the step under test)', () => {
+  it('does not preinstall Bun (the compiled daemon needs no runtime; a bare box is under test)', () => {
     expect(dockerCode).not.toMatch(/bun\.sh|oven-sh|\/\.bun\b/)
   })
 
@@ -243,16 +243,14 @@ describe('remote-host live test · gated and aimed at the real transport', () =>
     expect(live).toContain('process.env.WALNUT_REMOTE_ONBOARDING_HOST')
   })
 
-  it('labels a download failure at install-runtime as NETWORK, only with evidence', () => {
-    expect(live).toContain('throw new Error(`NETWORK: ${cause}')
+  it('labels a download failure of the Claude Code installer as NETWORK, only with evidence', () => {
     // Evidence comes from the box itself, not only from Walnut's (thin) error text.
     // Any HTTP answer is a live network, so no `curl -f`; only a transport failure counts.
     expect(live).toContain('curl -sS -o /dev/null --max-time 20 "$u"')
-    expect(live).toContain("unreachableFromBox(['https://bun.sh/install', 'https://github.com'])")
     expect(live).toContain("unreachableFromBox(['https://claude.ai/install.sh', 'https://storage.googleapis.com'])")
     expect(live).toContain('throw new Error(`NETWORK: the native Claude Code installer could not download')
-    // Bun present on the box means install-runtime worked: never blame the network then.
-    expect(live).toMatch(/if \(\/\^BUN_OK\$\/m\.test\(\w+\)\) return null/)
+    // A failed install with a reachable network and no download error is a Walnut bug, not NETWORK.
+    expect(live).toContain('if (unreachable || said) {')
   })
 
   it('runs a to e with autofix OFF, set before any product module loads', () => {

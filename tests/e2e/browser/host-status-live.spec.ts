@@ -18,11 +18,10 @@ const HOST = 'devbox'
 const HOST_LABEL = 'Big dev box'
 const HOSTNAME = 'devbox.example.test'
 
-type Phase = 'idle' | 'ssh' | 'probe' | 'install-runtime' | 'upload' | 'start' | 'tunnel' | 'handshake' | 'connected' | 'reconnecting' | 'failed' | 'queued'
+type Phase = 'idle' | 'ssh' | 'probe' | 'upload' | 'start' | 'tunnel' | 'handshake' | 'connected' | 'reconnecting' | 'failed' | 'queued'
 const STEPS: Array<{ phase: Phase; label: string }> = [
   { phase: 'ssh', label: 'SSH' },
   { phase: 'probe', label: 'Probe' },
-  { phase: 'install-runtime', label: 'Install runtime' },
   { phase: 'upload', label: 'Upload daemon' },
   { phase: 'start', label: 'Start daemon' },
   { phase: 'tunnel', label: 'Tunnel' },
@@ -43,7 +42,6 @@ const PHASE_LABEL: Record<Phase, string> = {
   idle: `Connecting to ${HOST_LABEL}`,
   ssh: `Opening an SSH connection to ${HOST_LABEL}`,
   probe: `Checking whether the session daemon is running on ${HOST_LABEL}`,
-  'install-runtime': `Installing the session daemon runtime on ${HOST_LABEL} (first connect, usually under a minute)`,
   upload: `Uploading the session daemon to ${HOST_LABEL}`,
   start: `Starting the session daemon on ${HOST_LABEL}`,
   tunnel: `Opening the tunnel to ${HOST_LABEL}`,
@@ -66,7 +64,7 @@ function status(phase: Phase, extra: Partial<HostStatus> = {}): HostStatus {
   return {
     host: HOST, label: HOST_LABEL, hostname: HOSTNAME, user: 'me',
     connected: phase === 'connected', phase, phaseLabel: PHASE_LABEL[phase], steps,
-    note: phase === 'install-runtime' || phase === 'upload'
+    note: phase === 'upload'
       ? `First connect installs the session daemon on ${HOST_LABEL}; this can take a few minutes. It keeps going in the background: you can close this.` : undefined,
     phaseElapsedMs: 12_000, connectElapsedMs: 40_000, at: Date.now(), ...extra,
   }
@@ -154,7 +152,7 @@ function scriptRemoteListDirs(page: Page, mode: { value: 'pending' | 'dirs' | 'e
     calls.push(url)
     times.push(Date.now())
     if (mode.value === 'pending') {
-      return route.fulfill({ json: { dirs: [], parent, exists: true, pending: { phase: 'install-runtime', label: PHASE_LABEL['install-runtime'], elapsedMs: 1200 } } })
+      return route.fulfill({ json: { dirs: [], parent, exists: true, pending: { phase: 'upload', label: PHASE_LABEL.upload, elapsedMs: 1200 } } })
     }
     if (mode.value === 'error') {
       return route.fulfill({ json: { dirs: [], parent, exists: true, hostError: { message: 'Permission denied (publickey).', kind: 'auth', hint: 'Check the key.' } } })
@@ -228,7 +226,7 @@ test('the app reads host status once at load, so the picker opens with the dots 
 })
 
 test('connecting row shows the step list; a WS frame advances it with no extra list-dirs request; connected fetches at once', async ({ page }) => {
-  await injectHost(page, status('install-runtime'))
+  await injectHost(page, status('upload'))
   const mode = { value: 'pending' as 'pending' | 'dirs' | 'error', dirs: ['projects', 'scratch'] }
   const remote = scriptRemoteListDirs(page, mode)
   await remote.install()
@@ -239,11 +237,11 @@ test('connecting row shows the step list; a WS frame advances it with no extra l
   const row = list(page).locator('.sps-host-connecting')
   await expect(row).toBeVisible()
   const steps = row.locator('.sps-host-step')
-  await expect(steps).toHaveCount(7)
+  await expect(steps).toHaveCount(6)
   await expect(row.locator('.sps-host-step[data-step="ssh"]')).toHaveAttribute('data-status', 'done')
   await expect(row.locator('.sps-host-step[data-step="probe"]')).toHaveAttribute('data-status', 'done')
-  await expect(row.locator('.sps-host-step[data-step="install-runtime"]')).toHaveAttribute('data-status', 'active')
-  await expect(row.locator('.sps-host-step[data-step="upload"]')).toHaveAttribute('data-status', 'todo')
+  await expect(row.locator('.sps-host-step[data-step="upload"]')).toHaveAttribute('data-status', 'active')
+  await expect(row.locator('.sps-host-step[data-step="start"]')).toHaveAttribute('data-status', 'todo')
   await expect(row.locator('.sps-host-step-note')).toContainText('First connect installs the session daemon')
   await expect(row.locator('.sps-host-step-total')).toContainText(/Connecting for/)
   // Full contrast, never the old whisper.
@@ -258,7 +256,7 @@ test('connecting row shows the step list; a WS frame advances it with no extra l
   await pushStatus(page, status('start', { note: undefined }))
   await expect(row.locator('.sps-host-step[data-step="start"]')).toHaveAttribute('data-status', 'active')
   expect(remote.calls.length).toBe(callsBefore)
-  await expect(row.locator('.sps-host-step[data-step="install-runtime"]')).toHaveAttribute('data-status', 'done')
+  await expect(row.locator('.sps-host-step[data-step="upload"]')).toHaveAttribute('data-status', 'done')
   await expect(row.locator('.sps-host-step-note')).toHaveCount(0)
   callsBefore = remote.calls.length
   await pushStatus(page, status('handshake', { note: undefined }))
@@ -429,8 +427,8 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
 
   await pushStatus(page, status('ssh'))
   await expect(state).toContainText(PHASE_LABEL.ssh)
-  await pushStatus(page, status('install-runtime'))
-  await expect(state).toContainText('Installing the session daemon runtime')
+  await pushStatus(page, status('upload'))
+  await expect(state).toContainText('Uploading the session daemon')
   await pushStatus(page, status('connected'))
   await expect(state).toHaveText(/^Online/)
   await expect(dot).toHaveAttribute('data-kind', 'connected')

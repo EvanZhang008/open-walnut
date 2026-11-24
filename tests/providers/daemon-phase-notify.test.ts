@@ -66,14 +66,14 @@ describe('addOnDaemonPhaseChange', () => {
     const off = addOnDaemonPhaseChange((s) => { seen.push({ phase: s.phase, host: s.host }) })
     // The real connect() stamps these phases in this order; drive them without ssh.
     vi.spyOn(DaemonConnection.prototype, 'connect').mockImplementation(async function (this: DaemonConnection) {
-      for (const p of ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'] as const) {
+      for (const p of ['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake'] as const) {
         this.setPhaseForTest(p)
       }
     })
     try {
       await getDaemonConnection(host, sshTarget)
       expect(seen.map((s) => s.phase)).toEqual(
-        ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake'],
+        ['ssh', 'probe', 'upload', 'start', 'tunnel', 'handshake'],
       )
       expect(new Set(seen.map((s) => s.host))).toEqual(new Set([host]))
     } finally { off() }

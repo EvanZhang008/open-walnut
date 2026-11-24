@@ -712,7 +712,6 @@ export type DaemonConnectPhase =
   | 'idle'
   | 'ssh'
   | 'probe'
-  | 'install-runtime'
   | 'upload'
   | 'start'
   | 'tunnel'
@@ -3111,7 +3110,7 @@ export class DaemonConnection {
             `sandboxes do not deploy/start remote daemons (attach-only)`,
           )
         }
-        // Steps 2-3: deploy (stamps install-runtime / upload) and start, with
+        // Steps 2-3: deploy (stamps upload) and start, with
         // one runtime fallback chain if the start fails in a runtime-shaped way.
         await this.markFirstConnect()
         daemonPort = await this.deployAndStart()
