@@ -14363,18 +14363,19 @@ export class SessionRunner {
       // retry can bring the folder back, and the panel offers to continue in a new one
       // (core/sessions/folder-gone.ts). Asked only on a failure, never on a send.
       // A setting that refuses the engine (engines.codex) parks it the same way, its words on the row, until it is changed.
-      const configRefused = classifyDeliveryFailure(err).code === 'engine_config'
+      // One verdict for the whole failure: the classifier is read once, whatever branch takes it.
+      const verdict = classifyDeliveryFailure(err)
+      const configRefused = verdict.code === 'engine_config'
       const goneCwd = err instanceof BudgetPausedError || err instanceof BudgetCheckingError || configRefused ? null : await acpFolderGone(session)
       if (err instanceof BudgetPausedError || configRefused) {
         this.cancelBudgetRetry(deliverySessionId)
-        await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
-        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason, configRefused ? {} : undefined)
+        await parkMessages(rows, verdict).catch(() => {})
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), verdict.reason, configRefused ? {} : undefined)
       } else if (err instanceof EngineSignInRequiredError) {
         // The engine's CLI on that host is not signed in: no retry can sign it in, so the turn
         // waits for the user's Retry, and the chat offers the sign-in in Settings for that host.
         // The rows are parked, waiting for that host's sign-in (they go out by itself once it signs in, or on
         // the chat's Retry; Discard drops them); their own row says why (saidOnMessage).
-        const verdict = classifyDeliveryFailure(err)
         await parkMessages(rows, verdict).catch(() => {})
         reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message, { waitsFor: verdict.waitsFor })
         bus.emit(EventNames.SESSION_ERROR, {
