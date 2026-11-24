@@ -296,7 +296,13 @@
      the title's first line, 20 px down (the pill's 18 px line and that gap), never beside the pill. */
   .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) { --meta-shift: 20px; row-gap: 2px; }
   .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .todo-pinned-title { margin-top: 0; }
-  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > :is(.pinned-phase-picker, .todo-item-select-checkbox, .task-kebab-wrapper, .task-start-btn, .worker-fold-row-back) {
+  /* One selector per tool, each naming its element: a :has() before an :is() last compound restyles the
+     whole page on every insert (tests/web/css-has-invalidation-ratchet.test.ts). */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .pinned-phase-picker,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .todo-item-select-checkbox,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .task-kebab-wrapper,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .task-start-btn,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .worker-fold-row-back {
     top: calc(var(--card-pad-top) + var(--meta-shift));
   }
   .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card):not(.status-card-two-line):has(> .todo-item-limit-pill) > .task-unread-dot { top: calc(var(--row-band) / 2 + 2px + var(--meta-shift)); }
