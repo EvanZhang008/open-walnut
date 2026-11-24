@@ -11,7 +11,7 @@
  * Card view models keep their identity while their content is the same, so a
  * session-status update re-renders only the card it changed (G36).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications/NotificationProvider';
@@ -21,6 +21,7 @@ import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { waitText } from './kanban-time';
 import { log } from '@/utils/log';
+import { useMinuteNow } from '@/utils/minute-clock';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import type { BoardKanbanSeen, BoardPayload, BoardSeen } from '../board-model';
 import { NO_BOARD_ELEMENTS, boardSignals, walkTeam, teamChildren, TEAM_DEPTH_CAP, type BoardElement, type BoardElements } from '../board-overview-model';
@@ -33,8 +34,6 @@ import { useTeamStatusReady } from './useTeamStatusReady';
 import { useTeamThreadStates } from './useTeamThreadStates';
 import { useExperimental } from '@/hooks/useExperimental';
 
-const MINUTE_MS = 60_000;
-
 /**
  * A clock that moves once a minute: the time of the last tick (the mount, then
  * each wall clock minute). Every relative time on the cards reads this one value,
@@ -42,16 +41,8 @@ const MINUTE_MS = 60_000;
  * `just now` happens to cross a minute in between (G36); they all move on the tick.
  */
 export function useMinuteClock(): number {
-  const [clock, setClock] = useState(() => Date.now());
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const arm = () => {
-      timer = setTimeout(() => { setClock(Date.now()); arm(); }, MINUTE_MS - (Date.now() % MINUTE_MS) + 50);
-    };
-    arm();
-    return () => clearTimeout(timer);
-  }, []);
-  return clock;
+  // The app's one minute clock (minute-clock.ts): every label that moves with the minute moves together.
+  return useMinuteNow();
 }
 
 function elementsOf(doc: Document, selector: string): BoardElement[] {

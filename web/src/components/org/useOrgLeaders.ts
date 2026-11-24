@@ -6,6 +6,7 @@
  */
 import { useMemo } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useKeepEqual } from '@/utils/keep-equal';
 import type { Task } from '@open-walnut/core';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { VpCard } from './org-chart-model';
@@ -24,11 +25,13 @@ export interface OrgDirectorsView {
 
 export function useOrgLeaders(cards: readonly VpCard[], tasks: readonly Task[]) {
   const on = useExperimental('org_leaders');
-  const byKey = useMemo(() => {
+  // Kept while equal (keep-equal.ts): a status write elsewhere rebuilds it, and a new map would
+  // draw the whole Org list again.
+  const byKey = useKeepEqual(useMemo(() => {
     if (!on) return null;
     const byId = new Map(tasks.map((t) => [t.id, t] as const));
     return new Map(cards.map((c) => [c.key, leaderGroups(sourcesOf(c.projects), byId)] as const));
-  }, [on, cards, tasks]);
+  }, [on, cards, tasks]));
   const projects = useMemo(() => directorProjectsByVp(cards), [cards]);
   const groupsOf = useLeanCallback((row: ChannelRow) => byKey?.get(row.key) ?? NONE, [byKey]);
   const projectsOf = useLeanCallback((row: ChannelRow) => projects.get(row.key) ?? NO_PROJECTS, [projects]);

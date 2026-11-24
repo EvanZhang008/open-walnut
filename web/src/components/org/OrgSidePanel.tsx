@@ -8,7 +8,10 @@
  * wide window a panel carries a lock: a locked panel stays beside the page while the next
  * task opens next to it (org-side-columns.ts), and it is still there after a restart.
  */
-import { useEffect, useState } from 'react';
+import { countRender } from '@/utils/render-count';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { useStoreTask } from '@/contexts/TasksContext';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { fetchTask } from '@/api/tasks';
@@ -38,9 +41,11 @@ export function sideTargetParam(t: OrgSideTarget): string {
 }
 
 interface Props {
-  target: OrgSideTarget;
-  tasks: readonly Task[];
-  onClose: () => void;
+  /** What it shows, as the strip names it (`task:<id>`, `session:<id>`, parseSideTarget): a string,
+   *  so a memo'd panel stays put, and what the callbacks below are handed, so the page passes one
+   *  function for every panel. */
+  panelId: string;
+  onClose: (panelId: string) => void;
   onOpenSession: (sessionId: string) => void;
   /** Start a chat with a task that has none: a composer bound to it on home. */
   onStartChat: (taskId: string) => void;
@@ -48,9 +53,9 @@ interface Props {
   inboxRequest?: number;
   /** Whether the panel is pinned beside the page; with onToggleLock, its header shows the lock. */
   locked?: boolean;
-  onToggleLock?: () => void;
+  onToggleLock?: (panelId: string) => void;
   /** The panel came back from the saved strip or place, not a click: a gone session closes it (SessionPanel onRestoredGone). */
-  onRestoredGone?: () => void;
+  onRestoredGone?: (panelId: string) => void;
 }
 
 const HOME_ICON = (
@@ -59,9 +64,14 @@ const HOME_ICON = (
   </svg>
 );
 
-export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock, onRestoredGone }: Props) {
+/** Drawn again only when its own task, session or props change: it reads its one task from the
+ *  store (useStoreTask), never the whole list, so another task's status write leaves it and its
+ *  chat as they are (2026-11-23: the chat beside the Org page drew on every task update). */
+export const OrgSidePanel = memo(function OrgSidePanel({ panelId, onClose, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock, onRestoredGone }: Props) {
+  countRender('OrgSidePanel');
   const navigate = useNavigate();
-  const stored = target.kind === 'task' ? tasks.find((t) => t.id === target.id) : undefined;
+  const target = useMemo(() => parseSideTarget(panelId) ?? { kind: 'session' as const, id: panelId }, [panelId]);
+  const stored = useStoreTask(target.kind === 'task' ? target.id : null) ?? undefined;
   // A task the store does not hold (a completed one, say) is read once.
   const [fetched, setFetched] = useState<{ id: string; task: Task | null } | null>(null);
   useEffect(() => {
@@ -74,7 +84,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
         setFetched({ id: target.id, task: null });
         // A restored panel (a pin, a node's kept free panel) whose task was deleted closes itself, as
         // a session's does; a failed read (offline, a deploy) keeps it, saying the task is gone.
-        if (err instanceof ApiError && err.status === 404) onRestoredGone?.();
+        if (err instanceof ApiError && err.status === 404) onRestoredGone?.(panelId);
       });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per task; the close is the latest
@@ -82,6 +92,23 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
   const task = stored ?? (fetched?.id === target.id ? fetched.task ?? undefined : undefined);
   const loading = target.kind === 'task' && !stored && fetched?.id !== target.id;
   const sessionId = target.kind === 'session' ? target.id : task ? resolveTaskSessionId(task) : null;
+  // One identity each for the chat (SessionPanel is memo'd: a new function drew it and its history).
+  const close = useLeanCallback(() => onClose(panelId), []);
+  const toggleLock = useLeanCallback(() => onToggleLock?.(panelId), []);
+  const restoredGone = useLeanCallback(() => onRestoredGone?.(panelId), []);
+  const locate = useLeanCallback((id: string) => locateTaskOnHome(id, navigate, sessionId ? { sessionId } : undefined), []);
+  const homeButton = useMemo(() => (sessionId ? (
+    <button
+      type="button"
+      className="org-side-home"
+      data-testid="org-side-home"
+      title="Open on Home"
+      aria-label="Open on Home"
+      onClick={() => openSessionOnHome(sessionId, navigate)}
+    >
+      {HOME_ICON}
+    </button>
+  ) : null), [sessionId, navigate]);
 
   if (sessionId) {
     return (
@@ -92,23 +119,12 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
           viewPlace="org-side"
           embedded
           {...(inboxRequest ? { inboxRequest } : {})}
-          {...(onToggleLock ? { locked: !!locked, onToggleLock: () => onToggleLock() } : {})}
-          onClose={onClose}
-          {...(onRestoredGone ? { onRestoredGone: () => onRestoredGone() } : {})}
-          headerLeading={(
-            <button
-              type="button"
-              className="org-side-home"
-              data-testid="org-side-home"
-              title="Open on Home"
-              aria-label="Open on Home"
-              onClick={() => openSessionOnHome(sessionId, navigate)}
-            >
-              {HOME_ICON}
-            </button>
-          )}
+          {...(onToggleLock ? { locked: !!locked, onToggleLock: toggleLock } : {})}
+          onClose={close}
+          {...(onRestoredGone ? { onRestoredGone: restoredGone } : {})}
+          headerLeading={homeButton}
           onSessionClick={onOpenSession}
-          onLocateTask={(id) => locateTaskOnHome(id, navigate, { sessionId })}
+          onLocateTask={locate}
         />
       </aside>
     );
@@ -128,12 +144,12 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
             aria-pressed={!!locked}
             aria-label={locked ? 'Unlock panel' : 'Lock panel beside the page'}
             title={locked ? 'Unlock: the next task opened replaces this panel' : 'Lock: the next task opens next to this panel'}
-            onClick={onToggleLock}
+            onClick={toggleLock}
           >
             {locked ? ICON_LOCK : ICON_UNLOCK}
           </button>
         )}
-        <button type="button" className="org-side-close" data-testid="org-side-close" aria-label="Close" title="Close" onClick={onClose}>×</button>
+        <button type="button" className="org-side-close" data-testid="org-side-close" aria-label="Close" title="Close" onClick={close}>×</button>
       </header>
       {task && (
         <div className="org-side-card-body">
@@ -148,4 +164,4 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
       )}
     </aside>
   );
-}
+});

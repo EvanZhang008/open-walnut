@@ -55,11 +55,11 @@ function buildDayPills(): { label: string; date: string }[] {
 }
 
 /** Format a due_date value for display. */
-export function formatDateDisplay(iso: string | undefined | null): string {
+export function formatDateDisplay(iso: string | undefined | null, nowMs = Date.now()): string {
   if (!iso) return '';
   const d = parseDateLocal(iso);
   if (isNaN(d.getTime())) return iso;
-  const now = new Date();
+  const now = new Date(nowMs);
 
   // Time-level dates (contains 'T'): show relative
   if (iso.includes('T')) {
@@ -115,12 +115,12 @@ export function formatStartDateDisplay(iso: string | undefined | null): string {
 }
 
 /** Check if a due_date is overdue. */
-export function isOverdue(iso: string | undefined | null): boolean {
+export function isOverdue(iso: string | undefined | null, nowMs = Date.now()): boolean {
   if (!iso) return false;
   const d = parseDateLocal(iso);
   if (isNaN(d.getTime())) return false;
-  if (iso.includes('T')) return d.getTime() < Date.now();
-  const now = new Date();
+  if (iso.includes('T')) return d.getTime() < nowMs;
+  const now = new Date(nowMs);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   return d.getTime() < todayStart.getTime();
 }

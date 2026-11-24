@@ -3,7 +3,7 @@ import type { SessionCronJob } from '@open-walnut/core';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
 import { changeSessionSupervision, type SupervisionSnapshot } from '@/stores/session-supervision-store';
 import { cronPromptPreview, formatCronClock, formatCronDistance } from '@/utils/cron-job-text';
-import { onPageVisible } from '@/utils/page-visibility';
+import { useMinuteNow } from '@/utils/minute-clock';
 import { DisclosureButton, ToggleSwitch } from '@/components/controls';
 import '@/styles/session-supervision.css';
 
@@ -24,18 +24,6 @@ const RECOVERY_STARTUP: Record<string, string> = {
   unavailable: 'host unavailable',
 };
 
-/** Re-renders each minute while mounted so "in 12m" stays honest; a hidden tab
- *  catches up the moment it becomes visible. */
-function useMinuteClock(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const timer = setInterval(tick, 60_000);
-    const off = onPageVisible(tick);
-    return () => { clearInterval(timer); off(); };
-  }, []);
-  return now;
-}
 
 function JobRow({ job, now }: { job: SessionCronJob; now: number }) {
   const [promptOpen, setPromptOpen] = useState(false);
@@ -100,7 +88,8 @@ export function CronJobsCard({ sid, snapshot, open, onClose, archived }: {
   archived?: boolean;
 }) {
   const cron = useActiveSessionCron(sid);
-  const now = useMinuteClock();
+  // "in 12m" stays honest with the shared minute clock (minute-clock.ts; a hidden tab catches up on return).
+  const now = useMinuteNow();
   // The pill is the only way in, so when it goes (job deleted, expired, session
   // stopped) the open flag goes with it instead of springing back hours later.
   useEffect(() => { if (open && !cron) onClose(); }, [open, cron, onClose]);

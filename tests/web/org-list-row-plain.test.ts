@@ -86,7 +86,7 @@ describe('an Org list row draws its avatar, its name and at most one red dot', (
 
   it('draws a router row the same way, its avatar plain', () => {
     const r = row({ key: 'router:r1', kind: 'router', name: 'Support router', threadsBadge: undefined, alerts: [], latest: 'support · Active · 2 VP links' })
-    const html = render(createElement(OrgRouterSection, { rows: [r], selectedKey: null, now: NOW, onSelect: () => {} }))
+    const html = render(createElement(OrgRouterSection, { rows: [r], selectedKey: null, onSelect: () => {} }))
     const option = html.slice(html.indexOf('<button'), html.lastIndexOf('</button>'))
     expect(shownText(option)).toBe('Support router')
     expect(option).not.toMatch(/org-state-dot|org-channel-dot|org-badge/)

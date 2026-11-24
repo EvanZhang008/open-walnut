@@ -49,7 +49,9 @@
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
+import { countRender } from '@/utils/render-count';
 import { useMemo, useRef, useState } from 'react';
+import { useMinuteNow } from '@/utils/minute-clock';
 import { OrgThreadsWatching, type WatchingCopy } from './OrgThreadsWatching';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
@@ -124,7 +126,8 @@ interface Props {
   tasks: readonly Task[];
   /** Send a message filed under this thread; null when the node has no chat yet. */
   onFollowUp: OnFollowUp;
-  now: number;
+  /** The clock its cards read; left out, the list keeps its own minute clock (minute-clock.ts). */
+  now?: number;
   /** The Brief is off (experiment brief_off): every thread in its state's group (OrgThreadsByState). */
   byState?: boolean;
 }
@@ -400,7 +403,11 @@ export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now
     : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} {...(copy ? { copy } : {})} />;
 }
 
-export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState = false }: Props) {
+export function OrgThreads({ name, owner, state, tasks, onFollowUp, now: nowGiven, byState = false }: Props) {
+  countRender('OrgThreads');
+  // Its own minute while it shows threads, so a minute draws this list, never the node around it.
+  const ownNow = useMinuteNow(nowGiven === undefined && !!state.threads?.length);
+  const now = nowGiven ?? ownNow;
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);

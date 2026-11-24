@@ -31,6 +31,7 @@
  * complcaited, just thread"). Any action that takes a row off (an answer, a snooze) takes it off on
  * the click. No title tooltips: they drew over the row's own menus.
  */
+import { countRender } from '@/utils/render-count';
 import '@/styles/org-rail.css';
 import '@/styles/notice-card.css';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -145,6 +146,7 @@ function TaskTabList({ tasks, tab }: { tasks: readonly Task[]; tab: Exclude<OrgR
 }
 
 const TaskTabRow = memo(function TaskTabRow({ task: t, own, onOpen }: { task: Task; own: OrgTaskTab; onOpen: (id: string) => void }) {
+  countRender('OrgTaskTabRow');
   // Home's circle and its colour (grey plain, blue with a session, green done): the same shape a
   // Home row of that section wears (sectionRowIcon), a span here since the row is the button.
   const circle = useTaskCircle(t);
@@ -346,7 +348,7 @@ function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, 
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefOff = false, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, now, placement, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefOff = false, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, placement, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -392,12 +394,12 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
   onQuote: (a: OrgAlertView) => void;
   canQuote: boolean;
   answers: OrgAnswers;
-  now: number;
   /** Beside the chat (a wide page), or above it. */
   placement: 'side' | 'top';
   /** The side rail's width (the user's, OrgNodeDetail); the CSS default otherwise. */
   width?: string;
 }) {
+  countRender('OrgTaskRail');
   // On the CEO's rail each ask names the VP it is under (a VP is a label over its asks, never a row).
   const vpByTask = useMemo(() => {
     const m = new Map<string, string>();
@@ -457,11 +459,11 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
       </div>
       {view === 'brief' && !briefOff ? (
         <div className="org-rail-body">
-          <OrgBrief owner={contact} tasks={tasks} name={title} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
+          <OrgBrief owner={contact} tasks={tasks} name={title} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
         </div>
       ) : view === 'threads' ? (
         <div className="org-rail-body">
-          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} now={now} byState={briefOff} />
+          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onFollowUp={onThreadFollowUp} byState={briefOff} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-mode={shownMode}>

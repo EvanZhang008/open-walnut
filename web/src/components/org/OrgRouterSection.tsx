@@ -11,7 +11,9 @@
  * Inside the list's listbox it is a group of options (all a listbox may hold); Up and Down reach its
  * rows through the list's own key handler, which counts them after the VPs.
  */
+import { memo } from 'react';
 import type React from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import type { ChannelRow } from './org-channels-model';
 import { OrgAvatar } from './OrgAvatar';
 import { OrgListRow, rowDot, rowHover } from './OrgListRow';
@@ -29,7 +31,9 @@ type RouterMenu = (e: React.MouseEvent, target: { row: ChannelRow }) => void;
 
 /** The list's one plain row (OrgListRow); its area, Paused or Active and its VPs (buildChannels'
  *  line) are in its hover. */
-function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: RouterMenu }) {
+const RouterRow = memo(function RouterRow({ row, selected, onSelect, onMenu }: { row: ChannelRow; selected: boolean; onSelect: (key: string) => void; onMenu?: RouterMenu }) {
+  // The hover's "moved 5m ago" moves with the minute clock (minute-clock.ts), this row alone.
+  const hover = useMinuteValue((now) => rowHover(row, now));
   return (
     <OrgListRow
       avatar={<OrgAvatar row={row} plain />}
@@ -41,17 +45,16 @@ function RouterRow({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; 
       data-key={row.key}
       data-kind="router"
       data-state={row.state}
-      title={rowHover(row, now)}
+      title={hover}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     />
   );
-}
+});
 
-export function OrgRouterSection({ rows, selectedKey, now, onSelect, onMenu, onNewRouter }: {
+export function OrgRouterSection({ rows, selectedKey, onSelect, onMenu, onNewRouter }: {
   rows: readonly ChannelRow[];
   selectedKey: string | null;
-  now: number;
   onSelect: (key: string) => void;
   onMenu?: RouterMenu;
   /** New router, a + on this heading (2026-11-21, the user: "no new router,put it sin the router
@@ -75,7 +78,7 @@ export function OrgRouterSection({ rows, selectedKey, now, onSelect, onMenu, onN
       </div>
       {rows.map((r) => (
         <div key={r.key} className="org-channel-wrap" role="presentation">
-          <RouterRow row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
+          <RouterRow row={r} selected={selectedKey === r.key} onSelect={onSelect} onMenu={onMenu} />
         </div>
       ))}
     </div>

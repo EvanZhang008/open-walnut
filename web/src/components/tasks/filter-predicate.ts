@@ -20,7 +20,7 @@ import {
   toTaskQuery,
   type TaskQueryFilterState,
 } from './view-filter-model';
-import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-state';
+import { buildTaskQueryContext, safeNormalizeTaskQuery, timeWindowKey } from './task-query-state';
 import { matchesDateFilter } from './task-date-filter';
 import { FILTER_DIMS, type FilterDim, type FilterLists, type FilterState } from './filter-bar-types';
 import { projectGroupKey } from '../../utils/project-display';
@@ -106,6 +106,35 @@ export function buildFilterEvalContext(
     queryCtx: buildTaskQueryContext(allTasks, state.blocked !== undefined),
     defaults,
   };
+}
+
+/** The clock-dependent part of a filter: what moves a task in or out with no task changing. */
+const clockKeys = new WeakMap<readonly Task[], { state: FilterState; now: number; key: string }>();
+
+/**
+ * What the filter's clock-dependent conditions make of `tasks` at `now`, as one key: the tasks a
+ * Date pick (Available now, Overdue, This week) or a relative time window (the last 24 hours) leaves
+ * out. It changes only when the clock moves a task in or out (a start time arriving, a due time
+ * passing, a task leaving the window), so the list is worked out again then, never once a minute
+ * (minute-clock.ts useMinuteValue; 2026-11-23, Home's whole list drew every minute for it).
+ */
+export function clockKey(tasks: readonly Task[], state: FilterState, now: number): string {
+  const hit = clockKeys.get(tasks);
+  if (hit && hit.state === state && hit.now === now) return hit.key;
+  const date = state.date;
+  const time = state.time.preset !== null ? toTaskQuery(sliceFor(state, 'time')).time : undefined;
+  let key = '';
+  if (date) {
+    const out: string[] = [];
+    for (const t of tasks) {
+      const dated = !(date === 'now' && t.status === 'done') && (!!t.start_date || !!t.due_date || !!t.parent_task_id);
+      if (dated && !matchesDateFilter(t, date, tasks as Task[], now)) out.push(t.id);
+    }
+    key = out.join(',');
+  }
+  if (time) key += `|${timeWindowKey(tasks, time, now)}`;
+  clockKeys.set(tasks, { state, now, key });
+  return key;
 }
 
 /** Does `task` pass one dimension's condition? */

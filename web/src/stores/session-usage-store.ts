@@ -1,4 +1,5 @@
 import type { SessionUsage } from '@/api/session-usage';
+import { keepEqual } from '@/utils/keep-equal';
 
 export interface SessionUsageSnapshot {
   data: SessionUsage | null;
@@ -42,7 +43,11 @@ export class SessionUsageStore {
     return () => { entry.listeners.delete(listener); };
   };
   private publish(entry: Entry, patch: Partial<SessionUsageSnapshot>): void {
-    entry.snapshot = { ...entry.snapshot, ...patch };
+    // A poll that reads what was there already tells nobody: every open chat of the session draws
+    // again for each change (2026-11-23: a budget's 15 s poll drew its chat three times a poll).
+    const next = keepEqual(entry.snapshot, { ...entry.snapshot, ...patch });
+    if (next === entry.snapshot) return;
+    entry.snapshot = next;
     for (const listener of entry.listeners) listener();
   }
   private accept(sessionId: string, entry: Entry, data: SessionUsage): SessionUsage {

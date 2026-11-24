@@ -15,7 +15,10 @@
  * under a VP are on the Org chart (OrgChartSheet). With the "sections" Directors layout (Settings → Org)
  * they are also one DIRECTORS section after the VPs (OrgDirectorSection).
  */
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { countRender } from '@/utils/render-count';
+import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { DisclosureButton } from '@/components/controls';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -41,8 +44,14 @@ import { EmptyState } from '@/components/common/EmptyState';
 /** What a right-click is on: a row of the list, or a project under "Archived". */
 export type ChannelMenuTarget = { row: ChannelRow } | { moved: MovedRow };
 type OnMenu = (e: MouseEvent, target: ChannelMenuTarget) => void;
+const NO_ROWS: readonly ChannelRow[] = [];
+const NO_MOVED: readonly MovedRow[] = [];
 
-function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: OnMenu }) {
+/** One row, drawn again only when its own row changes (OrgPage keeps an unchanged row's object,
+ *  keep-equal.ts); its hover's "moved 5m ago" moves with the minute clock on its own. */
+const Row = memo(function Row({ row, selected, onSelect, onMenu }: { row: ChannelRow; selected: boolean; onSelect: (key: string) => void; onMenu?: OnMenu }) {
+  countRender('OrgChannelRow');
+  const hover = useMinuteValue((now) => rowHover(row, now));
   return (
     <OrgListRow
       avatar={<OrgAvatar row={row} plain />}
@@ -53,12 +62,12 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       data-testid={row.kind === 'main' ? 'org-channel-main' : 'org-channel'}
       data-key={row.key}
       data-state={row.state}
-      title={rowHover(row, now)}
+      title={hover}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     />
   );
-}
+});
 
 function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly MovedRow[]; query: string; onSelect: (key: string) => void; onMenu?: OnMenu }) {
   const [open, setOpen] = useState(false);
@@ -116,17 +125,19 @@ interface Props {
   openTaskIds?: ReadonlySet<string>;
   /** The Directors of each VP (org-leaders.ts) and its projects, for the DIRECTORS section; absent while the experiment is off. */
   directors?: OrgDirectorsView;
-  now: number;
 }
 
-export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, openTaskIds, directors, now }: Props) {
+export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers = NO_ROWS, moved = NO_MOVED, rowMenu, total, vps, selectedKey, query, onQuery, onSelect, onOpenChart, onNewRouter, openTaskIds, directors }: Props) {
+  countRender('OrgChannelList');
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   const sections = orgName.settings.directorsLayout === 'sections';
   // A right-click selects a word in WebKit before the menu opens: that selection is the
   // gesture's, not the user's, so it neither keeps the browser's menu nor stays lit.
   const menu = useContextMenu<ChannelMenuTarget>({ ignorePressSelection: true });
-  const onMenu: OnMenu | undefined = rowMenu ? (e, target) => { menu.open(e, target); } : undefined;
+  // One identity, so a memo'd row is not drawn again for a new closure.
+  const openMenu = useLeanCallback<OnMenu>((e, target) => { menu.open(e, target); }, []);
+  const onMenu: OnMenu | undefined = rowMenu ? openMenu : undefined;
   // Back on the page, the list is where it was scrolled to (org-place.ts), once its rows are in.
   const scrollRestored = useRef(false);
   useLayoutEffect(() => {
@@ -204,17 +215,17 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         onPointerEnter={hold.onPointerEnter}
         onPointerLeave={hold.onPointerLeave}
       >
-        <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
+        <Row row={main} selected={selectedKey === main.key} onSelect={onSelect} onMenu={onMenu} />
         <div className="org-list-section" role="presentation" data-testid="org-vps-head">VPs · {vps}</div>
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
-            <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
+            <Row row={r} selected={selectedKey === r.key} onSelect={onSelect} onMenu={onMenu} />
           </div>
         ))}
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}
         {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
-        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} onMenu={onMenu} onNewRouter={onNewRouter} />
-        <OrgTopicsSection topics={topics} selectedKey={selectedKey} now={now} onSelect={onSelect} />
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} onSelect={onSelect} onMenu={onMenu} onNewRouter={onNewRouter} />
+        <OrgTopicsSection topics={topics} selectedKey={selectedKey} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <EmptyState size="section" title="No open work yet" hint="Ask the CEO to start something." testId="org-empty" />}
@@ -231,4 +242,4 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
       )}
     </aside>
   );
-}
+});

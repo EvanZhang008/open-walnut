@@ -31,7 +31,7 @@ import { useShownTags } from './TaskTagPills';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { visibleInterval } from '@/utils/page-visibility';
+import { useMinuteValue } from '@/utils/minute-clock';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
 import '@/styles/header-fit.css';
@@ -338,14 +338,8 @@ export function TasksPageTable({
     () => ({ '--tp-cols': gridTemplate(visible) }) as React.CSSProperties,
     [visible],
   );
-  // Relative times ("3h ago") go stale while nothing else re-renders; tick once a
-  // minute, but only while a timestamp column is actually on screen.
-  const hasTimeColumn = visible.some((c) => c.id === 'created' || c.id === 'updated' || c.id === 'completed');
-  const [, setClock] = useState(0);
-  useEffect(() => {
-    if (!hasTimeColumn) return;
-    return visibleInterval(() => setClock((n) => n + 1), 60_000);
-  }, [hasTimeColumn]);
+  // Relative times ("3h ago") move with the minute clock in their own cell (TableTimeCell), so a
+  // minute draws only the cells whose words change, never the whole table (minute-clock.ts).
 
   // ── ghost add-row state (keyed by group so only one ghost is editing) ──
   const [addingIn, setAddingIn] = useState<string | null>(null);
@@ -574,12 +568,7 @@ export function TasksPageTable({
       case 'updated':
       case 'completed': {
         const iso = col.id === 'created' ? t.created_at : col.id === 'updated' ? t.updated_at : t.completed_at;
-        const text = formatTableTime(iso);
-        return (
-          <span key={col.id} data-col={col.id} className="tp-cell-time" title={formatTableTimeTitle(iso)}>
-            {text || <span className="tp-cell-empty">–</span>}
-          </span>
-        );
+        return <TableTimeCell key={col.id} colId={col.id} iso={iso} />;
       }
     }
   };
@@ -726,5 +715,15 @@ export function TasksPageTable({
       </div>
       {body}
     </div>
+  );
+}
+
+/** A timestamp cell ("3h ago", then a date): its own minute clock, so it alone draws when its words change. */
+function TableTimeCell({ colId, iso }: { colId: string; iso: string | undefined | null }) {
+  const text = useMinuteValue((now) => formatTableTime(iso, now));
+  return (
+    <span data-col={colId} className="tp-cell-time" title={formatTableTimeTitle(iso)}>
+      {text || <span className="tp-cell-empty">–</span>}
+    </span>
   );
 }

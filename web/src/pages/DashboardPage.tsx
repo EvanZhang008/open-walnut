@@ -37,16 +37,14 @@ import {
   deriveSourceOptions,
   deriveSprintOptions,
   deriveTagOptions,
-  safeNormalizeTaskQuery,
 } from '@/components/tasks/task-query-state';
 import { useTagDisplay } from '@/stores/tag-display-store';
+import { useNormalizedTaskQuery } from '@/components/tasks/useNormalizedTaskQuery';
 import {
   matchesTaskQuery,
-  type NormalizedTaskQuery,
   type TaskQueryContext,
 } from '@open-walnut/task-query';
 import type { Task } from '@open-walnut/core';
-import { visibleInterval } from '@/utils/page-visibility';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
@@ -282,23 +280,11 @@ export function DashboardPage() {
   // is literally the same predicate. Presentation (column sort, grouping,
   // collapse) stays in TasksPageTable, which is still a pure display component.
 
-  // Re-evaluate relative windows on a minute tick, matching the home panel.
-  // visibleInterval, not setInterval: a hidden tab must not burn re-renders
-  // (and gets ONE catch-up tick when it comes back).
-  const [minuteTick, setMinuteTick] = useState(0);
-  useEffect(() => visibleInterval(() => setMinuteTick((n) => n + 1), 60_000), []);
-
-  // The tick only reaches the memo while a relative window is actually set:
-  // otherwise every minute re-normalized the query and re-ran the filter pass
-  // over the whole table for a guaranteed-identical result.
-  const timeTick = query.timePreset === null ? 0 : minuteTick;
-
-  // ONE captured `now` per evaluation, so a window can't slide mid-pass.
-  const normalized = useMemo<NormalizedTaskQuery | null>(
-    () => safeNormalizeTaskQuery(toTaskQuery(query), new Date()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeTick re-arms relative time windows
-    [query, timeTick],
-  );
+  // The query against the clock, matching the home panel: read again when the clock moves a task
+  // across a relative window's edge or the list changes, never once a minute for the whole page
+  // (useNormalizedTaskQuery). ONE captured `now` per evaluation, so a window can't slide mid-pass.
+  const taskQuery = useMemo(() => toTaskQuery(query), [query]);
+  const normalized = useNormalizedTaskQuery(tasks, taskQuery);
 
   // Same context builder the home panel uses.
   const queryContext = useMemo<TaskQueryContext>(

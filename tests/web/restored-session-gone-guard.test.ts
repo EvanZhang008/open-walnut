@@ -74,8 +74,9 @@ describe('restored session panels whose session is gone', () => {
 
   it('Org closes a restored pin or remembered panel the same way', () => {
     const org = read('pages/OrgPage.tsx');
-    expect(org.match(/\.\.\.restoredGone\(/g)?.length).toBe(2);
-    expect(read('components/org/OrgSidePanel.tsx')).toMatch(/onRestoredGone: \(\) => onRestoredGone\(\)/);
+    // The phone's one panel and every panel of the strip: only one the restore brought back.
+    expect(org.match(/restoredSide\.current\?\.has\(.*?\) \? \{ onRestoredGone: /g)?.length).toBe(2);
+    expect(read('components/org/OrgSidePanel.tsx')).toMatch(/onRestoredGone: restoredGone/);
   });
 });
 

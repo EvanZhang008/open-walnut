@@ -53,9 +53,9 @@ export function isDeferredByStart(task: Task, allTasks: Task[], now = Date.now()
  *  "Now" is START-time driven: it answers "what should I look at now", so a
  *  task is shown unless its start_date says the work begins later. Due dates
  *  are deadlines: they mark Overdue but never hide a task from Now. */
-export function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task[]): boolean {
+export function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task[], now = Date.now()): boolean {
   if (!filter) return true; // "All"
-  const now = Date.now();
+
   switch (filter) {
     case 'now':
       // Everything actionable now: no start date, or start time has arrived.
@@ -66,7 +66,7 @@ export function matchesDateFilter(task: Task, filter: DateFilter, allTasks: Task
       if (!dueMs) return false;
       // Time-level dates: overdue if past now; Day-level: overdue if before start of today
       if (effectiveDue!.includes('T')) return dueMs < now;
-      const todayStart = new Date();
+      const todayStart = new Date(now);
       todayStart.setHours(0, 0, 0, 0);
       return dueMs < todayStart.getTime();
     }

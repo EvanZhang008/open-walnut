@@ -5,7 +5,9 @@
  * (TopicChat). Inside the list's listbox it is a group of options, like the Routers. The rows come
  * from useOrgTopicRows, which the list also reads, so Up and Down walk them in the order drawn.
  */
+import { memo } from 'react';
 import { OrgListRow } from '@/components/org/OrgListRow';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { timeAgo } from '@/utils/time';
 import type { TopicSummary } from '@/api/topics';
 import { UnavailableState } from '@/components/common/EmptyState';
@@ -38,10 +40,31 @@ export function topicHover(t: TopicSummary, now: number): string {
   return [`${t.title}${moved ? `, moved ${moved}` : ''}`, t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'].join('\n'); // empty-state-ok: a row's hover text
 }
 
-export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
+/** One topic row; its hover's "moved 5m ago" moves with the minute clock (minute-clock.ts), this row alone. */
+const TopicRow = memo(function TopicRow({ t, selected, onSelect }: { t: TopicSummary; selected: boolean; onSelect: (key: string) => void }) {
+  const key = topicKey(t.id);
+  const hover = useMinuteValue((now) => topicHover(t, now));
+  return (
+    <div className="org-channel-wrap" role="presentation">
+      <OrgListRow
+        avatar={<GroupAvatar members={t.members} size={34} />}
+        name={t.title}
+        selected={selected}
+        className="is-topic"
+        data-testid="org-topic"
+        data-peek-row=""
+        data-key={key}
+        data-topic-id={t.id}
+        title={hover}
+        onClick={() => onSelect(key)}
+      />
+    </div>
+  );
+});
+
+export function OrgTopicsSection({ topics, selectedKey, onSelect }: {
   topics: OrgTopicRows;
   selectedKey: string | null;
-  now: number;
   onSelect: (key: string) => void;
 }) {
   const { on, rows, error, reload } = topics;
@@ -58,26 +81,7 @@ export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
           <UnavailableState size="row" role="presentation" title="Couldn't load topics" detail={error} onRetry={reload} testId="org-topics-error" />
         </div>
       )}
-      {rows.map((t) => {
-        const key = topicKey(t.id);
-        const selected = selectedKey === key;
-        return (
-          <div key={t.id} className="org-channel-wrap" role="presentation">
-            <OrgListRow
-              avatar={<GroupAvatar members={t.members} size={34} />}
-              name={t.title}
-              selected={selected}
-              className="is-topic"
-              data-testid="org-topic"
-              data-peek-row=""
-              data-key={key}
-              data-topic-id={t.id}
-              title={topicHover(t, now)}
-              onClick={() => onSelect(key)}
-            />
-          </div>
-        );
-      })}
+      {rows.map((t) => <TopicRow key={t.id} t={t} selected={selectedKey === topicKey(t.id)} onSelect={onSelect} />)}
     </div>
   );
 }

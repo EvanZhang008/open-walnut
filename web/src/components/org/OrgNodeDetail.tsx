@@ -18,7 +18,9 @@
  *            settings section of its own under it, and it has no side bar, so no Tasks (it owns no
  *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { countRender } from '@/utils/render-count';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { minuteNow, useMinuteValue } from '@/utils/minute-clock';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { usePendingApprovals } from '@/components/approvals/ApprovalRow';
 import { approvalsForNode } from '@/components/approvals/approvals-store';
@@ -60,7 +62,7 @@ import { newsAt, sharedAnswers, threadCountLabel, type ThreadCounts } from '@ope
 import { threadCounts } from '@open-walnut/thread-groups';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, allTasksSections, headerPillWords, headerPills, isSectionFlips, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, allTasksSections, headerPillWords, headerPills, isSectionFlips, doneInWindow, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import type { ImageAttachment } from '@/api/chat';
 import {
   areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -107,7 +109,6 @@ interface Props {
   tasksLoading?: boolean;
   /** Phone: back to the list. */
   onBack?: () => void;
-  now: number;
 }
 
 /** What the side bar of a node that keeps Threads holds, in words. */
@@ -197,7 +198,8 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenLetterOf, onOpenSession, answers, onStartChat, tasksLoading, onBack, now }: Props) {
+export const OrgNodeDetail = memo(function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenLetterOf, onOpenSession, answers, onStartChat, tasksLoading, onBack }: Props) {
+  countRender('OrgNodeDetail');
   // What opens instead of this node or beside it (another node, a letter's panel, the chat this
   // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
   // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened. A task
@@ -269,7 +271,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const [flipped, setFlipped] = usePageViewOf<string[]>('org', 'node.sectionFlips2', row.key, [], isSectionFlips);
   const flipSection = (t: OrgRailTab) => setFlipped((f) => (f.includes(t) ? f.filter((x) => x !== t) : [...f, t]));
   const [focusSection, setFocusSection] = useState<{ tab: OrgRailTab; n: number } | null>(null);
-  const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
+  // The Completed section keeps a window of days: worked out again when a task leaves it (a key
+  // of the minute clock, minute-clock.ts), never once a minute for the whole node.
+  const doneShown = useMinuteValue((now) => doneInWindow(tasks, now));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- doneShown stands for the clock
+  const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, minuteNow()), [row, rows, tasks, doneShown]);
   /** A count in the header: All tasks, with that section open and brought into view (its tasks may
    *  all be watched, then Watching; a section not drawn is never flipped). */
   const openTab = (t: OrgTaskTab) => {
@@ -292,7 +298,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const briefNew = showsBrief && (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
   const briefFresh = useBriefRefresh(showsBrief ? contact : undefined, tasks);
-  const updating = showsBrief && !!contact && briefUpdating(contact, now);
+  const updating = useMinuteValue((now) => showsBrief && !!contact && briefUpdating(contact, now));
   const title = row.kind === 'main' ? 'CEO' : isRouter ? row.name : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -317,6 +323,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   };
   /** The side bar on Tasks, drawn by `mode` (the Board: the one its lead keeps). */
   const openTasks = (mode: OrgTaskMode) => { setRailHidden(false); setTopPick('task'); setTaskMode(mode === 'board' && hasBoard === false ? 'all' : mode); };
+  // One identity for the chat's Board button: the chat is memo'd, and a new function drew it (and its
+  // whole history) again on every task update.
+  const openBoard = useLeanCallback(() => openTasks('board'), []);
   // A view the URL names (a row's "Open tasks", whose URL still says team, an old link to Board): the
   // side bar opens on it, once.
   useEffect(() => {
@@ -437,10 +446,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
   /** The chat's header goes into the node's (SessionPanel headerSlot): its status and its kebab. */
   const [chatTools, setChatTools] = useState<HTMLElement | null>(null);
-  const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   // A VP made only to put projects under leads no work of its own while its home has none.
   const leads = row.led?.length ? [...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)] : [];
-  const headTitle = [title, leads.length ? `Leads ${leads.join(', ')}` : '', lastMoved ? `Moved ${lastMoved}` : ''].filter(Boolean).join('\n');
   // Every ask the Needs you count holds is a row, the node's own first (2026-10-31: a count with
   // "Its ask is in the chat." under it left the user hunting for it).
   const alertsShown = useMemo(() => ownAskFirst(tabs.needs, row.contactId), [tabs.needs, row.contactId]);
@@ -484,7 +491,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       mode={taskMode} onMode={setTaskMode} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
-      now={now} placement={railSide ? 'side' : 'top'}
+      placement={railSide ? 'side' : 'top'}
       {...(railSide ? { width: railCss } : {})}
     />
   );
@@ -500,7 +507,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
             · moved just now???"). */}
         <OrgAvatar row={row} size={40} plain />
         <div className="org-detail-who">
-          <h2 className="org-detail-title wn-title" data-fit-title="" data-testid="org-detail-title" title={headTitle}>{title}</h2>
+          <NodeTitle title={title} leads={leads} lastAt={row.lastAt} />
           <div className="org-detail-sub">
             <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} keepsThreads={keepsBrief} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
             {isRouter && <span className="org-muted" data-testid="org-detail-router-role">Router</span>}
@@ -548,7 +555,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
             <ReplyThreadContext.Provider value={replyHost}>
-              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} headerPillsInMenu={headNarrow} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} threadsBeside={threadsShown} onSessionClick={onOpenSession} />
+              <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} headerPillsInMenu={headNarrow} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: openBoard } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} threadsBeside={threadsShown} onSessionClick={onOpenSession} />
             </ReplyThreadContext.Provider>
           </div>
         ) : (
@@ -573,4 +580,12 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       </div>
     </div>
   );
+});
+
+/** The node's name; its hover says what it leads and when it last moved, that "5m ago" on the
+ *  minute clock (minute-clock.ts), so a minute draws this heading, never the node. */
+function NodeTitle({ title, leads, lastAt }: { title: string; leads: readonly string[]; lastAt: number }) {
+  const lastMoved = useMinuteValue((now) => (lastAt ? timeAgo(new Date(lastAt).toISOString(), { now }) : ''));
+  const hover = [title, leads.length ? `Leads ${leads.join(', ')}` : '', lastMoved ? `Moved ${lastMoved}` : ''].filter(Boolean).join('\n');
+  return <h2 className="org-detail-title wn-title" data-fit-title="" data-testid="org-detail-title" title={hover}>{title}</h2>;
 }

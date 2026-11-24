@@ -33,7 +33,8 @@ import {
 } from './filter-bar-types';
 import { buildFilterChips, clearedState, isDimDefault, migrateLegacy, readFilterState, writeFilterState } from './filter-bar-model';
 import { FILTER_DIMS, type FilterDim } from './filter-bar-types';
-import { buildFilterEvalContext, hiddenByText, showValueFor, type FilterEvalContext, type HiddenReason } from './filter-predicate';
+import { useMinuteValue } from '@/utils/minute-clock';
+import { buildFilterEvalContext, clockKey, hiddenByText, showValueFor, type FilterEvalContext, type HiddenReason } from './filter-predicate';
 import { projectLabel } from './filter-bar-model';
 import { computeFacetCounts } from './filter-facets';
 import { RECENT_STORE_LIMIT, createdToastId, pushRecent, readPersistedFilters, readRecent, writePersistedFilters } from './filter-bar-persist';
@@ -92,8 +93,6 @@ export interface HomeFiltersOptions {
   externalProject?: string;
   onProjectChange?: (project: string) => void;
   clearFocusOverride: () => void;
-  /** Re-arms relative time windows (the panel's 60s tick, 0 when no window is set). */
-  timeTick?: number;
 }
 
 /** Focus is in something the user types into. */
@@ -113,7 +112,7 @@ export function addsChip(prev: FilterState, next: FilterState): boolean {
 }
 
 export function useHomeFilters(opts: HomeFiltersOptions) {
-  const { tasks, loading, projectOrder, externalProject, onProjectChange, clearFocusOverride, timeTick = 0 } = opts;
+  const { tasks, loading, projectOrder, externalProject, onProjectChange, clearFocusOverride } = opts;
   const [models, setModels] = useState<ModelPair>(() => initialFilterModels(externalProject));
   const { legacy, query: taskQueryState } = models;
   const state = useMemo(() => readFilterState(legacy, taskQueryState), [legacy, taskQueryState]);
@@ -231,13 +230,14 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   }), [loading, tasks, projectOrder, integrations, tagDisplay, showPriority, tagLabel]);
 
   const chips = useMemo(() => buildFilterChips(state, lists), [state, lists]);
-  // One `now` per state change; timeTick re-arms a relative time window.
-  // Only a relative time window needs the tick; Date reads the clock per call.
-  const windowTick = state.time.preset === null ? 0 : timeTick;
+  // One `now` per state change. The minute clock moves the filter only when it moves a task in or
+  // out (clockKey: a start time arriving, a task leaving a relative window), so the list is worked
+  // out again then, never once a minute. Date reads the clock per call; the key says when to call.
+  const clock = useMinuteValue((now) => clockKey(tasks, state, now));
   const evalCtx = useMemo<FilterEvalContext>(
     () => buildFilterEvalContext(tasks, state),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- windowTick re-arms relative windows
-    [tasks, state, windowTick],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clock re-arms relative windows
+    [tasks, state, clock],
   );
   // Facet counts only while the popover is open (4.1: one pass, keyed on the chips).
   const facets = useMemo(
@@ -253,10 +253,12 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
     showWaiting: legacy.showWaiting,
     taskQueryState,
     state, lists, chips, evalCtx, facets, recent,
+    /** The clock's key (clockKey): changes when the clock moves a task in or out of the filter. */
+    clock,
     apply, clearAll, showTask,
     menuOpen, setMenuOpen, setChipMenuOpen,
     buttonRef, rowRef, listScrollRef,
-  }), [legacy, taskQueryState, state, lists, chips, evalCtx, facets, recent, apply, clearAll, showTask, menuOpen]);
+  }), [legacy, taskQueryState, state, lists, chips, evalCtx, facets, recent, clock, apply, clearAll, showTask, menuOpen]);
 }
 
 export type HomeFilters = ReturnType<typeof useHomeFilters>;

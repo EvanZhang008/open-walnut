@@ -57,6 +57,17 @@ export interface OrgTaskTabs {
 
 const doneAt = (t: Task) => Date.parse(t.completed_at ?? t.updated_at ?? '') || 0;
 
+const DONE_WINDOW_MS = ORG_DONE_WINDOW_DAYS * 24 * 60 * 60_000;
+
+/** How many finished tasks, in any project, are inside the Completed window at `now`: it changes
+ *  only when one leaves (or the list does), so a node's tabs are worked out again only then. */
+export function doneInWindow(tasks: readonly Task[], now: number): number {
+  const cutoff = now - DONE_WINDOW_MS;
+  let n = 0;
+  for (const t of tasks) if (userStateOf(t) === 'done' && doneAt(t) >= cutoff) n++;
+  return n;
+}
+
 /**
  * A node's tasks by tab. A VP's node: the open tasks of its teams (its own project and every
  * project it leads), as the org tree counts them (the VP's own task is its chat, and only its ask
@@ -82,7 +93,7 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
     : row.alerts;
   const newest = (a: Task, b: Task) => taskTime(b) - taskTime(a);
   const of = (state: 'working' | 'waiting') => [...open.values()].filter((t) => userStateOf(t) === state).sort(newest);
-  const cutoff = now - ORG_DONE_WINDOW_DAYS * 24 * 60 * 60_000;
+  const cutoff = now - DONE_WINDOW_MS;
   const done = tasks
     .filter((t) => userStateOf(t) === 'done' && !t.plugin_only && projects.has(projectKey(t.project)) && doneAt(t) >= cutoff)
     .sort((a, b) => doneAt(b) - doneAt(a));

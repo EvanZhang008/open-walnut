@@ -86,7 +86,6 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { createProject } from '@/api/projects';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
 import { log } from '@/utils/log';
-import { visibleInterval } from '@/utils/page-visibility';
 import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
@@ -170,7 +169,7 @@ import { orderPinnedTier } from '@/utils/pinned-tier-order';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
 import { ancestorChain, foldersHolding, fromPanelGesture, locatePlaceSig, type LocateHold } from './locate-hold';
-import { formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
+import { TaskDatePills } from './TaskDatePills';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useFoldAnchor } from '@/hooks/useFoldAnchor';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
@@ -1109,6 +1108,7 @@ interface TaskRowBodyProps extends SortableTaskItemProps {
 }
 
 const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, searchTierLabel, foldAsks, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
+  countRender('TaskRowBody');
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const setNodeRef = sortableRef;
@@ -1148,16 +1148,6 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     folderCollapsed ? 'task-folder-collapsed' : '',
     isSelected ? 'task-multi-selected' : '',
   ].filter(Boolean).join(' ');
-
-  const dueDateLabel = formatDateDisplay(task.due_date);
-  const dueDateOverdue = isOverdue(task.due_date);
-  // Start pill only matters while the task is still deferred (future start).
-  // Deliberately checks the task's OWN start_date, not the parent-inherited
-  // effective start used by the Now filter — the pill marks where the defer
-  // was set, and this row component has no access to the full task list.
-  const startMs = task.start_date ? parseDateLocal(task.start_date).getTime() : NaN;
-  const startDeferred = Number.isFinite(startMs) && startMs > Date.now();
-  const startDateLabel = startDeferred ? formatDateDisplay(task.start_date) : '';
 
   // Inline title editing: the one rename every task row shares (useInlineTitleEdit); here a
   // click on the title of the focused row starts it too.
@@ -1323,16 +1313,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <LeaderPill task={task} />
           <AwaySyncMark item={task} />
           {/* Info pills + kebab — same line as title, no second row */}
-          {startDateLabel && (
-            <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
-              <span className="todo-item-start-icon" aria-hidden="true">{ICONS.ICON_ARROW_RIGHT}</span><span>{startDateLabel}</span>
-            </span>
-          )}
-          {dueDateLabel && (
-            <span className={`${badge(dueDateOverdue ? 'error' : 'neutral', { long: true })} todo-item-due-pill`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
-              <span>{dueDateLabel}</span>
-            </span>
-          )}
+          {/* Start and due pills read the minute clock themselves (TaskDatePills). */}
+          <TaskDatePills startDate={task.start_date} dueDate={task.due_date} />
           {/* A usage limit holds it: the Flat view's Limited words, and its reset is the row's time. */}
           <TaskLimitPill task={task} />
           {/* It started on the fallback engine: the Flat view's Fallback tag (fallback-row.tsx). */}
@@ -2484,20 +2466,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     return () => { if (fadingTimerRef.current) clearTimeout(fadingTimerRef.current); };
   }, []);
 
-  // Auto-refresh tick: bump every 60s so time-dependent UI re-evaluates —
-  // the date filter (deferred tasks appear on time) AND the per-row ▶ start
-  // pill, which renders in the "All" view too, so the timer runs always.
-  const [_tick, setTick] = useState(0);
-  useEffect(() => {
-    // visibleInterval: hidden tabs skip the re-render tick; one catch-up on return.
-    return visibleInterval(() => setTick((t) => t + 1), 60_000);
-  }, []);
-
-  // Filter state (both internal models, spec D5) lives in useHomeFilters.
+  // Filter state (both internal models, spec D5) lives in useHomeFilters. Its `clock` moves when the
+  // minute clock moves a task in or out of the filter (a deferred task's start arriving), so the list
+  // is worked out again then; a minute that changes nothing draws nothing (minute-clock.ts).
   const homeFilters = useHomeFilters({
     tasks, loading, projectOrder: ordering?.projectOrder, externalProject, onProjectChange, clearFocusOverride,
-    timeTick: _tick,
   });
+  const filterClock = homeFilters.clock;
   const filterState = homeFilters.state;
   // A Status pick holding every open phase (the default, or Open plus Waiting or
   // Complete) is drawn as status sections (status-sections.ts): the list keeps the
@@ -5079,7 +5054,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
       && !inTopSection(t));
     return { list: result, matchedIds };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, passesBoard, hiddenAsWaiting, keepWhileParking, keepWhileCompleting, _tick, _overrideTick, recentTick, inTopSection]);
+  }, [tasks, showCompleted, passesBoard, hiddenAsWaiting, keepWhileParking, keepWhileCompleting, filterClock, _overrideTick, recentTick, inTopSection]);
 
   // Read here, not further down: the dedupe memo below is the first consumer.
   const filterOverrideId = focusOverrideRef.current;
@@ -5708,7 +5683,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   useLayoutEffect(() => { requestMoveFolderRef.current = requestMoveFolder; }, [requestMoveFolder]);
   const handleMoveFolderToProject = useLeanCallback((groupId: string, project: string) => {
     void requestMoveFolder(groupId, project);
-  }, [requestMoveFolder]);
+  // Not keyed on the task list (a lean callback runs the latest committed render's, tasks
+  // included): a new identity on every task update drew every row of the list again (2026-11-23).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Flat project groups (skipped in flat mode). '' = Inbox, rendered last so the
   // named projects (the meaningful grouping) lead the list.
@@ -6612,7 +6590,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     ensureManualSort(projectGroupKey(tasks.find((t) => t.id === taskId)?.project));
     scrollAfterReparentRef.current = taskId;
     onReparentTask(taskId, null);
-  }, [onReparentTask, ensureManualSort, tasks]);
+  // Not keyed on the task list (a lean callback runs the latest committed render's, tasks
+  // included): a new identity on every task update drew every row of the list again (2026-11-23).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onReparentTask]);
 
   // Kebab "Project" select — same mutation as dragging the task onto another
   // project group, minus the drag (no insertNearTaskId: append to the target).
@@ -6620,7 +6601,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     requestMoveTask(taskId, project).catch((err) => {
       onOperationError?.(err instanceof Error ? err.message : 'Move failed');
     });
-  }, [requestMoveTask, onOperationError]);
+  // Not keyed on the task list (a lean callback runs the latest committed render's, tasks
+  // included): a new identity on every task update drew every row of the list again (2026-11-23).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onOperationError]);
 
   // Group chip click → rename the group via the app's own prompt dialog (never the
   // browser-native prompt). Cancel/empty/unchanged keeps the name.
@@ -6644,7 +6628,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     if (memberIds.length === 0) return;
     if (onUngroupTasks) onUngroupTasks(memberIds);
     else if (onUngroupTask) memberIds.forEach((id) => onUngroupTask(id));
-  }, [onDeleteFolder, onUngroupTasks, onUngroupTask, tasks]);
+  // Not keyed on the task list (a lean callback runs the latest committed render's, tasks
+  // included): a new identity on every task update drew every row of the list again (2026-11-23).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onDeleteFolder, onUngroupTasks, onUngroupTask]);
 
   // "+ → New folder" on a project header: prompt a name, create it empty.
   const handleCreateFolder = useLeanCallback(async (project: string) => {

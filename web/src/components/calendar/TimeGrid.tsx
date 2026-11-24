@@ -37,7 +37,7 @@ import {
   layoutDayEvents,
   weekRange,
 } from '@/utils/calendar-date';
-import { visibleInterval } from '@/utils/page-visibility';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { fittedSlotPx, GRID_EXTENDED_END, GRID_FOCUS_START, gridMinute, gridY, gridLocalIso, gridSnapMinute, PHONE_MIN_SLOT_PX, phoneLandingMinute, useCalendarGridSettings } from './calendar-grid-settings';
 import { timeGridItems } from './calendar-items';
 import './grid-controls.css';
@@ -304,8 +304,8 @@ export const TimeGrid = memo(function TimeGrid({
     return base.map((d) => formatDateOnly(d));
   }, [days, anchor]);
 
-  const today = new Date();
-  const todayStr = formatDateOnly(today);
+  // Today moves with the shared minute clock, so the grid draws again once a day, at midnight.
+  const todayStr = useMinuteValue((now) => formatDateOnly(new Date(now)));
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollMinuteRef = useRef(GRID_FOCUS_START);
   const colsRef = useRef<HTMLDivElement>(null);
@@ -374,17 +374,9 @@ export const TimeGrid = memo(function TimeGrid({
     publishMetrics();
   }, [slotPx, days, fullDay, viewportHeight, publishMetrics, phone, dayList]);
 
-  // Now-line, re-anchored every 60s. visibleInterval: hidden tabs skip; the
-  // catch-up tick on return recomputes from the clock, so it's never stale.
-  const [nowMin, setNowMin] = useState(() => today.getHours() * 60 + today.getMinutes());
-  useEffect(() => {
-    return visibleInterval(() => {
-      const n = new Date();
-      setNowMin(n.getHours() * 60 + n.getMinutes());
-    }, 60_000);
-  }, []);
-
-  const showNow = dayList.includes(todayStr) && nowMin >= startMinute && nowMin < endMinute;
+  // The now line, its label and the hour label it covers each move with the shared minute clock
+  // (NowMark, minute-clock.ts): a minute draws them, never the whole grid.
+  const todayShown = dayList.includes(todayStr);
 
   const { allDayByDay, timedByDay } = useMemo(() => {
     const allDay = new Map<string, CalendarItem[]>();
@@ -727,19 +719,16 @@ export const TimeGrid = memo(function TimeGrid({
         <div className="cal-grid-ruler" style={{ height: gridY(endMinute, startMinute, slotPx) }}>
           {hours.map((h) => (
             <div key={h} className="cal-grid-hour" style={{ height: slotPx * 2 }}>
-              <span
-                className="cal-grid-hourlabel"
-                style={showNow && Math.abs(gridY(h * 60, startMinute, slotPx) - gridY(nowMin, startMinute, slotPx)) < NOW_LABEL_CLEAR_PX ? { visibility: 'hidden' } : undefined}
-              >
-                {hourLabel(h)}
-              </span>
+              <HourLabel h={h} todayShown={todayShown} startMinute={startMinute} endMinute={endMinute} slotPx={slotPx} />
             </div>
           ))}
-          {showNow && (
-            <span className="cal-now-label" data-testid="cal-now-label" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
-              {clockLabel(nowMin, true)}
-            </span>
-          )}
+          <NowMark todayShown={todayShown} startMinute={startMinute} endMinute={endMinute}>
+            {(nowMin) => nowMin !== null && (
+              <span className="cal-now-label" data-testid="cal-now-label" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
+                {clockLabel(nowMin, true)}
+              </span>
+            )}
+          </NowMark>
           <span className="cal-grid-range-end">{hourLabel(endMinute / 60)}</span>
         </div>
         <div className="cal-grid-cols" ref={colsRef} style={{ height: gridY(endMinute, startMinute, slotPx) }}>
@@ -829,21 +818,42 @@ export const TimeGrid = memo(function TimeGrid({
           )}
 
           {/* now line: faint across the week, solid with a dot on today */}
-          {showNow && days > 1 && (
-            <div className="cal-now-line cal-now-line-faint" style={{ top: gridY(nowMin, startMinute, slotPx) }} />
-          )}
-          {showNow && (
-            <GridOverlay day={todayStr} dayList={dayList}>
-              <div className="cal-now-line" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
-                <span className="cal-now-dot" />
-              </div>
-            </GridOverlay>
-          )}
+          <NowMark todayShown={todayShown} startMinute={startMinute} endMinute={endMinute}>
+            {(nowMin) => nowMin !== null && (
+              <>
+                {days > 1 && <div className="cal-now-line cal-now-line-faint" style={{ top: gridY(nowMin, startMinute, slotPx) }} />}
+                <GridOverlay day={todayStr} dayList={dayList}>
+                  <div className="cal-now-line" style={{ top: gridY(nowMin, startMinute, slotPx) }}>
+                    <span className="cal-now-dot" />
+                  </div>
+                </GridOverlay>
+              </>
+            )}
+          </NowMark>
         </div>
       </div>
     </div>
   );
 });
+
+/** What moves with the clock in the grid: its children get the minute of the day while today shows
+ *  inside the grid's hours, else null; drawn again only when that minute changes. */
+function NowMark({ todayShown, startMinute, endMinute, children }: { todayShown: boolean; startMinute: number; endMinute: number; children: (nowMin: number | null) => React.ReactNode }) {
+  const nowMin = useMinuteValue(minuteOfDay, todayShown);
+  return <>{children(todayShown && nowMin >= startMinute && nowMin < endMinute ? nowMin : null)}</>;
+}
+
+const minuteOfDay = (now: number): number => { const d = new Date(now); return d.getHours() * 60 + d.getMinutes(); };
+
+/** An hour's label, hidden while the now label sits on it; drawn again only when that flips. */
+function HourLabel({ h, todayShown, startMinute, endMinute, slotPx }: { h: number; todayShown: boolean; startMinute: number; endMinute: number; slotPx: number }) {
+  const covered = useMinuteValue((now) => {
+    const nowMin = minuteOfDay(now);
+    return todayShown && nowMin >= startMinute && nowMin < endMinute
+      && Math.abs(gridY(h * 60, startMinute, slotPx) - gridY(nowMin, startMinute, slotPx)) < NOW_LABEL_CLEAR_PX;
+  }, todayShown);
+  return <span className="cal-grid-hourlabel" style={covered ? { visibility: 'hidden' } : undefined}>{hourLabel(h)}</span>;
+}
 
 /** Positions children over one day column using percentage offsets. */
 function GridOverlay({ day, dayList, children }: { day: string; dayList: string[]; children: React.ReactNode }) {

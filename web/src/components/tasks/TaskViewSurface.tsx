@@ -4,7 +4,6 @@ import type { Task } from '@open-walnut/core'
 import { projectIdentity } from '@/utils/project-display'
 import {
   matchesTaskQuery,
-  type NormalizedTaskQuery,
   type TaskQuery,
   type TaskQueryContext,
 } from '@open-walnut/task-query'
@@ -13,9 +12,9 @@ import { useUndoableTaskActions } from '@/undo/TaskUndoContext'
 import { useFavorites } from '@/hooks/useFavorites'
 import { useOrdering } from '@/hooks/useOrdering'
 import { useProjectRegistry } from '@/hooks/useProjectRegistry'
-import { visibleInterval } from '@/utils/page-visibility'
 import { TasksPageTable } from './TasksPageTable'
-import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-state'
+import { buildTaskQueryContext } from './task-query-state'
+import { useNormalizedTaskQuery } from './useNormalizedTaskQuery'
 import type { TpSort } from './tasks-page-sort'
 import type { TaskViewProps } from '@/plugins/types'
 import '@/styles/tasks-page.css'
@@ -78,7 +77,6 @@ export function TaskViewSurface({
   const [currentGrouped, setCurrentGrouped] = useState(() => readGrouped(groupedKey, initialGrouped))
   const [collapsed, setCollapsed] = useState<Set<string>>(() => readCollapsed(collapsedKey))
   const [localSearch, setLocalSearch] = useState(search)
-  const [minuteTick, setMinuteTick] = useState(0)
   const activeProject = project ?? null
 
   useEffect(() => {
@@ -87,13 +85,9 @@ export function TaskViewSurface({
 
   useEffect(() => { setCurrentGrouped(initialGrouped) }, [initialGrouped])
   useEffect(() => { setLocalSearch(search) }, [search])
-  useEffect(() => visibleInterval(() => setMinuteTick((value) => value + 1), 60_000), [])
-
-  const timeTick = query.time ? minuteTick : 0
-  const normalized = useMemo<NormalizedTaskQuery | null>(
-    () => safeNormalizeTaskQuery(query as TaskQuery, new Date()),
-    [query, timeTick],
-  )
+  // The query against the clock, read again when the clock moves a task across a relative window's
+  // edge or the list changes, never once a minute for the whole view (useNormalizedTaskQuery).
+  const normalized = useNormalizedTaskQuery(tasks, query as TaskQuery)
   const queryContext = useMemo<TaskQueryContext>(
     () => buildTaskQueryContext(tasks, query.blocked !== undefined),
     [tasks, query.blocked],

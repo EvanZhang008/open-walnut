@@ -17,6 +17,7 @@
  * machines for one path ask which.
  */
 import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useMinuteNow } from '@/utils/minute-clock';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { checkedLine } from '@open-walnut/user-status';
@@ -36,7 +37,6 @@ interface Props {
   tasks: readonly Task[];
   /** The owner's name, for the empty state. */
   name: string;
-  now: number;
   /** Folded: its first lines, the rest a click away. */
   folded?: boolean;
   /** What moved since it was written (brief-fresh.ts), from the live tasks. */
@@ -45,7 +45,9 @@ interface Props {
   updating?: boolean;
 }
 
-export function OrgBrief({ owner, tasks, name, now, folded, fresh, updating }: Props) {
+export function OrgBrief({ owner, tasks, name, folded, fresh, updating }: Props) {
+  // Its own minute clock (minute-clock.ts): "Written 5m ago" moves without the node drawing again.
+  const now = useMinuteNow();
   const brief = owner?.brief;
   const labels = useEntityLabelsVersion();
   const states = useMemo(() => new Map(tasks.map((t) => [t.id, userStateOf(t)] as const)), [tasks]);

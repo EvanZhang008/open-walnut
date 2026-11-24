@@ -11,14 +11,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { createElement, isValidElement, type ReactElement, type ReactNode } from '../../web/node_modules/react/index.js'
+import { parseHTML } from 'linkedom'
+import { act, createElement, type ReactNode } from '../../web/node_modules/react/index.js'
+import { createRoot } from '../../web/node_modules/react-dom/client.js'
 import { renderToStaticMarkup as renderStatic } from '../../web/node_modules/react-dom/server.node.js'
 import { MemoryRouter } from '../../web/node_modules/react-router-dom/dist/index.js'
 const renderToStaticMarkup = (node: ReactNode) => renderStatic(createElement(MemoryRouter, null, node))
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe, type ChannelRow } from '../../web/src/components/org/org-channels-model.js'
-import { OrgAvatar } from '../../web/src/components/org/OrgAvatar'
 import { nodeKeepsThreads } from '../../web/src/components/org/org-task-tabs.js'
 
 const { OrgRouterSection, routersHeading } = await import('../../web/src/components/org/OrgRouterSection')
@@ -41,23 +42,20 @@ function routerRow(id: string, name: string, extra: Partial<ChannelRow> = {}): C
 }
 
 const render = (rows: readonly ChannelRow[], selectedKey: string | null = null) =>
-  renderToStaticMarkup(createElement(OrgRouterSection, { rows, selectedKey, now: NOW, onSelect: () => {} }))
+  renderToStaticMarkup(createElement(OrgRouterSection, { rows, selectedKey, onSelect: () => {} }))
 
-/** Every element in a tree of function components, each called with its props (none uses hooks;
- *  the avatar, which reads the task store, stays a leaf). */
-function elements(node: ReactNode): ReactElement[] {
-  const out: ReactElement[] = []
-  const walk = (n: ReactNode) => {
-    if (Array.isArray(n)) { n.forEach(walk); return }
-    if (!isValidElement(n)) return
-    out.push(n)
-    const props = n.props as { children?: ReactNode }
-    if (n.type === OrgAvatar) return
-    if (typeof n.type === 'function') walk((n.type as (p: unknown) => ReactNode)(n.props))
-    else walk(props.children)
-  }
-  walk(node)
-  return out
+/** The section mounted in a DOM of its own (its rows read the minute clock, a hook), and each
+ *  option's own props (React keeps them on the node), so a test can press one. */
+function mountedOptions(node: ReactNode): Array<{ onClick: () => void }> {
+  const dom = parseHTML('<!DOCTYPE html><html><head></head><body><div id="root"></div></body></html>')
+  Object.assign(globalThis, { window: dom.window, document: dom.document, IS_REACT_ACT_ENVIRONMENT: true })
+  const host = dom.document.getElementById('root') as unknown as Element
+  const root = createRoot(host)
+  act(() => { root.render(createElement(MemoryRouter, null, node)) })
+  const options = [...(host as unknown as HTMLElement).querySelectorAll('button[role="option"]')]
+  const props = options.map((el) => (el as unknown as Record<string, { onClick: () => void }>)[Object.keys(el).find((k) => k.startsWith('__reactProps'))!]!)
+  act(() => root.unmount())
+  return props
 }
 
 describe('the Routers section renders router rows as options of their own group', () => {
@@ -91,10 +89,9 @@ describe('the Routers section renders router rows as options of their own group'
 
   it('a click selects the router node by its key', () => {
     const picked: string[] = []
-    const tree = OrgRouterSection({ rows: [routerRow('r1', 'Support router'), routerRow('r2', 'Billing router')], selectedKey: null, now: NOW, onSelect: (k: string) => picked.push(k) })
-    const buttons = elements(tree).filter((e) => e.type === 'button')
+    const buttons = mountedOptions(createElement(OrgRouterSection, { rows: [routerRow('r1', 'Support router'), routerRow('r2', 'Billing router')], selectedKey: null, onSelect: (k: string) => picked.push(k) }))
     expect(buttons).toHaveLength(2)
-    ;(buttons[1].props as { onClick: () => void }).onClick()
+    buttons[1]!.onClick()
     expect(picked).toEqual(['router:r2'])
   })
 
@@ -126,7 +123,7 @@ describe('the Routers section in the Org list', () => {
   })
 
   it('selects a router like a node: onSelect, never onOpenTask', () => {
-    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} now=\{now\} onSelect=\{onSelect\} onMenu=\{onMenu\} onNewRouter=\{onNewRouter\} \/>/)
+    expect(listCode).toMatch(/<OrgRouterSection rows=\{routers\} selectedKey=\{selectedKey\} onSelect=\{onSelect\} onMenu=\{onMenu\} onNewRouter=\{onNewRouter\} \/>/)
     expect(section).not.toMatch(/onOpenTask/)
   })
 

@@ -22,9 +22,11 @@
  * detail pane, named by its title; no node's pins or Home locks stand beside it (and none are
  * rewritten), only the free panel the URL names.
  */
+import { countRender } from '@/utils/render-count';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { useKeepEqual } from '@/utils/keep-equal';
 import { ICON_LOCK } from '@/components/common/Icons';
 import { useNavigate } from 'react-router-dom';
 import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
@@ -119,24 +121,14 @@ const probe: AlertProbe = (task: Task) => {
   return null;
 };
 
-/** A clock that moves once a minute, for the rows' "5m". */
-function useMinuteNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
-}
-
 /** How soon a failed first load of the tasks is tried again while the Org page shows. */
 const FIRST_LOAD_RETRY_MS = 5_000;
 
 export function OrgPage() {
+  countRender('OrgPage');
   const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks, showOperationError, refetch, predictStatus } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
-  const now = useMinuteNow();
   const epoch = useSessionStatusEpoch();
   const [params, setParams] = useSearchParamsNow();
   const [query, setQuery] = useState('');
@@ -221,11 +213,13 @@ export function OrgPage() {
     [shownTasks],
   );
   const areaNames = useRouterAreaNames(routerAreaIds);
-  const channels = useMemo(
+  // Every row that reads the same keeps its object (keep-equal.ts): one task's status write
+  // changes its VP's row, and only that row, the node it shows and what reads them draw again.
+  const channels = useKeepEqual(useMemo(
     () => buildChannels(tree, shownTasks, answeredProbe, areaNames),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alertSig stands for the status store
     [tree, shownTasks, alertSig, areaNames],
-  );
+  ));
   // For callbacks that must stay stable across org updates (select: the row menu memo holds it).
   const channelsRef = useCommittedRef(channels);
 
@@ -292,7 +286,8 @@ export function OrgPage() {
   const leaders = useOrgLeaders(cards, tasks);
   const filterRows = leaders.filter;
   const visibleRows = useMemo(() => filterRows(channels.rows, query), [filterRows, channels.rows, query]);
-  const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
+  const moved = useKeepEqual(useMemo(() => movedProjects(channels, tasks), [channels, tasks]));
+  const routerRows = useMemo(() => filterChannels(channels.routers, query), [channels.routers, query]);
   const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
 
@@ -379,7 +374,7 @@ export function OrgPage() {
 
   // A Director's row whose task is open beside this page wears a light tint (2026-11-03, the user: no
   // frame, "if this page shows it, highlight its background a little ... very elegant").
-  const openTaskIds = useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]);
+  const openTaskIds = useKeepEqual(useMemo(() => new Set(slotTaskIds(phone ? (openParam ? [{ id: openParam, locked: false }] : []) : strip, shownTasks)), [phone, openParam, strip, shownTasks]));
   // A phone shows one panel from the URL and never touches the desktop's saved strip.
   const [writeStrip] = useState(() => createStripWriter('orgColumns'));
   // The page's own strip only (a panel Home locked is Home's, read again from there), under the node
@@ -416,7 +411,10 @@ export function OrgPage() {
 
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
-  const select = useCallback((key: string, tab?: OrgTab) => {
+  // The handlers below are one identity for the page's life (useLeanCallback with no deps: each call
+  // runs the latest committed render's), so the memo'd list, node and side panels are not drawn
+  // again for a new function on every task update.
+  const select = useLeanCallback((key: string, tab?: OrgTab) => {
     // rowOf answers a led project's VP row, so the project's own row is looked up in it.
     const row = rowOf(channelsRef.current, key);
     const contactId = (row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId;
@@ -436,7 +434,7 @@ export function OrgPage() {
       if (kept) { restoredSide.current?.add(kept); next.set('open', kept); } else next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
-  }, [setParams, phone, overlays, channelsRef, tasks]);
+  }, []);
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.
@@ -487,21 +485,21 @@ export function OrgPage() {
   const [sideInbox, setSideInbox] = useState<{ taskId: string; n: number } | null>(null);
   /** Answer on another task's letter (OrgNodeDetail's alert rows): the task opens beside the page
    *  on its session's Inbox tab. */
-  const openLetterOf = useCallback((taskId: string) => {
+  const openLetterOf = useLeanCallback((taskId: string) => {
     const node = nodeOf((t) => t.id === taskId);
     // A node lists its own letter on its chat, with Answer there.
     if (node) { select(node.key, 'chat'); return; }
     setSideInbox({ taskId, n: Date.now() });
     recordTaskOpened(taskId);
     openSide({ kind: 'task', id: taskId });
-  }, [nodeOf, select, openSide]);
-  const openSession = useCallback((sessionId: string) => {
+  }, []);
+  const openSession = useLeanCallback((sessionId: string) => {
     const node = nodeOf((t) => resolveTaskSessionId(t) === sessionId);
     if (node) { select(node.key, 'chat'); return; }
     setSideInbox(null);
     recordTaskOpened(tasks.find((t) => resolveTaskSessionId(t) === sessionId)?.id);
     openSide({ kind: 'session', id: sessionId });
-  }, [nodeOf, select, openSide, tasks]);
+  }, []);
   /** A task clicked anywhere on this page (a chat's pill, a thread's chip, a Tasks row, a Board card,
    *  the Brief, a notice, search): it opens here, never on Home (2026-11-15, the user: "if we click in
    *  te org seciton the taks need ot open in org that is only difference, all other page go to home").
@@ -537,7 +535,7 @@ export function OrgPage() {
   /** The Home locks a panel of the strip shows (one, or none for the page's own). */
   const homeIdsOf = useLeanCallback((id: string) => fromHome.filter((h) => h.id === id || sameSession(h.id, id)).map((h) => h.id), [fromHome, sameSession]);
   /** × on one panel of the strip: the free one closes through the URL, a pin leaves the strip. */
-  const closePanel = useCallback((id: string) => {
+  const closePanel = useLeanCallback((id: string) => {
     restoredSide.current?.delete(id);
     const home = homeIdsOf(id);
     if (home.length) setHomeOff([...homeOff, ...home.filter((h) => !homeOff.includes(h))].slice(-HOME_OFF_MAX));
@@ -545,10 +543,11 @@ export function OrgPage() {
     // Beside a topic the strip holds only the free panel: the default node's pins are not touched.
     if (!topicId) setPins((cols) => cols.filter((c) => c.node !== node || (c.id !== id && !sameSession(c.id, id))));
     if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
-  }, [openParam, closeSide, sameSession, homeIdsOf, homeOff, setHomeOff, selected.key, topicId]);
-  const restoredGone = (id: string, close: () => void) => (restoredSide.current?.has(id) ? { onRestoredGone: close } : {});
+  }, []);
+  /** A phone's one panel came back from the saved place and its session is gone: it closes. */
+  const phoneSideGone = useLeanCallback((id: string) => { restoredSide.current?.delete(id); closeSide(); }, []);
   /** The lock: the free panel joins the pins; an unlocked pin becomes the free panel (one per page). */
-  const togglePanelLock = useCallback((id: string) => {
+  const togglePanelLock = useLeanCallback((id: string) => {
     // Beside a topic no node is shown to lock a panel under (its panel offers no lock).
     if (topicId) return;
     // A panel Home locked: unlocked here, it leaves this page (the VP: "unlocking on Org only takes it
@@ -560,7 +559,7 @@ export function OrgPage() {
     setPins((prev) => setNodePins(prev, node, here));
     const target = parseSideTarget(id);
     if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
-  }, [shownPins, strip, openParam, sameSession, openSide, homeIdsOf, closePanel, selected.key, topicId]);
+  }, []);
 
 
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
@@ -572,7 +571,7 @@ export function OrgPage() {
 
   /** Start a node that has no session, here (src/core/org/org-autostart.ts): it runs in the
    *  background and its chat opens in place, so nothing navigates (2026-11-03). */
-  const startChat = useCallback(async (row: ChannelRow) => {
+  const startChat = useLeanCallback(async (row: ChannelRow) => {
     log.info('org-page', 'start node in place', { node: row.key, taskId: row.contactId });
     try {
       if (row.contactId) await startOrgNode(row.contactId, false);
@@ -588,7 +587,10 @@ export function OrgPage() {
     } catch (err) {
       showOperationError(`Could not start ${row.name}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [showOperationError]);
+  }, []);
+  const startNode = useLeanCallback((row: ChannelRow) => { void startChat(row); }, []);
+  const openChartPlain = useLeanCallback(() => openChart(), []);
+  const newRouter = useLeanCallback(() => setRouterSetup(true), []);
 
   // A right-click on a row: open it on a tab, and move its project the way the chart does
   // (the chart opens on the same question, so a move is confirmed in one place). The menu stays
@@ -652,7 +654,7 @@ export function OrgPage() {
         <OrgChannelList
           main={channels.main}
           rows={visibleRows}
-          routers={filterChannels(channels.routers, query)}
+          routers={routerRows}
           moved={moved}
           rowMenu={rowMenu}
           total={channels.rows.length}
@@ -661,11 +663,10 @@ export function OrgPage() {
           query={query}
           onQuery={setQuery}
           onSelect={select}
-          onOpenChart={() => openChart()}
-          onNewRouter={() => setRouterSetup(true)}
+          onOpenChart={openChartPlain}
+          onNewRouter={newRouter}
           openTaskIds={openTaskIds}
           {...(leaders.directors ? { directors: leaders.directors } : {})}
-          now={now}
         />
       )}
       {!phone && (
@@ -709,19 +710,17 @@ export function OrgPage() {
             onOpenLetterOf={openLetterOf}
             onOpenSession={openSession}
             answers={answers}
-            onStartChat={(row) => { void startChat(row); }}
+            onStartChat={startNode}
             tasksLoading={tasksLoading}
             {...(phone ? { onBack: back } : {})}
-            now={now}
           />}
         </section>
       )}
       {phone && side && (
         <OrgSidePanel
-          target={side}
-          tasks={tasks}
+          panelId={sideTargetParam(side)}
           onClose={closeSide}
-          {...restoredGone(sideTargetParam(side), () => { restoredSide.current?.delete(sideTargetParam(side)); closeSide(); })}
+          {...(restoredSide.current?.has(sideTargetParam(side)) ? { onRestoredGone: phoneSideGone } : {})}
           onOpenSession={openSession}
           onStartChat={chatOnHome}
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
@@ -749,12 +748,11 @@ export function OrgPage() {
             return (
               <OrgSidePanel
                 key={slot.id}
-                target={target}
-                tasks={tasks}
+                panelId={slot.id}
                 locked={slot.locked}
-                {...(topicId ? {} : { onToggleLock: () => togglePanelLock(slot.id) })}
-                onClose={() => closePanel(slot.id)}
-                {...restoredGone(slot.id, () => closePanel(slot.id))}
+                {...(topicId ? {} : { onToggleLock: togglePanelLock })}
+                onClose={closePanel}
+                {...(restoredSide.current?.has(slot.id) ? { onRestoredGone: closePanel } : {})}
                 onOpenSession={openSession}
                 onStartChat={chatOnHome}
                 {...(target.kind === 'task' && sideInbox?.taskId === target.id ? { inboxRequest: sideInbox.n } : {})}

@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useSyncExternalStore } from 'react';
 import { fetchSessionUsage, NO_BUDGET_STATUSES, patchSessionBudget } from '@/api/session-usage';
-import { SessionUsageStore } from '@/stores/session-usage-store';
+import { SessionUsageStore, type SessionUsageSnapshot } from '@/stores/session-usage-store';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { engineHasBudget } from '@open-walnut/budget-engines';
@@ -9,7 +9,16 @@ export const sessionUsageStore = new SessionUsageStore({ fetch: fetchSessionUsag
 
 export function useSessionBudgetUsage(sessionId: string, dialogVisible: boolean) {
   const subscribe = useCallback((listener: () => void) => sessionUsageStore.subscribe(sessionId, listener), [sessionId]);
-  const getSnapshot = useCallback(() => sessionUsageStore.getSnapshot(sessionId), [sessionId]);
+  // With its dialog closed a panel shows only the budget (its numbers, its error) and polls on whether
+  // it has them: a read's loading flag going on and off does not draw the panel, only a change of those.
+  const shown = useRef<SessionUsageSnapshot | null>(null);
+  const getSnapshot = useCallback(() => {
+    const s = sessionUsageStore.getSnapshot(sessionId);
+    const kept = shown.current;
+    if (!dialogVisible && kept && kept.data === s.data && kept.noBudget === s.noBudget && kept.error === s.error && kept.errorStatus === s.errorStatus && kept.saving === s.saving) return kept;
+    shown.current = s;
+    return s;
+  }, [sessionId, dialogVisible]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   // A session whose engine records no per-request usage has no budget: never ask
   // (the answer is a 400 the browser logs as an error, on every panel of such a session).

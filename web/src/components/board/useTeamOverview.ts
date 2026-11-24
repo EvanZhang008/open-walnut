@@ -9,34 +9,23 @@
  * from the board payload `useTaskBoard` keeps current. The only clock is a
  * minute tick, for "a reminder is due" and the rows' "3m" times.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { log } from '@/utils/log';
+import { MINUTE_MS, useMinuteValue } from '@/utils/minute-clock';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import type { BoardPayload, BoardSeen } from './board-model';
 import {
   NO_BOARD_ELEMENTS, buildTeamOverview, teamChildren, type BoardElement, type BoardElements, type LiveStatus, type TeamOverview,
 } from './board-overview-model';
 
-const MINUTE_MS = 60_000;
 
-/** A clock that moves once a minute (the value is the minute). */
-function useMinute(): number {
-  const [minute, setMinute] = useState(() => Math.floor(Date.now() / MINUTE_MS));
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const arm = () => {
-      timer = setTimeout(() => { setMinute(Math.floor(Date.now() / MINUTE_MS)); arm(); }, MINUTE_MS - (Date.now() % MINUTE_MS) + 50);
-    };
-    arm();
-    return () => clearTimeout(timer);
-  }, []);
-  return minute;
-}
+/** The shared minute clock's minute (minute-clock.ts). */
+const useMinute = (): number => useMinuteValue((now) => Math.floor(now / MINUTE_MS));
 
 /** A choice's context on a card is a few lines, not the author's whole block. */
 const CONTEXT_MAX = 600;
