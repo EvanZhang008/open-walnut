@@ -177,7 +177,11 @@ describe('the guard triggers', () => {
     }
     expect(ensureOneSessionPerTaskGuard(db)).toBe(true);
     expect(db.prepare(`SELECT name FROM main.sqlite_master WHERE type='trigger'`).pluck().all()).toEqual([]);
-    expect(db.prepare(`SELECT name FROM temp.sqlite_master WHERE type='trigger' ORDER BY name`).pluck().all()).toEqual([...ONE_SESSION_PER_TASK_TRIGGERS].sort());
+    // The connection also counts its session row writes (session-db.ts countSessionRowWrites): those
+    // triggers are this build's own and stay; the guard's are the rest.
+    const temp = db.prepare(`SELECT name FROM temp.sqlite_master WHERE type='trigger' ORDER BY name`).pluck().all() as string[];
+    expect(temp.filter((n) => !n.startsWith('session_row_writes_'))).toEqual([...ONE_SESSION_PER_TASK_TRIGGERS].sort());
+    expect(temp.filter((n) => n.startsWith('session_row_writes_'))).toHaveLength(3);
     expect(() => insertLegacyRow('second', 'task-f', '2026-10-03T00:00:00.000Z')).toThrow(/one session per task/);
   });
 
