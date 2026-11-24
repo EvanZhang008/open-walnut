@@ -25,7 +25,7 @@ export interface UserTextSpec {
 
 const HIS_WORDS = 'the user\'s own words, quoted as he wrote them'
 const FOR_WALNUT = 'a reason Walnut checks or logs, not a message to the user'
-const REPORT = ['report.ask', 'report.ask_more', 'report.next', 'report.waiting_on', 'report.ask_new', 'report.ask_options.label', 'report.user_kind_why']
+const REPORT = ['report.ask', 'report.ask_more', 'report.next', 'report.waiting_on', 'report.ask_new', 'report.ask_options.label', 'report.ask_options.detail', 'report.user_kind_why']
 const REPORT_OTHERS = {
   'report.user_kind_words': HIS_WORDS, 'report.user_words': HIS_WORDS,
   'report.design_review': 'the path of a design review and its scores', 'report.same_as': 'the id of an earlier ask',
