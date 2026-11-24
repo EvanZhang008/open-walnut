@@ -71,11 +71,11 @@ struct WebContentPolicyTests {
         state.recordReload(.footprint, at: now.addingTimeInterval(-3_000))
         state.judgeReload(sample(2_400), policy: policy, now: now)
         for i in 0..<3 { state.recordRecycle(at: now.addingTimeInterval(TimeInterval(-600 * (i + 1)))) }
-        precondition(policy.verdict(for: sample(2_300, idle: 999), state: state, now: now)
-                     == .suppressed(.footprint, why: "rate_limited"))
+        precondition(policy.verdict(for: sample(3_600, idle: 999), state: state, now: now)
+                     == .suppressed(.footprintForced, why: "rate_limited"))
         // The window slides: an hour later the budget is back.
-        precondition(policy.verdict(for: sample(2_300, idle: 999), state: state, now: now.addingTimeInterval(3_601))
-                     == .recycle(.footprint))
+        precondition(policy.verdict(for: sample(3_600, idle: 999), state: state, now: now.addingTimeInterval(3_601))
+                     == .recycle(.footprintForced))
 
         // Report cadence: first sample logs, then every fifth, and any level change.
         var cadence = WebContentWatchdogState()
@@ -131,12 +131,29 @@ struct WebContentPolicyTests {
         // Guard for the whole class of holds: every reason a swap can be held for is
         // either one a pause or the process's age ends by itself (no notice), or one
         // only the person ends (the notice). A new reason must be put on one side.
+        // A third kind is kept on purpose: a page whose reload did not help stays as it is under
+        // forceBytes, with no notice (its Reload Page would not help), because a swap there left
+        // kernel_task 1.3 to 2.3 GB larger (2026-11-23).
         let endsByItself: Set<String> = ["user_active", "process_too_young"]
-        for why in ["user_active", "process_too_young", "rate_limited", "unsaved_work"] {
-            precondition(endsByItself.contains(why) != MemoryNoticeState.needsPerson.contains(why),
-                         "hold \(why) is on neither side or on both")
+        let keptOnPurpose: Set<String> = ["reload_did_not_help"]
+        let allHolds = ["user_active", "process_too_young", "rate_limited", "unsaved_work", "reload_did_not_help"]
+        for why in allHolds {
+            let sides = [endsByItself.contains(why), MemoryNoticeState.needsPerson.contains(why), keptOnPurpose.contains(why)]
+            precondition(sides.filter { $0 }.count == 1, "hold \(why) is on no side or on two")
         }
-        precondition(endsByItself.union(MemoryNoticeState.needsPerson) == ["user_active", "process_too_young", "rate_limited", "unsaved_work"])
+        precondition(endsByItself.union(MemoryNoticeState.needsPerson).union(keptOnPurpose) == Set(allHolds))
+        // Every hold the policy can give is in that list (read from its source).
+        let policyFile = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("desktop/WebContentPolicy.swift")
+        let policySource = (try? String(contentsOf: policyFile, encoding: .utf8)) ?? ""
+        precondition(!policySource.isEmpty, "read \(policyFile.path)")
+        let holdPattern = try! NSRegularExpression(pattern: #"why: "([a-z_]+)""#)
+        let holdsInSource = Set(holdPattern.matches(in: policySource, range: NSRange(policySource.startIndex..., in: policySource)).compactMap {
+            Range($0.range(at: 1), in: policySource).map { String(policySource[$0]) }
+        })
+        precondition(!holdsInSource.isEmpty && holdsInSource.isSubset(of: Set(allHolds)),
+                     "a hold the guard does not know: \(holdsInSource.subtracting(allHolds))")
 
         // Guard for the whole class: a page at critical memory is never left as it is.
         // Every sample a critical page can give (any idle, visibility, age, budget,
@@ -161,6 +178,7 @@ struct WebContentPolicyTests {
                                 let goesNow: Bool = { if case .recycle = verdict { return true }; return false }()
                                 let heldBy: String? = { if case let .suppressed(_, why) = verdict { return why }; return nil }()
                                 let endsAlone = heldBy.map { endsByItself.contains($0) } ?? false
+                                precondition(heldBy.map { !keptOnPurpose.contains($0) } ?? true, "a page whose reload was never judged is never kept")
                                 precondition(goesNow || shown || endsAlone,
                                              "critical page left with no swap and no notice: \(mbValue)MB idle \(idle) visible \(visible) age \(age) spent \(spent) unsaved \(unsaved) -> \(verdict)")
                                 if heldBy == "user_active" { precondition(policy.wantsPauseCheck(verdict), "a hold on input is ended by the pause check") }
@@ -178,6 +196,49 @@ struct WebContentPolicyTests {
                 }
             }
         }
+
+        // The same class for a page whose memory reload did not help: under forceBytes only the
+        // kept-on-purpose hold (or a newer bundle's own reload) may appear; at forceBytes and above
+        // the usual rule holds: swap now, swap at the next pause, or the notice.
+        for mbValue in [2_200, 2_404, 3_016, 3_499, 3_500, 4_200] as [UInt64] {
+            for idle in [0, 3, 8, 60, 400] as [TimeInterval] {
+                for visible in [true, false] {
+                    for stale in [false, true] {
+                        var failed = WebContentWatchdogState()
+                        failed.recordReload(.footprint, at: now.addingTimeInterval(-7_200))
+                        failed.judgeReload(sample(2_400, age: 9_000), policy: policy, now: now.addingTimeInterval(-6_000))
+                        precondition(failed.reloadDidNotHelp)
+                        let s = sample(mbValue, age: 9_000, idle: idle, visible: visible, stale: stale)
+                        let verdict = policy.verdict(for: s, state: failed, now: now)
+                        var n = MemoryNoticeState()
+                        let shown = n.update(level: .critical, verdict: verdict, now: now)
+                        let goesNow: Bool = { if case .recycle = verdict { return true }; return false }()
+                        let heldBy: String? = { if case let .suppressed(_, why) = verdict { return why }; return nil }()
+                        if mbValue < 3_500 {
+                            if stale {
+                                precondition(verdict == .recycle(.staleBundle) || verdict == .suppressed(.staleBundle, why: "user_active"),
+                                             "a newer bundle still loads: \(mbValue)MB idle \(idle) -> \(verdict)")
+                                if !visible || idle >= policy.idleForStaleBundle { precondition(verdict == .recycle(.staleBundle)) }
+                            } else {
+                                precondition(verdict == .suppressed(.footprint, why: "reload_did_not_help") && !shown,
+                                             "kept, with no notice: \(mbValue)MB idle \(idle) -> \(verdict)")
+                            }
+                        } else {
+                            let endsAlone = heldBy.map { endsByItself.contains($0) } ?? false
+                            precondition(goesNow || shown || endsAlone, "a freezing page left alone: \(mbValue)MB idle \(idle) -> \(verdict)")
+                            if goesNow { precondition(verdict == .recycle(.footprintForced) && policy.replacesProcess(.footprintForced, state: failed)) }
+                        }
+                    }
+                }
+            }
+        }
+        // A page back at a normal size may be reloaded for memory again if it grows.
+        var shrank = WebContentWatchdogState()
+        shrank.recordReload(.footprint, at: now.addingTimeInterval(-7_200))
+        shrank.judgeReload(sample(2_400, age: 9_000), policy: policy, now: now.addingTimeInterval(-6_000))
+        shrank.judgeReload(sample(900, age: 9_600), policy: policy, now: now.addingTimeInterval(-5_400))
+        precondition(!shrank.reloadDidNotHelp)
+        precondition(policy.verdict(for: sample(2_400, age: 12_000, idle: 60), state: shrank, now: now) == .recycle(.footprint))
 
         // What holds the memory: the category table of `footprint -p`, largest first.
         let table = """
@@ -275,6 +336,11 @@ struct WebContentPolicyTests {
             .appendingPathComponent("desktop/WebContentWatchdog.swift")
         let source = (try? String(contentsOf: watchdogSource, encoding: .utf8)) ?? ""
         precondition(!source.isEmpty, "read \(watchdogSource.path)")
+        // A notice shown at forceBytes and above swaps when the person presses Reload Page.
+        precondition(source.contains("let reason: RecycleReason = sample.footprintBytes >= policy.forceBytes ? .footprintForced : .footprint"),
+                     "Reload Page on the notice asks for the swap a freezing page gets")
+        precondition(!source.contains("startRecycle(.footprint, sample: sample, level: level, fields: self.lastFields"),
+                     "the notice's recycle takes its reason from the page's size")
         let calls = source.components(separatedBy: "evaluateJavaScript(").count - 1
         precondition(calls == 2, "WebContentWatchdog.swift has \(calls) evaluateJavaScript calls: a new one goes through askPage")
         precondition(source.contains("private func askPage("), "askPage is the one way to ask the page")
@@ -308,14 +374,26 @@ struct WebContentPolicyTests {
         // The first grown-up sample is still critical: the reload did not help.
         seq.judgeReload(sample(2_400, age: 7_500), policy: policy, now: t0.addingTimeInterval(policy.minProcessAge))
         precondition(seq.reloadDidNotHelp && !seq.memoryReloadPending)
-        // However long input or unsaved text holds the next recycle, it is a swap (no clock).
-        precondition(policy.replacesProcess(.footprint, state: seq))
+        // Under forceBytes the page keeps its process and nothing reloads it again: a swap there
+        // left kernel_task 1.3 to 2.3 GB larger each time (2026-11-23).
+        precondition(!policy.replacesProcess(.footprint, state: seq), "a swap under forceBytes costs more than it frees")
+        precondition(policy.verdict(for: sample(2_400, age: 7_800, idle: 999), state: seq, now: t0.addingTimeInterval(900))
+                     == .suppressed(.footprint, why: "reload_did_not_help"))
+        var quiet = MemoryNoticeState()
+        for m in 0...20 {
+            precondition(!quiet.update(level: .critical, verdict: .suppressed(.footprint, why: "reload_did_not_help"),
+                                       now: t0.addingTimeInterval(Double(m) * 60)),
+                         "no notice whose Reload Page would not help")
+        }
+        // A page large enough to freeze still gets the new process, however long input holds it (no clock).
         precondition(policy.replacesProcess(.footprintForced, state: seq))
-        seq.judgeReload(sample(900, age: 20_000), policy: policy, now: t0.addingTimeInterval(14_000))
-        precondition(policy.replacesProcess(.footprint, state: seq), "decided once per process")
+        precondition(policy.verdict(for: sample(3_600, age: 7_800, idle: 999), state: seq, now: t0.addingTimeInterval(900))
+                     == .recycle(.footprintForced))
+        seq.judgeReload(sample(1_800, age: 20_000), policy: policy, now: t0.addingTimeInterval(14_000))
+        precondition(policy.replacesProcess(.footprintForced, state: seq), "decided until the page is back at a normal size")
         precondition(!policy.replacesProcess(.staleBundle, state: seq), "a deploy still only reloads")
         seq.forgetReloads()
-        precondition(!policy.replacesProcess(.footprint, state: seq), "a new process starts over")
+        precondition(!policy.replacesProcess(.footprintForced, state: seq), "a new process starts over")
         precondition(seq.pageAge(7_200, now: now) == 7_200)
 
         // A reload that helped leaves the next memory recycle a reload again.
@@ -332,7 +410,7 @@ struct WebContentPolicyTests {
         precondition(policy.verdict(for: sample(1_000, idle: 9_999, stale: true), state: spentBudget, now: now) == .recycle(.staleBundle))
         spentBudget.recordReload(.footprint, at: now.addingTimeInterval(-600))
         spentBudget.judgeReload(sample(2_400), policy: policy, now: now)
-        precondition(policy.verdict(for: sample(2_300, idle: 60), state: spentBudget, now: now) == .suppressed(.footprint, why: "rate_limited"),
+        precondition(policy.verdict(for: sample(3_600, idle: 60), state: spentBudget, now: now) == .suppressed(.footprintForced, why: "rate_limited"),
                      "a swap still is")
 
         // The watchdog asks the policy, once, for both the swap and its log, and a reload that

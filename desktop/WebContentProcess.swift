@@ -91,6 +91,9 @@ enum WebContentProcess {
     /// process's footprint stops falling, all within 8 s. The blank page takes the window's colour
     /// (`background`), so the wait reads as the page changing, not as a window gone white. Its
     /// drafts are written on the way out, as on any reload; the caller reads `pageURL` before this.
+    /// 2026-11-23: on the person's Mac it did not help. The page's graphics were mapped by the app
+    /// process, so the blank page gave back none of them (2.6 GB before and after) and the swap still
+    /// left them to kernel_task; WebContentPolicy.replacesProcess now swaps only a page that freezes.
     static func emptyInPlace(_ view: WKWebView, background: NSColor? = nil, then: @escaping () -> Void) {
         let process = pid(view)
         let until = Date().addingTimeInterval(8)

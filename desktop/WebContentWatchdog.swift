@@ -431,10 +431,12 @@ final class WebContentWatchdog {
         let policy = policyProvider()
         let level = policy.level(for: sample.footprintBytes)
         DesktopLogger.shared.log("webcontent_notice_reload", fields: lastFields)
+        // A page that freezes is swapped, as the watchdog itself would (replacesProcess).
+        let reason: RecycleReason = sample.footprintBytes >= policy.forceBytes ? .footprintForced : .footprint
         checkUnsavedWork(reload: true) { [weak self, weak webView] unsaved in
             guard let self, let webView = webView, self.webView === webView else { return }
             if !unsaved {
-                self.startRecycle(.footprint, sample: sample, level: level, fields: self.lastFields, origin: "notice")
+                self.startRecycle(reason, sample: sample, level: level, fields: self.lastFields, origin: "notice")
                 return
             }
             self.listUnsavedWork { items in
@@ -453,7 +455,7 @@ final class WebContentWatchdog {
                     // with a sheet is not swapped (recyclePopout).
                     DispatchQueue.main.async {
                         guard let self, let webView = webView, self.webView === webView else { return }
-                        self.startRecycle(.footprint, sample: sample, level: level, fields: self.lastFields,
+                        self.startRecycle(reason, sample: sample, level: level, fields: self.lastFields,
                                           origin: "notice", ignoreUnsaved: true)
                     }
                 }

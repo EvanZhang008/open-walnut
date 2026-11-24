@@ -165,6 +165,14 @@ struct WebContentPolicy {
         }
         // A page loaded again in its process spikes while it boots, like a new process.
         if state.pageAge(sample.processAge, now: now) < minProcessAge { return .suppressed(reason, why: "process_too_young") }
+        // Another reload would not help either, and a swap at this size costs more than it frees
+        // (replacesProcess): the page stays as it is until it reaches forceBytes. A newer bundle
+        // still loads, at the stale bundle's own break: that reload is not for memory.
+        if reason == .footprint && state.reloadDidNotHelp {
+            guard sample.bundleStale else { return .suppressed(reason, why: "reload_did_not_help") }
+            if !(hidden || sample.userIdle >= idleForStaleBundle) { return .suppressed(.staleBundle, why: "user_active") }
+            return .recycle(.staleBundle)
+        }
         if !gateOpen { return .suppressed(reason, why: "user_active") }
         // The hourly budget is for process swaps; a reload in place is cheap.
         if replacesProcess(reason, state: state) && state.recyclesWithin(3600, of: now) >= maxRecyclesPerHour {
@@ -181,12 +189,21 @@ struct WebContentPolicy {
     /// frees its old graphics itself (2026-11-21: kernel_task flat across a reload on screen). So a
     /// deploy only reloads, and so does memory pressure the first time: most of a bloated page is its
     /// graphics (1650 of 2517 MB on 11-21), which the reload gives back. Only a page that is over the
-    /// threshold again once the reloaded page has booted (`judgeReload`) gets a new process, which
-    /// then dies holding little: the reload did not help, so the memory is the process's own.
+    /// threshold again once the reloaded page has booted (`judgeReload`) is a candidate for a new
+    /// process.
+    ///
+    /// 2026-11-23: such a page does not die holding little. Its graphics are not its own any more:
+    /// the app process still maps them (1600 IOSurfaces, 6.1 GB in the app against 0.6 GB owned by
+    /// the live page), which is why neither a reload nor the blank page `emptyInPlace` loads gave
+    /// them back (1.5 GB of graphics before and after three reloads). Each of the day's three swaps,
+    /// at 2.6, 3.4 and 2.3 GB, raised kernel_task by 1.8, 2.3 and 1.3 GB, held until the app quits.
+    /// So a page under forceBytes keeps its process (the memory stays the page's, and is no more
+    /// than a swap would leak plus the new page growing again); only a page so large that it
+    /// freezes (forceBytes) gets the new process, after a reload did not help.
     func replacesProcess(_ reason: RecycleReason, state: WebContentWatchdogState) -> Bool {
         switch reason {
-        case .staleBundle: return false
-        case .footprint, .footprintForced: return state.reloadDidNotHelp
+        case .staleBundle, .footprint: return false
+        case .footprintForced: return state.reloadDidNotHelp
         }
     }
 
@@ -236,6 +253,9 @@ struct MemoryNoticeState {
         if case .recycle = verdict { shown = false; return false }
         if shown { return true }
         guard !spent, level == .critical else { return false }
+        // Its Reload Page would not help either: the page already reloaded and stayed this large.
+        // The wait starts over, so a page that later passes forceBytes gets its full quiet window.
+        if case .suppressed(_, "reload_did_not_help") = verdict { criticalSince = nil; return false }
         if criticalSince == nil { criticalSince = now }
         var waitsOnPerson = false
         if case let .suppressed(_, why) = verdict { waitsOnPerson = Self.needsPerson.contains(why) }
@@ -284,6 +304,9 @@ struct WebContentWatchdogState {
     /// is past booting says whether the reload brought the process under the recycle threshold.
     /// However long a hold (input, unsaved text) keeps the next recycle back, it stays decided.
     mutating func judgeReload(_ sample: WebContentSample, policy: WebContentPolicy, now: Date) {
+        // A page back at a normal size has shed what the reload could not: if it grows again,
+        // a reload is worth trying again.
+        if policy.level(for: sample.footprintBytes) == .normal { reloadDidNotHelp = false }
         guard memoryReloadPending, pageAge(sample.processAge, now: now) >= policy.minProcessAge else { return }
         memoryReloadPending = false
         if sample.footprintBytes >= policy.recycleBytes { reloadDidNotHelp = true }
