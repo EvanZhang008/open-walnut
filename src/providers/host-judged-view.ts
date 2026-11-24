@@ -33,8 +33,8 @@ const OUTLIVING = new Set<OutlivingSource>(['background', 'team', 'wakeup', 'loo
 function rowAlive(row: Pick<SessionRecord, 'process_status' | 'pid'> | null | undefined): boolean | null {
   if (!row) return null
   if (row.process_status === 'running' || row.process_status === 'idle') return true
-  if (row.process_status === 'stopped') return false
-  if (row.process_status === 'error') return row.pid != null
+  // 'error' is the host's word that its process ended, as in the live state: one rule for both.
+  if (row.process_status === 'stopped' || row.process_status === 'error') return false
   return null
 }
 

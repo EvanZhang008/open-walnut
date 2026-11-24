@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
-  proxy: null as null | { call: ReturnType<typeof vi.fn> },
+  proxy: null as null | { host?: string; call: ReturnType<typeof vi.fn> },
   rows: new Map<string, Record<string, unknown>>(),
   updates: [] as Array<[string, Record<string, unknown>]>,
   slots: [] as unknown[][],
@@ -26,7 +26,8 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   reconcileModeSlots: async (...args: unknown[]) => { m.slots.push(args) },
 }))
 
-import { changeModeOnHost, terminateOnHost } from '../../../src/core/sessions/host-judged-controls.js'
+import { HostNeedsUpdateError, changeModeOnHost, onJudgingHost, terminateOnHost } from '../../../src/core/sessions/host-judged-controls.js'
+import { _resetSessionCommandGateForTesting, noteHostTakesChecks } from '../../../src/core/sessions/session-command-gate.js'
 
 describe('host-judged controls', () => {
   beforeEach(() => {
@@ -64,5 +65,22 @@ describe('host-judged controls', () => {
   it('a session no host runs is refused', async () => {
     m.proxy = null
     await expect(terminateOnHost('s1', {})).rejects.toThrow(/not run by a host/)
+  })
+
+  it('a check (supervision, a line\'s fate, a pending start\'s cancel) goes only to a host that names the checks capability', async () => {
+    _resetSessionCommandGateForTesting()
+    m.proxy = { host: 'devbox', call: vi.fn().mockResolvedValue(true) }
+    for (const member of ['readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart'] as const) {
+      await expect(onJudgingHost('s1', member, [])).rejects.toBeInstanceOf(HostNeedsUpdateError)
+    }
+    expect(m.proxy.call).not.toHaveBeenCalled()
+    // A stop is no check: an older host takes it as before.
+    m.proxy.call.mockResolvedValue({ status: 'terminated', sessionId: 's1' })
+    await terminateOnHost('s1', { force: true })
+    expect(m.proxy.call).toHaveBeenCalledTimes(1)
+    noteHostTakesChecks('devbox', true)
+    m.proxy.call.mockResolvedValue(true)
+    expect(await onJudgingHost('s1', 'lineAlreadyRan', ['u1', []])).toBe(true)
+    expect(m.proxy.call).toHaveBeenLastCalledWith('lineAlreadyRan', ['u1', []], 'lifecycle')
   })
 })

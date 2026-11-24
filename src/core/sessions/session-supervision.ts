@@ -68,6 +68,9 @@ async function onJudgingHostSupervision(sid: string, enabled?: boolean): Promise
   const asked = onJudgingHost(sid, 'readSessionSupervision', enabled === undefined ? [] : [enabled]) as Promise<SupervisionAnswer>
   if (enabled !== undefined) {
     try { return await asked } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === 'host_needs_update') {
+        throw new SessionControlError(`Automatic recovery was not changed: ${(error as Error).message}`, 409, { code: 'host_needs_update' })
+      }
       lastKnown.delete(sid)
       throw new SessionControlError(`The session's host did not confirm the automatic recovery change: ${error instanceof Error ? error.message : String(error)}`, 503, { code: 'host_no_answer' })
     }

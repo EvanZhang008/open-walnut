@@ -29,8 +29,7 @@
  * daemon's switch and every `.send('<name>'` call site of src/, and fails on a session-process command
  * or call site this file and its table do not classify.
  */
-import { hostJudgedRowsMayExist, judgingHostOf } from './judge-of.js'
-import { hostJudgedOfAcpRuntimeInStore } from '../session-db.js'
+import { hostJudgedRowsMayExist, hostJudgedSessionOfRuntime, judgingHostOf } from './judge-of.js'
 import { handOverMarkStands } from '../session-channel/handover-marks.js'
 import { log } from '../../logging/index.js'
 
@@ -94,28 +93,15 @@ function handOverUnanswered(sid: string): boolean {
   try { return handOverMarkStands(sid) === true } catch { return false }
 }
 
-/** ACP runtime id -> its host-judged session, kept briefly (a miss is asked again after RUNTIME_MISS_MS). */
-const runtimeMemo = new Map<string, { sid: string | null; at: number }>()
-const RUNTIME_MISS_MS = 30_000
-const RUNTIME_MEMO_MAX = 2_000
-
-/** The host-judged session whose ACP worker is `runtimeId`, or null. */
-export function hostJudgedSessionOfRuntime(runtimeId: string): string | null {
-  if (!runtimeId || !hostJudgedRowsMayExist()) return null
-  const m = runtimeMemo.get(runtimeId)
-  if (m && (m.sid || Date.now() - m.at < RUNTIME_MISS_MS)) return m.sid
-  let sid: string | null = null
-  try { sid = hostJudgedOfAcpRuntimeInStore(runtimeId)?.sid ?? null } catch { sid = null }
-  if (runtimeMemo.size >= RUNTIME_MEMO_MAX) runtimeMemo.clear()
-  runtimeMemo.set(runtimeId, { sid, at: Date.now() })
-  return sid
-}
+/** The host-judged session of an ACP worker's runtime id (judge-of.ts keeps the map: no store read). */
+export { hostJudgedSessionOfRuntime }
 
 /** The session a daemon command is about: its `sid` (an ACP worker's runtime id mapped to its session), or a rename's old id. */
 function sessionOfCommand(cmd: string, params: Record<string, unknown>): string | null {
   const id = typeof params.sid === 'string' && params.sid ? params.sid : typeof params.oldSid === 'string' && params.oldSid ? params.oldSid : null
   if (!id) return null
-  if (RUNTIME_KEYED.has(cmd) && !judgingHostOf(id)) return hostJudgedSessionOfRuntime(id) ?? id
+  // A runtime id is never a session id: only the map can name its session (and a miss is a legacy worker).
+  if (RUNTIME_KEYED.has(cmd)) return hostJudgedSessionOfRuntime(id)
   return id
 }
 
@@ -159,6 +145,20 @@ export function assertSessionCommandReachesDaemon(daemonHost: string, cmd: strin
   throw new HostJudgedCommandError(sid, target.host, cmd, route)
 }
 
+/** Hosts whose service answers the checks of its own sessions (switch.ts SESSION_HOST_CHECKS_CAP), as their last report says. */
+const hostsTakingChecks = new Set<string>()
+
+/** A host's report named (or stopped naming) SESSION_HOST_CHECKS_CAP (session-channel/leader-boot.ts). */
+export function noteHostTakesChecks(host: string, on: boolean): void {
+  if (on) hostsTakingChecks.add(host)
+  else hostsTakingChecks.delete(host)
+}
+
+/** Does `host`'s service answer readSessionSupervision, lineAlreadyRan and cancelPendingStart? */
+export function hostTakesChecks(host: string): boolean {
+  return hostsTakingChecks.has(host)
+}
+
 export function sessionCommandRefusals(): Record<string, number> {
   return Object.fromEntries(refusals)
 }
@@ -169,8 +169,8 @@ export function sessionCommandsAimedAt(sid: string): Record<string, number> {
 }
 
 export function _resetSessionCommandGateForTesting(): void {
-  runtimeMemo.clear()
   refusals.clear()
   warned.clear()
   aimed.clear()
+  hostsTakingChecks.clear()
 }

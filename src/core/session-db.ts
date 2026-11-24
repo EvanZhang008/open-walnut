@@ -379,17 +379,18 @@ export function sessionTaskAndEngineInStore(claudeSessionId: string): { taskId: 
 }
 
 /**
- * The host-judged session whose ACP worker is `runtimeId` (the session command gate,
- * sessions/session-command-gate.ts): only rows whose payload says `judge: 'host'` are parsed.
+ * Every host-judged ACP session's runtime id (judge-of.ts seedHostJudgedRuntimes, once at the leader
+ * side's boot): only rows with a host, whose payload says `judge: 'host'` and names a runtime, are parsed.
  */
-export function hostJudgedOfAcpRuntimeInStore(runtimeId: string): { sid: string; host: string | null } | null {
+export function hostJudgedRuntimesInStore(): Array<{ sid: string; host: string; runtimeId: string }> {
   const handle = getDb();
-  if (!handle || !runtimeId) return null;
-  const row = prepared(handle,
-    `SELECT claude_session_id AS sid, host FROM sessions WHERE instr(coalesce(payload, ''), '"judge":"host"') > 0 AND instr(payload, ?) > 0
-       AND json_valid(payload) AND json_extract(payload, '$.acpRuntimeId') = ? LIMIT 1`,
-  ).get(runtimeId, runtimeId) as { sid: string; host: string | null } | undefined;
-  return row ?? null;
+  if (!handle) return [];
+  const rows = handle.prepare(
+    `SELECT claude_session_id AS sid, host, json_extract(payload, '$.acpRuntimeId') AS runtimeId FROM sessions
+      WHERE host IS NOT NULL AND host <> '' AND instr(coalesce(payload, ''), '"judge":"host"') > 0
+        AND instr(payload, '"acpRuntimeId"') > 0 AND json_valid(payload)`,
+  ).all() as Array<{ sid: string; host: string; runtimeId: unknown }>;
+  return rows.filter((r): r is { sid: string; host: string; runtimeId: string } => typeof r.runtimeId === 'string' && r.runtimeId !== '');
 }
 
 /** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */

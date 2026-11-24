@@ -16,6 +16,9 @@
  *       host-side    the host's own service to its own daemon, for its own sessions
  *       maintenance  a developer command on this machine's own daemon
  *     A new call site, or one more in a listed file, fails until it is listed.
+ *   - a command named by a variable (`.send(cmd,`, `.send(command,`, `.send(o.cmd,`) cannot be read
+ *     from the source: each file that sends one is listed in VARIABLE_SENDS with what the variable can
+ *     name. Any other form (a template string, a computed name) is caught only by the runtime gate.
  *   - DaemonConnection.send asks the gate first, so a call site that is wrong still sends nothing.
  */
 import { describe, expect, it } from 'vitest'
@@ -116,6 +119,22 @@ const CALL_SITES: Record<string, Record<string, [Way, number]>> = {
   'src/providers/service-set-move-checks.ts': { getState: ['gated', 1] },
 }
 
+/** file -> [how many `.send(<variable>,` call sites, what the variable can name]. */
+const VARIABLE_SENDS: Record<string, [number, string]> = {
+  'src/providers/acp-ask-once.ts': [2, 'the ACP commands of an AcpSession (legacy-only: never built for a host-judged session)'],
+  'src/providers/daemon-connection.ts': [7, 'the link handing its own send to helpers (updates, replica pushes, net, transfers): each helper\'s commands are counted in its own file, and this send runs the gate'],
+  'src/providers/service-set-move-link.ts': [2, 'a service set move\'s own link (maintenance); its session reads take judgedHereRecords (service-set-move-checks.ts)'],
+  'src/providers/service-set-move-checks.ts': [1, 'cli.holder of the move\'s sessions, judgedHereRecords only'],
+  'src/providers/remote-session-manager.ts': [1, 'uploads of a message\'s files (upload.part, fs.write): host-local work'],
+  'src/core/turn-snapshots/service.ts': [1, 'turns.* (host-local work)'],
+  'src/core/transfer/daemon-transfer-client.ts': [1, 'transfer.* (host-local work)'],
+  'src/core/standby/remote-transport.ts': [1, 'a standby leader\'s spool commands (maintenance)'],
+  'src/core/workspaces/daemon-client.ts': [1, 'workspace.* and taskdir.* (host-local work)'],
+  'src/core/link/daemon-connection-link.ts': [1, 'the follower link\'s requests (maintenance)'],
+  'src/core/hosts/host-mcp.ts': [1, 'mcp.* (host-local work)'],
+  'src/core/hosts/host-exec.ts': [1, 'exec.* (host-local work)'],
+}
+
 const ASKS_JUDGE = /\b(sessionCommandTarget|judgeOf|judgedHereRecords|judgedHereOnly|judgingHostOf|hostJudgedSessionOfRuntime)\(/
 
 function callSites(): Record<string, Record<string, number>> {
@@ -157,6 +176,17 @@ describe('session command gate ratchet', () => {
     const found = callSites()
     const listed = Object.fromEntries(Object.entries(CALL_SITES).map(([f, m]) => [f, Object.fromEntries(Object.entries(m).map(([c, [, n]]) => [c, n]))]))
     expect(found, 'a new or removed call site of a session-process command: list it in CALL_SITES (gated, legacy-only, host-side or maintenance)').toEqual(listed)
+  })
+
+  it('every file that sends a command named by a variable is listed with what it can name', () => {
+    const found: Record<string, number> = {}
+    for (const f of files('src')) {
+      if (DAEMON_ITSELF.has(f)) continue
+      const n = [...noComments(read(f)).matchAll(/\.send\((?:cmd|command|o\.cmd)\s*,/g)].length
+      if (n > 0) found[f] = n
+    }
+    const listed = Object.fromEntries(Object.entries(VARIABLE_SENDS).map(([f, [n]]) => [f, n]))
+    expect(found, 'a new `.send(<variable>,` call site: list it in VARIABLE_SENDS with what the variable can name (a session-process command must be gated)').toEqual(listed)
   })
 
   it('a gated call site\'s file asks the judge', () => {

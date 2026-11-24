@@ -247,6 +247,8 @@ export function defaultRunStartDeps(): RunStartDeps {
         if (res.alive) return 'alive';
         return res.ok !== false && res.cancelled === true ? 'cancelled' : 'unknown';
       } catch (err) {
+        // Nothing could be asked (no link, a host too old to cancel): unknown, as before, and no warning.
+        if ((err as { code?: unknown } | null)?.code === 'cancel_not_askable') return 'unknown';
         log.cron.warn('routine start: cancel of an unconfirmed start failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
         return 'unknown';
       } finally {

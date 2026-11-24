@@ -49,6 +49,8 @@ export async function resendAlreadyRan(input: {
     });
     return true;
   } catch (err) {
+    // A host on a Walnut from before the check is not asked (host-judged-controls.ts): send as before.
+    if ((err as { code?: unknown } | null)?.code === 'host_needs_update') return false;
     log.session.warn('resend fate check failed: sending it as before', {
       sessionId: input.sessionId, uuid: input.lineUuid, error: err instanceof Error ? err.message : String(err),
     });

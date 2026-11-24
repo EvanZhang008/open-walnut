@@ -11,11 +11,12 @@
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
-import { createLeaderSide, reportJudges, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
+import { createLeaderSide, reportHostChecks, reportJudges, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
 import { noteHostSessionSide } from './host-side-health.js'
 import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
-import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
+import { forgetHostJudged, judgingHostOf, noteHostJudged, seedHostJudgedRuntimes, setHostJudgeProbe } from '../sessions/judge-of.js'
+import { noteHostTakesChecks } from '../sessions/session-command-gate.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 import { forgetHostResumes, noteHostResumes, noteSwitchAnyHost, setHostSwitchProbe } from './resume-hosts.js'
 import { NOT_OWN_SESSION } from './host-api.js'
@@ -278,6 +279,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     // A host seen while a ban stands may be a name of the banned machine its hello just told: every link is judged again (N2).
     if (anyHostRevoked()) side.noteRevoked(view.hostKey)
     noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server), view.phase === 'running' && reportResumesAcp(view.server))
+    noteHostTakesChecks(view.hostKey, view.phase === 'running' && reportHostChecks(view.server))
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
     noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)
@@ -318,6 +320,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     }
   }, { global: true, interest: [EventNames.SESSION_DELETED] })
   for (const view of hostServer.peekHostServerViews()) look(view)
+  // The runtimes of host-judged ACP sessions, read once here so no send reads the store (sessions/session-command-gate.ts).
+  setImmediate(() => { seedHostJudgedRuntimes() })
   // Hand-overs this leader had no answer to when it stopped: their lost checks run again (host-handover.ts).
   void import('../../providers/host-resume.js').then((m) => m.rearmHandOversAtBoot()).catch((err: unknown) => {
     log.session.warn('host hand-over: the unanswered hand-overs were not armed again', { error: err instanceof Error ? err.message : String(err) })

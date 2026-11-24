@@ -41,6 +41,12 @@ export const SESSION_RESUME_CAP = 'session-resume-v1'
  * to its own daemon. A host naming only SESSION_RESUME_CAP keeps ACP sessions legacy.
  */
 export const SESSION_RESUME_ACP_CAP = 'session-resume-acp-v1'
+/**
+ * Capability a host's service names when it answers the leader's checks of its own sessions as
+ * `lifecycle` calls (host-calls.ts: readSessionSupervision, lineAlreadyRan, cancelPendingStart;
+ * sessions/host-lifecycle.ts). A host from before it is not asked them (sessions/host-judged-controls.ts).
+ */
+export const SESSION_HOST_CHECKS_CAP = 'session-host-checks-v1'
 
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 

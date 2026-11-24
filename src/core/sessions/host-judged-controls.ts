@@ -15,8 +15,21 @@
 import type { SessionMode, SessionRecord } from '../types.js'
 import type { TerminateResult } from './session-lifecycle.js'
 import type { HOST_CALL_ALLOWLIST } from '../session-channel/host-calls.js'
+import { hostTakesChecks } from './session-command-gate.js'
 
 export type HostLifecycleMember = (typeof HOST_CALL_ALLOWLIST)['lifecycle'][number]
+
+/** The members a host answers only once it names SESSION_HOST_CHECKS_CAP (switch.ts). */
+const CHECKS: ReadonlySet<HostLifecycleMember> = new Set(['readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart'])
+
+/** The host that runs the session is on a Walnut from before the check: it is not asked. */
+export class HostNeedsUpdateError extends Error {
+  readonly code = 'host_needs_update'
+  constructor(readonly host: string, readonly member: string) {
+    super(`the service on ${host} that runs this session needs a Walnut update before it can answer ${member}; it updates with its next deploy`)
+    this.name = 'HostNeedsUpdateError'
+  }
+}
 
 async function proxyOf(sessionId: string) {
   const { hostJudgedSession } = await import('../../providers/host-judged-runner.js')
@@ -27,7 +40,9 @@ async function proxyOf(sessionId: string) {
 
 /** One `lifecycle` member (host-calls.ts) carried out by the host that runs `sessionId`: its answer, or a throw. */
 export async function onJudgingHost(sessionId: string, member: HostLifecycleMember, args: unknown[] = []): Promise<unknown> {
-  return (await proxyOf(sessionId)).call(member, args, 'lifecycle')
+  const p = await proxyOf(sessionId)
+  if (CHECKS.has(member) && !hostTakesChecks(p.host)) throw new HostNeedsUpdateError(p.host, member)
+  return p.call(member, args, 'lifecycle')
 }
 
 /** A stop of a host-run session: its host's answer. */

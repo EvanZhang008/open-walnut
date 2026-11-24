@@ -1,7 +1,9 @@
 /**
  * The leader's side of the hosts that run and judge their own sessions
  * (docs/plan/one-service-every-host.md, phase 2; the wire contract is design/C3b-design.md of the
- * task that built it). Leader only, and only while the switch is on (switch.ts).
+ * task that built it). Leader only, on every leader (leader-boot.ts): the switch (switch.ts) decides only
+ * where a NEW session runs, so a session a host already runs and judges keeps its channel, its calls and
+ * its stops with the switch off.
  *
  * Per host whose service names SESSION_JUDGE_CAP and is connected:
  *   - one session channel: a WebSocket (`GET /host-api/session-channel`) over a stream the host's
@@ -26,7 +28,7 @@ import type { Duplex } from 'node:stream'
 import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { createLeaderApply, HostRevoked } from './leader-apply.js'
-import { SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_HOST_CHECKS_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
@@ -481,6 +483,11 @@ export function reportResumes(report: { capabilities?: unknown } | null | undefi
 /** Does it also resume an ACP engine's session (host-resume.ts, SESSION_RESUME_ACP_CAP)? */
 export function reportResumesAcp(report: { capabilities?: unknown } | null | undefined): boolean {
   return reportResumes(report) && reportNames(report, SESSION_RESUME_ACP_CAP)
+}
+
+/** Does it answer the checks of its own sessions as lifecycle calls (SESSION_HOST_CHECKS_CAP)? */
+export function reportHostChecks(report: { capabilities?: unknown } | null | undefined): boolean {
+  return reportJudges(report) && reportNames(report, SESSION_HOST_CHECKS_CAP)
 }
 
 function reportNames(report: { capabilities?: unknown } | null | undefined, cap: string): boolean {

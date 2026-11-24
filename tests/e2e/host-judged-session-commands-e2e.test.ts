@@ -15,6 +15,9 @@
  *                out by the host against its own daemon (host-lifecycle.ts)
  *   C4 complete  completing its task stops it, carried out by the host
  *   C5 stop      a second session's stop asked on the Mac, carried out by the host
+ *   C6 off       the switch off on the Mac decides new starts only: two sessions the host already runs
+ *                stay its own (their judge, their channel), so their probes, a stop and a task-complete
+ *                stop still go to the host's service and succeed (docs/plan/one-service-every-host.md)
  * After each: zero session commands aimed at a daemon for it, and no refusal anywhere in the Mac.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -133,4 +136,33 @@ describe.skipIf(!RUN)('the Mac sends a host-judged session\'s host daemon no com
     await noCommands(second.sid)
     await noCommands(sid)
   })
+
+  it('C6: with the switch off, sessions the host already runs stay its own: probes, a stop and a task-complete stop reach its service and succeed', async () => {
+    const toStop = await startTask('Host judged, stopped after off', 'ROUND three')
+    const toComplete = await startTask('Host judged, completed after off', 'ROUND four')
+    const off = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: false } })
+    expect(off.status, JSON.stringify(off.json)).toBe(200)
+    await waitFor(async () => !(await h.mac(`/side?host=${HOST_KEY}`)).judges, 30_000, 'the Mac to stop handing new starts to the host')
+    // The channel stays linked, and both sessions stay the host's.
+    expect((await h.mac(`/side?host=${HOST_KEY}`)).linked).toBe(true)
+    for (const s of [toStop.sid, toComplete.sid]) expect(await h.mac(`/judge?sid=${s}`)).toEqual({ judge: 'host', host: HOST_KEY })
+    // Probes: the list and the Mac's own scans read them alive from the channel.
+    const list = await h.c.mac('GET', '/api/sessions')
+    const rows = (list.json.sessions ?? list.json) as Array<Record<string, unknown>>
+    for (const s of [toStop.sid, toComplete.sid]) expect(rows.find((r) => r.claudeSessionId === s)).toMatchObject({ process_status: 'idle', judge: 'host' })
+    const scan = await h.mac(`/scans?sid=${toStop.sid}&host=${HOST_KEY}`)
+    expect(scan).toMatchObject({ alive: true, evicted: [], orphans: [], swept: [] })
+    // A stop asked on the Mac: carried out by the host.
+    const stop = await h.c.mac('POST', `/api/v1/sessions/${toStop.sid}/terminate`, { force: true })
+    expect(stop.status, JSON.stringify(stop.json)).toBe(200)
+    expect(stop.json).toMatchObject({ status: 'terminated' })
+    // Completing a task: its session's stop carried out by the host.
+    const done = await h.c.mac('POST', `/api/v1/tasks/${toComplete.taskId}/complete`, {})
+    expect(done.status, JSON.stringify(done.json)).toBeLessThan(300)
+    for (const s of [toStop.sid, toComplete.sid]) {
+      await waitFor(async () => (await hostRow(s))?.process_status === 'stopped' && (await macRow(s))?.process_status === 'stopped', 60_000, 'the host to stop it and the Mac to read it')
+        .catch((err) => { throw new Error(say(String(err))) })
+      await noCommands(s)
+    }
+  }, 300_000)
 })

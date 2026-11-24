@@ -20,14 +20,17 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-session-c
 vi.mock('../../../src/core/session-channel/handover-marks.js', () => ({ handOverMarkStands: (sid: string) => m.handOver.has(sid) }))
 vi.mock('../../../src/core/session-db.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/session-db.js')>()),
-  hostJudgedOfAcpRuntimeInStore: (rt: string) => (m.runtimes.has(rt) ? { sid: m.runtimes.get(rt)!, host: 'devbox' } : null),
-  sessionTaskAndEngineInStore: () => null,
+  sessionTaskAndEngineInStore: (sid: string) => {
+    const rt = [...m.runtimes].find(([, s]) => s === sid)?.[0]
+    return rt ? { taskId: 't', engine: 'opencode', acpRuntimeId: rt } : null
+  },
   anyChannelCursor: () => false,
   sessionJudgeInStore: () => null,
 }))
 vi.mock('../../../src/core/sessions/host-judged-controls.js', () => ({
   onJudgingHost: async (sid: string, member: string, args: unknown[] = []) => { m.hostCalls.push({ sid, member, args }); return m.hostAnswer },
   terminateOnHost: async (sid: string, opts: unknown) => { m.hostCalls.push({ sid, member: 'terminateSession', args: [opts] }); return m.hostAnswer },
+  HostNeedsUpdateError: class extends Error { readonly code = 'host_needs_update' },
 }))
 vi.mock('../../../src/core/session-tracker.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/session-tracker.js')>()),
@@ -90,8 +93,12 @@ describe('the gate', () => {
   })
 
   it('refuses every session-process command of a host-judged session, naming its host-service route', () => {
+    // An ACP worker's commands name its runtime id, which the session's row gives.
+    m.runtimes.set('acp-all', JUDGED)
+    noteHostJudged(JUDGED, 'devbox')
     for (const cmd of SESSION_PROCESS_COMMANDS) {
-      const params = cmd === 'rename' ? { oldSid: JUDGED, newSid: 'x' } : { sid: JUDGED }
+      const byRuntime = cmd.startsWith('acp') || cmd.startsWith('agent.')
+      const params = cmd === 'rename' ? { oldSid: JUDGED, newSid: 'x' } : { sid: byRuntime ? 'acp-all' : JUDGED }
       let err: unknown
       try { assertSessionCommandReachesDaemon('devbox', cmd, params) } catch (e) { err = e }
       expect(err, cmd).toBeInstanceOf(HostJudgedCommandError)
@@ -107,6 +114,7 @@ describe('the gate', () => {
 
   it('knows an ACP worker by its runtime id', () => {
     m.runtimes.set('acp-0123', JUDGED)
+    noteHostJudged(JUDGED, 'devbox')
     expect(() => assertSessionCommandReachesDaemon('devbox', 'acpStop', { sid: 'acp-0123' })).toThrow(HostJudgedCommandError)
     expect(() => assertSessionCommandReachesDaemon('devbox', 'acpStop', { sid: 'acp-other' })).not.toThrow()
   })
@@ -141,6 +149,7 @@ describe('probes answer a host-judged session from the channel', () => {
     expect(await probeDaemonSession('devbox', JUDGED)).toEqual({ alive: true })
     expect(await probeDaemonSessionArgs('devbox', JUDGED)).toBeNull()
     m.runtimes.set('acp-77', JUDGED)
+    noteHostJudged(JUDGED, 'devbox')
     expect(await probeAcpWorker('devbox', 'acp-77')).toBe(true)
     // No connection was looked up: a legacy session's probe finds no link here and answers null.
     expect(await probeDaemonSession('devbox', LEGACY)).toBeNull()

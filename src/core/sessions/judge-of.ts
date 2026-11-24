@@ -13,7 +13,8 @@
  * (session-channel/leader-side.ts) installs that probe. With nothing installed, and on every server whose store never applied a
  * host's channel, every answer is 'legacy' at the cost of one small query once.
  */
-import { anyChannelCursor, sessionJudgeInStore } from '../session-db.js'
+import { anyChannelCursor, hostJudgedRuntimesInStore, sessionJudgeInStore, sessionTaskAndEngineInStore } from '../session-db.js'
+import { isAcpEngine } from '../agents/engine-registry.js'
 import { judgedByHost, rowOwnedHere, thisHostKey } from './session-row-owner.js'
 import type { SessionRecord } from '../types.js'
 
@@ -26,6 +27,19 @@ const legacy = new Set<string>()
 const LEGACY_MEMO_MAX = 20_000
 /** Sessions this host replica runs for its leader (taskSideOnLeader said so); bounded, cleared when full. */
 const ownHere = new Set<string>()
+/**
+ * Sessions taken back from their host (forgetHostJudged): the store's row may still say the host's
+ * for a moment (takeStartBack writes it back after its awaits), so a read in between learns nothing
+ * from it. Cleared when the row reads legacy, or the host's start or row is noted again.
+ */
+const takenBack = new Set<string>()
+/**
+ * ACP worker runtime id -> its host-judged session (the session command gate maps a runtime-keyed
+ * command with it). Kept where host rows are learned and forgotten, never by a store scan on a send.
+ */
+const runtimeSessions = new Map<string, string>()
+/** sid -> its runtime id, or null for a session that has none and never will (a native engine's). */
+const runtimeOfSid = new Map<string, string | null>()
 /** Did this store ever apply a host's channel? null: not asked yet. */
 let anyCursor: boolean | null = null
 /** A host replica whose leader is an older Walnut without the session channel judges none of its own rows (session-channel/old-leader-watch.ts). */
@@ -62,12 +76,62 @@ export function noteHostJudged(sid: string, host: string): void {
   if (!sid || !host) return
   known.set(sid, host)
   legacy.delete(sid)
+  takenBack.delete(sid)
   anyCursor = true
+  learnRuntime(sid)
 }
 
-/** A start the leader handed to a host did not go: `sid` is not that host's after all. */
+/**
+ * A start the leader handed to a host did not go (or a deleted row): `sid` is not that host's after
+ * all. Its row may still say so until the take-back writes it (see takenBack).
+ */
 export function forgetHostJudged(sid: string): void {
   known.delete(sid)
+  if (takenBack.size >= LEGACY_MEMO_MAX) takenBack.clear()
+  takenBack.add(sid)
+  const rt = runtimeOfSid.get(sid)
+  if (rt) runtimeSessions.delete(rt)
+  runtimeOfSid.delete(sid)
+}
+
+/** The ACP runtime of a host-judged session, read once its row names one (one row by its key). */
+function learnRuntime(sid: string): void {
+  if (runtimeOfSid.has(sid)) return
+  let row: ReturnType<typeof sessionTaskAndEngineInStore>
+  try { row = sessionTaskAndEngineInStore(sid) } catch { return }
+  if (!row) return
+  if (row.acpRuntimeId) {
+    if (runtimeSessions.size >= LEGACY_MEMO_MAX) runtimeSessions.clear()
+    runtimeSessions.set(row.acpRuntimeId, sid)
+    runtimeOfSid.set(sid, row.acpRuntimeId)
+  } else if (!isAcpEngine((row.engine ?? undefined) as SessionRecord['engine'])) {
+    // A native session has no worker, ever; an ACP one without its runtime yet is read again at its next row.
+    if (runtimeOfSid.size >= LEGACY_MEMO_MAX) runtimeOfSid.clear()
+    runtimeOfSid.set(sid, null)
+  }
+}
+
+/** The host-judged session whose ACP worker is `runtimeId`, or null. A map lookup: no store read. */
+export function hostJudgedSessionOfRuntime(runtimeId: string): string | null {
+  return (runtimeId && runtimeSessions.get(runtimeId)) || null
+}
+
+/**
+ * At the leader side's boot: the runtimes of the host-judged ACP sessions the store holds (one read,
+ * off any send), so a runtime-keyed command is mapped before anything else learned its session.
+ */
+export function seedHostJudgedRuntimes(): number {
+  let rows: Array<{ sid: string; host: string; runtimeId: string }>
+  try { rows = hostJudgedRuntimesInStore() } catch { return 0 }
+  const here = thisHostKey()
+  let n = 0
+  for (const r of rows) {
+    if (!r.host || r.host === here || takenBack.has(r.sid)) continue
+    runtimeSessions.set(r.runtimeId, r.sid)
+    runtimeOfSid.set(r.sid, r.runtimeId)
+    n++
+  }
+  return n
 }
 
 /** The host whose service judges `sid`, or null (a legacy session, or no such row). */
@@ -86,9 +150,13 @@ export function judgingHostOf(sid: string): string | null {
   if (!row) return null
   const here = thisHostKey()
   if (row.judgedByHost && row.host && row.host !== here) {
+    // Taken back: its row is written back to the leader's in a moment (forgetHostJudged).
+    if (takenBack.has(sid)) return null
     known.set(sid, row.host)
+    learnRuntime(sid)
     return row.host
   }
+  takenBack.delete(sid)
   if (legacy.size >= LEGACY_MEMO_MAX) legacy.clear()
   legacy.add(sid)
   return null
@@ -199,6 +267,9 @@ export function _resetJudgeOfForTesting(): void {
   known.clear()
   legacy.clear()
   ownHere.clear()
+  takenBack.clear()
+  runtimeSessions.clear()
+  runtimeOfSid.clear()
   anyCursor = null
   startProbe = null
   standsDown = false

@@ -643,6 +643,22 @@ hand-over asks while the session is still legacy (its process manager is the lea
 a hand-over is unanswered the host has not taken the session, so the leader still asks the runtime whether a CLI
 of it runs (`status`, `acpState` only; the gate checks the hand-over mark on disk).
 
+The switch decides only where a new session runs. A session a host already runs and judges stays that host's
+with the switch off: the leader side runs on every leader, and the host keeps its channel, its routes (all but
+`start`) and its capabilities while its fact log exists (`host-boot.ts` followHostSwitch, `hostRanSessions`).
+So the gate keeps sending such a session's probes, stops and checks to its host's service, never to the daemon;
+`tests/e2e/host-judged-session-commands-e2e.test.ts` C6 proves a probe, a stop and a task-complete stop after
+the switch went off.
+
+A host on a build from before the checks (`readSessionSupervision`, `lineAlreadyRan`, `cancelPendingStart`) is not
+asked them: its service names `session-host-checks-v1` once it answers them (`switch.ts` SESSION_HOST_CHECKS_CAP).
+Until it does, a supervision read answers unavailable, a change says the host needs an update, a resend goes as
+before, and a retry of an unconfirmed start says it cannot be retried until the host updates.
+
+The gate reads no store on a send once a session is known: judge-of keeps the judge per session and the runtime
+id of each host-judged ACP worker in memory (seeded once at the leader side's boot, then kept where host rows are
+learned and forgotten). A take-back is not undone by a read before its row is written back (`takenBack`).
+
 Not in this clause: host-local work (files, git, exec, terminals, transfers, workspaces, task folders, usage,
 turn snapshots) and maintenance still go over the daemon's command path, and transcript reads (the rewind
 probe and history) belong to clause 2.
