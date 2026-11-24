@@ -743,6 +743,14 @@ export function createHostServerManager(deps: ManagerDeps) {
       // The host's one service is this Walnut's follower (2026-11-24: a first report a lossy link
       // delayed past a minute took it down, and the host came back as two programs for good): a
       // failure leaves it running, never reads as "no follower there", and is only checked again.
+      // The host's daemon refused it as the machine that leads this Walnut (host-server-core.ts): this
+      // computer, as the probe says; trying again would only be refused again.
+      const leadsHere = /this machine leads Walnut /.test(message)
+      if (leadsHere) {
+        failedNow.delete(hostKey)
+        notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host: it is the machine that leads this Walnut, which runs Walnut already.')
+        return
+      }
       const service = await oneServiceMeant(hosts.get(hostKey) ?? host)
       if (err instanceof UntilRetry) {
         // The same file would fail the same way: it waits for Retry (or a newer build). On a host

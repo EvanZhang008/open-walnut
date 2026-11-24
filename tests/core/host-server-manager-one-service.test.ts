@@ -319,6 +319,23 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
     expect(fileAsks).toEqual([])
   })
 
+  it('a configure the host refuses as the machine that leads this Walnut rules the row out at once, no retry', async () => {
+    const h = await servingHost()
+    const send = h.send.bind(h)
+    h.send = async (cmd, params, ms) => {
+      if (cmd === 'server.configure' && (params as { spec?: unknown })?.spec) return { ok: false, error: 'server.configure: this machine leads Walnut wmac01; no follower of it runs here' }
+      return send(cmd, params, ms)
+    }
+    const failed: string[] = []
+    const m = createHostServerManager(deps({ health: { failed: (k) => { failed.push(k) }, settled: () => {} } }))
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'this-computer' } })
+    expect(m.view('devbox').message).not.toMatch(/left running|tries again/)
+    expect(m.view('devbox').retryAt).toBeUndefined()
+    expect(failed).toEqual([])
+    expect(removed(h)).toBe(0)
+  })
+
   it('a hello without the server features reads as not settled, never as no follower', async () => {
     const h = await servingHost()
     h.caps.delete('stream-relay-v1')
@@ -475,11 +492,11 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
       // A name's gate: its follower fact reads the keeper's (the alias tests check keeperOf).
       "'another-name'": /keeper !== hostKey/,
       'judged.gate.reason': /firstOnByDefault\(host/,
-      // Only this computer probes true, even when it leads as its own one service.
-      "'this-computer'": /self === true/,
+      // Only this computer probes true, even when it leads as its own one service; or its daemon says it leads.
+      "'this-computer'": /self === true|if \(leadsHere\)/,
       "'no-build'": /!service\b/,
     }
-    expect(gates.map((g) => g.reason).sort()).toEqual(Object.keys(gateWhy).sort())
+    expect(gates.map((g) => g.reason).sort()).toEqual([...Object.keys(gateWhy), "'this-computer'"].sort())
     for (const g of gates) expect(scope(g.at).headers, g.reason).toMatch(gateWhy[g.reason]!)
     expect(src.slice(src.indexOf('async function firstOnByDefault'), src.indexOf('async function firstOnByDefault') + 600)).toContain('oneServiceHere(host)')
 

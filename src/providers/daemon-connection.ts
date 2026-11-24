@@ -4430,9 +4430,10 @@ export class DaemonConnection {
       daemonNames: () => conn.daemonNames(),
       // The hello's word: a host's one Walnut service is this Walnut's follower when its home is ours.
       servesAs: () => conn.servesAs,
-      // The offer the mode decision reads (serviceModeWant): the cloud box is never offered one.
+      // The offer the mode decision reads (serviceModeWant, wantedNow): the cloud box is never offered one,
+      // and a daemon not under the service launcher cannot become one before an update.
       oneServiceWanted: async () => {
-        if (conn.isCloudTunnel) return false
+        if (conn.isCloudTunnel || !conn._launcher) return false
         const offer = await hostServiceOfferWanted(conn.hostKey, pooledMachineIdOf)
         return offer === false ? false : (await serviceLauncherWanted()) ? offer : false
       },
