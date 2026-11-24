@@ -146,3 +146,51 @@ describe('the switch case, replayed', () => {
     expect(t.reply).not.toContain('Did you not answer me already')
   })
 })
+
+describe('his request in needs, then a card of the node\'s own for the same task (the threads inspection, item 9)', () => {
+  let fence = ''
+  let his = ''
+  const OTHER = { separate_reason: 'The sprinkler valve is another decision, about another task.' }
+
+  it('the second card for the same task\'s decision is refused until it names his card as replaced', async () => {
+    fence = (await addTask({ title: 'Orchard fence posts', project: 'Triage', parent_task_id: taskId })).task.id
+    // Ten minutes before his last message above, so it opens its own thread (a message within 3 minutes joins his last one's).
+    const at = new Date(Date.now() - 10 * 60_000).toISOString()
+    const r = await api<{ thread: { id: string }; created: boolean }>('POST', `/tasks/${taskId}/threads`, { text: 'Which fence posts should we order for the orchard?', at })
+    expect(r.json.created).toBe(true)
+    his = r.json.thread.id
+    const put = await op('thread_update', {
+      id: his, state: 'needs', add_tasks: [fence], ...KIND, ...OTHER,
+      reply: 'Order oak or larch posts for the orchard fence? I recommend larch: it lasts as long and costs a third less.',
+      options: [{ label: 'Larch (recommended)', recommended: true }, { label: 'Oak' }],
+    })
+    expect(put.ok, JSON.stringify(put)).toBe(true)
+    const draft = {
+      title: 'Orchard fence: larch or oak posts?', from: 'task', tasks: [fence], ...KIND,
+      text: 'Order larch posts for the orchard fence (a third cheaper, lasts as long as oak)? I recommend it.',
+      reply: 'Order larch posts for the orchard fence? I recommend it: a third cheaper than oak and it lasts as long.',
+      options: [{ label: 'Larch (recommended)', recommended: true }, { label: 'Oak' }],
+    }
+    // Before this change his card was no ask of the node's own, so only the sprinkler card was named.
+    const unnamed = await op('thread_create', draft)
+    expect(unnamed.ok).toBe(false)
+    expect((unnamed as { message: string }).message).toContain(his)
+  })
+
+  it('named, his old card closes with where it is asked now, and one card asks it', async () => {
+    const made = await op('thread_create', {
+      title: 'Orchard fence: larch or oak posts?', from: 'task', tasks: [fence], ...KIND, ...OTHER, supersedes: [his],
+      text: 'Order larch posts for the orchard fence (a third cheaper, lasts as long as oak)? I recommend it.',
+      reply: 'Order larch posts for the orchard fence? I recommend it: a third cheaper than oak and it lasts as long.',
+      options: [{ label: 'Larch (recommended)', recommended: true }, { label: 'Oak' }],
+    })
+    expect(made.ok, JSON.stringify(made)).toBe(true)
+    const fresh = (made as { result: { thread: { id: string } } }).result.thread.id
+    const old = await thread(his)
+    expect(old.closed).toMatchObject({ how: 'dropped', told: true })
+    expect(old.reply).toMatch(/Asked now in "Orchard fence: larch or oak posts\?" \(th-/)
+    expect(old.options).toBeUndefined()
+    const open = (await readThreads(taskId)).threads.filter((t) => !t.closed && t.state === 'needs' && t.tasks?.includes(fence))
+    expect(open.map((t) => t.id)).toEqual([fresh])
+  })
+})

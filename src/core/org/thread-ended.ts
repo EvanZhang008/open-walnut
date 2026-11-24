@@ -12,14 +12,19 @@
  *          thread of its own (a decision or a result there); or
  *   quiet  it names no task, the node did not open it (a thread it keeps for him to follow), and
  *          nothing was written on it for QUIET_MS.
+ *   replaced  (answered or pending) its summary only points at another card, and an open decision
+ *          card of the same node names one of its tasks or is named by it: the decision is asked
+ *          there, so this one holds nothing (the threads inspection, item 9: Main's old card said
+ *          "replaced by the new card, pick there" in Done beside the new card asking it).
  * Closed, it is in his Done for its week like any other, and a word of his on the subject opens a
- * new one. Answered, needs, new and working threads are never closed here: they hold something for
- * him or are the node's move. Pure, but for closeEndedThreads.
+ * new one. Needs, new and working threads are never closed here, nor an answered one but a pointer:
+ * they hold something for him or are the node's move. Pure, but for closeEndedThreads.
  */
 import type { Task } from '../types.js';
 import { deliveryOpen, isPlainReaction, type OrgThread, type ThreadsFile } from './threads-model.js';
 import { changedForHimAt, shownToHim, snoozedNow, watchedNow } from './thread-view.js';
 import { inAcknowledged } from './thread-known.js';
+import { summaryPointsElsewhere } from './thread-summary-content.js';
 
 /** A task's work counts as ended this long after it completed. */
 export const ENDED_MS = 3 * 24 * 3600_000;
@@ -27,7 +32,7 @@ export const ENDED_MS = 3 * 24 * 3600_000;
 export const QUIET_MS = 14 * 24 * 3600_000;
 
 export type EndedTask = Pick<Task, 'id' | 'phase'> & Partial<Pick<Task, 'completed_at' | 'updated_at'>>;
-export type EndedWhy = 'work' | 'quiet';
+export type EndedWhy = 'work' | 'quiet' | 'replaced';
 
 /**
  * A word of his after the node's last answer on `t`, other than a bare ok or thanks. An answer is
@@ -35,7 +40,7 @@ export type EndedWhy = 'work' | 'quiet';
  * line's routine summary (`lineReplyAt` equal to `replyAt`), which rewrites the card each turn
  * whatever he asked.
  */
-function hisWordOpen(t: OrgThread): boolean {
+export function hisWordOpen(t: OrgThread): boolean {
   const own = t.replyAt && t.lineReplyAt !== t.replyAt ? t.replyAt : undefined;
   const answered = [own, ...t.messages.map((m) => m.answer?.at)].filter((v): v is string => !!v).sort().pop() ?? '';
   return t.messages.some((m) => m.at > answered && !isPlainReaction(m.text));
@@ -54,13 +59,22 @@ export const HOLDS: Record<'letter' | 'ask' | 'choice', (t: OrgThread) => boolea
 /** The threads of a linked task, to see whether one still shows him something there. */
 export type ThreadsOf = (taskId: string) => readonly OrgThread[] | undefined;
 
+/**
+ * Something on `t` is still his, so nothing closes it for him: he watches or snoozed it, it is in
+ * Acknowledged while the AI places it (its first minutes: the ack settle's), it holds an item
+ * (HOLDS), a reply of his is on its way, or a word of his is unanswered. `except`: a hold the caller
+ * itself just settled (a replaced card's own letter). Pure.
+ */
+export function holdsHim(t: OrgThread, now: number = Date.now(), except?: keyof typeof HOLDS): boolean {
+  if (watchedNow(t) || snoozedNow(t, now) || inAcknowledged(t)) return true;
+  if (Object.entries(HOLDS).some(([kind, holds]) => kind !== except && holds(t))) return true;
+  return t.messages.some(deliveryOpen) || hisWordOpen(t);
+}
+
 /** Why `t` on node `node` closes now, or null. Pure. */
 export function endedWhy(t: OrgThread, node: string, tasks: ReadonlyMap<string, EndedTask>, now: number = Date.now(), threadsOf?: ThreadsOf): EndedWhy | null {
   if (t.closed || t.movedTo || t.state !== 'pending') return null;
-  // Acknowledged and still being placed (its first minutes): the ack settle's. Placed, it is any other thread.
-  if (watchedNow(t) || snoozedNow(t, now) || inAcknowledged(t)) return null;
-  if (Object.values(HOLDS).some((holds) => holds(t))) return null;
-  if (t.messages.some(deliveryOpen) || hisWordOpen(t)) return null;
+  if (holdsHim(t, now)) return null;
   const ids = (t.tasks ?? []).filter((id) => id !== node);
   if (ids.length) {
     for (const id of ids) {
@@ -79,12 +93,53 @@ export function endedWhy(t: OrgThread, node: string, tasks: ReadonlyMap<string, 
   return Number.isFinite(last) && now - last >= QUIET_MS ? 'quiet' : null;
 }
 
-/** The file with every ended thread closed by Walnut, and what closed. Pure. */
+/** An answer on `t` he has not read yet (its message's readAt before it): still his to read there. Pure. */
+export function answerUnread(t: Pick<OrgThread, 'messages'>): boolean {
+  return t.messages.some((m) => !!m.answer && !(m.readAt && m.readAt >= m.answer.at));
+}
+
+/**
+ * The open decision card of the same node that replaced `t`, or null (review 2026-11-24: never a
+ * result card beside an unrelated decision on the same task). `t` is answered or pending, holds
+ * nothing of his (holdsHim, and no answer he has not read), its summary only points elsewhere
+ * (summaryPointsElsewhere), and a needs thread other than it is named by that summary (its id or
+ * title), or, when `t` itself once waited on him (a decision card), names one of its tasks (the
+ * node aside). Pure.
+ */
+export function replacedBy(t: OrgThread, file: ThreadsFile, now: number = Date.now()): string | null {
+  if (t.closed || t.movedTo || (t.state !== 'answered' && t.state !== 'pending')) return null;
+  // Its summary only points elsewhere: a node's words, or the line a replaced card was given (supersedes).
+  if (!t.reply || !(summaryPointsElsewhere(t.reply) || REPLACED_LINE_RE.test(t.reply.trim())) || holdsHim(t, now) || answerUnread(t)) return null;
+  const reply = t.reply;
+  const own = new Set((t.tasks ?? []).filter((id) => id !== file.taskId));
+  const decided = !!t.needsAt;
+  const named = (n: OrgThread) => reply.includes(n.id) || (n.title.trim().length >= TITLE_NAMED_MIN && reply.includes(n.title.trim()));
+  const by = file.threads.find((n) => n.id !== t.id && !n.closed && !n.movedTo && n.state === 'needs'
+    && (named(n) || (decided && (n.tasks ?? []).some((id) => own.has(id)))));
+  return by?.id ?? null;
+}
+
+/** The line a replaced card says, in the language the cards are written in (the new card's title). Pure. */
+export function replacedLine(now: { id: string; title: string }): string {
+  return /[\u4e00-\u9fff]/.test(now.title) ? `\u73b0\u5728\u6539\u5728\u201c${now.title}\u201d\u91cc\u95ee\uff08${now.id}\uff09\u3002` : `Asked now in "${now.title}" (${now.id}).`;
+}
+/** replacedLine's words, in either language. */
+const REPLACED_LINE_RE = /^(?:\u73b0\u5728\u6539\u5728\u201c[\s\S]*\u201d\u91cc\u95ee\uff08th-[\w-]+\uff09\u3002|Asked now in "[\s\S]*" \(th-[\w-]+\)\.)$/;
+
+/** A title this long, found in a summary, names that card (a short one could be any words). */
+const TITLE_NAMED_MIN = 8;
+
+/** Why `t` closes now (replaced first, then ended), or null. Pure. */
+export function closeWhy(t: OrgThread, file: ThreadsFile, tasks: ReadonlyMap<string, EndedTask>, now: number = Date.now(), threadsOf?: ThreadsOf): EndedWhy | null {
+  return replacedBy(t, file, now) ? 'replaced' : endedWhy(t, file.taskId, tasks, now, threadsOf);
+}
+
+/** The file with every ended or replaced thread closed by Walnut, and what closed. Pure. */
 export function closeEnded(file: ThreadsFile, tasks: ReadonlyMap<string, EndedTask>, now: number = Date.now(), threadsOf?: ThreadsOf): { file: ThreadsFile; closed: Array<{ id: string; why: EndedWhy }> } {
   const at = new Date(now).toISOString();
   const closed: Array<{ id: string; why: EndedWhy }> = [];
   const threads = file.threads.map((t) => {
-    const why = endedWhy(t, file.taskId, tasks, now, threadsOf);
+    const why = closeWhy(t, file, tasks, now, threadsOf);
     if (!why) return t;
     closed.push({ id: t.id, why });
     const { snoozed: _s, options: _o, ...rest } = t;
@@ -93,7 +148,7 @@ export function closeEnded(file: ThreadsFile, tasks: ReadonlyMap<string, EndedTa
   return closed.length ? { file: { ...file, threads }, closed } : { file, closed };
 }
 
-/** The sweep: every node's ended threads closed (thread-answers.ts sweepAll). Returns how many. */
+/** The sweep: every node's ended and replaced threads closed (thread-answers.ts sweepAll). Returns how many. */
 export async function closeEndedThreads(now: number = Date.now()): Promise<number> {
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return 0;
@@ -106,7 +161,7 @@ export async function closeEndedThreads(now: number = Date.now()): Promise<numbe
   for (const node of await store.threadTaskIds()) {
     const file = await store.readThreads(node).catch(() => null);
     if (!file) continue;
-    const candidates = file.threads.filter((t) => endedWhy(t, node, tasks, now));
+    const candidates = file.threads.filter((t) => closeWhy(t, file, tasks, now));
     if (!candidates.length) continue;
     for (const id of new Set(candidates.flatMap((t) => t.tasks ?? []))) {
       if (!own.has(id)) own.set(id, (await store.readThreads(id).catch(() => null))?.threads ?? []);
