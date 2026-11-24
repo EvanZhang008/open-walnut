@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
-const disk = vi.hoisted(() => ({ present: true, remake: 'present' as 'present' | 'no', checks: [] as Array<{ cwd: string; host?: string }>, remakes: [] as unknown[][], noted: [] as unknown[][] }))
+const disk = vi.hoisted(() => ({ present: true, remake: 'present' as 'present' | 'pending' | 'no', checks: [] as Array<{ cwd: string; host?: string }>, remakes: [] as unknown[][], noted: [] as unknown[][] }))
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-folder-prep'))
 vi.mock('../../src/providers/daemon-connection.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -189,6 +189,36 @@ describe('a woken session whose released workspace is made again before its host
     await vi.waitFor(() => expect(errors).toEqual([expect.objectContaining({ sessionId: HOST_SID, errorKind: 'delivery_failed', parked: true })]), WAIT)
     expect(sent).toEqual([])
     bus.unsubscribe('test-folder-prep')
+  })
+
+  it('a host-judged send never waits for the remake: its line waits parked here, quietly, and goes once the workspace is there', async () => {
+    disk.remake = 'pending'
+    await hostJudgedStopped()
+    const { sent } = fakeSide()
+    const errors: unknown[] = []
+    bus.subscribe('test-folder-prep-pending', (e) => { if (e.name === EventNames.SESSION_ERROR) errors.push(e.data) }, { global: true, interest: [EventNames.SESSION_ERROR] })
+    try {
+      await enqueueMessage(HOST_SID, 'wake up', { id: 'qm-fp-5', sentBy: 'person' })
+      send(HOST_SID)
+      await vi.waitFor(async () => expect((await getQueue(HOST_SID)).map((m) => `${m.id}:${m.status}`)).toEqual(['qm-fp-5:parked']), WAIT)
+      // Asked for, never waited for here: the session's command chain (a Stop) is not held behind it.
+      expect(disk.remakes[0][3]).toMatchObject({ waitMs: 0, resume: true })
+      // The background remake follows it (noteFolderGone: kickRemake), and nothing failed yet.
+      await vi.waitFor(() => expect(disk.noted).toEqual([[HOST_SID, { cwd: WS, host: 'devbox' }]]), WAIT)
+      expect(errors).toEqual([])
+      expect(sent).toEqual([])
+      // The remake ends: what waited goes to the host, once.
+      disk.present = true
+      await folderIsBack(HOST_SID, 'gate-task-b')
+      await vi.waitFor(() => expect(sent.filter((s) => s.op === 'send')).toHaveLength(1), WAIT)
+      expect(sent[0].body.queued).toEqual([expect.objectContaining({ id: 'qm-fp-5', message: 'wake up' })])
+      await vi.waitFor(async () => expect(await getQueue(HOST_SID)).toEqual([]), WAIT)
+      await settle(60)
+      expect(sent.filter((s) => s.op === 'send')).toHaveLength(1)
+      expect(errors).toEqual([])
+    } finally {
+      bus.unsubscribe('test-folder-prep-pending')
+    }
   })
 
   it('a host-judged session whose CLI runs there: a send asks nothing about its folder', async () => {

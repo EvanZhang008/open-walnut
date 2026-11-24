@@ -134,11 +134,17 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   const { takeLinesForHost, parkMessages, peekLinesForHost } = await import('../core/session-message-queue.js')
   // A send that wakes its CLI at rest on the host (a kick, a line that runs): its folder is made
   // ready here first, as a spawn here would (a released workspace made again); the host's service
-  // cannot. Still gone: the lines that would run park here the spawn's way, nothing goes.
+  // cannot. Never waited for here: this session's command chain (a Stop too) would wait behind it.
+  // Still gone: the lines that would run park here, and the remake (kickRemake, its own longer
+  // wait) sends them when the folder is there; one that cannot be made takes the folder-gone way.
   const wakes = o.kick || (await peekLinesForHost(sid).catch(() => [])).some((m) => !heldOf(m))
   if (wakes) {
-    const folder = await prepareHostSessionFolder(sid, host)
-    if (!folder.ok) { await parkWaitingOnGoneFolder(sid, folder.error ?? 'Working directory not available', folder.folder); settle(sid); return }
+    const folder = await prepareHostSessionFolder(sid, host, { remakeWaitMs: 0 })
+    if (!folder.ok) {
+      await parkWaitingOnGoneFolder(sid, folder.error ?? 'Working directory not available', folder.folder, folder.remake === 'pending')
+      settle(sid)
+      return
+    }
   }
   let taken: Awaited<ReturnType<typeof takeLinesForHost>>
   try { taken = await takeLinesForHost(sid) } catch (err) {
@@ -209,17 +215,20 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
 }
 
 /**
- * The folder of a host-run session is gone and was not made again: what would run parks here with
- * the spawn's reason and the folder is recorded, the runner's way for its own (parkOnGoneFolder:
- * noteFolderGone, its banner and button, the parked batch said once). The button's continue, or a
- * remake that ends later, sends the rows again.
+ * The folder of a host-run session is not there: what would run parks here with the spawn's reason
+ * and the folder is recorded, the runner's way for its own (parkOnGoneFolder: noteFolderGone, which
+ * follows a remake on its way, kickRemake, and sends the rows once the folder is there; else the
+ * banner and its button). `remaking`: the task's workspace is being made again, so nothing failed
+ * yet and no failure is said.
  */
-async function parkWaitingOnGoneFolder(sid: string, reason: string, folder?: { cwd: string; host: string }): Promise<void> {
+async function parkWaitingOnGoneFolder(sid: string, reason: string, folder: { cwd: string; host: string } | undefined, remaking: boolean): Promise<void> {
   const { peekLinesForHost } = await import('../core/session-message-queue.js')
   const runs = (await peekLinesForHost(sid).catch(() => [])).filter((m) => !heldOf(m))
   const { parkOnGoneFolder } = await import('./claude-code-session.js')
-  await parkOnGoneFolder(sid, runs, reason, folder)
-  log.session.warn('host-run session: its folder is gone; its lines are parked here, not sent', { sessionId: sid, parked: runs.length, error: reason })
+  await parkOnGoneFolder(sid, runs, reason, folder, { quiet: remaking })
+  log.session.warn(remaking
+    ? 'host-run session: its workspace is being made again; its lines wait here and go when it is there'
+    : 'host-run session: its folder is gone; its lines are parked here, not sent', { sessionId: sid, parked: runs.length, error: reason })
 }
 
 /** A send (or a redelivery) of a session whose hand-over is unanswered: it waits, its kick kept for the release. */

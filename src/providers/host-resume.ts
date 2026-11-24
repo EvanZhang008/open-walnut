@@ -17,9 +17,10 @@
  *              the host's runtime says no CLI of it runs (no answer is not at rest). The runner's
  *              own facts are read again right before the hand, with no await between. A live
  *              session is never handed over.
- *   folder     before the hand its folder is made ready on this leader, as a spawn here makes it
- *              (session-folder-prep.ts prepareFolderForHost: a released workspace made again); one
- *              still gone stays legacy ('folder_gone'), whose spawn takes the folder-gone way.
+ *   folder     first, before the at-rest facts are read, its folder is made ready on this leader, as
+ *              a spawn here makes it (session-folder-prep.ts prepareFolderForHost: a released
+ *              workspace made again), so the window from the facts to the hand stays short; one still
+ *              gone stays legacy ('folder_gone', held a while), whose spawn takes the folder-gone way.
  *   ACP        an ACP engine's session (Codex and the rest) is handed the same way to a host whose
  *              service names SESSION_RESUME_ACP_CAP (else 'acp_engine': legacy). Nothing moves: its
  *              worker, its journal and the engine's own thread are on the host already, in the daemon
@@ -288,14 +289,31 @@ function askedHostNow(sid: string): string | null {
   return isAcpEngine((row?.engine ?? undefined) as SessionRecord['engine']) ? acpResumeHostOf(sid) : resumeHostOf(sid)
 }
 
+/**
+ * Its folder made ready here first, as a spawn here would (a released workspace made again): the
+ * host's service cannot. Before the at-rest facts are read, so the window from those facts to the
+ * hand stays as short as it was (the remake can take minutes). A session the runner holds live is
+ * not asked (it is never handed). False: gone and not made again, so it stays legacy for a while and
+ * the legacy delivery's spawn takes the folder-gone way.
+ */
+async function folderReadyForResume(sid: string, host: string, r: RunnerRest): Promise<boolean> {
+  const live = runnerFacts(sid, r)
+  if (live.sdk || live.wrapperLive || live.turnInFlight || live.restartInFlight || live.preparing) return true
+  const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+  const row = await getSessionByClaudeId(sid).catch(() => null)
+  if (!row?.cwd || row.judge === 'host') return true
+  if ((await prepareFolderForHost(sid, { taskId: row.taskId, cwd: row.cwd, host: row.host ?? host })).ok) return true
+  holdLegacy(sid)
+  log.session.info('host resume: the session stays legacy, it is not at rest', { sessionId: sid, host, why: 'folder_gone' })
+  return false
+}
+
 async function resumeNow(sid: string, host: string, r: RunnerRest, o: { attaching?: boolean }): Promise<boolean> {
+  if (!(await folderReadyForResume(sid, host, r))) return false
   const { facts: read, row, transferRunning } = await restFacts(sid, r, host)
   const facts: RestFacts = { ...read, attaching: o.attaching === true }
   let why = notAtRestReason(facts)
   if (!why) why = notAtRestReason({ ...facts, cli: await cliOnHost(host, sid) })
-  // Its folder made ready here first, as a spawn here would (a released workspace made again): the
-  // host's service cannot. Gone and not made again: the legacy delivery takes the folder-gone way.
-  if (!why && row && !(await prepareFolderForHost(sid, { taskId: row.taskId, cwd: row.cwd, host: row.host ?? host })).ok) why = 'folder_gone'
   if (!why) await r.unparkWaiting(sid).catch(() => {})
   // After every await above, and with none from here to the hand: a Restart or a transfer begun meanwhile keeps it legacy.
   if (!why) why = notAtRestReason({ ...facts, ...runnerFacts(sid, r), transferRunning: transferRunning(), cli: false })

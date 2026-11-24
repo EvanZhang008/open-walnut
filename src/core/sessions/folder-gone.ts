@@ -418,7 +418,7 @@ async function sendWaitingOnHost(sessionId: string, notice: string | null, since
     const sent = await onJudgingHost(sessionId, 'sendFolderWaiting', [notice, since ?? null])
     return typeof sent === 'number' ? sent : 0
   } catch (err) {
-    log.session.warn('folder gone: the host that runs the session was not asked to send what waited on the folder', { sessionId, error: err instanceof Error ? err.message : String(err) })
+    log.session.warn('folder gone: the host that runs the session did not send what waited on the folder (a host before this step answers no_such_member: its rows wait there until it is updated, or for the button)', { sessionId, error: err instanceof Error ? err.message : String(err) })
     return 0
   }
 }

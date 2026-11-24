@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { HOST_FORWARDED_RUNNER_METHODS, HOST_RESPAWNS } from '../../src/providers/host-judged-runner.js'
+import { HOST_CALL_ALLOWLIST } from '../../src/core/session-channel/host-calls.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SRC = path.join(ROOT, 'src')
@@ -27,11 +28,33 @@ const NO_PREP: Record<string, string> = {
   'src/providers/host-handover.ts:askHostOwns': 'holdOnly probe, starts nothing',
   // The phone's send through the cloud companion, a replica (no workspace can be made there): a host
   // that refuses it on a gone folder says so on its channel to the leader, whose session:error
-  // handler takes the folder-gone way (session-folder-prep.ts noteHostFolderGone).
-  'src/core/session-channel/companion-host-ops.ts:sendViaHost': 'runs on the companion; the host refusal reaches the leader',
+  // handler takes the folder-gone way (session-folder-prep.ts noteHostFolderGone). Fallback too:
+  // the host's own restart recovery, auto-continue and the other resends of its own runner.
+  'src/core/session-channel/companion-host-ops.ts:sendViaHost': 'fallback: runs on the companion; the host refusal reaches the leader',
 }
 
-const PREP = /\b(prepareFolderForHost|prepareHostSessionFolder)\(/
+/**
+ * Host calls whose name says they may start, resume or wake a CLI on the host, by `target.member`,
+ * each with how its folder is covered. 'fallback': it runs on the host's own runner, so only the
+ * leader's handling of the host's gone-folder report covers it (server.ts session:error, then
+ * noteHostFolderGone: kickRemake, then sendFolderWaiting).
+ */
+const WAKES: Record<string, string> = {
+  'runner.reinitialize': 'prepared on the leader first (HOST_RESPAWNS, respawnOnHost)',
+  'session.retryCancelledLines': 'fallback',
+  'lifecycle.changeSessionModeOf': 'fallback (a mode change may restart the CLI on the host)',
+  'runner.changePermissionMode': 'acts on a live CLI only: its folder is there',
+  'runner.recoverCancelledForSession': 'never spawns: puts cancelled rows back',
+  'runner.getOrAttachLiveSession': 'a lookup of what runs; starts nothing',
+  'runner.findOrAttachAcpSession': 'a lookup of what runs; starts nothing',
+  'acp.reattachWatcher': 'watches a running worker\'s journal; starts nothing',
+  'session.awaitSpawn': 'waits for a spawn already under way; starts nothing',
+  'lifecycle.sendFolderWaiting': 'sent only once the folder is back (folder-gone.ts sendWaiting)',
+}
+const WAKE_NAME = /retry|restart|resume|spawn|reinit|attach|recover|send|ModeOf|PermissionMode/i
+
+/** The helper, or a wrapper of it whose body calls it (checked below). */
+const PREP = /\b(prepareFolderForHost|prepareHostSessionFolder|folderReadyForResume)\(/
 const HAND = /startOnHostCatchingUp\(|\.startOnHost\(|\.sendToHost\(|['`]\/host-api\/sessions\/(start|send)['`]/
 const FN = /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/
 
@@ -84,6 +107,15 @@ describe('every start or resume this leader hands a host makes its folder ready 
     expect(Object.keys(NO_PREP).filter((k) => !found.has(k))).toEqual([])
   })
 
+  it('the resume\'s wrapper prepares the folder (before the at-rest facts are read)', () => {
+    const src = readFileSync(path.join(SRC, 'providers/host-resume.ts'), 'utf8')
+    const at = src.indexOf('async function folderReadyForResume(')
+    expect(src.slice(at, src.indexOf('\n}\n', at))).toMatch(/prepareFolderForHost\(/)
+    const body = src.slice(src.indexOf('async function resumeNow('))
+    expect(body.indexOf('folderReadyForResume(')).toBeGreaterThan(0)
+    expect(body.indexOf('folderReadyForResume(')).toBeLessThan(body.indexOf('restFacts('))
+  })
+
   it('the leader side sends a start or a send to a host only through its two methods', () => {
     const src = readFileSync(path.join(SRC, 'core/session-channel/leader-side.ts'), 'utf8')
     expect(src.match(/request\(\s*\w+,\s*'start'/g) ?? []).toHaveLength(1)
@@ -100,6 +132,15 @@ describe('every start or resume this leader hands a host makes its folder ready 
     const body = src.slice(at, src.indexOf('\n}\n', at))
     expect(body.indexOf('prepareHostSessionFolder(')).toBeGreaterThan(0)
     expect(body.indexOf('prepareHostSessionFolder(')).toBeLessThan(body.indexOf('callRunner('))
+  })
+
+  it('every host call that may wake a CLI is listed with how its folder is covered', () => {
+    const named = Object.entries(HOST_CALL_ALLOWLIST).flatMap(([target, members]) => (members as readonly string[]).map((m) => `${target}.${m}`))
+    const wakes = named.filter((n) => WAKE_NAME.test(n.split('.')[1]))
+    expect(wakes.filter((n) => !WAKES[n])).toEqual([])
+    expect(Object.keys(WAKES).filter((n) => !named.includes(n))).toEqual([])
+    // The ones the fallback alone covers, said out loud.
+    expect(Object.keys(WAKES).filter((n) => WAKES[n].startsWith('fallback')).sort()).toEqual(['lifecycle.changeSessionModeOf', 'session.retryCancelledLines'])
   })
 
   it('the runner\'s own spawn uses the same helper, with no second copy beside it', () => {

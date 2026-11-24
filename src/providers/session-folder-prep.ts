@@ -31,24 +31,35 @@ export interface FolderPrep {
   sshTarget?: SshTarget
   /** The spawn's step clock (its timing breakdown). */
   onStep?: (step: 'taskDirMs' | 'cwdCheckMs') => void
+  /**
+   * How long to wait here for a remake (default SPAWN_WAIT_MS, the spawn's). 0: ask for it and
+   * return at once; the caller hands the wait to the background remake (kickRemake).
+   */
+  remakeWaitMs?: number
+}
+
+/** What a preparation found: the folder is there (ok), or why not, and what became of its remake. */
+export type FolderPrepResult = CwdCheckResult & {
+  /** A remake was asked for: 'pending' still on its way, 'no' not a workspace this Walnut can make. */
+  remake?: 'present' | 'pending' | 'no'
 }
 
 /** Restore, check, and remake: the folder is there (ok), or why not, in the spawn's own words. */
-export async function prepareSessionFolder(p: FolderPrep): Promise<CwdCheckResult> {
+export async function prepareSessionFolder(p: FolderPrep): Promise<FolderPrepResult> {
   const host = p.host ?? undefined
   if (p.taskId) {
     const { restoreOwnTaskDir } = await sessionPort().launch.loadTaskDirPlace()
     await restoreOwnTaskDir(p.taskId, p.cwd, host).catch(() => false)
   }
   p.onStep?.('taskDirMs')
-  let check = await checkCwdExists(p.cwd, host, p.sshTarget)
+  let check: FolderPrepResult = await checkCwdExists(p.cwd, host, p.sshTarget)
   // A folder in the task's isolated workspace, which a cleanup removed after the task was
   // completed: the workspace is made again at the same path and the start waits for it, so a
   // message to a woken task runs instead of parking.
   if (!check.ok && p.taskId && isFolderGoneReason(check.error)) {
     const { remakeForGoneFolder, SPAWN_WAIT_MS } = await import('../core/workspaces/remake.js')
-    const remade = await remakeForGoneFolder(p.taskId, p.cwd, host, { waitMs: SPAWN_WAIT_MS, resume: true }).catch(() => 'no' as const)
-    if (remade === 'present') check = await checkCwdExists(p.cwd, host, p.sshTarget)
+    const remade = await remakeForGoneFolder(p.taskId, p.cwd, host, { waitMs: p.remakeWaitMs ?? SPAWN_WAIT_MS, resume: true }).catch(() => 'no' as const)
+    check = remade === 'present' ? await checkCwdExists(p.cwd, host, p.sshTarget) : { ...check, remake: remade }
   }
   p.onStep?.('cwdCheckMs')
   return check
@@ -77,14 +88,14 @@ async function targetOf(host: string): Promise<SshTarget | undefined> {
  * A folder this leader cannot ask about (no folder named, not an absolute path, a host it has no
  * target for) is the host's to judge: ok.
  */
-export async function prepareFolderForHost(sid: string | null, p: { taskId?: string | null; cwd?: string | null; host: string }): Promise<CwdCheckResult> {
+export async function prepareFolderForHost(sid: string | null, p: { taskId?: string | null; cwd?: string | null; host: string; remakeWaitMs?: number }): Promise<FolderPrepResult> {
   const cwd = p.cwd ?? ''
   if (!cwd.startsWith('/')) return { ok: true }
   const sshTarget = isLocalHost(p.host) ? undefined : await targetOf(p.host)
   // checkCwdExists reads this machine's disk without a target: never for another host's folder.
   if (!isLocalHost(p.host) && !sshTarget) return { ok: true }
-  const check = await prepareSessionFolder({ taskId: p.taskId, cwd, host: isLocalHost(p.host) ? null : p.host, sshTarget })
-  if (!check.ok) log.session.warn('host session: its folder is gone and was not made again; nothing is handed to its host', { sessionId: sid, taskId: p.taskId, host: p.host, cwd, error: check.error })
+  const check = await prepareSessionFolder({ taskId: p.taskId, cwd, host: isLocalHost(p.host) ? null : p.host, sshTarget, ...(p.remakeWaitMs !== undefined ? { remakeWaitMs: p.remakeWaitMs } : {}) })
+  if (!check.ok) log.session.warn('host session: its folder is gone and is not there yet; nothing is handed to its host', { sessionId: sid, taskId: p.taskId, host: p.host, cwd, error: check.error, remake: check.remake })
   return check
 }
 
@@ -96,12 +107,12 @@ const liveOnHost = (status: string | undefined): boolean => status === 'running'
  * send whose lines run, a Restart). A session whose CLI runs is not asked (its folder is there).
  * `folder` names what was checked, for the caller's folder-gone way.
  */
-export async function prepareHostSessionFolder(sid: string, host: string): Promise<CwdCheckResult & { folder?: { cwd: string; host: string } }> {
+export async function prepareHostSessionFolder(sid: string, host: string, o: { remakeWaitMs?: number } = {}): Promise<FolderPrepResult & { folder?: { cwd: string; host: string } }> {
   const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
   const row = await getSessionByClaudeId(sid).catch(() => null)
   if (!row?.cwd || liveOnHost(row.process_status)) return { ok: true }
   const rowHost = row.host ?? host
-  const check = await prepareFolderForHost(sid, { taskId: row.taskId, cwd: row.cwd, host: rowHost })
+  const check = await prepareFolderForHost(sid, { taskId: row.taskId, cwd: row.cwd, host: rowHost, ...o })
   return check.ok ? check : { ...check, folder: { cwd: row.cwd, host: rowHost } }
 }
 

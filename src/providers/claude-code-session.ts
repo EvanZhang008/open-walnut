@@ -12017,10 +12017,11 @@ async function acpFolderGone(session: AcpSession): Promise<string | null> {
  * and the page hears the parked batch once. The ACP drain's refusal and a host-run session's whose
  * folder this leader could not make ready (host-judged-send.ts) share it.
  */
-export async function parkOnGoneFolder(sessionId: string, rows: QueuedMessage[], reason: string, folder?: { cwd: string; host?: string | null }): Promise<void> {
+export async function parkOnGoneFolder(sessionId: string, rows: QueuedMessage[], reason: string, folder?: { cwd: string; host?: string | null }, o: { quiet?: boolean } = {}): Promise<void> {
   if (rows.length > 0) await parkMessages(rows, reason).catch(() => {})
   await noteFolderGoneOnce(sessionId, folder?.cwd, folder?.host)
-  if (rows.length === 0) return
+  // Quiet: the task's workspace is being made again, whose end sends the rows: nothing failed yet.
+  if (rows.length === 0 || o.quiet) return
   reportBatchFailed(sessionId, rows.map((m) => m.id), reason)
   bus.emit(EventNames.SESSION_ERROR, {
     sessionId, error: reason, errorKind: 'delivery_failed' as const, parked: true,
