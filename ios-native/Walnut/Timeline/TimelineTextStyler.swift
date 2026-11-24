@@ -312,11 +312,15 @@ enum TimelineTextStyler {
             }
             if let link = run.link {
                 attrs[.link] = link
-                attrs[.foregroundColor] = UIColor.tintColor
+                // The chat's grey (the timeline draws only in chats), not the window's
+                // brown `tintColor`: a grey link reads as one by its underline, in the
+                // chat's quiet outline grey (chat-palette.css).
+                attrs[.foregroundColor] = Theme.Chat.accentColor
                 // A task mention reads as a name (semibold, from its intent), not
                 // as an address: no underline.
                 if !TaskMentionLink.isTaskLink(link) {
                     attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                    attrs[.underlineColor] = Theme.Chat.outlineColor
                 }
             }
             if run.underlineStyle != nil {

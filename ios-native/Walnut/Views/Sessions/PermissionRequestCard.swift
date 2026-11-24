@@ -263,6 +263,9 @@ struct PendingPermissionStack: View {
             // Cards scrolled past the box's top edge stay inside it instead of
             // drawing under the navigation bar.
             .clipped()
+            // An ask that waits on the person keeps the app's colour inside the grey chat (the
+            // web's `.permission-request-card.is-pending`): its keys, rings and pills are brown.
+            .walnutPalette(.app)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("session.permissionStack")
         }

@@ -29,8 +29,8 @@ let voiceControlTarget: CGFloat = 44
 /// one draws `keyShape`, a circle, and a key with a word on it (Queue) the
 /// capsule of the same height. The box's corner is rounded, never a capsule:
 /// 2026-11-21 the user called the oval Threads box ugly and asked for one
-/// unified box; 2026-11-22 he asked why the keys had turned square. Send is `Theme.tint` with `Theme.onTint`, a grey fill when there
-/// is nothing to send. Form fields (settings, search, task editors) are not
+/// unified box; 2026-11-22 he asked why the keys had turned square. Send is the palette's accent with its `onTint`, a grey fill when there
+/// is nothing to send; in a chat the palette is the chat's grey (`WalnutPalette`). Form fields (settings, search, task editors) are not
 /// message boxes and keep their own style.
 enum MessageBox {
     /// The box's corner: rounded, never a capsule (the web's `--input-radius`, 12).
@@ -64,6 +64,7 @@ struct VoiceMicButton: View {
     let voice: VoiceRecorder
     let identifier: String
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
@@ -74,7 +75,7 @@ struct VoiceMicButton: View {
             // 5.84:1 light, 5.3:1 on dark grey.
             ProgressView()
                 .controlSize(.small)
-                .tint(Theme.tint)
+                .tint(palette.tint)
                 .frame(width: size.diameter, height: size.diameter)
                 .frame(width: size.target, height: size.target)
                 .accessibilityElement(children: .ignore)
@@ -111,6 +112,7 @@ struct VoiceRecordingBar: View {
     /// for the words, then sends the whole box (`DictationSendGate`).
     var onSend: (() -> Void)?
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
@@ -134,9 +136,9 @@ struct VoiceRecordingBar: View {
             Button(action: onStop) {
                 Image(systemName: "checkmark")
                     .font(.system(size: size.glyphSize, weight: .semibold))
-                    .foregroundStyle(Theme.onTint)
+                    .foregroundStyle(palette.onTint)
                     .frame(width: size.diameter, height: size.diameter)
-                    .background(Theme.accent, in: MessageBox.keyShape)
+                    .background(palette.accent, in: MessageBox.keyShape)
                     .frame(width: size.target, height: size.target)
                     .contentShape(Rectangle())
             }
@@ -148,9 +150,9 @@ struct VoiceRecordingBar: View {
                 Button(action: onSend) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
-                        .foregroundStyle(Theme.onTint)
+                        .foregroundStyle(palette.onTint)
                         .frame(width: size.diameter, height: size.diameter)
-                        .background(Theme.accent, in: MessageBox.keyShape)
+                        .background(palette.accent, in: MessageBox.keyShape)
                         .frame(width: size.target, height: size.target)
                         .contentShape(Rectangle())
                 }
@@ -249,6 +251,7 @@ struct VoiceNoticeRows: View {
     let onRecovered: (String) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.openURL) private var openURL
+    @Environment(\.walnutPalette) private var palette
 
     /// The notices' own height, measured, so the frame around them is exactly
     /// that up to `maxHeight`.
@@ -398,7 +401,7 @@ struct VoiceNoticeRows: View {
         Button {
             voice.discardPending()
         } label: {
-            Image(systemName: "trash").font(.callout).foregroundStyle(Theme.tint).modifier(VoiceTarget())
+            Image(systemName: "trash").font(.callout).foregroundStyle(palette.tint).modifier(VoiceTarget())
         }
         .accessibilityLabel("Discard saved recordings")
         .accessibilityIdentifier("\(idPrefix).voiceDiscardPending")
@@ -652,6 +655,7 @@ struct ActionCapsuleButton: View {
 struct ActionCapsuleLabel: View {
     let title: String
     var prominent = true
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         Text(title)
@@ -659,8 +663,9 @@ struct ActionCapsuleLabel: View {
             .lineLimit(1)
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .foregroundStyle(prominent ? Theme.onTint : Theme.tint)
-            .background(prominent ? Theme.accent : Theme.tintSoft, in: Capsule())
+            .foregroundStyle(prominent ? palette.onTint : palette.tint)
+            // Words on the fill: the palette's fill for words (4.5:1 in a chat's dark too).
+            .background(prominent ? palette.keyFill : palette.tintSoft, in: Capsule())
     }
 }
 

@@ -144,7 +144,8 @@ struct MessageRow: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
                         .background(
-                            failed ? Theme.danger.opacity(0.08) : Theme.tintSoft,
+                            // The person's words in the chat's grey bubble (`Theme.Chat`, as the web).
+                            failed ? Theme.danger.opacity(0.08) : Theme.Chat.userBubble,
                             in: RoundedRectangle(cornerRadius: 20, style: .continuous)
                         )
                         .overlay {
@@ -558,7 +559,8 @@ struct NotificationCard: View {
             || message.text.contains("**Session Error**") || message.text.contains("**Subagent Error**")
     }
 
-    private var accent: Color { isError ? Theme.danger : Theme.tint }
+    /// An error stays red; any other notice in a chat is the chat's grey.
+    private var accent: Color { isError ? Theme.danger : Theme.Chat.accent }
 
     private var iconName: String {
         switch message.source {

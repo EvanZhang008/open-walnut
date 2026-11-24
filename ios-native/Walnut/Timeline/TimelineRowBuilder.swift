@@ -290,7 +290,7 @@ final class TimelineRowBuilder {
                 .font: caption, .foregroundColor: Self.aboutDotColor(state), .baselineOffset: lift,
             ]
             var name: [NSAttributedString.Key: Any] = [
-                .font: pill, .foregroundColor: UIColor.tintColor, .baselineOffset: lift,
+                .font: pill, .foregroundColor: Theme.Chat.accentColor, .baselineOffset: lift,
             ]
             if let link { dot[.link] = link; name[.link] = link }
             text.append(NSAttributedString(string: "\u{25CF}\u{00A0}", attributes: dot))

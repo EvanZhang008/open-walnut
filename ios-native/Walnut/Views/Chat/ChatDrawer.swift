@@ -26,6 +26,8 @@ struct ChatDrawer: View {
     /// Optional so WalnutTests can host the drawer without the app environment;
     /// renaming or deleting an ask needs it, and those rows hide the menu there.
     @Environment(TasksStore.self) private var tasks: TasksStore?
+    /// The sidebar of chats is part of the chat: the chat's greys (`Theme.Chat`).
+    private var palette: WalnutPalette { .chat }
     /// Up while a drawer drag is being tracked, and EVERY action in here is behind
     /// it. A leftward close drag starts on a row, the row is a full-width button,
     /// and the finger never leaves its bounds, so SwiftUI still fires it on
@@ -216,6 +218,7 @@ struct ChatDrawer: View {
         } message: {
             Text(verbatim: actionError ?? "")
         }
+        .walnutPalette(.chat)
     }
 
     private static let topID = "chat.drawer.top"
@@ -448,20 +451,20 @@ struct ChatDrawer: View {
             Text(verbatim: agent.name)
                 .font(.subheadline)
                 .fontWeight(isActive ? .semibold : .regular)
-                .foregroundStyle(isActive ? Theme.tint : .primary)
+                .foregroundStyle(isActive ? palette.tint : .primary)
                 .lineLimit(2)
             Spacer(minLength: 4)
             if isActive {
                 Image(systemName: "checkmark")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.tint)
+                    .foregroundStyle(palette.tint)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isActive ? Theme.tintSoft : Color.clear,
+            isActive ? palette.tintSoft : Color.clear,
             in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)
@@ -582,7 +585,7 @@ struct ChatDrawer: View {
             Text(verbatim: AskProjectName.displayTitle(ask.title, project: asksProject))
                 .font(.subheadline)
                 .fontWeight(isActive ? .semibold : .regular)
-                .foregroundStyle(isActive ? Theme.tint : .primary)
+                .foregroundStyle(isActive ? palette.tint : .primary)
                 .lineLimit(2)
             Text(verbatim: RelativeTime.short(ask.activityAt))
                 .font(.caption)
@@ -593,7 +596,7 @@ struct ChatDrawer: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isActive ? Theme.tintSoft : Color.clear,
+            isActive ? palette.tintSoft : Color.clear,
             in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)
@@ -695,7 +698,7 @@ struct ChatDrawer: View {
             Text(verbatim: conversation.title ?? "New conversation")
                 .font(.subheadline)
                 .fontWeight(isActive ? .semibold : .regular)
-                .foregroundStyle(isActive ? Theme.tint : .primary)
+                .foregroundStyle(isActive ? palette.tint : .primary)
                 .lineLimit(2)
             Text(verbatim: RelativeTime.short(conversation.updatedAt))
                 .font(.caption)
@@ -706,7 +709,7 @@ struct ChatDrawer: View {
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isActive ? Theme.tintSoft : Color.clear,
+            isActive ? palette.tintSoft : Color.clear,
             in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)

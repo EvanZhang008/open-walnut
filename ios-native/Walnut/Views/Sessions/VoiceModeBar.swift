@@ -8,6 +8,8 @@ import SwiftUI
 /// Replay otherwise. The line above says what is happening in words, because
 /// the person may not be looking at the transcript at all.
 struct VoiceModeBar: View {
+    /// The chat's greys in a chat (`WalnutPalette`); a listening mic stays red.
+    @Environment(\.walnutPalette) private var palette
     let voice: VoiceModeController
     /// The session's own activity while it works ("Running Bash"), when known.
     let activity: String?
@@ -118,14 +120,14 @@ struct VoiceModeBar: View {
         } label: {
             ZStack {
                 Circle()
-                    .fill(phase == .listening ? Theme.danger : Theme.tint)
+                    .fill(phase == .listening ? Theme.danger : palette.accent)
                 if phase == .transcribing {
                     ProgressView()
-                        .tint(Theme.onTint)
+                        .tint(palette.onTint)
                 } else {
                     Image(systemName: phase == .listening ? "arrow.up" : "mic.fill")
                         .font(.system(size: micSize * 0.38, weight: .semibold))
-                        .foregroundStyle(Theme.onTint)
+                        .foregroundStyle(palette.onTint)
                 }
             }
             .frame(width: micSize, height: micSize)

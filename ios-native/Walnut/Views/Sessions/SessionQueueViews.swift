@@ -25,6 +25,8 @@ struct SessionQueueStrip: View {
     static let visibleRows = 3
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The chat's greys above a chat's composer (`WalnutPalette`).
+    @Environment(\.walnutPalette) private var palette
 
     /// The tray shares the screen with the composer and the keyboard: at the accessibility
     /// sizes it lists one message and the rest are behind "Show all".
@@ -127,7 +129,7 @@ struct SessionQueueStrip: View {
             // opens for it is the edit sheet.
             Text(queue.trayRows.count == 1 ? "Edit" : "Show all \(queue.trayRows.count)")
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(Theme.tint)
+                .foregroundStyle(palette.tint)
                 .frame(minHeight: 36)
                 .contentShape(Rectangle())
         }
@@ -177,8 +179,8 @@ struct SessionQueueStrip: View {
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .background(Theme.tintSoft, in: Capsule())
-            .foregroundStyle(Theme.tint)
+            .background(palette.tintSoft, in: Capsule())
+            .foregroundStyle(palette.tint)
     }
 
     /// Two or more messages a Stop held back, with nothing running: one tap puts them all in line again.
@@ -191,10 +193,10 @@ struct SessionQueueStrip: View {
             } label: {
                 Text("Send all")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.tint)
+                    .foregroundStyle(palette.tint)
                     .padding(.horizontal, 10)
                     .frame(minHeight: 32)
-                    .background(Theme.tintSoft, in: Capsule())
+                    .background(palette.tintSoft, in: Capsule())
                     .padding(6)
                     .contentShape(Rectangle())
                     .padding(-6)
@@ -261,10 +263,10 @@ struct SessionQueueStrip: View {
                 } label: {
                     Text("Send")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.tint)
+                        .foregroundStyle(palette.tint)
                         .padding(.horizontal, 10)
                         .frame(minWidth: 44, minHeight: 32)
-                        .background(Theme.tintSoft, in: Capsule())
+                        .background(palette.tintSoft, in: Capsule())
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                         .padding(.trailing, 4)
@@ -363,6 +365,7 @@ struct QueueUndoLine: View {
     let gone: WithdrawnQueuedMessage
     let onUndo: (WithdrawnQueuedMessage) -> Void
     let identifier: String
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         HStack(spacing: 8) {
@@ -379,7 +382,7 @@ struct QueueUndoLine: View {
             } label: {
                 Text("Undo")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.tint)
+                    .foregroundStyle(palette.tint)
                     .frame(minWidth: 44, minHeight: 36)
                     .contentShape(Rectangle())
             }
@@ -402,6 +405,7 @@ struct SessionQueuedMessageSheet: View {
     let turnRunning: Bool
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.walnutPalette) private var palette
     @State private var text = ""
     @State private var seeded = false
     @State private var saving = false
@@ -478,8 +482,8 @@ struct SessionQueuedMessageSheet: View {
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
                             .buttonStyle(.walnut(.secondary))
-                            .tint(Theme.tint)
-                            .foregroundStyle(Theme.tint)
+                            .tint(palette.tint)
+                            .foregroundStyle(palette.tint)
                             .disabled(saving || queue.busyIds.contains(row.id)
                                       || (emptied && !sendGate.isDictating && !sendGate.isWaiting))
                             .accessibilityIdentifier("session.queue.sendNow")
@@ -613,7 +617,6 @@ struct SessionQueuedMessageSheet: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.walnut(.primary))
-            .tint(Theme.accent)
             .accessibilityIdentifier("session.queue.stranded.keep")
             Button(role: .destructive) {
                 dismiss()

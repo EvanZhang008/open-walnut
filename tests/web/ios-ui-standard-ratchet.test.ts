@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { countIos, countFile, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
+import { countIos, countFile, codeLines, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
 
 const BASELINE = path.join(import.meta.dirname, 'ios-ui-standard-baseline.json')
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md'
@@ -137,6 +137,111 @@ describe('iOS UI standard: one look per kind of control', () => {
       })
     }
     expect(offenders).toEqual([])
+  })
+
+  describe("the chat paints with the web's grey chat palette", () => {
+    // 2026-11-24, the user: the phone's chat should look like the web's chat, "white, black,
+    // grey, and maybe a bit of yellow as our main tone". Theme.Chat mirrors chat-palette.css;
+    // every chat root sets `.walnutPalette(.chat)`; what waits on the person sets `.app` back.
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    const CSS = fs.readFileSync(path.join(import.meta.dirname, '../../web/src/styles/chat-palette.css'), 'utf8')
+
+    /** A CSS block's custom properties, by the block's selector line. */
+    function cssVars(selector: string): Record<string, string> {
+      const start = CSS.indexOf(`${selector} {`)
+      expect(start, `chat-palette.css has a "${selector}" block`).toBeGreaterThanOrEqual(0)
+      const block = CSS.slice(start, CSS.indexOf('}', start))
+      const vars: Record<string, string> = {}
+      for (const m of block.matchAll(/--([\w-]+):\s*([^;]+);/g)) vars[m[1]] = m[2].trim().toUpperCase()
+      return vars
+    }
+
+    /** Theme.Chat's `<name> = UIColor(light: 0x.., dark: 0x..)` values as #RRGGBB. */
+    function swiftPair(name: string): { light: string; dark: string } {
+      const theme = read('Walnut/Core/Theme.swift')
+      const chat = theme.slice(theme.indexOf('enum Chat {'), theme.indexOf('\n    }\n', theme.indexOf('enum Chat {')))
+      const m = chat.match(new RegExp(String.raw`static let ${name} = UIColor\(light: 0x([0-9A-Fa-f]{6}), dark: 0x([0-9A-Fa-f]{6})\)`))
+      expect(m, `Theme.Chat.${name} is a light/dark hex pair`).not.toBeNull()
+      return { light: `#${m![1].toUpperCase()}`, dark: `#${m![2].toUpperCase()}` }
+    }
+
+    it("Theme.Chat's values are chat-palette.css's", () => {
+      const light = cssVars(':root')
+      const dark = cssVars(':root[data-theme="dark"]')
+      const pairs: [string, string][] = [
+        ['chat-user-bubble', 'userBubbleColor'],
+        ['chat-panel', 'panelColor'],
+        ['chat-grey-strong', 'accentColor'],
+        ['chat-grey-soft', 'softColor'],
+      ]
+      for (const [css, swift] of pairs) {
+        expect(swiftPair(swift), `--${css} vs Theme.Chat.${swift}`).toEqual({ light: light[css], dark: dark[css] })
+      }
+    })
+
+    /** The roots of every chat surface: each sets the chat's palette for all below it. */
+    const CHAT_ROOTS = [
+      'Walnut/Views/Chat/ChatView.swift',
+      'Walnut/Views/Chat/ChatDrawer.swift',
+      'Walnut/Views/Chat/ComposerView.swift',
+      'Walnut/Views/Sessions/SessionConversationView.swift',
+      'Walnut/Views/Sessions/NewSessionChatView.swift',
+      // A hosted timeline cell does not inherit the SwiftUI environment: it sets its own.
+      'Walnut/Timeline/TimelineComponentCells.swift',
+    ]
+    /** What waits on the person keeps the app's colour inside a chat (the web's is-pending card). */
+    const KEEPS_COLOUR = [
+      'Walnut/Views/Sessions/PermissionRequestCard.swift',
+      'Walnut/Views/Tasks/ActionNeededView.swift',
+      // An Org node's pages (Threads, Tasks, Brief) open over its chat and are not a chat.
+      'Walnut/Views/Org/OrgNodePage.swift',
+    ]
+    /** Views that draw in a chat: never the app's accent directly. Every timeline file is one. */
+    const CHAT_FILES = [
+      'Walnut/Views/Chat/ChatView.swift',
+      'Walnut/Views/Chat/ChatDrawer.swift',
+      'Walnut/Views/Chat/ChatDrawerOrg.swift',
+      'Walnut/Views/Chat/ChatDrawerDirectors.swift',
+      'Walnut/Views/Chat/ComposerView.swift',
+      'Walnut/Views/Chat/ComposerFileCard.swift',
+      'Walnut/Views/Chat/MessageRow.swift',
+      'Walnut/Views/Chat/ModelSheetColumns.swift',
+      'Walnut/Views/Chat/ModelSheetFolds.swift',
+      'Walnut/Views/Sessions/NewSessionChatView.swift',
+      'Walnut/Views/Sessions/SessionConversationView.swift',
+      'Walnut/Views/Sessions/SessionQueueViews.swift',
+      'Walnut/Views/Sessions/VoiceModeBar.swift',
+      'Walnut/Views/Shared/VoiceInputControls.swift',
+      'Walnut/Views/Shared/VoiceDictation.swift',
+      'Walnut/Views/Shared/DesignSystem/WalnutButtonStyle.swift',
+      'Walnut/Views/Shared/DesignSystem/WalnutSurfaces.swift',
+      ...(fs.readdirSync(path.join(IOS_ROOT, 'Walnut/Timeline')) as string[])
+        .filter((f) => f.endsWith('.swift')).map((f) => `Walnut/Timeline/${f}`),
+    ]
+    const DIRECT_ACCENT = /\bTheme\.(?:tint|accent|tintSoft|chipSelected|onTint)(?:Color)?\b/
+
+    it('every chat root applies .walnutPalette(.chat), and an ask keeps .app', () => {
+      for (const f of CHAT_ROOTS) expect(read(f), f).toContain('.walnutPalette(.chat)')
+      for (const f of KEEPS_COLOUR) expect(read(f), f).toContain('.walnutPalette(.app)')
+    })
+
+    it("a chat's views paint with the palette, never the app's accent directly", () => {
+      const offenders: string[] = []
+      for (const f of CHAT_FILES) {
+        const raw = read(f).split('\n')
+        codeLines(raw.join('\n')).forEach((code, i) => {
+          if (DIRECT_ACCENT.test(code) && !/chat-palette-ok:/.test(raw[i])) offenders.push(`ios-native/${f}:${i + 1}: ${raw[i].trim()}`)
+        })
+      }
+      expect(offenders, `Use the environment's palette (\`@Environment(\\.walnutPalette)\`, palette.tint) or Theme.Chat, or mark the line // chat-palette-ok: <why>:\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it('finds a direct accent and honours the marker', () => {
+      expect(DIRECT_ACCENT.test('.foregroundStyle(Theme.tint)')).toBe(true)
+      expect(DIRECT_ACCENT.test('config.baseBackgroundColor = Theme.accentColor')).toBe(true)
+      expect(DIRECT_ACCENT.test('.foregroundStyle(Theme.Chat.accent)')).toBe(false)
+      expect(DIRECT_ACCENT.test('.foregroundStyle(palette.tint)')).toBe(false)
+    })
   })
 
   it('the standard it enforces names this test', () => {

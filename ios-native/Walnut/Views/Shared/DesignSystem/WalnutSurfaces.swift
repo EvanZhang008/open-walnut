@@ -11,6 +11,9 @@ struct WalnutBadge: View {
     /// A least width, so a column of one-letter badges (M, A, D) lines up.
     var minWidth: CGFloat? = nil
 
+    /// The accent tone is the chat's grey inside a chat (`WalnutPalette`).
+    @Environment(\.walnutPalette) private var palette
+
     var body: some View {
         HStack(spacing: Theme.Space.xxs) {
             if let systemImage { Image(systemName: systemImage).accessibilityHidden(true) }
@@ -30,7 +33,7 @@ struct WalnutBadge: View {
     private var ink: Color {
         switch tone {
         case .neutral: Theme.secondaryOnCard
-        case .accent: Theme.tint
+        case .accent: palette.tint
         case .danger: Theme.dangerText
         case .warning: Theme.needsText
         case .success: Theme.doneText
@@ -40,7 +43,7 @@ struct WalnutBadge: View {
     private var fill: Color {
         switch tone {
         case .neutral: Theme.controlFill
-        case .accent: Theme.tintSoft
+        case .accent: palette.tintSoft
         case .danger: Theme.danger.opacity(0.12)
         case .warning: Theme.warning.opacity(0.16)
         case .success: Theme.success.opacity(0.14)

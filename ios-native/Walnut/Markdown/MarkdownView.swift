@@ -12,6 +12,8 @@ struct MarkdownView: View {
     /// The paragraph, list and quote text style; `.markdownBodyFont(_:)` sets it for a compact
     /// place (a thread card), everything else keeps `.body`.
     @Environment(\.markdownBodyFont) private var bodyFont
+    /// The chat's greys when drawn in a chat (`WalnutPalette`), the app's brown elsewhere.
+    @Environment(\.walnutPalette) private var palette
     /// Lazy only where this view is a scroll view's own content (a long plan). Inside a card, a
     /// letter or a chat row a lazy stack answers its height from estimates it keeps, so a fold
     /// that grew or shrank the text left the card at the old height for a while: blank bands
@@ -87,7 +89,7 @@ struct MarkdownView: View {
             HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Image(systemName: checked ? "checkmark.circle.fill" : "circle")
                     .font(Theme.Glyph.xl.font())
-                    .foregroundStyle(checked ? Theme.tint : Color(.tertiaryLabel))
+                    .foregroundStyle(checked ? palette.tint : Color(.tertiaryLabel))
                     .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 7 }
                 Text(text)
                     .font(bodyFont)
@@ -111,7 +113,7 @@ struct MarkdownView: View {
         case .quote(let lines):
             HStack(spacing: 0) {
                 Theme.Radius.shape(Theme.Radius.xs)
-                    .fill(Theme.tint.opacity(0.6))
+                    .fill(palette.tint.opacity(0.6))
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
@@ -154,7 +156,7 @@ struct MarkdownView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Theme.tintSoft, in: Capsule())
+            .background(palette.tintSoft, in: Capsule())
             .padding(.vertical, 2)
 
         case .table(let header, let rows):
@@ -223,6 +225,7 @@ struct MarkdownCodeBlockView: View {
     @State private var wrap: Bool
     @State private var copied = false
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.walnutPalette) private var palette
 
     init(language: String?, text: String, source: LinkSource? = nil) {
         self.language = language
@@ -272,7 +275,7 @@ struct MarkdownCodeBlockView: View {
                     // On reads in the selection's colour.
                     Label("Wrap", systemImage: "arrow.turn.down.left")
                         .labelStyle(.titleAndIcon)
-                        .foregroundStyle(wrap ? Theme.tint : Theme.secondaryOnCard)
+                        .foregroundStyle(wrap ? palette.tint : Theme.secondaryOnCard)
                 }
                 .buttonStyle(.walnut(.tool, size: .small))
                 .accessibilityLabel(wrap ? "Stop wrapping long lines" : "Wrap long lines")

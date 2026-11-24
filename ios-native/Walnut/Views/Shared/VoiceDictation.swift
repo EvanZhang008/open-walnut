@@ -304,6 +304,7 @@ private struct VoiceRecordingSeat: View {
     let onStop: () -> Void
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = MessageBox.keySize
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.walnutPalette) private var palette
     @State private var phase = false
 
     var body: some View {
@@ -327,9 +328,10 @@ private struct VoiceRecordingSeat: View {
                     .minimumScaleFactor(0.6)
                     .frame(width: inner * 0.8)
             }
-            .foregroundStyle(Theme.onTint)
+            .foregroundStyle(palette.onTint)
             .frame(width: inner, height: inner)
-            .background(Theme.accent, in: MessageBox.keyShape)
+            // The time is words: the palette's fill for words.
+            .background(palette.keyFill, in: MessageBox.keyShape)
             .padding(3)
             .overlay {
                 Circle()

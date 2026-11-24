@@ -190,7 +190,7 @@ final class TimelineUserBubbleCell: UICollectionViewCell {
         }
         bubble.backgroundColor = failed
             ? UIColor(Theme.danger).withAlphaComponent(0.08)
-            : UIColor(Theme.tintSoft)
+            : Theme.Chat.userBubbleColor
         bubble.layer.borderWidth = failed ? 1 : 0
         bubble.layer.borderColor = failed
             ? UIColor(Theme.danger).withAlphaComponent(0.5).cgColor : nil
@@ -314,9 +314,10 @@ final class TimelineCodeCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        card.backgroundColor = .secondarySystemBackground
+        // The chat's grey panel (`Theme.Chat.panel`, the web's --chat-panel).
+        card.backgroundColor = Theme.Chat.panelColor
         // Opaque: pinned, it covers the code scrolling under it.
-        header.backgroundColor = .secondarySystemBackground
+        header.backgroundColor = Theme.Chat.panelColor
         card.layer.cornerRadius = 10
         card.layer.cornerCurve = .continuous
         card.clipsToBounds = true

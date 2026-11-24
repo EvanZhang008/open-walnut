@@ -36,6 +36,7 @@ struct ChatDrawerOrgList: View {
     var directors: DirectorsSettings = DirectorsSettings()
     /// nil: no Director actions here (Directors off, or a host without them).
     var actions: ChatDirectorActions? = nil
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -110,7 +111,7 @@ struct ChatDrawerOrgList: View {
                 Button(action: retry) {
                     Text("Try again")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.tint)
+                        .foregroundStyle(palette.tint)
                         .frame(minWidth: 88, minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                 }
@@ -176,6 +177,7 @@ private struct VPRowMenu: ViewModifier {
 struct ChatOrgRowView: View {
     let row: ChatOrgModel.Row
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.walnutPalette) private var palette
 
     /// At the accessibility sizes a name wraps instead of being cut.
     private var lines: Int { typeSize.isAccessibilitySize ? 3 : 1 }
@@ -210,9 +212,9 @@ struct ChatOrgRowView: View {
         return OrgAvatar(taskId: row.contactId, side: 34) {
             Text(verbatim: ceo ? "C" : ChatOrgModel.initials(row.name))
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ceo ? Theme.onTint : .white)
+                .foregroundStyle(ceo ? palette.onTint : .white)
                 .frame(width: 34, height: 34)
-                .background(ceo ? Theme.accent : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
+                .background(ceo ? palette.keyFill : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
         }
     }
 

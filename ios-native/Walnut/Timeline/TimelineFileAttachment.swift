@@ -247,7 +247,7 @@ struct TimelineFileChipView: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Theme.Glyph.md.font(.semibold))
-                .foregroundStyle(Theme.tint)
+                .foregroundStyle(Theme.Chat.accent)
                 .frame(width: Self.buttonSide, height: Self.buttonSide)
                 .contentShape(Rectangle())
         }
@@ -261,9 +261,9 @@ struct TimelineFileChipView: View {
             HStack(spacing: TimelineFileChip.iconGap) {
                 Image(systemName: chip.symbol)
                     .font(.system(size: TimelineFileChip.iconSide / 2, weight: .semibold))
-                    .foregroundStyle(failed ? Theme.danger : Theme.tint)
+                    .foregroundStyle(failed ? Theme.danger : Theme.Chat.accent)
                     .frame(width: TimelineFileChip.iconSide, height: TimelineFileChip.iconSide)
-                    .background(failed ? Theme.danger.opacity(0.12) : Theme.tintSoft,
+                    .background(failed ? Theme.danger.opacity(0.12) : Theme.Chat.accentSoft,
                                 in: Theme.Radius.shape(Theme.Radius.sm))
                 VStack(alignment: .leading, spacing: TimelineFileChip.lineGap) {
                     // Wrapped, never cut to one line: at the large text sizes a one-line
@@ -292,7 +292,7 @@ struct TimelineFileChipView: View {
             if let progress = chip.progress {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .tint(Theme.tint)
+                    .tint(Theme.Chat.accent)
                     .frame(height: TimelineFileChip.barHeight)
             }
             // Room for Retry and Remove on their own row (accessibility sizes).
@@ -303,7 +303,7 @@ struct TimelineFileChipView: View {
         .padding(.horizontal, TimelineFileChip.cardHPad)
         .padding(.vertical, TimelineFileChip.cardVPad)
         .frame(maxWidth: TimelineFileChip.maxWidth, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
+        .background(Theme.Chat.panel, in: Theme.Radius.shape(Theme.Radius.md))
         .overlay(Theme.Radius.shape(Theme.Radius.md)
             .strokeBorder(failed ? Theme.danger.opacity(0.5) : Color(.separator).opacity(0.4)))
         .contentShape(Theme.Radius.shape(Theme.Radius.md))

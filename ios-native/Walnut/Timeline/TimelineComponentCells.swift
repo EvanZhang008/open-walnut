@@ -66,6 +66,9 @@ enum TimelineHostedCell {
                         delegate: TimelineCellActionDelegate?) -> some View {
         rowContent(for: row, delegate: delegate)
             .modifier(TimelineHostedLinkRouting(delegate: delegate))
+            // The timeline draws only in chats, and a hosted cell does not inherit the
+            // SwiftUI environment around the collection view: it sets the chat's palette itself.
+            .walnutPalette(.chat)
     }
 
     /// Route a link tapped inside hosted SwiftUI content.
@@ -218,7 +221,8 @@ enum TimelineHostedCell {
                             Text(notice).font(.caption)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        .foregroundStyle(Theme.warning)
+                        // A status in a chat is the chat's soft grey (chat-palette.css's --warning).
+                        .foregroundStyle(Theme.Chat.soft)
                     } else {
                         Label(TimelineMetrics.notSentWords, systemImage: "exclamationmark.circle.fill")
                             .font(.caption)
@@ -274,7 +278,7 @@ enum TimelineHostedCell {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Theme.tint)
+            .foregroundStyle(Theme.Chat.accent)
             .accessibilityIdentifier("chat.withdrawQueued")
             .accessibilityLabel(ChatSendQueueRules.withdrawAccessibilityLabel)
             Group {
@@ -1056,7 +1060,7 @@ private struct TimelineThinkingChipView: View {
                     .lineLimit(maxLines)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(TimelineMetrics.expandCardPadding)
-                    .background(Color(.secondarySystemBackground),
+                    .background(Theme.Chat.panel,
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .accessibilityIdentifier("thinking.livePreview")
                     // The card keeps its own leading inset: the row margin moved
@@ -1761,9 +1765,10 @@ private struct TimelineNotificationView: View {
 
     private var accent: Color {
         switch tone {
-        case .info: return Theme.tint
+        // In a chat (the only place the timeline draws) a notice is grey; an error stays red.
+        case .info: return Theme.Chat.accent
         case .error: return Theme.danger
-        case .warning: return Theme.warning
+        case .warning: return Theme.Chat.soft
         }
     }
 
@@ -1933,7 +1938,7 @@ private struct TimelineTableView: View {
         // A table wider than the page says so when it appears: nothing else hints
         // that the cut-off column scrolls into view.
         .scrollIndicatorsFlash(onAppear: true)
-        .background(Color(.secondarySystemBackground).opacity(0.6),
+        .background(Theme.Chat.panel,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, TimelineMetrics.hMargin)
         .padding(.vertical, TimelineMetrics.codeVMargin)

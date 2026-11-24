@@ -69,6 +69,7 @@ struct PillSheetRow: View {
     let settled: Bool
     var insets = EdgeInsets()
     let onPick: (PillMenu.Item) -> Void
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         Button {
@@ -83,7 +84,7 @@ struct PillSheetRow: View {
                 // web picker: "just show the name, and colour the selected one").
                 Text(item.title)
                     .fontWeight(item.checked ? .semibold : .regular)
-                    .foregroundStyle(item.checked ? Theme.tint : item.enabled ? Color.primary : Color.secondary)
+                    .foregroundStyle(item.checked ? palette.tint : item.enabled ? Color.primary : Color.secondary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)

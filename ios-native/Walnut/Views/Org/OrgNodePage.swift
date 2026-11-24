@@ -72,6 +72,9 @@ struct OrgNodePageHost: ViewModifier {
                 OrgNodePage(route: route, followsLinks: follows, link: link)
                     // Said again here: a pushed page is not promised the environment of its host.
                     .environment(\.orgPagePlace, orgPagePlace)
+                    // Not a chat, though it opens over one: its thread cards keep the app's colour
+                    // (the web's `.top-thread`), whatever palette the chat under it paints with.
+                    .walnutPalette(.app)
             }
             .onAppear {
                 follow()

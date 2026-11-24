@@ -56,6 +56,8 @@ struct NewSessionChatView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(ConnectionStore.self) private var connection: ConnectionStore?
+    /// A new session's page is a chat: the chat's greys (`Theme.Chat`), as the web.
+    private var palette: WalnutPalette { .chat }
 
     private let api = WalnutAPI()
 
@@ -144,7 +146,6 @@ struct NewSessionChatView: View {
                             HStack(spacing: 12) {
                                 Button("Retry") { Task { _ = await runLaunch(fromComposer: false) } }
                                     .buttonStyle(.walnut(.primary))
-                                    .tint(Theme.accent)
                                     .accessibilityIdentifier("newSessionChat.retryLaunch")
                                 Button("Edit message") { editFailedLaunch() }
                                     .buttonStyle(.walnut(.secondary))
@@ -257,6 +258,7 @@ struct NewSessionChatView: View {
         .onChange(of: contentLink.draftFocusPending) { _, pending in
             if pending, contentLink.takeDraftFocus(), !dynamicTypeSize.isAccessibilitySize { composerFocus += 1 }
         }
+        .walnutPalette(.chat)
     }
 
     // MARK: - Body content
@@ -424,16 +426,16 @@ struct NewSessionChatView: View {
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(
-                                isCurrent(dir) ? Theme.tintSoft : Color(.tertiarySystemFill),
+                                isCurrent(dir) ? palette.tintSoft : Color(.tertiarySystemFill),
                                 in: Capsule()
                             )
                             // The web's accent border on the lit chip. Without it
                             // the tinted fill sat 1.04:1 from the bar in dark mode
                             // and the chosen folder was the FAINTEST chip in the row.
                             .overlay(
-                                Capsule().strokeBorder(Theme.tint, lineWidth: isCurrent(dir) ? 1 : 0)
+                                Capsule().strokeBorder(palette.tint, lineWidth: isCurrent(dir) ? 1 : 0)
                             )
-                            .foregroundStyle(isCurrent(dir) ? Theme.tint : .primary)
+                            .foregroundStyle(isCurrent(dir) ? palette.tint : .primary)
                         }
                         .accessibilityIdentifier("newSessionChat.quickDir")
                         .accessibilityAddTraits(isCurrent(dir) ? .isSelected : [])
@@ -665,10 +667,10 @@ struct NewSessionChatView: View {
                 .accessibilityHidden(true)
             Text(text).font(.caption.weight(.medium)).lineLimit(1)
         }
-        .foregroundStyle(active ? Theme.tint : .secondary)
+        .foregroundStyle(active ? palette.tint : .secondary)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(active ? Theme.tintSoft : Color(.tertiarySystemFill), in: Capsule())
+        .background(active ? palette.tintSoft : Color(.tertiarySystemFill), in: Capsule())
         .contentShape(Capsule())
     }
 

@@ -61,6 +61,9 @@ final class TimelineCollectionController: UIViewController {
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.backgroundColor = .clear
+        // The timeline is a chat: anything its cells tint by default (a text selection's
+        // handles, a system control) takes the chat's grey, not the window's brown.
+        collectionView.tintColor = Theme.Chat.accentColor
         collectionView.alwaysBounceVertical = true
         // .onDrag, not .interactive: with the composer + tab bar behind the
         // keyboard, "drag all the way down past the keyboard edge" was the

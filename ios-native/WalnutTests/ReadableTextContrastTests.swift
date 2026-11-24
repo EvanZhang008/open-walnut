@@ -166,6 +166,7 @@ final class ReadableTextContrastTests: XCTestCase {
     /// grey it draws in now clears the text bar on both accents, both schemes.
     func testAFoldedCardTitleClearsTheTextBarOnTheCardsTint() {
         let accents: [(String, UIColor)] = [("tint", Theme.tintColor),
+                                             ("chat accent", Theme.Chat.accentColor),
                                              ("danger", Theme.dangerColor)]
         for dark in [false, true] {
             for (name, accent) in accents {
@@ -198,6 +199,40 @@ final class ReadableTextContrastTests: XCTestCase {
             for (name, ink, paper) in pairs {
                 let ratio = contrast(ink, over: paper, dark: dark)
                 XCTAssertGreaterThanOrEqual(ratio, textMinimum,
+                                            "\(name), \(dark ? "dark" : "light"): \(String(format: "%.2f", ratio)):1")
+            }
+        }
+    }
+
+    /// The chat's palette (`Theme.Chat`, the twin of web/src/styles/chat-palette.css): words at
+    /// 4.5:1 and a glyph-only key at 3:1, in both appearances. White words on the dark grey
+    /// #8E8E93 read 3.3:1, enough for the send key's glyph and not for words, so a key with words
+    /// takes `Theme.Chat.keyFill` (#636366 in dark, 6.0:1).
+    func testTheChatPalettesWordsReadOnTheirFills() {
+        let words: [(String, UIColor, UIColor)] = [
+            ("white words on a chat key with words", Theme.Chat.onAccentColor, Theme.Chat.keyFillColor),
+            ("chat accent words (a link, a quiet action) on the page", Theme.Chat.accentColor, .systemBackground),
+            ("chat accent words on a grouped card", Theme.Chat.accentColor, .secondarySystemGroupedBackground),
+            ("chat accent words on the chat's panel (a tool call, code)", Theme.Chat.accentColor, Theme.Chat.panelColor),
+            ("chat accent words on the soft wash (a pill, a selected row)", Theme.Chat.accentColor, Theme.Chat.accentSoftColor),
+            ("primary words in the person's bubble", .label, Theme.Chat.userBubbleColor),
+            ("primary words on a selected chat chip", .label, Theme.Chat.chipSelectedColor),
+            ("the soft status grey on the page", Theme.Chat.softColor, .systemBackground),
+            ("the readable grey on the chat's panel", Theme.secondaryOnCardColor, Theme.Chat.panelColor),
+        ]
+        let glyphs: [(String, UIColor, UIColor)] = [
+            ("white glyph on a chat key (send, talk)", Theme.Chat.onAccentColor, Theme.Chat.accentColor),
+            ("white glyph on the chat's stop key", Theme.Chat.onAccentColor, Theme.Chat.softColor),
+        ]
+        for dark in [false, true] {
+            for (name, ink, paper) in words {
+                let ratio = contrast(ink, over: paper, dark: dark)
+                XCTAssertGreaterThanOrEqual(ratio, textMinimum,
+                                            "\(name), \(dark ? "dark" : "light"): \(String(format: "%.2f", ratio)):1")
+            }
+            for (name, ink, paper) in glyphs {
+                let ratio = contrast(ink, over: paper, dark: dark)
+                XCTAssertGreaterThanOrEqual(ratio, glyphMinimum,
                                             "\(name), \(dark ? "dark" : "light"): \(String(format: "%.2f", ratio)):1")
             }
         }

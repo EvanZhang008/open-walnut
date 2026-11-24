@@ -58,6 +58,7 @@ struct ModelSheetFoldPage: View {
     let facts: ModelSheetFacts
     /// The sheet's menu, to name a model the way its rows do.
     let menu: PillMenu
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         List {
@@ -160,7 +161,7 @@ struct ModelSheetFoldPage: View {
                                 valueID: "composer.modelSheet.contextValue")
                         if let fraction = context.fraction {
                             ProgressView(value: fraction)
-                                .tint(context.warning != nil ? Theme.warning : Theme.tint)
+                                .tint(context.warning != nil ? Theme.warning : palette.tint)
                                 .accessibilityHidden(true)
                         }
                     }
@@ -234,6 +235,7 @@ private struct FactRow: View {
 /// tabular digits. VoiceOver reads each cell with its column's name.
 private struct SpeedTable: View {
     let rows: [ModelSheetFormat.SpeedRow]
+    @Environment(\.walnutPalette) private var palette
 
     var body: some View {
         Grid(alignment: .trailing, horizontalSpacing: 8, verticalSpacing: 8) {
@@ -284,7 +286,7 @@ private struct SpeedTable: View {
                     HStack(spacing: 4) {
                         if row.running {
                             Circle()
-                                .fill(Theme.tint)
+                                .fill(palette.tint)
                                 .frame(width: 6, height: 6)
                         }
                         if !row.states.isEmpty {

@@ -588,6 +588,7 @@ or button shape.
 | Kind | Web | iOS |
 |---|---|---|
 | Accent | `--accent` blue | Walnut's brown, not the web's blue (2026-11-24, the user: the earlier yellow-based look is nicer, "because it's Walnut"): `Theme.tint` (#8B5A2B / the golden #C99659) for links, selection and quiet actions; `Theme.accent` (the same colour) for a solid fill, with `Theme.onTint` words on it (white in light, #1C1207 in dark, where white on the golden reads only 2.2:1) |
+| Chat palette | `chat-palette.css` | the web's greys inside every chat (2026-11-24, the user: "white, black, grey, and maybe a bit of yellow"): `Theme.Chat` (bubble #F0F0F0 / #2C2C2E, panel #F7F7F7 / #1C1C1E, accent #3A3A3C / #8E8E93 with white on a glyph key, `keyFill` #636366 in dark under words, soft grey #757579 / #8E8E93), set by `.walnutPalette(.chat)` at each chat root (the design system reads `\.walnutPalette`, a view writes `palette.tint`, a timeline cell `Theme.Chat` itself); the brown stays outside chats and on what waits on the person (a pending permission or question card, Action needed: `.walnutPalette(.app)`) |
 | Main action | `.btn-primary` | `.buttonStyle(.walnut(.primary))`: round, solid `Theme.accent`, `Theme.onTint` words, at most one per card or page |
 | Action | `.btn` | `.walnut(.secondary)`: `tertiarySystemFill`, primary words |
 | Tool | `.ask-card-tools .btn` | `.walnut(.tool)`: no fill, `Theme.secondaryOnCard`; a menu's label is `WalnutMenuLabel` ("Snooze ▾") |

@@ -10,6 +10,7 @@ struct ComposerFileCard: View {
     /// A recorded video's "8 stills · narration", after its size.
     var caption: String? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.walnutPalette) private var palette
     /// The icon's tile grows with the text at the accessibility sizes (gate r7).
     private var iconSide: CGFloat { dynamicTypeSize.isAccessibilitySize ? 52 : 34 }
 
@@ -44,11 +45,11 @@ struct ComposerFileCard: View {
                     } else {
                         Image(systemName: file?.symbol ?? ComposerBar.Symbol.files)
                             .font(.system(size: iconSide / 2, weight: .semibold))
-                            .foregroundStyle(Theme.tint)
+                            .foregroundStyle(palette.tint)
                     }
                 }
                 .frame(width: iconSide, height: iconSide)
-                .background(Theme.tintSoft, in: Theme.Radius.shape(Theme.Radius.sm))
+                .background(palette.tintSoft, in: Theme.Radius.shape(Theme.Radius.sm))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(file?.name ?? (importingCount == 1 ? "Adding file…" : "Adding \(importingCount) files…"))
                         .font(.footnote.weight(.medium))

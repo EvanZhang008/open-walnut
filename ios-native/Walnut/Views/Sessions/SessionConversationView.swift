@@ -201,6 +201,8 @@ struct SessionConversationView: View {
                     SessionReconnectingNotice.show(notice == .reconnecting, sessionId: session.id)
                 }
         }
+        // A session's page is a chat: the chat's greys (`Theme.Chat`, the web's chat-palette.css).
+        .walnutPalette(.chat)
     }
 
     /// An Org node's chat opens its page on top when asked (a push, a link: `OrgNodePageHost`),
@@ -273,6 +275,7 @@ struct SessionConversationView: View {
                         onExit: { stopVoiceMode() }
                     )
                 }
+                .walnutPalette(.chat)
             } else {
                 composer
                     // Covered by the host's page, or by this page's own fork.

@@ -20,6 +20,7 @@ struct ChatDirectorFold: View {
     let fold: ChatDirectorsModel.Fold
     let actions: ChatDirectorActions
     @AppStorage private var isOpen: Bool
+    @Environment(\.walnutPalette) private var palette
 
     init(row: ChatOrgModel.Row, fold: ChatDirectorsModel.Fold, actions: ChatDirectorActions) {
         self.row = row
@@ -87,7 +88,7 @@ struct ChatDirectorFold: View {
                 } label: {
                     Label("New Director", systemImage: "plus")
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(Theme.tint)
+                        .foregroundStyle(palette.tint)
                         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                         .padding(.leading, Self.nameInset + 4)
                         .contentShape(Rectangle())

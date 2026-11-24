@@ -88,6 +88,92 @@ enum Theme {
         light: UIColor(rgb: 0xFF3B30).withAlphaComponent(0.08),
         dark: UIColor(rgb: 0xFF453A).withAlphaComponent(0.16)
     ))
+
+    /// The chat's palette: grey, quiet, one set for every chat, the twin of the web's
+    /// `web/src/styles/chat-palette.css` (2026-11-24, the user: the phone's chat should look like the
+    /// web's, "white, black, grey, and maybe a bit of yellow as our main tone"). Inside a chat the
+    /// accent's coloured fills, links, pills and icons are these greys (`WalnutPalette.chat`); colour
+    /// stays on what waits on the person (a pending permission or question card), which takes the
+    /// app's brown back (`.walnutPalette(.app)`), and on an error (`Theme.danger`).
+    /// `tests/web/ios-ui-standard-ratchet.test.ts` holds these values equal to the CSS file's.
+    enum Chat {
+        /// The person's words sit in a light grey bubble (`--chat-user-bubble`).
+        static let userBubble = Color(dynamic: userBubbleColor)
+        static let userBubbleColor = UIColor(light: 0xF0F0F0, dark: 0x2C2C2E)
+        /// A tool call's or a code block's grey panel (`--chat-panel`).
+        static let panel = Color(dynamic: panelColor)
+        static let panelColor = UIColor(light: 0xF7F7F7, dark: 0x1C1C1E)
+        /// What the accent becomes in a chat (`--chat-grey-strong`): a link, an icon that acts, a
+        /// quiet action's words, and the solid fill of a GLYPH-only key (send, talk) under
+        /// `onAccent`: white on it is 11.4:1 light and 3.3:1 dark, a glyph's 3:1, as the web.
+        static let accent = Color(dynamic: accentColor)
+        static let accentColor = UIColor(light: 0x3A3A3C, dark: 0x8E8E93)
+        /// The solid fill of a key with WORDS (a main action, a recommended option, "Queue"): the
+        /// accent in light; in dark a step deeper, since white words on #8E8E93 read only 3.3:1
+        /// and words need 4.5:1 (6.0:1 on #636366).
+        static let keyFill = Color(dynamic: keyFillColor)
+        static let keyFillColor = UIColor(light: 0x3A3A3C, dark: 0x636366)
+        /// Words and glyphs on `accent` or `keyFill`: white in both appearances.
+        static let onAccent = Color(dynamic: onAccentColor)
+        static let onAccentColor = UIColor(light: 0xFFFFFF, dark: 0xFFFFFF)
+        /// A soft wash for a pill, a tag or a selected row (`--chat-grey-subtle`).
+        static let accentSoft = Color(dynamic: accentSoftColor)
+        static let accentSoftColor = UIColor(light: UIColor.black.withAlphaComponent(0.05),
+                                             dark: UIColor.white.withAlphaComponent(0.08))
+        /// A selected chip's fill: a step stronger than an unselected chip's grey, with the
+        /// accent's hairline (`WalnutChipStyle`). Primary words only on it.
+        static let chipSelected = Color(dynamic: chipSelectedColor)
+        static let chipSelectedColor = UIColor(light: 0xD8D8DC, dark: 0x4A4A4E)
+        /// A link's underline and a quiet outline (`--chat-grey-outline`): a grey link reads as a
+        /// link by its underline, shown at rest.
+        static let outline = Color(dynamic: outlineColor)
+        static let outlineColor = UIColor(light: UIColor.black.withAlphaComponent(0.2),
+                                          dark: UIColor.white.withAlphaComponent(0.28))
+        /// Status colours (done, waiting, an info notice) as one soft grey (`--chat-grey-soft`):
+        /// 4.6:1 on the light page, 6.4:1 on the dark one.
+        static let soft = Color(dynamic: softColor)
+        static let softColor = UIColor(light: 0x757579, dark: 0x8E8E93)
+    }
+}
+
+/// Which accent a view paints with: the app's brown, or the chat's greys (`Theme.Chat`). Every
+/// chat surface sets `.walnutPalette(.chat)` at its root; what waits on the person inside a chat
+/// (a pending permission or question card) sets `.walnutPalette(.app)` back. A view reads
+/// `@Environment(\.walnutPalette)` and writes `palette.tint` where it would write `Theme.tint`,
+/// and the design system's buttons, chips and badges do so already.
+enum WalnutPalette: Hashable, Sendable {
+    case app, chat
+
+    /// Links, selected things, icons that act, a quiet action's words.
+    var tint: Color { self == .chat ? Theme.Chat.accent : Theme.tint }
+    /// The solid fill of a glyph-only key (send, talk, a confirm tick).
+    var accent: Color { self == .chat ? Theme.Chat.accent : Theme.accent }
+    /// The solid fill of a key with words (a main action, a recommended option).
+    var keyFill: Color { self == .chat ? Theme.Chat.keyFill : Theme.accent }
+    /// Words and glyphs on `accent` or `keyFill`.
+    var onTint: Color { self == .chat ? Theme.Chat.onAccent : Theme.onTint }
+    /// A soft fill for a pill, a tag, a selected row.
+    var tintSoft: Color { self == .chat ? Theme.Chat.accentSoft : Theme.tintSoft }
+    /// A selected chip's fill.
+    var chipSelected: Color { self == .chat ? Theme.Chat.chipSelected : Theme.chipSelected }
+
+    /// The same as UIKit colours, for a UIKit view a SwiftUI parent configures.
+    var tintColor: UIColor { self == .chat ? Theme.Chat.accentColor : Theme.tintColor }
+    var keyFillColor: UIColor { self == .chat ? Theme.Chat.keyFillColor : Theme.accentColor }
+    var onTintColor: UIColor { self == .chat ? Theme.Chat.onAccentColor : Theme.onTintColor }
+}
+
+extension EnvironmentValues {
+    /// The palette the views below paint with (`WalnutPalette`): the app's, unless a chat set its own.
+    @Entry var walnutPalette: WalnutPalette = .app
+}
+
+extension View {
+    /// Paint everything below with `palette`: the design system reads it, and the system's own
+    /// controls (a toggle, a progress ring, a link in `Text`) follow through `.tint`.
+    func walnutPalette(_ palette: WalnutPalette) -> some View {
+        environment(\.walnutPalette, palette).tint(palette.tint)
+    }
 }
 
 extension UIColor {

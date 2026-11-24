@@ -231,6 +231,10 @@ struct ChatView: View {
                 }
                 MessageListView()
             }
+            // The chat paints with the chat's greys (`Theme.Chat`, the web's chat-palette.css). A
+            // session pushed here, the composer and the sidebar of chats set it themselves; the tab
+            // bar, a sheet and a page that is not a chat (an Org node's Threads) keep the brown.
+            .walnutPalette(.chat)
             .navigationDestination(for: WalnutSession.self) { session in
                 // The node page a thread push asks for reaches this chat through
                 // `OrgNodePageLink`, which the chat and its page observe; a value passed
@@ -1253,7 +1257,7 @@ struct ChatView: View {
         HStack(spacing: 8) {
             Image(systemName: "questionmark.bubble.fill")
                 .font(.subheadline)
-                .foregroundStyle(Theme.tint)
+                .foregroundStyle(Theme.tint) // chat-palette-ok: an ask that waits on the person keeps the brown
             Text("\(chat.activeAgentName) has a question. Reply below to answer.")
                 .font(.footnote)
                 .lineLimit(2)
@@ -1261,7 +1265,8 @@ struct ChatView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(Theme.tint.opacity(0.10))
+        .background(Theme.tint.opacity(0.10)) // chat-palette-ok: an ask that waits on the person keeps the brown
+        .walnutPalette(.app)
         .accessibilityIdentifier("chat.questionBanner")
     }
 

@@ -7,6 +7,8 @@ import SwiftUI
 /// OS picks (a capsule on iOS 26).
 ///
 /// - `primary`: the one main action of a card or page: solid accent (`Theme.accent`, Walnut's brown), `Theme.onTint` words.
+///   Inside a chat (`WalnutPalette.chat`) the accent is the chat's grey (`Theme.Chat.keyFill`, white
+///   words), as every colour of the family: each style reads `\.walnutPalette`, so no call site changes.
 /// - `secondary`: any other action: quiet grey fill, primary words.
 /// - `tool`: Snooze, pin, a pager arrow, a "Group ▾" menu: no fill, quiet words, a fill when pressed.
 /// - `destructive`: Delete, Reject, Deny: the grey fill with red words (`Theme.dangerText`).
@@ -36,6 +38,7 @@ struct WalnutButtonStyle: ButtonStyle {
 
     @Environment(\.isEnabled) private var enabled
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.walnutPalette) private var palette
 
     /// The family's shape for a key of this role and width.
     static func shape(_ role: Role, fullWidth: Bool = false) -> AnyShape {
@@ -92,7 +95,7 @@ struct WalnutButtonStyle: ButtonStyle {
         // enabled grey button (WCAG exempts a disabled control's words from the contrast rule).
         if isSolid && !enabled { return Color(uiColor: .tertiaryLabel) }
         return switch role {
-        case .primary, .option(recommended: true): Theme.onTint
+        case .primary, .option(recommended: true): palette.onTint
         case .secondary, .option(recommended: false): .primary
         case .tool: Theme.secondaryOnCard
         case .destructive: Theme.dangerText
@@ -102,7 +105,7 @@ struct WalnutButtonStyle: ButtonStyle {
     private func fill(pressed: Bool) -> Color {
         switch role {
         case .primary, .option(recommended: true):
-            return enabled ? Theme.accent : Theme.controlFill
+            return enabled ? palette.keyFill : Theme.controlFill
         case .secondary, .destructive:
             return pressed ? Theme.controlFillPressed : Theme.controlFill
         case .tool:
@@ -134,6 +137,8 @@ struct WalnutOptionLabel: View {
 
     static let recommendedWord = "Recommended"
 
+    @Environment(\.walnutPalette) private var palette
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -161,17 +166,18 @@ struct WalnutOptionLabel: View {
 
     /// Second words: the readable grey on a plain row, `onTint` on the filled one (a dimmed white
     /// read under 4.5:1 there).
-    private var quiet: Color { recommended ? Theme.onTint : Theme.secondaryOnCard }
+    private var quiet: Color { recommended ? palette.onTint : Theme.secondaryOnCard }
 }
 
 /// A chip: a filter, a view switch, a toggle among several (Inbox filters, the board's views, a
 /// folder to pick). Round (a capsule), 32 pt drawn and a 44 pt touch; selected
 /// is a light accent fill (`Theme.chipSelected`, a step stronger than `tintSoft` so it reads on a white
-/// rail) with an accent hairline and primary words, never a solid block.
+/// rail) with an accent hairline and primary words, never a solid block; the chat's greys in a chat.
 struct WalnutChipStyle: ButtonStyle {
     var selected = false
 
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.walnutPalette) private var palette
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Capsule(style: .continuous)
@@ -182,10 +188,10 @@ struct WalnutChipStyle: ButtonStyle {
             .lineLimit(1)
             .padding(.horizontal, Theme.Space.m)
             .frame(minHeight: Theme.Control.smallHeight)
-            .background(selected ? Theme.chipSelected : (configuration.isPressed ? Theme.controlFillPressed : Theme.controlFill),
+            .background(selected ? palette.chipSelected : (configuration.isPressed ? Theme.controlFillPressed : Theme.controlFill),
                         in: shape)
             .overlay {
-                if selected { shape.strokeBorder(Theme.tint, lineWidth: 1) }
+                if selected { shape.strokeBorder(palette.tint, lineWidth: 1) }
             }
             .opacity(enabled ? 1 : 0.5)
             .contentShape(Rectangle().inset(by: -(Theme.Control.target - Theme.Control.smallHeight) / 2))

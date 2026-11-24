@@ -160,7 +160,7 @@ final class IslandResultStripView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .secondarySystemBackground
+        backgroundColor = Theme.Chat.panelColor
         layer.cornerRadius = Theme.Radius.md
         layer.cornerCurve = .continuous
         accessibilityIdentifier = "chat.islandResult"
@@ -169,11 +169,12 @@ final class IslandResultStripView: UIView {
         previewLabel.numberOfLines = IslandResultStrip.previewLines
         previewLabel.lineBreakMode = .byTruncatingTail
         previewLabel.textColor = .secondaryLabel
-        // The family's main action: solid accent, white words, the soft corner (never the
-        // system's capsule, and not a tinted fill whose tint words read at 3.7:1).
+        // The family's main action in the chat's palette: the grey fill for words, white words
+        // (6.0:1 or more both ways), the soft corner (never the system's capsule, and not a
+        // tinted fill whose tint words read at 3.7:1).
         var config = UIButton.Configuration.filled()
-        config.baseBackgroundColor = Theme.accentColor
-        config.baseForegroundColor = .white
+        config.baseBackgroundColor = Theme.Chat.keyFillColor
+        config.baseForegroundColor = Theme.Chat.onAccentColor
         config.cornerStyle = .fixed
         config.background.cornerRadius = Theme.Radius.sm
         config.contentInsets = IslandResultStrip.buttonInsets

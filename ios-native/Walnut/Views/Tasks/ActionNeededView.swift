@@ -252,6 +252,9 @@ struct ActionNeededView: View {
             }
             // The family's card that asks: frosted, `Theme.Radius.card` corners, a hairline.
             .walnutCard(frosted: true)
+            // What waits on the person keeps the app's colour, in a chat too (the web's
+            // `.action-needed.is-strip` in chat-palette.css).
+            .walnutPalette(.app)
             // Paged by its two arrows only for now. A sideways swipe (the web's) waits until it is
             // proven on the simulator not to set off the row's own swipe actions (a full swipe right
             // marks the task Done, BoardRowGestures) or the Tasks drawer's leftward close.

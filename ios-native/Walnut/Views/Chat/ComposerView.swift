@@ -192,6 +192,10 @@ struct ComposerBar: View {
     /// accessibility text sizes (see `noticeRow`).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    /// Every composer paints with the chat's greys, as every composer on the web
+    /// (`.chat-input-container` in chat-palette.css): its keys, pills and the views below it.
+    private var palette: WalnutPalette { .chat }
+
     /// Last height this composer measured, so returning to a retained tab or coming
     /// back from the background can re-publish it (see the publishers on the body).
     @State private var measuredHeight: CGFloat = 0
@@ -858,6 +862,7 @@ struct ComposerBar: View {
             guard !Task.isCancelled else { return }
             if useLongDraftEditor { longDraftFocused = true } else { focused = true }
         }
+        .walnutPalette(.chat)
     }
 
     // MARK: - Rows
@@ -1325,9 +1330,9 @@ struct ComposerBar: View {
             } label: {
                 Image(systemName: quickAction.autoSendArmed ? Symbol.send : Symbol.confirm)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.onTint)
+                    .foregroundStyle(palette.onTint)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(Theme.accent, in: MessageBox.keyShape)
+                    .background(palette.accent, in: MessageBox.keyShape)
             }
             .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
@@ -1341,9 +1346,9 @@ struct ComposerBar: View {
                 Button(action: gatedSend) {
                     Image(systemName: Symbol.send)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(live ? Theme.onTint : Color(.tertiaryLabel))
+                        .foregroundStyle(live ? palette.onTint : Color(.tertiaryLabel))
                         .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                        .background(live ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                        .background(live ? palette.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
                 }
                 .disabled(!live)
                 .accessibilityLabel("Stop and send")
@@ -1573,9 +1578,9 @@ struct ComposerBar: View {
         } label: {
             Image(systemName: Symbol.voiceMode)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.onTint)
+                .foregroundStyle(palette.onTint)
                 .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                .background(Theme.accent, in: MessageBox.keyShape)
+                .background(palette.accent, in: MessageBox.keyShape)
                 .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(disabled)
@@ -1604,15 +1609,17 @@ struct ComposerBar: View {
                 if stopping {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
+                        .tint(palette.onTint)
                 } else {
                     Image(systemName: Symbol.stop)
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(palette.onTint)
                 }
             }
             .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-            .background(Theme.danger, in: MessageBox.keyShape)
+            // Stopping is not an error: the chat's soft grey, as the web's stop key (white on it
+            // 4.6:1 light, 3.3:1 dark for the glyph).
+            .background(Theme.Chat.soft, in: MessageBox.keyShape)
             .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(stopping)
@@ -1662,10 +1669,10 @@ struct ComposerBar: View {
                     .font(.footnote.weight(.semibold))
                     .lineLimit(1)
             }
-            .foregroundStyle(Theme.tint)
+            .foregroundStyle(palette.tint)
             .padding(.horizontal, 10)
             .frame(minHeight: 34)
-            .background(Theme.tintSoft, in: Capsule())
+            .background(palette.tintSoft, in: Capsule())
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
@@ -1708,24 +1715,25 @@ struct ComposerBar: View {
                 // cancels the wait (the words still land in the box).
                 ProgressView()
                     .controlSize(.small)
-                    .tint(Theme.onTint)
+                    .tint(palette.onTint)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(Theme.accent, in: MessageBox.keyShape)
+                    .background(palette.accent, in: MessageBox.keyShape)
             } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
                 // Its whole name: this send puts the words in the queue, the others act now.
                 Text("Queue")
                     .font(.footnote.weight(.semibold))
                     .lineLimit(1)
-                .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
+                .foregroundStyle(canSend ? palette.onTint : Color(.tertiaryLabel))
                 .padding(.horizontal, 10)
                 .frame(height: MessageBox.keySize)
-                .background(canSend ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
+                // Words on the key: the fill that keeps them at 4.5:1 in dark.
+                .background(canSend ? palette.keyFill : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
             } else {
                 Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
                     .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
-                    .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
+                    .foregroundStyle(canSend ? palette.onTint : Color(.tertiaryLabel))
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(canSend ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                    .background(canSend ? palette.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
             }
         }
         .disabled(!canSend && !sendGate.isWaiting)
@@ -1790,10 +1798,10 @@ struct ComposerBar: View {
                     .fixedSize()
             }
         }
-        .foregroundStyle(Theme.tint)
+        .foregroundStyle(palette.tint)
         .padding(.horizontal, text == nil ? 0 : 10)
         .frame(minWidth: 32, minHeight: 32)
-        .background(Theme.tintSoft, in: Capsule())
+        .background(palette.tintSoft, in: Capsule())
         .contentShape(Capsule())
     }
 
