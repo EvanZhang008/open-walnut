@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { guardedPath } from '../setup/exec-guard.js'
 import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
-import { BUN, HOME, HOST_SERVER_PORT, cmd, endRigs, lines, report, restartDaemon, rig, rigBase, sleep, startRigs, waitFor, type Daemon } from '../helpers/host-call-rig.js'
+import { BUN, HOME, HOST_SERVER_PORT, cmd, endRigs, lines, report, restartDaemon, rig, rigBase, startRigs, waitFor, type Daemon } from '../helpers/host-call-rig.js'
 
 const HOST_ROOT = `http://127.0.0.1:${HOST_SERVER_PORT}`
 const MOCK_AGENT = path.resolve(__dirname, '../providers/mock-acp-agent.mjs')
@@ -158,8 +158,8 @@ describe.skipIf(!BUN)('a session this host assembles runs Walnut\'s shim for a b
     let mac: WebSocket = r.mac
     try {
       // The follower restarting: its socket is gone, its server spec is still kept here.
+      // Whether the daemon has seen the close yet or not, the answer is the same (linked or kept).
       await new Promise<void>((resolve) => { r.follower.once('close', () => resolve()); r.follower.close() })
-      await sleep(300)
       const away = await startNative(r.mac, 'f0f0f0f0-0000-4000-8000-0000000000f0', HOME, HOST_ROOT)
       expectShim(away, r.d)
       expect(away.callSocket).toBeNull()
