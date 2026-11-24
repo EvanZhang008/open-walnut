@@ -422,7 +422,8 @@ describe('SessionHealthMonitor — idle-threshold source gating (DEFAULT_*_IDLE_
     );
     expect(src).toMatch(/DEFAULT_LOCAL_IDLE_TIMEOUT_MS\s*=\s*60\s*\*\s*60\s*\*\s*1000/);
     expect(src).toMatch(/DEFAULT_REMOTE_IDLE_TIMEOUT_MS\s*=\s*2\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
-    expect(src).toMatch(/const isRemote\s*=\s*!!session\.host/);
+    // The place a session runs is read through execHostOf (a `__local__` row is the local machine).
+    expect(src).toMatch(/const isRemote\s*=\s*!!execHostOf\(session\)/);
     expect(src).toMatch(/isRemote\s*\?\s*DEFAULT_REMOTE_IDLE_TIMEOUT_MS\s*:\s*DEFAULT_LOCAL_IDLE_TIMEOUT_MS/);
   });
 
