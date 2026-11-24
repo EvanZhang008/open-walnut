@@ -143,7 +143,9 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
   }
   fs.mkdirSync(w.a.home, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(w.a.home, 'config.yaml'), YAML.stringify(cfg))
-  await seedPrimaryPairing(w.a.home, `127.0.0.1:${companion.port}`, companion.tokens)
+  // The data remote goes to the companion through its link too (doorK, plain http as the companion serves git):
+  // a cut of the companion cuts its git sync as well, as on a real machine.
+  await seedPrimaryPairing(w.a.home, `127.0.0.1:${links.doorK.port}`, companion.tokens)
   const serviceB: RemoteWorld['serviceB'] = { door: null, link: wmB }
   const all = Object.values(links)
   const ofMachine = { a: [links.copy, links.aToH, links.aToBService], b: [links.bToA, links.bToH] }

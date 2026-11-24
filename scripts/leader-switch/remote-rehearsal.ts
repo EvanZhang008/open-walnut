@@ -17,10 +17,11 @@ import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/s
 import { readSwitchState, readTargetState, type SwitchState, type TargetState } from '../../src/core/leader/switch/flow.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
-import { Checks, KILL_POINTS, checkCarried, checkNoOldPaths, cronDoorCalls, seed, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type Seeded } from './rehearsal.js'
+import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type Seeded } from './rehearsal.js'
 import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
-import type { Machine } from './world.js'
+import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
+import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const last = (out: string, n = 3) => out.trim().split('\n').slice(-n).join(' | ')
@@ -151,10 +152,21 @@ async function answersOn(w: RemoteWorld, m: Machine, sid: string): Promise<Map<s
   return counts
 }
 
+/** The built daemon every machine here runs (remote-world.ts startHostDaemon 'standalone', built) against its source's hash. */
+function builtDaemon(): { ok: boolean; why: string } {
+  const file = path.join(REPO, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch}.version`)
+  const built = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null
+  const source = computeExpectedDaemonVersion()
+  return { ok: !!built && built === source, why: `built ${built ?? 'none'}, source ${source ?? 'unknown'}${built !== source ? ' (bash scripts/build-daemon.sh)' : ''}` }
+}
+
 export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; log?: (s: string) => void; only?: string[] }): Promise<RemoteResult> {
   const log = opts.log ?? (() => {})
   const c = new Checks(print)
   const times: Record<string, string> = {}
+  // A daemon built from older source would rehearse that one: nothing runs on a stale build.
+  const daemon = builtDaemon()
+  if (!c.add('boot: the built daemon every machine runs is built from this source', daemon.ok, daemon.why)) return { checks: c, times }
   const w = await makeRemoteWorld(root, { portA: opts.portA, portB: opts.portB, log })
   const roles: Roles = { leader: w.a, other: w.b }
   const want = (name: string) => !opts.only?.length || opts.only.includes(name)
@@ -214,12 +226,17 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const late = { rel: 'plugins/rehearsal-plugin/data/late.json', content: JSON.stringify({ late: randomBytes(4).toString('hex') }) }
   fs.writeFileSync(path.join(A.home, late.rel), late.content)
   await waitForBatch(B.standbyDir, Date.now(), 120_000)
+  // The routine fires on A before the switch (each slot once in total is checked across it, below).
+  const firedA = await waitFor('a routine slot on A', async () => cronDoorCalls(A.home).some((l) => l.mayAct), 90_000, 500).then(() => true).catch(() => false)
+  c.add('main: the routine fires on A before the switch', firedA)
   const load = startLoad(w, A)
-  await sleep(1_500)
+  await waitFor('the load acknowledged on A', async () => load.acked.length > 0, 60_000, 100).catch(() => {})
   const sw = await switchCmd(w, A, ['--to', B.id])
   const acked = await load.stop()
   log(sw.out)
   const tgt = await targetDone(sw.state)
+  // From here B leads: A opens no new connection to B's daemon (the copy link) or to H's (B drives H now).
+  const fromA = { copy: w.links.copy.accepted(), aToH: w.links.aToH.accepted() }
   if (!c.add('main: switch A -> B completes (the command on A, the target job on B over the copy link)', sw.code === 0 && sw.state?.step === 'done' && tgt?.step === 'done', `exit ${sw.code}; target ${tgt?.step}; ${last(sw.out, 4)}`)) return
   times['downtime A -> B, copy link unslowed'] = `${((tgt?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
   c.add('main: B leads with the write permission', !!(await status(w, B))?.mayAct)
@@ -236,7 +253,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   }
   const after = (await w.api(B, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -2
   c.add('main: nothing sent twice (A\'s last accepted ops replayed on B apply none twice)', replayed === Math.min(5, acked.length) && before === after, `${replayed} replays; tasks ${before} -> ${after}`)
-  checkNoOverlap(c, 'main A -> B', A, B)
+  checkOneLeader(c, 'main A -> B', A, B, { stoppedAt: tgt?.stoppedAt })
   // Hosts follow: H and the old machine A connected to B.
   const tHosts = Date.now()
   const followed = await waitFor('every host connected to B', async () => hostsConnected(w, B, [w.h.id, A.id]), 180_000, 1_000).then(() => true).catch(() => false)
@@ -271,12 +288,12 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   c.add('main: a message to it through B runs on the old machine and arrives once', ownAnswered && ownAfter.get('echo: ROUND own two on B') === 1 && ownAfter.get('echo: ROUND own on A') === 1 && ran.a && !ran.b,
     `${ownSecond.why ?? ''} ${JSON.stringify([...ownAfter])}; the turn in the CLI transcript on machine-a: ${ran.a}, on machine-b: ${ran.b}`)
   // Triggers once: every routine slot through a door on one machine, once.
-  await sleep(17_000)
+  await waitFor('a routine slot on B', async () => cronDoorCalls(B.home).some((l) => l.mayAct), 90_000, 500).catch(() => {})
   const slotsA = cronDoorCalls(A.home).filter((l) => l.mayAct).map((l) => l.opId)
   const slotsB = cronDoorCalls(B.home).filter((l) => l.mayAct).map((l) => l.opId)
   const both = slotsA.filter((x) => slotsB.includes(x))
   const dup = [...slotsA, ...slotsB].filter((x, i, all) => all.indexOf(x) !== i)
-  c.add('main: the routine fired each slot once in total across the switch', both.length === 0 && dup.length === 0 && slotsB.length > 0, `${new Set(slotsA).size} on A, ${new Set(slotsB).size} on B, ${both.length} on both, ${dup.length} repeats`)
+  c.add('main: the routine fired each slot once in total across the switch', both.length === 0 && dup.length === 0 && slotsA.length > 0 && slotsB.length > 0, `${new Set(slotsA).size} on A, ${new Set(slotsB).size} on B, ${both.length} on both, ${dup.length} repeats`)
   // The companion keeps one primary (`__local__`), for two minutes, held by B's daemon.
   const primaries: string[] = []
   for (let i = 0; i < 24; i++) {
@@ -300,6 +317,9 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
     const r = await w.api(B, 'POST', '/api/tasks', { title, project: 'Rehearsal' }, opId)
     if (r.status < 300) onBWrites.push({ id: r.json.task.id, title, opId })
   }
+  const fromANow = { copy: w.links.copy.accepted(), aToH: w.links.aToH.accepted() }
+  c.add('main: once B leads, A opens no new connection to B\'s daemon (the copy link) or to H\'s', fromANow.copy === fromA.copy && fromANow.aToH === fromA.aToH,
+    `copy link ${fromA.copy} -> ${fromANow.copy}, A to H ${fromA.aToH} -> ${fromANow.aToH} (from B ready to the switch back)`)
   await w.side(A).startStandby().catch(() => null)
   const batchA = await waitForBatch(A.standbyDir, Date.now(), 180_000).catch(() => 0)
   c.add('main: B\'s batches reach A\'s standby folder over B\'s link to A\'s daemon', batchA > 0, `batch ${batchA}`)
@@ -310,7 +330,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   times['downtime B -> A (switch back), copy link unslowed'] = `${((tb?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
   c.add('main: A leads again', !!(await status(w, A))?.mayAct)
   await checkCarried(c, w, A, B, { tasks: [...s.tasks, ...acked, ...onBWrites], notes: s.notes, pluginFiles: [...s.pluginFiles, late] }, 'main B -> A')
-  checkNoOverlap(c, 'main B -> A', A, B)
+  checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt })
   c.add('main: A\'s handed-over home is kept beside the new one', fs.existsSync(`${A.home}.before-${back.state!.id}`) && readMarker(`${A.home}.before-${back.state!.id}`)?.state === 'handed-over')
 }
 
@@ -375,6 +395,9 @@ async function runSwitch(x: Ctx, label: string, o: { env?: Record<string, string
   if (o.during) await o.during(from, to)
   const r = await run
   x.log(`${label}:\n${r.out}`)
+  // A source job that died (exit 4) is resumed by the caller at once: waiting for the target job first would
+  // outlast the old leader's stop wait, and its server would take the handover back before the resume.
+  if (r.code === 4 && !o.during) return r
   const t = await targetDone(r.state)
   r.target = t
   if (r.state?.step === 'done' && t?.step === 'done') { roles.leader = to; roles.other = from }
@@ -667,9 +690,14 @@ async function kills(x: Ctx): Promise<void> {
       resumedOn = `${L.id} (exit ${final.code})`
       if (final.state?.step === 'done' && final.target?.step === 'done') { roles.leader = roles.other; roles.other = L }
     }
+    // The kill happened where it was asked: the source job died there (exit 4, the command saying so), or the
+    // target job was found dead there and resumed.
+    const killed = target ? resumedOn !== '' : r.code === 4 && /died|stopped at/.test(r.out)
+    c.add(`kill ${point}: the ${target ? 'target' : 'source'} job died there`, killed, `first exit ${r.code}; ${last(r.out, 1)}`)
+    // Resumed at once, every kill point finishes the switch (as on one machine, rehearsal.ts rehearseKill):
+    // a roll back here is a bug of the resume, never an allowed answer.
     const done = final.state?.step === 'done' && final.target?.step === 'done'
-    const rolledBack = final.state?.step === 'rolled-back'
-    c.add(`kill ${point}: the switch finishes or rolls back`, done || rolledBack, `first exit ${r.code}; resumed on ${resumedOn || 'none'}; source ${final.state?.step}; target ${final.target?.step}; ${final.state?.rollbackWhy?.slice(0, 120) ?? ''}`)
+    c.add(`kill ${point}: the resumed switch finishes, both jobs done, no roll back`, done && !final.state?.rollbackWhy && !final.target?.rollbackWhy, `first exit ${r.code}; resumed on ${resumedOn || 'none'}; source ${final.state?.step}; target ${final.target?.step}; ${(final.state?.rollbackWhy ?? final.target?.rollbackWhy)?.slice(0, 160) ?? 'no roll back'}`)
     await oneLeader(x, `kill ${point}`, roles.leader)
     await checkCarried(c, w, roles.leader, L, x.carried, `kill ${point}`)
   }

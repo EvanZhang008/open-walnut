@@ -147,10 +147,15 @@ Source job:
    machine's `host_key` (the name the new leader gives it in its `hosts`); with either missing, or the steps not
    set (a trial start: a leader's permit sets them, `host-follow-steps.ts`), none runs. The host service listens on
    a loopback port picked as the host-server manager picks one (random candidates in 41000 to 49999, the first
-   free one; a handover asked again keeps the port its record names). After the record, `retellNetMembers` is
-   asked again every 2 s until every net host took the lists and the new leader is let in (its network id: the
-   `endpoint` of its host key in `hosts`), for half the commit window at most a minute; not done by then, the
-   server takes its handover back and refuses, naming the hosts, and nothing stops. Once the record stands
+   free one, in the range `src/core/host-server/service-ports.ts` gives both; the same switch asked again keeps
+   the port its record names, a record of another switch is not reused). The handover is noted as soon as its
+   record stands (`noteHandedOver`: the stop wait starts, and any take-back from here undoes the host steps and
+   marks the switch taken back). After the record, `retellNetMembers` is asked again every 2 s until every net
+   host took the lists and the new leader is let in (its network id: the `endpoint` of its host key in `hosts`),
+   for half the commit window at most a minute. That bound is hard: each call is raced against the time left,
+   and none starts with less than 5 s left. Not done by then, the server takes its handover back (the host
+   steps undone once the cancel stands; a cancel that does not reach a majority is tried again every 5 s) and
+   refuses with 409, naming the hosts; nothing stops, and the same switch id is refused after. Once the record stands
    and the hosts follow, the server writes the ticket and starts the target job; when it cannot, it
    cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.
@@ -194,7 +199,9 @@ Target job:
    old home's newest task and a note must read back through its API (the same read-back as the
    restore drill's boot check, `src/core/trial-start/read-back.ts`: the note is the first one under
    the vault root, `artifacts/` once the notes moved into the one tree, `notes/` before). Then it stops. A
-   resumed trial skips the size and row comparison (its server may have touched the home).
+   resumed trial skips the size and row comparison (its server may have touched the home), and a dated copy
+   of `config.yaml` missing from `config.yaml.history/` (the trial server's config write moves a repeated
+   version to the front and deletes its older copy: `config-history.ts`); every other file must be there.
 4. **commit**: the new leader starts for real, told the handover's number: its own `renew` on
    top of the handover reaches a majority (a `grant` once the handover ran out at the
    witnesses, for a long trial). From here the old machine's `mayAct()` is false for good and
@@ -244,7 +251,7 @@ cross it:
 | batches (periodic and final) | `fs.writePart` of the batch, `walnut standby receive` there (`exec.script`), as `RemoteStandbyTarget` |
 | the ticket, the final mark, a cleared check report | `fs.write` with `atomic` (fsync, then rename: `fs-write-atomic-v1`) into `standby_dir/switch/` |
 | the check report, the target state | `fs.read` |
-| the target job (and its `--check`) | `exec.run` with `detach` and `endGroup`, job id `hx-leader-switch-<id>` (a second start answers `job_exists`, which counts as started), the machine's `env` from `leader_switch.machines` as an `env K=V` prefix |
+| the target job (and its `--check`) | `exec.run` with `detach` and `endGroup`, job id `hx-leader-switch-<id>`, the machine's `env` from `leader_switch.machines` as an `env K=V` prefix. A second start answers `job_exists`: the job is read (`exec.read`), and one still running or ended at `done` or `rolled-back` counts as started; one ended anywhere else (killed, the machine restarted) runs again under `hx-leader-switch-<id>-r<hex>` and resumes from its state file |
 | verify | `walnut standby receive verify` there (`exec.script`), as `RemoteStandbyTarget.verify` |
 
 The preflight asks the daemon's hello first and names each capability it lacks
@@ -252,7 +259,13 @@ The preflight asks the daemon's hello first and names each capability it lacks
 host-exec-detach-v1, fs-write-atomic-v1). A call that loses the link is tried again on a new one
 for up to 2 minutes; a refusal from the daemon is never retried. The begin rule (`beginRefusal`)
 also checks that the machine starting the switch has a `host_key` that `config.yaml`'s `hosts`
-names (the new leader dials it back as a host).
+names (the new leader dials it back as a host). The ticket names the new machine by its `host_key`, or else by
+the name this leader's `standby.host` gives it, for the session hosts step ([Paths](#paths), where a session runs).
+
+The routes that read the copy link answer within a deadline: `GET /api/leader/switch/target` within 10 s
+(502 naming the link when it does not answer) and `POST /api/leader/switch/check` within 150 s in all (its
+link, clearing the last report, the verify, the job, its report). A last report that cannot be cleared stops
+the check (an old report would otherwise be read as this one's), and the peer is closed however it ends.
 
 The trial's checks run in the target job, on the new machine, against its own copy: before the
 promotion rewrites any path the job reads the copy's row counts, newest task and a read-back note
@@ -272,6 +285,11 @@ ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
    the commit window. A take-back (a cancel by hand, the stop wait) is refused while the stop runs; one
    that could not reach the witnesses lets the switch wait for its stop again, and the stop wait tries
    again every 5 s.
+   Before it takes the stop the server holds the copy link (`peer.hold`, within 10 s, never past the commit
+   deadline): the stop's teardown of every host link leaves it open, and nothing dials a new one in a stop.
+   Not held, the server does not stop at all (the stop is abandoned and the switch waits for its stop again).
+   Held, a command over it fails at once when the link is down and is cut at the commit deadline (none starts
+   after it), so no wait of the stop outlives the deadline.
 2. Its doors close and its stores close, as in a planned stop. A switch stop writes no
    release record: the handover is the last record of this process.
 3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
@@ -968,10 +986,11 @@ trial's scan took 53 ms of the 8.4 s downtime.
 link, so the ticket names the old machine's host key): a session row with no host (NULL, `''`, `__local__`) ran on the old
 leader's own daemon. Its folder is kept, and so is its host: the old machine, now a host of the new leader, by the
 `host_key` its `leader_switch.machines` entry gives it. A row on the new machine's `host_key` names no host now: that daemon is
-the new leader's own. A row its host's own service judges (`judge: 'host'`) keeps its key, as the session channel's tables
-do. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
-resumed after a kill does not swap back). The trial's offline check does not compare that store's size and rows with the
-copy's (`offlineCheck` `changed`); its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
+the new leader's own. A row its host's own service judges (`judge: 'host'` on a named host, as `judgedByHost` in
+`session-row-owner.ts` reads it) keeps its key, as the session channel's tables do; a row with no host is the leader's
+whatever its payload says, and moves. The swap runs once per switch (the switch id is marked in `sessions.sqlite` in the same transaction, so a promotion
+resumed after a kill does not swap back). The trial's offline check does not compare that store's size with the
+copy's (`offlineCheck` `changed`); its rows must be the copy's plus the mark row, and its integrity check still runs. The rehearsal's `main` starts a session on A's own daemon,
 switches, and checks that B lists it on host `machine-a` with its turn once, and that a message through B runs on A (the turn is in
 the CLI transcript under A's home, none under B's). Without a `host_key` for the old machine nothing moves, and such a session would run on the
 new leader's own daemon, where its transcript is not.
@@ -1011,6 +1030,14 @@ leader's console ([its rehearsal](./leader-switch-console.md#rehearsal)). Its te
 `tests/e2e/leader-switch-real-*.test.ts` (a few scenarios per file, `tests/helpers/leader-switch-real.ts`). The standby copies and promoted homes are read-only, so at
 the end the run makes `<work dir>` writable again and removes it when every check passed (`--keep`
 keeps it); a failed run keeps it, writable, as evidence.
+
+`--remote [--only <scenario>,...]` runs the same between machines (`scripts/leader-switch/remote-rehearsal.ts`): A, B and
+a third host H, each with the built standalone daemon (refused when `dist/daemon-binaries` was built from other source
+than this checkout's: `bash scripts/build-daemon.sh`), every link a loopback proxy that can cut or slow it, the companion as
+the third witness. Beyond the checks above it asks: A acts only before it stopped and B only after the commit
+(`checkOneLeader`); once B leads, A opens no new connection to B's daemon or to H's; the routine fires on A before the switch
+and on B after it, each slot once in total; at each kill point the job died there (the source job's exit 4, or the target job
+found dead and resumed) and the resumed switch finishes with both jobs `done`, no roll back.
 
 ## Witnesses on other machines
 

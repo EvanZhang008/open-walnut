@@ -103,7 +103,7 @@ export async function seed(w: World, m: Machine, n = 10): Promise<Seeded> {
 }
 
 /** Writes through A's API until it stops answering; every write it acknowledged is listed. */
-export function startLoad(w: World, m: Machine): { stop(): Promise<Seeded['tasks']>; notes: Seeded['notes'] } {
+export function startLoad(w: World, m: Machine): { stop(): Promise<Seeded['tasks']>; notes: Seeded['notes']; acked: Readonly<Seeded['tasks']> } {
   const acked: Seeded['tasks'] = []
   const notes: Seeded['notes'] = []
   let running = true
@@ -125,7 +125,7 @@ export function startLoad(w: World, m: Machine): { stop(): Promise<Seeded['tasks
       }
     }
   })()
-  return { notes, async stop() { running = false; await loop; return acked } }
+  return { notes, acked, async stop() { running = false; await loop; return acked } }
 }
 
 export async function checkCarried(c: Checks, w: World, to: Machine, from: Machine, s: { tasks: Seeded['tasks']; notes: Seeded['notes']; pluginFiles: Seeded['pluginFiles'] }, label: string): Promise<void> {
