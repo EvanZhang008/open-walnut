@@ -38,10 +38,8 @@
 import { isLoopbackHostname, isLoopbackUrl } from '../core/service-url.js'
 import { withCodexRequestTag } from '../core/sessions/request-tag.js'
 
-/** A provider id codex reads as a table key; codex-acp's patch passes only these. */
-const PROVIDER_ID = /^[A-Za-z0-9_-]+$/
-/** Codex's built-in providers win over a user table of the same id, so naming one would route nowhere new. */
-const BUILT_IN_PROVIDER_IDS = new Set(['openai', 'ollama', 'lmstudio', 'oss'])
+import { CODEX_BUILT_IN_PROVIDER_IDS as BUILT_IN_PROVIDER_IDS, CODEX_PROVIDER_ID as PROVIDER_ID } from './codex-thread-provider.js'
+
 const WIRE_APIS = new Set(['responses', 'chat'])
 /** The charset real provider model ids use (resolveModelSwitchValue in core/types.ts). */
 const MODEL_ID = /^[A-Za-z0-9._:/-]+$/

@@ -106,6 +106,7 @@ SOURCES=(
   src/providers/acp-daemon.ts
   src/providers/acp-survive.ts
   src/providers/acp-thread-restore.ts
+  src/providers/codex-thread-provider.ts
   src/providers/acp-host-artifacts.ts
   src/lib/cli-private-tmp.ts
   src/lib/single-file.ts

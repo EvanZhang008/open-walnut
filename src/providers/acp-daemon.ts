@@ -34,6 +34,7 @@ import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
 import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { probeCodexModels } from './codex-model-probe.js'
 import { findThreadToRestore } from './acp-thread-restore.js'
+import { CODEX_TRANSPORT_ENV, codexHomeOf, planCodexResume } from './codex-thread-provider.js'
 import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
 import { firstRpcId, openSurviveChannel, prepareSurviveFiles, readSavedPos, removeSurviveFiles, survivePaths, type SurviveChannel } from './acp-survive.js'
 import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, registryFile, unregisterRun } from './detached-registry.js'
@@ -606,6 +607,24 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     repairJournalMode(journalPath)
     // Where a cold start's time goes, for the start log line and the caller's own (acp-session.ts).
     const startedAt = Date.now()
+    // A thread a failed load replaced, and that never got a turn of its own,
+    // is not the conversation: try the one it replaced first (acp-thread-restore.ts).
+    const restoreId = await findThreadToRestore(journalPath, providerSessionId)
+    // A Codex thread resumes under the provider id it recorded (codex-thread-provider.ts):
+    // read here, on the host that keeps its rollout, before the worker takes its CODEX_CONFIG.
+    let resumeProviders: Record<string, string> = {}
+    if (providerSessionId) {
+      const spawnEnv = mergeAcpSpawnEnv(baseEnv, env)
+      const plan = await planCodexResume({
+        codexConfig: spawnEnv.CODEX_CONFIG,
+        codexHome: codexHomeOf(spawnEnv),
+        threadIds: [restoreId, providerSessionId],
+        adapter: spawnEnv[CODEX_TRANSPORT_ENV] !== 'app-server',
+      })
+      if (plan.codexConfig) env = { ...(env ?? {}), CODEX_CONFIG: plan.codexConfig }
+      resumeProviders = plan.providers
+      for (const note of plan.notes) log('info', 'acp: codex thread resumes under the provider id it recorded', { sid, ...note })
+    }
     let proc: ChildProcess
     if (deps.maySpawn && !deps.maySpawn()) return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
     const survive = params.survive === true
@@ -735,12 +754,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     entry.gracefulCancel = initMeta?.walnut?.gracefulCancel === true
     // Same mount list on both paths: ACP's mcpServers is the complete set for
     // the session, so omitting it on load would drop the mounts on cold resume.
-    // A thread a failed load replaced, and that never got a turn of its own,
-    // is not the conversation: try the one it replaced first (acp-thread-restore.ts).
-    const restoreId = await findThreadToRestore(journalPath, providerSessionId)
+    // Each load names the provider id its thread recorded, when that one is not today's.
+    const modelProviderOf = (thread: string) => (resumeProviders[thread] ? { modelProvider: resumeProviders[thread] } : {})
     let sessionResp: WorkerRpcResponse | undefined
     if (restoreId) {
-      const restored = await rpc(entry, 'loadSession', { providerSessionId: restoreId, cwd, mcpServers })
+      const restored = await rpc(entry, 'loadSession', { providerSessionId: restoreId, cwd, mcpServers, ...modelProviderOf(restoreId) })
       log(restored.ok ? 'info' : 'warn', restored.ok ? 'acp: restored the thread a fresh one had replaced' : 'acp: replaced thread did not load, loading the requested one', {
         sid, requested: providerSessionId, restored: restoreId,
       })
@@ -751,7 +769,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       if (restored.ok || restored.error?.kind !== 'load_failed') sessionResp = restored
     }
     sessionResp ??= providerSessionId
-      ? await rpc(entry, 'loadSession', { providerSessionId, cwd, mcpServers })
+      ? await rpc(entry, 'loadSession', { providerSessionId, cwd, mcpServers, ...modelProviderOf(providerSessionId) })
       : await rpc(entry, 'newSession', { cwd, mcpServers })
     if (!sessionResp.ok) {
       // load_failed is a real outcome the caller must decide on (fallback to

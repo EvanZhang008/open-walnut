@@ -173,6 +173,54 @@ describe('direct Codex under the daemon', () => {
     expect(metas('s4').some((e) => e.type === 'session-loaded')).toBe(true)
   })
 
+  it('a thread created under a provider id that was renamed since resumes under that id, at today\'s endpoint', async () => {
+    const current = { name: 'box-a-proxy', base_url: 'http://127.0.0.1:8402/openai/v1', wire_api: 'responses', requires_openai_auth: false }
+    const env = (extra: Record<string, unknown>) => ({ ...startParams('s7').env, ...extra })
+    const first = await acp.acpStart(makeWs(), startParams('s7'))
+    const threadId = (first.result as { session: { sessionId: string } }).session.sessionId
+    await acp.acpStop('s7')
+    // Codex recorded the thread under the provider id of its day (the 2026-11-24 shape).
+    const day = path.join(tmpDir, 'codex-home', 'sessions', '2026', '11', '24')
+    fs.mkdirSync(day, { recursive: true })
+    fs.writeFileSync(path.join(day, `rollout-2026-11-24T13-31-16-${threadId}.jsonl`),
+      JSON.stringify({ type: 'session_meta', payload: { id: threadId, model_provider: 'old-proxy', base_instructions: { text: 'x' } } }) + '\n')
+    for (const t of intervals) clearInterval(t)
+    acp = makeAcp()
+
+    const codexConfig = JSON.stringify({ model_provider: 'box-a-proxy', model_providers: { 'box-a-proxy': current } })
+    const again = await acp.acpStart(makeWs(), startParams('s7', { providerSessionId: threadId, env: env({ CODEX_CONFIG: codexConfig }) }))
+    expect(again.ok, JSON.stringify(again)).toBe(true)
+    expect((again.result as { state: { providerSessionId: string } }).state.providerSessionId).toBe(threadId)
+    const resume = codexLog().filter((e) => e.kind === 'request' && e.method === 'thread/resume').at(-1)!
+    expect(resume.params?.modelProvider).toBe('old-proxy')
+    const config = resume.params?.config as { model_provider: string; model_providers: Record<string, unknown> }
+    expect(config.model_provider).toBe('old-proxy')
+    expect(config.model_providers['old-proxy']).toEqual({ ...current, name: 'old-proxy' })
+    // The app-server itself knows the alias too, and keeps today's provider for new threads.
+    const argv = (codexLog().filter((e) => e.kind === 'spawn').at(-1) as unknown as { argv: string[] }).argv
+    expect(argv.some((a) => a.startsWith('model_providers.old-proxy='))).toBe(true)
+    expect(argv).toContain('model_provider="box-a-proxy"')
+    expect(metas('s7').some((e) => e.type === 'resume-error' || e.type === 'resume-failed')).toBe(false)
+  })
+
+  it('an old id the user\'s own config.toml defines is left alone: Codex then refuses the switch, as 0.171 does (the mock holds the real check)', async () => {
+    const first = await acp.acpStart(makeWs(), startParams('s8'))
+    const threadId = (first.result as { session: { sessionId: string } }).session.sessionId
+    await acp.acpStop('s8')
+    // A provider the user's own config.toml defines is left alone, so the resume names today's id.
+    fs.writeFileSync(path.join(tmpDir, 'codex-home', 'config.toml'), '[model_providers.old-proxy]\nbase_url = "http://10.0.0.9/v1"\n')
+    const day = path.join(tmpDir, 'codex-home', 'sessions', '2026', '11', '24')
+    fs.mkdirSync(day, { recursive: true })
+    fs.writeFileSync(path.join(day, `rollout-2026-11-24T13-31-16-${threadId}.jsonl`),
+      JSON.stringify({ type: 'session_meta', payload: { id: threadId, model_provider: 'old-proxy' } }) + '\n')
+    for (const t of intervals) clearInterval(t)
+    acp = makeAcp()
+    const codexConfig = JSON.stringify({ model_provider: 'box-a-proxy', model_providers: { 'box-a-proxy': { name: 'box-a-proxy', base_url: 'http://127.0.0.1:8402/v1' } } })
+    const again = await acp.acpStart(makeWs(), startParams('s8', { providerSessionId: threadId, env: { ...startParams('s8').env, CODEX_CONFIG: codexConfig } }))
+    expect(again.ok).toBe(false)
+    expect(metas('s8').find((e) => e.type === 'resume-error')?.reason).toMatch(/Cannot change this thread's model provider/)
+  })
+
   it('a thread Codex lost is a load_failed with its reason in the journal, so the caller starts a new one visibly', async () => {
     const out = await acp.acpStart(makeWs(), startParams('s5', { providerSessionId: '019a0000-0000-7000-8000-00000000dead' }))
     expect(out.ok).toBe(false)

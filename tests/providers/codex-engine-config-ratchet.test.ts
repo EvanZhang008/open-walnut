@@ -34,6 +34,7 @@ const KNOWN: Record<string, { applies: string } | { namesOnly: string }> = {
   'src/core/agents/host-adapter-spec.ts': { namesOnly: 'names the adapter bundle another host runs; its env comes from acp-session.ts' },
   'src/providers/acp-host-artifacts.ts': { namesOnly: 'finds the bundle and codex on a host; the env it runs with comes from the start' },
   'src/providers/daemon-version-check.ts': { namesOnly: 'hashes the adapter files for the daemon version' },
+  'src/providers/acp-daemon.ts': { namesOnly: 'on the host, adds a resumed thread\'s recorded provider id to the CODEX_CONFIG it received, as an alias of the provider that one names (codex-thread-provider.ts); reads the transport setting' },
 }
 
 function sourceFiles(dir: string): string[] {
@@ -107,6 +108,8 @@ describe('every Codex spawn applies engines.codex through one function', () => {
       const to = from >= 0 ? code.indexOf('\n}\n', from) : -1
       for (const m of code.matchAll(CODEX_CONFIG_WRITE)) {
         if (from >= 0 && m.index! > from && m.index! < to) continue
+        // The host's resume step: the received CODEX_CONFIG with a thread's recorded id aliased (codex-thread-provider.ts).
+        if (file === 'src/providers/acp-daemon.ts' && /^[\s,{]*CODEX_CONFIG:\s*plan\.codexConfig\b/.test(code.slice(m.index!))) continue
         writes.push(`${file}: ${code.slice(m.index!, m.index! + 60).trim()}`)
       }
     }
@@ -175,6 +178,8 @@ describe('every Codex spawn applies engines.codex through one function', () => {
       'src/providers/codex-engine-config.ts': 'the resolver: readCodexEngineSettings, codexProviderForPlace, codexConfigFromSettings',
       'src/providers/codex-model-probe.ts': 'codexProviderStartupArgs: puts the provider the received CODEX_CONFIG names on the app-server command line',
       'src/core/sessions/request-tag.ts': 'adds the session tag headers to the provider the resolved CODEX_CONFIG already names',
+      'src/providers/codex-thread-provider.ts': 'on the host, copies the provider the received CODEX_CONFIG names under the id a resumed thread recorded; never reads engines.codex',
+      'src/providers/codex-app-server/connection.ts': 'a resume names the id its thread recorded, only one the received CODEX_CONFIG defines',
     }
     const TOUCH = [
       /\bmodel_providers['"]?\s*:/, // an object key

@@ -95,6 +95,22 @@ and a `CODEX_CONFIG` entry under the host provider's own name keeps its other ke
 provider's address. A session on this machine, and a host's own service reading its own
 `engines.codex.env`, keep the env as written.
 
+A Codex thread keeps the provider id it was created under: Codex records it in the thread's
+rollout and resumes the thread only under that id (Codex 0.171 refuses an id it no longer knows,
+and a resume that names another). When a provider id Walnut defined is gone now (you renamed
+the provider's `name`, or a host got a provider of its own under another name), the host that
+resumes an older thread reads the id the thread recorded and resumes it under that id, defined
+as an alias of the provider the host uses now (same endpoint, same keys), so the conversation
+goes on at today's endpoint (`src/providers/codex-thread-provider.ts`). A rollout that cannot be
+found or read changes nothing.
+
+Not covered: a thread created under an id your own `~/.codex/config.toml` defines, or under one
+of Codex's built-in ids (for example `openai`, a thread started before Walnut named a provider
+for that host). Walnut leaves that provider alone, resumes under its own id, and Codex 0.171
+refuses the switch, so such a thread still falls back to a new conversation after the start's
+retries. Resuming it under your own provider would send the session past the provider Walnut
+was set to use.
+
 Only the provider is per host. `model`, `effort` and every other key of `engines.codex` stay the
 global ones on every host, so the default `model` must exist on each host's provider too. The
 model prefix is the provider's own: a host provider with no `model_prefix` gets none, one with its

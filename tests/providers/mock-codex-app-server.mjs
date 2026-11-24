@@ -51,6 +51,9 @@
  * rootTurnId = the answered id) that says "review: <instructions>", ended under the root id.
  * config/read gives MOCK_SANDBOX_WW (JSON) as the [sandbox_workspace_write] table.
  * A thread id ending in 0000locked: thread/resume fails as an unreadable rollout would.
+ * A thread with a rollout under CODEX_HOME/sessions/<y>/<m>/<d>/rollout-*-<id>.jsonl resumes
+ * only as Codex 0.171 resumes one: the provider id its session_meta records must be defined
+ * (the resume's config.model_providers or CODEX_HOME/config.toml), and the resume must name it.
  * Like Codex, every input the turn takes (its prompt, each steer) is sent as a userMessage item.
  */
 
@@ -80,6 +83,22 @@ const log = (entry) => { if (LOG) fs.appendFileSync(LOG, JSON.stringify({ pid: p
 log({ kind: 'spawn', argv })
 
 const readThreads = () => { try { return JSON.parse(fs.readFileSync(THREADS, 'utf8')) } catch { return {} } }
+/** The provider id a thread's rollout records, as Codex reads it (the session_meta first line). */
+const recordedProvider = (threadId) => {
+  const sessions = path.join(HOME, 'sessions')
+  const walk = (dir, depth) => {
+    let names = []
+    try { names = fs.readdirSync(dir) } catch { return undefined }
+    for (const n of names) {
+      const p = path.join(dir, n)
+      if (depth < 3) { const hit = walk(p, depth + 1); if (hit) return hit } else if (n.endsWith(`-${threadId}.jsonl`)) return p
+    }
+    return undefined
+  }
+  const file = walk(sessions, 0)
+  if (!file) return undefined
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').split('\n')[0]).payload?.model_provider } catch { return undefined }
+}
 const saveThread = (id, data) => { const all = readThreads(); all[id] = data; fs.writeFileSync(THREADS, JSON.stringify(all)) }
 
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n')
@@ -412,6 +431,15 @@ async function handle(msg) {
       if (String(params.threadId).endsWith('0000locked')) return fail(id, 'failed to load rollout: Permission denied (os error 13)')
       const saved = readThreads()[params.threadId]
       if (!saved) return fail(id, `no rollout found for thread id ${params.threadId}`)
+      const recorded = recordedProvider(params.threadId)
+      let toml = ''
+      try { toml = fs.readFileSync(path.join(HOME, 'config.toml'), 'utf8') } catch { /* none */ }
+      const inToml = recorded && toml.split('\n').some((l) => l.trim().startsWith(`[model_providers.${recorded}`))
+      if (recorded && !inToml && !(params.config?.model_providers && Object.hasOwn(params.config.model_providers, recorded))) {
+        return fail(id, `This chat uses model provider \u201c${recorded}\u201d, which is no longer configured. Restore this provider\u2019s configuration to continue.`)
+      }
+      const named = params.modelProvider ?? params.config?.model_provider
+      if (recorded && named && named !== recorded) return fail(id, `failed to load configuration: Cannot change this thread's model provider from \`${recorded}\` to \`${named}\` on resume.`)
       threadId = params.threadId
       const turns = params.excludeTurns ? [] : saved.turns || []
       return send({ id, result: { thread: { id: threadId, turns }, model: 'gpt-mock', modelProvider: 'mock', reasoningEffort: 'high', cwd: params.cwd } })

@@ -17,8 +17,9 @@
 
 import { redactSensitiveText } from '../../logging/redact.js'
 import { AppServerRpcError } from './rpc.js'
+import { CODEX_TRANSPORT_ENV } from '../codex-thread-provider.js'
 
-export const CODEX_TRANSPORT_ENV = 'WALNUT_CODEX_TRANSPORT'
+export { CODEX_TRANSPORT_ENV }
 export type CodexTransport = 'app-server' | 'acp'
 
 export function resolveCodexTransport(

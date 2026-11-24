@@ -206,6 +206,11 @@ export interface LoadSessionParams {
   providerSessionId: string
   cwd: string
   mcpServers?: AcpMcpServer[]
+  /**
+   * The Codex provider id the thread recorded, when it is not the one CODEX_CONFIG names
+   * (codex-thread-provider.ts): the direct client resumes under it. An adapter ignores it.
+   */
+  modelProvider?: string
 }
 
 export type PromptParams =

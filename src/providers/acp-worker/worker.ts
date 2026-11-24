@@ -430,7 +430,7 @@ export class AcpWorker {
       }
       const resp = this.direct
         // The app-server resumes without a replay; it sends the past turns only when the journal lost them.
-        ? await this.direct.loadSession({ sessionId: request.sessionId, cwd: request.cwd, mcpServers: params.mcpServers, replay: !this.skipReplayFrames })
+        ? await this.direct.loadSession({ sessionId: request.sessionId, cwd: request.cwd, mcpServers: params.mcpServers, replay: !this.skipReplayFrames, modelProvider: params.modelProvider })
         : useLoad
           ? await conn.loadSession(request)
           : await conn.resumeSession(request)

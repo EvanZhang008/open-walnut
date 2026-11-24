@@ -190,12 +190,19 @@ export class CodexDirectConnection {
     return this.adoptThread(resp)
   }
 
-  /** `replay`: send the thread's past turns as provider-replay frames (the journal lost them). */
-  async loadSession(params: { sessionId: string; cwd?: string; mcpServers?: AcpMcpServer[]; replay?: boolean }): Promise<Record<string, unknown>> {
+  /**
+   * `replay`: send the thread's past turns as provider-replay frames (the journal lost them).
+   * `modelProvider`: the provider id the thread recorded, when it is not today's
+   * (codex-thread-provider.ts): Codex resumes a thread only under its own id.
+   */
+  async loadSession(params: { sessionId: string; cwd?: string; mcpServers?: AcpMcpServer[]; replay?: boolean; modelProvider?: string }): Promise<Record<string, unknown>> {
     await this.loadModelRows()
     const cwd = params.cwd || this.cwd
     const config = await this.threadConfig(cwd, params.mcpServers)
-    const provider = this.modelProvider()
+    const recorded = typeof params.modelProvider === 'string' && isRecord(config.model_providers) && Object.hasOwn(config.model_providers, params.modelProvider)
+      ? params.modelProvider : undefined
+    if (recorded) config.model_provider = recorded
+    const provider = recorded ?? this.modelProvider()
     // excludeTurns (experimental on the oldest supported Codex, which our initialize opts into):
     // the thread's past turns stay in Codex, unread, unless the journal lost them.
     const excludeTurns = !params.replay
