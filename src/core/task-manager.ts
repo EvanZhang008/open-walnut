@@ -2999,14 +2999,15 @@ async function persistTaskExt(task: Task): Promise<void> {
  * Fire-and-forget: mark all sessions linked to a completed task as completed.
  * Uses dynamic import to avoid circular dependency with session-tracker.
  */
-function autoCompleteTaskSessions(task: Task, actorSid?: string): void {
+function autoCompleteTaskSessions(task: Task, actorSid: string | undefined, decided: boolean): void {
   // This runs on EVERY write to a complete task (a title refine, a cwd rename
   // seen on a tool call): a session whose own completion waits for its turn
-  // end is left to that wait.
+  // end is left to that wait. `decided`: this write made it complete; a later
+  // one is gentle, so a session its host runs is never cut mid-turn by it.
   const sessionIds = (task.session_ids ?? []).filter((sid) => !isAwaitingTurnEnd(sid));
   if (!sessionIds.length) return;
   import('./session-tracker.js')
-    .then(({ completeTaskSessions }) => completeTaskSessions(sessionIds, actorSid ? { actorSid } : undefined))
+    .then(({ completeTaskSessions }) => completeTaskSessions(sessionIds, { ...(actorSid ? { actorSid } : {}), ...(decided ? {} : { gentle: true }) }))
     .then((count) => {
       if (count > 0) {
         log.task.info('auto-completed sessions for task', { taskId: task.id, count });
@@ -3046,7 +3047,8 @@ export async function migrateCompletedTaskSessions(): Promise<number> {
   }
 
   const { completeTaskSessions } = await import('./session-tracker.js');
-  const count = await completeTaskSessions([...allSessionIds]);
+  // gentle: this pass did not decide any completion, so it never cuts a turn its host runs.
+  const count = await completeTaskSessions([...allSessionIds], { gentle: true });
   if (count > 0) {
     log.task.info('migrated stale sessions from completed tasks', { count, tasks: completeTasks.length });
   }
@@ -4295,7 +4297,7 @@ export async function completeTask(
   if (!syncResult.success) {
     throw new TaskSyncError(task.source, syncResult.error);
   }
-  autoCompleteTaskSessions(task, opts?.actorSid);
+  autoCompleteTaskSessions(task, opts?.actorSid, oldPhase !== 'COMPLETE');
   emitPhaseChanged(task, oldPhase, opts?.source ?? 'api', opts?.actorSid);
 
   return { task };
@@ -4341,7 +4343,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   if (!syncResult.success) {
     throw new TaskSyncError(task.source, syncResult.error);
   }
-  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
+  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task, undefined, oldPhase !== 'COMPLETE');
 
   const eventName = task.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
   bus.emit(eventName, { task }, ['web-ui'], { source: 'internal' });
@@ -4440,8 +4442,8 @@ export async function setPhaseBulk(
     if (!syncResult.success) {
       syncFailed.push({ id: task.id, title: task.title, ok: false, error: `Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}` });
     }
-    if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
     const prior = oldPhases.get(task.id);
+    if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task, undefined, prior !== undefined && prior !== 'COMPLETE');
     if (prior !== undefined) emitPhaseChanged(task, prior, 'bulk');
   }
 
@@ -5272,7 +5274,7 @@ export async function updateTask(
     }
   }
   if (parentChangeAction) parentChangeAction();
-  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task, eventOptions?.actorSid);
+  if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task, eventOptions?.actorSid, oldPhase !== 'COMPLETE');
 
   // Centralized event emission — every updateTask() call notifies the UI.
   // All other task-mutating functions (addNote, updateDescription, toggleComplete,
@@ -9089,7 +9091,7 @@ export async function updateTaskRaw(
   }
   // Before the phase event, as completeTask orders them.
   if (opts?.completeSessions && updated.phase === 'COMPLETE' && rawOldPhase !== 'COMPLETE') {
-    autoCompleteTaskSessions(updated, opts.actorSid);
+    autoCompleteTaskSessions(updated, opts.actorSid, true);
   }
   if (opts?.emitEvent) {
     const eventName = updated.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;

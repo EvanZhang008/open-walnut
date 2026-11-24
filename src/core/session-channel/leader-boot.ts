@@ -11,7 +11,7 @@
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
-import { createLeaderSide, reportHostChecks, reportJudges, reportReadsHistory, reportResumes, reportResumesAcp, type LeaderSide } from './leader-side.js'
+import { createLeaderSide, reportHostChecks, reportJudges, reportReadsHistory, reportResumes, reportResumesAcp, reportTakesCompleteStop, type LeaderSide } from './leader-side.js'
 import { noteHostReadsHistory, setHostHistoryCaller } from '../sessions/host-history-reads.js'
 import { noteHostSessionSide } from './host-side-health.js'
 import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
@@ -284,6 +284,9 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     noteHostResumes(view.hostKey, view.phase === 'running' && reportResumes(view.server), view.phase === 'running' && reportResumesAcp(view.server))
     noteHostTakesChecks(view.hostKey, view.phase === 'running' && reportHostChecks(view.server))
     noteHostReadsHistory(view.hostKey, view.phase !== 'running' ? 'down' : reportReadsHistory(view.server) ? 'answers' : 'old')
+    // Whether it takes a completed task's stop itself; the asks that waited to know go now (sessions/host-judged-complete.ts).
+    void import('../sessions/host-judged-complete.js').then((m) => m.noteHostCompleteStop(view.hostKey,
+      view.phase !== 'running' ? 'down' : reportTakesCompleteStop(view.server) ? 'takes' : 'old')).catch(() => {})
     lookIssue(view)
     // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
     noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)

@@ -106,6 +106,7 @@ const NOT_A_CONTROL: Record<string, string> = {
   'lifecycle.readParkedRows': 'a read of the rows the host keeps parked, listed in the leader\'s queue view (host-queue-rows.ts)',
   'lifecycle.sendQueuedRowNow': 'a queued row\'s Retry or Send now on the host that keeps it (host-queue-rows.ts), not a control of a running session',
   'lifecycle.discardQueuedRow': 'a queued row\'s Discard on the host that keeps it (host-queue-rows.ts), as the route `drop` is for the leader\'s rows',
+  'lifecycle.takeCompletionStop': 'the leader\'s stop of a completed task\'s session, decided by the completion and carried out by the host (host-judged-complete.ts), not a control a person calls',
 }
 
 const testsOf = (file: string): string[] => {

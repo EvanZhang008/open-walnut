@@ -40,6 +40,7 @@ import {
 // live in a prose match.
 import { classifyStatusReasonKind } from './session-error-kind.js';
 import { SELF_COMPLETE_STOP_MAX_MS, stopWhenTurnEnds } from './sessions/self-complete-stop.js';
+import { completionAskPending, stopHostRunForCompletion, type HostCompletionStop } from './sessions/host-judged-complete.js';
 import { liveAcpSessionIds, noteStopUndelivered, recheckUndeliveredHosts, undeliveredHolds, unreachableOwnerHosts } from './sessions/task-complete-stop.js';
 import { assertTaskSessionFree, otherTaskSessionId } from './sessions/one-session-per-task.js';
 import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
@@ -3245,7 +3246,9 @@ export async function completeTaskSessions(
   // The session whose API call completed the task. Mid-turn (its record
   // 'running'), it is stopped when that turn ends instead
   // (sessions/self-complete-stop.ts).
-  opts?: { actorSid?: string },
+  // `gentle`: a pass that did not just decide the completion (the boot pass, a later write to the
+  // complete task): a session its host judges is asked to stop at its turn's end, never mid-turn.
+  opts?: { actorSid?: string; gentle?: boolean },
 ): Promise<number> {
   if (!sessionIds.length) return 0;
   await ensureSessionInit();
@@ -3280,7 +3283,7 @@ export async function completeTaskSessions(
     const rearm: { sid: string; since: number }[] = [];
     const nowMs = Date.parse(now);
     // Sessions their host runs and judges: stopped by that host, their row untouched here (R2-M3).
-    const hostStops: { sid: string; host: string }[] = [];
+    const hostStops: HostCompletionStop[] = [];
     const hereKey = thisHostKey();
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
@@ -3313,13 +3316,14 @@ export async function completeTaskSessions(
         const session = rowToSession(row);
         if (judgedByHost(session) && !rowOwnedHere(session, hereKey)) {
           if (isTerminalSession(session) || (session.process_status === 'stopped' && session.pid == null)) continue;
-          // It completed its own task mid-turn: it stops when that turn ends (its facts end it here).
-          if (opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid) && session.process_status === 'running') {
-            stopAtTurnEnd = sid;
-            continue;
-          }
-          hostStops.push({ sid, host: session.host! });
-          updated++;
+          // Its host keeps the stop on its own row already, or an ask is on its way (host-judged-complete.ts).
+          if (session.taskCompleteStop || completionAskPending(sid)) continue;
+          // It completed its own task mid-turn: it stops when that turn ends, as does any session a
+          // pass that did not just decide the completion finds live.
+          const midTurnActor = !!opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid) && session.process_status === 'running';
+          const when = midTurnActor || opts?.gentle ? 'turn_end' : 'now';
+          hostStops.push({ sid, host: session.host!, when });
+          if (when === 'now') updated++;
           continue;
         }
         initializeStatusVersion(session);
@@ -3399,8 +3403,8 @@ export async function completeTaskSessions(
     if (lockWait instanceof Promise) await lockWait;
     for (const session of stoppedRows) emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
     if (hostStops.length > 0) {
-      log.session.info('completing task sessions: their hosts stop the sessions they run', { sessionIds: hostStops.map((h) => h.sid).join(','), count: hostStops.length });
-      (await import('./sessions/host-judged-complete.js')).stopHostRunForCompletion(hostStops);
+      log.session.info('completing task sessions: their hosts stop the sessions they run', { sessionIds: hostStops.map((h) => `${h.sid}:${h.when}`).join(','), count: hostStops.length });
+      stopHostRunForCompletion(hostStops);
     }
     // Still under the lock every record write takes: the status write that
     // ends this turn lands after the wait is registered.

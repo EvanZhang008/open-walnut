@@ -4249,8 +4249,10 @@ export interface SessionRecord {
    *  'turn_end', it completed its own task mid-turn and is stopped when that turn ends (watched again
    *  after a restart, deadline from `at`); 'undelivered', its host's daemon was not connected, so the
    *  record keeps its state and the stop is sent when the host connects (`actor`: it was the session
-   *  that completed the task, so it still waits for its turn's end). */
-  taskCompleteStop?: { at: string; state: 'turn_end' | 'undelivered'; actor?: boolean };
+   *  that completed the task, so it still waits for its turn's end). On a host-judged row the host
+   *  writes it when its leader asks (sessions/host-judged-complete.ts), with `reopens`, the task's
+   *  reopen count then: a task copy that counts more says the task was reopened since. */
+  taskCompleteStop?: { at: string; state: 'turn_end' | 'undelivered'; actor?: boolean; reopens?: number };
   /** Its host could not be reached when it was stopped (sessions/host-lost.ts): stopped here at
    *  `at`, its stop request kept pending until the host reconnects and ends the process
    *  (`endedAt`). `by`: 'human' or 'task:<id>'; `why`: what the connect answered. */

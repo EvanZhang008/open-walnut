@@ -116,14 +116,17 @@ export async function noteStopUndelivered(sid: string, why: string): Promise<voi
 }
 
 /**
- * At startup (before the completed-task migration): every session waiting for its own turn's
- * end is watched again, deadline from its `at`; one whose task was reopened goes on.
+ * At startup (before the completed-task migration on a leader; when a host's session side starts,
+ * host-boot.ts): every session this server judges that waits for its own turn's end is watched
+ * again, deadline from its `at`; one whose task was reopened goes on. A copy of a row another
+ * server judges (a host's, on the leader) is left to that server.
  */
 export async function resumeTaskCompleteStops(): Promise<number> {
   const { listTaskCompleteStops } = await import('../session-tracker.js');
   const { stopWhenTurnEnds } = await import('./self-complete-stop.js');
+  const { judgedHereRecords } = await import('./judge-of.js');
   let n = 0;
-  for (const rec of await listTaskCompleteStops({ state: 'turn_end' })) {
+  for (const rec of judgedHereRecords(await listTaskCompleteStops({ state: 'turn_end' }))) {
     const sid = rec.claudeSessionId;
     if (!await taskStillComplete(rec)) { await clearTaskCompleteStop(sid, 'turn_end'); continue; }
     const since = Date.parse(rec.taskCompleteStop!.at);
@@ -143,8 +146,9 @@ export async function resumeTaskCompleteStops(): Promise<number> {
  */
 export async function flushTaskCompleteStops(hostKey: string): Promise<number> {
   const { listTaskCompleteStops, completeTaskSessions } = await import('../session-tracker.js');
+  const { judgedHereRecords } = await import('./judge-of.js');
   let sent = 0;
-  for (const rec of await listTaskCompleteStops({ state: 'undelivered', host: hostKey })) {
+  for (const rec of judgedHereRecords(await listTaskCompleteStops({ state: 'undelivered', host: hostKey }))) {
     const sid = rec.claudeSessionId;
     try {
       if (!await taskStillComplete(rec)) { await clearTaskCompleteStop(sid, 'undelivered'); continue; }

@@ -29,7 +29,7 @@ import { callArgsOut } from './host-calls.js'
 import { attachLeaderChannel, isChannelFrame, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { createLeaderApply, HostRevoked } from './leader-apply.js'
-import { SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
+import { SESSION_COMPLETE_STOP_CAP, SESSION_HOST_CHECKS_CAP, SESSION_HISTORY_CAP, SESSION_JUDGE_CAP, SESSION_RESUME_ACP_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import { noteFrameParsed } from '../../providers/line-parse-count.js'
@@ -505,6 +505,11 @@ export function reportHostChecks(report: { capabilities?: unknown } | null | und
 /** Does it answer the transcript reads of its sessions (sessions/host-history-reads.ts, SESSION_HISTORY_CAP)? */
 export function reportReadsHistory(report: { capabilities?: unknown } | null | undefined): boolean {
   return reportJudges(report) && reportNames(report, SESSION_HISTORY_CAP)
+}
+
+/** Does it take the stop of a completed task's session itself (sessions/host-judged-complete.ts, SESSION_COMPLETE_STOP_CAP)? */
+export function reportTakesCompleteStop(report: { capabilities?: unknown } | null | undefined): boolean {
+  return reportJudges(report) && reportNames(report, SESSION_COMPLETE_STOP_CAP)
 }
 
 function reportNames(report: { capabilities?: unknown } | null | undefined, cap: string): boolean {

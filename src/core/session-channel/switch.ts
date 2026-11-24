@@ -55,6 +55,15 @@ export const SESSION_HOST_CHECKS_CAP = 'session-host-checks-v1'
  */
 export const SESSION_HISTORY_CAP = 'session-history-v1'
 
+/**
+ * Capability a host's service names when it takes the stop of a completed task's session itself
+ * (host-calls.ts `lifecycle` takeCompletionStop, sessions/host-judged-complete.ts): a session that
+ * completed its own task mid-turn is stopped by its host when that turn ends, the wait kept on the
+ * host's own row, so neither a leader restart nor the host's own restart cuts the turn. Without
+ * it, the leader waits for the turn's end itself and then hands the host the stop, as before.
+ */
+export const SESSION_COMPLETE_STOP_CAP = 'session-complete-stop-v1'
+
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 
 function forced(): boolean | null {

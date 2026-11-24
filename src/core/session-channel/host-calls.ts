@@ -40,7 +40,7 @@ export const HOST_CALL_ALLOWLIST = {
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
   lifecycle: [
-    'terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart', 'sendFolderWaiting',
+    'terminateSession', 'changeSessionModeOf', 'readSessionSupervision', 'lineAlreadyRan', 'cancelPendingStart', 'sendFolderWaiting', 'takeCompletionStop',
     // The rows the host keeps parked in its own queue: listed, retried and discarded from the leader's panel (host-queue-rows.ts).
     'readParkedRows', 'sendQueuedRowNow', 'discardQueuedRow',
   ],

@@ -22,6 +22,11 @@
  * The wait is also on the record (`taskCompleteStop: 'turn_end'`, task-complete-stop.ts), so
  * a restart watches it again with its own deadline instead of losing it (2026-11-18: a deploy
  * dropped the in-memory wait, and the boot migration then wrote the live session stopped).
+ *
+ * On a host that runs and judges its sessions, the same wait serves the host's own rows: the
+ * leader decided the completion and asked the host (host-judged-complete.ts takeCompletionStop),
+ * the marker on the host's row is that decision, and the host stops its own session at the turn's
+ * end (stopOwnCompleted), its task copy only vetoing a task reopened since.
  */
 import { log } from '../../logging/index.js';
 import { TurnEndWait } from './turn-end-wait.js';
@@ -97,8 +102,12 @@ export function isAwaitingTurnEnd(sessionId: string): boolean {
 export async function stillComplete(sessionId: string): Promise<string | undefined> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { listTasksByIds } = await import('../task-manager.js');
+  const rec = await getSessionByClaudeId(sessionId);
+  // One of this host's own rows: the leader's decision on its row, not the task copy here.
+  const host = await import('./host-judged-complete.js');
+  if (rec && await host.ownRowHere(rec)) return await host.hostCompletionStillWanted(rec) ? (rec.taskId || sessionId) : undefined;
   // The record names the session's task now (a merge moves sessions).
-  const taskId = (await getSessionByClaudeId(sessionId))?.taskId;
+  const taskId = rec?.taskId;
   const task = taskId ? (await listTasksByIds([taskId]))[0] : undefined;
   return task?.phase === 'COMPLETE' ? taskId : undefined;
 }
@@ -116,7 +125,12 @@ async function stopIfStillComplete(sessionId: string, wait: Wait): Promise<void>
       await (await taskCompleteStop()).clearTaskCompleteStop(sessionId, 'turn_end');
       return;
     }
-    const { completeTaskSessions } = await import('../session-tracker.js');
+    const { completeTaskSessions, getSessionByClaudeId } = await import('../session-tracker.js');
+    const host = await import('./host-judged-complete.js');
+    if (await host.ownRowHere(await getSessionByClaudeId(sessionId))) {
+      await host.stopOwnCompleted(sessionId);
+      return;
+    }
     // Still the actor: when a new turn has started since, it waits for that one.
     const stopped = await completeTaskSessions([sessionId], { actorSid: sessionId });
     if (stopped > 0) log.session.info('self-completed session stopped at turn end', { sessionId, taskId, summary });

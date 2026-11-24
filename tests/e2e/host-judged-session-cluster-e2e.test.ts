@@ -20,6 +20,9 @@
  *                cursor, nothing lost, nothing twice
  *   S5b after    a message the Mac lines up for after a running turn goes to the host with its
  *                hold, and the host sends it when its turn ends, the Mac stopped meanwhile
+ *   S5c complete a session that completes its own task mid-turn is not cut: its host keeps the stop
+ *                on its own row, the Mac restarts meanwhile and asks nothing that cuts it, and the
+ *                host stops the session once when the turn ends
  *   S6 off       the switch off on the Mac: a new start on the same host takes the legacy path
  *   S7 tasks     through all of the above the host tried no task write of a session it runs (the
  *                Mac does their task side from the facts): no refused or failed write in its log
@@ -33,7 +36,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BUN, HOST_KEY, waitFor } from '../helpers/replica-cluster.js'
 import { hostStream, writeClusterLogs } from '../helpers/replica-cluster-reads.js'
-import { factsAtBothEnds, startHostJudgeCluster, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
+import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill, type HostFactRecord, type HostJudgeCluster, type ProbeEvent } from '../helpers/host-judge-cluster.js'
 import { channelClassOf } from '../../src/core/session-channel/event-classes.js'
 
 const RUN = !!BUN && process.platform !== 'win32'
@@ -239,6 +242,48 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND after turn'), 120_000, 'the after-turn answer on the Mac after the wake').catch((err) => { throw new Error(say(String(err))) })
     await factsAfter(sid, before)
   }, 400_000)
+
+  it('S5c: a session that completes its own task mid-turn: its host stops it when the turn ends, once, across a Mac restart', async () => {
+    await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 120_000, 'the Mac to link the host after the wake')
+    const t = await h.c.mac('POST', '/api/tasks', { title: 'Host judged self complete', project: 'Acme' })
+    expect(t.status, JSON.stringify(t.json)).toBe(201)
+    const tid = t.json.task.id as string
+    const gate = path.join(h.c.base, 'gate-s5c')
+    const st = await h.c.mac('POST', `/api/v1/tasks/${tid}/start`, { host: HOST_KEY, cwd: hostCwd, mode: 'bypass', message: `please hold until ${gate}` })
+    expect(st.status, JSON.stringify(st.json)).toBe(202)
+    const own = st.json.sessionId as string
+    const macRow = async () => ((await h.c.mac('GET', `/api/sessions/${own}`)).json.session ?? {}) as Record<string, any>
+    const hostRow = async () => ((await h.host(`/row?sid=${own}`)).row ?? {}) as Record<string, any>
+    await waitFor(async () => (await macRow()).process_status === 'running', 120_000, 'the held turn to run').catch((err) => { throw new Error(say(String(err))) })
+
+    // The session completes its own task from inside its turn.
+    const done = await h.c.mac('POST', `/api/v1/tasks/${tid}/complete`, {}, { 'x-walnut-caller-sid': own })
+    expect(done.status, JSON.stringify(done.json)).toBe(200)
+    // Its host keeps the stop on its own row, and the Mac's copy shows it; the turn goes on.
+    await waitFor(async () => (await hostRow()).taskCompleteStop?.state === 'turn_end', 30_000, 'the host to keep the stop on its row').catch((err) => { throw new Error(say(String(err))) })
+    await waitFor(async () => (await macRow()).taskCompleteStop?.state === 'turn_end', 30_000, 'the Mac\'s copy to show the host\'s marker')
+    expect((await hostRow()).process_status).toBe('running')
+
+    // The Mac restarts while the turn still runs: its boot pass sees the host's marker and asks nothing.
+    const again = await h.restartMac()
+    await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 120_000, 'the restarted Mac to link the host')
+    await waitFor(() => again.log().includes('startup: completed-task session migration done'), 120_000, 'the restarted Mac\'s completed-task pass')
+    expect(await hostRow()).toMatchObject({ process_status: 'running', taskCompleteStop: { state: 'turn_end' } })
+    expect(again.log()).not.toContain(`${own}:now`)
+
+    // The turn ends: its host stops it, once, and the Mac's copy follows.
+    fs.writeFileSync(gate, 'go')
+    await waitFor(async () => resultOn((await h.host(`/events?sid=${own}`)) as ProbeEvent[], `echo: released ${gate}`), 120_000, 'the held turn to end on the host').catch((err) => { throw new Error(say(String(err))) })
+    await waitFor(async () => (await hostRow()).process_status === 'stopped', 60_000, 'the host to stop its completed session').catch((err) => { throw new Error(say(String(err))) })
+    await waitFor(async () => (await macRow()).process_status === 'stopped', 60_000, 'the Mac\'s copy to read it stopped')
+    await waitFor(async () => (await hostRow()).taskCompleteStop === undefined, 30_000, 'the host to drop its marker after the stop')
+    // Once: the stop the host recorded is the only one, after both ends went still.
+    const stop = (await hostRow()).stopRequest as { id: string } | undefined
+    expect(stop?.id, JSON.stringify(await hostRow())).toBeTruthy()
+    await untilFactsStill(h)
+    expect(((await hostRow()).stopRequest as { id: string }).id).toBe(stop!.id)
+    expect((await macRow()).process_status).toBe('stopped')
+  }, 600_000)
 
   it('S6: the switch off on the Mac: a new start on the same host takes the legacy path; the session the host already runs still reports', async () => {
     // S5 ended on a wake: the Mac's daemon link to the host is redialled after it, and the channel with it.

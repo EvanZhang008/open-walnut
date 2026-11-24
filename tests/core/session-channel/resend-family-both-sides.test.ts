@@ -48,6 +48,7 @@ const NOT_MEMBERS: Record<string, string> = {
   'src/providers/daemon-connection': 'the reconnect rescue pass of the leader\'s daemon links',
   'src/core/session-tracker': 'the session command gate\'s filters (stale-row repair, capacity eviction, the orphan sweep): a host-judged row is its host\'s to repair, evict or sweep, so these leave it out; no job of the resend family',
   'src/providers/service-set-move-checks': 'a service set move\'s list of sessions to move: a host-judged one is its host service\'s already; no job of the resend family',
+  'src/core/sessions/task-complete-stop': 'a completed task\'s turn-end stops read back at startup on each side (the leader\'s boot migration, host-boot.ts on a host): each side resumes only the rows it judges; no job of the resend family',
 }
 
 function code(file: string): string {

@@ -7,9 +7,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 /** The host's stop of a session it runs (sessions/host-judged-controls.ts terminateOnHost): recorded, never run. */
 const hostStops = vi.hoisted(() => [] as Array<{ sid: string; opts: unknown }>)
+/** A host that takes the stop itself is asked (sessions/host-judged-complete.ts takeCompletionStop): recorded. */
+const hostAsks = vi.hoisted(() => [] as Array<{ sid: string; member: string; when: unknown }>)
 const ownerStops = vi.hoisted(() => [] as string[])
 vi.mock('../../../src/core/sessions/host-judged-controls.js', () => ({
   terminateOnHost: async (sid: string, opts: unknown) => { hostStops.push({ sid, opts }); return { status: 'terminated', sessionId: sid } },
+  onJudgingHost: async (sid: string, member: string, args: Array<{ when?: unknown }>) => { hostAsks.push({ sid, member, when: args[0]?.when }); return { state: 'stopped' } },
 }))
 vi.mock('../../../src/core/sessions/owner-stop.js', async (orig) => ({
   ...(await orig() as object),
@@ -25,6 +28,7 @@ import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
 import * as sessionDb from '../../../src/core/session-db.js'
 import * as tracker from '../../../src/core/session-tracker.js'
 import { writingAsHost } from '../../../src/core/sessions/session-row-owner.js'
+import { _resetHostJudgedCompleteForTesting, noteHostCompleteStop } from '../../../src/core/sessions/host-judged-complete.js'
 
 beforeAll(async () => {
   for (const k of ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER']) delete process.env[k]
@@ -67,6 +71,9 @@ describe('on the leader, a host\'s row', () => {
   })
 
   it('R2-M3: completing a task hands a host\'s running session to its host to stop: its row is not written here, no owner stop is sent from here', async () => {
+    // A host from before session-complete-stop-v1: the stop is handed over whole.
+    _resetHostJudgedCompleteForTesting()
+    noteHostCompleteStop('devbox', 'old')
     await tracker.createSessionRecord('sid-host-2', 'task-h2', 'Marina', '/w', { host: 'devbox', title: 'Host run 2' })
     await writingAsHost(() => tracker.updateSessionRecord('sid-host-2', { judge: 'host', process_status: 'running', pid: 4242 }))
     const before = await tracker.getSessionByClaudeId('sid-host-2')
@@ -76,6 +83,22 @@ describe('on the leader, a host\'s row', () => {
     expect(ownerStops).toEqual([])
     const after = await tracker.getSessionByClaudeId('sid-host-2')
     expect(after).toMatchObject({ process_status: 'running', pid: 4242, judge: 'host' })
+    expect(after?.status_reason).toBe(before?.status_reason)
+    expect(after?.taskCompleteStop).toBeUndefined()
+  })
+
+  it('R2-M3, a host that takes the stop itself: it is asked, and the row is not written here either', async () => {
+    _resetHostJudgedCompleteForTesting()
+    noteHostCompleteStop('devbox', 'takes')
+    await tracker.createSessionRecord('sid-host-3', 'task-h3', 'Marina', '/w', { host: 'devbox', title: 'Host run 3' })
+    await writingAsHost(() => tracker.updateSessionRecord('sid-host-3', { judge: 'host', process_status: 'running', pid: 4343 }))
+    const before = await tracker.getSessionByClaudeId('sid-host-3')
+    expect(await tracker.completeTaskSessions(['sid-host-3'])).toBe(1)
+    await vi.waitFor(() => expect(hostAsks).toEqual([{ sid: 'sid-host-3', member: 'takeCompletionStop', when: 'now' }]))
+    expect(hostStops.filter((s) => s.sid === 'sid-host-3')).toEqual([])
+    expect(ownerStops).toEqual([])
+    const after = await tracker.getSessionByClaudeId('sid-host-3')
+    expect(after).toMatchObject({ process_status: 'running', pid: 4343, judge: 'host' })
     expect(after?.status_reason).toBe(before?.status_reason)
     expect(after?.taskCompleteStop).toBeUndefined()
   })
