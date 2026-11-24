@@ -17,6 +17,27 @@ import type { LocalWitnessPlace, MachinePlace } from '../../src/core/leader/swit
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
+/**
+ * Stop every process of this user whose HOME is under `dir` (Linux: read from /proc; elsewhere nothing): what a
+ * world's daemons started outlives them (a host service, a console replica, a CLI).
+ */
+export async function stopLeftovers(dir: string): Promise<void> {
+  if (process.platform !== 'linux') return
+  const mine: number[] = []
+  for (const e of fs.readdirSync('/proc')) {
+    const pid = Number(e)
+    if (!Number.isInteger(pid) || pid === process.pid) continue
+    try {
+      const home = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((l) => l.startsWith('HOME='))?.slice(5)
+      if (home && (home === dir || home.startsWith(`${dir}${path.sep}`))) mine.push(pid)
+    } catch { /* gone, or not this user's */ }
+  }
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+  for (const pid of mine) try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+  for (let i = 0; i < 50 && mine.some(alive); i++) await new Promise((r) => setTimeout(r, 100))
+  for (const pid of mine.filter(alive)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+}
+
 export interface Machine extends MachinePlace { dir: string; idFile: string }
 
 export interface World {

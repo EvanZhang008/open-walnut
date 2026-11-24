@@ -28,7 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import YAML from 'yaml'
 import type { ChildProcess } from 'node:child_process'
-import { makeWorld, REPO, type Machine, type World } from './world.js'
+import { makeWorld, REPO, stopLeftovers, type Machine, type World } from './world.js'
 import { startHostDaemon, windowEnv, writeStubBin } from '../../tests/helpers/replica-cluster.js'
 import { startSilentLinkProxy, type SilentLinkProxy } from '../../tests/helpers/silent-link-proxy.js'
 import { makeLoopbackCert, startTlsFront, type TlsFront } from '../../tests/helpers/loopback-tls.js'
@@ -58,24 +58,6 @@ export interface RemoteWorld extends World {
   /** Start B's host replica once the Walnut id is known (after A's first boot). */
   startServiceB(walnutId: string): Promise<void>
   stop(): Promise<void>
-}
-
-/** Stop every process of this user whose HOME is under `dir` (Linux: read from /proc; elsewhere nothing). */
-async function stopLeftovers(dir: string): Promise<void> {
-  if (process.platform !== 'linux') return
-  const mine: number[] = []
-  for (const e of fs.readdirSync('/proc')) {
-    const pid = Number(e)
-    if (!Number.isInteger(pid) || pid === process.pid) continue
-    try {
-      const home = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((l) => l.startsWith('HOME='))?.slice(5)
-      if (home && (home === dir || home.startsWith(`${dir}${path.sep}`))) mine.push(pid)
-    } catch { /* gone, or not this user's */ }
-  }
-  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
-  for (const pid of mine) try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
-  for (let i = 0; i < 50 && mine.some(alive); i++) await new Promise((r) => setTimeout(r, 100))
-  for (const pid of mine.filter(alive)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
 }
 
 /** A third machine: a folder (its HOME) and a machine id, no server. */

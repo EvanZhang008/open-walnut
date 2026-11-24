@@ -19,7 +19,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import YAML from 'yaml'
-import { makeWorld, REPO, switchConfig, type Machine, type World } from './world.js'
+import { makeWorld, REPO, stopLeftovers, switchConfig, type Machine, type World } from './world.js'
 import { HOST_RUNTIME, startHostDaemon, windowEnv, writeAppDir, writeStubBin, builtAppMissing } from '../../tests/helpers/replica-cluster.js'
 import type { ChildProcess } from 'node:child_process'
 
@@ -114,6 +114,8 @@ export async function makeConsoleWorld(root: string, opts: { portA: number; port
         const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
         for (let i = 0; i < 100 && alive(); i++) await new Promise((r) => setTimeout(r, 100))
       }
+      // The console replica the daemon started outlives it: every process left whose HOME is in this world.
+      await stopLeftovers(root)
     },
   }
 }
