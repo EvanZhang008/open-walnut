@@ -31,7 +31,7 @@ import { scanSessionCost } from '../../src/providers/session-cost-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
 import { createDaemonPorts } from '../../src/providers/port-scan-core.js'
 import { applyTriggersDelta } from '../../src/providers/trigger-check-core.js'
-import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
+import { expandHome } from '../../src/providers/daemon-module-deps.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -98,6 +98,12 @@ export interface MockDaemonOptions {
   codexHome?: string
   /** How late a CLI's own exit is reported (default 100 ms, so its last lines are on disk). */
   exitReportDelayMs?: number
+  /**
+   * The host's HOME: a `~/` path of an fs.* command expands against it, as the real daemon's does
+   * (daemon-module-deps.ts expandHome), so a remote host's `~/.claude/projects/...` read finds the
+   * test's transcripts. Unset: paths are taken as they come.
+   */
+  home?: string
 }
 
 /**
@@ -208,6 +214,7 @@ export class MockDaemon {
 
   get port(): number { return this._port }
   private usageDirs: { projects?: string; codex?: string }
+  private home: string | undefined
 
   constructor(options: MockDaemonOptions = {}) {
     this.exitReportDelayMs = options.exitReportDelayMs ?? 100
@@ -215,6 +222,7 @@ export class MockDaemon {
     this.streamsDir = options.streamsDir ?? path.join(this.tmpDir, 'streams')
     this.turnSnapshotRoot = options.turnSnapshotRoot ?? null
     this.usageDirs = { projects: options.claudeProjectsDir, codex: options.codexHome }
+    this.home = options.home
     fs.mkdirSync(this.streamsDir, { recursive: true })
     this._acp = createAcpDaemon<WebSocket>({
       streamsDir: options.acpStreamsDir ?? this.streamsDir,
@@ -394,6 +402,9 @@ export class MockDaemon {
     // process down. This daemon lives in the fixture server, so one throw (bun's spawn
     // throws E2BIG synchronously for a VP's long argv on Linux, 2026-11-12) ended every
     // browser test after it with ECONNREFUSED.
+    if (this.home && typeof cmd.cmd === 'string' && cmd.cmd.startsWith('fs.') && typeof cmd.path === 'string') {
+      cmd = { ...cmd, path: expandHome(cmd.path, this.home) }
+    }
     try {
       this.dispatchCommand(ws, id, cmd)
     } catch (err) {

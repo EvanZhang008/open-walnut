@@ -14,7 +14,7 @@
  * (codex-engine-config.ts codexProviderForPlace): a host's own, else the global one,
  * except a loopback global anywhere but the leader's own machine.
  */
-import { CodexEngineConfigError, codexProviderForPlace, type CodexProviderSource } from './codex-engine-config.js'
+import { CodexEngineConfigError, codexProviderForPlace, codexRawConfig, isCodexEngineConfigError, resolveCodexEngine, type CodexProviderSource } from './codex-engine-config.js'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -135,4 +135,27 @@ export async function codexWalnutConfig(place: CodexSpawnPlace): Promise<Record<
     noteSource(resolved.source, (msg, meta) => log.session.warn(msg, meta))
   }
   return resolved.config
+}
+
+/**
+ * The setting that would refuse a Codex start at `place`, asked before anything is changed for it
+ * (an engine switch asks first, so a refusal leaves the task on its session, engine-switch-setting.ts):
+ * the start's own CodexEngineConfigError, or null when the start may go. Null too for what the start
+ * decides better itself: a transient refusal (no copy of the leader's settings yet: it waits for
+ * one), and a host whose link is not up (only its live link tells a host that is this machine
+ * under another name apart, so the start, which dials it first, judges that one).
+ */
+export async function codexStartRefusal(place: CodexSpawnPlace): Promise<CodexEngineConfigError | null> {
+  const remote = place.host && place.host !== '__local__' ? place.host : undefined
+  if (remote) {
+    const { getConnectedDaemonConnection } = await import('./daemon-connection.js')
+    if (!getConnectedDaemonConnection(remote)) return null
+  }
+  try {
+    const config = await codexWalnutConfig({ host: remote })
+    resolveCodexEngine(config, codexRawConfig(config, !!remote))
+    return null
+  } catch (err) {
+    return isCodexEngineConfigError(err) && !err.transient ? err : null
+  }
 }

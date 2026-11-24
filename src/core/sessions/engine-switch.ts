@@ -56,6 +56,7 @@ import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engin
 import { interruptedByShutdown } from '../server-stopping.js';
 import { engineSignInOf, SIGN_IN_REQUIRED } from '../../providers/delivery-failure.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
+import { settingPreflight, settingRefusal } from './engine-switch-setting.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
@@ -72,6 +73,7 @@ export class EngineSwitchError extends Error {
     this.name = 'EngineSwitchError';
   }
 }
+const switchError = (message: string, status: number, code: string): EngineSwitchError => new EngineSwitchError(message, status, code);
 
 /**
  * A start refused because the engine's CLI is not signed in on the host: said as that sign-in, in
@@ -450,6 +452,9 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}), ...(carry.dictation ? { dictation: carry.dictation } : {}) } : {}),
   };
   if (busy && !now) {
+    // A switch a setting refuses is refused now, not parked until the turn ends (the run asks again).
+    const setting = await settingPreflight({ engine, host }, { engine: old.engine, move }, switchError);
+    if (setting) throw await fail(task.id, state, setting.words, setting.as);
     await tm.updateTaskRaw(task.id, { engine_switch: state }, { source: 'engine-switch', emitEvent: true });
     const { watchPendingSwitch } = await import('./engine-switch-watch.js');
     watchPendingSwitch(task.id, old.claudeSessionId);
@@ -646,6 +651,10 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   }, { source: 'engine-switch', emitEvent: true });
   // Cancelled while it waited (or a newer pick took over): nothing changes.
   if (!claimed) throw new EngineSwitchError('This switch was cancelled or replaced', 409, 'switch_cancelled');
+  // A start a setting refuses (a Codex provider that reaches nothing on the host): refused before
+  // the old session's turn, process or rows are touched, so the task stays exactly as it was.
+  const setting = await settingPreflight({ engine, host }, { engine: old.engine, move: !!state.move }, switchError);
+  if (setting) throw await fail(taskId, state, setting.words, setting.as);
   log.session.info('engine switch: starting', { taskId, switchId: state.id, from: old.claudeSessionId, fromEngine: resolveEngine(old.engine), to: engine, host });
   // Walnut's status question to the old session: none starts now, one in flight finishes first.
   const { settleStatusQuestion } = await import('./status-question.js');
@@ -781,6 +790,9 @@ async function handOver(
     const stays = `The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`;
     const signIn = signInRefusal(err, state.move ? stays : undefined);
     if (signIn) throw await fail(taskId, state, signIn.words, signIn.as, progress);
+    // A setting refused the start after the check above (it changed meanwhile): said as that setting.
+    const setting = settingRefusal(err, { engine, host }, { engine: old.engine, move: !!state.move }, switchError);
+    if (setting) throw await fail(taskId, state, setting.words, setting.as, progress);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
       ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. ${stays}`
       : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,

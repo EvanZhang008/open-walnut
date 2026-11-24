@@ -821,7 +821,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         if (uncertain) return result;
         // A setting refused it (engines.codex, say): a retry fails the same way until the setting is changed.
         if (classifyDeliveryFailure(err).code === 'engine_config') {
-          throw new QuickStartError(`Task ${task.id} could not start: ${message}. A setting stops it, so a retry fails the same way until that setting is changed; then retry task_start with the same id.`, 422, { code: 'engine_config' });
+          // The setting's own error rides as the cause: an engine switch says it in its own words (engine-switch-setting.ts).
+          throw Object.assign(new QuickStartError(`Task ${task.id} could not start: ${message}. A setting stops it, so a retry fails the same way until that setting is changed; then retry task_start with the same id.`, 422, { code: 'engine_config' }), { cause: err });
         }
         // An engine's CLI that is not signed in keeps its kind and facts (the body, and the cause):
         // the caller (an engine switch, a route) says it as the sign-in it is.

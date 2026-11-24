@@ -18,6 +18,8 @@ const edges = vi.hoisted(() => ({
   failBeforeRow: false,
   /** What a failed start throws (default: a plain error). */
   failWith: undefined as unknown,
+  /** The setting that refuses a Codex start on the host (codex-engine-source.ts codexStartRefusal); unset: none. */
+  codexRefusal: undefined as Error | undefined,
   /** The old session's history cannot be read (a remote host dropped). */
   failHistory: false,
   nextSid: 0,
@@ -46,6 +48,11 @@ vi.mock('../../../src/providers/claude-code-session.js', async (orig) => {
 vi.mock('../../../src/core/agents/host-engines.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/agents/host-engines.js')>()),
   hostEngineAvailability: async (host: string, engine: string) => edges.hostEngines[host]?.[engine] ?? null,
+}));
+
+vi.mock('../../../src/providers/codex-engine-source.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/providers/codex-engine-source.js')>()),
+  codexStartRefusal: async () => edges.codexRefusal ?? null,
 }));
 
 vi.mock('../../../src/constants.js', () => createMockConstants('engine-switch'));
@@ -130,7 +137,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failWith = undefined; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear();
+  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failWith = undefined; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear(); edges.codexRefusal = undefined;
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
   owner.clear();
@@ -1226,5 +1233,61 @@ describe('engine switch inside a task', () => {
     const res = await requestEngineSwitch({ taskId: task.id, engine: 'codex', message: 'Hello', source: 'ui' });
     expect(res.state).toBe('done');
     expect(edges.starts[0]).toMatchObject({ engine: 'codex', message: 'Hello' });
+  });
+});
+
+describe('a switch a setting refuses (engines.codex: no provider reaches the host)', () => {
+  const words = 'engines.codex: provider "local-proxy" is at http://127.0.0.1:8402/v1, so it reaches nothing on host "devbox". See "A provider per host" in docs/reference/codex-engine.md.';
+
+  it('an agent\'s pick during a turn is refused at once, not parked until the turn ends; its message stays on the task', async () => {
+    const { taskId, sid } = await taskOn('claude', { host: 'devbox' });
+    edges.hostEngines.devbox = { codex: { installed: true, version: '1', reason: null } };
+    const { CodexEngineConfigError } = await import('../../../src/providers/codex-engine-config.js');
+    edges.codexRefusal = new CodexEngineConfigError(words.replace(/^engines\.codex: /, ''));
+    await mutateStore((s) => {
+      s.queues[sid] = [{ id: 'qm-busy', sessionId: sid, message: 'not delivered yet', status: 'pending', enqueuedAt: new Date().toISOString() } as never];
+    }, false, true);
+    const err = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Carry on in Codex.', source: 'ui', when: 'turn_end' }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: 'engine_config' });
+    expect((err as Error).message).toMatch(/^The switch to Codex did not start: engines\.codex: provider "local-proxy"/);
+    const task = await getTask(taskId);
+    expect(task.engine_switch).toMatchObject({ state: 'failed', message: expect.stringContaining('Carry on in Codex.') });
+    expect(task.engine_switch?.error).toMatch(/^engines\.codex: provider "local-proxy".*codex-engine\.md$/);
+    // Nothing changed: no start, the old session untouched, its queued row still its own.
+    expect(edges.starts).toHaveLength(0);
+    expect(edges.stops).toHaveLength(0);
+    expect((await getSessionByClaudeId(sid))?.archived).toBeFalsy();
+    expect((await getStore()).queues[sid]?.map((r) => r.id)).toEqual(['qm-busy']);
+  });
+
+  it('a pick run now is refused before the old session is retired or stopped', async () => {
+    const { taskId, sid } = await taskOn('claude', { host: 'devbox' });
+    edges.hostEngines.devbox = { codex: { installed: true, version: '1', reason: null } };
+    const { CodexEngineConfigError } = await import('../../../src/providers/codex-engine-config.js');
+    edges.codexRefusal = new CodexEngineConfigError(words.replace(/^engines\.codex: /, ''));
+    await expect(requestEngineSwitch({ taskId, engine: 'codex', message: 'Now.', source: 'ui' })).rejects.toMatchObject({ status: 422, code: 'engine_config' });
+    expect(edges.starts).toHaveLength(0);
+    expect(edges.stops).toHaveLength(0);
+    const old = await getSessionByClaudeId(sid);
+    expect(old?.archived).toBeFalsy();
+    expect(old?.archive_reason).toBeFalsy();
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+  });
+
+  it('a start the setting refuses after the check (it changed meanwhile) answers 422 engine_config, and the task is back on its session', async () => {
+    const { taskId, sid } = await taskOn('claude', { host: 'devbox' });
+    edges.hostEngines.devbox = { codex: { installed: true, version: '1', reason: null } };
+    const { CodexEngineConfigError } = await import('../../../src/providers/codex-engine-config.js');
+    const { QuickStartError } = await import('../../../src/core/sessions/quick-start.js');
+    const cause = new CodexEngineConfigError(words.replace(/^engines\.codex: /, ''));
+    edges.failStart = true;
+    edges.failWith = Object.assign(new QuickStartError(`Task ${taskId} could not start: ${cause.message}. A setting stops it; then retry task_start with the same id.`, 422, { code: 'engine_config' }), { cause });
+    const err = await requestEngineSwitch({ taskId, engine: 'codex', message: 'Now.', source: 'ui' }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: 'engine_config' });
+    expect((err as Error).message).not.toContain('task_start');
+    expect((await getTask(taskId)).engine_switch?.error).toMatch(/^engines\.codex: provider "local-proxy"/);
+    const old = await getSessionByClaudeId(sid);
+    expect(old?.archived).toBeFalsy();
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
   });
 });

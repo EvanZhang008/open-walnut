@@ -70,7 +70,9 @@ start, resume, restart and engine switch, on this machine and on the host's own 
    (a host entry that reaches this machine's own daemon counts as this machine): there the Codex
    session does not start. Its error names the host and shows the
    `hosts.<name>.engines.codex.provider` to set: a start or an engine switch answers `422
-   engine_config` with it and the task's last start keeps it; a restart answers it, and a message
+   engine_config` with it and the task's last start keeps it (an engine switch or a move is refused
+   before anything changes: the task stays on its session, which keeps running, and the switch's
+   message stays on the task, to send to that session or let go); a restart answers it, and a message
    to a session that can no longer start there is held with it in the chat. A retry fails the
    same way until the setting changes; once the config changes (on this machine, or a new copy
    of it on the host), each held message goes out by itself once. A server that has no copy of

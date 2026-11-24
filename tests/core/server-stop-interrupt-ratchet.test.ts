@@ -160,8 +160,12 @@ describe('a move a server stop cuts short is paused for the next boot', () => {
     expect(outside).toEqual([
       // noteRefusedAfterWait: a person's pick refused before it ever ran.
       'await fail(req.taskId, state, err);',
+      // switchFrom: a pick that would wait for the turn, refused by a setting first (nothing done yet).
+      'if (setting) throw await fail(task.id, state, setting.words, setting.as);',
       // execute: the session it started from is gone, before the claim (nothing done yet).
       "throw await fail(taskId, state, new EngineSwitchError('The session this switch started from is gone or already replaced', 409, 'switch_stale'));",
+      // execute: a setting refuses the start, right after the claim (nothing done yet).
+      'if (setting) throw await fail(taskId, state, setting.words, setting.as);',
     ])
   })
 
