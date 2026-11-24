@@ -247,7 +247,10 @@ function recover(s0: State, split: Split, found: Found): M | null {
   return null
 }
 
-function explore(split: Split, depth: number, listChange = false): { states: number; held: Set<string>; twoLeaders: State[]; takeovers: string[]; stuck: Array<{ s: State; led: M | null }> } {
+/** The walk yields to the event loop every so many states, so the test worker's calls home (its RPC) are answered during it. */
+const YIELD_EVERY = 2_000
+
+async function explore(split: Split, depth: number, listChange = false): Promise<{ states: number; held: Set<string>; twoLeaders: State[]; takeovers: string[]; stuck: Array<{ s: State; led: M | null }> }> {
   const found: Found = { twoLeaders: [], takeovers: [] }
   // w4 is set up and waits to join (no list, no configuration): it takes only the change that brings it in.
   const witness = (joining: boolean): WitnessState => ({ held: null, acceptedAt: 0, list: joining ? null : LIST, joint: null, cfg: joining ? null : 'c', epoch: 0, progress: null, ops: [] })
@@ -260,7 +263,8 @@ function explore(split: Split, depth: number, listChange = false): { states: num
   let frontier = [s0]
   for (let d = 0; d < depth && frontier.length; d++) {
     const next: State[] = []
-    for (const s of frontier) {
+    for (const [i, s] of frontier.entries()) {
+      if (i % YIELD_EVERY === YIELD_EVERY - 1) await new Promise((r) => setImmediate(r))
       for (const n of moves(s, split, found, listChange)) {
         const k = key(n)
         if (seen.has(k)) continue
@@ -283,8 +287,8 @@ const showW = (s: State) => s.w.map((w) => (w.held ? `${w.held.kind} ${w.held.nu
 const show = (x: { s: State; led: M | null }) => `${showW(x.s)}; last lease ${x.s.last}${x.s.stoodTo ? `, handed to ${x.s.stoodTo}` : ''}; after recovery: ${x.led ?? 'nobody'}`
 
 describe('the split records rule over every short history of two machines and three witnesses', () => {
-  it('never two leases at once, never a takeover, and from every state where nobody leads the last holder leads again', () => {
-    const r = explore(realSplit, Number(process.env.SPLIT_MODEL_DEPTH ?? 6))
+  it('never two leases at once, never a takeover, and from every state where nobody leads the last holder leads again', async () => {
+    const r = await explore(realSplit, Number(process.env.SPLIT_MODEL_DEPTH ?? 6))
     expect(r.states).toBeGreaterThan(10_000)
     console.log(`split records model: ${r.states} states`)
     expect([...r.held].sort()).toEqual(['cancel', 'grant', 'handover', 'release', 'renew'])
@@ -293,8 +297,8 @@ describe('the split records rule over every short history of two machines and th
     expect([r.stuck.length, ...r.stuck.slice(0, 6).map(show)]).toEqual([0])
   }, 300_000)
 
-  it('the same with a witness list change (w3 out, w4 in: its joint and final steps), a step shallower', () => {
-    const r = explore(realSplit, Number(process.env.SPLIT_MODEL_DEPTH_LIST ?? 5), true)
+  it('the same with a witness list change (w3 out, w4 in: its joint and final steps), a step shallower', async () => {
+    const r = await explore(realSplit, Number(process.env.SPLIT_MODEL_DEPTH_LIST ?? 5), true)
     console.log(`split records model with a list change: ${r.states} states`)
     expect([...r.held].sort()).toEqual(['cancel', 'epoch 1', 'grant', 'handover', 'members:final', 'members:joint', 'release', 'renew'])
     expect(r.twoLeaders.slice(0, 3).map((s) => show({ s, led: null }))).toEqual([])
@@ -302,7 +306,7 @@ describe('the split records rule over every short history of two machines and th
     expect([r.stuck.length, ...r.stuck.slice(0, 6).map(show)]).toEqual([0])
   }, 300_000)
 
-  it('red control: without the cancel case some state leaves nobody able to lead', () => {
+  it('red control: without the cancel case some state leaves nobody able to lead', async () => {
     // The rule as it was before: a cancel of this machine is neither its own record nor a record of its own above a handover.
     const before: Split = (read, me) => {
       if (read.standing !== undefined) return null
@@ -314,15 +318,15 @@ describe('the split records rule over every short history of two machines and th
           : (r.held.kind === 'renew' || r.held.kind === 'grant') && r.held.holder === me)
       return answers.every(own) ? { want: 'grant' } : null
     }
-    const r = explore(before, 5)
+    const r = await explore(before, 5)
     expect(r.twoLeaders.length).toBe(0)
     expect(r.stuck.length).toBeGreaterThan(0)
     expect(r.stuck.some((x) => x.s.w.some((w) => w.held?.kind === 'cancel'))).toBe(true)
   }, 300_000)
 
-  it('red control: a grant whenever no record has a majority takes over', () => {
+  it('red control: a grant whenever no record has a majority takes over', async () => {
     const loose: Split = (read) => (read.standing === undefined && read.replies.filter((r) => read.list.includes(r.witness)).length >= majorityOf(read.list) ? { want: 'grant' } : null)
-    const r = explore(loose, 5)
+    const r = await explore(loose, 5)
     expect(r.takeovers.length).toBeGreaterThan(0)
   }, 300_000)
 })
