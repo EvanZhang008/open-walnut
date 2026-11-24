@@ -233,10 +233,12 @@ test('a long why opens with More, a bare path reads short, and a narrow card giv
   const cut = await clamp.evaluate((el) => el.clientHeight)
   const toggle = item.getByTestId('ask-card-more')
   await expect(toggle).toHaveText('Show more')
-  // The hover peek opens the text where it is; Show more stays put under the pointer meanwhile.
+  // A hover opens nothing (2026-11-24: only a task's own row widens, ask-card-no-peek.spec.ts): the
+  // text stays cut where it is, and Show more is the way to read it whole.
   await clamp.hover()
-  await expect(item.locator('[data-peek-down]').first(), 'the hover peek opened the text').toBeAttached({ timeout: 5_000 })
   await page.waitForTimeout(500)
+  await expect(item.locator('[data-peek-down]'), 'the hover opened nothing').toHaveCount(0)
+  expect(await clamp.evaluate((el) => el.clientHeight), 'still cut to its lines').toBe(cut)
   await expect(toggle).toHaveText('Show more')
   await page.mouse.move(5, 5)
   await toggle.click()
@@ -246,7 +248,7 @@ test('a long why opens with More, a bare path reads short, and a narrow card giv
   await page.screenshot({ path: `test-results/ask-card-more-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
   await toggle.click()
   await expect(toggle).toHaveText('Show more')
-  // Under the pointer the hover peek holds it open again; away from the card it is cut as before.
+  // Cut to its lines as before.
   await page.mouse.move(5, 5)
   await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBe(cut)
   // Narrow: a card under 460 px (a narrowed list column; a window under 769 px is the phone's layout)

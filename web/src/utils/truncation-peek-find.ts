@@ -115,14 +115,23 @@ export function headerOf(el: Element): Element | null {
   return found;
 }
 
+/** A task's own row (its title, in the list it is drawn in; a worker under its lead names its task
+ *  `data-fold-task-id`, WorkerFoldTree.tsx). */
+export const PEEK_TASK_ROW_SELECTOR = '[data-peek-row][data-task-id], [data-peek-row][data-fold-task-id]';
+
 /**
- * Whether cut-off text at `el` may widen on hover: inside a zone, not in a header there. A card with
- * a box to type in inside a zone (Home's ask card) still opens downward in its column, the way the
- * user designed it there (2026-11-20, truncation-peek-row.ts growsDown); outside a zone it does not
- * (2026-11-23: a session's question card opened down over the reply box).
+ * Whether cut-off text at `el` may widen on hover: a task's title row inside a zone, never its
+ * header, and nothing else there (2026-11-24, the user: "please dont enlarge this automtaiclLY,
+ * ANYTHING can easily show all by cusotmer shoudln't auto enarge it is so bad, the task titide in
+ * sesion page in task pannel is fine, other debateable"): a project or folder head, an ask card
+ * (which opened downward, truncation-peek-row.ts growsDown) and any other cut text in the zone keep
+ * their place and show a native tooltip, as they do outside it.
  */
 export function peekAllowed(el: Element): boolean {
-  return !!el.closest(PEEK_ZONE_SELECTOR) && !headerOf(el);
+  if (!el.closest(PEEK_ZONE_SELECTOR) || headerOf(el)) return false;
+  // The nearest row, not the nearest task row: a card inside a task row is that card's own.
+  const row = el.closest(PEEK_ROW_SELECTOR);
+  return !!row && row.matches(PEEK_TASK_ROW_SELECTOR) && !growsDown(row);
 }
 
 /**

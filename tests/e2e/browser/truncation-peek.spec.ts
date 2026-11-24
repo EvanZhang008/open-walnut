@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
-import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitle, expectTooltipNotPeek, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
+import { expectRestored, expectStill, expectToolsClearOfTitle, expectTooltipNotPeek, expectWidensInPlace, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
 
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts). A task row widens in place
@@ -10,10 +10,12 @@ import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitl
  * top layer at its own top and height, wide enough for that text on one line, over whatever is
  * beside it; an empty placeholder keeps its place, so no row moves. No native title is left above
  * the pointer, so no dark box opens; it closes when the pointer leaves or the list scrolls; a row
- * that fits shows nothing. Text outside a row that a column clips opens its own container the same
- * way. All of this happens only inside a peek zone (`[data-peek-zone]`, Home's task panel;
- * 2026-11-23, the user: only very narrow places widen): the page fixtures below are marked as one,
- * and each has a twin outside any zone that opens nothing and shows its text in a native title.
+ * that fits shows nothing. All of this happens only on a task's own row (`[data-peek-row][data-task-id]`)
+ * inside a peek zone (`[data-peek-zone]`, Home's task panel; 2026-11-23, the user: only very narrow
+ * places widen; 2026-11-24: only the task's own title row there, "ANYTHING can easily show all by
+ * cusotmer shoudln't auto enarge"). The page fixtures below are marked as a zone holding task rows;
+ * an unmarked control, a sentence and a row that is no task's, in a zone or outside one, open
+ * nothing and show their text in a native title.
  */
 
 const SHOTS = '/tmp/truncation-peek'
@@ -281,61 +283,75 @@ test('moving down a list: one row open at a time, no row and no scroll moves, an
   }
 })
 
-test('in a zone, at the window\'s right edge a row grows to the left, the last row of a scrolled list opens over its clip, and titles are restored; outside one nothing opens', async ({ page, baseURL }) => {
+test('in a zone, a task row at the window\'s right edge grows to the left and the last task row of a scrolled list opens over its clip; an unmarked control and a row that is no task\'s open nothing there, as outside one', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await page.mouse.move(600, 700)
   await page.evaluate(() => {
     const control = '<button type="button" title="Open the long line: Working" style="display:block;width:100%;overflow:hidden;white-space:nowrap;text-align:left"><span class="clip-line">A line the column cuts off at its edge, with every word of it still to read</span></button>'
+    const cut = 'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
     // The same control and list outside any zone.
     const outside = document.createElement('div')
     outside.id = 'peek-outside'
     outside.style.cssText = 'position:fixed;left:40px;top:300px;width:250px;z-index:5000;background:var(--bg);font-size:14px'
-    outside.innerHTML = `${control}<div id="peek-outside-list" style="height:90px;overflow:auto">${Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" class="peek-outside-row" style="height:30px;line-height:30px;padding:0 8px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Outside row ${i}: a list row outside any zone keeps its place and shows its words in a tooltip</span></div>`).join('')}</div>`
+    outside.innerHTML = `${control}<div id="peek-outside-list" style="height:90px;overflow:auto">${Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" data-task-id="fixture-outside-${i}" class="peek-outside-row" style="height:30px;line-height:30px;padding:0 8px"><span style="${cut}">Outside row ${i}: a task row outside any zone keeps its place and shows its words in a tooltip</span></div>`).join('')}</div>`
     document.body.appendChild(outside)
+    // In a zone at the window's right edge: the same unmarked control, a list row that is no
+    // task's, and a task's own row.
     const edge = document.createElement('div')
     edge.id = 'peek-fixture'
     edge.setAttribute('data-peek-zone', '')
     edge.style.cssText = 'position:fixed;left:1000px;top:300px;width:250px;z-index:5000;background:var(--bg);font-size:14px'
-    edge.innerHTML = `${control}<div id="peek-following">Following row</div>`
+    edge.innerHTML = [
+      control,
+      `<div data-peek-row="" class="peek-plain-row" style="height:30px;line-height:30px;padding:0 8px"><span style="${cut}">A list row in a zone that is no task's keeps its place and shows its words in a tooltip</span></div>`,
+      `<div data-peek-row="" data-task-id="fixture-edge-task" class="peek-edge-row" style="height:30px;line-height:30px;padding:0 8px"><span class="edge-line" style="${cut}">A task row the column cuts off at its edge, with every word of it still to read</span></div>`,
+      '<div id="peek-following">Following row</div>',
+    ].join('')
     document.body.appendChild(edge)
     const list = document.createElement('div')
     list.id = 'peek-list'
     list.setAttribute('data-peek-zone', '')
     list.style.cssText = 'position:fixed;left:900px;top:560px;width:300px;height:120px;overflow:auto;z-index:5000;background:var(--bg);font-size:14px'
-    list.innerHTML = Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" class="peek-list-row" style="height:30px;line-height:30px;padding:0 8px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">List row ${i}: the last one of a list scrolled to its end opens over the clip of the list</span></div>`).join('')
+    list.innerHTML = Array.from({ length: 6 }, (_, i) => `<div data-peek-row="" data-task-id="fixture-list-${i}" class="peek-list-row" style="height:30px;line-height:30px;padding:0 8px"><span style="${cut}">List row ${i}: the last one of a list scrolled to its end opens over the clip of the list</span></div>`).join('')
     document.body.appendChild(list)
   })
 
-  // Outside a zone: the cut control and a cut list row open nothing and keep their boxes; the line
+  // Outside a zone: the cut control and a cut task row open nothing and keep their boxes; the line
   // shows its words in a native title, and the control keeps its own.
   const outsideButton = page.locator('#peek-outside button')
   await expectTooltipNotPeek(page.locator('#peek-outside .clip-line'), 'every word of it still to read', 'outside control')
   await expect(outsideButton).toHaveAttribute('title', 'Open the long line: Working')
   const outsideRow = page.locator('#peek-outside .peek-outside-row').nth(2)
   const outsideNext = await topsOf([page.locator('#peek-outside .peek-outside-row').nth(3)])
-  await expectTooltipNotPeek(outsideRow.locator('span'), 'shows its words in a tooltip', 'outside list row')
+  await expectTooltipNotPeek(outsideRow.locator('span'), 'shows its words in a tooltip', 'outside task row')
   await expectStill([page.locator('#peek-outside .peek-outside-row').nth(3)], outsideNext, 'the outside row below')
 
-  // At the right edge: it keeps its right edge and grows to the left, inside the window.
-  const button = page.locator('#peek-fixture button:not([data-peek-placeholder])')
-  const line = page.locator('#peek-fixture .clip-line')
-  const before = await box(button)
+  // In the zone, the unmarked control and the row that is no task's open nothing either
+  // (2026-11-24): the same tooltip, and the task row below them stays where it is.
+  const edgeRow = page.locator('#peek-fixture .peek-edge-row')
+  const edgeTop = await topsOf([edgeRow])
+  await expectTooltipNotPeek(page.locator('#peek-fixture .clip-line'), 'every word of it still to read', 'control in a zone')
+  await expect(page.locator('#peek-fixture button')).toHaveAttribute('title', 'Open the long line: Working')
+  await expectTooltipNotPeek(page.locator('#peek-fixture .peek-plain-row span'), 'shows its words in a tooltip', 'a row in a zone that is no task\'s')
+  await expectStill([edgeRow], edgeTop, 'the task row below them')
+
+  // At the right edge: the task row keeps its right edge and grows to the left, inside the window.
+  const line = edgeRow.locator('.edge-line')
+  const before = await box(edgeRow)
   const following = await topsOf([page.locator('#peek-following')])
-  const at = await centerOf(page, button)
+  const at = await centerOf(page, edgeRow)
   await page.mouse.move(at.x, at.y)
-  const after = await expectWidensInPlace(button, before, { label: 'right-edge control' })
+  const after = await expectWidensInPlace(edgeRow, before, { label: 'right-edge task row' })
   expect(after.x, 'it grew to the left').toBeLessThan(before.x - 1)
-  await expect.poll(() => isOpen(line)).toBe(true)
-  await expect.poll(() => fits(button), 'the whole line shows in the widened control').toBe(true)
-  await expectStill([page.locator('#peek-following')], following, 'below the right-edge control')
+  await expect.poll(() => openInRow(line), 'the whole line shows in the widened row').toBe(true)
+  await expectStill([page.locator('#peek-following')], following, 'below the right-edge task row')
   expect(await titlesAt(page, at.x, at.y)).toEqual([])
   await page.screenshot({ path: `${SHOTS}/2-right-edge.png`, clip: { x: 600, y: 240, width: 680, height: 240 } })
   await page.mouse.move(600, 700)
-  await expectRestored(button, before, 'right-edge control')
-  await expect(button).toHaveAttribute('title', 'Open the long line: Working')
+  await expectRestored(edgeRow, before, 'right-edge task row')
 
-  // The last row of a list scrolled to its end: it opens over the list's clip, and the list
+  // The last task row of a list scrolled to its end: it opens over the list's clip, and the list
   // neither scrolls nor grows.
   const list = page.locator('#peek-list')
   await list.evaluate((el) => { el.scrollTop = el.scrollHeight })
@@ -360,10 +376,10 @@ test('in a zone, at the window\'s right edge a row grows to the left, the last r
 
 // 2026-11-16 (session-panel-narrow R5): a host name cut inside a sentence opened the sentence's
 // inline span, whose placeholder held one line, so the open box stood 86px taller and 2px lower than
-// its place. Every inline box around a cut text (one span in another, a link) is passed over: the
-// block that holds the sentence is what opens, at its own top and height. That is inside a zone; a
-// session panel is none (2026-11-23), so there the cut name opens nothing and shows a native title.
-test('in a zone a cut name inside a sentence opens the block that holds the sentence, never an inline span around it; outside one it opens nothing', async ({ page, baseURL }) => {
+// its place. Since 2026-11-24 a sentence opens nothing anywhere, in a zone as outside one (only a
+// task's own row widens there, as a whole): the sentence keeps its place, the name its box, and the
+// name shows in a native title.
+test('a cut name inside a sentence opens nothing, in a zone as outside one: the sentence keeps its place and the name shows in a native title', async ({ page, baseURL }) => {
   await isolateUiPrefs(page)
   await openHome(page, baseURL!)
   await page.mouse.move(600, 700)
@@ -376,7 +392,7 @@ test('in a zone a cut name inside a sentence opens the block that holds the sent
     const outside = fixture.cloneNode() as HTMLElement
     outside.id = 'peek-prose-outside'
     outside.style.left = '700px'
-    outside.innerHTML = `<div class="prose-block"><span class="prose-inline">${token} is reachable, and this session's process is not running. Send a message to resume it.</span></div>`
+    outside.innerHTML = `<div class="prose-block" data-case="outside"><span class="prose-inline">${token} is reachable, and this session's process is not running. Send a message to resume it.</span></div>`
     document.body.appendChild(outside)
     fixture.setAttribute('data-peek-zone', '')
     fixture.innerHTML = [
@@ -386,23 +402,13 @@ test('in a zone a cut name inside a sentence opens the block that holds the sent
     ].join('')
     document.body.appendChild(fixture)
   }, NAME)
-  // Outside a zone: the sentence keeps its place, the name its box, and the name is in a native title.
-  const outsideBlock = page.locator('#peek-prose-outside .prose-block')
-  const outsideBefore = await box(outsideBlock)
-  await expectTooltipNotPeek(outsideBlock.locator('.prose-token'), NAME, 'sentence outside a zone')
-  const outsideAfter = await box(outsideBlock)
-  for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(outsideAfter[k] - outsideBefore[k]), `the outside sentence's ${k} did not move`).toBeLessThanOrEqual(0.5)
-  for (const kind of ['span', 'nested', 'link']) {
-    const block = page.locator(`#peek-prose .prose-block[data-case="${kind}"]`)
-    const token = block.locator('.prose-token')
+  for (const kind of ['outside', 'span', 'nested', 'link']) {
+    const block = page.locator(`.prose-block[data-case="${kind}"]`)
     const before = await box(block)
     expect(before.height, `${kind}: the sentence runs over several lines`).toBeGreaterThan(40)
-    await expectPeeksInPlace(token, NAME, `${kind} sentence`)
-    // While open, it is the sentence's block that is in the top layer.
-    await token.hover()
-    await expect.poll(() => token.evaluate((el) => el.closest('[data-peek-expanded]')?.classList.contains('prose-block') ?? null), { timeout: 5_000 }).toBe(true)
-    await page.mouse.move(600, 700)
-    await expectRestored(block, before, `${kind} sentence`)
+    await expectTooltipNotPeek(block.locator('.prose-token'), NAME, `${kind} sentence`)
+    const after = await box(block)
+    for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(after[k] - before[k]), `${kind}: the sentence's ${k} did not move`).toBeLessThanOrEqual(0.5)
   }
 })
 

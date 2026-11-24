@@ -3,8 +3,10 @@ import { home } from './inbox-items-helpers'
 import { expectInboxCardWhole, expectRestored, expectStill, expectTooltipNotPeek, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, peekMarks, topsOf } from './truncation-peek-helpers'
 
 // A whole card widens sideways at its own height (2026-11-15, the user: wider, not taller), and
-// only inside a peek zone (`[data-peek-zone]`, Home's task panel; 2026-11-23, the user: only very
-// narrow places widen). The page fixture below is marked as one; its twin outside opens nothing.
+// only a task's own row (`[data-peek-row][data-task-id]`) inside a peek zone (`[data-peek-zone]`,
+// Home's task panel; 2026-11-23, the user: only very narrow places widen; 2026-11-24: only the task's
+// own row there). The page fixture below is marked as one; what in it is no task's row, and its twin
+// outside, open nothing.
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
 const SUBJECT = 'A letter with a full-length subject: review the garden schedule, the tool inventory and the next steps before the weekend'
@@ -32,7 +34,7 @@ test('dense inbox cards show their subject and preview whole, keep their actions
   }
 })
 
-test('in a zone, unmarked components, rows with twelve texts, a line longer than the window and the keyboard all widen the real row; outside one nothing opens', async ({ page }) => {
+test('in a zone, task rows with twelve texts, an icon, a line longer than the window, a button or the keyboard widen the real row; an unmarked component, an option and a row that is no task\'s open nothing there, as outside one', async ({ page }) => {
   await home(page)
   await page.mouse.move(1000, 100)
   await page.evaluate(() => {
@@ -41,27 +43,31 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
     fixture.id = 'peek-class-fixture'
     fixture.setAttribute('data-peek-zone', '')
     fixture.style.cssText = 'position:fixed;left:40px;top:60px;width:260px;z-index:9999;background:var(--bg)'
+    // Only a task's own row widens in a zone (2026-11-24): the rows that do carry data-task-id.
     fixture.innerHTML = [
-      `<div data-peek-row="" id="many-texts" style="height:216px;overflow:hidden">${Array.from({ length: 12 }, (_, i) => `<div style="${cut};height:18px">Row ${i}: ${'A detailed entry with all of its words shown in this row. '.repeat(2)}</div>`).join('')}</div>`,
-      `<div id="new-container"><span id="new-text" style="display:block;${cut}">${'A new component also widens in place. '.repeat(3)}</span></div>`,
+      `<div data-peek-row="" data-task-id="fixture-many" id="many-texts" style="height:216px;overflow:hidden">${Array.from({ length: 12 }, (_, i) => `<div style="${cut};height:18px">Row ${i}: ${'A detailed entry with all of its words shown in this row. '.repeat(2)}</div>`).join('')}</div>`,
+      `<div id="new-container"><span id="new-text" style="display:block;${cut}">${'An unmarked component in a zone keeps its place. '.repeat(3)}</span></div>`,
+      `<div data-peek-row="" id="plain-row"><span id="plain-text" style="display:block;${cut}">${"A list row in a zone that is no task's keeps its place. ".repeat(3)}</span></div>`,
+      `<div data-peek-row="" data-task-id="fixture-live" id="live-row"><span id="live-text" style="display:block;${cut}">${'A task row widens in place. '.repeat(4)}</span></div>`,
       '<div id="following">Following component</div>',
-      `<div role="listbox"><div role="option" id="option-a" style="${cut}">A long option name with many words that should only widen this option, never the whole list</div><div role="option" id="option-b" style="${cut}">A second long option that must remain cut while the first option is hovered</div></div>`,
-      `<div id="icon-line" style="display:flex;width:240px;gap:8px"><span id="line-icon" style="flex:none">○</span><span id="line-text" style="${cut}">A long status text keeps its own icon beside it on the same line while the row widens</span></div>`,
-      `<div id="too-long-box"><span id="too-long" style="display:block;${cut}">${'Far longer than any window: every word of this line will not fit on one screen. '.repeat(8)}</span></div>`,
-      `<div data-peek-row="" id="btn-row" style="display:flex;gap:6px;width:240px"><span id="btn-text" style="${cut};flex:1;min-width:0">A row with its own button keeps that button working while it is wide open</span><button id="btn-spy" type="button">More</button></div><div id="btn-after">After the button row</div>`,
-      `<button id="kbd-before">Before</button><div data-peek-row="" tabindex="0" id="kbd-row" style="${cut}">A row reached with the keyboard opens as wide as the pointer would make it</div><button id="kbd-after">After</button>`,
+      `<div role="listbox"><div role="option" id="option-a" style="${cut}">A long option name with many words that keeps its place in a zone, as outside one</div><div role="option" id="option-b" style="${cut}">A second long option that must remain cut while the first option is hovered</div></div>`,
+      `<div data-peek-row="" data-task-id="fixture-icon" id="icon-line" style="display:flex;width:240px;gap:8px"><span id="line-icon" style="flex:none">○</span><span id="line-text" style="${cut}">A long status text keeps its own icon beside it on the same line while the row widens</span></div>`,
+      `<div data-peek-row="" data-task-id="fixture-long" id="too-long-box"><span id="too-long" style="display:block;${cut}">${'Far longer than any window: every word of this line will not fit on one screen. '.repeat(8)}</span></div>`,
+      `<div data-peek-row="" data-task-id="fixture-btn" id="btn-row" style="display:flex;gap:6px;width:240px"><span id="btn-text" style="${cut};flex:1;min-width:0">A row with its own button keeps that button working while it is wide open</span><button id="btn-spy" type="button">More</button></div><div id="btn-after">After the button row</div>`,
+      `<button id="kbd-before">Before</button><div data-peek-row="" data-task-id="fixture-kbd" tabindex="0" id="kbd-row" style="${cut}">A row reached with the keyboard opens as wide as the pointer would make it</div><button id="kbd-after">After</button>`,
+      `<div data-peek-row="" tabindex="0" id="kbd-plain-row" style="${cut}">A row that is no task's, reached with the keyboard in a zone, opens nothing</div>`,
     ].join('')
     document.body.appendChild(fixture)
-    // The same kinds outside any zone: an unmarked container, a row of cut texts, a row with a
-    // button, and a row the keyboard reaches.
+    // The same kinds outside any zone: an unmarked container, a task row of cut texts, a task row
+    // with a button, and a task row the keyboard reaches.
     const outside = document.createElement('section')
     outside.id = 'peek-outside-fixture'
     outside.style.cssText = 'position:fixed;left:700px;top:60px;width:260px;z-index:9999;background:var(--bg)'
     outside.innerHTML = [
       `<div id="out-container"><span id="out-text" style="display:block;${cut}">${'An unmarked component outside a zone keeps its place. '.repeat(3)}</span></div>`,
-      `<div data-peek-row="" id="out-row" style="height:54px;overflow:hidden">${Array.from({ length: 3 }, (_, i) => `<div style="${cut};height:18px">Out ${i}: ${'A detailed entry outside a zone shows its words in a tooltip. '.repeat(2)}</div>`).join('')}</div>`,
-      `<div data-peek-row="" id="out-btn-row" style="display:flex;gap:6px;width:240px"><span id="out-btn-text" style="${cut};flex:1;min-width:0">A row with its own button outside a zone keeps that button working</span><button id="out-btn" type="button">More</button></div>`,
-      `<button id="out-kbd-before">Before</button><div data-peek-row="" tabindex="0" id="out-kbd-row" style="${cut}">A row reached with the keyboard outside a zone opens nothing</div>`,
+      `<div data-peek-row="" data-task-id="fixture-out-row" id="out-row" style="height:54px;overflow:hidden">${Array.from({ length: 3 }, (_, i) => `<div style="${cut};height:18px">Out ${i}: ${'A detailed entry outside a zone shows its words in a tooltip. '.repeat(2)}</div>`).join('')}</div>`,
+      `<div data-peek-row="" data-task-id="fixture-out-btn" id="out-btn-row" style="display:flex;gap:6px;width:240px"><span id="out-btn-text" style="${cut};flex:1;min-width:0">A row with its own button outside a zone keeps that button working</span><button id="out-btn" type="button">More</button></div>`,
+      `<button id="out-kbd-before">Before</button><div data-peek-row="" data-task-id="fixture-out-kbd" tabindex="0" id="out-kbd-row" style="${cut}">A row reached with the keyboard outside a zone opens nothing</div>`,
       '<div id="out-following">Following outside</div>',
     ].join('')
     document.body.appendChild(outside)
@@ -94,10 +100,22 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
   await page.locator('#out-kbd-row').blur()
   await off()
 
-  // Twelve cut texts in one row: all open at once, all whole, and nothing below moves.
+  // In the zone, what is no task's own row opens nothing either: an unmarked component, a list row
+  // without a task, an option of a list. Each keeps its box, the rows below stay, and its text is
+  // in a native title.
+  const zoneBelow = [page.locator('#live-row'), page.locator('#following'), page.locator('#option-b')]
+  const zoneTops = await topsOf(zoneBelow)
+  await expectTooltipNotPeek(page.locator('#new-text'), 'An unmarked component in a zone', 'unmarked container in a zone')
+  await expectTooltipNotPeek(page.locator('#plain-text'), 'that is no task\'s keeps its place', 'a row in a zone that is no task\'s')
+  await expectTooltipNotPeek(page.locator('#option-a'), 'keeps its place in a zone', 'an option in a zone')
+  await expect(page.locator('#option-b')).not.toHaveAttribute('data-peek-open')
+  await expectStill(zoneBelow, zoneTops, 'in the zone')
+  await off()
+
+  // Twelve cut texts in one task row: all open at once, all whole, and nothing below moves.
   const many = page.locator('#many-texts')
   const manyBefore = await box('#many-texts')
-  const below = [page.locator('#new-container'), page.locator('#following')]
+  const below = [page.locator('#new-container'), page.locator('#live-row'), page.locator('#following')]
   const belowTops = await topsOf(below)
   await many.hover({ position: { x: 5, y: 5 } })
   await expectWidensInPlace(many, manyBefore, { label: 'twelve texts' })
@@ -107,42 +125,32 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
   await off()
   await expectRestored(many, manyBefore, 'twelve texts')
 
-  // An unmarked component opens its container through the same path.
-  const container = page.locator('#new-container')
-  const containerBefore = await box('#new-container')
+  // A task row of one cut text opens whole on its line.
+  const live = page.locator('#live-row')
+  const liveBefore = await box('#live-row')
   const followingTop = await topsOf([page.locator('#following')])
-  await page.locator('#new-text').hover()
-  await expectWidensInPlace(container, containerBefore, { label: 'unmarked container' })
-  await expect.poll(() => openInRow(page.locator('#new-text'))).toBe(true)
-  await expectStill([page.locator('#following')], followingTop, 'after the unmarked container')
+  await page.locator('#live-text').hover()
+  await expectWidensInPlace(live, liveBefore, { label: 'task row' })
+  await expect.poll(() => openInRow(page.locator('#live-text'))).toBe(true)
+  await expectStill([page.locator('#following')], followingTop, 'after the task row')
   // A live text change under the pointer opens it again on the new text, at the same height.
-  await page.locator('#new-text').evaluate((el) => { el.textContent = 'Changed entry with new words: '.repeat(3) })
-  await expect.poll(() => openInRow(page.locator('#new-text'))).toBe(true)
-  await expect(page.locator('#new-text')).toContainText('Changed entry')
-  await expectWidensInPlace(container, containerBefore, { label: 'unmarked container, changed' })
+  await page.locator('#live-text').evaluate((el) => { el.textContent = 'Changed entry with new words: '.repeat(3) })
+  await expect.poll(() => openInRow(page.locator('#live-text'))).toBe(true)
+  await expect(page.locator('#live-text')).toContainText('Changed entry')
+  await expectWidensInPlace(live, liveBefore, { label: 'task row, changed' })
   await off()
-  await expectRestored(container, containerBefore, 'unmarked container')
+  await expectRestored(live, liveBefore, 'task row')
 
   // React's keyed reorder moves a node without changing its text. The old shell must be
   // removed before a frame paints the new order, even though the row remains connected.
-  await page.locator('#new-text').hover()
-  await expectWidensInPlace(container, containerBefore, { label: 'before same-node reorder' })
-  await container.evaluate(el => el.parentElement!.appendChild(el))
-  await expect(container).not.toHaveAttribute('data-peek-expanded')
+  await page.locator('#live-text').hover()
+  await expectWidensInPlace(live, liveBefore, { label: 'before same-node reorder' })
+  await live.evaluate(el => el.parentElement!.appendChild(el))
+  await expect(live).not.toHaveAttribute('data-peek-expanded')
   await expect(page.locator('[data-peek-placeholder]')).toHaveCount(0)
-  expect(await container.evaluate(el => el.matches(':popover-open'))).toBe(false)
-  await container.evaluate(el => el.parentElement!.insertBefore(el, document.getElementById('following')))
+  expect(await live.evaluate(el => el.matches(':popover-open'))).toBe(false)
+  await live.evaluate(el => el.parentElement!.insertBefore(el, document.getElementById('following')))
   await off()
-
-  // One option of a list opens alone.
-  const optionBTop = await topsOf([page.locator('#option-b')])
-  const optionBefore = await box('#option-a')
-  await page.locator('#option-a').hover()
-  await expectWidensInPlace(page.locator('#option-a'), optionBefore, { label: 'option' })
-  await expect(page.locator('#option-b')).not.toHaveAttribute('data-peek-open')
-  await expectStill([page.locator('#option-b')], optionBTop, 'the next option')
-  await off()
-  await expectRestored(page.locator('#option-a'), optionBefore, 'option')
 
   // A text keeps its icon beside it on the same line.
   const lineBefore = await box('#icon-line')
@@ -199,6 +207,11 @@ test('in a zone, unmarked components, rows with twelve texts, a line longer than
   await page.keyboard.press('Tab')
   await expect(page.locator('#kbd-after')).toBeFocused()
   await expectRestored(kbd, kbdBefore, 'keyboard row after Tab')
+  // Tab on to a row that is no task's: it opens nothing.
+  await page.keyboard.press('Tab')
+  await expect(page.locator('#kbd-plain-row')).toBeFocused()
+  await page.waitForTimeout(300)
+  expect(await peekMarks(page), 'Tab onto a row in a zone that is no task\'s opens nothing').toBe(0)
 })
 
 test('a worker row under a long lead says Worker alone and widens whole, with the metadata one line above the title', async ({ page, request }, info) => {

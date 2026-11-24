@@ -43,8 +43,9 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
   // to read the rest before answering). The one fold of every card (common/TextFold.tsx).
   const text = useTextFold({ parts: ':scope > .ask-card-question, :scope > .ask-card-detail' });
   return (
-    // A card with a box to type in: hovering its text opens it downward in its own column, never
-    // across the window over the panes beside it (utils/truncation-peek-row.ts growsDown).
+    // A card with a box to type in (utils/truncation-peek-row.ts growsDown): hovering opens nothing,
+    // its cut text shows as a tooltip and Show more shows it whole (2026-11-24, the user: only a
+    // task's title in the task panel widens; truncation-peek-find.ts peekAllowed).
     <div className={`ask-card${text.whole ? ' is-whole' : ''} ${className}`.trim()} ref={text.ref} data-testid={testId} data-peek-row="" data-peek-grow="down" {...data}>
       {title ? <div className="ask-card-title">{title}</div> : null}
       {question ? <div className="ask-card-question">{question}</div> : null}

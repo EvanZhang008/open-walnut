@@ -7,9 +7,9 @@
  *   repeat text in full view). A new row written that way fails here; drop the title, the peek
  *   needs nothing, or mark the element `data-peek="off"` if it must keep it;
  * - every shared peek widens the real row sideways in the top layer (2026-11-15, the user: the
- *   whole card gets wider, not taller), never a floating clone of its text. The one exception is
- *   a card a person types into: it opens downward in its own column, capped at 1.5 times its
- *   height (2026-11-20; tests/web/peek-card-grows-down-guard.test.ts).
+ *   whole card gets wider, not taller), never a floating clone of its text. A card a person types
+ *   into never widens: it was the one that opened downward in its own column (2026-11-20;
+ *   tests/web/peek-card-grows-down-guard.test.ts), and since 2026-11-24 it opens on no hover.
  */
 import path from 'node:path';
 import fs from 'node:fs';

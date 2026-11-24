@@ -3,6 +3,9 @@
  * task's ask card that covered the chat: "when it expand whole button is gone", then "the max its
  * like 1.5 time long not like whole screen"). The shared peek (web/src/utils/truncation-peek-row.ts)
  * opens such a card's cut-off texts in place, in its own column, at most 1.5 times its height.
+ * Since 2026-11-24 a card that grows down opens on no hover at all (truncation-peek-find.ts
+ * peekAllowed: only a task's own title row widens in its zone; tests/web/peek-task-rows-only.test.ts,
+ * tests/e2e/browser/ask-card-no-peek.spec.ts), so the mark keeps it from ever widening across the window.
  *
  * The class: every `data-peek-row` element that holds a field. Each one either carries
  * `data-peek-grow="down"`, or is listed below with why the runtime field rule (`growsDown`) is

@@ -1,14 +1,18 @@
 /**
- * Cut-off text widens on hover only in a narrow side list of tasks (`data-peek-zone`: Home's task
- * panel), never in a header there (utils/truncation-peek-find.ts peekAllowed). Everywhere else
- * nothing opens: the cut text shows its full text as a native tooltip. 2026-11-23, the user on the
- * Org page head ("这个 title 不要，就是放上去之后还要放大") and on a question card that opened down over
- * the reply box ("但所有东西都放大真的是不太舒服"). The zone list itself: tests/web/truncation-peek-zones.test.ts.
+ * Cut-off text widens on hover only on a task's own row (`[data-peek-row][data-task-id]`) in a narrow
+ * side list of tasks (`data-peek-zone`: Home's task panel), never in a header there
+ * (utils/truncation-peek-find.ts peekAllowed). Everywhere else, other text in the zone included (a
+ * project head, a line that is no task's row), nothing opens: the cut text shows its full text as a
+ * native tooltip. 2026-11-23, the user on the Org page head ("这个 title 不要，就是放上去之后还要放大")
+ * and on a question card that opened down over the reply box ("但所有东西都放大真的是不太舒服");
+ * 2026-11-24: "ANYTHING can easily show all by cusotmer shoudln't auto enarge it is so bad, the task
+ * titide in sesion page in task pannel is fine". The zone list itself: tests/web/truncation-peek-zones.test.ts.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { openTaskSession } from './agent-text-entry-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
+import { presetPanelDesign } from './status-section-helpers'
 
 test.setTimeout(180_000)
 
@@ -21,51 +25,76 @@ async function openOrg(page: Page): Promise<void> {
   await expect(page.locator('.org-list-head')).toBeVisible()
 }
 
-/** A cut line of text, as a row, a header or a card head would hold it, put into `parent`. */
-async function probe(page: Page, id: string, cls: string, parent: string, top: number): Promise<void> {
-  await page.evaluate(({ id, cls, parent, top, long }) => {
+/**
+ * A cut line of text, as a row, a header or a card head would hold it, put into `parent`. `task`:
+ * marked as a task's own row (`data-peek-row` with a `data-task-id`), the only row that widens.
+ */
+async function probe(page: Page, id: string, cls: string, parent: string, top: number, task = false): Promise<void> {
+  await page.evaluate(({ id, cls, parent, top, long, task }) => {
     const row = document.createElement('div')
     row.id = id
     row.className = cls
+    if (task) { row.setAttribute('data-peek-row', ''); row.setAttribute('data-task-id', `fixture-${id}`) }
     row.style.cssText = `position:fixed;left:20px;top:${top}px;width:240px;display:flex;background:#fff;z-index:99999;font:13px system-ui`
     row.innerHTML = `<span class="probe-text" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${long}</span>`
     document.querySelector(parent)!.appendChild(row)
-  }, { id, cls, parent, top, long: LONG })
+  }, { id, cls, parent, top, long: LONG, task })
 }
 
-test('cut text widens only in the Home task panel; anywhere else, and in a header, it keeps its place with a tooltip', async ({ page }) => {
+test('cut text widens only on a task row in the Home task panel; a project head or other line there, anywhere else, and a header keep their place with a tooltip', async ({ page }) => {
   await isolateUiPrefs(page)
+  await presetPanelDesign(page, 'project')
   await page.setViewportSize({ width: 1280, height: 900 })
   await loadHome(page)
-  await probe(page, 'probe-zone-row', 'probe-line', '.todo-panel', 160)
+  await showAllSections(page)
+  // A project head in the zone (the list's first) opens nothing on hover, and nothing moves: only
+  // a task's row widens.
+  const head = page.locator('.todo-panel .todo-group-project-header').first()
+  await expect(head).toBeVisible({ timeout: 30_000 })
+  await head.scrollIntoViewIfNeeded()
+  await page.mouse.move(1, 1)
+  const headBefore = await head.boundingBox()
+  const name = head.locator('.todo-group-project-name')
+  await name.hover()
+  await page.waitForTimeout(400)
+  expect(await peekOpen(page), 'a project head in the task panel opens nothing').toBe(0)
+  expect(await page.locator('[data-peek-placeholder]').count(), 'and holds no placeholder').toBe(0)
+  expect(await head.boundingBox(), 'the project head did not move').toEqual(headBefore)
+  await page.mouse.move(1, 1)
+  await probe(page, 'probe-zone-row', 'probe-line', '.todo-panel', 160, true)
+  await probe(page, 'probe-zone-line', 'probe-line', '.todo-panel', 520)
   await probe(page, 'probe-zone-head', 'probe-panel-header', '.todo-panel', 200)
   await probe(page, 'probe-page-line', 'probe-line', 'body', 240)
   await probe(page, 'probe-page-card', 'probe-card-head', 'body', 280)
   await probe(page, 'probe-page-fit', 'probe-strip', 'body', 320)
   await page.locator('#probe-page-fit').evaluate((el) => el.setAttribute('data-fit-header', ''))
-  // A question card outside the task panel (a session's ask, the user's 2026-11-23 screenshot): a
-  // card with a box to type in, which opens downward only inside the task panel.
+  // A question card outside the task panel (a session's ask, the user's 2026-11-23 screenshot) and
+  // one inside it (Home's ask card): a card with a box to type in, which opens in neither
+  // (2026-11-24; tests/e2e/browser/ask-card-no-peek.spec.ts walks the real one).
   await probe(page, 'probe-page-ask', 'probe-ask', 'body', 360)
-  await page.locator('#probe-page-ask').evaluate((el) => {
-    el.setAttribute('data-peek-row', ''); el.setAttribute('data-peek-grow', 'down')
-    const t = el.querySelector('.probe-text') as HTMLElement
-    t.style.cssText = 'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal'
-    t.textContent = Array(6).fill(t.textContent).join(' ')
-    const box = document.createElement('textarea'); el.appendChild(box)
-  })
-  // In the zone: a line widens.
+  await probe(page, 'probe-zone-ask', 'probe-ask', '.todo-panel', 560)
+  for (const id of ['probe-page-ask', 'probe-zone-ask']) {
+    await page.locator(`#${id}`).evaluate((el) => {
+      el.setAttribute('data-peek-row', ''); el.setAttribute('data-peek-grow', 'down')
+      const t = el.querySelector('.probe-text') as HTMLElement
+      t.style.cssText = 'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal'
+      t.textContent = Array(6).fill(t.textContent).join(' ')
+      const box = document.createElement('textarea'); el.appendChild(box)
+    })
+  }
+  // In the zone: a task's row widens.
   await page.locator('#probe-zone-row .probe-text').hover()
-  await expect.poll(() => peekOpen(page), 'a line in the task panel widens').toBeGreaterThan(0)
+  await expect.poll(() => peekOpen(page), 'a task row in the task panel widens').toBeGreaterThan(0)
   await page.mouse.move(1, 1)
   await expect.poll(() => peekOpen(page)).toBe(0)
-  for (const id of ['probe-zone-head', 'probe-page-line', 'probe-page-card', 'probe-page-fit', 'probe-page-ask']) {
+  for (const id of ['probe-zone-line', 'probe-zone-head', 'probe-zone-ask', 'probe-page-line', 'probe-page-card', 'probe-page-fit', 'probe-page-ask']) {
     const text = page.locator(`#${id} .probe-text`)
     const before = await text.boundingBox()
     await text.hover()
     await page.waitForTimeout(400)
     expect(await peekOpen(page), `${id}: nothing opens`).toBe(0)
     expect(await text.boundingBox(), `${id}: nothing moves`).toEqual(before)
-    await expect(text, `${id}: the full text is its tooltip`).toHaveAttribute('title', id === 'probe-page-ask' ? /^A long line/ : LONG)
+    await expect(text, `${id}: the full text is its tooltip`).toHaveAttribute('title', id.endsWith('-ask') ? /^A long line/ : LONG)
     await page.mouse.move(1, 1)
   }
   await page.evaluate(() => document.querySelectorAll('[id^="probe-"]').forEach((el) => el.remove()))
@@ -115,7 +144,8 @@ test('in the task panel nothing peeks while a menu or a popover is open over it'
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await loadHome(page)
-  await probe(page, 'probe-zone-row', 'probe-line', '.todo-panel', 160)
+  // A task's own row: the one row in the panel that peeks.
+  await probe(page, 'probe-zone-row', 'probe-line', '.todo-panel', 160, true)
   const line = page.locator('#probe-zone-row .probe-text')
   const openers: Array<{ name: string; open: () => Promise<void>; menu: string }> = [
     { name: 'a row menu (right-click)', menu: '.task-kebab-menu, .wn-context-menu', open: async () => {

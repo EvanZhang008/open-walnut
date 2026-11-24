@@ -1,6 +1,6 @@
 /**
  * Cut-off text widens on hover only in a narrow side list of tasks (web/src/utils/truncation-peek-find.ts,
- * PEEK_ZONE_SELECTOR). 2026-11-23, the user, after a question card in a session opened down over the
+ * PEEK_ZONE_SELECTOR), and there only on a task's own row (tests/web/peek-task-rows-only.test.ts). 2026-11-23, the user, after a question card in a session opened down over the
  * reply box: "就是那种非常非常 narrow 的地方，然后可能我们放大可以，但所有东西都放大真的是不太舒服";
  * and on the Org page head: "这个 title 不要，就是放上去之后还要放大". Everywhere else the text keeps its
  * place, shows its full text as a native tooltip, and a click opens what holds it.
