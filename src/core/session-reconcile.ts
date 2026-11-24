@@ -608,32 +608,25 @@ export function daemonStreamPath(sessionId: string, host?: string | null): strin
  *  Without this, a whale turn's stuck-'running' record was unreconcilable
  *  forever (incident 57b125ab: 55 MB stream, verdict sat in the 19 KB after
  *  the watermark, every tick returned 'tail-window-exhausted' for 15h). */
-export async function fetchStreamTailFold(
+/**
+ * The session's daemon stream file as it is now: its path, size and file-incarnation identity
+ * (dev:ino:birthtimeMs; undefined from a pre-epoch daemon), or why there is none. New HOME location
+ * first, legacy /tmp second (a live pre-move session keeps appending at the legacy path until its
+ * CLI dies: see the candidates doc). The epoch lets a caller tell a watermark of a DEAD predecessor
+ * file (the tracker's arbitration only accepts a watermark regression paired with an epoch change).
+ */
+export async function statStreamFile(
   sessionId: string,
   host: string | null | undefined,
-  opts?: { consumedOffset?: number },
-): Promise<{ fold: SessionTailFold; fileSize: number; streamEpoch?: string } | string> {
-  const { DaemonFileReader } = await import('./daemon-file-reader.js')
-  const reader = new DaemonFileReader(host ?? '__local__')
-  // New HOME location first, legacy /tmp second (a live pre-move session keeps
-  // appending at the legacy path until its CLI dies — see the candidates doc).
-  let streamPath = ''
-  let size = -1
+  given?: { stat(p: string): Promise<{ size: number; epoch?: string } | null> },
+): Promise<{ path: string; size: number; epoch?: string } | 'stream-stat-failed' | 'no-stream-file'> {
+  const reader = given ?? new (await import('./daemon-file-reader.js')).DaemonFileReader(host ?? '__local__')
   let statFailed = false
-  // File-incarnation identity (dev:ino:birthtimeMs) of the stream file the
-  // fold is computed over. Callers need it to durably reset a consumedOffset
-  // watermark that belongs to a DEAD predecessor file (the tracker's
-  // arbitration only accepts a watermark regression paired with an epoch
-  // change). undefined = pre-epoch daemon.
-  let streamEpoch: string | undefined
   for (const candidate of daemonStreamPathCandidates(sessionId, host)) {
     try {
       const st = await reader.stat(candidate)
       if (st === null) continue
-      streamPath = candidate
-      size = st.size
-      streamEpoch = st.epoch
-      break
+      return { path: candidate, size: st.size, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) }
     } catch (err) {
       statFailed = true
       log.session.debug('reconcile: stream stat failed', {
@@ -642,7 +635,19 @@ export async function fetchStreamTailFold(
       })
     }
   }
-  if (size < 0) return statFailed ? 'stream-stat-failed' : 'no-stream-file'
+  return statFailed ? 'stream-stat-failed' : 'no-stream-file'
+}
+
+export async function fetchStreamTailFold(
+  sessionId: string,
+  host: string | null | undefined,
+  opts?: { consumedOffset?: number },
+): Promise<{ fold: SessionTailFold; fileSize: number; streamEpoch?: string } | string> {
+  const { DaemonFileReader } = await import('./daemon-file-reader.js')
+  const reader = new DaemonFileReader(host ?? '__local__')
+  const file = await statStreamFile(sessionId, host, reader)
+  if (typeof file === 'string') return file
+  const { path: streamPath, size, epoch: streamEpoch } = file
   if (size === 0) return 'no-stream-file'
 
   let window = TAIL_WINDOW_BYTES

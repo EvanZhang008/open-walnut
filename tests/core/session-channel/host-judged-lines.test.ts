@@ -1,17 +1,28 @@
 /**
- * The host's attach rule for its own sessions (src/core/session-channel/host-judged-lines.ts) and
- * the replay floor of an attach (src/providers/attach-evidence.ts judgedReplayFloor).
+ * The host's attach rule for its own sessions (src/core/session-channel/host-judged-lines.ts), the
+ * fact log's told line (fact-log.ts toldLine) and the replay floor of an attach
+ * (src/providers/attach-evidence.ts judgedReplayFloor).
  */
-import { afterEach, describe, expect, it } from 'vitest'
-import { attachJudgeFirst, mayStillRun, setJudgeAttach, startOwnAttach, type OwnRowLike } from '../../../src/core/session-channel/host-judged-lines.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { attachJudgeFirst, installOwnAttach, mayStillRun, setJudgeAttach, startOwnAttach, toldLineOf, type OwnRowLike, type LiveCli } from '../../../src/core/session-channel/host-judged-lines.js'
+import { FactLog, foldTold } from '../../../src/core/session-channel/fact-log.js'
 import { judgedReplayFloor, type StreamEvidence } from '../../../src/providers/attach-evidence.js'
 
-const noAcp = (e: string | undefined) => e === 'acp-x'
-const row = (sid: string, extra: Partial<OwnRowLike> = {}): OwnRowLike => ({ claudeSessionId: sid, pid: 42, type: 'interactive', process_status: 'idle', ...extra })
+const judge = vi.hoisted(() => ({ here: new Set<string>(), standsDown: false }))
+vi.mock('../../../src/core/sessions/judge-of.js', () => ({
+  judgedHere: (sid: string) => !judge.standsDown && judge.here.has(sid),
+  hostStandsDown: () => judge.standsDown,
+}))
+
+const isAcp = (e: string | undefined) => e === 'acp-x'
+const row = (sid: string, extra: Partial<OwnRowLike> = {}): OwnRowLike => ({ claudeSessionId: sid, type: 'interactive', ...extra })
+
+afterEach(() => { setJudgeAttach(null); judge.here.clear(); judge.standsDown = false })
 
 describe('attachJudgeFirst', () => {
-  afterEach(() => setJudgeAttach(null))
-
   it('is a no-op when nothing is installed (a host that runs no sessions, the leader)', async () => {
     await expect(attachJudgeFirst('s1', 'test')).resolves.toBeUndefined()
   })
@@ -28,59 +39,167 @@ describe('attachJudgeFirst', () => {
   })
 })
 
+describe('installOwnAttach: the attach before a write', () => {
+  function wire(o: { reads?: () => boolean; engines?: Record<string, string>; live?: Record<string, LiveCli> } = {}) {
+    const attached: Array<{ sid: string; pid?: number }> = []
+    const held = new Set<string>()
+    const stop = installOwnAttach({
+      runner: { attachOwnLive: async (sid, pid) => { attached.push({ sid, ...(pid !== undefined ? { pid } : {}) }); held.add(sid); return {} } },
+      holds: (sid) => held.has(sid),
+      ownRows: async () => [],
+      engineOf: async (sid) => o.engines?.[sid],
+      liveCli: async (sid) => o.live?.[sid] ?? null,
+      toldLine: (sid) => (sid === 'told' ? { v: 99 } : undefined),
+      readsReady: o.reads ?? (() => true),
+      // The boot passes stay out of these cases.
+      delayMs: 3_600_000,
+    })
+    return { attached, stop }
+  }
+
+  it('attaches an own session with the runtime\'s pid, once; the told lines are installed', async () => {
+    judge.here.add('own')
+    const w = wire({ live: { own: { pid: 4242 } } })
+    const stop = await w.stop
+    expect(toldLineOf('told')).toEqual({ v: 99 })
+    await attachJudgeFirst('own', 'away-sends')
+    await attachJudgeFirst('own', 'away-sends')
+    expect(w.attached).toEqual([{ sid: 'own', pid: 4242 }])
+    stop()
+    expect(toldLineOf('told')).toBeUndefined()
+  })
+
+  it('skips a copied row, an ACP engine\'s session, a host standing down, and a CLI the runtime does not hold', async () => {
+    judge.here.add('acp'); judge.here.add('dead'); judge.here.add('own')
+    const w = wire({ engines: { acp: 'gemini' }, live: { acp: { pid: 1 }, own: { pid: 2 } } })
+    const stop = await w.stop
+    await attachJudgeFirst('copied', 'away-sends')
+    await attachJudgeFirst('acp', 'away-sends')
+    await attachJudgeFirst('dead', 'away-sends')
+    judge.standsDown = true
+    await attachJudgeFirst('own', 'away-sends')
+    expect(w.attached).toEqual([])
+    stop()
+  })
+
+  it('before this host reads its own streams it attaches nothing (the boot passes take it, reading on from the told line)', async () => {
+    judge.here.add('own')
+    let reads = false
+    const w = wire({ reads: () => reads, live: { own: { pid: 2 } } })
+    const stop = await w.stop
+    await attachJudgeFirst('own', 'away-sends')
+    expect(w.attached).toEqual([])
+    reads = true
+    await attachJudgeFirst('own', 'away-sends')
+    expect(w.attached).toEqual([{ sid: 'own', pid: 2 }])
+    stop()
+  })
+})
+
 describe('startOwnAttach: the boot passes over the own rows', () => {
-  it('attaches each row that may still run and is not held, and tries the rest again at the next pass', async () => {
+  it('attaches each own row whose CLI the runtime holds, whatever the row says, and asks the rest again at the next pass', async () => {
     const held = new Set<string>(['held'])
-    const alive = new Set<string>(['a'])
-    const tried: string[] = []
-    const rows = [row('a'), row('b'), row('held'), row('stopped', { process_status: 'stopped' }), row('nopid', { pid: null }),
-      row('acp', { engine: 'acp-x' }), row('archived', { archived: true }), row('triage', { type: 'triage' })]
+    // `resumed`: the daemon resumed it itself while the service was down; its row still says stopped, with no pid.
+    const live: Record<string, LiveCli> = { a: { pid: 11 }, resumed: { pid: 12 } }
+    const asked: string[] = []
+    const attached: Array<[string, number | undefined]> = []
+    const rows = [row('a'), row('b'), row('held'), row('resumed'), row('acp', { engine: 'acp-x' }), row('archived', { archived: true }), row('triage', { type: 'triage' })]
     const own = startOwnAttach({
       ownRows: async () => rows,
       holds: (sid) => held.has(sid),
-      attach: async (sid) => { tried.push(sid); if (!alive.has(sid)) return false; held.add(sid); return true },
-      isAcp: noAcp,
-      passesMs: [0, 5],
+      liveCli: async (sid) => { asked.push(sid); return live[sid] ?? null },
+      attach: async (sid, pid) => { attached.push([sid, pid]); held.add(sid); return true },
+      isAcp, passesMs: [0, 5],
     })
     await own.done
-    // b is tried again at the second pass (its CLI was not adopted yet); a is held by then.
-    expect(tried).toEqual(['a', 'b', 'b'])
+    expect(attached).toEqual([['a', 11], ['resumed', 12]])
+    // b (no CLI yet) is asked again at the second pass; a and resumed are held by then.
+    expect(asked).toEqual(['a', 'b', 'resumed', 'b'])
   })
 
-  it('a stop ends the passes at once', async () => {
-    const tried: string[] = []
-    const own = startOwnAttach({ ownRows: async () => [row('a')], holds: () => false, attach: async (sid) => { tried.push(sid); return false }, isAcp: noAcp, passesMs: [0, 60_000] })
+  it('a host standing down attaches nothing; a stop ends the passes at once', async () => {
+    const attached: string[] = []
+    const down = startOwnAttach({ ownRows: async () => [row('a')], holds: () => false, liveCli: async () => ({ pid: 1 }), attach: async (sid) => { attached.push(sid); return true }, isAcp, standsDown: () => true, passesMs: [0] })
+    await down.done
+    expect(attached).toEqual([])
+    const own = startOwnAttach({ ownRows: async () => [row('a')], holds: () => false, liveCli: async () => null, attach: async () => true, isAcp, passesMs: [0, 60_000] })
     await new Promise((r) => setTimeout(r, 20))
     own.stop()
     await own.done
-    expect(tried).toEqual(['a'])
   })
 
-  it('mayStillRun: a live interactive native row only', () => {
-    expect(mayStillRun(row('a'), noAcp)).toBe(true)
-    expect(mayStillRun(row('a', { process_status: 'running' }), noAcp)).toBe(true)
-    expect(mayStillRun(row('a', { process_status: 'stopped' }), noAcp)).toBe(false)
-    expect(mayStillRun(row('a', { engine: 'acp-x' }), noAcp)).toBe(false)
+  it('mayStillRun: an interactive native row, whatever its status', () => {
+    expect(mayStillRun(row('a'), isAcp)).toBe(true)
+    expect(mayStillRun(row('a', { engine: 'acp-x' }), isAcp)).toBe(false)
+    expect(mayStillRun(row('a', { archived: true }), isAcp)).toBe(false)
+  })
+})
+
+describe('the fact log\'s told line', () => {
+  it('is the furthest line a durable fact came from, kept across a reopen and a compaction, and a new file\'s first line resets it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'told-'))
+    try {
+      const log = await FactLog.open({ dir, walnutId: 'w1', durable: false, flushMs: 5 })
+      log.append('s1', 'session:text-delta', { delta: 'a' }, { line: { epoch: 'e1', v: 100 } })
+      log.append('s1', 'session:result', { result: 'r' }, { line: { epoch: 'e1', v: 250 } })
+      log.append('s2', 'row', {})
+      expect(log.toldLine('s1'), 'not durable yet: not told').toBeUndefined()
+      await log.flush()
+      expect(log.toldLine('s1')).toEqual({ epoch: 'e1', v: 250 })
+      expect(log.toldLine('s2')).toBeUndefined()
+      await log.ack(log.head)
+      await log.compact()
+      await log.close()
+      const again = await FactLog.open({ dir, walnutId: 'w1', durable: false, flushMs: 5 })
+      expect(again.toldLine('s1'), 'after a compaction dropped its records').toEqual({ epoch: 'e1', v: 250 })
+      again.append('s1', 'session:text-delta', { delta: 'b' }, { line: { epoch: 'e2', v: 40 } })
+      await again.flush()
+      expect(again.toldLine('s1'), 'a new stream file').toEqual({ epoch: 'e2', v: 40 })
+      await again.close()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('foldTold keeps the furthest line of one file', () => {
+    expect(foldTold({ v: 10 }, { v: 5 })).toEqual({ v: 10 })
+    expect(foldTold({ v: 10 }, { v: 15 })).toEqual({ v: 15 })
+    expect(foldTold(undefined, undefined)).toBeUndefined()
   })
 })
 
 describe('judgedReplayFloor', () => {
-  const ev = (fileSize: number, endOffset?: number): StreamEvidence => ({
-    fileSize,
+  const ev = (fileSize: number, endOffset?: number, streamEpoch?: string): StreamEvidence => ({
+    fileSize, ...(streamEpoch ? { streamEpoch } : {}),
     fold: { lastResult: endOffset === undefined ? null : { isError: false, endOffset } } as never,
   })
 
-  it('an own row with a result past its judged watermark replays from the watermark', () => {
-    expect(judgedReplayFloor(true, 1000, ev(5000, 4800))).toBe(1000)
-    expect(judgedReplayFloor(true, 0, ev(5000, 4800)), 'a watermark reset to a new file\'s start').toBe(0)
+  it('reads on from the told line: a turn running at the restart is not said again, a result told is not said twice', () => {
+    // Mid-turn: the leader heard up to 3000; the turn's end (4800) came while no runner read.
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 3000, from: 'told' })
+    // The result's fact went out, the record's watermark did not (a crash between): nothing is read again.
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 5000 })).toEqual({ floor: 5000, from: 'told' })
+    // The record's watermark went out, the result's fact did not: it is read again and told.
+    expect(judgedReplayFloor(true, 4800, ev(5000, 4800, 'e1'), { epoch: 'e1', v: 1000 })).toEqual({ floor: 1000, from: 'told' })
   })
 
-  it('no replay: the last result is the judged one, no result, no watermark, a dead file, no evidence, or not an own row', () => {
+  it('a fold with no verdict (no turn anchor) still places the told line by the file\'s size and epoch', () => {
+    expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { epoch: 'e1', v: 3000 }, { fileSize: 5000, streamEpoch: 'e1' })).toEqual({ floor: 3000, from: 'told' })
+    expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { epoch: 'e1', v: 3000 }, { fileSize: 5000, streamEpoch: 'e2' })).toBeNull()
+    expect(judgedReplayFloor(true, -1, 'no-turn-anchor', { v: 3000 })).toBeNull()
+  })
+
+  it('a told line of another file, or past this one, is not used', () => {
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800, 'e2'), { epoch: 'e1', v: 3000 })).toEqual({ floor: 1000, from: 'judged' })
+    expect(judgedReplayFloor(true, -1, ev(5000, 4800), { v: 6000 })).toBeNull()
+  })
+
+  it('with no told line: the judged watermark, when a result was written past it', () => {
+    expect(judgedReplayFloor(true, 1000, ev(5000, 4800))).toEqual({ floor: 1000, from: 'judged' })
     expect(judgedReplayFloor(true, 4800, ev(5000, 4800)), 'the result at the watermark was judged').toBeNull()
     expect(judgedReplayFloor(true, 1000, ev(5000)), 'no result in the tail: a turn still running comes live').toBeNull()
     expect(judgedReplayFloor(true, -1, ev(5000, 4800)), 'no watermark').toBeNull()
-    expect(judgedReplayFloor(true, 6000, ev(5000, 4800)), 'beyond the file').toBeNull()
     expect(judgedReplayFloor(true, 1000, 'no-stream-file'), 'no evidence').toBeNull()
-    expect(judgedReplayFloor(false, 1000, ev(5000, 4800)), 'a session the leader judges keeps the future-only attach').toBeNull()
+    expect(judgedReplayFloor(false, 1000, ev(5000, 4800), { v: 3000 }), 'a session this server does not judge as its host').toBeNull()
   })
 })

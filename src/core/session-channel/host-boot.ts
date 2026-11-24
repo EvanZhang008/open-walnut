@@ -46,6 +46,7 @@ import { createStandDownHeld } from './stand-down-held.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
+import type { LiveCli } from './host-judged-lines.js'
 import { noteSessionRowWritten } from './row-hook.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
 import { WALNUT_HOME } from '../../constants.js'
@@ -165,7 +166,9 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     ownRows: () => ownRows(o.hostKey),
     liveOf: (sid) => liveStateOf(runner, sid, turnOf),
     stamp,
-    offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
+    // The line the runner has read up to: the fact log keeps the furthest one told (fact-log.ts toldLine),
+    // where an attach after a restart reads on from (host-judged-lines.ts).
+    offsetOf: (sid) => { const at = (runner.findSessionByClaudeId(sid) as { readOffset?: number } | undefined)?.readOffset; return typeof at === 'number' && at >= 0 ? at : undefined },
     onOwnRow: (sid) => gone.forget(sid),
     handOf: (row) => bundles.handFor(row.taskId),
     onLog: say,
@@ -297,10 +300,15 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
   // A line into an own session's CLI by any path but its runner waits for the runner to watch it, and
   // the own rows whose CLI survived this service's restart are watched again at once (host-judged-lines.ts).
-  const { selfHostConnection } = await import('../../replica/self-host.js')
+  const [{ selfHostConnection }, { getSessionByClaudeId }] = await Promise.all([import('../../replica/self-host.js'), import('../session-tracker.js')])
+  const delayMs = Number(process.env.WALNUT_HOST_OWN_ATTACH_DELAY_MS)
   up.ownAttach = await (await import('./host-judged-lines.js')).installOwnAttach({
     runner: sessionRunner, holds: runnerHolds, ownRows: () => ownRows(o.hostKey), runnerReady: sessionRunner.initialized,
-    readsReady: () => selfHostConnection(o.hostKey)?.connected === true, log: say,
+    engineOf: async (sid) => (await getSessionByClaudeId(sid).catch(() => null))?.engine ?? undefined,
+    liveCli: (sid) => runtimeLiveCli(sid), toldLine: (sid) => log.toldLine(sid),
+    readsReady: () => selfHostConnection(o.hostKey)?.connected === true,
+    // Tests: the boot passes wait this much longer, so only the attach before a write can take a session.
+    ...(delayMs > 0 ? { delayMs } : {}), log: say,
   })
   // Stopped while it was put in place: it goes too.
   if (current !== up) up.ownAttach()
@@ -416,6 +424,17 @@ export async function resumeNotAtRest(
   return cli === null ? 'this host\'s runtime did not say whether its CLI runs' : null
 }
 
+type RuntimeConn = { send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown> }
+
+/** This host's own link to its runtime (the own-sessions link), or null when it did not come within a few seconds. */
+async function runtimeConn(given?: RuntimeConn | null): Promise<RuntimeConn | null> {
+  if (given) return given
+  const [dc, { getLocalDaemonConnection }, { within }] = await Promise.all([
+    import('../../providers/daemon-connection.js'), import('../../providers/local-daemon-dial.js'), import('./host-judged-lines.js'),
+  ])
+  return dc.getConnectedDaemonConnection('__local__') ?? (await within(getLocalDaemonConnection(), 3_000)) ?? null
+}
+
 /**
  * The runtime's word on a session's CLI (its `status` answer through the own-sessions link): alive,
  * dead, or null when the link or the answer did not come within a few seconds. For a row of an ACP
@@ -424,23 +443,28 @@ export async function resumeNotAtRest(
 export async function runtimeHoldsCli(
   sid: string, row?: Pick<SessionRecord, 'engine' | 'acpRuntimeId'> | null,
   /** Tests: the runtime's connection (else this host's own link to its runtime). */
-  given?: { send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown> } | null,
+  given?: RuntimeConn | null,
 ): Promise<boolean | null> {
-  const dc = await import('../../providers/daemon-connection.js')
-  const { getLocalDaemonConnection } = await import('../../providers/local-daemon-dial.js')
   const { acpWorkerReplyAlive, statusReplyAlive } = await import('../../providers/daemon-status-reply.js')
   const { isAcpEngine } = await import('../agents/engine-registry.js')
-  const within = <T>(p: Promise<T>, ms: number): Promise<T | null> => new Promise((resolve) => {
-    const t = setTimeout(() => resolve(null), ms)
-    t.unref?.()
-    p.then((v) => { clearTimeout(t); resolve(v) }, () => { clearTimeout(t); resolve(null) })
-  })
-  const conn = given ?? dc.getConnectedDaemonConnection('__local__') ?? await within(getLocalDaemonConnection(), 3_000)
+  const { within } = await import('./host-judged-lines.js')
+  const conn = await runtimeConn(given)
   if (!conn) return null
   if (row && isAcpEngine(row.engine ?? undefined)) {
     if (!row.acpRuntimeId) return null
-    return acpWorkerReplyAlive(await within(conn.send('acpState', { sid: row.acpRuntimeId }, 3_000), 3_500) as { ok?: unknown; errorKind?: unknown } | null)
+    return acpWorkerReplyAlive(((await within(conn.send('acpState', { sid: row.acpRuntimeId }, 3_000), 3_500)) ?? null) as { ok?: unknown; errorKind?: unknown } | null)
   }
   const reply = await within(conn.send('status', { sid }, 3_000), 3_500)
   return reply ? statusReplyAlive(reply as { ok?: unknown; exists?: unknown; alive?: unknown }) : null
+}
+
+/** A native session's CLI as the runtime holds it now (its registry, whatever the row says): alive with its pid, or null. */
+export async function runtimeLiveCli(sid: string, given?: RuntimeConn | null): Promise<LiveCli> {
+  const { statusReplyAlive } = await import('../../providers/daemon-status-reply.js')
+  const { within } = await import('./host-judged-lines.js')
+  const conn = await runtimeConn(given)
+  if (!conn) return null
+  const reply = (await within(conn.send('status', { sid }, 3_000), 3_500)) as { ok?: unknown; exists?: unknown; alive?: unknown; pid?: unknown } | undefined
+  if (!reply || statusReplyAlive(reply) !== true) return null
+  return typeof reply.pid === 'number' ? { pid: reply.pid } : {}
 }

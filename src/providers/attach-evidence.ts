@@ -147,21 +147,37 @@ export async function readAttachEvidence(
 }
 
 /**
- * Where an attach of a session this host judges itself (session-row-owner.ts rowOwnedHere) reads
- * its stream from: the last turn end its runner judged (the record's consumedOffset), when the
- * stream proves a result was written past it, so a turn that ended while no runner read the CLI
- * (a restart of the host's service, a line written by the daemon or the host's server directly)
- * is read and judged once now; its result sits past the watermark, so the replay guard takes it as
- * new, and every line at or below it stays a replay. Null otherwise: the attach subscribes to what
- * comes next, as before (2026-11-23: a same-host send's turn ended before the runner attached
- * again, and the future-only attach skipped it for good).
+ * Where an attach of a session this host judges itself (session-row-owner.ts rowOwnedHere, and the
+ * host not standing down for an older leader) reads its stream on from, so what its CLI wrote while
+ * no runner read it (a restart of the host's service, a line written by the daemon or the host's
+ * server directly) is said once, and nothing the leader already heard is said again
+ * (2026-11-23: a same-host send's turn ended before the runner attached again, and the future-only
+ * attach skipped it for good):
  *
- * `watermark` is the in-memory one after the stale-watermark heal (-1 when there is none, or when
- * it belongs to a dead file), so a floor is never a position in another file.
+ *   told     the furthest line a durable fact of the session came from (fact-log.ts toldLine): every
+ *            line up to it was handled and told, every line past it was not, so the attach reads on
+ *            from exactly there, a turn that was running at the restart included. Used when it is a
+ *            position in this file (its epoch, when both know one, and within its size).
+ *   judged   with no told line (a log from before it, a session that never said a fact here): the
+ *            last turn end its runner judged (the record's consumedOffset), when the stream proves a
+ *            result was written past it.
+ *
+ * Null otherwise: the attach subscribes to what comes next, as before. The floor is also the attach's
+ * replay watermark: a result past it is new, a line at or below it was handled. `watermark` is the
+ * in-memory one after the stale-watermark heal (-1 when there is none, or when it belongs to a dead
+ * file), so the judged floor is never a position in another file.
  */
-export function judgedReplayFloor(ownHostJudged: boolean, watermark: number, evidence: StreamEvidence): number | null {
-  if (!ownHostJudged || typeof evidence === 'string') return null
+export function judgedReplayFloor(
+  ownHostJudged: boolean, watermark: number, evidence: StreamEvidence, told?: { epoch?: string; v: number } | null,
+  /** The stream file's size and epoch when the evidence has none (a fold with no verdict): enough for the told line. */
+  file?: { fileSize: number; streamEpoch?: string } | null,
+): { floor: number; from: 'told' | 'judged' } | null {
+  if (!ownHostJudged) return null
+  const at = typeof evidence === 'string' ? file ?? null : evidence
+  if (told && at && Number.isSafeInteger(told.v) && told.v >= 0 && told.v <= at.fileSize
+    && !(told.epoch && at.streamEpoch && told.epoch !== at.streamEpoch)) return { floor: told.v, from: 'told' }
+  if (typeof evidence === 'string') return null
   if (!Number.isInteger(watermark) || watermark < 0 || watermark >= evidence.fileSize) return null
   const end = evidence.fold.lastResult?.endOffset
-  return typeof end === 'number' && end > watermark ? watermark : null
+  return typeof end === 'number' && end > watermark ? { floor: watermark, from: 'judged' } : null
 }

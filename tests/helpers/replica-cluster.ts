@@ -207,7 +207,8 @@ export interface ReplicaCluster {
   sleepMac(): SignalWindow
   wakeMac(): SignalWindow
   /** SIGTERM to the replica; its daemon (a launcher's host: its launcher) starts it again. Resolves with the new pid once it answers. */
-  restartReplica(timeoutMs?: number): Promise<number>
+  /** `between`: runs once the old process ended, before the new one is waited for (what happens while it is down). */
+  restartReplica(timeoutMs?: number, between?: () => Promise<void> | void): Promise<number>
   asleep(): boolean
   /** `linkProxy` only: close the Mac's link to the host daemon (every connection) and hold its redials silent. */
   cutLink(): void
@@ -1054,12 +1055,13 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       }
       return steps
     },
-    async restartReplica(timeoutMs = 120_000) {
+    async restartReplica(timeoutMs = 120_000, between) {
       if (launcher) {
         // The replica is the host's service: it ends, and its launcher starts it again.
         const before = launcher.proc
         signalChild(before, 'SIGTERM')
         await waitFor(() => before.exitCode !== null || before.signalCode !== null, 30_000, 'the host\'s service to stop')
+        await between?.()
         const next = await launcher.next(before, timeoutMs)
         await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted service to answer')
         return next.pid!
@@ -1068,6 +1070,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       if (before.length === 0) throw new Error('replica-cluster: no replica runs to restart')
       for (const p of before) signalPinned(p, 'SIGTERM')
       await waitFor(() => before.every((p) => !stillPinned(p)), 30_000, 'the replica to stop')
+      await between?.()
       const next = await waitFor(() => replicaPins().find((p) => !before.some((b) => b.pid === p.pid)) ?? null, timeoutMs, 'its daemon to start the replica again')
       await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted replica to answer')
       return next.pid

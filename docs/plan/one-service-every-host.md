@@ -514,10 +514,14 @@ service with a whole set of places; neither lists, adopts or stops the other's s
 - **No line into a session it judges goes past the host's runner unread** (`src/core/session-channel/host-judged-lines.ts`).
   Every host path that writes into a session's CLI through the daemon instead of the runner (a same-host
   send or reply, a plain note, a prompt's answer, a trigger fire, a message while the host is alone) lets the
-  runner attach first; after a restart of the host's service the runner attaches its own rows whose CLI
-  survived at once; and an attach of an own row with a result past its last judged turn end reads the
-  stream again from there (`judgedReplayFloor` in `src/providers/attach-evidence.ts`), so a turn that ended
-  while no runner read it, whoever wrote its line (the daemon's own away answer too), is judged once
+  runner attach first (not an ACP engine's session, nor while the host stands down for an older leader);
+  after a restart of the host's service the runner attaches every own row whose CLI the runtime holds (its
+  registry, not the row: the daemon may have resumed one alone), once it reads its own streams; and an
+  attach of an own row reads the stream on from the furthest line the leader was told of (the fact log's
+  told line, saved with its fsynced state: `toldLine` in `src/core/session-channel/fact-log.ts`,
+  `judgedReplayFloor` in `src/providers/attach-evidence.ts`), so a turn that ended while no runner read it,
+  whoever wrote its line (the daemon's own away answer too), is said once, and what the leader already
+  heard of a turn running at the restart is not said again
   (2026-11-23: a same-host send after a service restart; tests:
   `tests/e2e/host-judge-restart-local-send-e2e.test.ts`, ratchet
   `tests/core/session-channel/host-judged-lines-ratchet.test.ts`).

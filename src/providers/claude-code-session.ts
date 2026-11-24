@@ -38,7 +38,7 @@ import { controlsReportedWithin } from './remote-judged-session.js'
 import { noteSessionLiveChanged } from '../core/session-channel/row-hook.js'
 import { hostJudgedSession, installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
 import { handOverPending, setLeaderDelivery } from './host-handover.js'
-import { judgingHostOf } from '../core/sessions/judge-of.js'
+import { hostStandsDown, judgingHostOf } from '../core/sessions/judge-of.js'
 import { acpResumeHostOf, resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { assertHostNotRevoked } from '../core/session-channel/revoked-hosts.js'
 import { execHostOf, rowOwnedHere, thisHostKey } from '../core/sessions/session-row-owner.js'
@@ -1124,6 +1124,8 @@ export class ClaudeCodeSession {
    *  (monotonic) so it survives restarts; seeded from the record on attach.
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
+  /** The furthest stream line (its daemon `v`) this instance has handled, -1 before the first. */
+  private _readOffset = -1
 
   /** The prompt cache facts of the main loop's last live request, with where this session compacts by
    *  itself (the idle compaction's threshold is a share of it); undefined until one reported usage. */
@@ -2622,6 +2624,11 @@ export class ClaudeCodeSession {
     return this._consumedOffset
   }
 
+  /** The furthest stream line this instance handled (-1 before the first): the host's facts carry it (host-emitter.ts). */
+  get readOffset(): number {
+    return this._readOffset
+  }
+
   /** Current turn generation — see `_turnGen`. Read by core/phase.ts's stale-result
    *  gate to reject a SESSION_RESULT whose turn has already been superseded. */
   get turnGen(): number {
@@ -4097,10 +4104,28 @@ export class ClaudeCodeSession {
 
     // ── Stale-watermark heal (incident inc-1786428350008, healStaleWatermark) ──
     if (typeof streamEvidence !== 'string') await ClaudeCodeSession.healStaleWatermark(session, record, streamEvidence)
-    // A session this host judges itself, with a result past its last judged turn end: what its CLI
-    // wrote while no runner read it is read again from there and judged now (attach-evidence.ts
-    // judgedReplayFloor). The replay itself ends the turn, so the downgrade below leaves it alone.
-    const judgedFloor = judgedReplayFloor(rowOwnedHere(record, thisHostKey()), session._consumedOffset, streamEvidence)
+    // A session this host judges itself: what its CLI wrote while no runner read it is read on from
+    // where the leader was last told (attach-evidence.ts judgedReplayFloor), which is also the replay
+    // watermark from here. The replay itself ends a turn that ended in the gap, so the downgrade
+    // below leaves it alone.
+    const ownJudged = rowOwnedHere(record, thisHostKey()) && !hostStandsDown()
+    const told = ownJudged && record.claudeSessionId ? (await import('../core/session-channel/host-judged-lines.js')).toldLineOf(record.claudeSessionId) : undefined
+    // A fold with no verdict (no turn anchor in its window) still had a file: its size and epoch place the told line.
+    let file: { fileSize: number; streamEpoch?: string } | null = null
+    if (told && typeof streamEvidence === 'string' && streamEvidence !== EVIDENCE_TIMEOUT) {
+      const { statStreamFile } = await import('../core/session-reconcile.js')
+      const st = await statStreamFile(record.claudeSessionId, record.host).catch(() => null)
+      if (st && typeof st !== 'string') file = { fileSize: st.size, ...(st.epoch ? { streamEpoch: st.epoch } : {}) }
+    }
+    const replay = judgedReplayFloor(ownJudged, session._consumedOffset, streamEvidence, told, file)
+    const judgedFloor = replay?.floor ?? null
+    if (replay) {
+      session._consumedOffset = replay.floor
+      log.session.info('attachToExisting: an own session reads on from where the leader was told', {
+        sessionId: record.claudeSessionId, floor: replay.floor, from: replay.from, recordWatermark: record.consumedOffset ?? null,
+        fileSize: typeof streamEvidence === 'string' ? file?.fileSize ?? null : streamEvidence.fileSize,
+      })
+    }
 
     // Create the session manager for attach (all sessions go through daemon now).
     //
@@ -4365,7 +4390,7 @@ export class ClaudeCodeSession {
         isRemote,
         transportFileSize: session._transport.fileSize,
         fromOffset: fromOffset === Number.MAX_SAFE_INTEGER ? 'MAX_SAFE_INTEGER (skip replay)' : fromOffset,
-        ...(judgedFloor !== null ? { replay: 'from the last judged turn end' } : {}),
+        ...(replay ? { replay: replay.from } : {}),
       })
       try {
         const attachedTransport = session._transport
@@ -4491,6 +4516,8 @@ export class ClaudeCodeSession {
         log.session.warn('transport attach failed, session may not stream', {
           sessionId: record.claudeSessionId,
           error: err instanceof Error ? err.message : String(err),
+          // The downgrade was left to a replay that did not start: the next attach reads on from the same place.
+          ...(judgedFloor !== null ? { replayFloor: judgedFloor, downgradeLeftToReplay: true } : {}),
         })
       }
     }
@@ -7354,6 +7381,7 @@ export class ClaudeCodeSession {
     // result/idle handlers can compare it against the consumed watermark and
     // advance it on turn completion. Undefined on old daemons without `v`.
     this._currentEventV = v
+    if (typeof v === 'number' && v > this._readOffset && v < Number.MAX_SAFE_INTEGER) this._readOffset = v
     // Clear stall diagnostic timer — we're receiving output, session is responsive
     this._lastJsonlEventTs = Date.now()
     // Lane-turn liveness (core/sessions/session-progress.ts): EVERY stream line
@@ -13130,6 +13158,24 @@ export class SessionRunner {
       })
       return undefined
     }
+  }
+
+  /**
+   * A session this host runs and judges itself, whose CLI the host's runtime holds now
+   * (session-channel/host-judged-lines.ts): attached with the runtime's pid, since the row's may be
+   * stale or absent (a CLI the daemon resumed itself while the host's service was down, its row
+   * still `stopped`). `budgetMs`: a write waits on it (an on-demand attach's evidence budget).
+   */
+  async attachOwnLive(claudeSessionId: string, pid?: number, budgetMs?: number): Promise<ClaudeCodeSession | undefined> {
+    const inMap = this.findByClaudeId(claudeSessionId)
+    if (inMap) return inMap
+    const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
+    const record = await getSessionByClaudeId(claudeSessionId)
+    if (!record || isAcpEngine(record.engine) || !rowOwnedHere(record, thisHostKey())) return undefined
+    log.session.info('attachOwnLive: attaching an own session the runtime holds', {
+      sessionId: claudeSessionId, pid: pid ?? record.pid, rowPid: record.pid, rowStatus: record.process_status, taskId: record.taskId,
+    })
+    return this.attachNativeRecord(typeof pid === 'number' ? { ...record, pid } : record, budgetMs !== undefined ? { evidenceBudgetMs: budgetMs } : undefined)
   }
 
   /**

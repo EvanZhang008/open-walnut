@@ -23,10 +23,11 @@ vi.mock('../../src/core/sessions/session-row-owner.js', async (orig) => ({
   thisHostKey: () => own.hostKey,
 }))
 
-import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
+import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
+import { setToldLines } from '../../src/core/session-channel/host-judged-lines.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
-import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import type { SessionRecord } from '../../src/core/types.js'
@@ -54,9 +55,11 @@ beforeEach(async () => {
 afterEach(async () => {
   bus.clear()
   own.hostKey = ''
+  setToldLines(null)
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 
+const toolUse = (id: string) => JSON.stringify({ type: 'assistant', message: { id: `msg-${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }] } })
 const user = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: text } })
 const result = (sid: string, text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, result: text, session_id: sid })
 const idle = () => JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
@@ -89,10 +92,98 @@ function resultsOf(sid: string): string[] {
   return out
 }
 
+function eventsOf(sid: string, name: string): number[] {
+  const out: number[] = []
+  bus.subscribe(`judged-replay-${name}-${sid}`, (e) => {
+    if (e.name === name && (e.data as { sessionId?: string }).sessionId === sid) out.push(1)
+  }, { global: true })
+  return out
+}
+
+/** A stream whose second turn was running at the restart: its tool call was told, its end came while no runner read. */
+function seedMidTurn(sid: string, pid: number): { watermark: number; told: number; end: number } {
+  const lines = [user('ROUND one'), result(sid, 'echo: ROUND one'), idle(), user('ROUND two'), toolUse('toolu_told'), result(sid, 'echo: ROUND two'), idle()]
+  const ends: number[] = []
+  let at = 0
+  for (const l of lines) { at += Buffer.byteLength(l) + 1; ends.push(at) }
+  fs.writeFileSync(path.join(streams, `${sid}.jsonl`), lines.map((l) => l + '\n').join(''))
+  daemon.seedSession(sid, { pid, alive: true })
+  return { watermark: ends[1]!, told: ends[4]!, end: ends[5]! }
+}
+
 const lastAttach = (sid: string) => daemon.getAttachHistory().filter((a) => a.sid === sid).at(-1)?.fromOffset
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('attaching a session this host judges', () => {
+  it('a turn running at the restart is read on from the line the leader was told: its end is said once, its told part not again', async () => {
+    own.hostKey = '__local__'
+    const sid = 'jr-mid-turn'
+    const { watermark, told } = seedMidTurn(sid, 6111)
+    setToldLines((s) => (s === sid ? { v: told } : undefined))
+    const results = resultsOf(sid)
+    const tools = eventsOf(sid, EventNames.SESSION_TOOL_USE)
+    const session = await attach(sid, 6111, watermark)
+    expect(lastAttach(sid)).toBe(told)
+    await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
+    await settle(300)
+    expect(results).toEqual(['echo: ROUND two'])
+    expect(tools, 'the tool call the leader already heard').toEqual([])
+    session.detach()
+
+    // The control: with no told line (a log from before it) the same stream is read from the judged turn end, tool call included.
+    const sid2 = 'jr-mid-turn-untold'
+    const m2 = seedMidTurn(sid2, 6115)
+    const tools2 = eventsOf(sid2, EventNames.SESSION_TOOL_USE)
+    const again = await attach(sid2, 6115, m2.watermark)
+    expect(lastAttach(sid2)).toBe(m2.watermark)
+    await vi.waitFor(() => expect(tools2.length).toBe(1), { timeout: 5_000 })
+    again.detach()
+  })
+
+  it('the result\'s fact was told but the record\'s watermark was not written (a crash between): the turn is not said twice', async () => {
+    own.hostKey = '__local__'
+    const sid = 'jr-crash-window'
+    const { watermark, end } = seedMidTurn(sid, 6112)
+    setToldLines((s) => (s === sid ? { v: end } : undefined))
+    const results = resultsOf(sid)
+    const session = await attach(sid, 6112, watermark)
+    expect(lastAttach(sid)).toBe(end)
+    await settle(500)
+    expect(results).toEqual([])
+    session.detach()
+  })
+
+  it('the record\'s watermark was written but the result\'s fact was not: the turn is read again and said once', async () => {
+    own.hostKey = '__local__'
+    const sid = 'jr-reverse-window'
+    const { watermark, end } = seedMidTurn(sid, 6113)
+    setToldLines((s) => (s === sid ? { v: watermark } : undefined))
+    const results = resultsOf(sid)
+    const session = await attach(sid, 6113, end)
+    expect(lastAttach(sid)).toBe(watermark)
+    await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
+    session.detach()
+  })
+
+  it('a CLI the daemon resumed itself while the service was down (its row stopped, a stale pid) is attached with the runtime\'s pid, and its turn judged', async () => {
+    own.hostKey = '__local__'
+    const sid = 'jr-resumed'
+    const { watermark } = seedMidTurn(sid, 6114)
+    const { task } = await addTask({ title: 'Resumed by the daemon' })
+    await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+    await createSessionRecord(sid, task.id, 'proj', '/tmp', { pid: 1, outputFile: `remote://__local__/${sid}`, messageCount: 1 })
+    await updateSessionRecord(sid, { judge: 'host', host: '__local__', process_status: 'stopped', consumedOffset: watermark } as Partial<SessionRecord>)
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ judge: 'host', host: '__local__', process_status: 'stopped' })
+    const results = resultsOf(sid)
+    const runner = new SessionRunner(MOCK_CLI)
+    runner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
+    const session = await runner.attachOwnLive(sid, 6114)
+    expect(session, 'attached').toBeTruthy()
+    expect(lastAttach(sid)).toBe(watermark)
+    await vi.waitFor(() => expect(results).toEqual(['echo: ROUND two']), { timeout: 5_000 })
+    session!.detach()
+  })
+
   it('a turn that ended while no runner read it is replayed from the last judged turn end and judged once', async () => {
     own.hostKey = '__local__'
     const sid = 'jr-own-gap'

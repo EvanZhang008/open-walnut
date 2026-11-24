@@ -24,7 +24,8 @@
  * test reads the running turn, then releases it): "echo: released <path>". An interrupt
  * control request (Walnut's Stop) ends such a held turn at once: "echo: interrupted".
  * "please stream <n> lines at <r> per second" writes a busy turn's output (streamLines, for
- * scripts/bench-host-judged-sessions.mts): "echo: streamed <what it wrote, by kind>".
+ * scripts/bench-host-judged-sessions.mts): "echo: streamed <what it wrote, by kind>". "...then hold
+ * until <path>" holds the turn after that output, as above: "echo: streamed <...> then released".
  *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
@@ -137,15 +138,24 @@ function runNext() {
     })
     return
   }
-  const hold = /please hold until (\/\S+)/i.exec(words)
-  if (hold) {
+  const holdUntil = (gatePath, reply) => {
     const gate = setInterval(() => {
-      if (!fs.existsSync(hold[1])) return
+      if (!fs.existsSync(gatePath)) return
       clearInterval(gate)
       stopHeld = null
-      finish(`echo: released ${hold[1]}`)
+      finish(reply)
     }, 50)
     stopHeld = () => { clearInterval(gate); stopHeld = null; finish('echo: interrupted') }
+  }
+  // "please stream <n> lines at <r> per second then hold until <path>": a busy turn's output, then held.
+  const streamHold = /please stream (\d+) lines at (\d+) per second then hold until (\/\S+)/i.exec(words)
+  if (streamHold) {
+    streamLines(Number(streamHold[1]), Number(streamHold[2]), (n) => holdUntil(streamHold[3], `echo: streamed ${JSON.stringify(n)} then released`))
+    return
+  }
+  const hold = /please hold until (\/\S+)/i.exec(words)
+  if (hold) {
+    holdUntil(hold[1], `echo: released ${hold[1]}`)
     return
   }
   const stream = /^please stream (\d+) lines at (\d+) per second$/i.exec(words.trim())

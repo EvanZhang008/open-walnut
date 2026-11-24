@@ -15,7 +15,7 @@
  * Files in `dir`:
  *   facts-<walnutId>.ndjson      one record per line, append-only; rewritten only by compaction
  *                                (tmp + rename)
- *   facts-<walnutId>.state.json  {v:1, logId, acked, permit, sseq: {sid: last}}
+ *   facts-<walnutId>.state.json  {v:1, logId, acked, permit, sseq: {sid: last}, told: {sid: line}}
  *
  * Rules this file owns:
  *   - a record is durable (fsynced) before anyone hears of it (`onDurable`), so a leader never
@@ -27,7 +27,11 @@
  *     what it has not, stands one `turn-summary` record for the tool facts of each finished turn
  *     and one merged `row` record for its row patches; facts of a turn still running are kept;
  *     a session's `drop` record (the leader deleted it) stands for all of that session before it;
- *   - a torn last line (a crash in a write) is cut at open.
+ *   - a torn last line (a crash in a write) is cut at open;
+ *   - `toldLine(sid)`: the furthest CLI output line a durable fact of the session came from, so the
+ *     host's runner, attaching again after a restart, reads on from exactly where the leader was told
+ *     (host-judged-lines.ts): rebuilt from the records at open and kept in the state (compaction
+ *     drops records, never it), so it is never ahead of what a crash could lose, nor behind it.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -73,7 +77,27 @@ export interface FactLogOptions {
  * epoch in `permit` (the field an older build wrote and reads: its one number was the epoch) and
  * its permit number beside it (absent in an older file: 0).
  */
-interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number> }
+interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number>; told?: Record<string, ToldLine> }
+
+/** A CLI output line a fact came from: its stream file's epoch (when known) and its end offset. */
+export interface ToldLine { epoch?: string; v: number }
+
+/** `seen` with a durable fact's line folded in: a later line of the same file, or the first line of a new file. */
+export function foldTold(seen: ToldLine | undefined, line: ToldLine | undefined): ToldLine | undefined {
+  if (!line || !Number.isSafeInteger(line.v) || line.v < 0) return seen
+  if (!seen || (line.epoch && seen.epoch && line.epoch !== seen.epoch) || line.v > seen.v) return line.epoch ? { epoch: line.epoch, v: line.v } : { v: line.v }
+  return seen
+}
+
+function toldOf(raw: unknown): Record<string, ToldLine> {
+  const out: Record<string, ToldLine> = {}
+  if (!raw || typeof raw !== 'object') return out
+  for (const [sid, t] of Object.entries(raw as Record<string, unknown>)) {
+    const l = t as Partial<ToldLine> | null
+    if (l && Number.isSafeInteger(l.v) && (l.v as number) >= 0) out[sid] = typeof l.epoch === 'string' ? { epoch: l.epoch, v: l.v as number } : { v: l.v as number }
+  }
+  return out
+}
 
 const SAFE_ID = /^[A-Za-z0-9_.-]{1,128}$/
 /**
@@ -116,7 +140,7 @@ export class FactLog {
       const raw = JSON.parse(await fsp.readFile(stateFile, 'utf8')) as Partial<LogState>
       if (raw?.v === 1 && typeof raw.logId === 'string') {
         const permitNumber = Number(raw.permitNumber) || 0
-        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, ...(permitNumber > 0 ? { permitNumber } : {}), sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {} }
+        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, ...(permitNumber > 0 ? { permitNumber } : {}), sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {}, told: toldOf(raw.told) }
       }
     } catch { /* a new log */ }
     const { records, validBytes, totalBytes } = await readRecords(file)
@@ -125,11 +149,14 @@ export class FactLog {
       await fsp.truncate(file, validBytes)
       o.log?.('warn', 'fact log: cut a torn last line', { walnutId: o.walnutId, cut: totalBytes - validBytes })
     }
-    if (!state) state = { v: 1, logId: crypto.randomBytes(8).toString('hex'), acked: 0, permit: 0, sseq: {} }
+    if (!state) state = { v: 1, logId: crypto.randomBytes(8).toString('hex'), acked: 0, permit: 0, sseq: {}, told: {} }
+    const told = state.told ??= {}
     let head = state.acked
     for (const r of records) {
       head = Math.max(head, r.seq)
       state.sseq[r.sid] = Math.max(state.sseq[r.sid] ?? 0, r.sseq)
+      const t = foldTold(told[r.sid], r.line)
+      if (t) told[r.sid] = t
     }
     const log = new FactLog(o, state, head, records[0]?.seq ?? head + 1, validBytes)
     await log.saveState()
@@ -154,6 +181,12 @@ export class FactLog {
   onDurable(cb: (recs: FactRecord[]) => void): () => void {
     this.listeners.add(cb)
     return () => { this.listeners.delete(cb) }
+  }
+
+  /** The furthest CLI output line a durable fact of `sid` came from (see the header), or undefined. */
+  toldLine(sid: string): ToldLine | undefined {
+    const t = this.state.told?.[sid]
+    return t ? { ...t } : undefined
   }
 
   /** The next sseq this session's next fact takes, without taking it. */
@@ -265,6 +298,11 @@ export class FactLog {
     if (this.firstSeq > this.durableHead) this.firstSeq = batch[0].full.seq
     this.durableHead = batch[batch.length - 1].full.seq
     const recs = batch.map((b) => b.full)
+    const told = this.state.told ??= {}
+    for (const r of recs) {
+      const t = foldTold(told[r.sid], r.line)
+      if (t) told[r.sid] = t
+    }
     for (const cb of this.listeners) {
       try { cb(recs) } catch (err) {
         this.o.log?.('warn', 'fact log: a listener threw', { error: err instanceof Error ? err.message : String(err) })
