@@ -615,7 +615,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       return
     }
 
-    // The hosts offered their one Walnut service (providers/service-launcher-flag.ts): host keys, or [] / null for none.
+    // The only hosts offered their one Walnut service (providers/service-launcher-flag.ts): host keys, [] for none,
+    // null to remove the list (every host is offered, but one whose hosts.<name>.service_offer is false).
     const offer: unknown = body.host_service_offer
     if (offer !== undefined && offer !== null && !(Array.isArray(offer) && offer.length <= 200
       && offer.every((k) => typeof k === 'string' && k.length > 0 && k.length <= 200))) {

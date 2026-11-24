@@ -111,16 +111,18 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'service_launcher',
     name: 'A launcher keeps each host\'s daemon running',
-    description: 'Each remote host runs its session daemon under a small launcher script (systemd, launchd or cron starts it): it restarts the daemon when it exits or stops answering, tries each new version first and puts the previous one back when the new one does not start or keeps failing in its first 15 minutes. Settings shows each host\'s current version, the one it would go back to, and the last put-back. Off: hosts keep their plain service, and one that has the launcher gets the plain service back at its next update.',
+    description: 'Each remote host runs its session daemon under a small launcher script (systemd, launchd or cron starts it): it restarts the daemon when it exits or stops answering, tries each new version first and puts the previous one back when the new one does not start or keeps failing in its first 15 minutes. Settings shows each host\'s current version, the one it would go back to, and the last put-back. With it, each host that runs this Walnut\'s server there also runs it and its session daemon as one Walnut service; hosts.<name>.service_offer: false in the config keeps one host on two programs. On unless you turn it off. Off: hosts keep their plain service, and one that has the launcher gets the plain service back at its next update.',
     summary: 'A small launcher restarts each remote host\'s daemon when it stops, and puts the old version back if a new one fails.',
-    default: false,
+    // On by default since the one-service experiments were proven (docs/plan/one-service-every-host.md); a stored false keeps it off.
+    default: true,
   },
   {
     id: 'host_call_entry',
     name: 'A host\'s calls go through its own Walnut, also while this computer answers',
-    description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls straight to that copy, whether or not this computer is there, instead of through the host\'s daemon socket; and a message between two sessions on that host is delivered by that copy while this computer answers too, in place of the daemon. Sessions already running keep the socket, and a call falls back to it (and a message to this computer) whenever the host\'s copy cannot take it. The answers are the same either way.',
+    description: 'On a host that runs its own copy of Walnut, a session or plugin job started there from now on sends its Walnut calls straight to that copy, whether or not this computer is there, instead of through the host\'s daemon socket; and a message between two sessions on that host is delivered by that copy while this computer answers too, in place of the daemon. Sessions already running keep the socket, and a call falls back to it (and a message to this computer) whenever the host\'s copy cannot take it. The answers are the same either way. On unless you turn it off. Off: every call goes through the host\'s daemon socket, as before.',
     summary: 'Sessions on a host that runs its own Walnut send their calls to that copy, also while this computer answers.',
-    default: false,
+    // On by default since the one-service experiments were proven (docs/plan/one-service-every-host.md); a stored false keeps it off.
+    default: true,
   },
   {
     id: 'change_status',
@@ -244,16 +246,18 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'work_survives_restart',
     name: 'Work on a host survives a restart',
-    description: 'A command an agent runs on a host (host_exec), a plugin\'s script there and an agent such as Codex keep running when Walnut\'s service on that host restarts or updates, and the next service picks each one up where it was: its whole output, its exit code, the turn it was in. Off: they run as before, and an update there waits for them or ends them.',
+    description: 'A command an agent runs on a host (host_exec), a plugin\'s script there and an agent such as Codex keep running when Walnut\'s service on that host restarts or updates, and the next service picks each one up where it was: its whole output, its exit code, the turn it was in. Only hosts whose Walnut is new enough do it; others run them as before. On unless you turn it off. Off: they run as before, and an update there waits for them or ends them.',
     summary: 'Commands, plugin scripts and agents on a host keep running when Walnut\'s service there restarts or updates.',
-    default: false,
+    // On by default since the one-service experiments were proven (docs/plan/one-service-every-host.md); a stored false keeps it off.
+    default: true,
   },
   {
     id: 'in_process_daemon',
     name: 'Sessions run inside Walnut\'s own process',
-    description: 'This computer\'s sessions, host commands and triggers are run by Walnut\'s own process instead of a separate background program: Walnut calls them directly, with nothing between. Running sessions are picked up when you turn this on or off (it applies at the next start of Walnut). It changes nothing on your hosts. Off: a separate background program runs them, as before.',
+    description: 'This computer\'s sessions, host commands and triggers are run by Walnut\'s own process instead of a separate background program: Walnut calls them directly, with nothing between. Running sessions are picked up when you turn this on or off (it applies at the next start of Walnut). It changes nothing on your hosts. On unless you turn it off. Off: a separate background program runs them, as before.',
     summary: 'Walnut runs this computer\'s sessions and triggers itself, not in a separate program. Applies when Walnut next starts.',
-    default: false,
+    // On by default since the one-service experiments were proven (docs/plan/one-service-every-host.md); a stored false keeps it off.
+    default: true,
   },
   {
     id: 'host_runs_sessions',

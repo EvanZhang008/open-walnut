@@ -336,7 +336,7 @@ file, with its way out); live: `tests/fleet/host-lost.fleet.ts`.
 
 ## Work survives a daemon restart (experiment `work_survives_restart`)
 
-With the experiment on and a daemon that names the capability, work started on a host outlives the
+With the experiment on (its default since 2026-11-24) and a daemon that names the capability, work started on a host outlives the
 daemon that started it, and the next daemon follows it. The known exceptions, where the code picks
 the safer side or says it does not know:
 
@@ -432,7 +432,7 @@ before. The backup writer keeps an existing `local/backup/machine-id` and uses t
 where none exists. Known limit: the id is a file in the account's home, not read from the system, so a
 machine cloned from a disk image of another (a VM template, a restored home) carries the same id.
 Walnut then counts the two as one machine: their aliases join into one row, usage reads one of them,
-and naming one in `host_service_offer` offers the other too (the one-service lock is not affected: it
+and the offer of the one Walnut service to one of them (or `service_offer: false` on one) goes for the other too (the one-service lock is not affected: it
 is a lock per machine and daemon dir); the id is also the holder id of a switchable leader's write
 permission, so two clones read as one holder there. Walnut does not tell clones apart by a second fact:
 the facts that would (the host name, a disk id, `/etc/machine-id`) also change on one machine in
@@ -487,9 +487,10 @@ empty). The served record (`daemon.serves.json`) keys the home the Walnut speaks
 
 ## The Walnut service on a host
 
-Behind the experiment `service_launcher` (off by default) and the config list `host_service_offer`, a
-host can run its session daemon and one Walnut's follower server as ONE process: the Walnut service.
-A host not in the list runs two programs, the daemon and the follower child it starts, as before.
+With the experiment `service_launcher` (on by default) and the offer on for the host (every host,
+unless the config keeps one on two programs, below), a host can run its session daemon and one
+Walnut's follower server as ONE process: the Walnut service. A host kept off the offer runs two
+programs, the daemon and the follower child it starts, as before.
 
 **One process.** The launcher still runs `<install root>/versions/<sha>/<file> --service`, the same
 command line. That entry first reads `<install root>/service-mode.json` (`src/binary/service-entry.ts`,
@@ -607,10 +608,11 @@ Walnut's update is told `not_service_owner` and carries the mode over to the new
 that serves as this Walnut's service, the host-server manager starts no separate follower there, and
 the hosts page and Settings say "Walnut service" (only for this Walnut's own: `servesThisWalnut`).
 
-The offer is per host: a host gets it only while its key is in `host_service_offer`, read live from
-the config (`hostServiceOfferWanted(hostKey)` in `src/providers/service-launcher-flag.ts`, the one
-function every part of the offer reads), and a host taken out of the list goes back to two programs at
-its next update. `in_process_daemon`, which runs the Mac's own sessions in process, offers no host
+The offer is per host, read live from the config (`hostServiceOfferWanted(hostKey)` in
+`src/providers/service-launcher-flag.ts`, the one function every part of the offer reads): every host
+by default, a host the config keeps off it goes back to two programs at its next update. This
+computer's own daemon (`__local__`) is never offered it, and a follower never offers anything (the
+offer's config is not in its copy). `in_process_daemon`, which runs the Mac's own sessions in process, offers no host
 anything (2026-11-23: with it on, every host under the launcher was offered at its next update, a
 macOS host that had never run the service among them, and no host could be put back alone).
 `WALNUT_HOST_SERVICE_OFFER=1|0` decides the offer alone for one process. A switch whose update ran is recorded per host and build
@@ -626,16 +628,20 @@ work: its hello names no Walnut, and no command in `LEADER_ONLY_COMMANDS` (leade
 host copy, triggers, hooks, bridge, skills, servers, jobs, secrets, the network, task-dir sweeps)
 leaves it (`tests/providers/replica-own-sessions-link.test.ts`).
 
-**Offering chosen hosts only: `host_service_offer`.** A leader config item (not an experiment),
-`host_service_offer: [<host key>, ...]`, the keys of `hosts`, set with `PUT /api/config`. A host in
-the list is offered the service, whatever `in_process_daemon` says (still with `service_launcher` on),
-and gets all of the offer: the walnut file staged in its slot, `--serve`, and its Walnut Health
-items. The list turns nothing else on: with `in_process_daemon` off the Mac's own runtime stays a
-program, and home-move declarations and same-machine aliases stay off (so move the data dir only with the host out of the
-list, or the moved Walnut cannot switch the old home's service back). A host taken out of the list
-gets `--no-serve` at its next update. An absent or empty list changes nothing. An older leader keeps
-the key: config reads and writes carry top-level keys they do not know. The item is temporary, until
-the step that removes the old two-program path on a host.
+**Keeping one host on two programs: `hosts.<name>.service_offer` and `host_service_offer`.** Leader
+config items (not experiments), read in this order by `serviceOfferFor`:
+`hosts.<name>.service_offer: false` keeps that host on two programs (true offers it); while a
+`host_service_offer: [<host key>, ...]` list is there (the keys of `hosts`, set with `PUT /api/config`,
+kept from when the offer went to chosen hosts only), only the hosts it names are offered, and `[]`
+offers none; with neither, every host is. Two config names of one machine get one answer, a false of
+either wins. An offered host gets all of the offer, whatever `in_process_daemon` says (still with
+`service_launcher` on): the walnut file staged in its slot, `--serve`, and its Walnut Health items. The
+offer turns nothing else on: with `in_process_daemon` off the Mac's own runtime stays a program, and
+home-move declarations and same-machine aliases stay off (so move the data dir only with the host kept
+off the offer, or the moved Walnut cannot switch the old home's service back). A host the config takes
+the offer from gets `--no-serve` at its next update. An older leader keeps both keys: config reads and
+writes carry keys they do not know. Both are temporary, until the step that removes the old
+two-program path on a host.
 
 **Upgrade and rollback.** An update with `--serve` stages the walnut file, proves it boots as a
 service in throwaway dirs (`daemon-boot-proof.ts`), writes the mode file naming that version, and
@@ -674,7 +680,7 @@ place (`src/core/session-channel/switch.ts`):
 
 The switch alone moves nothing: a host takes a session only from its one Walnut service (the
 follower and the session runtime in one process), which a host runs only when the leader offers it
-(`service_launcher` and `host_service_offer`, below). A host on the plain daemon keeps today's path
+(`service_launcher` and the per-host offer, below). A host on the plain daemon keeps today's path
 whatever the switch says. An older release reads the unset experiment as unknown: 0.6.37 has no
 session channel at all, and judges every session itself (the downgrade in
 `docs/plan/one-service-every-host.md`). A host replica with no config copy yet reads the switch as off

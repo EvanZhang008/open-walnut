@@ -161,8 +161,10 @@ describe('serviceModeWantNow', () => {
   })
 })
 
-// The host offer is the config list host_service_offer, read live, per host; neither in_process_daemon
-// nor the per-process switch of this computer's own runtime (WALNUT_IN_PROCESS_DAEMON) offers a host anything.
+// The host offer is read live, per host, from the leader's config: every host by default, a host the
+// config keeps off it (hosts.<name>.service_offer: false, or a list host_service_offer that leaves it out)
+// not; neither in_process_daemon nor the per-process switch of this computer's own runtime
+// (WALNUT_IN_PROCESS_DAEMON) changes it.
 describe('hostServiceOfferWanted', () => {
   const KEYS = ['WALNUT_HOST_SERVICE_OFFER', 'WALNUT_IN_PROCESS_DAEMON'] as const
   let saved: Record<string, string | undefined> = {}
@@ -179,10 +181,13 @@ describe('hostServiceOfferWanted', () => {
   }
   const withExperiment = (on: boolean) => withConfig({ experimental: { in_process_daemon: on } })
 
-  it('this process running its own runtime in process (WALNUT_IN_PROCESS_DAEMON=1) offers no host anything', async () => {
+  it('this process running its own runtime in process (WALNUT_IN_PROCESS_DAEMON) does not change the offer', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
-    process.env.WALNUT_IN_PROCESS_DAEMON = '1'
-    await expect((await withExperiment(false))('devbox')).resolves.toBe(false)
+    for (const env of ['1', '0']) {
+      process.env.WALNUT_IN_PROCESS_DAEMON = env
+      await expect((await withConfig({ experimental: { in_process_daemon: false }, host_service_offer: [] }))('devbox'), env).resolves.toBe(false)
+      await expect((await withExperiment(false))('devbox'), env).resolves.toBe(true)
+    }
   })
 
   // 2026-11-23: in_process_daemon on offered every host under the launcher (a macOS host that had never
@@ -204,14 +209,59 @@ describe('hostServiceOfferWanted', () => {
     await expect((await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: ['devbox'] }))('devbox')).resolves.toBe(false)
   })
 
-  it('no list, an empty one or a hand-edited non-list offers no host, whatever the experiment says', async () => {
+  // The default flip (2026-11-24): with no list every host is offered; a list kept from when the offer
+  // went to chosen hosts only keeps that choice ([] offers none). A hand-edited non-list is no list.
+  it('no list (or a hand-edited non-list) offers every host; an empty list offers none, whatever the experiment says', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
-    for (const list of [undefined, [], 'devbox', { devbox: true }, null]) {
+    for (const list of [undefined, 'devbox', { devbox: true }, null]) {
       for (const on of [false, true]) {
         const cfg = { experimental: { in_process_daemon: on }, ...(list === undefined ? {} : { host_service_offer: list }) }
-        await expect((await withConfig(cfg))('devbox'), `${JSON.stringify(list)} ${on}`).resolves.toBe(false)
+        await expect((await withConfig(cfg))('devbox'), `${JSON.stringify(list)} ${on}`).resolves.toBe(true)
       }
     }
+    await expect((await withConfig({ host_service_offer: [] }))('devbox')).resolves.toBe(false)
+  })
+
+  it('hosts.<name>.service_offer keeps one host on two programs, or offers it past a list', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ hosts: { devbox: { service_offer: false }, 'gpu-box': {}, lab: { service_offer: 'no' } } })
+    await expect(offer('devbox')).resolves.toBe(false)
+    await expect(offer('gpu-box')).resolves.toBe(true)
+    // Only a boolean counts.
+    await expect(offer('lab')).resolves.toBe(true)
+    const listed = await withConfig({ host_service_offer: ['devbox'], hosts: { devbox: { service_offer: false }, 'gpu-box': { service_offer: true }, lab: {} } })
+    await expect(listed('devbox')).resolves.toBe(false)
+    await expect(listed('gpu-box')).resolves.toBe(true)
+    await expect(listed('lab')).resolves.toBe(false)
+  })
+
+  it('this computer\'s own daemon is never offered it, and a follower offers nothing', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    await expect((await withConfig({}))('__local__')).resolves.toBe(false)
+    await expect((await withConfig({ host_service_offer: ['__local__'] }))('__local__')).resolves.toBe(false)
+    vi.doMock('../../src/core/server-role.js', async (orig) => ({ ...(await orig<object>()), isFollower: () => true }))
+    try {
+      await expect((await import('../../src/providers/service-launcher-flag.js')).hostServiceOfferWanted('devbox')).resolves.toBe(false)
+    } finally {
+      vi.doUnmock('../../src/core/server-role.js')
+    }
+  })
+
+  // Two names of one machine get one answer: a false of either wins, and while a name with a choice of its
+  // own may be this machine (its id not known yet) and its choice would change the answer: not sure (null).
+  it('an opt-out of another name of the same machine keeps this name off too', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ hosts: { devbox: { service_offer: false }, 'devbox-alias': {}, 'gpu-box': {}, newbox: {} } })
+    const ids: Record<string, string | null> = { devbox: 'm-1', 'devbox-alias': 'm-1', 'gpu-box': 'm-2', newbox: null }
+    const idOf = (k: string) => ids[k] ?? null
+    await expect(offer('devbox-alias', idOf)).resolves.toBe(false)
+    await expect(offer('gpu-box', idOf)).resolves.toBe(true)
+    await expect(offer('newbox', idOf)).resolves.toBeNull()
+    ids.devbox = null
+    await expect(offer('gpu-box', idOf)).resolves.toBeNull()
+    // No opt-out anywhere: every name is offered, known machine or not.
+    const all = await withConfig({ hosts: { devbox: {}, newbox: {} } })
+    await expect(all('newbox', idOf)).resolves.toBe(true)
   })
 
   it('the list switches on nothing else: this computer\'s own runtime stays a program', async () => {

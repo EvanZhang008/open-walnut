@@ -1837,6 +1837,12 @@ export interface Config {
      *  it on; absent: the experiment decides. Sessions a host already runs keep reporting either way.
      *  Config only (no Settings control). An older Walnut reads past it. */
     runs_sessions?: boolean;
+    /** Is this host offered its one Walnut service (src/providers/service-launcher-flag.ts
+     *  serviceOfferFor)? false: it keeps the session daemon and its Walnut server as two programs
+     *  (one that runs as the service is switched back at its next update); true: offered even when a
+     *  `host_service_offer` list leaves it out; absent: offered unless such a list leaves it out.
+     *  Config only (no Settings control). An older Walnut reads past it. */
+    service_offer?: boolean;
     /** This host's own engine settings, over the global `engines` for a session that runs here.
      *  Only `codex.provider` today (src/providers/codex-engine-config.ts codexProviderForPlace,
      *  docs/reference/codex-engine.md): a host whose model endpoint is not the global one's
@@ -1861,9 +1867,10 @@ export interface Config {
   hosts_warmup?: {
     enabled?: boolean;
   };
-  /** The hosts (keys of `hosts`) this leader offers their one Walnut service to, one by one, whatever
-   *  `in_process_daemon` says (src/providers/service-launcher-flag.ts hostServiceOfferWanted). Absent
-   *  or empty: no host is offered it. Temporary, until the old two-program path on a host is removed. */
+  /** Kept from when the one Walnut service went to chosen hosts only (src/providers/service-launcher-flag.ts
+   *  serviceOfferFor): while a list is here, only the hosts it names (keys of `hosts`) are offered it, and
+   *  [] offers none. Absent: every host is, except one whose `hosts.<name>.service_offer` is false.
+   *  Temporary, until the old two-program path on a host is removed. */
   host_service_offer?: string[];
   /** Found hosts (core/hosts/found-hosts.ts): set once the server decided the found
    *  hosts an older Walnut left; from then on a newly found host waits for the

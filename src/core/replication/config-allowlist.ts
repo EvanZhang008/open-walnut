@@ -218,6 +218,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     connect_by: 'who gave that answer, read only where the Mac warms its hosts',
     not_offered: 'why the Mac no longer offers a found host (it is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
     runs_sessions: 'the leader decides where a start goes; the copy says the hosts turned on as its own row hosts_run_sessions (named in the hosts row, an older replica would refuse the whole row)',
+    service_offer: 'the leader decides which hosts it offers their one Walnut service to (named in the hosts row, an older replica would refuse the whole row)',
     engines: 'copied as its own row host_engines (named in the hosts row, an older replica would refuse the whole row)',
   },
   stt: {

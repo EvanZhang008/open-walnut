@@ -38,6 +38,7 @@ export const NET_ROW_FIELD_WRITER = {
   shell_setup: 'person',
   keep: 'person',
   runs_sessions: 'person',
+  service_offer: 'person',
   engines: 'person',
   discovered: 'own-path',
   connect: 'own-path',
@@ -60,6 +61,7 @@ export const PERSON_FIELD_OK: { readonly [K in PersonField]: (v: unknown) => boo
   capabilities: (v) => Array.isArray(v) && v.every((t) => typeof t === 'string'),
   keep: (v) => typeof v === 'object' && v !== null && !Array.isArray(v),
   runs_sessions: (v) => typeof v === 'boolean',
+  service_offer: (v) => typeof v === 'boolean',
   // The host's own engine settings, read by the same rule a start reads them (a wrong provider is refused here).
   engines: (v) => typeof v === 'object' && v !== null && !Array.isArray(v) && hostEnginesValid(v),
 }

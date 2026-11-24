@@ -18,44 +18,78 @@ export async function serviceLauncherWanted(): Promise<boolean> {
 }
 
 /**
- * Does this leader offer this host its one Walnut service (one-service-mode.ts)? Only when the
- * host's key is in the config's `host_service_offer` list: the service on chosen hosts only, one by
- * one. `in_process_daemon` (this computer's own sessions in Walnut's process) offers no host anything
+ * Does this leader offer this host its one Walnut service (one-service-mode.ts)? Every host is, by
+ * default, unless the config keeps it on the old two-program path; `service_launcher` must be on too
+ * (serviceModeWantNow asks it apart). The choice for one host, read in this one place
+ * (serviceOfferFor), in this order:
+ *
+ *   WALNUT_HOST_SERVICE_OFFER=1|0   decides the offer alone for one process (a test, a rehearsal).
+ *   `hosts.<name>.service_offer`    false keeps that host on two programs, true offers it, as
+ *                                   `hosts.<name>.runs_sessions` does for its switch.
+ *   `host_service_offer: [names]`   kept from when the offer went to chosen hosts only: while a list
+ *                                   is there, only the hosts it names are offered, so a config that
+ *                                   chose hosts one by one keeps its choice. Absent: every host.
+ *
+ * Never this computer's own daemon (`__local__`) and never from a follower (a replica, the companion,
+ * a host's service): the offer is the leader's word, and the list and the per-host choice are not in
+ * a follower's config copy (replication/config-allowlist.ts), so a follower would read "every host".
+ *
+ * `in_process_daemon` (this computer's own sessions in Walnut's process) offers no host anything
  * (2026-11-23: with it on, every host under the launcher was offered at its next update, a macOS host
  * that had never run the service among them, and taking a host out of the list changed nothing, so
- * no host could be put back alone while this computer kept its own runtime in process). The list is
- * temporary, until the old two-program path on a host is removed. `service_launcher` must be on
- * too (serviceModeWantNow asks it apart).
- *
- * Every decision of the offer for a host reads it here, from the config on each check, never
- * through inProcessDaemonWanted(), which is this computer's own runtime and decided once per process.
- * A host taken out of the list is switched back at its next update. WALNUT_HOST_SERVICE_OFFER=1 or 0 decides the offer alone for one process.
+ * no host could be put back alone while this computer kept its own runtime in process). Every
+ * decision of the offer for a host reads it here, from the config on each check, never through
+ * inProcessDaemonWanted(), which is this computer's own runtime and decided once per process. A host
+ * the config takes the offer from is switched back at its next update.
  */
 export async function hostServiceOfferWanted(hostKey: string, machineIdOf?: (hostKey: string) => string | null): Promise<boolean | null> {
   const forced = process.env.WALNUT_HOST_SERVICE_OFFER
   if (forced === '1' || forced === '0') return forced === '1'
+  if (hostKey === '__local__') return false
   try {
-    const { getConfig } = await import('../core/config-manager.js')
-    const config = await getConfig()
-    // A hand-edited file may hold anything here: only a list of names counts.
-    const listed: unknown = config.host_service_offer
-    if (!Array.isArray(listed)) return false
-    if (listed.includes(hostKey)) return true
-    // The list names config entries, and two entries can be one machine (two names for one box):
-    // a name of the same machine (the same hello machine id) counts, and while a listed name's
-    // machine is not known yet the answer is "not sure", so the box is never switched back and forth.
-    const others = listed.filter((k): k is string => typeof k === 'string' && k !== hostKey)
-    if (others.length === 0 || !machineIdOf) return false
-    const mine = machineIdOf(hostKey)
-    if (!mine) return null
-    let unknown = false
-    for (const k of others) {
-      const theirs = machineIdOf(k)
-      if (theirs === mine) return true
-      if (!theirs) unknown = true
-    }
-    return unknown ? null : false
+    const [{ getConfig }, { isFollower }] = await Promise.all([import('../core/config-manager.js'), import('../core/server-role.js')])
+    if (isFollower()) return false
+    return serviceOfferFor(await getConfig(), hostKey, machineIdOf)
   } catch {
     return false
   }
+}
+
+type OfferConfig = { hosts?: Record<string, unknown> | null; host_service_offer?: unknown }
+
+/**
+ * The offer for one host from the leader's config (pure). Two entries can be one machine (two names
+ * for one box, the same hello machine id): the machine gets one answer, a false of any of its names
+ * wins, and while a name with a choice of its own may be this machine (its id not known yet) and its
+ * choice would change the answer, the answer is "not sure" (null), so the box is never switched back
+ * and forth.
+ */
+export function serviceOfferFor(config: OfferConfig, hostKey: string, machineIdOf?: (hostKey: string) => string | null): boolean | null {
+  // A hand-edited file may hold anything here: only a list of names counts.
+  const rawList = config.host_service_offer
+  const listed = Array.isArray(rawList) ? rawList.filter((k): k is string => typeof k === 'string') : null
+  const hosts = config.hosts && typeof config.hosts === 'object' ? config.hosts : {}
+  const choiceOf = (k: string): boolean | undefined => {
+    const own = (hosts[k] as { service_offer?: unknown } | null | undefined)?.service_offer
+    if (typeof own === 'boolean') return own
+    return listed?.includes(k) ? true : undefined
+  }
+  // No list: every host; a list kept from before: only the hosts it names.
+  const fallback = listed === null
+  const own = choiceOf(hostKey)
+  if (own === false) return false
+  const others = [...new Set([...Object.keys(hosts), ...(listed ?? [])])].filter((k) => k !== hostKey && choiceOf(k) !== undefined)
+  if (others.length === 0 || !machineIdOf) return own ?? fallback
+  const mine = machineIdOf(hostKey)
+  let decided: boolean | undefined = own
+  const maybe: boolean[] = []
+  for (const k of others) {
+    const theirs = mine ? machineIdOf(k) : null
+    const c = choiceOf(k) as boolean
+    if (mine && theirs === mine) decided = decided === false || c === false ? false : true
+    else if (!mine || !theirs) maybe.push(c)
+  }
+  const now = decided ?? fallback
+  const would = (c: boolean): boolean => decided === false || c === false ? false : true
+  return maybe.every((c) => would(c) === now) ? now : null
 }

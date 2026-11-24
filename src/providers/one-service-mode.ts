@@ -7,8 +7,8 @@
  * `--no-serve <home>`): a wanted mode that differs from what the hello says is an update due,
  * with the same holds and probation as a new build.
  *
- * Offered only with the experiment service_launcher on and, for the host, the host named in the
- * config's `host_service_offer` (read live, per host: service-launcher-flag.ts
+ * Offered only with the experiment service_launcher on and the offer on for the host (every host
+ * unless the config keeps it on two programs, read live, per host: service-launcher-flag.ts
  * hostServiceOfferWanted), to a host whose
  * daemon already runs under the launcher, that runs this Walnut's full follower (`web --replica`,
  * the spec the service starts from), and that can take this build's walnut file (the daemon-only
@@ -147,9 +147,9 @@ export interface ServiceModeInputs {
   /** The switch this host was last asked (ServiceModeAsk): read only when the mode is decided. */
   modeAsked(): Promise<ServiceModeAsk | null>
   /**
-   * The offer for this host: the host in `host_service_offer` (service-launcher-flag.ts
-   * hostServiceOfferWanted). null: a listed name may be this same machine and its id is not known yet,
-   * so the mode is left as it is (never switched back on a guess).
+   * The offer for this host (service-launcher-flag.ts hostServiceOfferWanted). null: a name with a
+   * choice of its own may be this same machine and its id is not known yet, so the mode is left as it
+   * is (never switched back on a guess).
    */
   offerWanted(): Promise<boolean | null>
   launcherWanted(): Promise<boolean>
