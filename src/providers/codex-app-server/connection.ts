@@ -37,6 +37,7 @@ import { CodexGoalState, GOAL_CONTINUATION_TEXT, NEXT_TURN_GRACE_MS, REPEAT_PAUS
 import type { CodexModelRow } from '../codex-model-probe.js'
 import { endpointServedModels, keepServedModels, providerFromCodexConfig } from '../codex-endpoint-models.js'
 import type { AcpMcpServer } from '../acp-worker/protocol.js'
+import { endpointWords, retryKindOf, watchTickMs } from '../engine-turn-watch.js'
 
 const INIT_TIMEOUT_MS = 30_000
 const THREAD_TIMEOUT_MS = 120_000
@@ -44,7 +45,6 @@ const TURN_START_TIMEOUT_MS = 60_000
 const INTERRUPT_TIMEOUT_MS = 10_000
 const MODEL_LIST_TIMEOUT_MS = 20_000
 const MAX_MODEL_PAGES = 50
-const WATCHDOG_TICK_MS = 15_000
 const STEER_SETTLE_MS = 1_500
 /** Follow-up Codex turns one Walnut turn may run for steers Codex left unanswered. */
 const MAX_CONTINUATIONS = 2
@@ -54,20 +54,10 @@ const TERMINATE_BUDGET_MS = 3_000
 /** Reading what runs on at a turn's end: the turn's end waits on it. */
 const BACKGROUND_LIST_TIMEOUT_MS = 5_000
 
-/** No event at all for this long while a turn runs and nothing is in progress: the turn is stuck. */
-export function stallIdleMs(env: NodeJS.ProcessEnv): number {
-  const n = Number(env.WALNUT_CODEX_STALL_MS)
-  return Number.isFinite(n) && n > 0 ? n : 15 * 60_000
-}
 /** How long a turn/steer may go unanswered (a test shortens it). */
 function steerTimeoutMs(env: NodeJS.ProcessEnv): number {
   const n = Number(env.WALNUT_CODEX_STEER_TIMEOUT_MS)
   return Number.isFinite(n) && n > 0 ? n : 30_000
-}
-/** The same while a command or tool call runs (a quiet build or test run is no stall). */
-export function stallItemMs(env: NodeJS.ProcessEnv): number {
-  const n = Number(env.WALNUT_CODEX_STALL_ITEM_MS)
-  return Number.isFinite(n) && n > 0 ? n : 90 * 60_000
 }
 
 export interface AcpClientHandler {
@@ -164,9 +154,7 @@ export class CodexDirectConnection {
       capabilities: { experimentalApi: true, requestAttestation: false },
     }, INIT_TIMEOUT_MS)
     this.rpc.notify('initialized')
-    // A short stall limit (tests) is checked as often as it needs.
-    const tick = Math.max(50, Math.min(WATCHDOG_TICK_MS, Math.floor(stallIdleMs(this.env) / 4)))
-    this.watchdog = setInterval(() => this.checkStall(), tick)
+    this.watchdog = setInterval(() => this.checkStall(), watchTickMs(this.env))
     this.watchdog.unref?.()
     return {
       protocolVersion: 1,
@@ -503,7 +491,7 @@ export class CodexDirectConnection {
   }
 
   private touch(): void {
-    if (this.turn) this.turn.lastEventAt = Date.now()
+    this.turn?.watch.progress()
   }
 
   private onNotification(method: string, params: unknown): void {
@@ -530,7 +518,10 @@ export class CodexDirectConnection {
     if (turnId && (stale || !turn || (turn.id && !turn.owns(turnId)))) {
       if (method !== 'thread/tokenUsage/updated') return
     }
-    this.touch()
+    // A retry notice proves Codex is alive, never that the turn gets anywhere: it has its own limit
+    // (2026-11-24: "Reconnecting... waiting for network" every minute held a turn open for 7 hours).
+    if (method === 'error' && params.willRetry === true) turn?.watch.retried(retryKindOf(params.error))
+    else this.touch()
     if (turn && isRecord(params.item)) {
       if (method === 'item/started') turn.noteItemStarted(params.item)
       else if (method === 'item/completed') turn.noteItemCompleted(params.item)
@@ -680,14 +671,14 @@ export class CodexDirectConnection {
   private checkStall(): void {
     const turn = this.turn
     if (!turn || turn.settled || turn.ending || this.approvals.waiting) return
-    const limit = this.events.itemRunning ? stallItemMs(this.env) : stallIdleMs(this.env)
-    const quietMs = Date.now() - turn.lastEventAt
-    if (quietMs < limit) return
-    const minutes = Math.round(quietMs / 60_000)
-    this.settleTurn(turn, { error: new CodexTurnError(
-      `Codex sent nothing for ${minutes} minutes, so Walnut stopped the turn (operation timed out).`,
-      { walnutError: 'turn_stalled' },
-    ) })
+    const verdict = turn.watch.verdict({
+      now: Date.now(), itemRunning: this.events.itemRunning, holding: false, env: this.env,
+      engine: 'Codex', endpoint: endpointWords(providerFromCodexConfig(this.launch.threadConfig)?.base_url),
+    })
+    if (!verdict) return
+    this.settleTurn(turn, { error: new CodexTurnError(verdict.words, verdict.kind === 'turn_stalled'
+      ? { walnutError: 'turn_stalled', walnutWords: verdict.words }
+      : { walnutError: 'retry_exhausted', retryKind: verdict.kind, walnutWords: verdict.words }) })
     // Interrupt it at Codex; one that does not answer is ended with its process.
     const cleanup = this.cancelStalled(turn).finally(() => { if (this.stallCleanup === cleanup) this.stallCleanup = null })
     this.stallCleanup = cleanup

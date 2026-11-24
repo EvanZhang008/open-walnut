@@ -11,6 +11,8 @@
  * `rootTurnId`); both ids are this turn's.
  */
 
+import { TurnWatch } from '../engine-turn-watch.js'
+
 export interface TurnResult { stopReason: string; usage?: Record<string, number> }
 
 /** Items that are not the model's answer: a steer before them is still unanswered. */
@@ -44,7 +46,8 @@ export class LiveTurn {
   /** Resolves once the turn is settled, however it ended. */
   readonly ended: Promise<true>
   private markEndedFn!: () => void
-  lastEventAt = Date.now()
+  /** What the turn did lately, for the stall and retry watchdog (engine-turn-watch.ts). */
+  readonly watch = new TurnWatch()
   usage?: Record<string, number>
   settled = false
   /** The text of every user input Codex reported in this turn (its own and each steer it took). */

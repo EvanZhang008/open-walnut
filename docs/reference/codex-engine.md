@@ -192,10 +192,21 @@ codex-acp adapter's sessions write, so the web and phone apps read both alike. W
   usage limit, rate limit (429), overloaded (503), server error, lost connection, context window
   full, or sign-in needed. The rate limit, overload, server error and lost connection rows are
   retried; the usage limit row waits for its reset. Every request has a deadline, and a turn
-  that sends nothing for 15 minutes (90 while a command runs; `WALNUT_CODEX_STALL_MS` and
-  `WALNUT_CODEX_STALL_ITEM_MS` change them) is stopped. Codex is then asked to end it too, and
+  that sends nothing for 15 minutes (90 while a command runs; `WALNUT_TURN_STALL_MS` and
+  `WALNUT_TURN_STALL_ITEM_MS`, or the older `WALNUT_CODEX_STALL_MS` and
+  `WALNUT_CODEX_STALL_ITEM_MS`, change them) is stopped. Codex's own retry notices ("Reconnecting...
+  waiting for network", an `error` with `willRetry`) do not count as getting anywhere: a turn that
+  keeps retrying for 30 minutes with nothing else (`WALNUT_ENGINE_RETRY_LIMIT_MS`) is stopped too,
+  and its row says so in Walnut's words ("Codex could not reach its model at <base_url> for 30
+  minutes (it retried 28 times by itself), so Walnut stopped the turn (network error)"); the session
+  record keeps those words, so the task's status says why. Codex is then asked to end it too, and
   the next message waits for that; a turn Codex does not end in 10 seconds is ended with its
-  process. A stop that had to end the process says so in the transcript.
+  process. A stop that had to end the process says so in the transcript. The same bound, one policy
+  (`src/providers/engine-turn-watch.ts`), covers a turn through any ACP adapter (the worker's
+  `acp-worker/adapter-turn-watch.ts`, which cancels the adapter's turn and ends an adapter that does
+  not stop) and Claude Code's unattended retry mode (the daemon passes
+  `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS`); `tests/providers/engine-retry-bound.test.ts` fails on
+  an engine or a retry signal with no bound.
 - **Commands left running.** Codex can end its turn while a command it started goes on (a build
   or test run in one of its background terminals), and nothing of Codex's wakes it when that
   command ends. The client asks Codex what still runs at each turn's end

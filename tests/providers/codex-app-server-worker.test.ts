@@ -512,6 +512,47 @@ describe('direct Codex: failures', () => {
     expect(requests('turn/interrupt')).toHaveLength(1)
   })
 
+  // 2026-11-24: Codex retried "Reconnecting... waiting for network" every minute for 7 hours to an
+  // endpoint nothing listened on, and each notice reset the quiet clock (engine-turn-watch.ts).
+  it('a turn Codex keeps retrying is stopped at the retry limit, in words that name the endpoint', async () => {
+    const config = { model_provider: 'lp', model_providers: { lp: { name: 'lp', base_url: 'http://user:secret@127.0.0.1:9/openai/v1/?key=k', wire_api: 'responses' } } }
+    const { w } = await startSession({ WALNUT_ENGINE_RETRY_LIMIT_MS: '500', CODEX_CONFIG: JSON.stringify(config) })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'RETRY_FOREVER' })
+    await waitTurn('c1', 5000)
+    const err = errorRows().find((e) => e.commandId === 'c1')
+    expect(err?.errorKind).toBe('connection')
+    expect(String(err?.message)).toMatch(/^Codex could not reach its model at http:\/\/127\.0\.0\.1:9\/openai\/v1 for \d+ seconds? \(it retried \d+ times by itself\), so Walnut stopped the turn \(network error\)\.$/)
+    expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
+    expect(requests('turn/interrupt')).toHaveLength(1)
+    const next = await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'after the retries' })
+    expect(next.ok, JSON.stringify(next)).toBe(true)
+    await waitTurn('c2')
+    expect(agentText()).toContain('echo: after the retries')
+  })
+
+  it('a turn Codex keeps retrying on a rate limit is a rate_limited row', async () => {
+    const { w } = await startSession({ WALNUT_ENGINE_RETRY_LIMIT_MS: '400' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'RETRY_429' })
+    await waitTurn('c1', 5000)
+    const err = errorRows().find((e) => e.commandId === 'c1')
+    expect(err?.errorKind).toBe('rate_limited')
+    expect(String(err?.message)).toMatch(/^Codex was rate limited by its model for /)
+    expect(classifyTurnError(`${err?.errorKind}: ${err?.message}`)).toBe('retryable')
+  })
+
+  it('a retry streak that recovers inside the limit is not cut, and output keeps a slow turn alive', async () => {
+    const { w } = await startSession({ WALNUT_ENGINE_RETRY_LIMIT_MS: '1500', WALNUT_CODEX_STALL_MS: '400' })
+    await op(w, 'prompt', { commandId: 'c1', walnutMessageId: 'm1', text: 'RETRY_THEN_OK 600' })
+    await waitTurn('c1', 5000)
+    expect(errorRows().find((e) => e.commandId === 'c1')).toBeUndefined()
+    expect(agentText()).toContain('recovered')
+    // Deltas every 50ms for longer than both limits: progress, never a stall.
+    await op(w, 'prompt', { commandId: 'c2', walnutMessageId: 'm2', text: 'SLOW 1800' })
+    await waitTurn('c2', 8000)
+    expect(errorRows().find((e) => e.commandId === 'c2')).toBeUndefined()
+    expect(requests('turn/interrupt')).toHaveLength(0)
+  })
+
   it('a stalled turn Codex does not end after an answered interrupt is ended with its process', async () => {
     const { w } = await startSession({ WALNUT_CODEX_STALL_MS: '400' })
     const pid = ((await op(w, 'getState')).result as WorkerStateSnapshot).adapterPid!

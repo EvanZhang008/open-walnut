@@ -25,7 +25,7 @@ beforeEach(async () => {
 afterEach(() => { bus.unsubscribe('acp-usage-limit-test') })
 
 let seq = 0
-async function run(errorKind: string, opts: { resetsAt?: number; text?: string } = {}) {
+async function run(errorKind: string, opts: { resetsAt?: number; text?: string; message?: string } = {}) {
   const sessionId = `acp-limit-${errorKind}-${++seq}`
   const runtimeId = `rt-${errorKind}-${seq}`
   const commandId = 'acp-prompt:qm-limit'
@@ -48,7 +48,7 @@ async function run(errorKind: string, opts: { resetsAt?: number; text?: string }
     kind: 'acp', ts: 3, source: 'live',
     frame: { method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: opts.text ?? WORDS } } } },
   })
-  line(400, { kind: 'meta', ts: 4, event: { type: 'error', errorKind, message: 'x', commandId, ...(opts.resetsAt ? { resetsAt: opts.resetsAt } : {}) } })
+  line(400, { kind: 'meta', ts: 4, event: { type: 'error', errorKind, message: opts.message ?? 'x', commandId, ...(opts.resetsAt ? { resetsAt: opts.resetsAt } : {}) } })
   line(500, { kind: 'meta', ts: 5, event: { type: 'turn-interrupted', reason: 'worker-crash', commandId } })
   return { sessionId, errors }
 }
@@ -79,5 +79,16 @@ describe('an ACP turn the usage limit refused', () => {
     expect(errors[0].usageLimit).toBeUndefined()
     await vi.waitFor(async () => expect((await getSessionByClaudeId(sessionId))?.process_status).toBe('error'))
     expect((await getSessionByClaudeId(sessionId))?.errorMessage ?? '').not.toContain('usage limit')
+  })
+
+  it('any other failed turn keeps its error words on the record, so the session says why (engine-turn-watch.ts)', async () => {
+    const words = 'Codex could not reach its model at http://127.0.0.1:9/v1 for 30 minutes (it retried 28 times by itself), so Walnut stopped the turn (network error).'
+    const { sessionId, errors } = await run('connection', { text: 'Working on it.', message: words })
+    expect(errors[0].usageLimit).toBeUndefined()
+    await vi.waitFor(async () => {
+      const rec = await getSessionByClaudeId(sessionId)
+      expect(rec?.process_status).toBe('error')
+      expect(rec?.errorMessage).toBe(words)
+    })
   })
 })

@@ -42,6 +42,7 @@ import { matchesUsageLimitText, parseUsageLimitReset } from '../usage-limit-text
 import { ACP_AUTH_ENV, pickAcpAuthMethod } from './adapter-env.js'
 import { TurnTextTail, turnEndFailure } from './executor-error.js'
 import { CodexDirectConnection, type AcpClientHandler } from '../codex-app-server/connection.js'
+import { AdapterTurnWatch, WalnutTurnStop, walnutWordsOf } from './adapter-turn-watch.js'
 import { CodexLaunchError, prepareCodexLaunch } from '../codex-app-server/launch.js'
 import { AppServerRpcError } from '../codex-app-server/rpc.js'
 import { classifyCodexFailure } from '../codex-app-server/errors.js'
@@ -237,6 +238,13 @@ export class AcpWorker {
       adapter.once('error', (e) => reject(<WorkerError>{ kind: 'adapter_spawn_failed', message: e.message }))
     })
     this.adapter = adapter
+    this.turnWatch = new AdapterTurnWatch({
+      env,
+      engine: () => agentNameOf(this.initializeResponse),
+      holding: () => this.pendingPermissions.size > 0,
+      cancel: () => this.providerSessionId && this.conn ? this.conn.cancel({ sessionId: this.providerSessionId }) : Promise.resolve(),
+      kill: () => { if (adapter.exitCode === null && adapter.signalCode === null) adapter.kill('SIGTERM') },
+    })
     adapter.on('exit', () => {
       // Adapter death mid-turn = the turn is gone (no hot reattach exists).
       // A worker is one adapter: without it every later op fails as "protocol"
@@ -293,6 +301,7 @@ export class AcpWorker {
 
   /** The adapter (or the app-server it stood for) is gone: the turn with it, and this worker. */
   private adapterExited(what: string): void {
+    this.turnWatch?.end()
     if (this.turnActive) {
       const commandId = this.turnCommandId ?? undefined
       this.turnActive = false
@@ -347,6 +356,18 @@ export class AcpWorker {
   private backgroundWork: BackgroundTerminal[] = []
   /** The live turn's last agent text: a turn some adapters fail in words (executor-error.ts). */
   private turnTail = new TurnTextTail()
+  /** The stall and retry bound of an adapter's turn (adapter-turn-watch.ts); the direct client watches its own. */
+  private turnWatch: AdapterTurnWatch | null = null
+
+  /** The prompt of an adapter's turn, under its stall and retry bound. */
+  private watchedPrompt<T>(prompt: Promise<T>): Promise<T> {
+    return this.turnWatch ? this.turnWatch.watched(prompt) : prompt
+  }
+
+  /** A turn Walnut stopped at the adapter is still being cancelled there: the next one waits. */
+  private async adapterTurnSettled(): Promise<void> {
+    if (this.turnWatch?.cleanup) await this.turnWatch.cleanup
+  }
 
   /**
    * MCP mounts for session/new + session/load. The SAME list must ride both:
@@ -467,6 +488,7 @@ export class AcpWorker {
     if (params.control === 'self-report') return this.opControlPrompt(params)
     const dup = this.checkDuplicate('prompt', params.commandId)
     if (dup) return dup
+    await this.adapterTurnSettled()
     const conn = this.requireConn()
     if (!this.providerSessionId) throw <WorkerError>{ kind: 'no_session', message: 'no provider session — call newSession/loadSession first' }
     if (this.turnActive || this.controlPrompt) {
@@ -504,10 +526,10 @@ export class AcpWorker {
     // {accepted:true}; turn progress rides the journal.
     let prompt: ReturnType<ClientSideConnection['prompt']>
     try {
-      prompt = conn.prompt({
+      prompt = this.watchedPrompt(conn.prompt({
         sessionId: this.providerSessionId,
         prompt: [{ type: 'text', text: params.text }],
-      })
+      }))
     } catch (error) {
       this.turnActive = false
       this.turnCommandId = null
@@ -548,14 +570,15 @@ export class AcpWorker {
       this.turnCommandId = null
       this.lastEnded = 'turn'
       // Only the error category is safe to persist; provider diagnostics may contain credentials.
-      const kind = this.direct ? classifyDirectRejection(e) : classifyPromptRejection(e)
+      // A turn Walnut stopped (a stall, an engine that kept retrying) carries its own words.
+      const kind = this.direct || e instanceof WalnutTurnStop ? classifyDirectRejection(e) : classifyPromptRejection(e)
       this.reportProviderError('prompt', kind, e)
       // A usage limit's reset is read here, on the host: Codex writes it in the host's local time.
       const resetsAt = kind === 'usage_limit' ? parseUsageLimitReset(rejectionText(e), Date.now()) : undefined
       this.journal.appendMeta({
         type: 'error',
         errorKind: kind,
-        message: safeWorkerErrorMessage(kind),
+        message: walnutWordsOf(e) ?? safeWorkerErrorMessage(kind),
         commandId: params.commandId,
         ...(resetsAt ? { resetsAt } : {}),
       })
@@ -667,11 +690,12 @@ export class AcpWorker {
     return accepted
   }
 
-  private opControlPrompt(
+  private async opControlPrompt(
     params: Extract<PromptParams, { control: 'self-report' }>,
-  ): unknown {
+  ): Promise<unknown> {
     const dup = this.checkDuplicate('controlPrompt', params.commandId)
     if (dup) return dup
+    await this.adapterTurnSettled()
     const conn = this.requireConn()
     if (!this.providerSessionId) {
       throw <WorkerError>{ kind: 'no_session', message: 'no provider session — call newSession/loadSession first' }
@@ -697,10 +721,10 @@ export class AcpWorker {
     // Like a user prompt, ACP resolves at turn end. The immediate accepted
     // response keeps the daemon RPC bounded; output and completion ride the
     // journal as source='control' records consumed privately by AcpSession.
-    void conn.prompt({
+    void this.watchedPrompt(conn.prompt({
       sessionId: this.providerSessionId,
       prompt: [{ type: 'text', text: params.text }],
-    }).then((resp) => {
+    })).then((resp) => {
       const refused = this.controlPrompt?.commandId === params.commandId && this.controlPrompt.toolRefused
       this.finishControlPrompt(params.commandId, refused ? 'tool-refused' : resp.stopReason)
     }).catch((error) => {
@@ -712,7 +736,7 @@ export class AcpWorker {
       this.finishControlPrompt(
         params.commandId,
         'error',
-        safeWorkerErrorMessage('protocol'),
+        walnutWordsOf(error) ?? safeWorkerErrorMessage('protocol'),
       )
     })
     return acceptedResult
@@ -784,6 +808,7 @@ export class AcpWorker {
     }
     this.acceptCommand('permissionResponse', params.commandId)
     this.pendingPermissions.delete(params.providerRequestId)
+    this.turnWatch?.progress()
     pending.resolve(
       params.optionId === null
         ? { outcome: { outcome: 'cancelled' } }
@@ -894,6 +919,7 @@ export class AcpWorker {
 
   private async opShutdown(): Promise<unknown> {
     this.shuttingDown = true
+    this.turnWatch?.end()
     if (this.turnActive) {
       this.journal.appendMeta({
         type: 'turn-interrupted',
@@ -912,7 +938,8 @@ export class AcpWorker {
     // Close adapter stdin → adapter exits → provider runtime torn down (~2s in codex-acp).
     this.adapter?.stdin?.end()
     const adapter = this.adapter
-    if (adapter && adapter.exitCode === null) {
+    // A signal's end leaves exitCode null: that adapter is gone too, with no exit event left to wait for.
+    if (adapter && adapter.exitCode === null && adapter.signalCode === null) {
       await new Promise<void>((resolve) => {
         const t = setTimeout(() => { adapter.kill('SIGKILL'); resolve() }, 5000)
         adapter.once('exit', () => { clearTimeout(t); resolve() })
@@ -940,6 +967,7 @@ export class AcpWorker {
           && this.turnActive && !this.controlPrompt && !this.loadingSession) {
           this.turnTail.push(update.content.text)
         }
+        if ((this.turnActive || this.controlPrompt) && !this.loadingSession) this.turnWatch?.frame(update)
         if (update.sessionUpdate === 'tool_call' && this.controlPrompt) this.refuseControlTool(update.title)
         if (update.sessionUpdate === 'tool_call') {
           this.toolCalls.set(update.toolCallId, { toolCallId: update.toolCallId, title: update.title, kind: update.kind, rawInput: update.rawInput })
@@ -1238,6 +1266,14 @@ function journalHoldsConversation(journalPath: string): boolean {
 
 function isWorkerError(e: unknown): e is WorkerError {
   return typeof e === 'object' && e !== null && 'kind' in e && 'message' in e && !(e instanceof Error)
+}
+
+/** The adapter's own name for the words of a stopped turn ("OpenCode"), short and plain; "The agent" when it gave none. */
+function agentNameOf(initializeResponse: unknown): string {
+  const info = asObject(asObject(initializeResponse).agentInfo)
+  const name = [info.title, info.name].find((v): v is string => typeof v === 'string' && v.trim() !== '')
+  const plain = name?.replace(/[^\w .@/-]+/g, '').trim().slice(0, 40)
+  return plain || 'The agent'
 }
 
 function asObject(value: unknown): Record<string, unknown> {

@@ -23,6 +23,10 @@
  *   SLOW_ACK          a steer is taken (its userMessage item is sent), the turn ends 300ms later,
  *                     and the steer's answer comes MOCK_STEER_ACK_MS (1500) after it
  *   HANG_DEAF         like HANG, and turn/interrupt is answered but never ends the turn
+ *   RETRY_FOREVER     says "Reconnecting... waiting for network" (error, willRetry) every
+ *                     MOCK_RETRY_EVERY_MS (50) until interrupted, as Codex does for an endpoint
+ *                     nothing listens on; RETRY_429 the same with a rate limit
+ *   RETRY_THEN_OK <ms> retries like RETRY_FOREVER for <ms>, then answers "recovered" and completes
  *   STEER_AFTER_FINAL says "ok", then a steer is taken (answered, its userMessage item sent)
  *                     and the turn completes without answering it, as real Codex does
  *                     (MOCK_FINAL_STEER_ACK_MS delays the steer's answer)
@@ -207,6 +211,20 @@ async function runTurn(t, text) {
       return
     case 'HANG': case 'HANG_DEAF':
       return
+    case 'RETRY_FOREVER': case 'RETRY_429': case 'RETRY_THEN_OK': {
+      const until = word === 'RETRY_THEN_OK' ? Date.now() + (Number(arg) || 500) : Infinity
+      const error = word === 'RETRY_429'
+        ? { message: 'Reconnecting... 2/5', codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: 429 } }, additionalDetails: 'Too Many Requests' }
+        : { message: 'Reconnecting... waiting for network', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } }, additionalDetails: 'Connection failed: error sending request' }
+      while (!t.done && Date.now() < until) {
+        notify('error', { threadId, turnId: t.id, willRetry: true, error })
+        await sleep(Number(process.env.MOCK_RETRY_EVERY_MS) || 50)
+      }
+      if (t.done) return
+      message(t.id, 'recovered')
+      finish('completed')
+      return
+    }
     case 'HOLD_OWN': case 'REJECT_SAME':
       message(t.id, 'working')
       t.held = true

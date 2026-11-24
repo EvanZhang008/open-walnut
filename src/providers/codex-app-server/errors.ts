@@ -27,6 +27,10 @@ export function classifyCodexFailure(data: unknown): CodexFailureKind | undefine
   if (!isRecord(data)) return undefined
   if (data.walnutError === 'app_server_exited') return 'app_server_exited'
   if (data.walnutError === 'turn_stalled') return 'turn_stalled'
+  // Codex kept retrying past Walnut's limit (engine-turn-watch.ts): the kind of what it retried.
+  if (data.walnutError === 'retry_exhausted') {
+    return data.retryKind === 'rate_limited' || data.retryKind === 'overloaded' || data.retryKind === 'server_error' ? data.retryKind : 'connection'
+  }
   const info = data.codexErrorInfo
   const status = httpStatusOf(info)
   if (info === 'usageLimitExceeded') return 'usage_limit'

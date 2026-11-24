@@ -13,6 +13,11 @@
  *     <file> exists, so a test can act mid-turn however slow the machine is
  *   - "error"           → responds to session/prompt with a JSON-RPC error
  *   - "self-report-test"→ streams a deterministic labeled private report
+ *   - "engine-retries-forever" → a retry notice (session_info_update, willRetry) every
+ *     MOCK_ACP_RETRY_EVERY_MS (50) until cancelled; "engine-retries-deaf" ignores the cancel
+ *   - "engine-goes-quiet" → sends nothing until cancelled
+ *   - "steady-progress <ms>" → a chunk every 100ms for <ms>, then end_turn
+ *   - "steady-tool <ms>" → one tool call that runs <ms> with no update, then end_turn
  *   - anything else     → streams 2 message chunks then end_turn
  *
  * session/load replays one historical message chunk (marker: "replayed:") so
@@ -216,6 +221,38 @@ async function handlePrompt(id, params) {
 
   if (process.env.MOCK_ACP_PROMPT_LOG) {
     fs.appendFileSync(process.env.MOCK_ACP_PROMPT_LOG, JSON.stringify({ sessionId, text: raw }) + '\n');
+  }
+
+  if (text.includes('engine-retries-forever') || text.includes('engine-retries-deaf')) {
+    if (text.includes('engine-retries-deaf')) ignoreCancel = true;
+    const every = Number(process.env.MOCK_ACP_RETRY_EVERY_MS) || 50;
+    while (!cancelled) {
+      notify('session/update', { sessionId, update: { sessionUpdate: 'session_info_update', _meta: { codex: { error: {
+        message: 'Reconnecting... waiting for network', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } }, willRetry: true,
+      } } } } });
+      await sleep(every);
+    }
+    reply(id, { stopReason: 'cancelled' });
+    return;
+  }
+  if (text.includes('engine-goes-quiet')) {
+    while (!cancelled) await sleep(20);
+    reply(id, { stopReason: 'cancelled' });
+    return;
+  }
+  if (text.includes('steady-progress') || text.includes('steady-tool')) {
+    const ms = Number(/steady-\w+ (\d+)/.exec(text)?.[1]) || 1000;
+    const until = Date.now() + ms;
+    if (text.includes('steady-tool')) {
+      notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'steady-1', title: 'long build', kind: 'execute', status: 'in_progress' } });
+      while (!cancelled && Date.now() < until) await sleep(20);
+      notify('session/update', { sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'steady-1', status: 'completed' } });
+    } else {
+      while (!cancelled && Date.now() < until) { chunk(sessionId, '.'); await sleep(100); }
+    }
+    chunk(sessionId, 'steady done');
+    reply(id, { stopReason: cancelled ? 'cancelled' : 'end_turn' });
+    return;
   }
 
   if (text.includes('executor-bad-key')) {

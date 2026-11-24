@@ -77,6 +77,7 @@ import { setRuntimeTreesDirOf } from './service-set.js'
 import { applyCliLoginPath, installHomeBin, withInstallHomeBin } from './daemon-cli-path.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
+import { claudeRetryEnv } from './engine-turn-watch.js'
 import { PS_TREE_ARGS, claimedSidVerdict, parentName, parseProcessTree, proofFor, shortProgram, type ProcRow } from './caller-proof-core.js'
 import { socketPeerPid, socketPeerPidReady } from './socket-peer-pid.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
@@ -7944,6 +7945,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // it twice. Keep in sync with the other twin.
       CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      // Its unattended retry mode (CLAUDE_CODE_RETRY_WATCHDOG, a user setting) otherwise retries
+      // with no limit while the session reads Running: the same bound as every engine (engine-turn-watch.ts).
+      ...claudeRetryEnv(daemonEnv),
       ...(daemonEnv.WALNUT_DISABLE_FILE_CHECKPOINTS === '1'
         ? {}
         : { CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' }),

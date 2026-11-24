@@ -815,6 +815,8 @@ export class AcpSession {
   private _refusalIsUsageLimit = false
   /** The provider's usage-limit words when the usage limit ended this turn (the record's errorMessage). */
   private _turnLimitText: string | null = null
+  /** The words of the turn's error row (a stall, an engine that kept retrying), for the record's errorMessage. */
+  private _turnErrorText: string | null = null
   /** Turn boundaries seen in the journal: a steer the live turn refused is not asked again in it. */
   private _turnEpoch = 0
   private _steerRefusedEpoch = -1
@@ -1082,7 +1084,11 @@ export class AcpSession {
         }
         this._turnActive = false
       }
-      if (t === 'error' && !isOpRefusalRecord(record.event)) this._turnHadError = true
+      if (t === 'error' && !isOpRefusalRecord(record.event)) {
+        this._turnHadError = true
+        // The worker journals only safe words (Walnut's own, or a fixed sentence per kind): the session says why it failed.
+        if (typeof record.event.message === 'string' && record.event.message) this._turnErrorText = record.event.message
+      }
       if (t === 'permission-answered' || t === 'permission-auto-cancelled') {
         if (this._pendingPermissions.delete(record.event.providerRequestId)) {
           this.persistPendingPermission()
@@ -2918,8 +2924,9 @@ export class AcpSession {
     const isError = this._turnHadError
       || (event.type === 'turn-interrupted' && event.reason === 'worker-crash')
     this._turnHadError = false
-    const limitText = isError ? this._turnLimitText : null
+    const limitText = isError ? this._turnLimitText ?? this._turnErrorText : null
     this._turnLimitText = null
+    this._turnErrorText = null
 
     this._cursorCommit = this._cursorCommit.then(async () => {
       if (v <= this._committedV) return
@@ -2932,7 +2939,7 @@ export class AcpSession {
         last_status_change: new Date().toISOString(),
         status_reason: isError ? 'api_error' : (isInterrupted ? 'turn_interrupted' : 'turn_completed'),
         status_changed_by: 'session-runner',
-        // The usage limit's own words, so the session says why it stopped (sessions/usage-limit-wait.ts).
+        // Why it stopped: the usage limit's own words (sessions/usage-limit-wait.ts), else the error row's.
         ...(limitText ? { errorMessage: limitText } : {}),
       })
       this._committedV = updated.consumedOffset ?? this._committedV
