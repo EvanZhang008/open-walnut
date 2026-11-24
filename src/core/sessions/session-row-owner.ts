@@ -114,10 +114,19 @@ export function mergeHostFacts(leaderRow: SessionRecord | null, change: Readonly
   }
   for (const [k, v] of Object.entries(change)) {
     if (leaderRow && sessionFieldOwner(k) === 'leader') continue
+    // A stop the host already answered here as done (host-judged-controls.ts terminateOnHost) never
+    // reads `pending` again from an older record of the same stop.
+    if (k === 'stopRequest' && stopWentBack(leaderRow?.stopRequest, v)) continue
     if (v === null || v === undefined) delete out[k]
     else out[k] = v
   }
   return out as unknown as SessionRecord
+}
+
+function stopWentBack(held: SessionRecord['stopRequest'] | undefined, next: unknown): boolean {
+  if (!held || held.state === 'pending' || !next || typeof next !== 'object') return false
+  const n = next as { id?: unknown; state?: unknown }
+  return n.id === held.id && n.state === 'pending'
 }
 
 /** The fields of `patch` the leader may not write on a host's row: every host field it names. */

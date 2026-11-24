@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  LEADER_SESSION_FIELDS, SESSION_FIELD_OWNER, judgedByHost, mergeLeaderCopy, ownedPartOf, rowOwnedHere, writingAsHost,
+  LEADER_SESSION_FIELDS, SESSION_FIELD_OWNER, judgedByHost, mergeHostFacts, mergeLeaderCopy, ownedPartOf, rowOwnedHere, writingAsHost,
 } from '../../../src/core/sessions/session-row-owner.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
@@ -103,5 +103,24 @@ describe('what a write may change', () => {
   it('a row the leader runs takes the whole patch, wherever', () => {
     expect(ownedPartOf(hostRow({ judge: undefined }), patch, '').patch).toBe(patch)
     expect(ownedPartOf(hostRow({ judge: undefined }), patch, 'devbox').patch).toBe(patch)
+  })
+})
+
+describe('a host\'s facts over the leader\'s copy', () => {
+  const at = '2026-11-24T00:00:00.000Z'
+  const held = (state: 'pending' | 'confirmed' | 'failed') => hostRow({ stopRequest: { id: 'st1', requestedAt: at, state } })
+
+  it('a stop answered here as done never reads pending again from an older record of the same stop', () => {
+    for (const whole of [false, true]) {
+      const out = mergeHostFacts(held('confirmed'), { stopRequest: { id: 'st1', requestedAt: at, state: 'pending' }, process_status: 'running' }, whole)
+      expect(out.stopRequest, String(whole)).toEqual({ id: 'st1', requestedAt: at, state: 'confirmed' })
+      expect(out.process_status).toBe('running')
+    }
+  })
+
+  it('a new stop, a pending one held here and a later answer all go through', () => {
+    expect(mergeHostFacts(held('confirmed'), { stopRequest: { id: 'st2', requestedAt: at, state: 'pending' } }, false).stopRequest).toMatchObject({ id: 'st2', state: 'pending' })
+    expect(mergeHostFacts(held('pending'), { stopRequest: { id: 'st1', requestedAt: at, state: 'confirmed' } }, false).stopRequest).toMatchObject({ state: 'confirmed' })
+    expect(mergeHostFacts(held('failed'), { stopRequest: { id: 'st1', requestedAt: at, state: 'confirmed' } }, false).stopRequest).toMatchObject({ state: 'confirmed' })
   })
 })

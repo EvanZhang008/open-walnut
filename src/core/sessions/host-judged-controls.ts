@@ -45,9 +45,31 @@ export async function onJudgingHost(sessionId: string, member: HostLifecycleMemb
   return p.call(member, args, 'lifecycle')
 }
 
-/** A stop of a host-run session: its host's answer. */
+/**
+ * A stop of a host-run session: its host's answer. A stop the host answered as done (confirmed or
+ * failed) is taken into the leader's row at once, as the host's own writer (writingAsHost): the row
+ * record that says the same comes later over the channel, and until then the leader's copy still
+ * read `pending`, so a send right after the stop met the stop fence (409). mergeHostFacts keeps it
+ * against an older record of the same stop that still says `pending`.
+ */
 export async function terminateOnHost(sessionId: string, opts: { force?: boolean; by?: string }): Promise<TerminateResult> {
-  return await (await proxyOf(sessionId)).call('terminateSession', [opts], 'lifecycle') as TerminateResult
+  const result = await (await proxyOf(sessionId)).call('terminateSession', [opts], 'lifecycle') as TerminateResult
+  await takeAnsweredStop(sessionId, result)
+  return result
+}
+
+async function takeAnsweredStop(sessionId: string, result: TerminateResult | null | undefined): Promise<void> {
+  const stop = result?.stopRequest
+  if (!stop || result.status === 'pending' || (stop.state !== 'confirmed' && stop.state !== 'failed')) return
+  const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js')
+  const { judgedByHost, writingAsHost } = await import('./session-row-owner.js')
+  const row = await getSessionByClaudeId(sessionId)
+  if (!row || !judgedByHost(row)) return
+  const kept = row.stopRequest
+  // A later stop the channel already brought stays.
+  if (kept && kept.id !== stop.id && kept.requestedAt > stop.requestedAt) return
+  const stopRequest = { ...(kept?.id === stop.id ? kept : {}), ...stop } as NonNullable<SessionRecord['stopRequest']>
+  await writingAsHost(() => updateSessionRecord(sessionId, { stopRequest }))
 }
 
 /**

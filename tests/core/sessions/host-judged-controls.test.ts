@@ -43,6 +43,28 @@ describe('host-judged controls', () => {
     expect(m.proxy!.call).toHaveBeenCalledWith('terminateSession', [{ force: true, by: 'person' }], 'lifecycle')
   })
 
+  it('a stop the host answered as done is in the leader\'s row at once, so a send right after it meets no stop fence', async () => {
+    m.rows.set('s1', { claudeSessionId: 's1', judge: 'host', host: 'devbox', stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'pending' } })
+    m.proxy!.call.mockResolvedValue({ status: 'terminated', sessionId: 's1', stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'confirmed' } })
+    await terminateOnHost('s1', { force: true })
+    expect(m.updates).toEqual([['s1', { stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'confirmed' } }]])
+  })
+
+  it('a pending stop, a stop with no record, a later stop already here and a row no host judges are left to the channel', async () => {
+    const later = { id: 'st2', requestedAt: '2026-11-24T00:05:00.000Z', state: 'pending' }
+    for (const [row, answer] of [
+      [{ judge: 'host', host: 'devbox' }, { status: 'pending', sessionId: 's1', stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'pending' } }],
+      [{ judge: 'host', host: 'devbox' }, { status: 'terminated', sessionId: 's1' }],
+      [{ judge: 'host', host: 'devbox', stopRequest: later }, { status: 'terminated', sessionId: 's1', stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'confirmed' } }],
+      [{ host: 'devbox' }, { status: 'terminated', sessionId: 's1', stopRequest: { id: 'st1', requestedAt: '2026-11-24T00:00:00.000Z', state: 'confirmed' } }],
+    ] as const) {
+      m.rows.set('s1', { claudeSessionId: 's1', ...row })
+      m.proxy!.call.mockResolvedValue(answer)
+      await terminateOnHost('s1', {})
+    }
+    expect(m.updates).toEqual([])
+  })
+
   it('a mode change goes to the host; the leader writes its own fields and moves the slots', async () => {
     m.rows.set('s1', { claudeSessionId: 's1', mode: 'bypass', title: 'Old' })
     m.proxy!.call.mockResolvedValue({ mode: 'plan' })
