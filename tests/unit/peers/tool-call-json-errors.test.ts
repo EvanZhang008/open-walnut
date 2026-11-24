@@ -1,4 +1,4 @@
-/** Every CLI face fails a `walnut tools call` as one JSON object with its old exit code (2026-11-06: `2>&1 | json.load` failed). */
+/** Every CLI fails a `walnut tools call` as one JSON object with its old exit code (2026-11-06: `2>&1 | json.load` failed). */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -6,9 +6,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { runTools } from '../../../src/commands/tools.js'
-import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 import { spyCliStreams } from '../../helpers/cli-streams.js'
 
 const REPO = path.resolve(__dirname, '../../..')
@@ -28,24 +26,19 @@ const REPRO_REFUSAL = {
 interface Run { code: number | null; out: string; err: string; received: string }
 interface Failure { ok: false; error: { code: string; message: string; detail?: unknown } }
 
-type Face = 'wn-cli' | 'twin'
 let root = ''
-let twinFile = ''
 let runnerFile = ''
 
 beforeAll(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'tcj-'))
-  twinFile = path.join(root, 'daemon.cjs')
-  fs.writeFileSync(twinFile, getDaemonSource())
   runnerFile = path.join(root, 'runner.ts')
   fs.writeFileSync(runnerFile, `import { runWalnutCli } from ${JSON.stringify(path.join(REPO, 'src/providers/wn-cli.ts'))}\n`
     + 'process.exit(await runWalnutCli(process.argv.slice(2)))\n')
 })
 afterAll(() => { fs.rmSync(root, { recursive: true, force: true }) })
 
-function faceCommand(face: Face): string[] {
-  return face === 'twin' ? [SOURCE_TWIN.file, twinFile, 'wn'] : [process.execPath, runnerFile]
-}
+/** The in-session CLI (wn-cli.ts), run as its own process. */
+const cliCommand = (): string[] => [process.execPath, runnerFile]
 
 /** A stand-in agent gateway in its own dir: records the request line, answers with `answer` (or nothing). */
 async function gateway(answer: unknown | null): Promise<{ dir: string; sock: string; received: () => string; close: () => void }> {
@@ -64,8 +57,7 @@ async function gateway(answer: unknown | null): Promise<{ dir: string; sock: str
 }
 
 /** One CLI run. `shell2to1`: through `sh -c '... 2>&1'`, exactly as the 2026-11-06 caller ran it. */
-async function runFace(
-  face: Face,
+async function runCli(
   argv: string[],
   answer: unknown | null,
   opts: { shell2to1?: boolean; env?: NodeJS.ProcessEnv; noSocket?: 'missing' | 'none' } = {},
@@ -81,7 +73,7 @@ async function runFace(
   }
   // No injected socket and nothing at the well-known path: no daemon on this host.
   if (opts.noSocket === 'none') { delete env.WALNUT_AGENT_SOCKET; env.WALNUT_DAEMON_DIR = fs.mkdtempSync(path.join(root, 'e')) }
-  const [cmd, ...pre] = faceCommand(face)
+  const [cmd, ...pre] = cliCommand()
   const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`
   const r = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
     const child = opts.shell2to1
@@ -106,16 +98,16 @@ function failureIn(text: string): Failure {
   return parsed
 }
 
-describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
+describe('the in-session CLI (wn-cli.ts)', () => {
   it('the 2026-11-06 call: one JSON object on stderr with the real reason, and `2>&1` parses', async () => {
-    const r = await runFace(face, ['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL)
+    const r = await runCli(['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL)
     expect(r.code).toBe(1)
     expect(r.out).toBe('')
     const f = failureIn(r.err)
     expect(f.error.code).toBe('invalid_arguments')
     expect(f.error.message).toContain('phases takes one comma-separated string, e.g. "TODO,IN_PROGRESS"')
 
-    const both = await runFace(face, ['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL, { shell2to1: true })
+    const both = await runCli(['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL, { shell2to1: true })
     expect(both.code).toBe(1)
     expect(both.err).toBe('')
     expect(JSON.parse(both.out)).toEqual(f)
@@ -127,13 +119,10 @@ describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
       ['tools', 'call', '--json', REPRO_OP, REPRO],
       ['tools', 'call', REPRO_OP, REPRO, '--json'],
     ]) {
-      const r = await runFace(face, argv, REPRO_REFUSAL)
+      const r = await runCli(argv, REPRO_REFUSAL)
       expect(r.code, argv.join(' ')).toBe(1)
       expect(r.err, argv.join(' ')).toBe('')
-      // The twin keeps its old envelope for a --json before call or the op.
-      const legacy = face === 'twin' && argv.indexOf('--json') < argv.indexOf(REPRO_OP)
-      if (legacy) expect(JSON.parse(r.out)).toEqual(REPRO_REFUSAL)
-      else expect(failureIn(r.out).error.code).toBe('invalid_arguments')
+      expect(failureIn(r.out).error.code).toBe('invalid_arguments')
       // The payload went out as written.
       expect(JSON.parse(r.received.trim()).args).toMatchObject({ name: REPRO_OP, args: { phases: ['TODO', 'IN_PROGRESS'] } })
     }
@@ -142,34 +131,15 @@ describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
   it('a success is the bare result, --json or not', async () => {
     const answer = { ok: true, result: { results: [{ type: 'task', title: 'Controller' }] } }
     for (const extra of [[], ['--json']]) {
-      const r = await runFace(face, ['tools', 'call', 'search', '{"q":"controller"}', ...extra], answer)
+      const r = await runCli(['tools', 'call', 'search', '{"q":"controller"}', ...extra], answer)
       expect(r.code).toBe(0)
       expect(r.err).toBe('')
       expect(JSON.parse(r.out)).toEqual(answer.result)
     }
   }, 60_000)
 
-  it('the twin keeps its old --json envelope before call or the op: success wrapped, error as the gateway sent it', async () => {
-    if (face !== 'twin') return
-    const ok = { ok: true, result: { a: 1 } }
-    const throttled = { ok: false, error: { code: 'throttled', message: 'too many', retryAfterMs: 3000, detail: { outcome: 'Refused' } } }
-    for (const pre of [['tools', '--json', 'call'], ['tools', 'call', '--json']]) {
-      const s = await runFace(face, [...pre, 'task_list', '{}'], ok)
-      expect(s.code).toBe(0)
-      expect(JSON.parse(s.out)).toEqual(ok)
-      const f = await runFace(face, [...pre, 'task_send', '{"to":"acme","text":"hi"}'], throttled)
-      expect(f.code).toBe(4)
-      expect(f.err).toBe('')
-      expect(JSON.parse(f.out)).toEqual(throttled)
-    }
-    // A local failure is still the new object.
-    const bad = await runFace(face, ['tools', '--json', 'call', 'search', '{"q":'], null)
-    expect(bad.code).toBe(2)
-    expect(failureIn(bad.out).error.code).toBe('invalid_json')
-  }, 60_000)
-
   it('a --json word inside the JSON is text, never the flag', async () => {
-    const r = await runFace(face, ['tools', 'call', 'task_send', '{"to":"acme","text":"--json"}'], { ok: true, result: { sent: true } })
+    const r = await runCli(['tools', 'call', 'task_send', '{"to":"acme","text":"--json"}'], { ok: true, result: { sent: true } })
     expect(r.code).toBe(0)
     // The call is the first line the gateway got; a carded op (task_send) sends its chat-card record after it.
     expect(JSON.parse(r.received.split('\n')[0]).args.args).toEqual({ to: 'acme', text: '--json' })
@@ -177,28 +147,28 @@ describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
 
   it('an op\'s detail stays on stdout by default and rides in the error with --json', async () => {
     const answer = { ok: false, error: { code: 'throttled', message: 'too many gateway writes', retryAfterMs: 3000, detail: { outcome: 'Refused, nothing changed' } } }
-    const plain = await runFace(face, ['tools', 'call', 'task_send', '{"to":"acme","text":"hi"}'], answer)
+    const plain = await runCli(['tools', 'call', 'task_send', '{"to":"acme","text":"hi"}'], answer)
     expect(plain.code).toBe(4)
     expect(JSON.parse(plain.out)).toEqual({ outcome: 'Refused, nothing changed' })
     expect(failureIn(plain.err)).toEqual({
       ok: false, error: { code: 'throttled', message: 'too many gateway writes\nretry after 3s — do not retry in a loop' },
     })
-    const json = await runFace(face, ['tools', 'call', 'task_send', '{"to":"acme","text":"hi"}', '--json'], answer)
+    const json = await runCli(['tools', 'call', 'task_send', '{"to":"acme","text":"hi"}', '--json'], answer)
     expect(json.code).toBe(4)
     expect(json.err).toBe('')
     expect(failureIn(json.out).error.detail).toEqual({ outcome: 'Refused, nothing changed' })
   }, 60_000)
 
   it('an unknown op is unknown_op', async () => {
-    const r = await runFace(face, ['tools', 'call', 'no_such_op', '{}'], { ok: false, error: { code: 'bad_request', message: 'unknown op: no_such_op — run `walnut tools list`' } })
+    const r = await runCli(['tools', 'call', 'no_such_op', '{}'], { ok: false, error: { code: 'bad_request', message: 'unknown op: no_such_op — run `walnut tools list`' } })
     expect(r.code).toBe(1)
     expect(failureIn(r.err).error.code).toBe('unknown_op')
   }, 30_000)
 })
 
-/** Every local and transport failure, on both faces: same code, exit and streams; nothing sent where nothing may be. */
-describe('the in-session CLI and its template twin agree on every failure', () => {
-  const CASES: Array<{ name: string; argv: string[]; answer: unknown | null; code: string; exit: number; sends: boolean; opts?: Parameters<typeof runFace>[3] }> = [
+/** Every local and transport failure: its code, exit and streams; nothing sent where nothing may be. */
+describe('the in-session CLI on every failure', () => {
+  const CASES: Array<{ name: string; argv: string[]; answer: unknown | null; code: string; exit: number; sends: boolean; opts?: Parameters<typeof runCli>[2] }> = [
     { name: 'malformed JSON', argv: ['tools', 'call', 'search', '{"q":'], answer: null, code: 'invalid_json', exit: 2, sends: false },
     { name: 'a JSON array', argv: ['tools', 'call', 'search', '["q"]'], answer: null, code: 'invalid_json', exit: 2, sends: false },
     { name: 'a word after the JSON', argv: ['tools', 'call', 'search', '{"q":"x"}', '--dry-run'], answer: null, code: 'usage_error', exit: 2, sends: false },
@@ -215,47 +185,39 @@ describe('the in-session CLI and its template twin agree on every failure', () =
   ]
 
   it.each(CASES)('$name', async (c) => {
-    const seen: Record<string, unknown> = {}
-    for (const face of ['wn-cli', 'twin'] as const) {
-      for (const json of [false, true]) {
-        const r = await runFace(face, json ? [...c.argv, '--json'] : c.argv, c.answer, c.opts)
-        const label = `${face}${json ? ' --json' : ''}`
-        expect(r.code, label).toBe(c.exit)
-        const f = failureIn(json ? r.out : r.err)
-        expect(f.error.code, label).toBe(c.code)
-        expect(json ? r.err : r.out, label).toBe('')
-        expect(r.received !== '', label).toBe(c.sends)
-        seen[label] = { code: r.code, error: f.error.code }
-      }
+    for (const json of [false, true]) {
+      const r = await runCli(json ? [...c.argv, '--json'] : c.argv, c.answer, c.opts)
+      const label = json ? '--json' : 'plain'
+      expect(r.code, label).toBe(c.exit)
+      const f = failureIn(json ? r.out : r.err)
+      expect(f.error.code, label).toBe(c.code)
+      expect(json ? r.err : r.out, label).toBe('')
+      expect(r.received !== '', label).toBe(c.sends)
     }
-    expect(seen['twin']).toEqual(seen['wn-cli'])
-    expect(seen['twin --json']).toEqual(seen['wn-cli --json'])
   }, 120_000)
 
-  it('a malformed answer line: each face fails with one JSON object, as before with its own exit', async () => {
-    for (const face of ['wn-cli', 'twin'] as const) {
-      const dir = fs.mkdtempSync(path.join(root, 'm'))
-      const sock = path.join(dir, 'gw.sock')
-      const server = net.createServer((c) => { c.on('data', () => { c.write('not json\n') }) })
-      await new Promise<void>((resolve) => server.listen(sock, () => resolve()))
-      fs.chmodSync(sock, 0o600)
-      const [cmd, ...pre] = faceCommand(face)
-      const r = await new Promise<{ code: number | null; err: string; out: string }>((resolve) => {
-        const child = spawn(cmd, [...pre, 'tools', 'call', 'search', '{"q":"x"}'], {
-          env: { ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_AGENT_SOCKET: sock, WALNUT_SESSION_ID: 'probe-sid' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
-        let out = ''
-        let err = ''
-        child.stdout.on('data', (d) => { out += d })
-        child.stderr.on('data', (d) => { err += d })
-        child.on('close', (code) => resolve({ code, err, out }))
+  it('a malformed answer line: it fails with one JSON object, as before with its own exit', async () => {
+    const dir = fs.mkdtempSync(path.join(root, 'm'))
+    const sock = path.join(dir, 'gw.sock')
+    const server = net.createServer((c) => { c.on('data', () => { c.write('not json\n') }) })
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()))
+    fs.chmodSync(sock, 0o600)
+    const [cmd, ...pre] = cliCommand()
+    const r = await new Promise<{ code: number | null; err: string; out: string }>((resolve) => {
+      const child = spawn(cmd, [...pre, 'tools', 'call', 'search', '{"q":"x"}'], {
+        env: { ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_AGENT_SOCKET: sock, WALNUT_SESSION_ID: 'probe-sid' },
+        stdio: ['ignore', 'pipe', 'pipe'],
       })
-      server.close()
-      expect(r.code, face).not.toBe(0)
-      expect(r.out, face).toBe('')
-      failureIn(r.err)
-    }
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (d) => { out += d })
+      child.stderr.on('data', (d) => { err += d })
+      child.on('close', (code) => resolve({ code, err, out }))
+    })
+    server.close()
+    expect(r.code).not.toBe(0)
+    expect(r.out).toBe('')
+    failureIn(r.err)
   }, 60_000)
 })
 
@@ -380,7 +342,7 @@ describe('the hub CLI (src/commands/tools.ts)', () => {
   })
 })
 
-/** Ratchet: no call failure path prints plain text again (each face counted from its source). */
+/** Ratchet: no call failure path prints plain text again (each CLI counted from its source). */
 describe('ratchet: a call fails only through the one JSON object', () => {
   const read = (f: string) => fs.readFileSync(path.join(REPO, f), 'utf8')
 
@@ -398,13 +360,5 @@ describe('ratchet: a call fails only through the one JSON object', () => {
     expect(start).toBeGreaterThan(0)
     const block = src.slice(start, src.indexOf("if (parsed.kind === 'wait') {", start))
     expect(block).not.toMatch(/process\.stderr\.write\(/)
-  })
-
-  it('the template twin: the call branch fails through wnFail only', () => {
-    const src = read('src/providers/daemon-source.ts')
-    const start = src.indexOf('var wnExtra = rest.slice(2)')
-    const block = src.slice(start, src.indexOf("op = 'tools.call';", start))
-    expect(block).not.toMatch(/errOut\(/)
-    expect(block.match(/wnFail\(/g)).toHaveLength(5)
   })
 })

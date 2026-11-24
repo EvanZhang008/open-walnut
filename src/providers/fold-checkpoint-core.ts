@@ -33,10 +33,7 @@
  * write goes to `.fold`, so it can never overwrite the prepared one. A load
  * reads both and takes the valid one that reaches further.
  *
- * How each twin gets it: daemon-standalone.ts imports createFoldCheckpoint;
- * daemon-source.ts inlines `createFoldCheckpoint.toString()` through
- * `__CREATE_FOLD_CHECKPOINT__`. So the factory body references NOTHING at
- * module scope.
+ * Imported by daemon-standalone.ts (createFoldCheckpoint). The factory body references NOTHING at module scope.
  */
 
 /**

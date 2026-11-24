@@ -209,28 +209,6 @@ describe('the probation of a local replacement', () => {
     expect(discardSpy).toHaveBeenCalledWith(tmpDir, 'new-version')
   })
 
-  // 2026-11-04 review 6: the source daemon's files of a build on its probation took the way back's
-  // place when the next build's were written.
-  it('the source daemon\'s files of a build on its probation wait beside the way back when the next build is written', async () => {
-    const dir = path.join(tmpDir, 'src-daemon')
-    fs.mkdirSync(dir, { recursive: true })
-    const daemon = new LocalDaemon({ daemonDir: dir })
-    const ld = daemon as unknown as { _stay: { start(e: string, p: number | null, due: () => void): void; clear(): void }; materializeSourceDaemon(): Promise<string>; keepsDurable: boolean }
-    fs.writeFileSync(path.join(dir, 'daemon-fallback.cjs'), 'source of B')
-    fs.writeFileSync(path.join(dir, 'daemon-fallback.cjs.version'), 'B')
-    fs.writeFileSync(path.join(dir, 'daemon-fallback.cjs.sha256'), 'not-this-one')
-    fs.writeFileSync(path.join(dir, 'daemon.version'), 'B')
-    ld._stay.start('B', 7001, () => {})
-    try {
-      await ld.materializeSourceDaemon()
-      const beside = path.join(dir, 'previous')
-      const keep = ld.keepsDurable ? (await import('../../src/providers/local-daemon-replace.js')).previousKeepDir(dir) : beside
-      expect(fs.readFileSync(path.join(`${keep}.next`, 'daemon-fallback.cjs'), 'utf8')).toBe('source of B')
-      expect(fs.existsSync(path.join(keep, 'daemon-fallback.cjs'))).toBe(false)
-      expect(fs.readFileSync(path.join(dir, 'daemon-fallback.cjs'), 'utf8')).not.toBe('source of B')
-    } finally { ld._stay.clear() }
-  })
-
   // 2026-11-04 review 7: a daemon found gone only long past its window ended the watch with no
   // verdict, so its next start was not watched, and on a Mac kept its file over the way back.
   it('a server back hours after the new daemon died watches its next start anew: no refusal, nothing kept at the start', async () => {

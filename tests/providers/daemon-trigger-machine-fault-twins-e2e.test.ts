@@ -1,5 +1,5 @@
 /**
- * A trigger check the machine failed, on the real daemon twins (trigger-check-core.ts
+ * A trigger check the machine failed, on the real daemon (trigger-check-core.ts
  * machineFaultOf): the daemon reads the answers the check's own `walnut` calls got, and a run that
  * failed with a machine fault among them is reported with `fault`, without a strike.
  *
@@ -7,7 +7,7 @@
  *        └═gateway-result{errorCode, api}═►                       exit 1 when the call failed
  *
  * 2026-11-16 11:36Z: the Mac's disk was 99% full, the API answered 507, and nine checks failed
- * at once and woke their sessions. Covered, on both twins:
+ * at once and woke their sessions. Covered:
  * - a 507 answer (api {status 507, code disk_full}) → trigger.checked {outcome error, fault disk_full},
  *   consecutiveErrors stays 0, and the state file has no `fault` (an older snapshot check would
  *   call it corrupt);
@@ -24,24 +24,16 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const BUN: string | undefined = testBun()
 const STANDALONE = path.join(ROOT, 'src/providers/daemon-standalone.ts')
-let srcDir = ''
+let checkDir = ''
 let checkPath = ''
 let root = ''
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(srcDir, 'daemon.cjs'), '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 // The check: one gateway call as `walnut trigger-check` makes it, then its verdict. A failed call
 // is exit 1, as the CLI does on a 507; a good one prints the items the test put in the file, or
@@ -107,7 +99,7 @@ async function waitFor<T>(pick: () => T | undefined, ms = 30_000): Promise<T | u
   return pick()
 }
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   root = fs.realpathSync(fs.mkdtempSync('/tmp/wmf-'))
   const daemonDir = path.join(root, 'd')
   const stateDir = path.join(root, 'ts')
@@ -126,8 +118,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', 'spawn-journal.jsonl'),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'], cwd: ROOT })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(b.toString()))
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
@@ -167,14 +158,8 @@ async function boot(twin: Twin): Promise<Daemon> {
 }
 
 beforeAll(() => {
-  srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-machine-fault-src-'))
-  fs.writeFileSync(path.join(srcDir, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 })
-  // The sidecar the deploy ships beside the script (scripts/build-daemon.sh).
-  buildSync({
-    entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-    bundle: true, platform: 'node', format: 'cjs', outfile: path.join(srcDir, 'trigger-check-core.cjs'), logLevel: 'silent',
-  })
-  checkPath = path.join(srcDir, 'check.cjs')
+  checkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-machine-fault-src-'))
+  checkPath = path.join(checkDir, 'check.cjs')
   fs.writeFileSync(checkPath, CHECK)
 })
 
@@ -193,79 +178,77 @@ afterEach(async () => {
 
 const ID = 'trg-mail-1'
 
-for (const twin of TWINS) {
-  describe(`machine faults, ${twin.name}`, () => {
-    it('a machine fault is reported as one without a strike; the script\'s own failure counts; nothing is lost', async () => {
-      const d = await boot(twin)
-      const items = path.join(root, 'items.txt')
-      fs.writeFileSync(items, 'm1')
-      const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
-      const configured = await rpc(d, {
-        cmd: 'triggers.configure',
-        config: { version: 1, triggers: [{ id: ID, name: 'Mail', everyMs: 3_600_000, check: { run: `${q(process.execPath)} ${q(checkPath)} ${q(items)}`, timeoutSeconds: 30 } }] },
-      })
-      expect(configured.ok, JSON.stringify(configured)).toBe(true)
-      // Quiet for a moment: a run the arm itself started has reported, so the next event is ours.
-      const settle = async () => {
-        let n = -1
-        while (n !== d.events.length) { n = d.events.length; await new Promise((r) => setTimeout(r, 800)) }
-      }
-      const run = async (): Promise<Record<string, any>> => {
-        await settle()
-        const from = d.events.length
-        await rpc(d, { cmd: 'triggers.run', triggerId: ID }).catch(() => undefined)
-        const ev = await waitFor(() => d.events.slice(from).find((e) => e.id === ID && !e.replay))
-        expect(ev, `no event after triggers.run; events: ${JSON.stringify(d.events)}`).toBeDefined()
-        // A fire is acked, as the server does, so its replay never comes back as a new event.
-        if (ev!.ev === 'trigger.fired') await rpc(d, { cmd: 'triggers.ack', triggerId: ID, seq: ev!.seq })
-        return ev!
-      }
-      // The first good run reports m1 (the arm's own run, or this one).
+describe.skipIf(!BUN)('machine faults, standalone daemon (bun)', () => {
+  it('a machine fault is reported as one without a strike; the script\'s own failure counts; nothing is lost', async () => {
+    const d = await boot()
+    const items = path.join(root, 'items.txt')
+    fs.writeFileSync(items, 'm1')
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const configured = await rpc(d, {
+      cmd: 'triggers.configure',
+      config: { version: 1, triggers: [{ id: ID, name: 'Mail', everyMs: 3_600_000, check: { run: `${q(process.execPath)} ${q(checkPath)} ${q(items)}`, timeoutSeconds: 30 } }] },
+    })
+    expect(configured.ok, JSON.stringify(configured)).toBe(true)
+    // Quiet for a moment: a run the arm itself started has reported, so the next event is ours.
+    const settle = async () => {
+      let n = -1
+      while (n !== d.events.length) { n = d.events.length; await new Promise((r) => setTimeout(r, 800)) }
+    }
+    const run = async (): Promise<Record<string, any>> => {
       await settle()
-      const armed = d.events.find((e) => e.ev === 'trigger.fired' && e.id === ID)
-      if (armed) await rpc(d, { cmd: 'triggers.ack', triggerId: ID, seq: armed.seq })
-      const first = armed ?? await run()
-      expect(first.ev, JSON.stringify(first)).toBe('trigger.fired')
-      expect(first.items.map((i: { id: string }) => i.id)).toEqual(['m1'])
+      const from = d.events.length
+      await rpc(d, { cmd: 'triggers.run', triggerId: ID }).catch(() => undefined)
+      const ev = await waitFor(() => d.events.slice(from).find((e) => e.id === ID && !e.replay))
+      expect(ev, `no event after triggers.run; events: ${JSON.stringify(d.events)}`).toBeDefined()
+      // A fire is acked, as the server does, so its replay never comes back as a new event.
+      if (ev!.ev === 'trigger.fired') await rpc(d, { cmd: 'triggers.ack', triggerId: ID, seq: ev!.seq })
+      return ev!
+    }
+    // The first good run reports m1 (the arm's own run, or this one).
+    await settle()
+    const armed = d.events.find((e) => e.ev === 'trigger.fired' && e.id === ID)
+    if (armed) await rpc(d, { cmd: 'triggers.ack', triggerId: ID, seq: armed.seq })
+    const first = armed ?? await run()
+    expect(first.ev, JSON.stringify(first)).toBe('trigger.fired')
+    expect(first.items.map((i: { id: string }) => i.id)).toEqual(['m1'])
 
-      // 1. The disk is full: three runs, each a machine fault, no strike.
-      d.answer.mode = 'disk_full'
-      fs.writeFileSync(items, 'm1,m2')
-      for (let i = 0; i < 3; i++) {
-        const ev = await run()
-        expect(ev, JSON.stringify(ev)).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 0 })
-        expect(ev.error).toContain('507')
-      }
-      const file = JSON.parse(fs.readFileSync(path.join(d.stateDir, fs.readdirSync(d.stateDir).find((f) => f.endsWith('.json'))!), 'utf8'))
-      expect(file.consecutiveErrors).toBe(0)
-      expect(file.lastCheck.fault).toBeUndefined()
-      expect(JSON.stringify(file)).not.toContain('"fault"')
+    // 1. The disk is full: three runs, each a machine fault, no strike.
+    d.answer.mode = 'disk_full'
+    fs.writeFileSync(items, 'm1,m2')
+    for (let i = 0; i < 3; i++) {
+      const ev = await run()
+      expect(ev, JSON.stringify(ev)).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 0 })
+      expect(ev.error).toContain('507')
+    }
+    const file = JSON.parse(fs.readFileSync(path.join(d.stateDir, fs.readdirSync(d.stateDir).find((f) => f.endsWith('.json'))!), 'utf8'))
+    expect(file.consecutiveErrors).toBe(0)
+    expect(file.lastCheck.fault).toBeUndefined()
+    expect(JSON.stringify(file)).not.toContain('"fault"')
 
-      // 2. An answer that did not come in time: the check's own to hear about, a strike.
-      d.answer.mode = 'hub_timeout'
-      const slow = await run()
-      expect(slow).toMatchObject({ ev: 'trigger.checked', outcome: 'error', consecutiveErrors: 1 })
-      expect(slow.fault).toBeUndefined()
+    // 2. An answer that did not come in time: the check's own to hear about, a strike.
+    d.answer.mode = 'hub_timeout'
+    const slow = await run()
+    expect(slow).toMatchObject({ ev: 'trigger.checked', outcome: 'error', consecutiveErrors: 1 })
+    expect(slow.fault).toBeUndefined()
 
-      // 3. The machine is back, the script breaks on its own: a strike, no fault.
-      d.answer.mode = 'ok'
-      fs.writeFileSync(items, 'BROKEN')
-      const own = await run()
-      expect(own).toMatchObject({ ev: 'trigger.checked', outcome: 'error', consecutiveErrors: 2 })
-      expect(own.fault).toBeUndefined()
-      expect(own.error).toContain('jq: parse error')
+    // 3. The machine is back, the script breaks on its own: a strike, no fault.
+    d.answer.mode = 'ok'
+    fs.writeFileSync(items, 'BROKEN')
+    const own = await run()
+    expect(own).toMatchObject({ ev: 'trigger.checked', outcome: 'error', consecutiveErrors: 2 })
+    expect(own.fault).toBeUndefined()
+    expect(own.error).toContain('jq: parse error')
 
-      // 4. The check's own CLI met the 507 over HTTP and said so: a machine fault, and never relayed.
-      const relayedBefore = d.relayed.length
-      fs.writeFileSync(items, 'HTTP_507')
-      expect(await run()).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 2 })
-      expect(d.relayed.slice(relayedBefore).filter((n) => n === 'trigger_check_fault')).toEqual([])
+    // 4. The check's own CLI met the 507 over HTTP and said so: a machine fault, and never relayed.
+    const relayedBefore = d.relayed.length
+    fs.writeFileSync(items, 'HTTP_507')
+    expect(await run()).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 2 })
+    expect(d.relayed.slice(relayedBefore).filter((n) => n === 'trigger_check_fault')).toEqual([])
 
-      // 5. Fixed: the mail that came while the disk was full fires now.
-      fs.writeFileSync(items, 'm1,m2')
-      const back = await run()
-      expect(back.ev, JSON.stringify(back)).toBe('trigger.fired')
-      expect(back.items.map((i: { id: string }) => i.id)).toEqual(['m2'])
-    }, 150_000)
-  })
-}
+    // 5. Fixed: the mail that came while the disk was full fires now.
+    fs.writeFileSync(items, 'm1,m2')
+    const back = await run()
+    expect(back.ev, JSON.stringify(back)).toBe('trigger.fired')
+    expect(back.items.map((i: { id: string }) => i.id)).toEqual(['m2'])
+  }, 150_000)
+})

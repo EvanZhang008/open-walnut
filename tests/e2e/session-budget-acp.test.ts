@@ -1,6 +1,6 @@
 /**
- * Session budgets on an ACP engine (Codex), through a REAL daemon of each twin
- * with its sidecars, the real ACP worker, and the scripted mock ACP agent as the
+ * Session budgets on an ACP engine (Codex), through the REAL compiled daemon
+ * binary, the real ACP worker, and the scripted mock ACP agent as the
  * adapter. The test plays Codex's part of writing the rollout file the budget
  * reads (one token_count line per model call). No model, no real CLI, no SSH:
  * the daemon gets only budgetDaemonEnv, every directory under one scratch root.
@@ -21,10 +21,8 @@ import { createCleanupLedger, within, type OwnedProcess } from './fixtures/acp-c
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDaemonSource } from '../../src/providers/daemon-source.js';
-import { SOURCE_TWIN } from '../helpers/source-twin.js';
 import { budgetDaemonEnv, stderrTail } from './fixtures/budget-daemon-env.js';
-import { checkBudgetArtifacts, HOST_DAEMON_BINARY, sameBytes } from './fixtures/budget-artifacts.js';
+import { checkBudgetArtifacts, HOST_DAEMON_BINARY } from './fixtures/budget-artifacts.js';
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -41,28 +39,13 @@ const HOME_TAG = '/acp-budget-e2e-home';
 /** A shared parent the harness reaper never removes (NEVER_OURS in tests/setup/tmp-reaper.ts): a root kept after a failed cleanup stays for a look. */
 const ROOT_PARENT = path.join(os.tmpdir(), 'walnut-budget-e2e');
 
-function sourceDaemonScript(dir: string): string {
-  fs.writeFileSync(path.join(dir, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 });
-  for (const sidecar of ['acp-daemon-core.cjs', 'usage-core.cjs']) {
-    fs.copyFileSync(path.join(BIN_DIR, sidecar), path.join(dir, sidecar));
-    if (!sameBytes(path.join(BIN_DIR, sidecar), path.join(dir, sidecar))) throw new Error(`${sidecar} copy differs`);
-  }
-  return path.join(dir, 'daemon.cjs');
-}
-
-// Both twins, always: a missing or stale artifact fails here instead of skipping a twin.
-const TWINS: Array<{ name: string; command: (dir: string) => [string, string[]] }> = [
-  { name: 'source daemon + sidecars', command: dir => [SOURCE_TWIN.file, [sourceDaemonScript(dir), '--start']] },
-  { name: 'real binary', command: () => [DAEMON_BIN, ['--start']] },
-];
-
-for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
+// Always run: a missing or stale artifact fails here (checkBudgetArtifacts) instead of skipping.
+describe('ACP session budget (real binary)', () => {
   let root = '';
   let proc: ChildProcess | null = null;
   let ws: WebSocket | null = null;
   let rpcId = 0;
   const pushed: Array<Record<string, unknown>> = [];
-  let command: [string, string[]];
 
   let stderr = stderrTail();
   /** Everything this test started, and the proof it is gone (tests/e2e/fixtures/acp-cleanup-ledger.ts). */
@@ -87,13 +70,13 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
   async function startDaemon(): Promise<void> {
     const env = budgetDaemonEnv(root, { extra: { MOCK_ACP_FAIL_LOAD_FILE: path.join(root, 'fail-next-load'), MOCK_ACP_WITNESS: path.join(root, 'acp-witness.jsonl') } });
     stderr = stderrTail();
-    const p = spawn(command[0], command[1], { env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(DAEMON_BIN, ['--start'], { env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     proc = p;
     if (!p.pid) throw new Error('daemon did not spawn: ' + stderr.text);
     daemonRecord = null;
     // Between the spawn and this record there is a live child with no proof of identity: if the record
     // fails, the start is unproven (the root is kept) and stopDaemon will not signal it.
-    try { daemonRecord = ledger.daemonSpawned(p.pid, path.basename(command[1][0] === '--start' ? command[0] : command[1][0])); }
+    try { daemonRecord = ledger.daemonSpawned(p.pid, path.basename(DAEMON_BIN)); }
     catch (error) { ledger.unknown(`daemon ${p.pid}`, `its identity could not be recorded: ${(error as Error).message}`); throw error; }
     p.stderr!.on('data', chunk => stderr.push(chunk));
     p.on('error', error => stderr.push(`\nspawn error: ${error.message}`));
@@ -196,9 +179,8 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
   beforeAll(async () => {
     fs.mkdirSync(ROOT_PARENT, { recursive: true, mode: 0o700 });
     root = fs.mkdtempSync(path.join(ROOT_PARENT, 'acp-'));
-    for (const dir of ['tmp', 'work', 'daemon', 'streams', 'home/codex/sessions', 'home/config/projects', 'twin']) fs.mkdirSync(path.join(root, dir), { recursive: true });
+    for (const dir of ['tmp', 'work', 'daemon', 'streams', 'home/codex/sessions', 'home/config/projects']) fs.mkdirSync(path.join(root, dir), { recursive: true });
     const manifest = checkBudgetArtifacts(BIN_DIR);
-    command = twin.command(path.join(root, 'twin'));
     await startDaemon();
     const hello = await rpc('hello');
     expect(hello.version).toBe(manifest.version);

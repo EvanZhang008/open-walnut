@@ -3,9 +3,9 @@
  * (agent-commands-v1, docs/plan/agent-provider-platform.md P1).
  *
  * resolveAgentCommand is the whole routing contract: one namespace in, one
- * legacy per-engine daemon command out. Both daemon twins dispatch through it
- * (the source twin via a hand-inlined copy), so the table is pinned here plus a
- * cheap text-parity guard over the template.
+ * legacy per-engine daemon command out. The session daemon
+ * (daemon-standalone.ts) imports it and dispatches through it, so the table is
+ * pinned here plus a cheap text guard over the daemon's dispatch block.
  *
  * The module is dependency-free on purpose (the bun daemon bundles it), so it
  * duplicates the "which engines are ACP" answer that engine-registry owns. That
@@ -177,55 +177,7 @@ describe('resolveAgentCommand — unknown ops', () => {
   })
 })
 
-describe('daemon-source twin carries the agent.* dispatch block', () => {
-  // The SSH-deployed template can't import the module, so it inlines a copy.
-  // Cheap sync guard: the case labels and the inlined resolver must be present.
-  const templateSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
-
-  it("has the case 'agent.start': entry point", () => {
-    expect(templateSrc).toContain("case 'agent.start':")
-  })
-
-  it('has a case label for every declared op', () => {
-    for (const op of AGENT_OPS) {
-      expect(templateSrc, `missing case 'agent.${op}':`).toContain(`case 'agent.${op}':`)
-    }
-  })
-
-  it('inlines resolveAgentCommand and names the module it must stay in sync with', () => {
-    expect(templateSrc).toMatch(/function resolveAgentCommand\(engine, op\)/)
-    expect(templateSrc).toContain('Keep in sync with src/providers/agent-command-map.ts')
-  })
-
-  it('replies with the structured errorKind instead of a bare error', () => {
-    expect(templateSrc).toMatch(/errorKind:\s*agentRoute\.errorKind/)
-  })
-
-  it('BEHAVIORAL parity: the inlined routing table answers every (engine, op) pair identically', () => {
-    // Text presence can't catch a drifted table VALUE ('setOption' → 'setmode'
-    // in one twin only). Extract the inlined block, evaluate it, and sweep the
-    // full matrix against the module. The extracted text is our own source.
-    const start = templateSrc.indexOf('var AGENT_ACP_ENGINES')
-    expect(start, 'inlined AGENT_ACP_ENGINES not found').toBeGreaterThan(-1)
-    const end = templateSrc.indexOf('function dispatchCommand', start)
-    expect(end, 'dispatchCommand after the inlined resolver not found').toBeGreaterThan(start)
-    const block = templateSrc.slice(start, end)
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const inlined = new Function(`${block}; return resolveAgentCommand;`)() as typeof resolveAgentCommand
-    const engines = [
-      undefined, null, '', 'claude', 'some-future-engine', 'constructor', 'CODEX',
-      ...SESSION_ENGINE_IDS,
-    ]
-    for (const engine of engines) {
-      for (const op of [...AGENT_OPS, 'bogus']) {
-        expect(inlined(engine, op), `divergence at (${String(engine)}, ${op})`)
-          .toEqual(resolveAgentCommand(engine, op))
-      }
-    }
-  })
-})
-
-describe('daemon-standalone twin carries the agent.* dispatch block', () => {
+describe('the session daemon carries the agent.* dispatch block', () => {
   const standaloneSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
   it('has a case label for every declared op', () => {
@@ -233,22 +185,24 @@ describe('daemon-standalone twin carries the agent.* dispatch block', () => {
       expect(standaloneSrc, `missing case 'agent.${op}':`).toContain(`case 'agent.${op}':`)
     }
   })
+
+  it('routes through the module and replies with the structured errorKind instead of a bare error', () => {
+    expect(standaloneSrc).toContain("import { resolveAgentCommand } from './agent-command-map.js'")
+    expect(standaloneSrc).toMatch(/errorKind:\s*route\.errorKind/)
+  })
 })
 
 describe('bridge allowlist never exposes agent.*', () => {
   // The agent.* re-dispatch bypasses the bridge allowlist check by
   // construction (the allowlist runs BEFORE dispatch). Adding agent.start
-  // "for symmetry" would hand a compromised cloud box arbitrary-argv spawn —
-  // pin the invariant on both twins.
-  for (const file of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-    it(`${file} BRIDGE_ALLOWED_COMMANDS has no agent.* entry`, () => {
-      const src = fs.readFileSync(path.join(ROOT, file), 'utf-8')
-      const defStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
-      expect(defStart, 'BRIDGE_ALLOWED_COMMANDS not found').toBeGreaterThan(-1)
-      const defEnd = src.indexOf('])', defStart)
-      expect(defEnd, 'BRIDGE_ALLOWED_COMMANDS closing ]) not found').toBeGreaterThan(defStart)
-      const block = src.slice(defStart, defEnd)
-      expect(block).not.toMatch(/['"]agent\./)
-    })
-  }
+  // "for symmetry" would hand a compromised cloud box arbitrary-argv spawn.
+  it('daemon-standalone.ts BRIDGE_ALLOWED_COMMANDS has no agent.* entry', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    const defStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+    expect(defStart, 'BRIDGE_ALLOWED_COMMANDS not found').toBeGreaterThan(-1)
+    const defEnd = src.indexOf('])', defStart)
+    expect(defEnd, 'BRIDGE_ALLOWED_COMMANDS closing ]) not found').toBeGreaterThan(defStart)
+    const block = src.slice(defStart, defEnd)
+    expect(block).not.toMatch(/['"]agent\./)
+  })
 })

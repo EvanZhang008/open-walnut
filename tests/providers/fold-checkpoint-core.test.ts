@@ -307,15 +307,4 @@ describe('fold checkpoint', () => {
     expect(make().write(jsonl, foldText(fs.readFileSync(jsonl, 'utf8')), null)).toBe(true)
     expect(JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8')).v).toBe(FOLD_CHECKPOINT_FORMAT)
   })
-
-  it('survives the source twin injection (self-contained factory)', () => {
-    // daemon-source.ts inlines createFoldCheckpoint.toString(); rebuild it the
-    // same way and use it.
-    const rebuilt = new Function('return (' + createFoldCheckpoint.toString() + ')')() as typeof createFoldCheckpoint
-    fs.writeFileSync(jsonl, content(20))
-    const fold = foldText(fs.readFileSync(jsonl, 'utf8'))
-    const ck = rebuilt({ fs, createHash, pid: process.pid, minBytes: MIN })
-    expect(ck.write(jsonl, fold, null)).toBe(true)
-    expect(make().load(jsonl)?.fold).toEqual(fold)
-  })
 })

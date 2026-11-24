@@ -16,7 +16,6 @@ const ROOT = path.resolve(__dirname, '../..')
 const SITES: Record<string, string> = {
   // Restore at the point of reading.
   'src/providers/daemon-standalone.ts': 'restores: fs.read/readRange/readBounded/stat/ls/find and a start restores first (restoreForRead, plainFindResults, restoreForStart)',
-  'src/providers/daemon-source.ts': 'restores: the same, through the task-dir-core.cjs sidecar',
   'src/providers/transcript-archive.ts': 'the archive itself',
   'src/providers/history-ready-core.ts': 'reads bounded .jsonl.gz tails through gunzip without restoring; an offloaded transcript or archived rewind answers none',
   'src/core/history-remote/loading.ts': 'reads only the manifest (is the session kept remotely?) and a stat of its transcript and .gz',
@@ -106,20 +105,17 @@ describe('transcript archive: every transcript site is listed', () => {
   it('the restoring sites really call the archive', () => {
     const calls: Record<string, RegExp> = {
       'src/providers/daemon-standalone.ts': /restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)[\s\S]*plainFindResults\(found, name\)[\s\S]*restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)|restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)[\s\S]*restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)/,
-      'src/providers/daemon-source.ts': /restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)[\s\S]*transcriptRestoreForRead\(filePath\)[\s\S]*transcriptPlainFind\(found, name\)/,
       'src/core/session-file-reader.ts': /restoreArchivedAt\(/,
       'src/providers/session-changes-core.ts': /restoreArchivedAt\(/,
       'src/core/session-jsonl-migration.ts': /restoreArchivedAt\(/,
       'src/core/stream-retention.ts': /transcriptSessionId\(/,
     }
     for (const [file, re] of Object.entries(calls)) expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), file).toMatch(re)
-    // Both twins restore in each file command.
+    // The daemon restores in each file command.
+    const sa = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
     for (const fn of ['cmdFsRead', 'cmdFsStat', 'cmdFsReadRange', 'cmdFsLs', 'cmdFsReadBounded']) {
-      const sa = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
-      const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')
-      const body = (s: string) => s.slice(s.indexOf(`async function ${fn}(`), s.indexOf('\n}\n', s.indexOf(`async function ${fn}(`)))
-      expect(body(sa), `standalone ${fn}`).toMatch(/await restoreForRead\(/)
-      expect(body(src), `source ${fn}`).toMatch(/await transcriptRestoreForRead\(/)
+      const body = sa.slice(sa.indexOf(`async function ${fn}(`), sa.indexOf('\n}\n', sa.indexOf(`async function ${fn}(`)))
+      expect(body, fn).toMatch(/await restoreForRead\(/)
     }
   })
 })

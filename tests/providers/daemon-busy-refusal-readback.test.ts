@@ -5,7 +5,7 @@
  * 2026-11-23 four such read backs from a dev host were logged as errors and kept a health alarm
  * on while the old daemon served untouched.
  *
- * The members are enumerated from the source: a new `!force` refusal in either daemon twin or the
+ * The members are enumerated from the source: a new `!force` refusal in the session daemon or the
  * command drain fails here until DAEMON_BUSY_WORDS and the runner's retry cover it.
  */
 import fs from 'node:fs'
@@ -19,10 +19,10 @@ import { runnerScript } from '../../src/providers/daemon-net-update-io.js'
 import type { NetUpdateRecord } from '../../src/providers/daemon-net-update-io.js'
 import type { UpdateTail } from '../../src/providers/daemon-update-tail.js'
 
-const SOURCES = ['daemon-standalone.ts', 'daemon-source.ts', 'daemon-command-drain.ts']
+const SOURCES = ['daemon-standalone.ts', 'daemon-command-drain.ts']
   .map((f) => path.join(__dirname, '../../src/providers', f))
 
-/** The text of every refusal a `force` goes over, in the twins and the drain. */
+/** The text of every refusal a `force` goes over, in the daemon and the drain. */
 function busyRefusals(): string[] {
   const found = new Set<string>()
   const re = /if \(!(?:opts\.)?force\b[^\n]*\)\s*(?:\{\s*)?(?:return sendError\(ws, id, |throw new Error\()'([^']+)'/g

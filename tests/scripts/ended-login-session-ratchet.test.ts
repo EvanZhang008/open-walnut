@@ -121,14 +121,12 @@ describe('no server starts in a directory that may be deleted', () => {
   })
 
   it('every long-lived Walnut process keeps a working directory that exists (a child inherits only its parent\'s)', () => {
-    // The server: healCwd at boot and on its monitor (above). The daemon, both twins:
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(twin)
-      expect(src, twin).toMatch(/function healDaemonCwd\(\)/)
-      // The standalone twin heals in its process entry (runDaemonProcess), the source twin at load.
-      expect(src, twin).toMatch(/\n\s*healDaemonCwd\(\);?\n/)
-      expect(src, twin).toMatch(/setInterval\(healDaemonCwd, 60_?000\)/)
-    }
+    // The server: healCwd at boot and on its monitor (above). The daemon heals in its process
+    // entry (runDaemonProcess) and every minute after:
+    const daemon = read('src/providers/daemon-standalone.ts')
+    expect(daemon).toMatch(/function healDaemonCwd\(\)/)
+    expect(daemon).toMatch(/\n\s*healDaemonCwd\(\);?\n/)
+    expect(daemon).toMatch(/setInterval\(healDaemonCwd, 60_?000\)/)
     // The Mac app is started by LaunchServices in "/", and names the server's directory (below).
   })
 

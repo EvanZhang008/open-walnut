@@ -6,8 +6,7 @@
  * the call came back `hub_timeout: primary server timed out` after 20 s with no job id,
  * although the command had started there; its output was lost. Now every client face picks
  * `hx-<uuid>` before the call leaves and sends it as `job_id`: the in-session CLI
- * (wn-cli.ts), the template CLI in the daemon's source twin (daemon-source.ts), and the MCP
- * server on a host (walnut-mcp-stdio.ts). When no answer comes, each prints that id and the
+ * (wn-cli.ts) and the MCP server on a host (walnut-mcp-stdio.ts). When no answer comes, each prints that id and the
  * exact host_exec_read to run. A server older than the field refuses it before anything runs,
  * and each face then calls once more without it. `hub_unreachable` means the call never
  * reached the server: nothing ran, and the faces say so instead.
@@ -16,7 +15,7 @@
  * answer was lost) is in tests/e2e/host-exec-e2e.test.ts.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -27,9 +26,7 @@ import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunI
 import { runWalnutCli } from '../../../src/providers/wn-cli.js'
 import { createWalnutMcpHandler } from '../../../src/providers/walnut-mcp-stdio.js'
 import { runTools } from '../../../src/commands/tools.js'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { parseOpArgs } from '../../../src/ops/executor.js'
-import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 import type { WalnutOp } from '../../../src/ops/registry.js'
 
 const HUB_TIMEOUT = { ok: false, error: { code: 'hub_timeout', message: 'primary server timed out' } }
@@ -219,90 +216,6 @@ describe('the in-session CLI (wn-cli.ts)', () => {
   })
 })
 
-describe('the template CLI (daemon-source.ts)', () => {
-  async function run(sock: string, flags: string[] = [], op = 'host_exec', payload = CALL): Promise<{ code: number | null; err: string; out: string }> {
-    const twin = path.join(dir, 'daemon.cjs')
-    if (!fs.existsSync(twin)) fs.writeFileSync(twin, getDaemonSource())
-    return new Promise((resolve) => {
-      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', 'tools', 'call', ...flags, op, payload], {
-        env: { ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_AGENT_SOCKET: sock, WALNUT_SESSION_ID: 'probe-sid' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let err = ''
-      let out = ''
-      child.stderr.on('data', (d) => { err += d })
-      child.stdout.on('data', (d) => { out += d })
-      child.on('close', (code) => resolve({ code, err, out }))
-    })
-  }
-
-  it('sends its own job id, names it when no answer comes, and drops it for an older server', async () => {
-    const lost = await gateway(dir, () => HUB_TIMEOUT)
-    const r = await run(lost.sock)
-    lost.close()
-    expect(r.code).toBe(5)
-    const sent = lost.requests[0].args.args.job_id as string
-    expect(sent).toMatch(/^hx-[0-9a-f-]{36}$/)
-    expect(failureOf(r.err).message).toContain(`host_exec may have started on studio-mac as job ${sent}: do not run it again`)
-    expect(failureOf(r.err).message).toContain(`walnut tools call host_exec_read '{"host":"studio-mac","job_id":"${sent}","wait_ms":10000}'`)
-
-    fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
-    const old = await gateway(dir, (req, n) => (n === 1 ? olderServerRefusal(req.args.args) : DONE))
-    const r2 = await run(old.sock)
-    old.close()
-    expect(r2.code).toBe(0)
-    expect(old.requests.map((q) => q.args.args.job_id === undefined)).toEqual([false, true])
-
-    fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
-    const away = await gateway(dir, () => HUB_AWAY)
-    const r3 = await run(away.sock)
-    away.close()
-    expect(failureOf(r3.err).message).toContain('so nothing ran on studio-mac')
-    expect(r3.err).not.toContain('may have started')
-
-    // --json before the op (the twin's legacy form): stdout stays the one reply, and the run's id still reaches stderr.
-    fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
-    const lostJson = await gateway(dir, () => HUB_TIMEOUT)
-    const r4 = await run(lostJson.sock, ['--json'])
-    lostJson.close()
-    expect(r4.code).toBe(5)
-    expect(JSON.parse(r4.out)).toEqual(HUB_TIMEOUT)
-    expect(r4.err).toContain(`as job ${lostJson.requests[0].args.args.job_id as string}: do not run it again`)
-
-    // A socket that refuses the connection: the call never left.
-    const r5 = await run(staleSocket(dir))
-    expect(r5.code).toBe(6)
-    expect(failureOf(r5.err).message).toContain("host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac")
-    expect(r5.err).not.toContain('may have started')
-  }, 60_000)
-
-  it('picks a copy_id for host_copy the same way, and says the same as the other clients', async () => {
-    const copy = { from_host: 'devbox', from: '~/out/app.tgz', to_host: 'studio-mac', to: '~/in/app.tgz' }
-    const lost = await gateway(dir, () => HUB_TIMEOUT)
-    const r = await run(lost.sock, [], 'host_copy', JSON.stringify(copy))
-    lost.close()
-    expect(r.code).toBe(5)
-    const sent = lost.requests[0].args.args.copy_id as string
-    expect(sent).toMatch(/^hc-[0-9a-f-]{36}$/)
-    expect(lost.requests[0].args.args.job_id).toBeUndefined()
-    for (const line of lostRunLines('host_copy', copy, sent)) expect(failureOf(r.err).message).toContain(line)
-
-    fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
-    const old = await gateway(dir, (req, n) => (n === 1 ? olderServerRefusal(req.args.args, 'host_copy') : DONE))
-    const r2 = await run(old.sock, [], 'host_copy', JSON.stringify(copy))
-    old.close()
-    expect(r2.code).toBe(0)
-    expect(old.requests.map((q) => q.args.args.copy_id === undefined)).toEqual([false, true])
-
-    fs.rmSync(path.join(dir, 'gw.sock'), { force: true })
-    const away = await gateway(dir, () => HUB_AWAY)
-    const r3 = await run(away.sock, [], 'host_copy', JSON.stringify(copy))
-    away.close()
-    expect(failureOf(r3.err).message).toContain(awayLines('host_copy', copy)[0])
-    expect(r3.err).not.toContain('may have started')
-  }, 60_000)
-})
-
 describe('the Mac\'s own CLI (src/commands/tools.ts)', () => {
   it('an older server refuses the field: the same call once more without it', async () => {
     const bodies: Array<Record<string, unknown>> = []
@@ -388,12 +301,9 @@ describe('the MCP server on a host (walnut-mcp-stdio.ts)', () => {
   })
 })
 
-describe('the lost-run lines name the op the call made, in both twins (2026-11-05 code review 11)', () => {
-  it('host_exec_pinned says host_exec_pinned; the source twin builds the line from the op, never a fixed host_exec', () => {
+describe('the lost-run lines name the op the call made (2026-11-05 code review 11)', () => {
+  it('host_exec_pinned says host_exec_pinned', () => {
     expect(lostRunLines('host_exec_pinned', { host: 'h', grant_id: 'xg-0000', command: 'true' }, 'hx-abcd-1234')[0])
       .toBe('walnut: host_exec_pinned may have started on h as job hx-abcd-1234: do not run it again. Read it first:')
-    const twin = fs.readFileSync(path.join(__dirname, '../../../src/providers/daemon-source.ts'), 'utf8')
-    expect(twin).toContain("'walnut: ' + wnRunId.op + ' may have started on ' + wnRunId.host")
-    expect(twin).not.toContain("'walnut: host_exec may have started on '")
   })
 })

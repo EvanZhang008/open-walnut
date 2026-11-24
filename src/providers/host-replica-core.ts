@@ -16,10 +16,7 @@
  * needs the leader (`not_kept_here`), and a search says some notes are only there.
  * A kind the leader turned off here (`replica.drop`) is marked off, not just gone.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createHostReplica;
- * daemon-source.ts inlines `createHostReplica.toString()` through
- * `__CREATE_HOST_REPLICA__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createHostReplica). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'

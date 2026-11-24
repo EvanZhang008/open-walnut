@@ -6,7 +6,7 @@
  * cause was invisible in CI: the test discarded the daemon's stderr, and the
  * daemon's own FATAL line goes to its log in the daemon dir
  * (`daemon-d-<pid>-<hash>.log`, plus `daemon-exit-d-<pid>-<hash>.log` on a
- * JS-visible death, see daemonCrash in daemon-standalone.ts / daemon-source.ts),
+ * JS-visible death, see daemonCrash in daemon-standalone.ts),
  * which sits in a temp dir the test removes afterwards.
  *
  * `onDaemonEarlyExit(proc, { daemonDir }, fail)` replaces the boot helper's

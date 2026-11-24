@@ -6,7 +6,7 @@
  *
  *  - wn client (resolveWalnutCliEndpoint / isTrustedGatewaySocket): env wins when
  *    present, otherwise the well-known socket path + caller sid 'external'.
- *  - daemon gateway (resolveGatewayCallerSid, used by both twins): 'external'
+ *  - daemon gateway (resolveGatewayCallerSid, used by the daemon): 'external'
  *    passes through, every other unknown sid is still refused locally.
  *  - hub (capability-router): 'external' is PROVENANCE ONLY — the same op
  *    catalog a tracked session sees, the same policy gates, and a per-HOST rate
@@ -44,8 +44,6 @@ import {
   type CapabilityRouterDeps,
 } from '../../../src/core/peers/capability-router.js';
 import { PeerThrottle, GATEWAY_WRITE_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
-import { getDaemonSource } from '../../../src/providers/daemon-source.js';
-import { SOURCE_TWIN } from '../../helpers/source-twin.js';
 
 const UID = 501;
 const TRUSTED: WalnutSocketInfo = { isSocket: true, uid: UID, mode: 0o600 };
@@ -104,11 +102,6 @@ describe('resolveWalnutCliEndpoint', () => {
     const r = resolveWalnutCliEndpoint({ WALNUT_DAEMON_DIR: '/tmp/walnut-iso', HOME: '/home/me' }, probe, UID);
     expect(r.ok).toBe(false);
     expect(seen).toEqual([`/tmp/walnut-iso/${GATEWAY_SOCKET_FILENAME}`]);
-  });
-
-  it('the source twin CLI mirrors the same candidate order', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../../src/providers/daemon-source.ts'), 'utf-8');
-    expect(src).toContain("[PROD_DAEMON_DIR].concat(process.env.HOME ? [path.join(process.env.HOME, '.cache', 'open-walnut')] : [])");
   });
 
   it('honours WALNUT_DAEMON_DIR so an isolated daemon is reachable', () => {
@@ -206,93 +199,66 @@ describe('resolveGatewayCallerSid', () => {
   });
 });
 
-// ── daemon twins stay in sync (the node twin cannot import) ──
+// ── the daemon's side of the fallback ──
 
-describe('daemon twin parity for the external caller', () => {
+describe('the daemon and the external caller', () => {
   const ROOT = path.resolve(__dirname, '../../..');
-  const nodeTwin = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8');
-  const bunTwin = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8');
+  const daemon = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8');
 
-  it('both twins accept the external caller sid in their gateway line handler', () => {
-    expect(nodeTwin).toMatch(/EXTERNAL_CALLER_SID\s*=\s*'external'/);
-    expect(nodeTwin).toMatch(/if\s*\(sid === EXTERNAL_CALLER_SID\)\s*return EXTERNAL_CALLER_SID/);
-    expect(bunTwin).toMatch(/resolveGatewayCallerSid\(req\.sid, sessions, gatewaySidAliases\)/);
+  it('accepts the external caller sid in its gateway line handler', () => {
+    expect(daemon).toMatch(/resolveGatewayCallerSid\(req\.sid, sessions, gatewaySidAliases\)/);
   });
 
-  it('the node twin mirrors the wn well-known-socket fallback with the same trust rule', () => {
-    expect(nodeTwin).toMatch(/WALNUT_AGENT_SOCKET \|\| ''/);
-    expect(nodeTwin).toMatch(/WALNUT_SESSION_ID \|\| ''\)\.trim\(\) \|\| 'external'/);
-    expect(nodeTwin).toMatch(/path\.join\(DAEMON_DIR, 'agent-gateway\.sock'\)/);
-    // Same three-part trust check as isTrustedGatewaySocket.
-    expect(nodeTwin).toMatch(/isSocket\(\)/);
-    expect(nodeTwin).toMatch(/sockStat\.uid !== myUid/);
-    expect(nodeTwin).toMatch(/sockStat\.mode & 0o077/);
+  it('never loosens the socket mode for the fallback', () => {
+    expect(daemon).toMatch(/chmodSync\(GATEWAY_SOCK_PATH, 0o600\)/);
+    expect(daemon).not.toMatch(/chmodSync\(GATEWAY_SOCK_PATH, 0o6[67]/);
   });
 
-  it('neither twin loosens the socket mode for the fallback', () => {
-    for (const src of [nodeTwin, bunTwin]) {
-      expect(src).toMatch(/chmodSync\(GATEWAY_SOCK_PATH, 0o600\)/);
-      expect(src).not.toMatch(/chmodSync\(GATEWAY_SOCK_PATH, 0o6[67]/);
-    }
-  });
-
-  it('neither twin exits wn without flushing stdout first', () => {
+  it('the CLI never exits without flushing stdout first', () => {
     // process.exit() DISCARDS stdout still queued for a pipe, so a piped
-    // `wn ... --json` came out cut at the 64KB pipe buffer. The bun twin fixed
-    // it in wn-cli.ts (writeStdout); the node twin kept the bug for months
-    // because parity was only pinned on the trust rule. Both must buffer.
+    // `walnut ... --json` came out cut at the 64KB pipe buffer: wn-cli.ts buffers (writeStdout).
     const wnCli = fs.readFileSync(path.join(ROOT, 'src/providers/wn-cli.ts'), 'utf-8');
     expect(wnCli).toMatch(/async function writeStdout/);
     expect(wnCli).toMatch(/process\.stdout\.write\(text, \(\) => finish\(\)\)/);
-    // The node twin buffers into outBuf and flushes inside exitWn.
-    expect(nodeTwin).toMatch(/var out = function \(s\) \{ outBuf \+= s \+ '\\\\n'; \};/);
-    expect(nodeTwin).toMatch(/var exitWn = function \(code\)/);
-    expect(nodeTwin).toMatch(/process\.stdout\.write\(text, finishExit\)/);
-    // No un-flushed write-then-exit left anywhere in the twin's wn path.
-    const wnSection = nodeTwin.slice(
-      nodeTwin.indexOf('function runWnMinimal'),
-      nodeTwin.indexOf('// ── PATH setup ──'),
-    );
-    expect(wnSection.length).toBeGreaterThan(1000);
-    expect(wnSection).not.toMatch(/process\.stdout\.write\(s \+ '\\\\n'\)/);
   });
 
-  it('both twins install a walnut on the user PATH, prod-dir only and marker-guarded', () => {
+  it('installs a walnut on the user PATH, prod-dir only and marker-guarded', () => {
     // GATEWAY_SHIM_DIR only reaches sessions the daemon spawns, so without this
     // a hand-started terminal answers `walnut: command not found` and the whole
     // env-less fallback is unreachable.
-    for (const src of [nodeTwin, bunTwin]) {
-      expect(src).toMatch(/function installUserWalnutShim/);
-      expect(src).toMatch(/installUserWalnutShim\(\)/);
-      // Never for an isolated (test/sandbox/ephemeral) daemon.
-      // (Production is /tmp/open-walnut or its ~/.cache/open-walnut fallback.)
-      expect(src).toMatch(/function installUserWalnutShim\(\)[^{]*\{\s*if \(!IS_PROD_DAEMON_DIR\) return/);
-      expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/);
-      // Never clobber a foreign binary: the guard reads the shim's marker.
-      expect(src).toMatch(/existing\.(includes|indexOf)\((USER_WALNUT_SHIM_MARKER|marker)\)/);
-      // Built from parts, so the compiled file never carries the literal (an old daemon would overwrite it).
-      expect(src).toMatch(/USER_WALNUT_SHIM_TAG = \['walnut', 'user', 'shim'\]\.join\('-'\)/);
-      expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = USER_WALNUT_SHIM_TAG \+ ' v1'/);
-      expect(src).toMatch(/'\.local', 'bin'\)/);
-      // The retired `wn` name is actively cleaned up, marker-guarded: our old
-      // shims are deleted, a foreign wn binary is left alone.
-      expect(src).toMatch(/LEGACY_WN_SHIM_MARKERS = \['walnut-wn-shim v1'\]/);
-      expect(src).not.toMatch(/function userWnShimText/);
-    }
+    expect(daemon).toMatch(/function installUserWalnutShim/);
+    expect(daemon).toMatch(/installUserWalnutShim\(\)/);
+    // Never for an isolated (test/sandbox/ephemeral) daemon.
+    // (Production is /tmp/open-walnut or its ~/.cache/open-walnut fallback.)
+    expect(daemon).toMatch(/function installUserWalnutShim\(\)[^{]*\{\s*if \(!IS_PROD_DAEMON_DIR\) return/);
+    expect(daemon).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/);
+    // Never clobber a foreign binary: the guard reads the shim's marker.
+    expect(daemon).toMatch(/existing\.(includes|indexOf)\((USER_WALNUT_SHIM_MARKER|marker)\)/);
+    // Built from parts, so the compiled file never carries the literal (an old daemon would overwrite it).
+    expect(daemon).toMatch(/USER_WALNUT_SHIM_TAG = \['walnut', 'user', 'shim'\]\.join\('-'\)/);
+    expect(daemon).toMatch(/USER_WALNUT_SHIM_MARKER = USER_WALNUT_SHIM_TAG \+ ' v1'/);
+    expect(daemon).toMatch(/'\.local', 'bin'\)/);
+    // The retired `wn` name is actively cleaned up, marker-guarded: our old
+    // shims are deleted, a foreign wn binary is left alone.
+    expect(daemon).toMatch(/LEGACY_WN_SHIM_MARKERS = \['walnut-wn-shim v1'\]/);
+    expect(daemon).not.toMatch(/function userWnShimText/);
   });
 });
 
-// ── the node twin, actually run: a piped reply must arrive whole ──
+// ── the CLI a session on a host runs (`<daemon> walnut ...` is wn-cli.ts), actually run: a piped reply must arrive whole ──
 
-describe('node daemon twin: wn output through a pipe', () => {
-  function materializeNodeTwin(target: string): void {
-    fs.writeFileSync(target, getDaemonSource());
+describe('the walnut CLI: output through a pipe', () => {
+  /** wn-cli.ts as its own process, as the daemon's `walnut` keyword runs it. */
+  function cliRunner(dir: string): string {
+    const runner = path.join(dir, 'walnut-cli.ts');
+    fs.writeFileSync(runner, `import { runWalnutCli } from ${JSON.stringify(path.join(__dirname, '../../../src/providers/wn-cli.ts'))}\n`
+      + 'process.exit(await runWalnutCli(process.argv.slice(2)))\n');
+    return runner;
   }
 
   it('delivers a >64KB --json reply complete and parseable (not cut at the pipe buffer)', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-twin-'));
-    const twin = path.join(dir, 'daemon.cjs');
-    materializeNodeTwin(twin);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-pipe-'));
+    const runner = cliRunner(dir);
 
     const ops = Array.from({ length: 4000 }, (_, i) => ({ name: `op_${i}`, title: 'T'.repeat(20), readonly: true }));
     const payload = JSON.stringify({ ok: true, result: { ops } });
@@ -304,7 +270,7 @@ describe('node daemon twin: wn output through a pipe', () => {
     fs.chmodSync(sock, 0o600);
 
     const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', 'tools', 'list', '--json'], {
+      const child = spawn(process.execPath, [runner, 'tools', 'list', '--json'], {
         env: {
           ...process.env,
           WALNUT_DAEMON_DIR: dir,
@@ -331,9 +297,8 @@ describe('node daemon twin: wn output through a pipe', () => {
   }, 30_000);
 
   // ── tools.call payloads that cannot ride argv ──
-  // The source-deploy twin is the CLI face a REMOTE session actually gets (the
-  // on-PATH `walnut` shim execs `bun daemon.cjs wn`), and it is a separate
-  // hand-inlined implementation from wn-cli.ts. It parsed argv only, so a letter
+  // The CLI a REMOTE session gets (the on-PATH `walnut` shim execs the daemon's
+  // `walnut` keyword). An older copy parsed argv only, so a letter
   // with an inline base64 audio digest died on the client with "Argument list
   // too long": Linux caps ONE argv entry at MAX_ARG_STRLEN (128KB) regardless of
   // ARG_MAX, and execve fails before any Walnut code runs. Every payload here is
@@ -341,14 +306,16 @@ describe('node daemon twin: wn output through a pipe', () => {
   // on Linux instead of surfacing months later on a remote host.
   const OVER_ARGV_LIMIT = 200 * 1024;
 
-  /** Run the twin's wn CLI against a socket that records the request line. */
-  async function runTwinCall(
+  /**
+   * Run the walnut CLI against a socket that records what it is sent. `call` is the request
+   * line: a carded op (human_inbox_send) sends its chat-card record after it.
+   */
+  async function runCliCall(
     args: string[],
     opts: { stdin?: string } = {},
-  ): Promise<{ code: number | null; out: string; err: string; received: string }> {
+  ): Promise<{ code: number | null; out: string; err: string; received: string; call: string }> {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-args-'));
-    const twin = path.join(dir, 'daemon.cjs');
-    materializeNodeTwin(twin);
+    const runner = cliRunner(dir);
     const sock = path.join(dir, 'agent-gateway.sock');
     let received = '';
     const server = net.createServer((c) => {
@@ -361,7 +328,7 @@ describe('node daemon twin: wn output through a pipe', () => {
     fs.chmodSync(sock, 0o600);
 
     const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', ...args], {
+      const child = spawn(process.execPath, [runner, ...args], {
         env: {
           ...process.env,
           WALNUT_DAEMON_DIR: dir,
@@ -379,7 +346,7 @@ describe('node daemon twin: wn output through a pipe', () => {
     });
     server.close();
     fs.rmSync(dir, { recursive: true, force: true });
-    return { ...result, received };
+    return { ...result, received, call: received.split('\n')[0] };
   }
 
   /** A payload too big for one argv entry, with a tail marker to catch truncation. */
@@ -395,10 +362,10 @@ describe('node daemon twin: wn output through a pipe', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wn-payload-')), 'letter.json');
     fs.writeFileSync(file, json);
 
-    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
+    const r = await runCliCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
-    const sent = JSON.parse(r.received.trim()) as { op: string; args: { name: string; args: { html: string } } };
+    const sent = JSON.parse(r.call) as { op: string; args: { name: string; args: { html: string } } };
     expect(sent.op).toBe('tools.call');
     expect(sent.args.name).toBe('human_inbox_send');
     // Whole, not clipped at any buffer boundary.
@@ -408,26 +375,26 @@ describe('node daemon twin: wn output through a pipe', () => {
 
   it('reads a >128KB payload from explicit stdin (-)', async () => {
     const { json, tail } = bigPayload();
-    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
+    const r = await runCliCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
-    const sent = JSON.parse(r.received.trim()) as { args: { args: { html: string } } };
+    const sent = JSON.parse(r.call) as { args: { args: { html: string } } };
     expect(sent.args.args.html.endsWith(tail)).toBe(true);
   }, 30_000);
 
   it('reads a >128KB payload from a piped stdin with no positional argument', async () => {
     const { json, tail } = bigPayload();
-    const r = await runTwinCall(['tools', 'call', 'human_inbox_send'], { stdin: json });
+    const r = await runCliCall(['tools', 'call', 'human_inbox_send'], { stdin: json });
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
-    const sent = JSON.parse(r.received.trim()) as { args: { args: { html: string } } };
+    const sent = JSON.parse(r.call) as { args: { args: { html: string } } };
     expect(sent.args.args.html.endsWith(tail)).toBe(true);
   }, 30_000);
 
   it('still accepts a small inline JSON argument', async () => {
-    const r = await runTwinCall(['tools', 'call', 'task_get', '{"id":"abc"}']);
+    const r = await runCliCall(['tools', 'call', 'task_get', '{"id":"abc"}']);
     expect(r.code).toBe(0);
-    const sent = JSON.parse(r.received.trim()) as { args: { args: { id: string } } };
+    const sent = JSON.parse(r.call) as { args: { args: { id: string } } };
     expect(sent.args.args.id).toBe('abc');
   }, 30_000);
 
@@ -438,9 +405,9 @@ describe('node daemon twin: wn output through a pipe', () => {
    * an audio digest is megabytes, and one NDJSON line becomes one WebSocket frame
    * to the hub — where `ws` answers an oversized frame by closing the socket with
    * 1009 before any handler can turn it into an error. So the request carries only
-   * the PATH and the hub range-reads the file in batches. This is the twin that
-   * gets forgotten (a remote host would keep inlining and die at the gateway line,
-   * looking like a server bug), which is why it is asserted through a real spawn.
+   * the PATH and the hub range-reads the file in batches. A remote host that kept
+   * inlining would die at the gateway line, looking like a server bug, which is
+   * why it is asserted through a real spawn.
    */
   const OVER_INLINE_LIMIT = 1024 * 1024 + 64;
 
@@ -451,12 +418,12 @@ describe('node daemon twin: wn output through a pipe', () => {
     const file = path.join(dir, 'letter.json');
     fs.writeFileSync(file, json);
 
-    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
+    const r = await runCliCall(['tools', 'call', 'human_inbox_send', `@${file}`]);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     // The request line is TINY — that is the assertion, not just the field name.
     expect(r.received.length).toBeLessThan(4096);
-    const sent = JSON.parse(r.received.trim()) as {
+    const sent = JSON.parse(r.call) as {
       args: { name: string; argsFile?: string; args?: unknown }
     };
     expect(sent.args.name).toBe('human_inbox_send');
@@ -470,31 +437,31 @@ describe('node daemon twin: wn output through a pipe', () => {
   it('spills a >1MB stdin payload to a file and sends that path', async () => {
     // stdin is not a file the hub can range-read, so the CLI has to give it one.
     const json = JSON.stringify({ subject: 's', html: 'C'.repeat(OVER_INLINE_LIMIT) });
-    const r = await runTwinCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
+    const r = await runCliCall(['tools', 'call', 'human_inbox_send', '-'], { stdin: json });
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     expect(r.received.length).toBeLessThan(4096);
-    const sent = JSON.parse(r.received.trim()) as { args: { argsFile?: string } };
+    const sent = JSON.parse(r.call) as { args: { argsFile?: string } };
     expect(sent.args.argsFile).toMatch(/walnut-args-\d+-[0-9a-z]+\.json$/);
     // …and the spill is cleaned up on exit rather than left in tmp forever.
     expect(fs.existsSync(sent.args.argsFile!)).toBe(false);
   }, 30_000);
 
   it('fails usefully on an unreadable @file, a bare @, and malformed JSON', async () => {
-    const missing = await runTwinCall(['tools', 'call', 'task_get', '@/nope/missing.json']);
+    const missing = await runCliCall(['tools', 'call', 'task_get', '@/nope/missing.json']);
     expect(missing.code).toBe(2);
     expect(missing.err).toContain('cannot read arguments from /nope/missing.json');
     expect(missing.received).toBe('');
 
-    const bare = await runTwinCall(['tools', 'call', 'task_get', '@']);
+    const bare = await runCliCall(['tools', 'call', 'task_get', '@']);
     expect(bare.code).toBe(2);
     expect(bare.err).toContain('needs a file path');
 
-    const bad = await runTwinCall(['tools', 'call', 'task_get', '{not json']);
+    const bad = await runCliCall(['tools', 'call', 'task_get', '{not json']);
     expect(bad.code).toBe(2);
     expect(bad.err).toContain('invalid JSON arguments');
 
-    const arr = await runTwinCall(['tools', 'call', 'task_get', '[1,2]']);
+    const arr = await runCliCall(['tools', 'call', 'task_get', '[1,2]']);
     expect(arr.code).toBe(2);
     expect(arr.err).toContain('must be a JSON object');
   }, 60_000);

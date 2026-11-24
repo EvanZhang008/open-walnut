@@ -306,7 +306,7 @@ describe('the journal and the host copy go on under the first home', () => {
 /** An offline host whose keys and homes come from a walnut scope. */
 function journalHostWith(jdir: string, clock: { now: number }, over: { keyOf: (h: string) => string; canonical: (h: string) => string }) {
   const made = journalHost(jdir, clock, { journal: { keyOf: over.keyOf } })
-  // journalHost builds with the path key: build again with the scope's (the twins' wiring).
+  // journalHost builds with the path key: build again with the scope's (the daemon's wiring).
   return createOfflineHostOver({ ...made.deps, keyOf: over.keyOf, canonical: over.canonical })
 }
 
@@ -322,43 +322,37 @@ describe('rollback: an older daemon (sha1 of the path a file embeds) still finds
   })
 })
 
-describe('one key for a home in both daemon twins', () => {
-  const TWINS = {
-    standalone: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8'),
-    // Only the template the remote host runs (the smoke builders above it pass stubs).
-    source: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8'),
-  }
-  for (const [name, src] of Object.entries(TWINS)) {
-    it(`${name}: no core gets a key of its own: each takes walnutScope.keyOf`, () => {
-      const closures = [...src.matchAll(/createHash\('sha1'\)\.update\((?:home|value)\)\.digest\('hex'\)\.slice\(0, 16\)/g)]
-      expect(closures.length, 'the one sha1 of a home is walnutScope\'s own dep').toBe(1)
-      expect(src.match(/keyOf: walnutScope\.keyOf/g)?.length ?? 0, 'the cores take the scope\'s key').toBeGreaterThanOrEqual(6)
-      // The journal's store and host take it through host-journal-core.ts, which passes it on as given.
-      const journalCore = fs.readFileSync(path.join(ROOT, 'src/providers/host-journal-core.ts'), 'utf8')
-      expect(journalCore.match(/keyOf: deps\.keyOf/g)?.length ?? 0).toBe(2)
-      expect(src).toMatch(/dirOf: (?:\(home\) => |function \(home\) \{ return )path\.join\(REPLICA_DIR, walnutScope\.keyOf\(home\), 'attachments'\)/)
-      // The served record names where the Walnut speaks from now (what its server computes).
-      expect(src).toMatch(/walnutScope\.pathKeyOf\(walnutScope\.whereNow\(value\)\)/)
-    })
-    it(`${name}: every command is read by its Walnut's first home, and an alias folds what came before`, () => {
-      expect(src).toMatch(/cmd = adoptCommandHome\(ws, sent\)/)
-      for (const fn of ['foldTriggerScope', 'foldHooks', 'foldBridgeLink', 'offlineHost.foldHome', 'servedWalnuts.forgetKey']) {
-        expect(src, fn).toContain(`${fn}(`)
-      }
-      // Only a server's leader.configure declares a move; nothing infers one.
-      expect(src).toMatch(/cmd\.cmd === 'leader\.configure' && cmd\.movedFrom !== undefined && isServerClient\(ws\)/)
-      expect(src).toMatch(/walnutScope\.declareMove\(/)
-      expect(src).not.toMatch(/walnutScope\.adopt\(|walnutHomeMoves|movesOffered|homeAliasMayCome|heldForLeader|waitsForLeader|HOME_ALIAS_WAIT_MS|serverPlaces|homeInUse/)
-      // The home a Walnut left is refused for good, a command and a copy alike.
-      expect(src.match(/(?<!function )refuseMovedHome\(ws, cmd, /g)?.length ?? 0).toBe(2)
-      // Why, from the scope (busy: this Walnut is elsewhere; taken: another Walnut left this path).
-      expect(src).toMatch(/walnutScope\.refusalOf\(home, cmd\.walnutId, /)
-      expect(src).toMatch(/errorKind: refusal\.errorKind, movedTo: refusal\.movedTo/)
-      // Every former home goes to the scope, and a move not taken is told back on the answer.
-      expect(src).toMatch(/formerHomes: cmd\.formerHomes/)
-      expect(src).toMatch(/moveNotTaken: notTaken/)
-      expect(src).toMatch(/if \(!cmd\) return/)
-      expect(src).toMatch(/canonical: walnutScope\.canonical/)
-    })
-  }
+describe('one key for a home in the daemon', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  it('no core gets a key of its own: each takes walnutScope.keyOf', () => {
+    const closures = [...src.matchAll(/createHash\('sha1'\)\.update\((?:home|value)\)\.digest\('hex'\)\.slice\(0, 16\)/g)]
+    expect(closures.length, 'the one sha1 of a home is walnutScope\'s own dep').toBe(1)
+    expect(src.match(/keyOf: walnutScope\.keyOf/g)?.length ?? 0, 'the cores take the scope\'s key').toBeGreaterThanOrEqual(6)
+    // The journal's store and host take it through host-journal-core.ts, which passes it on as given.
+    const journalCore = fs.readFileSync(path.join(ROOT, 'src/providers/host-journal-core.ts'), 'utf8')
+    expect(journalCore.match(/keyOf: deps\.keyOf/g)?.length ?? 0).toBe(2)
+    expect(src).toMatch(/dirOf: (?:\(home\) => |function \(home\) \{ return )path\.join\(REPLICA_DIR, walnutScope\.keyOf\(home\), 'attachments'\)/)
+    // The served record names where the Walnut speaks from now (what its server computes).
+    expect(src).toMatch(/walnutScope\.pathKeyOf\(walnutScope\.whereNow\(value\)\)/)
+  })
+  it('every command is read by its Walnut\'s first home, and an alias folds what came before', () => {
+    expect(src).toMatch(/cmd = adoptCommandHome\(ws, sent\)/)
+    for (const fn of ['foldTriggerScope', 'foldHooks', 'foldBridgeLink', 'offlineHost.foldHome', 'servedWalnuts.forgetKey']) {
+      expect(src, fn).toContain(`${fn}(`)
+    }
+    // Only a server's leader.configure declares a move; nothing infers one.
+    expect(src).toMatch(/cmd\.cmd === 'leader\.configure' && cmd\.movedFrom !== undefined && isServerClient\(ws\)/)
+    expect(src).toMatch(/walnutScope\.declareMove\(/)
+    expect(src).not.toMatch(/walnutScope\.adopt\(|walnutHomeMoves|movesOffered|homeAliasMayCome|heldForLeader|waitsForLeader|HOME_ALIAS_WAIT_MS|serverPlaces|homeInUse/)
+    // The home a Walnut left is refused for good, a command and a copy alike.
+    expect(src.match(/(?<!function )refuseMovedHome\(ws, cmd, /g)?.length ?? 0).toBe(2)
+    // Why, from the scope (busy: this Walnut is elsewhere; taken: another Walnut left this path).
+    expect(src).toMatch(/walnutScope\.refusalOf\(home, cmd\.walnutId, /)
+    expect(src).toMatch(/errorKind: refusal\.errorKind, movedTo: refusal\.movedTo/)
+    // Every former home goes to the scope, and a move not taken is told back on the answer.
+    expect(src).toMatch(/formerHomes: cmd\.formerHomes/)
+    expect(src).toMatch(/moveNotTaken: notTaken/)
+    expect(src).toMatch(/if \(!cmd\) return/)
+    expect(src).toMatch(/canonical: walnutScope\.canonical/)
+  })
 })

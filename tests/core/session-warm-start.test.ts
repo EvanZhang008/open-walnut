@@ -9,34 +9,49 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
   sessionRunner: { findSessionByClaudeId: () => undefined },
 }))
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import ts from 'typescript'
 import { initialFoldState, foldLine, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
 import { applySnapshot, setSnapshotModeForTests, _resetSnapshotApplyForTests, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-apply.js'
 import { createSessionRecord, getSessionByClaudeId, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { bus } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
+import { buildDeps, createDaemonCore } from '../helpers/daemon-core-fixtures.js'
 
-const source = getDaemonSource()
-const pushCode = source.slice(source.indexOf('function assembleSessionSnapshot'), source.indexOf('// ── Startup reconcile'))
-const markerStart = source.indexOf('// ── Send message ──')
-const markerEnd = source.indexOf('// ── Set session mode ──', markerStart)
-if (markerStart < 0 || markerEnd <= markerStart) throw new Error('Daemon marker entry point not found')
-const markerCode = source.slice(markerStart, markerEnd)
+// The daemon's own snapshot push (assembleSessionSnapshot, emitSnapshot, pushSnapshot) and its
+// marker command, cut from daemon-standalone.ts and run against the real daemon core.
+const source = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+function region(from: string, to: string): string {
+  const start = source.indexOf(from)
+  const end = source.indexOf(to, start)
+  if (start < 0 || end <= start) throw new Error(`daemon region not found: ${from}`)
+  return source.slice(start, end)
+}
+const daemonCode = ts.transpileModule(
+  region('function streamEpochOf(', '// ── daemon-core wiring ──') + '\n'
+    + region('function cmdAppendUserMarker(', '// ── Set session mode ──'),
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText
 const sid = 'warm-start'
 const line = (value: unknown) => JSON.stringify(value) + '\n'
 const endedTurn = line({ type: 'system', subtype: 'init' })
   + line({ type: 'result', is_error: false, num_turns: 1 })
   + line({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
 
-function harness() {
+let cleanupCore: (() => Promise<void>) | null = null
+
+async function harness() {
   const jsonlPath = path.join(WALNUT_HOME, 'stream.jsonl')
   fs.writeFileSync(jsonlPath, endedTurn)
+  const ctx = await buildDeps()
+  cleanupCore = ctx.cleanup
   const session = {
     jsonlPath, foldState: initialFoldState(), state: 'running', pid: 4242,
     exitCode: null, pendingCtrl: null, subscribers: new Set([{ readyState: 1 }]),
-    streamEpoch: 'warm-stream', lastPushedSnapshot: null as SessionSnapshot | null,
+    streamEpoch: 'warm-stream', lastPushedSnapshot: null as SessionSnapshot | null, snapshotTimer: null,
   }
+  ctx.sessions.set(sid, session as unknown as Parameters<typeof ctx.sessions.set>[1])
+  const core = createDaemonCore(ctx.deps)
   const frames: SessionSnapshot[] = []
   let offset = 0
   const foldAvailable = () => {
@@ -49,10 +64,11 @@ function harness() {
     }
   }
   foldAvailable()
-  const api = new Function('fs', 'sessions', 'sendEvent', 'assembleSnapshot', 'snapshotDiffers', 'foldLine', 'SNAPSHOT_COALESCE_MS', 'sendOk', 'sendError',
-    `${pushCode}\n${markerCode}\nreturn { cmdAppendUserMarker, pushSnapshot };`)(
-    fs, new Map([[sid, session]]), (_ws: unknown, _ev: string, data: { snapshot: SessionSnapshot }) => frames.push(data.snapshot),
-    assembleSnapshot, snapshotDiffers, foldLine, 50,
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const api = new Function('fs', 'sessions', 'core', 'sendEvent', 'assembleSnapshot', 'snapshotDiffers', 'SNAPSHOT_COALESCE_MS', 'sendOk', 'sendError',
+    `${daemonCode}\nreturn { cmdAppendUserMarker, pushSnapshot };`)(
+    fs, ctx.sessions, core, (_ws: unknown, _ev: string, data: { snapshot: SessionSnapshot }) => frames.push(data.snapshot),
+    assembleSnapshot, snapshotDiffers, 50,
     (_ws: unknown, _id: string, result: { ok: boolean }) => expect(result.ok).toBe(true),
     (_ws: unknown, _id: string, error: string) => { throw new Error(error) },
   ) as { cmdAppendUserMarker: (ws: null, id: string, cmd: { sid: string; message: string; messageId: string }) => void; pushSnapshot: (sid: string, immediate: boolean) => void }
@@ -73,6 +89,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers()
+  await cleanupCore?.()
+  cleanupCore = null
   closeDb()
   _resetSessionTrackerForTesting()
   _resetSnapshotGateForTests()
@@ -83,7 +101,7 @@ afterEach(async () => {
 
 describe('warm turn-start snapshot acceptance', () => {
   it.each([10, 90, 250])('publishes an accepted start when the tailer arrives at %i ms', async (tailerMs) => {
-    const h = harness()
+    const h = await harness()
     const idle = h.frames[0]
     expect((await applySnapshot(sid, idle, 'daemon-push')).outcome).toBe('applied')
     expect((await getSessionByClaudeId(sid))?.consumedOffset).toBe(idle.v)
@@ -113,7 +131,7 @@ describe('warm turn-start snapshot acceptance', () => {
   })
 
   it('settles raced output without losing lines or leaving a phantom running turn', async () => {
-    const h = harness()
+    const h = await harness()
     await applySnapshot(sid, h.frames[0], 'daemon-push')
     vi.useFakeTimers()
     h.api.cmdAppendUserMarker(null, 'rpc-fast', { sid, message: 'quick reply', messageId: 'qm-fast' })

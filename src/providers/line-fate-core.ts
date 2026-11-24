@@ -1,8 +1,7 @@
 /**
  * What became of a user line the daemon may already have written into a CLI
- * (send-dedupe-v1). Pure and self-contained, shared by both daemon twins:
- * daemon-core.ts imports it, daemon-source.ts inlines its text (fn.toString()),
- * so NOTHING here may reference module scope, imports, or helpers.
+ * (send-dedupe-v1). Pure and self-contained:
+ * daemon-core.ts imports it, and NOTHING here references module scope, imports, or helpers.
  *
  * Evidence, strongest first:
  * - The CLI's own word: `command_lifecycle` frames for the line's uuid in the

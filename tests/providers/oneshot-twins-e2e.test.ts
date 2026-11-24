@@ -1,7 +1,6 @@
 /**
- * The one-shot family (oneshot-v1, oneshot-core.ts) on BOTH daemon twins booted
- * for real (the JS source twin on node, the standalone twin on bun when bun is
- * installed): a text-mode run streams its lines and exit, a warm key hands the
+ * The one-shot family (oneshot-v1, oneshot-core.ts) on the daemon booted for
+ * real (daemon-standalone.ts on bun): a text-mode run streams its lines and exit, a warm key hands the
  * pre-booted child (and its boot lines) to the run and boots a replacement, a
  * stream-json run ends at its result line, cancel signals the child, a closed
  * socket ends its runs, and a spawn that fails arrives as an exit with an error.
@@ -9,7 +8,7 @@
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the
  * only program the daemon starts is the test's fake CLI (process.execPath plus
  * tests/helpers/oneshot-fake-claude.cjs), never `claude`; every daemon is
- * SIGKILLed after its twin, and every child it ran is checked gone.
+ * SIGKILLed after its test, and every child it ran is checked gone.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
@@ -17,23 +16,15 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-oneshot-twins-')))
 afterAll(() => { if (root.includes('walnut-oneshot-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const FAKE = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let port = 0
@@ -47,7 +38,7 @@ afterEach(async () => {
     await exited
   }
   proc = null
-  // Nothing the daemon ran may outlive the test (the source twin kills its runs and pool on exit;
+  // Nothing the daemon ran may outlive the test (a daemon that exits kills its runs and pool;
   // a SIGKILLed daemon cannot, so the fake children end on their stdin closing).
   for (const pid of childPids.splice(0)) {
     await waitFor(() => !isAlive(pid), 10_000).catch(() => { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } })
@@ -66,7 +57,7 @@ async function waitFor(check: () => boolean, ms: number): Promise<void> {
   }
 }
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<void> {
+async function boot(dir: string): Promise<void> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -74,8 +65,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<void> {
     WALNUT_DAEMON_DIR: path.join(dir, 'daemon'), WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -143,9 +133,9 @@ const resultOf = (events: Array<Record<string, unknown>>) => {
 }
 const infoOf = (result: string) => JSON.parse(result.slice(result.indexOf('{'))) as { pid: number; ppid: number; cwd: string; probe: string }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('runs text-mode and warm stream-json children, cancels, and ends runs with their socket', async () => {
-    await boot(twin, path.join(root, twin.name.replace(/\W+/g, '-')))
+    await boot(path.join(root, 'standalone'))
     const c = await client()
     const daemonPid = proc!.pid!
     const cwd = fs.realpathSync(os.tmpdir())

@@ -36,9 +36,7 @@
  * nothing is held and every caller gets its answer as before; an older daemon never
  * sends `have`, so the server always answers in full.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createHeldCatalogs;
- * daemon-source.ts inlines `createHeldCatalogs.toString()` through
- * `__CREATE_HELD_CATALOGS__`. So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createHeldCatalogs). The factory body references NOTHING at module scope.
  */
 
 export type HeldCatalogSettle =

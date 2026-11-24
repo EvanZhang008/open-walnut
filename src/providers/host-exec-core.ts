@@ -637,7 +637,7 @@ export function createHostExec(deps: HostExecDeps) {
     },
     /** The runs endForUpdate stopped have ended (their reads answered), or `ms` passed: the twins' stopDaemon drains it. */
     untilEnded: (ms: number) => untilEndedByDaemon(jobs.values(), ms),
-    /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them (daemon-source.ts). */
+    /** File looks in flight `minAgeMs` or more (default STUCK_LOOK_MS; 0: any) in the thread pool: node's exit would wait on them. */
     stuck: (minAgeMs?: number) => stuckFileLooks(Date.now(), minAgeMs) > 0,
     /** End the matcher process (the daemon's shutdown, tests). */
     close: () => { adopter.close(); scripts.stopAll(); matcher?.close() },

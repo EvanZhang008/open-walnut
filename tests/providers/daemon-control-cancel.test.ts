@@ -2,8 +2,7 @@
  * E2E (incident a172ce49): the daemon's tailer intercept must clear pendingCtrl
  * when the CLI withdraws a pending can_use_tool via control_cancel_request.
  *
- * Runs the REAL daemon (getDaemonSource() template via node — the deployed
- * artifact, not a mock). The "CLI" is a shell script whose stdout the daemon
+ * Runs the REAL daemon (daemon-standalone.ts under bun, not a mock). The "CLI" is a shell script whose stdout the daemon
  * captures into the stream .jsonl; the tailer intercepts control lines from
  * exactly that file, so this exercises the production code path end to end:
  *
@@ -22,10 +21,11 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import WebSocket from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
+const BUN: string | undefined = testBun()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
 
@@ -39,10 +39,7 @@ afterEach(async () => {
 async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number; daemonDir: string }> {
   const daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ctrlcancel-d-'))
   const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ctrlcancel-s-'))
-  const scriptPath = path.join(daemonDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [STANDALONE, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,
@@ -116,7 +113,7 @@ async function waitForPendingCtrl(
   throw new Error(`waitForPendingCtrl timeout; last=${JSON.stringify(last)}`)
 }
 
-describe('daemon tailer: control_cancel_request clears pendingCtrl (real daemon E2E)', () => {
+describe.skipIf(!BUN)('daemon tailer: control_cancel_request clears pendingCtrl (real daemon E2E)', () => {
   it('control_request sets pendingCtrl; control_cancel_request clears it', async () => {
     const d = await spawnDaemon()
     const ws = await connectWs(d.port)

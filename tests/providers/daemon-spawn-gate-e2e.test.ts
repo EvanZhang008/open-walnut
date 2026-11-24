@@ -1,9 +1,8 @@
 /**
- * Spawn gate + host.preflight E2E against BOTH real daemon twins: the source
- * template (daemon-source.ts with host-runtime-core.ts injected as text) under
- * node, and daemon-standalone.ts run by bun when bun is installed. The source
- * twin spawns `claude` directly and used to fail with a bare "spawn failed" or
- * an exit 127 when claude, or the node an npm claude needs, was missing.
+ * Spawn gate + host.preflight E2E against the real session daemon
+ * (daemon-standalone.ts under bun). A daemon that spawns `claude` directly used to
+ * fail with a bare "spawn failed" or an exit 127 when claude, or the node an npm
+ * claude needs, was missing.
  *
  * MACHINE SAFETY: isolated WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR and a fake
  * HOME in temp dirs, never /tmp/open-walnut; PATH is pinned to system dirs and
@@ -12,29 +11,20 @@
  * is a `sleep` shim in the fake HOME, and its process group is killed after the
  * test that starts it.
  */
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { HOST_RUNTIME_MESSAGES } from '../../src/providers/host-runtime-core.js'
 import { claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
-let twin: Twin = TWINS[0]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 /** Process groups of shim CLIs a test started (spawned detached, so the daemon's death does not end them). */
@@ -50,8 +40,7 @@ async function spawnDaemon(home: string, cwd?: string): Promise<void> {
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -87,12 +76,6 @@ function fakeHome(): string {
   return home
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-spawn-gate-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
@@ -111,9 +94,7 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('daemon spawn gate: $name', (t) => {
-  beforeAll(() => { twin = t })
-
+describe.skipIf(!BUN)('daemon spawn gate, standalone daemon (bun)', () => {
   it('claude absent: start answers the not-installed sentence with errorKind, and preflight agrees', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-spawn-gate-')))
     await spawnDaemon(fakeHome())
@@ -217,15 +198,13 @@ describe.each(TWINS)('daemon spawn gate: $name', (t) => {
 })
 
 /**
- * host.fix over the wire, against the same real twins. Nothing here installs or
+ * host.fix over the wire, against the same real daemon. Nothing here installs or
  * compiles: only answers that run nothing are exercised (an unknown action, a
  * build-dtach whose source is incomplete, the Mac refusal). The fake HOME keeps
  * even the idempotency probe (`~/.local/bin/walnut-dtach --help`) away from the
  * real one.
  */
-describe.each(TWINS)('host.fix: $name', (t) => {
-  beforeAll(() => { twin = t })
-
+describe.skipIf(!BUN)('host.fix, standalone daemon (bun)', () => {
   it('advertises hostfix-v1, preflight reports the platform and arch, and only named actions run', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-fix-')))
     const home = fakeHome()

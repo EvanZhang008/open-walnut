@@ -23,10 +23,7 @@
  * or a file that does not exist, so a follower cannot even tell it is there.
  * A leader (trusted) socket never reaches this code.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createFollowerReads;
- * daemon-source.ts inlines `createFollowerReads.toString()` through
- * `__CREATE_FOLLOWER_READS__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createFollowerReads). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface FollowerReplicaReads {

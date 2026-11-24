@@ -9,7 +9,7 @@
  * until that process ended. Two proofs, in order:
  *
  * 1. The stamp. A daemon writes `<dir>/daemon.stamp` = `<pid> <start time>` right after
- *    daemon.pid (daemon-door.ts stampDoor, both twins; on Linux the start time is field 22 and the
+ *    daemon.pid (daemon-door.ts stampDoor; on Linux the start time is field 22 and the
  *    boot id, since ticks since boot repeat in a later boot). When it names this pid, it decides:
  *    the process is that daemon only if its start time is still the one stamped, whatever its
  *    command line (a host's one service runs as `walnut serve`). A stamp naming this pid with
@@ -19,14 +19,14 @@
  *    order) that stamp would read it as dead (review A3b S34-M1). It counts as no stamp.
  * 2. No stamp for this pid (a daemon from before the stamp, or one whose start time could not be
  *    read): the command line decides, the way the Mac starts one (`<dir>/<binary> --start`,
- *    `<runtime> <dir>/daemon.cjs --start`) or an OS service's (`.../versions/<sha>/daemon --service`).
+ *    `<runtime> <dir>/daemon.cjs --start` for an older leader's source daemon) or an OS service's (`.../versions/<sha>/daemon --service`).
  *    A Walnut server (`walnut serve`) is never taken for a daemon this way: only its stamp names
  *    it (review 2026-11-21 #4: a stale daemon.pid that names some other dir's server is no daemon).
  */
 
 import { DAEMON_STAMP_NAME } from './daemon-door.js'
 
-/** The daemon files the Mac starts in a daemon dir, as `<dir>/<name> --start` (the binary) or `<runtime> <dir>/daemon.cjs --start`. */
+/** The daemon files the Mac starts in a daemon dir, as `<dir>/<name> --start`. */
 export const DAEMON_BINARY_NAMES: readonly string[] = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64']
 
 /**
@@ -44,6 +44,7 @@ export const START_READER_SH: readonly string[] = [
 /** `w_args <pid>`: its command line, one space between words (Linux /proc; ps elsewhere, which a slim Linux image does not have). */
 export const W_ARGS_SH = `w_args() { if [ -r /proc/self/cmdline ]; then tr '\\000' ' ' < "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o args= -p "$1" 2>/dev/null; fi; }`
 
+// `daemon.cjs`: the source daemon an older leader started (`<runtime> <dir>/daemon.cjs --start`); one still alive on a host is a daemon.
 const commandPatterns = [...DAEMON_BINARY_NAMES, 'daemon.cjs'].map((name) => `*" $2/${name} --start"`).join('|')
 
 /**

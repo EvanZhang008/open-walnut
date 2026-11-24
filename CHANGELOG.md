@@ -6,6 +6,10 @@ breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- Remote Linux hosts now always run the compiled daemon (a daemon binary or the walnut file); a host where neither runs (node-only) is no longer supported
+
 ## [0.6.37] - 2026-11-20
 
 ### Fixed

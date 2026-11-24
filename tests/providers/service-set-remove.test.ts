@@ -32,7 +32,7 @@ const exists = (p: string) => fs.lstat(p).then(() => true, () => false)
 const table = (live: Record<number, string>) => ({
   isAlive: (pid: number) => pid in live, startTimeOf: (pid: number) => live[pid] ?? null, psStartOf: async (pid: number) => live[pid] ?? null,
 })
-// Where the twins keep the follower's pid files (HOST_SERVER_DIR under the state root, the install root).
+// Where the daemon keeps the follower's pid files (HOST_SERVER_DIR under the state root, the install root).
 async function followerPid(set: ReturnType<typeof serviceSet>, held: { pid: number; startTime: string }) {
   await fs.mkdir(path.join(set.installRoot, HOST_SERVER_STATE_DIR), { recursive: true })
   await fs.writeFile(path.join(set.installRoot, HOST_SERVER_STATE_DIR, 'server-k.pid'), JSON.stringify(held))
@@ -78,12 +78,10 @@ describe('removeServiceSetDir (drill D5)', () => {
     } finally { await fs.rm(target, { recursive: true, force: true }) }
   })
 
-  it('review round 2 H1: the follower\'s pid file is read where both twins write it (<state root>/host-server)', async () => {
-    for (const twin of ['daemon-standalone.ts', 'daemon-source.ts']) {
-      const text = await fs.readFile(path.join(__dirname, '../../src/providers', twin), 'utf8')
-      expect(text, twin).toMatch(new RegExp(`HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR\\s*\\?\\s*path\\.join\\(DAEMON_STATE_DIR, '${HOST_SERVER_STATE_DIR}'\\)`))
-      expect(text, twin).toMatch(new RegExp(`DETACHED_RUNS_DIR = path\\.join\\(SERVICE_MODE && DAEMON_STATE_DIR \\? DAEMON_STATE_DIR : DAEMON_DIR, '${DETACHED_RUNS_STATE_DIR}'\\)`))
-    }
+  it('review round 2 H1: the follower\'s pid file is read where the daemon writes it (<state root>/host-server)', async () => {
+    const text = await fs.readFile(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    expect(text).toMatch(new RegExp(`HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR\\s*\\?\\s*path\\.join\\(DAEMON_STATE_DIR, '${HOST_SERVER_STATE_DIR}'\\)`))
+    expect(text).toMatch(new RegExp(`DETACHED_RUNS_DIR = path\\.join\\(SERVICE_MODE && DAEMON_STATE_DIR \\? DAEMON_STATE_DIR : DAEMON_DIR, '${DETACHED_RUNS_STATE_DIR}'\\)`))
     const set = await layout()
     await followerPid(set, { pid: 6001, startTime: '3' })
     expect(await removeServiceSetDir(home, set, 1000, table({ 6001: '3' }))).toMatchObject({ removed: false, why: 'its follower still runs (pid 6001)' })

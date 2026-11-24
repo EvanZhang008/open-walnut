@@ -34,9 +34,7 @@
  * (`copyGone`: its folder no longer holds the Walnut's id). The aliases are kept in one small file (`aliasFile`, read on first use) that
  * older daemons never read.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createWalnutScope;
- * daemon-source.ts inlines `createWalnutScope.toString()` through
- * `__CREATE_WALNUT_SCOPE__`. So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createWalnutScope). The factory body references NOTHING at module scope.
  */
 
 export interface WalnutScopeDeps {

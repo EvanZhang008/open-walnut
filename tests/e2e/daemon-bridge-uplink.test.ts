@@ -1,16 +1,15 @@
 /**
- * BOTH real daemon twins under the 5-minute self-heal burst: its bridge uplink
+ * The real standalone daemon under the 5-minute self-heal burst: its bridge uplink
  * never has more than the high-water mark on the wire unconfirmed, cuts big
  * frames once the peer asks, acks mobile-event truthfully, answers
  * bridge.status, and logs one `bridge-conn-open` / `bridge-conn-close` pair per
  * connection with the documented fields.
  *
- * Each twin is spawned as a child process: the daemon-source template under
- * node, and the Bun twin (daemon-standalone.ts) compiled from THIS source when
- * bun is installed (skipped otherwise; the dist binary would test whatever was
- * last built, not the code under review). The twins are kept in sync by hand
- * (CLAUDE.md), and a static ratchet cannot tell a live ack from a dead one, so
- * the same behavior is asserted on both. Each dials a fake
+ * The daemon (daemon-standalone.ts) is compiled from THIS source when bun is
+ * installed (skipped otherwise; the dist binary would test whatever was last
+ * built, not the code under review) and spawned as a child process. A static
+ * ratchet cannot tell a live ack from a dead one, so the behavior is asserted on
+ * the running daemon. It dials a fake
  * cloud WebSocket server that behaves like a replica: it asks for 256KB chunks
  * (`bridge.peer`), as replicas did before 2026-10-05 (a current one asks for
  * 64KB), and the daemon cuts to 64KB anyway, its marker spacing. The cloud
@@ -21,13 +20,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { bunBuildEnv } from '../helpers/cloud-box-daemon-build.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { buildTestDaemon, findBun } from '../helpers/cloud-box-daemon-build.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'uplink-e2e-host'
@@ -36,43 +33,14 @@ const MiB = 1024 * 1024
 /** What the fake cloud asks the daemon to cut frames to, and what the daemon cuts to. */
 const ASKED_CHUNK = 256 * 1024
 const CUT_CHUNK = 64 * 1024
-const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-
-/** bun, looked up where scripts/build-daemon.sh looks; null when absent. */
-function findBun(): string | null {
-  const dirs = [...(process.env.PATH ?? '').split(path.delimiter), path.join(os.homedir(), '.bun', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']
-  for (const dir of dirs) {
-    if (!dir) continue
-    const candidate = path.join(dir, 'bun')
-    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate } catch { /* next */ }
-  }
-  return null
-}
-
-/** Compile the Bun twin from the source under test (not the dist binary, which is whatever was built last). */
-function buildBunDaemon(bun: string, outDir: string): Promise<string> {
-  fs.mkdirSync(outDir, { recursive: true })
-  const out = path.join(outDir, `daemon-${process.platform}-${process.arch}`)
-  return new Promise((resolve, reject) => {
-    execFile(bun, [
-      'build', '--compile', `--target=bun-${process.platform}-${process.arch}`, '--minify',
-      '--outfile', out, 'src/providers/daemon-standalone.ts',
-    ], { cwd: REPO_ROOT, env: bunBuildEnv(), timeout: 180_000, maxBuffer: 8 * 1024 * 1024 }, (err, _stdout, stderr) => {
-      if (err) reject(new Error(`bun build of the daemon failed: ${stderr || err.message}`))
-      else resolve(out)
-    })
-  })
-}
-
 const BUN = findBun()
 
 let workDir: string
-let scriptPath: string
 let bunDaemon: string | null = null
 let daemonDir: string
 
-async function spawnDaemon(cmd: string, args: string[]): Promise<{ proc: ChildProcess; port: number }> {
-  const proc = spawn(cmd, [...args, '--start'], {
+async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number }> {
+  const proc = spawn(bunDaemon!, ['--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -199,26 +167,18 @@ function daemonLog(): Array<Record<string, unknown>> {
 
 beforeAll(async () => {
   workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-uplink-e2e-'))
-  scriptPath = path.join(workDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  if (BUN) bunDaemon = await buildBunDaemon(BUN, path.join(workDir, 'bun'))
+  if (BUN) bunDaemon = await buildTestDaemon(path.join(workDir, 'bun'))
 }, 240_000)
 
 afterAll(() => {
   fs.rmSync(workDir, { recursive: true, force: true })
 })
 
-const twins: Array<{ name: string; skip: boolean; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, skip: false, command: () => [SOURCE_TWIN.file, [scriptPath]] },
-  { name: 'Bun twin, compiled from this source', skip: !BUN, command: () => [bunDaemon!, []] },
-]
-
-describe.each(twins)('daemon bridge uplink: $name', ({ skip, command }) => {
-  it.skipIf(skip)('a 2MB self-heal burst stays under the high-water mark, arrives whole and in order, and is logged per connection', async () => {
+describe.skipIf(!BUN)('daemon bridge uplink: standalone daemon, compiled from this source', () => {
+  it('a 2MB self-heal burst stays under the high-water mark, arrives whole and in order, and is logged per connection', async () => {
     daemonDir = fs.mkdtempSync(path.join(workDir, 'dir-'))
     const cloud = await startCloud()
-    const [cmd, args] = command()
-    const { proc, port } = await spawnDaemon(cmd, args)
+    const { proc, port } = await spawnDaemon()
     const ctl = await connectCtl(port)
     try {
       await rpc(ctl, 'bridge.configure', {

@@ -1,6 +1,6 @@
 /**
  * L1 unit — the turn-retry CONFIG CONTRACT: user config → daemon spawn env →
- * daemon-side resolved config, plus a syntax check on the deployed template.
+ * daemon-side resolved config.
  *
  * The Mac owns policy (config), the daemon owns execution (env read at boot).
  * A typo on either side of that handoff looks exactly like "the feature doesn't
@@ -8,11 +8,9 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { Script } from 'node:vm'
 import fs from 'node:fs'
 import path from 'node:path'
 import { buildTurnRetryEnv, resolveTurnRetryConfig } from '../../src/providers/daemon-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
@@ -86,32 +84,6 @@ describe('buildTurnRetryEnv — config → spawn env', () => {
   })
 })
 
-describe('deployed daemon template', () => {
-  const src = getDaemonSource()
-
-  it('is syntactically valid JavaScript after the retry code was embedded', () => {
-    // The template is a giant string literal, so a mis-escaped regex or backslash
-    // in the retry patterns produces a daemon that dies at boot on the remote host
-    // — after a deploy, far from this change. Parse it here instead.
-    expect(() => new Script(src)).not.toThrow()
-  })
-
-  it('embeds the retry policy (not just the parity-checked names)', () => {
-    expect(src).toContain('function checkTurnRetry')
-    expect(src).toContain('function decideTurnRetry')
-    expect(src).toContain('function fireTurnRetry')
-    expect(src).toContain('function classifyTurnError')
-  })
-
-  it('keeps the retry regex literals intact through string escaping', () => {
-    // A double-escaped \\b would compile to a literal backslash-b and silently
-    // stop matching, which reads as "retry just doesn't fire for that error".
-    const scoped = src.slice(src.indexOf('RETRYABLE_TURN_ERROR_PATTERNS'))
-    expect(scoped).toMatch(/\/operation timed out\/i/)
-    expect(scoped).toMatch(/\\bapi_timeout\\b/)
-  })
-})
-
 describe('spawn-env wiring on BOTH daemon paths', () => {
   const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf-8')
 
@@ -143,11 +115,9 @@ describe('spawn-env wiring on BOTH daemon paths', () => {
   })
 
   it('the daemon logs its resolved retry policy at boot (ops visibility)', () => {
-    for (const f of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(f)
-      const at = src.indexOf("'daemon started'")
-      expect(at, `${f}: no daemon-started log`).toBeGreaterThan(-1)
-      expect(src.slice(at, at + 800), `${f}: boot log omits the retry policy`).toContain('turnRetry')
-    }
+    const src = read('src/providers/daemon-standalone.ts')
+    const at = src.indexOf("'daemon started'")
+    expect(at, 'no daemon-started log').toBeGreaterThan(-1)
+    expect(src.slice(at, at + 800), 'boot log omits the retry policy').toContain('turnRetry')
   })
 })

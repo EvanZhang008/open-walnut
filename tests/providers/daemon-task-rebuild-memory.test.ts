@@ -3,11 +3,11 @@
  * phone-send data-loss family. rebuildTaskStateFromJsonl used to
  * readFileSync the WHOLE stream jsonl (156MB observed) + split() it into an
  * array on every attach/resume/adopt: RSS 104MB→789MB in ~30s, then a silent
- * runtime death mid phone-bridge send. Both twins now stream it in 1MB
+ * runtime death mid phone-bridge send. The daemon now streams it in 1MB
  * chunks with a byte-carry.
  *
- * This test runs the SOURCE TEMPLATE's extracted function (the same text the
- * remote daemon executes) against a synthetic multi-MB jsonl and asserts:
+ * This test runs the daemon's own function text (daemon-standalone.ts, types
+ * stripped with esbuild) against a synthetic multi-MB jsonl and asserts:
  *   1. correctness — identical TaskState output vs a naive whole-file replay;
  *   2. memory — peak RSS growth while rebuilding a ~64MB file stays far below
  *      the file size (the old implementation grew by ≥ 2× file size:
@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import * as esbuild from 'esbuild'
 
 let tmpDir = ''
 /**
@@ -30,16 +30,22 @@ let tmpDir = ''
 const PEAK_LINE = "console.log(JSON.stringify({ maxRSSkb: (() => { try { return Number(/VmHWM:\\s+(\\d+)/.exec(require('fs').readFileSync('/proc/self/status', 'utf8'))[1]) } catch { return 0 } })() || process.resourceUsage().maxRSS }));"
 let jsonlPath = ''
 
-/** Extract a top-level `function <name>(...) {...}` from the emitted template. */
+/** Extract a top-level `function <name>(...) {...}` from a source text. */
 function extractFn(src: string, name: string): string {
   const at = src.indexOf(`function ${name}(`)
-  expect(at, `${name} not found in template`).toBeGreaterThan(-1)
+  expect(at, `${name} not found in the daemon`).toBeGreaterThan(-1)
   let depth = 0
   for (let i = src.indexOf('{', at); i < src.length; i++) {
     if (src[i] === '{') depth++
     else if (src[i] === '}' && --depth === 0) return src.slice(at, i + 1)
   }
   throw new Error(`unbalanced braces extracting ${name}`)
+}
+
+const STANDALONE_TEXT = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+/** One of the daemon's top-level functions as plain JS: only its text, types stripped, nothing else of the file run. */
+function daemonFn(name: string): string {
+  return esbuild.transformSync(extractFn(STANDALONE_TEXT, name), { loader: 'ts' }).code
 }
 
 interface TaskStateShape {
@@ -51,10 +57,9 @@ interface TaskStateShape {
 
 type RebuildFn = (jsonlPath: string, now: number) => TaskStateShape
 
-/** Build the production rebuild function from the template text, with its
+/** Build the production rebuild function from the daemon's text, with its
  *  real helpers (applyTaskEvent etc.) in scope. */
-function buildTemplateRebuild(): RebuildFn {
-  const src = getDaemonSource()
+function buildDaemonRebuild(): RebuildFn {
   const parts = [
     "const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);",
     'const BG_TRANSITION_CAP = 20;',
@@ -64,10 +69,10 @@ function buildTemplateRebuild(): RebuildFn {
     'const logMsg = () => {};',
     // No fold checkpoint: these cases pin the rebuild from byte 0.
     'const foldCheckpoint = { load: () => null, restampTaskState: (t) => t };',
-    extractFn(src, 'emptyTaskState'),
-    extractFn(src, 'runningTaskCount'),
-    extractFn(src, 'applyTaskEvent'),
-    extractFn(src, 'rebuildTaskStateFromJsonl'),
+    daemonFn('emptyTaskState'),
+    daemonFn('runningTaskCount'),
+    daemonFn('applyTaskEvent'),
+    daemonFn('rebuildTaskStateFromJsonl'),
     'return rebuildTaskStateFromJsonl;',
   ].join('\n')
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
@@ -140,7 +145,7 @@ function writeWhale(targetBytes: number): void {
   }
 }
 
-describe('streamed rebuildTaskStateFromJsonl (template-extracted production code)', () => {
+describe('streamed rebuildTaskStateFromJsonl (the daemon\'s own production code)', () => {
   it('rebuilds a reused background task under its current invocation identity', () => {
     const event = (subtype: string, toolUseId?: string, extra: Record<string, unknown> = {}) => JSON.stringify({
       type: 'system', subtype, task_id: 'reused-agent', tool_use_id: toolUseId, ...extra,
@@ -154,7 +159,7 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
       event('task_notification', 'call-first', { status: 'completed' }),
     ]
     fs.writeFileSync(jsonlPath, lines.join('\n') + '\n')
-    const rebuild = buildTemplateRebuild()
+    const rebuild = buildDaemonRebuild()
     const running = rebuild(jsonlPath, 1000)
     expect(running.tasks['reused-agent']).toMatchObject({ status: 'running', toolUseId: 'call-second', isBackgrounded: true })
     fs.appendFileSync(jsonlPath, event('task_notification', 'call-second', { status: 'completed' }) + '\n')
@@ -163,14 +168,13 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
 
   it('produces the exact same TaskState as a whole-file replay', () => {
     writeWhale(4 * 1024 * 1024) // 4MB is plenty for correctness
-    const src = getDaemonSource()
-    const rebuild = buildTemplateRebuild()
+    const rebuild = buildDaemonRebuild()
     const now = Date.now()
     const streamed = rebuild(jsonlPath, now)
     const reference = referenceRebuild({
-      apply: extractFn(src, 'applyTaskEvent'),
-      empty: extractFn(src, 'emptyTaskState'),
-      running: extractFn(src, 'runningTaskCount'),
+      apply: daemonFn('applyTaskEvent'),
+      empty: daemonFn('emptyTaskState'),
+      running: daemonFn('runningTaskCount'),
     }, jsonlPath, now)
     // Timestamps (t) differ by clock; compare the identity-bearing fields.
     expect(Object.keys(streamed.tasks).sort()).toEqual(Object.keys(reference.tasks).sort())
@@ -187,7 +191,7 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
   it('a torn trailing line (CLI mid-write) does not throw and keeps prior state', () => {
     writeWhale(512 * 1024)
     fs.appendFileSync(jsonlPath, '{"type":"system","subtype":"task_started","task_id":"torn-tail"') // no newline
-    const rebuild = buildTemplateRebuild()
+    const rebuild = buildDaemonRebuild()
     const ts = rebuild(jsonlPath, Date.now())
     expect(ts.tasks['torn-tail']).toBeUndefined()
     expect(Object.keys(ts.tasks).length).toBeGreaterThan(0)
@@ -205,7 +209,6 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
     // does not have) is the measure instead: the naive replay must die under it.
     const FILE_MB = 128
     writeWhale(FILE_MB * 1024 * 1024)
-    const src = getDaemonSource()
     const prelude = [
       "const fs = require('node:fs');",
       "const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);",
@@ -215,15 +218,15 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
       'const TAILER_CARRY_MAX = 32 * 1024 * 1024;',
       'const logMsg = () => {};',
       'const foldCheckpoint = { load: () => null, restampTaskState: (t) => t };',
-      extractFn(src, 'emptyTaskState'),
-      extractFn(src, 'runningTaskCount'),
-      extractFn(src, 'applyTaskEvent'),
+      daemonFn('emptyTaskState'),
+      daemonFn('runningTaskCount'),
+      daemonFn('applyTaskEvent'),
     ].join('\n')
 
     const streamedScript = path.join(tmpDir, 'streamed.cjs')
     fs.writeFileSync(streamedScript, [
       prelude,
-      extractFn(src, 'rebuildTaskStateFromJsonl'),
+      daemonFn('rebuildTaskStateFromJsonl'),
       `const ts = rebuildTaskStateFromJsonl(${JSON.stringify(jsonlPath)}, Date.now());`,
       'console.log(JSON.stringify({ taskCount: Object.keys(ts.tasks).length }));',
       PEAK_LINE,

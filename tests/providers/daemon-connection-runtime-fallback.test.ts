@@ -1,12 +1,12 @@
 /**
- * First-connect hardening in DaemonConnection: the runtime is verified before
- * it is used, a runtime-shaped start failure walks bun → binary → node ONCE
- * inside the same connect, a failed bun install keeps its log tail on the
- * error, and a relocated daemon dir reaches every command that names it.
+ * First-connect hardening in DaemonConnection: a start failure that says the daemon file
+ * cannot RUN on the host (a CPU, a glibc) is one clear error with the reason remembered (the
+ * file is not sent again for a while), and a relocated daemon dir reaches every command that
+ * names it.
  *
- * All SSH is stubbed at sshExec (routes below answer the way the real scripts
- * do); deploySource / deployBinary / getLocalBinaryPath are stubbed too, so no
- * process, socket, upload or tunnel is created.
+ * All SSH is stubbed at sshExec (routes below answer the way the real scripts do);
+ * deployBinary / getLocalBinaryPath are stubbed too, so no process, socket, upload or
+ * tunnel is created.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { DaemonConnection, remoteServiceProbePaths, SshLoginRefusedError } from '../../src/providers/daemon-connection.js'
@@ -16,9 +16,6 @@ import { classifyHostConnectError } from '../../src/core/sessions/host-connect-h
 type Priv = Record<string, (...args: unknown[]) => unknown>
 const priv = (conn: DaemonConnection) => conn as unknown as Priv
 
-const BUN_OK = 'bun_path=/home/me/.bun/bin/bun\nbun_rc=0\nbun_out=1.1.30'
-const BUN_SIGILL = 'bun_path=/home/me/.bun/bin/bun\nbun_rc=132\nbun_out='
-const BUN_MISSING = 'bun_path=MISSING'
 const STARTED = '32100\n{"running":true}'
 /** A complete "no OS service here" answer for either daemon dir. */
 const NO_SERVICE = [...new Set([...remoteServiceProbePaths('/tmp/open-walnut'), ...remoteServiceProbePaths('/home/me/.cache/open-walnut')])]
@@ -28,27 +25,17 @@ interface Routes {
   dirProbe?: string | Error
   /** Reply to the live-daemon scan of both production dirs. */
   liveScan?: string
-  bun?: string[]
-  install?: string
-  /** Start command reply per runtime; an Error is thrown. */
-  start: Partial<Record<'bun' | 'binary' | 'node', string | Error>>
-  /** daemon-start.log contents per runtime that last started. */
-  startLog?: Partial<Record<'bun' | 'binary' | 'node', string>>
+  /** Start command reply; an Error is thrown. */
+  start?: string | Error
+  /** daemon-start.log contents. */
+  startLog?: string
 }
 
-function runtimeOf(cmd: string): 'bun' | 'binary' | 'node' {
-  if (/daemon-linux-\w+'? --start/.test(cmd)) return 'binary'
-  if (/\/bun'? \S*daemon\.cjs'? --start/.test(cmd)) return 'bun'
-  return 'node'
-}
-
-function setup(routes: Routes, opts: { binary?: boolean } = {}) {
+function setup(routes: Routes) {
   const conn = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
   const seen: string[] = []
   const starts: string[] = []
   const deploys: string[] = []
-  const bunReplies = [...(routes.bun ?? [BUN_OK])]
-  let lastStarted: 'bun' | 'binary' | 'node' = 'bun'
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
@@ -58,140 +45,61 @@ function setup(routes: Routes, opts: { binary?: boolean } = {}) {
     }
     if (cmd.includes('walnut-live none')) return routes.liveScan ?? 'walnut-live none'
     if (cmd.includes('walnut-service-probe-done')) return NO_SERVICE
-    if (cmd.includes('bun_path=')) return bunReplies.length > 1 ? bunReplies.shift()! : bunReplies[0]
-    if (cmd.includes('install_rc=')) return routes.install ?? 'install_rc=0\ninstall_log=/tmp/open-walnut/bun-install.log\ninstall_tail_begin\n\ninstall_tail_end'
     if (cmd.includes('nohup ')) {
-      lastStarted = runtimeOf(cmd)
-      starts.push(`${lastStarted}: ${cmd}`)
-      const reply = routes.start[lastStarted] ?? ''
+      starts.push(cmd)
+      const reply = routes.start ?? ''
       if (reply instanceof Error) throw reply
       return reply
     }
-    if (cmd.includes('daemon-start.log')) return routes.startLog?.[lastStarted] ?? ''
+    if (cmd.includes('daemon-start.log')) return routes.startLog ?? ''
     if (cmd.includes('uname -m')) return 'x86_64'
     return ''
   })
-  vi.spyOn(priv(conn), 'deploySource').mockImplementation(async () => { deploys.push(`source:${(conn as unknown as { _bunPath: string | null })._bunPath ? 'bun' : 'node'}`) })
   vi.spyOn(priv(conn), 'deployBinary').mockImplementation(async () => { deploys.push('binary') })
-  vi.spyOn(priv(conn), 'getLocalBinaryPath').mockImplementation(async () => (opts.binary ? '/fake/dist/daemon-linux-x64' : null))
+  vi.spyOn(priv(conn), 'getLocalBinaryPath').mockImplementation(async () => '/fake/dist/daemon-linux-x64')
   vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(null)
   return { conn, seen, starts, deploys }
 }
 
 afterEach(() => { vi.restoreAllMocks() })
 
-describe('runtime fallback chain', () => {
-  it('bun dies with SIGILL at start → the binary, in the same connect, and the host records "binary"', async () => {
-    const { conn, starts, deploys } = setup({
-      start: { bun: '', binary: STARTED },
-      startLog: { bun: 'walnut-daemon-exit=132' },
-    }, { binary: true })
-    const port = await priv(conn).deployAndStart()
-    expect(port).toBe(32100)
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun', 'binary'])
-    expect(deploys).toEqual(['source:bun', 'binary'])
-    expect(conn.remoteRuntime).toBe('binary')
+const fileFailed = (conn: DaemonConnection) => (conn as unknown as { _fileFailed: { reason: string; at: number } | null })._fileFailed
+
+describe('a daemon file that cannot run on the host', () => {
+  it('SIGILL at start: one clear error, one start, the reason remembered, and the file is not sent again', async () => {
+    const { conn, starts, deploys } = setup({ start: '', startLog: 'walnut-daemon-exit=132' })
+    await expect(priv(conn).deployAndStart()).rejects.toThrow(/cannot run on devbox.*walnut-daemon-exit=132/)
+    expect(starts).toHaveLength(1)
+    expect(deploys).toEqual(['binary'])
+    expect(fileFailed(conn)?.reason).toContain('walnut-daemon-exit=132')
+    deploys.length = 0
+    starts.length = 0
+    await expect(priv(conn).deployAndStart()).rejects.toThrow(/does not run on devbox, so it is not sent again/)
+    expect(deploys).toEqual([])
+    expect(starts).toEqual([])
   })
 
-  it('no prebuilt binary: bun → node; and when node cannot run either it stops (one chain, no loop)', async () => {
-    const { conn, starts, deploys } = setup({
-      start: { bun: '', node: '' },
-      startLog: { bun: 'walnut-daemon-exit=132', node: "node: /lib64/libc.so.6: version `GLIBC_2.28' not found" },
-    })
+  it('a loader error (an old glibc) is the same: the host cannot run the file', async () => {
+    const { conn, starts } = setup({ start: '', startLog: "daemon: /lib64/libc.so.6: version `GLIBC_2.28' not found" })
     await expect(priv(conn).deployAndStart()).rejects.toThrow(/GLIBC_2.28/)
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun', 'node'])
-    expect(deploys).toEqual(['source:bun', 'source:node'])
-    expect(conn.remoteRuntime).toBeNull()
+    expect(starts).toHaveLength(1)
+    expect(fileFailed(conn)).not.toBeNull()
   })
 
-  it('a start failure that is not about the runtime does not fall back', async () => {
-    const { conn, starts } = setup({ start: { bun: '' }, startLog: { bun: 'Error: listen EADDRINUSE: address already in use' } }, { binary: true })
+  it('a start failure that is not about the file does not remember anything', async () => {
+    const { conn, starts } = setup({ start: '', startLog: 'Error: listen EADDRINUSE: address already in use' })
     await expect(priv(conn).deployAndStart()).rejects.toThrow(/EADDRINUSE/)
     expect(starts).toHaveLength(1)
+    expect(fileFailed(conn)).toBeNull()
   })
 
-  it('a start that exits non-zero still reads the start log (the runtime death is recorded there)', async () => {
+  it('a start that exits non-zero still reads the start log (the death is recorded there)', async () => {
     const { conn, starts } = setup({
-      start: { bun: new RemoteCommandError('Command failed: ssh me@devbox sh -s\ncat: /tmp/open-walnut/daemon.port: No such file or directory', { code: 1, stdout: '', stderr: '', timedOut: false }), binary: STARTED },
-      startLog: { bun: 'walnut-daemon-exit=132' },
-    }, { binary: true })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun', 'binary'])
-  })
-})
-
-describe('a failed source deploy is retried before the binary', () => {
-  // Every 103 MB binary upload of 2026-10-22 to 25 followed one ssh failure
-  // (exit 255) of the 1.3 MB source deploy on the shared master.
-  it('one failure: the retry goes over a fresh connection and bun starts; the binary is never uploaded', async () => {
-    const { conn, starts, deploys } = setup({ start: { bun: STARTED } }, { binary: true })
-    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
-    const asked: Array<{ fresh?: boolean } | undefined> = []
-    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
-      asked.push(args[0] as { fresh?: boolean } | undefined)
-      if (asked.length === 1) throw new Error('daemon source deploy failed with code 255')
+      start: new RemoteCommandError('Command failed: ssh me@devbox sh -s\ncat: /tmp/open-walnut/daemon.port: No such file or directory', { code: 1, stdout: '', stderr: '', timedOut: false }),
+      startLog: 'walnut-daemon-exit=132',
     })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(asked.map((o) => o?.fresh === true)).toEqual([false, true])
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun'])
-    expect(deploys).not.toContain('binary')
-    expect(conn.remoteRuntime).toBe('bun')
-  })
-
-  it('three failures: the binary, as before', async () => {
-    const { conn, starts, deploys } = setup({ start: { binary: STARTED } }, { binary: true })
-    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
-    const asked: unknown[] = []
-    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
-      asked.push(args[0])
-      throw new Error('daemon source deploy failed with code 255')
-    })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(asked).toHaveLength(3)
-    expect(deploys).toEqual(['binary'])
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
-  })
-
-  it('a refused login is not tried again: every new connection would be refused the same way', async () => {
-    const { conn, deploys } = setup({ start: { binary: STARTED } }, { binary: true })
-    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
-    const asked: unknown[] = []
-    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
-      asked.push(args[0])
-      throw new SshLoginRefusedError('devbox', 'cert_expired')
-    })
-    await priv(conn).deployAndStart()
-    expect(asked).toHaveLength(1)
-    expect(deploys).toEqual(['binary'])
-  })
-})
-
-describe('bun verification and install', () => {
-  it('a bun that is installed but does not run is skipped, never reinstalled over', async () => {
-    const { conn, seen, starts } = setup({ bun: [BUN_SIGILL], start: { binary: STARTED } }, { binary: true })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(seen.some((c) => c.includes('install_rc='))).toBe(false)
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
-  })
-
-  it('a failed install keeps its log tail, and it rides the final error', async () => {
-    const { conn } = setup({
-      bun: [BUN_MISSING],
-      install: 'install_rc=6\ninstall_log=/tmp/open-walnut/bun-install.log\ninstall_tail_begin\nwalnut: installing bun\ncurl: (6) Could not resolve host: bun.sh\ninstall_tail_end',
-      start: { node: '' },
-      startLog: { node: 'Error: listen EADDRINUSE' },
-    })
-    const err = await (priv(conn).deployAndStart() as Promise<unknown>).catch((e: unknown) => e)
-    expect(String((err as Error).message)).toContain('bun install failed: exit 6')
-    expect(String((err as Error).message)).toContain('Could not resolve host: bun.sh')
-    expect(String((err as Error).message)).toContain('/tmp/open-walnut/bun-install.log')
-  })
-
-  it('an install that works is verified by running bun before it is used', async () => {
-    const { conn, starts } = setup({ bun: [BUN_MISSING, BUN_OK], start: { bun: STARTED } })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(starts[0]).toMatch(/^bun: .*'\/home\/me\/\.bun\/bin\/bun' /)
-    expect(conn.remoteRuntime).toBe('bun')
+    await expect(priv(conn).deployAndStart()).rejects.toThrow(/cannot run on devbox/)
+    expect(starts).toHaveLength(1)
   })
 })
 
@@ -204,7 +112,7 @@ describe('daemon dir fallback threads through the connect', () => {
   ].join('\n')
 
   it('a read-only /tmp moves the daemon to ~/.cache: start env, paths, status probes, stop all follow', async () => {
-    const routes: Routes = { dirProbe: FALLBACK_PROBE, start: { bun: STARTED } }
+    const routes: Routes = { dirProbe: FALLBACK_PROBE, start: STARTED }
     const { conn, seen, starts } = setup(routes)
     await priv(conn).resolveRemoteDir()
     expect(conn.remoteDirChoice).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 150 })
@@ -213,7 +121,7 @@ describe('daemon dir fallback threads through the connect', () => {
     const start = starts[0]
     expect(start).toContain("WALNUT_DAEMON_DIR='/home/me/.cache/open-walnut'")
     expect(start).toContain("WALNUT_STREAMS_DIR='/home/me/.open-walnut/tmp/streams'")
-    expect(start).toContain("'/home/me/.cache/open-walnut/daemon.cjs' --start > '/home/me/.cache/open-walnut/daemon-start.log'")
+    expect(start).toContain("'/home/me/.cache/open-walnut/daemon-linux-x64' --start > '/home/me/.cache/open-walnut/daemon-start.log'")
     expect(start).not.toContain('/tmp/open-walnut')
 
     seen.length = 0
@@ -235,12 +143,12 @@ describe('daemon dir fallback threads through the connect', () => {
 
   it('a healthy /tmp keeps the env-free start it always had', async () => {
     const probe = FALLBACK_PROBE.replace('tmp=read-only', 'tmp=ok').replace('cache=ok', 'cache=unchecked')
-    const { conn, starts } = setup({ dirProbe: probe, start: { bun: STARTED } })
+    const { conn, starts } = setup({ dirProbe: probe, start: STARTED })
     await priv(conn).resolveRemoteDir()
     expect(conn.remoteDirChoice).toMatchObject({ path: '/tmp/open-walnut', fallback: false })
     await priv(conn).deployAndStart()
     expect(starts[0]).not.toContain('WALNUT_DAEMON_DIR')
-    expect(starts[0]).toContain("'/tmp/open-walnut/daemon.cjs' --start")
+    expect(starts[0]).toContain("'/tmp/open-walnut/daemon-linux-x64' --start")
   })
 
   it("ssh's own failure at the probe is the connect error (not a misleading deploy error later)", async () => {
@@ -286,7 +194,7 @@ describe('never a second daemon beside one that runs from the other dir', () => 
 
   it('a probe that times out (slow link) rejects the connect, retryable, and never issues a start', async () => {
     const timedOut = new RemoteCommandError('Command failed: ssh me@devbox.example.test sh -s\nRemote command timed out after 15000ms', { code: null, stdout: '', stderr: '', timedOut: true })
-    const { conn, starts, deploys } = connecting({ dirProbe: timedOut, start: { bun: STARTED } })
+    const { conn, starts, deploys } = connecting({ dirProbe: timedOut, start: STARTED })
     const err = await conn.connect().catch((e: unknown) => e) as Error
     expect(err).toBeInstanceOf(Error)
     expect(err.message).toMatch(/daemon dir check on devbox did not finish/)
@@ -301,7 +209,7 @@ describe('never a second daemon beside one that runs from the other dir', () => 
     const { conn, starts, deploys, seen } = connecting({
       dirProbe: TMP_OK_PROBE,
       liveScan: 'walnut-live dir=1 pid=4242 port=32200 runtime=bun',
-      start: { bun: STARTED },
+      start: STARTED,
     })
     await conn.connect()
     expect(starts).toEqual([])
@@ -317,8 +225,8 @@ describe('never a second daemon beside one that runs from the other dir', () => 
 })
 
 describe('what actually runs the daemon', () => {
-  it('the binary --status arm no longer claims "binary" (a bun daemon answers it too); hello says what runs', async () => {
-    const { conn } = setup({ start: {} })
+  it('the --status arm does not claim a runtime; hello says what runs', async () => {
+    const { conn } = setup({ })
     vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
       const cmd = String(args[0])
       if (cmd.includes('walnut-service-probe-done')) return NO_SERVICE
@@ -330,29 +238,5 @@ describe('what actually runs the daemon', () => {
     vi.spyOn(priv(conn), '_sendHandshake').mockResolvedValue({ ok: true, capabilities: [], runtime: 'bun' })
     await priv(conn).verifyCapabilities()
     expect(conn.remoteRuntime).toBe('bun')
-  })
-
-  it('a runtime that died at start is remembered: the next connect skips it (no 37MB re-upload)', async () => {
-    const { conn, starts, deploys } = setup({
-      bun: [BUN_MISSING],
-      start: { binary: '', node: STARTED },
-      startLog: { binary: 'walnut-daemon-exit=132' },
-    }, { binary: true })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary', 'node'])
-    expect(deploys).toEqual(['binary', 'source:node'])
-    starts.length = 0
-    deploys.length = 0
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(deploys).toEqual(['source:node'])
-    expect(starts.map((s) => s.split(':')[0])).toEqual(['node'])
-  })
-
-  it('a known-bad bun is not probed or reinstalled on the next connect', async () => {
-    const { conn, seen } = setup({ start: { bun: '', node: STARTED }, startLog: { bun: "bun: version `GLIBC_2.27' not found" } })
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    seen.length = 0
-    expect(await priv(conn).deployAndStart()).toBe(32100)
-    expect(seen.some((c) => c.includes('bun_path=') || c.includes('install_rc='))).toBe(false)
   })
 })

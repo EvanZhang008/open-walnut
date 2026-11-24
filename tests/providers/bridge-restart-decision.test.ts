@@ -1,6 +1,6 @@
 /**
- * decideBridgeRestart — the pure configure-time restart decision shared by
- * the daemon twins (daemon-core.ts; mirrored inline in daemon-source.ts).
+ * decideBridgeRestart — the pure configure-time restart decision of the
+ * session daemon (daemon-core.ts).
  *
  * Context: the cloud bridge wedged for 2 days because (a) a dial stuck in
  * CONNECTING was never torn down and (b) the Mac's periodic identical config

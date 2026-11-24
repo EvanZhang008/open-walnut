@@ -1,24 +1,18 @@
 /**
- * The bridge over wss:// on every daemon runtime booted for real (gate
- * 2026-10-06: no test dialed a twin over TLS, so a change that put TLS on a
- * socket still looking up its host name passed every test while each JS
- * daemon crashed with SIGSEGV on its first wss dial).
+ * The bridge over wss:// on the session daemon (daemon-standalone.ts) booted
+ * for real (gate 2026-10-06: no test dialed a daemon over TLS, so a change that
+ * put TLS on a socket still looking up its host name passed every test while
+ * each JS daemon crashed with SIGSEGV on its first wss dial).
  *
- * Each twin dials wss://localhost against a local TLS cloud whose certificate
+ * The daemon dials wss://localhost against a local TLS cloud whose certificate
  * is made at runtime (openssl) and trusted through NODE_EXTRA_CA_CERTS, then:
  * the link works (SNI, a reply cut into chunks no bigger than the size the
  * daemon agreed to), a certificate it was not told to trust is refused with
- * the daemon still up, and a dead wss link is given up and redialed. The JS
- * clients reset the dead link's TCP socket; Bun 1.3.9 ends neither a closed
- * nor a terminated wss socket (see abandonBridgeSocket in
- * daemon-standalone.ts), so that check is the JS twins' only. Without a bun
- * binary the Bun row is reported as skipped, with the reason in its name.
- *
- * The JS twin runs on this runner's bun, where ws is built in: one install,
- * dialing wss:// with Bun's WebSocket as the bun twin does (getWsClientCtor in
- * daemon-source.ts), so it is held to the bun twin's checks. When the machine
- * has a real Node (tests/helpers/source-twin.ts) it runs on that Node too,
- * with and without the ws package next to it.
+ * the daemon still up, and a dead wss link is given up and redialed. Bun 1.3.9
+ * ends neither a closed nor a terminated wss socket (see abandonBridgeSocket
+ * in daemon-standalone.ts), so how the dead flow ends is not checked here.
+ * Without a bun binary the suite is reported as skipped, with the reason in
+ * its name.
  *
  * MACHINE SAFETY: HOME, the daemon dir, the streams dir and the certificate
  * are temp paths; the cloud and the link are local servers; daemons are
@@ -26,47 +20,24 @@
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import https from 'node:https'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { createRequire } from 'node:module'
 import { promisify } from 'node:util'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const WS_PACKAGE_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
 
-let srcDir = ''
 let certDir = ''
 let certFile = ''
 let keyFile = ''
-type Twin = { name: string; wsClient: string; resets: boolean; skip: boolean; command: () => [string, string[]] }
-const SOURCE_TWINS: Twin[] = [
-  // A source deploy runs the JS twin on bun too: on every bun run.
-  ...(process.versions.bun ? [{ name: 'source twin (bun)', wsClient: 'bun', resets: false, skip: false, command: (): [string, string[]] => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] }] : []),
-  ...(SOURCE_TWIN.runtime === 'node' ? [
-    { name: 'source twin (node), no ws package', wsClient: 'builtin', resets: true, skip: false, command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
-    { name: 'source twin (node), ws package installed', wsClient: 'ws', resets: true, skip: false, command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
-  ] : []),
-]
-const TWINS: Twin[] = [
-  ...SOURCE_TWINS,
-  // Without bun this row is reported as skipped, never dropped.
-  {
-    name: BUN ? 'standalone twin (bun)' : 'standalone twin (bun), SKIPPED: no bun in BUN_INSTALL/bin, ~/.bun/bin, /opt/homebrew/bin or /usr/local/bin',
-    wsClient: 'bun', resets: false, skip: !BUN, command: () => [BUN!, [STANDALONE, '--start']],
-  },
-]
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(pred: () => boolean, timeoutMs: number, what: string): Promise<void> {
   const end = Date.now() + timeoutMs
@@ -83,20 +54,6 @@ let port = 0
 const closers: Array<() => Promise<void> | void> = []
 
 beforeAll(async () => {
-  srcDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-wss-src-')))
-  const source = getDaemonSource()
-  for (const d of ['plain', 'withws']) {
-    fs.mkdirSync(path.join(srcDir, d))
-    fs.writeFileSync(path.join(srcDir, d, 'daemon.cjs'), source, { mode: 0o755 })
-  }
-  fs.mkdirSync(path.join(srcDir, 'withws/node_modules'))
-  fs.symlinkSync(WS_PACKAGE_DIR, path.join(srcDir, 'withws/node_modules/ws'))
-  // The plain case is only meaningful if nothing above it resolves ws, asked of the
-  // Node that runs it (Bun builds ws in, so its resolver always finds one).
-  if (SOURCE_TWIN.runtime === 'node') {
-    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore', env: { ...process.env, NODE_PATH: undefined } })
-    expect(found.status, 'ws resolves from the install with no ws package').not.toBe(0)
-  }
   // A throwaway certificate for localhost, made here and never stored in the
   // repo. RSA: Bun 1.3.9 refused the EC certificate LibreSSL makes.
   certDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-wss-cert-')))
@@ -108,10 +65,10 @@ beforeAll(async () => {
   ], { timeout: 60_000 })
 }, 90_000)
 afterAll(() => {
-  for (const d of [srcDir, certDir]) if (d) fs.rmSync(d, { recursive: true, force: true })
+  if (certDir) fs.rmSync(certDir, { recursive: true, force: true })
 })
 
-async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void> {
+async function boot(extraEnv: Record<string, string>): Promise<void> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-wss-')))
   const home = path.join(root, 'home')
   const streams = path.join(root, 'streams')
@@ -130,9 +87,8 @@ async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void>
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
     ...extraEnv,
   }
-  const [cmd, args] = twin.command()
   procExit = null
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   proc.on('exit', (code, signal) => { procExit = { code, signal } })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -272,20 +228,18 @@ async function startCloud() {
 /**
  * A TCP link in front of the cloud: TLS runs end to end through it.
  * blackhole() kills every open flow (it reads and drops, never carries or
- * closes anything again), and each flow notes how the daemon ended its side:
- * with a reset (ECONNRESET) or a FIN (null).
+ * closes anything again).
  */
 async function startLink(targetPort: number) {
-  type Flow = { client: net.Socket; up: net.Socket; dead: boolean; endedAt: number | null; endedWith: string | null }
+  type Flow = { client: net.Socket; up: net.Socket; dead: boolean }
   const flows: Flow[] = []
   const server = net.createServer((client) => {
     const up = net.connect({ port: targetPort, host: '127.0.0.1' })
-    const flow: Flow = { client, up, dead: false, endedAt: null, endedWith: null }
+    const flow: Flow = { client, up, dead: false }
     flows.push(flow)
     client.on('data', (b) => { if (!flow.dead) up.write(b) })
     up.on('data', (b) => { if (!flow.dead) client.write(b) })
-    client.on('end', () => { if (flow.endedAt == null) flow.endedAt = Date.now() })
-    client.on('error', (err: NodeJS.ErrnoException) => { if (flow.endedAt == null) { flow.endedWith = err.code ?? 'error'; flow.endedAt = Date.now() } })
+    client.on('error', () => {})
     client.on('close', () => { if (!flow.dead) up.destroy() })
     up.on('close', () => { if (!flow.dead) client.destroy() })
     up.on('error', () => {})
@@ -293,7 +247,6 @@ async function startLink(targetPort: number) {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
   const link = {
     port: (server.address() as net.AddressInfo).port,
-    flows,
     blackhole() { for (const f of flows) f.dead = true },
     close: () => new Promise<void>((r) => { for (const f of flows) { f.client.destroy(); f.up.destroy() } server.close(() => r()) }),
   }
@@ -301,15 +254,16 @@ async function startLink(targetPort: number) {
   return link
 }
 
-// A plain title, not describe.each's $name, which cuts a long name short (the
-// skip reason with it).
-for (const twin of TWINS) describe(`bridge over wss: ${twin.name}`, () => {
-  it.skipIf(twin.skip)('dials wss://localhost with SNI, trusts the certificate it was given, and serves a chunked reply', async () => {
+// Without bun the suite is reported as skipped, never dropped, with the reason in its name.
+describe.skipIf(!BUN)(BUN
+  ? 'bridge over wss: standalone daemon (bun)'
+  : 'bridge over wss: standalone daemon (bun), SKIPPED: no bun in BUN_INSTALL/bin, ~/.bun/bin, /opt/homebrew/bin or /usr/local/bin', () => {
+  it('dials wss://localhost with SNI, trusts the certificate it was given, and serves a chunked reply', async () => {
     const file = path.join(root || fs.realpathSync(os.tmpdir()), `walnut-wss-${process.pid}-${Date.now()}.bin`)
     fs.writeFileSync(file, crypto.randomBytes(256 * 1024))
     closers.push(() => fs.rmSync(file, { force: true }))
     const cloud = await startCloud()
-    await boot(twin, { NODE_EXTRA_CA_CERTS: certFile })
+    await boot({ NODE_EXTRA_CA_CERTS: certFile })
     const ctl = await connect(port)
     const reply = await ctlRpc(ctl, { cmd: 'bridge.configure', enabled: true, url: `wss://localhost:${cloud.port}/bridge`, token: 't', hostAlias: 'devbox' })
     expect(reply.ok).toBe(true)
@@ -330,13 +284,13 @@ for (const twin of TWINS) describe(`bridge over wss: ${twin.name}`, () => {
     // size the daemon agreed to, and was put back together whole.
     expect(cloud.chunksOf.get(id), 'the reply arrived unchunked').toBeGreaterThanOrEqual(2)
     expect(cloud.maxFrameBytes).toBeLessThanOrEqual(chunkBytes)
-    expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual([twin.wsClient])
+    expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual(['bun'])
     expect(daemonAlive()).toBe(true)
   }, 60_000)
 
-  it.skipIf(twin.skip)('refuses a certificate it was not told to trust, and stays up', async () => {
+  it('refuses a certificate it was not told to trust, and stays up', async () => {
     const cloud = await startCloud()
-    await boot(twin, {})
+    await boot({})
     const ctl = await connect(port)
     await ctlRpc(ctl, { cmd: 'bridge.configure', enabled: true, url: `wss://localhost:${cloud.port}/bridge`, token: 't', hostAlias: 'devbox' })
     // At least one dial reached the cloud, so the refusal is the client's.
@@ -349,10 +303,10 @@ for (const twin of TWINS) describe(`bridge over wss: ${twin.name}`, () => {
     expect(daemonAlive()).toBe(true)
   }, 60_000)
 
-  it.skipIf(twin.skip)('gives a dead wss link up and redials; the JS clients reset its TCP socket', async () => {
+  it('gives a dead wss link up and redials', async () => {
     const cloud = await startCloud()
     const link = await startLink(cloud.port)
-    await boot(twin, { NODE_EXTRA_CA_CERTS: certFile, WALNUT_BRIDGE_PING_MS: '300' })
+    await boot({ NODE_EXTRA_CA_CERTS: certFile, WALNUT_BRIDGE_PING_MS: '300' })
     const ctl = await connect(port)
     await ctlRpc(ctl, { cmd: 'bridge.configure', enabled: true, url: `wss://localhost:${link.port}/bridge`, token: 't', hostAlias: 'devbox' })
     await waitFor(() => cloud.hellos.length >= 1 || !daemonAlive(), 20_000, 'the first hello over wss')
@@ -361,12 +315,6 @@ for (const twin of TWINS) describe(`bridge over wss: ${twin.name}`, () => {
 
     link.blackhole()
     await waitFor(() => daemonLog(/inbound silence/).length >= 1, 10_000, 'the watchdog to give up')
-    const gaveUpAt = Date.parse(String(daemonLog(/inbound silence/)[0].ts))
-    if (twin.resets) {
-      await waitFor(() => link.flows[0].endedAt != null, 5_000, 'the daemon to end the wss flow it gave up on')
-      expect(link.flows[0].endedAt! - gaveUpAt).toBeLessThan(2_000)
-      expect(link.flows[0].endedWith, 'the wss flow given up on ended with a FIN, not a reset').toBe('ECONNRESET')
-    }
     await waitFor(() => cloud.hellos.length >= 2, 15_000, 'the redial over wss')
     expect(cloud.sni.filter((s) => s === 'localhost').length).toBeGreaterThanOrEqual(2)
     expect(daemonAlive()).toBe(true)

@@ -51,8 +51,7 @@ export function classifyArgsSource(raw: string | undefined, stdinIsTty: boolean)
  * A word after the arguments is refused, never dropped. The CLI read only the one argument, so
  * `tools call task_send '{...}' --dry-run` sent a real message to a task whose sender believed
  * it was a preview (2026-10-31). A stray `--json` asks for what every call prints anyway and
- * still passes. Null = nothing to refuse. The template CLI in daemon-source.ts inlines the same
- * rule and words.
+ * still passes. Null = nothing to refuse.
  */
 export function trailingArgsMessage(extra: readonly string[]): string | null {
   const first = extra.find((a) => a !== '--json')

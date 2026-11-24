@@ -5,8 +5,6 @@
  * Only the fs + exec layer is faked (tests/helpers/fake-host-runtime.ts), so
  * the real classification, search order, caching and message text all run.
  * The spawn shell's second opinion lives in host-runtime-preflight-shell.test.ts.
- * The factory is also re-materialized from its toString(), because that text
- * is what the source-deployed daemon twin actually runs.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,7 +19,6 @@ import {
   HOST_RUNTIME_MESSAGES,
   nodeCandidateDirs,
 } from '../../src/providers/host-runtime-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
 import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
@@ -179,7 +176,7 @@ describe('computeDaemonPath: login-shell capture', () => {
     const guarded = withSyncExec({ HOME, SHELL: '/bin/zsh', PATH: `/test/fakes:${guard}:/usr/bin`, WALNUT_TEST_EXEC_GUARD: guard }, login)
     const parts = guarded.rt.computeDaemonPath().path.split(':')
     const at = (d: string) => parts.indexOf(d)
-    // The test's own fakes and its (fake) HOME's bins, where twin tests keep a mock claude.
+    // The test's own fakes and its (fake) HOME's bins, where the daemon tests keep a mock claude.
     expect(at('/test/fakes')).toBe(0)
     expect(at(`${HOME}/.local/bin`)).toBeGreaterThan(at('/test/fakes'))
     expect(at(guard)).toBeGreaterThan(at(`${HOME}/.local/bin`))
@@ -418,60 +415,33 @@ describe('describeClaudeLaunchFailure', () => {
   })
 })
 
-// ── The text the source twin runs ────────────────────────────────────────────
+// ── How the daemon wires the gate and the preflight ──────────────────────────
 
-describe('injection into the source daemon twin', () => {
-  const FORBIDDEN = [/\b__name\b/, /\b__publicField\b/, /\b__defProp\b/, /\b__spreadValues\b/, /\brequire\s*\(/, /\bimport\s*\(/, /\bexports\./, /\bmodule\.exports\b/]
-
-  it('createHostRuntime.toString() carries no module-scope or bundler identifiers', () => {
-    const src = createHostRuntime.toString()
-    for (const re of FORBIDDEN) expect(src, `forbidden ${re}`).not.toMatch(re)
-  })
-
-  it('a re-materialized copy gives the same gate and preflight answers as the import', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const copy = new Function('"use strict"; return ' + createHostRuntime.toString())() as typeof createHostRuntime
-    const run = async (factory: typeof createHostRuntime) => {
-      const { deps } = fakeHost(npmHostFiles(), () => glibcFail, { HOME, PATH: `${HOME}/.local/bin:/usr/bin` })
-      const rt = factory(deps)
-      return [await rt.ensureClaude('claude', deps.env.PATH!), await rt.preflight(), rt.buildDaemonPath('/u', ['/x'], '/i:/u')]
-    }
-    expect(await run(copy)).toEqual(await run(createHostRuntime))
-  })
-
-  it('the deployed template has no placeholder residue and wires the gate + preflight like the binary twin', () => {
-    const generated = getDaemonSource()
-    expect(generated).not.toContain('__CREATE_HOST_RUNTIME__')
-    expect(generated).not.toContain('__CREATE_CLAUDE_CHECK__')
+describe('host runtime in the daemon', () => {
+  it('wires the gate and the preflight', () => {
     const root = path.resolve(__dirname, '../..')
-    const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8'))
-    const template = fs.readFileSync(path.join(root, 'src/providers/daemon-source.ts'), 'utf-8')
-    for (const [label, src] of [['standalone', standalone], ['template', template]] as const) {
-      expect(src, label).toMatch(/process\.env\.PATH = bootPath\.path/)
-      expect(src, label).toMatch(/case 'host\.preflight':/)
-      // The server's floor reaches the daemon, and both twins hand the runtime a sign-in check.
-      expect(src, label).toMatch(/hostRuntime\.preflight\(cmd\)/)
-      // sha256Hex names the CLI's keychain items under a custom CLAUDE_CONFIG_DIR (claude-check-core.ts).
-      expect(src, label).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env, platform: process\.platform, sha256Hex: [^\n]*createHash\('sha256'\)/)
-      expect(src, label).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
-      expect(src, label).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
-      // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.
-      const actual = label === 'template' ? generated : src
-      const parsed = ts.createSourceFile('daemon.ts', actual, ts.ScriptTarget.Latest, true)
-      const start = daemonStatements(ts, parsed).find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'cmdStart')
-      expect(start, `${label}: actual cmdStart missing`).toBeDefined()
-      const body = start!.getText(parsed)
-      // The original runtime failure and its exact error kind still reach the client.
-      expect(body, label).toMatch(/error\??\.?code === 'CLAUDE_RUNTIME'/)
-      expect(body, label).toMatch(/sendError\(ws, id, result(\.runtimeError)?\.message, \{ errorKind: result(\.runtimeError)?\.errorKind,/)
-      // Budget refusal is a separate precise path, never a generic spawn error or a retry.
-      expect(body, label).toMatch(/error\??\.?code === 'BUDGET_PAUSED'/)
-      expect(body, label).toContain("errorKind: 'budget_paused'")
-      expect(body, label).toContain("{ reason: 'budget_paused', code: 'BUDGET_PAUSED' }")
-    }
-    for (const src of [standalone, template]) {
-      const allow = src.slice(src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')))
-      expect(allow).not.toContain('host.preflight')
-    }
+    const src = twinText('daemon-standalone.ts', fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8'))
+    expect(src).toMatch(/process\.env\.PATH = bootPath\.path/)
+    expect(src).toMatch(/case 'host\.preflight':/)
+    // The server's floor reaches the daemon, and the daemon hands the runtime a sign-in check.
+    expect(src).toMatch(/hostRuntime\.preflight\(cmd\)/)
+    // sha256Hex names the CLI's keychain items under a custom CLAUDE_CONFIG_DIR (claude-check-core.ts).
+    expect(src).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env, platform: process\.platform, sha256Hex: [^\n]*createHash\('sha256'\)/)
+    expect(src).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
+    expect(src).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
+    // Inspect the actual cmdStart, not an earlier budget helper or a whole-file text match.
+    const parsed = ts.createSourceFile('daemon.ts', src, ts.ScriptTarget.Latest, true)
+    const start = daemonStatements(ts, parsed).find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'cmdStart')
+    expect(start, 'actual cmdStart missing').toBeDefined()
+    const body = start!.getText(parsed)
+    // The original runtime failure and its exact error kind still reach the client.
+    expect(body).toMatch(/error\??\.?code === 'CLAUDE_RUNTIME'/)
+    expect(body).toMatch(/sendError\(ws, id, result(\.runtimeError)?\.message, \{ errorKind: result(\.runtimeError)?\.errorKind,/)
+    // Budget refusal is a separate precise path, never a generic spawn error or a retry.
+    expect(body).toMatch(/error\??\.?code === 'BUDGET_PAUSED'/)
+    expect(body).toContain("errorKind: 'budget_paused'")
+    expect(body).toContain("{ reason: 'budget_paused', code: 'BUDGET_PAUSED' }")
+    const allow = src.slice(src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')))
+    expect(allow).not.toContain('host.preflight')
   })
 })

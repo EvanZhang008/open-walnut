@@ -33,9 +33,9 @@ cd "$(dirname "$0")/.."
 BUN=""
 if walnut_find_bun "$PWD"; then BUN="$BUN_BIN"; fi
 if [ -z "$BUN" ]; then
-  # Bun only cross-compiles the daemon binaries, and a host without one still gets a
-  # working daemon over the source-deploy fallback (daemon-connection.ts: "no binary
-  # found, falling back to source deploy"). Failing here used to stop the first build dead
+  # Bun only cross-compiles the daemon binaries. A checkout without them still runs its
+  # local daemon from source (local-daemon.ts), and hosts get the walnut file instead
+  # (daemon-connection.ts deployDaemon). Failing here used to stop the first build dead
   # on any machine that had never installed Bun, which is every new user's machine.
   # Release flows set WALNUT_REQUIRE_BUN=1 so a published tarball can never miss them.
   echo "build-daemon.sh: $(walnut_bun_missing)" >&2
@@ -43,7 +43,7 @@ if [ -z "$BUN" ]; then
     echo "build-daemon.sh: WALNUT_REQUIRE_BUN=1 is set, so this is fatal. Install Bun: https://bun.sh" >&2
     exit 1
   fi
-  echo "build-daemon.sh: skipping the daemon binaries. Walnut still runs: sessions deploy the daemon from source instead." >&2
+  echo "build-daemon.sh: skipping the daemon binaries. Walnut still runs its local daemon from source; remote hosts need the compiled daemon, which needs Bun." >&2
   echo "build-daemon.sh: install Bun (https://bun.sh) and re-run \`bun run build:daemon\` to get the faster prebuilt path." >&2
   exit 0
 fi
@@ -55,7 +55,6 @@ SOURCES=(
   src/providers/daemon-core.ts
   src/providers/daemon-fold.ts
   src/providers/fold-checkpoint-core.ts
-  src/providers/daemon-source.ts
   src/providers/daemon-capabilities.ts
   src/providers/gateway-core.ts
   src/providers/wn-cli.ts
@@ -164,7 +163,6 @@ SOURCES=(
   src/providers/transcript-rewind-core.ts
   src/providers/trigger-check-core.ts
   src/providers/trigger-envelope-core.ts
-  src/providers/trigger-check-sidecar.ts
   src/providers/trigger-clock-core.ts
   src/providers/trigger-state-snapshot-core.ts
   src/providers/trigger-state-seed-core.ts
@@ -374,15 +372,15 @@ HASH=$(
   done | $HASHER | cut -c1-12
 )
 VERSION="walnut-daemon-${HASH}"
-# WALNUT_DAEMON_SIDECARS_ONLY=1 builds only the JS artifacts below (sidecars, ACP
-# worker, pi-acp) into WALNUT_DAEMON_OUTDIR, without the three compiled daemons or
+# WALNUT_DAEMON_SIDECARS_ONLY=1 builds only the JS artifacts below (ACP worker and
+# adapters) into WALNUT_DAEMON_OUTDIR, without the three compiled daemons or
 # dtach: the compiled Walnut file runs its own daemon (scripts/build-binary.mjs).
 OUTDIR="${WALNUT_DAEMON_OUTDIR:-dist/daemon-binaries}"
 SIDECARS_ONLY="${WALNUT_DAEMON_SIDECARS_ONLY:-0}"
 mkdir -p "$OUTDIR"
 
 if [ "$SIDECARS_ONLY" != 1 ]; then
-# A sidecars-only build's marker describes no binary: a full build leaves none
+# An ACP-files-only build's marker describes no binary: a full build leaves none
 # behind (daemon-version-check.ts read a stale one as drift on every boot).
 rm -f "$OUTDIR/daemon.version" "$OUTDIR/.version-guard-gave-up"
 echo "Building daemon binaries (version: $VERSION)..."
@@ -426,7 +424,7 @@ fi
   src/providers/acp-worker/worker-main.ts
 echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 
-# What a remote deploy puts beside daemon.cjs so that host runs ACP engines itself
+# What the compiled walnut file carries so a host runs ACP engines itself
 # (src/providers/acp-host-artifacts.ts ACP_HOST_FILES). The worker gets its own
 # name: the compiled walnut file keeps a placeholder at acp-worker.js
 # (src/binary/bundled-modules.ts). codex-acp is one self-contained ESM file; with
@@ -435,122 +433,9 @@ cp "$OUTDIR/acp-worker.js" "$OUTDIR/acp-worker.mjs"
 cp node_modules/@agentclientprotocol/codex-acp/dist/index.js "$OUTDIR/codex-acp.mjs"
 cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENSE"
 
-# ACP supervision sidecar — the same acp-daemon.ts the binary compiles in, as a
-# CJS bundle for the source template. The npm package ships no daemon binaries,
-# so without this the local daemon of an npm install answered every acp*
-# command with acp_unsupported and Codex, Gemini, OpenCode, Goose and Pi could
-# not start. local-daemon.ts copies it next to daemon.cjs.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/acp-daemon-core.cjs" \
-  src/providers/acp-daemon.ts
-
-# Session-changes sidecar — a plain CJS bundle of session-changes-core.ts.
-# Source-template daemons (bun deploys) can't import modules, so deploySource
-# ships this next to daemon.cjs and the template require()s it lazily; the
-# daemon advertises 'changes-v1' only when the sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/changes-core.cjs" \
-  src/providers/session-changes-core.ts
-
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/usage-core.cjs" \
-  src/providers/usage-host-core.ts
-
-# usage-core also exports the persistent budget runtime and control ACK helper.
-# Both twins use the same accounting and pause policy; source deploy reuses this artifact.
-
-# External-session scan sidecar — same rationale as changes-core.cjs: the
-# source template can't import, so deploySource ships this next to daemon.cjs
-# and the template require()s it; 'external-scan-v1' is advertised only when
-# the sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/external-scan-core.cjs" \
-  src/providers/external-session-scan-core.ts
-
-# Layered path-resolution sidecar — same rationale as the two above: the
-# transcript scan + git/find search can't live in the source template, so
-# deploySource ships this next to daemon.cjs and the template require()s it;
-# 'path-resolve-v1' is advertised only when the sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/path-resolve-core.cjs" \
-  src/providers/path-resolve-core.ts
-
-# Session servers sidecar: listener scan + process-group Stop; 'ports-v1' is
-# advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/port-scan-core.cjs" \
-  src/providers/port-scan-core.ts
-
-# Task directories sidecar: the repo checks before a removal run git, which the
-# source template does not carry; 'task-dir-v1' is advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/task-dir-core.cjs" \
-  src/providers/task-dir-core.ts
-
-# Commands for tasks on other hosts sidecar: 'host-exec-v1' is advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/host-exec-core.cjs" \
-  src/providers/host-exec-core.ts
-
-# The host network sidecar: 'net-v1' is advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/net-core.cjs" \
-  src/providers/net-core.ts
-
-# A task on another host calling this host's MCP servers and web services:
-# 'host-mcp-v1' and 'host-http-v1' are advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/host-reach-core.cjs" \
-  src/providers/host-reach-core.ts
-
-# Fleet secrets sidecar: 'secrets-v1' is advertised only when it loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/secrets-core.cjs" \
-  src/providers/secrets-core.ts
-
-# Embedded VS Code sidecar — same rationale: install/spawn/health pipeline
-# can't live in the source template; 'vscode-v1' is advertised only when the
-# sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/vscode-server-core.cjs" \
-  src/providers/vscode-server-core.ts
-
-# Transcript rewind probe sidecar — same rationale: the chain walk + dead-set
-# replay can't live in the source template; 'rewind-probe-v1' is advertised only
-# when the sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/transcript-rewind-core.cjs" \
-  src/providers/transcript-rewind-core.ts
-
-# First-paint history view sidecar: the transcript parser the server uses can't live in
-# the source template; 'history-ready-v1' is advertised only when the sidecar loads.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/history-ready-core.cjs" \
-  src/providers/history-ready-core.ts
-
-# walnut-trigger check-contract sidecar — same rationale: the stdout parse, the
-# dedup rules and the process-group runner can't live in the source template;
-# 'triggers-v1' is advertised only when the sidecar loads. The entry adds the fire
-# envelope, which the daemon builds for a fire no server claimed.
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/trigger-check-core.cjs" \
-  src/providers/trigger-check-sidecar.ts
-
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/daemon-cron-runtime.cjs" \
-  src/providers/daemon-cron-runtime.ts
-
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/daemon-instance-lock.cjs" \
-  src/providers/daemon-instance-lock.ts
-
-"$BUN" build --minify --target=node --format=cjs \
-  --outfile "$OUTDIR/daemon-service-cli.cjs" \
-  src/providers/daemon-service-cli.ts
-
 if [ "$SIDECARS_ONLY" = 1 ]; then
   echo "$VERSION" > "$OUTDIR/daemon.version"
-  echo "Done. Daemon sidecars (version: $VERSION) in $OUTDIR"
+  echo "Done. Daemon ACP files (version: $VERSION) in $OUTDIR"
   exit 0
 fi
 
@@ -570,7 +455,7 @@ if [ "${WALNUT_BUILD_NET:-0}" = 1 ]; then
 fi
 
 # The budget E2Es (tests/e2e/session-budget*.test.ts) run these artifacts only as this
-# build made them: the manifest names their hashes and the sources' version. A sidecars-only
+# build made them: the manifest names their hashes and the sources' version. An ACP-files-only
 # build, a machine whose daemon binary this build does not make, or a tree without the
 # tests (a published package), writes none.
 HOST_DAEMON="daemon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed -e 's/aarch64/arm64/' -e 's/x86_64/x64/')"

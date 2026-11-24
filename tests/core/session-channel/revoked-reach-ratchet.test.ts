@@ -8,7 +8,7 @@
  *   - each kind of stream the host opens toward this leader (`info.from === '...'`)
  *   - each kind of journal record a drain applies (offline-handover.ts applyRecord, apply-v2.ts MAC_DRAINS)
  *   - each push of this leader's state (DaemonConnection.push*)
- *   - each command this leader sends a daemon (`.send('<name>'`, outside the daemon's own twins)
+ *   - each command this leader sends a daemon (`.send('<name>'`, outside the daemon itself)
  *   - each op that can aim at a host (a `host` input, or a host_* name), from the registry itself
  * A refused row names the entry (file and function) whose body reads the ban, through the one
  * alias-aware function (revoked-hosts.ts revokedAs) or a wrapper of it. No file reads a ban by a
@@ -29,8 +29,8 @@ import { listOps } from '../../../src/ops/index.js'
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const DAEMON = 'src/providers/daemon-connection.ts'
-/** The daemon's own twins: they run on the host and send nothing to it. */
-const DAEMON_TWINS = new Set(['src/providers/daemon-source.ts', 'src/providers/daemon-standalone.ts'])
+/** The daemon itself: it runs on the host and sends nothing to it. */
+const DAEMON_ITSELF = new Set(['src/providers/daemon-standalone.ts'])
 /** A function body reads the ban (revokedAs, or a wrapper that calls it). */
 const READS_BAN = /\b(revokedAs|revokedAsIn|hostRevokedNow|assertHostNotRevoked|machineRevokedNow|revokedHostIn|hostDoorRevoked|revokedReach|isRevoked|drainRevoked|revokedHostOfSession|revokedWhy|revokeBridgeTokens)\(/
 
@@ -100,7 +100,7 @@ function members(): Record<string, string[]> {
   const applyRecord = bodyOf(read('src/core/offline-handover.ts'), 'async function applyRecord(')
   // Every command the daemon takes (its own switch, so a name sent through a variable is in too),
   // and every literal one this leader sends, comment lines left out.
-  const commands = [...daemonCommands(), ...SRC.filter((f) => !DAEMON_TWINS.has(f)).flatMap((f) => all(noComments(read(f)), /\.send\('([a-zA-Z][\w.:-]*)'/g))]
+  const commands = [...daemonCommands(), ...SRC.filter((f) => !DAEMON_ITSELF.has(f)).flatMap((f) => all(noComments(read(f)), /\.send\('([a-zA-Z][\w.:-]*)'/g))]
   const ops = listOps({ includeDeprecated: true }).filter((op) => op.name.startsWith('host_') || Object.hasOwn((op.input ?? {}) as object, 'host')).map((op) => op.name)
   return {
     'daemon-event': [...new Set(events)],

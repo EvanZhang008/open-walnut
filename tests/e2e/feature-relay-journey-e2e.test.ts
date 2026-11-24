@@ -4,12 +4,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { WebSocket } from '#ws'
 import { z } from 'zod'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { childExecGuardEnv, guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 vi.mock('../../src/constants.js', () => createMockConstants('feature-journey-e2e', { CLOUD_MODE: true }))
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -19,8 +18,9 @@ import { featureNodeStore, featureNodeHub } from '../../src/web/ws/feature-node-
 import { FeatureNodeClient } from '../../src/core/feature-nodes/feature-client.js'
 import { decodeFrame, identifierSchema, type ReadFrame } from '../../src/core/feature-nodes/protocol.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 const NODE = 'catalog-node', ACCOUNT = 'catalog-account'
 const grant = { capability: { id: 'catalog.page', version: 1 }, fingerprint: 'catalog-v1' }
 const rows = Array.from({ length: 205 }, (_, i) => ({
@@ -100,15 +100,8 @@ async function stopOwnedDaemon(): Promise<void> {
 async function bootDaemon(): Promise<number> {
   // The short mkdtemp root also keeps any generated Unix socket under OS limits.
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fj-')))
-  for (const dir of ['home', 'data', 'daemon', 'state', 'streams', 'tmp', 'tasks', 'source',
+  for (const dir of ['home', 'data', 'daemon', 'state', 'streams', 'tmp', 'tasks',
     'config', 'cache', 'runtime', 'home/.claude']) fs.mkdirSync(path.join(root, dir), { recursive: true })
-  const script = path.join(root, 'source', 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o700 })
-  if (SOURCE_TWIN.runtime === 'node') {
-    fs.mkdirSync(path.join(root, 'source', 'node_modules'))
-    fs.symlinkSync(path.dirname(createRequire(import.meta.url).resolve('ws/package.json')),
-      path.join(root, 'source', 'node_modules', 'ws'))
-  }
   const env: NodeJS.ProcessEnv = {
     ...childExecGuardEnv(), HOME: path.join(root, 'home'), WALNUT_HOME_OVERRIDE: path.join(root, 'home'),
     SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), TMPDIR: path.join(root, 'tmp'),
@@ -123,7 +116,7 @@ async function bootDaemon(): Promise<number> {
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
     WALNUT_TASK_DIR_ROOT: path.join(root, 'tasks'), WALNUT_DAEMON_KEEP_SESSIONS: '0',
   }
-  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const child = daemon // Ownership is registered before any asynchronous startup wait.
   let stdout = '', stderr = '', failed: Error | undefined
   child.stdout!.on('data', (chunk) => { stdout = (stdout + String(chunk)).slice(-16_384) })
@@ -133,7 +126,7 @@ async function bootDaemon(): Promise<number> {
     if (failed) throw failed
     if (hasExited(child)) throw new Error(`Owned daemon exited during startup: ${stderr}`)
     return /^\d+$/m.test(stdout)
-  }, 'owned source daemon port', 60_000)
+  }, 'owned standalone daemon port', 60_000)
   const daemonPort = Number(stdout.match(/^\d+$/m)![0])
   expect(Number.isSafeInteger(daemonPort) && daemonPort > 0 && daemonPort <= 65535).toBe(true)
   expect(daemonPort).not.toBe(3456)
@@ -214,6 +207,7 @@ function resourcesReleased(): void {
 }
 
 beforeAll(async () => {
+  if (!BUN) return
   // This is a fresh companion, not a production snapshot. Only its bridge door
   // is enabled: no execution, backup leader, public push, or exposure runtime.
   vi.stubEnv('WALNUT_ROLE', 'replica')
@@ -282,7 +276,7 @@ afterAll(async () => {
   sockets.clear()
 }, 45_000)
 
-describe(`real authenticated feature relay journey on source twin (${SOURCE_TWIN.runtime})`, () => {
+describe.skipIf(!BUN)('real authenticated feature relay journey on the standalone daemon', () => {
   it('reads exact dense pages and survives feature lifecycle and credential changes', async () => {
     expect(serverStarted).toBe(true)
     expect(await reader!.list()).toEqual({ success: true, payload: [] })

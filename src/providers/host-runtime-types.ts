@@ -1,7 +1,7 @@
 /**
  * The shared shapes and the node-discovery shell snippet of host-runtime-core.ts,
  * kept apart from the factory so that file stays one self-contained function
- * (daemon-source.ts inlines it as text) and under the size limit. Everything
+ * and under the size limit. Everything
  * here is re-exported from host-runtime-core.ts; import from there.
  */
 

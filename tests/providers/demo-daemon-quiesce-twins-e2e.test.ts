@@ -1,5 +1,5 @@
 /**
- * demo.quiesce on both real daemon twins, booted as a Demo's own daemon (WALNUT_DEMO_ROOT,
+ * demo.quiesce on the real daemon (daemon-standalone.ts under bun), booted as a Demo's own daemon (WALNUT_DEMO_ROOT,
  * its generation, HOME and the daemon dir under that root), with stand-in programs only:
  * a native CLI that stays on its stdin, the one-shot fake (exits at stdin EOF) and an ACP
  * worker that exits on shutdown. Pinned: the reply comes after work accepted before it and
@@ -21,19 +21,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { demoTerminalDir, ensureDemoTerminalDir, removeDemoTerminalDir } from '../../src/lib/demo-terminal-dir.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { bunRuntime } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const ONESHOT_FAKE = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
 const BUN = bunRuntime()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const ACP_DAEMON = path.resolve(__dirname, '../../src/providers/acp-daemon.ts')
-const HOST_EXEC = path.resolve(__dirname, '../../src/providers/host-exec-core.ts')
-const TRIGGER_SIDECAR = path.resolve(__dirname, '../../src/providers/trigger-check-sidecar.ts')
 
 // Fixture trigger check: records its pid, then ends on a private release file or after 30 s; no network.
 const CHECK_HELPER = `
@@ -93,33 +88,15 @@ setTimeout(() => process.exit(0), 60000).unref()
 `
 
 let lib = ''
-let scriptDir = ''
 beforeAll(() => {
   lib = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wq-lib-')))
   fs.writeFileSync(path.join(lib, 'native-cli.cjs'), NATIVE_CLI)
   fs.writeFileSync(path.join(lib, 'acp-worker.mjs'), ACP_WORKER)
   fs.writeFileSync(path.join(lib, 'check-helper.cjs'), CHECK_HELPER)
-  // The source twin runs from a dir holding daemon.cjs and its ACP sidecar, built from this checkout.
-  scriptDir = path.join(lib, 'source')
-  fs.mkdirSync(scriptDir)
-  fs.writeFileSync(path.join(scriptDir, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 })
-  // Its ACP and host-exec sidecars, as scripts/build-daemon.sh builds them.
-  // trigger-check-core.cjs from trigger-check-sidecar.ts, the entry scripts/build-daemon.sh uses; the plugin job harness is inlined in daemon.cjs.
-  for (const [out, entry] of [['acp-daemon-core.cjs', ACP_DAEMON], ['host-exec-core.cjs', HOST_EXEC], ['trigger-check-core.cjs', TRIGGER_SIDECAR]]) {
-    const built = spawnSync(bunRuntime(), ['build', '--target=node', '--format=cjs', '--outfile', path.join(scriptDir, out), entry], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('could not build the ' + out + ' sidecar: ' + built.stderr)
-  }
 })
 // A fixture or daemon still running may be using a script in lib: then lib stays.
 let keepLib = false
 afterAll(() => { if (!keepLib && lib.includes('wq-lib-')) fs.rmSync(lib, { recursive: true, force: true }) })
-
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
-  // No bun is a failure here, never a skip.
-  { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] },
-]
 
 interface Daemon { proc: ChildProcess; ws: WebSocket; root: string; data: string }
 // Registered right after the spawn, so a boot that fails at the port or the socket is still stopped.
@@ -155,7 +132,7 @@ afterEach(async () => {
 })
 
 /** `demo`: the daemon dir is the Demo root's `d`; otherwise a plain isolated daemon with the same HOME. */
-async function boot(twin: Twin, demo: boolean): Promise<Daemon> {
+async function boot(demo: boolean): Promise<Daemon> {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wq-')))
   const root = path.join(base, 'open-walnut-demo')
   const home = path.join(root, 'homes', 'g1')
@@ -172,8 +149,8 @@ async function boot(twin: Twin, demo: boolean): Promise<Daemon> {
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
     WALNUT_DEMO_ROOT: root, WALNUT_DEMO_GENERATION: 'g1',
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  // No bun is a failure here, never a skip.
+  const proc = spawn(BUN, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const entry: Omit<Daemon, 'ws'> & { ws: WebSocket | null; terminals?: string } = { proc, ws: null, root, data: path.join(root, 'data', 'g1'), terminals }
   daemons.push(entry)
   const port = await new Promise<number>((resolve, reject) => {
@@ -242,9 +219,9 @@ async function waitFor(check: () => boolean, ms = 20_000): Promise<boolean> {
 
 const listed = async (d: Daemon) => ((await rpc(d, { cmd: 'list' })).sessions as Array<{ sid: string; alive: boolean }>)
 
-describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
-  it('the short Demo socket serves the default MCP mount or the capability-gated CLI fallback', async () => {
-    const d = await boot(twin, true)
+describe('demo.quiesce on the standalone daemon (bun)', () => {
+  it('the short Demo socket serves the default MCP mount', async () => {
+    const d = await boot(true)
     const socket = path.join(demoTerminalDir(d.root, 'g1'), 'agent-gateway.sock')
     const shim = path.join(path.dirname(socket), 'bin', 'walnut')
     expect(await waitFor(() => fs.existsSync(socket) && fs.existsSync(shim))).toBe(true)
@@ -275,35 +252,8 @@ describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
       const hello = await rpc(d, { cmd: 'hello', run: 'demo-mount-fixture', readOps: ['echo_demo'] })
       expect(hello).toMatchObject({ ok: true })
       const supportsMcp = (hello.capabilities as string[]).includes('walnut-mcp-v1')
-      expect(supportsMcp).toBe(twin.name === 'standalone twin (bun)')
+      expect(supportsMcp).toBe(true)
       const profile = withWalnutMcpMount({ setting: undefined, profile: undefined, hostServesMcp: supportsMcp, local: true, hubMount: () => { throw new Error('Default mounts never use the legacy hub') } })
-      if (!supportsMcp) {
-        expect(profile).toBeUndefined()
-        const child = spawn(shim, ['tools', 'list', '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-        let stdout = ''
-        child.stdout.on('data', (data) => { stdout += data.toString() })
-        child.stderr.on('data', (data) => { stderr += data.toString() })
-        try {
-          const code = await new Promise<number | null>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('Demo fallback CLI did not exit')), 15_000)
-            child.once('error', (error) => { clearTimeout(timer); reject(error) })
-            child.once('exit', (code) => { clearTimeout(timer); resolve(code) })
-          })
-          expect(code, stderr).toBe(0)
-          const reply = JSON.parse(stdout)
-          expect(reply.ok).toBe(true)
-          expect(reply.result.ops.map((op: { name: string }) => op.name)).toEqual(['echo_demo'])
-          expect(seen.map((event) => event.capability)).toEqual(['tools.list'])
-        } finally {
-          if (child.exitCode === null && child.signalCode === null) {
-            const exited = new Promise<void>((resolve) => { const timer = setTimeout(resolve, 10_000); child.once('exit', () => { clearTimeout(timer); resolve() }) })
-            child.kill('SIGTERM')
-            await exited
-          }
-          expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
-        }
-        return
-      }
       expect(profile?.mcpServers?.walnut).toEqual(mount)
       await client.connect(transport)
       expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['echo_demo'])
@@ -323,14 +273,14 @@ describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
   }, 90_000)
 
   it('waits for accepted work, ends the warm pool by stdin, names the ACP runtime, then takes only reads and stops', async () => {
-    const d = await boot(twin, true)
+    const d = await boot(true)
     const live = 'aaaaaaaa-0000-4000-8000-0000000000a1'
     const late = 'aaaaaaaa-0000-4000-8000-0000000000a2'
     const first = await nativeStart(d, live)
     expect(first).toMatchObject({ ok: true })
     const nativePid = first.pid as number
     expect(await acpStart(d, 'rt-quiesce-1')).toMatchObject({ ok: true })
-    const marker = 'quiesce-warm-' + twin.name.replace(/\W+/g, '-')
+    const marker = 'quiesce-warm-standalone'
     const spec = { command: process.execPath, args: [ONESHOT_FAKE, '-p', '--input-format', 'stream-json', '--model', marker], cwd: lib, env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: path.join(d.root, 'homes', 'g1') }, warmKey: 'k1' }
     expect(await rpc(d, { cmd: 'oneshot.prewarm', ...spec })).toMatchObject({ ok: true, warm: 'spawned' })
     expect(await waitFor(() => pidsWith(marker).length === 1)).toBe(true)
@@ -385,9 +335,9 @@ describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
   }, 180_000)
 
   it('a daemon that is no Demo\'s own refuses it, a wrong home is refused, and starts go on', async () => {
-    const plain = await boot(twin, false)
+    const plain = await boot(false)
     expect(await rpc(plain, { cmd: 'demo.quiesce', home: plain.data })).toMatchObject({ ok: false, errorKind: 'demo_quiesce_refused' })
-    const demo = await boot(twin, true)
+    const demo = await boot(true)
     expect(await rpc(demo, { cmd: 'demo.quiesce', home: path.join(demo.root, 'data', 'other') })).toMatchObject({ ok: false, errorKind: 'demo_quiesce_refused' })
     for (const d of [plain, demo]) {
       const sid = d === plain ? 'bbbbbbbb-0000-4000-8000-0000000000b1' : 'bbbbbbbb-0000-4000-8000-0000000000b2'
@@ -399,7 +349,7 @@ describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
   }, 180_000)
 
   it('a running trigger check is ended by the quiesce, quiet comes after its real exit, and no check starts after the fence', async () => {
-    const d = await boot(twin, true)
+    const d = await boot(true)
     const dir = path.join(path.dirname(d.root), 'fixture')
     fs.mkdirSync(dir)
     const release = path.join(dir, 'release')
@@ -436,7 +386,7 @@ describe.each(TWINS)('demo.quiesce on the $name', (twin) => {
   }, 180_000)
 
   it('a running plugin job is retired by the quiesce through the daemon\'s own stop, and a new configure is refused', async () => {
-    const d = await boot(twin, true)
+    const d = await boot(true)
     const out = path.join(path.dirname(d.root), 'job.jsonl')
     const jobEvents = () => (fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as { ev: string; pid: number; aborted?: boolean }) : [])
     const jobPid = () => jobEvents().find((e) => e.ev === 'start')?.pid ?? null

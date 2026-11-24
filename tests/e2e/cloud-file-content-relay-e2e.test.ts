@@ -4,7 +4,7 @@
  *   phone-style fetch (Bearer device token)
  *     → REAL startServer() in CLOUD_MODE (GET /api/v1/file-content)
  *       → REAL /bridge WS upgrade (machine token, bridge-registry)
- *         → REAL daemon-source.ts template process (fs.readBounded,
+ *         → REAL standalone daemon process (fs.readBounded,
  *           host-side sandbox + 2MB cap)
  *
  * This is the local pre-verification for the phone HTML preview through the
@@ -34,13 +34,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloud-filere
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../src/core/device-auth.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { withPreviewBridge } from '../../src/web/preview-bridge.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { bridgeHosts } from '../../src/web/ws/bridge-registry.js'
 
 const HOST_ALIAS = 'relaybox'
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 const HTML = '<!doctype html>\n<html><body><h1>works from anywhere</h1></body></html>\n'
 // Byte-contract data only, not a playable encoded video.
 const MEDIA_BYTES = Buffer.alloc(3 * 1024 * 1024 + 73)
@@ -55,7 +56,6 @@ let daemonPort = 0
 let ctl: WebSocket | null = null
 let daemonDir: string
 let filesDir: string
-let scriptPath: string
 
 function apiUrl(p: string): string {
   return `http://127.0.0.1:${port}${p}`
@@ -66,14 +66,15 @@ function authedFetch(p: string): Promise<Response> {
 }
 
 async function spawnDaemon(): Promise<void> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_HOME_OVERRIDE: filesDir,
       HOME: filesDir, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_DAEMON_PARENT_PID: String(process.pid) },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   daemonProc = proc
   daemonPort = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 20_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -136,9 +137,6 @@ beforeAll(async () => {
   fs.symlinkSync(path.join(filesDir, '.ssh', 'private.mp4'), path.join(filesDir, 'linked.mp4'))
 
   // Real daemon process dialing the REAL /bridge endpoint.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-relay-daemon-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-relay-dir-'))
   await spawnDaemon()
   ctl = await new Promise<WebSocket>((resolve, reject) => {
@@ -168,13 +166,12 @@ afterAll(async () => {
     })
   }
   await stopServer()
-  fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true })
   fs.rmSync(daemonDir, { recursive: true, force: true })
   fs.rmSync(filesDir, { recursive: true, force: true })
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('phone → cloud server → /bridge → real daemon → file bytes', () => {
+describe.skipIf(!BUN)('phone → cloud server → /bridge → real daemon → file bytes', () => {
   it('streams media bytes larger than 2 MB across the real bridge, seeks, and probes HEAD', async () => {
     const p = encodeURIComponent(path.join(filesDir, 'bytes.mp4'))
     const url = apiUrl(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}&raw=1`)

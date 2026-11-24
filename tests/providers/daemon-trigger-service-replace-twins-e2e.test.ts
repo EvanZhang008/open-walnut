@@ -1,18 +1,18 @@
 /**
- * A service daemon replaced by another binary keeps every trigger's memory, against BOTH real twins.
+ * A service daemon replaced by another binary keeps every trigger's memory, on the real daemon.
  *
  * 2026-11-16: right after a dev host's service daemon was replaced by a new build, a pipeline
  * watch's fire read as if it had delivered three old items again. The state had not moved: a
  * `--service` daemon keeps it in its install root (WALNUT_DAEMON_STATE_DIR/trigger-state, a named
  * Walnut's under walnuts/<key>/), not in ~/.open-walnut/tmp or the runtime dir, which is where
  * the search for it looked. This file pins that layout as production runs it (no
- * WALNUT_TRIGGER_STATE_DIR), replaces the daemon with the OTHER twin on the same dirs with an
+ * WALNUT_TRIGGER_STATE_DIR), replaces the daemon with a new one on the same dirs with an
  * emptied runtime dir, and checks nothing told comes back: not as an item (the seen ids, kept
  * fresh while the script still reports them) and not as a line of the fire's input (a line that
  * names an old item by its title).
  *
- * What's real: the standalone twin under bun, the source twin (getDaemonSource) under node with
- * its sidecars built by bun, a node check script, the state files, the timers. Mocked: nothing.
+ * What's real: the daemon (daemon-standalone.ts) under bun, a check script, the state files, the
+ * timers. Mocked: nothing.
  * MACHINE SAFETY: every dir is under this file's temp dir, and the test signals only its own
  * children's process groups.
  */
@@ -22,25 +22,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { TRIGGER_BUN as BUN, TriggerDaemon, buildSourceTwin, killTriggerDaemons, type Twin } from '../helpers/trigger-daemon.js'
+import { TRIGGER_BUN as BUN, TriggerDaemon, killTriggerDaemons } from '../helpers/trigger-daemon.js'
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trig-replace-')))
 afterAll(() => { if (base.includes('walnut-trig-replace-')) fs.rmSync(base, { recursive: true, force: true }) })
 
-const BIN = path.join(base, 'bin')
-if (BUN) buildSourceTwin(BIN)
 afterEach(killTriggerDaemons)
 
-const startService = (twin: Twin, env: Record<string, string>, runDir: string, cwd: string) =>
-  TriggerDaemon.start(twin, { mode: '--service', env, runDir, cwd, bin: BIN })
+const startService = (env: Record<string, string>, runDir: string, cwd: string) =>
+  TriggerDaemon.start('standalone', { mode: '--service', env, runDir, cwd })
 
 const itemIds = (fire: Record<string, unknown>) => (fire.items as Array<{ id: string }>).map((i) => i.id)
 
-const ORDERS: Array<[Twin, Twin]> = BUN ? [['standalone', 'source'], ['source', 'standalone']] : []
-
-describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
-  it.each(ORDERS)('%s, then %s: seen ids and the script state stay in the install root; nothing told comes back', async (first, second) => {
-    const t = fs.mkdtempSync(path.join(base, `${first}-${second}-`))
+describe.skipIf(!BUN)('a --service daemon replaced by a new one', () => {
+  it('seen ids and the script state stay in the install root; nothing told comes back', async () => {
+    const t = fs.mkdtempSync(path.join(base, 'replace-'))
     const dir = (name: string) => path.join(t, name)
     for (const name of ['h', 'tmp']) fs.mkdirSync(dir(name))
     const HOME = dir('h')
@@ -85,7 +81,7 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     const readState = () => JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { epoch: string; seq: number; seen: Record<string, number>; state: { startedAt: number } }
 
     // The old binary reports both standing items once.
-    const a = await startService(first, env, RUN_DIR, HOME)
+    const a = await startService(env, RUN_DIR, HOME)
     expect(await configure(a)).toMatchObject({ ok: true })
     await a.runOnce(ID, WALNUT)
     const [told] = a.fires(ID)
@@ -99,10 +95,10 @@ describe.skipIf(!BUN)('a --service daemon replaced by the other twin', () => {
     expect(copies).toContain(stateFile)
     for (const c of copies) expect(c.startsWith(path.join(STATE_DIR, 'trigger-state') + path.sep), `${c} is in the install root`).toBe(true)
 
-    // The replace: the old binary stops, the runtime dir goes with it, the other twin starts.
+    // The replace: the old binary stops, the runtime dir goes with it, the new one starts.
     await a.stop()
     fs.rmSync(RUN_DIR, { recursive: true, force: true })
-    const b = await startService(second, env, RUN_DIR, HOME)
+    const b = await startService(env, RUN_DIR, HOME)
     expect(await configure(b)).toMatchObject({ ok: true, count: 1 })
 
     // The same standing items: quiet, and their stamps follow this run.

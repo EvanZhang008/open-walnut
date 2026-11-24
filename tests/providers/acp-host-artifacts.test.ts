@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { ACP_HOST_FILES, ACP_HOST_WORKER, createHostEngineProbe, findHostBinary, resolveHostAcpArtifacts } from '../../src/providers/acp-host-artifacts.js'
 import { hostAdapterSpec } from '../../src/core/agents/host-adapter-spec.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { BUNDLED_MODULES, MODULE_PLACEHOLDER } from '../../src/binary/bundled-modules.js'
+import { BUNDLED_MODULES } from '../../src/binary/bundled-modules.js'
 import { ENGINE_REGISTRY, isAcpEngine } from '../../src/core/agents/engine-registry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -148,13 +148,6 @@ describe('what a remote deploy uploads', () => {
     for (const dist of Object.values(ACP_HOST_FILES)) {
       expect(Object.keys(BUNDLED_MODULES), dist).not.toContain(`dist/daemon-binaries/${dist}`)
     }
-  })
-
-  it('the upload refuses a placeholder, by the words the placeholder really has', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-connection.ts'), 'utf8')
-    const words = src.match(/sidecar\.includes\('([^']+)'\)/)?.[1]
-    expect(words).toBeTruthy()
-    expect(MODULE_PLACEHOLDER).toContain(words)
   })
 })
 

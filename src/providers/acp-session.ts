@@ -467,7 +467,7 @@ export { parseCodexBaseConfig }
  *
  * `WALNUT_SESSION_ID` is the managed-session identity the in-session `walnut` CLI
  * reads to resolve its own sid against the daemon gateway. The native `claude`
- * spawn sets it in daemon-standalone.ts / daemon-source.ts; without it here, a
+ * spawn sets it in daemon-standalone.ts; without it here, a
  * Codex session has no managed identity at all. We deliberately do NOT set
  * `WALNUT_AGENT_SOCKET`: the
  * daemon's gateway resolves caller sids against its native-CLI session map,

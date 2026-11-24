@@ -1,14 +1,14 @@
 /**
- * logs.tail and the running log cap (WP14, cap 'replica-logs-v1') on REAL daemon
- * processes, both twins:
+ * logs.tail and the running log cap (WP14, cap 'replica-logs-v1') on a REAL
+ * standalone daemon process:
  *
- *   test (the leader) ══trusted WS══► daemon (source twin on node, standalone on bun)
+ *   test (the leader) ══trusted WS══► daemon (standalone, on bun)
  *                                        │ server.configure: spawns the fake replica
  *                                        ▼
  *                         fake replica: structured lines in its run dir,
  *                         a flood on stdout (the supervisor caps it while it runs)
  *
- * What's real: the daemon processes, the supervisor (spawn, log fd, the cap
+ * What's real: the daemon process, the supervisor (spawn, log fd, the cap
  * check), the owner check of logs.tail (the leader socket's leader.configure),
  * the journal lines the daemon writes for an ack. The replica is a small script.
  *
@@ -19,7 +19,7 @@
  *   - a running replica's stdout log stays bounded (copied to `.1`, emptied in place).
  *
  * Hygiene: every dir is a temp dir; daemons and the fake replica are ours and are
- * stopped by pid at the end. A missing bun skips the standalone twin here (the
+ * stopped by pid at the end. A missing bun skips this suite here (the
  * large run, tests/setup/large-run.sh, fails on it instead).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -28,8 +28,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -78,7 +76,7 @@ let base = ''
 const started: number[] = []
 const fakePids: string[] = []
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone'): Promise<Daemon> {
+async function spawnDaemon(dir: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -88,17 +86,10 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone'): Promise<
     WALNUT_HOST_SERVER_LOG_MAX_BYTES: String(CAP),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   started.push(pid)
   return { proc, dir, port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
@@ -136,93 +127,91 @@ afterAll(() => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 })
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN && !REQUIRE_BUN)(`${twin} twin: logs.tail and the running log cap`, () => {
-    it('the leader reads its replica\'s lines and its journal lines; nobody else does; stdout stays bounded', async () => {
-      if (twin === 'standalone' && !BUN) throw new Error('bun is required for the standalone twin (WALNUT_REQUIRE_BUN=1) and was not found')
-      const dir = path.join(base, twin.slice(0, 2))
-      const runDir = path.join(base, `${twin}-run`)
-      const stdout = path.join(base, `${twin}-logs`, 'server.log')
-      const fake = path.join(base, `${twin}-fake.cjs`)
-      const fakePid = path.join(base, `${twin}-fake.pid`)
-      fakePids.push(fakePid)
-      fs.writeFileSync(fake, FAKE_REPLICA)
-      const d = await spawnDaemon(dir, twin)
-      const beat: Array<ReturnType<typeof setInterval>> = []
-      const socks: WebSocket[] = []
-      try {
-        const leader = await connectWs(d.port)
-        const other = await connectWs(d.port)
-        const stranger = await connectWs(d.port)
-        socks.push(leader, other, stranger)
-        expect((await cmd(leader, { cmd: 'hello' })).capabilities).toContain('replica-logs-v1')
-        expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
-        expect((await cmd(other, { cmd: 'leader.configure', home: OTHER, walnutId: OTHER_WALNUT, backup: true })).ok).toBe(true)
-        for (const ws of [leader, other]) beat.push(setInterval(() => { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500))
-        const spec = {
-          v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [fake], cwd: base,
-          env: { WALNUT_DAEMON_DIR: runDir, FAKE_PID: fakePid }, log: stdout, port: 41_235, settings: {},
-        }
-        expect((await cmd(leader, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
-        await waitFor(() => fs.existsSync(fakePid), 20_000, 'the fake replica')
-        // Journal lines of both Walnuts in the daemon's own log.
-        const ackHome = await cmd(leader, { cmd: 'offline.ack', home: HOME, seqs: [] })
-        const ackOther = await cmd(other, { cmd: 'offline.ack', home: OTHER, seqs: [] })
-        expect([ackHome.ok, ackOther.ok]).toEqual([true, true])
-
-        const mine = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['replica', 'journal'], n: 50 })
-        expect(mine.ok).toBe(true)
-        expect(mine.running).toBe(true)
-        const replicaMsgs = mine.lines.filter((l: any) => l.source === 'replica').map((l: any) => JSON.parse(l.line).message)
-        expect(replicaMsgs).toEqual(['replica presence', 'replica forward', 'web request'])
-        const journal = mine.lines.filter((l: any) => l.source === 'journal').map((l: any) => JSON.parse(l.line))
-        expect(journal.length).toBeGreaterThan(0)
-        expect(journal.every((j: any) => j.home === HOME && String(j.msg).startsWith('journal'))).toBe(true)
-        // A filter on the message, as walnut-logs.sh asks.
-        const fwd = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['replica'], n: 10, match: ['replica forward'] })
-        expect(fwd.lines.map((l: any) => JSON.parse(l.line).opId)).toEqual(['op-marina-1'])
-
-        // Another Walnut's leader: its own journal lines, never HOME's; HOME is refused to it.
-        const theirs = await cmd(other, { cmd: 'logs.tail', home: OTHER, sources: ['replica', 'journal'], n: 50 })
-        expect(theirs.ok).toBe(true)
-        expect(theirs.running).toBe(false)
-        expect(theirs.lines.every((l: any) => l.source === 'journal' && JSON.parse(l.line).home === OTHER)).toBe(true)
-        expect((await cmd(other, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('not_owner')
-        expect((await cmd(stranger, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('not_owner')
-        expect((await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['/etc/passwd'] })).errorKind).toBe('bad_request')
-        // The follower (the replica's own socket, with its token) may not ask either.
-        const token = fs.readFileSync(fakePid + '.token', 'utf8')
-        const follower = await connectWs(d.port)
-        socks.push(follower)
-        expect((await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token })).ok).toBe(true)
-        expect((await cmd(follower, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('follower_refused')
-
-        // The flood: about 100 KB a second on stdout; the cap is 64 KB, checked every 5 s.
-        await waitFor(() => fs.existsSync(stdout + '.1'), 20_000, 'the first cap while running')
-        let written = 0
-        let largest = 0
-        const end = Date.now() + 11_000
-        while (Date.now() < end) {
-          const size = fs.statSync(stdout).size
-          largest = Math.max(largest, size)
-          await sleep(250)
-        }
-        written = fs.statSync(stdout).size + fs.statSync(stdout + '.1').size
-        expect(written).toBeGreaterThan(CAP)
-        // Bounded: at most the cap plus one check interval of writing (and slack for a slow box).
-        expect(largest).toBeLessThan(CAP + 5 * 1024 * 1024 / 4)
-        const daemonLog = fs.readdirSync(dir).filter((n) => /^daemon-d-.*\.log$/.test(n)).map((n) => fs.readFileSync(path.join(dir, n), 'utf8')).join('')
-        expect(daemonLog).toMatch(/"msg":"host server: log capped"/)
-        const out = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['stdout'], n: 5 })
-        expect(out.ok && out.lines.length).toBe(5)
-        expect(out.lines.every((l: any) => l.source === 'stdout' && /^x+$/.test(l.line))).toBe(true)
-        expect((await cmd(leader, { cmd: 'server.configure', home: HOME, spec: null })).ok).toBe(true)
-      } finally {
-        for (const t of beat) clearInterval(t)
-        for (const ws of socks) { try { ws.close() } catch { /* closed */ } }
-        try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
-        await waitFor(() => !alive(d.pid), 20_000, 'daemon exit').catch(() => {})
+describe.skipIf(!BUN && !REQUIRE_BUN)('standalone daemon: logs.tail and the running log cap', () => {
+  it('the leader reads its replica\'s lines and its journal lines; nobody else does; stdout stays bounded', async () => {
+    if (!BUN) throw new Error('bun is required for the standalone daemon (WALNUT_REQUIRE_BUN=1) and was not found')
+    const dir = path.join(base, 'st')
+    const runDir = path.join(base, 'standalone-run')
+    const stdout = path.join(base, 'standalone-logs', 'server.log')
+    const fake = path.join(base, 'standalone-fake.cjs')
+    const fakePid = path.join(base, 'standalone-fake.pid')
+    fakePids.push(fakePid)
+    fs.writeFileSync(fake, FAKE_REPLICA)
+    const d = await spawnDaemon(dir)
+    const beat: Array<ReturnType<typeof setInterval>> = []
+    const socks: WebSocket[] = []
+    try {
+      const leader = await connectWs(d.port)
+      const other = await connectWs(d.port)
+      const stranger = await connectWs(d.port)
+      socks.push(leader, other, stranger)
+      expect((await cmd(leader, { cmd: 'hello' })).capabilities).toContain('replica-logs-v1')
+      expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
+      expect((await cmd(other, { cmd: 'leader.configure', home: OTHER, walnutId: OTHER_WALNUT, backup: true })).ok).toBe(true)
+      for (const ws of [leader, other]) beat.push(setInterval(() => { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500))
+      const spec = {
+        v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [fake], cwd: base,
+        env: { WALNUT_DAEMON_DIR: runDir, FAKE_PID: fakePid }, log: stdout, port: 41_235, settings: {},
       }
-    }, 120_000)
-  })
-}
+      expect((await cmd(leader, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
+      await waitFor(() => fs.existsSync(fakePid), 20_000, 'the fake replica')
+      // Journal lines of both Walnuts in the daemon's own log.
+      const ackHome = await cmd(leader, { cmd: 'offline.ack', home: HOME, seqs: [] })
+      const ackOther = await cmd(other, { cmd: 'offline.ack', home: OTHER, seqs: [] })
+      expect([ackHome.ok, ackOther.ok]).toEqual([true, true])
+
+      const mine = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['replica', 'journal'], n: 50 })
+      expect(mine.ok).toBe(true)
+      expect(mine.running).toBe(true)
+      const replicaMsgs = mine.lines.filter((l: any) => l.source === 'replica').map((l: any) => JSON.parse(l.line).message)
+      expect(replicaMsgs).toEqual(['replica presence', 'replica forward', 'web request'])
+      const journal = mine.lines.filter((l: any) => l.source === 'journal').map((l: any) => JSON.parse(l.line))
+      expect(journal.length).toBeGreaterThan(0)
+      expect(journal.every((j: any) => j.home === HOME && String(j.msg).startsWith('journal'))).toBe(true)
+      // A filter on the message, as walnut-logs.sh asks.
+      const fwd = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['replica'], n: 10, match: ['replica forward'] })
+      expect(fwd.lines.map((l: any) => JSON.parse(l.line).opId)).toEqual(['op-marina-1'])
+
+      // Another Walnut's leader: its own journal lines, never HOME's; HOME is refused to it.
+      const theirs = await cmd(other, { cmd: 'logs.tail', home: OTHER, sources: ['replica', 'journal'], n: 50 })
+      expect(theirs.ok).toBe(true)
+      expect(theirs.running).toBe(false)
+      expect(theirs.lines.every((l: any) => l.source === 'journal' && JSON.parse(l.line).home === OTHER)).toBe(true)
+      expect((await cmd(other, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('not_owner')
+      expect((await cmd(stranger, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('not_owner')
+      expect((await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['/etc/passwd'] })).errorKind).toBe('bad_request')
+      // The follower (the replica's own socket, with its token) may not ask either.
+      const token = fs.readFileSync(fakePid + '.token', 'utf8')
+      const follower = await connectWs(d.port)
+      socks.push(follower)
+      expect((await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token })).ok).toBe(true)
+      expect((await cmd(follower, { cmd: 'logs.tail', home: HOME, sources: ['replica'] })).errorKind).toBe('follower_refused')
+
+      // The flood: about 100 KB a second on stdout; the cap is 64 KB, checked every 5 s.
+      await waitFor(() => fs.existsSync(stdout + '.1'), 20_000, 'the first cap while running')
+      let written = 0
+      let largest = 0
+      const end = Date.now() + 11_000
+      while (Date.now() < end) {
+        const size = fs.statSync(stdout).size
+        largest = Math.max(largest, size)
+        await sleep(250)
+      }
+      written = fs.statSync(stdout).size + fs.statSync(stdout + '.1').size
+      expect(written).toBeGreaterThan(CAP)
+      // Bounded: at most the cap plus one check interval of writing (and slack for a slow box).
+      expect(largest).toBeLessThan(CAP + 5 * 1024 * 1024 / 4)
+      const daemonLog = fs.readdirSync(dir).filter((n) => /^daemon-d-.*\.log$/.test(n)).map((n) => fs.readFileSync(path.join(dir, n), 'utf8')).join('')
+      expect(daemonLog).toMatch(/"msg":"host server: log capped"/)
+      const out = await cmd(leader, { cmd: 'logs.tail', home: HOME, sources: ['stdout'], n: 5 })
+      expect(out.ok && out.lines.length).toBe(5)
+      expect(out.lines.every((l: any) => l.source === 'stdout' && /^x+$/.test(l.line))).toBe(true)
+      expect((await cmd(leader, { cmd: 'server.configure', home: HOME, spec: null })).ok).toBe(true)
+    } finally {
+      for (const t of beat) clearInterval(t)
+      for (const ws of socks) { try { ws.close() } catch { /* closed */ } }
+      try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
+      await waitFor(() => !alive(d.pid), 20_000, 'daemon exit').catch(() => {})
+    }
+  }, 120_000)
+})

@@ -1,5 +1,6 @@
 /**
- * Bridge session.launch E2E — spawn the REAL daemon-source.ts template,
+ * Bridge session.launch E2E — spawn the REAL standalone daemon
+ * (daemon-standalone.ts under bun),
  * connect a fake cloud WS server AND a fake primary walnut server (a trusted
  * ctl client), and drive the narrow launch relay over the bridge socket
  * exactly the way the cloud companion does for phone session creation
@@ -17,35 +18,30 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'bridge-launch-e2e-host'
 
 interface DaemonProc { proc: ChildProcess; port: number }
 
-let scriptPath: string
 let daemonDir: string
 let daemon: DaemonProc
 let ctl: WebSocket
 let cloud: FakeCloud
 let bridgeSideWs: WebSocket
 
-function writeDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-launch-e2e-'))
-  const p = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(p, getDaemonSource(), { mode: 0o755 })
-  return p
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 async function spawnDaemon(): Promise<DaemonProc> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -173,7 +169,6 @@ function answerNextLaunchRequest(
 }
 
 beforeAll(async () => {
-  scriptPath = writeDaemonScript()
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-launch-dir-'))
   cloud = await startFakeCloud()
   daemon = await spawnDaemon()
@@ -194,11 +189,10 @@ afterAll(async () => {
   try { ctl.close() } catch { /* already closed */ }
   await stopDaemon(daemon)
   await cloud.close()
-  fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true })
   fs.rmSync(daemonDir, { recursive: true, force: true })
 })
 
-describe('session.launch over the cloud bridge (real source daemon)', () => {
+describe.skipIf(!BUN)('session.launch over the cloud bridge (real standalone daemon)', () => {
   it('relays a launch to the trusted client and returns its success result', async () => {
     const params = { cwd: '/home/user/repo', host: 'devbox', message: 'hi from the phone', mode: 'plan' }
     const answered = answerNextLaunchRequest(() => ({
@@ -249,14 +243,6 @@ describe('session.launch over the cloud bridge (real source daemon)', () => {
     expect(res.ok).toBe(false)
     expect(res.errorKind).toBe('host_unreachable')
     expect(res.details).toEqual(details)
-  })
-
-  it('the binary twin passes details through the same way (it cannot run under node)', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf-8')
-    const start = src.indexOf('function cmdLaunchResult(')
-    const fn = src.slice(start, src.indexOf('\nfunction ', start + 1))
-    expect(fn).toMatch(/const \{ relayId, result, error, errorKind, details \} = cmd/)
-    expect(fn).toMatch(/\.\.\.\(details && typeof details === 'object' \? \{ details \} : \{\}\)/)
   })
 
   it('rejects a session.launch with no action', async () => {

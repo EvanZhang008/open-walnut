@@ -7,7 +7,7 @@
  *     └─▶ replica (real child process, WALNUT_CLOUD_MODE=1)
  *           ├─ /bridge ◀── __local__ : the Mac's own daemon (real), which
  *           │                          carries the replica's control relays
- *           └─ /bridge ◀── devbox    : the host's daemon (real daemon source)
+ *           └─ /bridge ◀── devbox    : the host's daemon (real standalone daemon)
  *   Mac (this process, startServer) ──DaemonConnection──▶ link proxy ──▶ host daemon
  *
  * The reported field state (2026-10-01): the Mac's DNS was degraded, its SSH
@@ -49,12 +49,12 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloud-host-h
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { accountInfo } from '../../src/lib/account.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const BUN = testBun()
 const MOCK_CLI = path.join(REPO_ROOT, 'tests/providers/mock-claude.mjs')
 const HOST = 'devbox'
 const HOST_LABEL = 'New big devbox'
@@ -191,8 +191,6 @@ function expectThrough(a: Answer, what: string): void {
 // ── The host: a real daemon, its own HOME, the mock CLI on its own PATH ─────
 
 async function startHostDaemon(): Promise<{ proc: ChildProcess; dir: string; port: number }> {
-  const script = path.join(hostDirs.daemon, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
   const env: NodeJS.ProcessEnv = {
     HOME: hostDirs.home,
     USER: accountInfo().username,
@@ -210,7 +208,7 @@ async function startHostDaemon(): Promise<{ proc: ChildProcess; dir: string; por
     // does (the mock drops it by default), so quick sends can be held to order.
     MOCK_CLAUDE_QUEUE_MIDTURN: '1',
   }
-  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  const proc = spawn(BUN!, [path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: REPO_ROOT })
   let err = ''
   proc.stderr?.on('data', (b: Buffer) => {
     err = (err + b.toString()).slice(-4000)
@@ -343,7 +341,10 @@ beforeAll(async () => {
   await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 1, tasks: [] }))
   await fsp.writeFile(path.join(WALNUT_HOME, 'config.yaml'), [
     'version: 1', 'user:', '  name: Tester', 'defaults:', '  priority: none',
-    'hosts:', `  ${HOST}:`, `    hostname: ${HOST}.invalid`, `    label: ${HOST_LABEL}`, '',
+    'hosts:', `  ${HOST}:`, `    hostname: ${HOST}.invalid`, `    label: ${HOST_LABEL}`,
+    // No follower server on the host: the standalone daemon can run one, and setting it
+    // up would ssh to the host, which this test has none of (the follower is not its subject).
+    '    server:', '      enabled: false', '',
   ].join('\n'))
   await seedPrimaryPairing(WALNUT_HOME, `127.0.0.1:${replica.port}`, replica.tokens)
   // The host's machine credential, cached as the Mac's first bridge push to it leaves it.
@@ -407,7 +408,7 @@ afterAll(async () => {
 
 // ── The cases ──────────────────────────────────────────────────────────────
 
-describe('a remote-host session on the phone while the Mac cannot reach the host', () => {
+describe.skipIf(!BUN)('a remote-host session on the phone while the Mac cannot reach the host', () => {
   it('everything up: the phone reads both sessions, and a send reaches the host once through the Mac', async () => {
     // A starts on the host from the Mac, as the user's earlier work had it.
     const warm = await mac(`/api/v1/sessions/${SID_A}/messages`, {

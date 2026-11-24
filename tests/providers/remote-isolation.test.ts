@@ -20,7 +20,6 @@ import {
   isolatedDaemonEnv, isolatedLayout, isolatedProbeOpts, isolationKey, remoteIsolationFor, resolveIsolatedRoot,
   testServerRemoteTermRoot, ownRootGuardSh, buildStaleIsolatedRootSweepScript, type RemoteIsolation,
 } from '../../src/providers/remote-isolation.js'
-import { buildBunInstallScript } from '../../src/providers/remote-runtime.js'
 import { buildDaemonDirProbeScript, chooseDaemonDir, parseDaemonDirProbe } from '../../src/providers/remote-daemon-dir.js'
 import { isProdDaemonDir } from '../../src/providers/ephemeral-replica-host.js'
 import { classifyHostConnectError } from '../../src/core/sessions/host-connect-hint.js'
@@ -358,26 +357,6 @@ describe('the retire script, run for real', () => {
     fs.symlinkSync(target, link)
     expect(await retire(link)).toMatchObject({ code: 1, out: expect.stringContaining('walnut-isolated-not-owned') })
     expect(fs.readFileSync(path.join(target, 'keep'), 'utf8')).toBe('x')
-  })
-})
-
-describe('the bun install of an isolated daemon, run for real', () => {
-  it('pipes the installer into bash under the isolated HOME (never into mkdir), and reports its status', () => {
-    const scratch = tempDir('walnut-iso-bun-')
-    const bin = path.join(scratch, 'bin')
-    fs.mkdirSync(bin)
-    const installer = 'echo "installer ran HOME=$HOME BUN_INSTALL=$BUN_INSTALL" > "$HOME/ran"; exit 0'
-    fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\nprintf '%s\\n' '${installer}'\n`, { mode: 0o755 })
-    const own = path.join(scratch, 'root', 'home')
-    const realHome = path.join(scratch, 'real-home')
-    fs.mkdirSync(realHome)
-    const out = execFileSync('/bin/sh', ['-s'], {
-      input: buildBunInstallScript(path.join(scratch, 'install.log'), 'https://bun.example/install', { installHome: own }),
-      encoding: 'utf-8', env: { PATH: guardedPath([bin], '/usr/bin:/bin'), HOME: realHome },
-    })
-    expect(out).toMatch(/^install_rc=0$/m)
-    expect(fs.readFileSync(path.join(own, 'ran'), 'utf8').trim()).toBe(`installer ran HOME=${own} BUN_INSTALL=${own}/.bun`)
-    expect(fs.readdirSync(realHome)).toEqual([])
   })
 })
 

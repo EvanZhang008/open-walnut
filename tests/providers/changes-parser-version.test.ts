@@ -53,11 +53,9 @@ describe('changes parser version', () => {
     expect(fn).toMatch(/if \(!GIT_BASES\.has\(base\)\) \{[\s\S]{0,300}?noteSessionChangesViewed\(sessionId, record\.host\)/)
   })
 
-  it('is what both daemon twins fence checkpoints with (never their build version)', () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(twin)
-      expect(src, twin).toContain("'changes-checkpoints'")
-      expect(src, twin).not.toMatch(/checkpointVersion\s*:/)
-    }
+  it('is what the session daemon fences checkpoints with (never its build version)', () => {
+    const src = read('src/providers/daemon-standalone.ts')
+    expect(src).toContain("'changes-checkpoints'")
+    expect(src).not.toMatch(/checkpointVersion\s*:/)
   })
 })

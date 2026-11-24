@@ -244,8 +244,8 @@ export const STUCK_LOOK_MS = 5_000
 
 /**
  * File looks in flight for STUCK_LOOK_MS or more: each holds a thread of the pool (a stat on a
- * mount that stopped answering), and node's exit waits for every pool thread, so the JS twin ends
- * itself hard when this is not 0 (daemon-source.ts exitDaemon). An absolute age, not the look's
+ * mount that stopped answering), and node's exit waits for every pool thread, so a daemon that ends
+ * itself hard when this is not 0 (the exit path of daemon-standalone.ts). An absolute age, not the look's
  * own deadline: a look near a wait's bound gets only 200 ms, and a stat that is merely slow there
  * must not turn an orderly exit into a SIGKILL (2026-11-04 review).
  */

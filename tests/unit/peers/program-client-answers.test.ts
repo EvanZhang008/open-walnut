@@ -201,39 +201,14 @@ function sendersIn(file: string): Sender[] {
   return out
 }
 
-/** The JS twin's `walnut` (daemon-source.ts, text inside a template): each `op = 'tools.call';` and the `args = {...};` it sends. */
-function twinSenders(): Sender[] {
-  const rel = 'src/providers/daemon-source.ts'
-  const text = fs.readFileSync(path.join(ROOT, rel), 'utf8')
-  const out: Sender[] = []
-  const marks = [...text.matchAll(/\bop = 'tools\.call';/g)].map((m) => m.index!)
-  marks.forEach((at, k) => {
-    // Up to the next choice of op, or the frame that sends it.
-    const end = Math.min(marks[k + 1] ?? text.length, text.indexOf('var sockPath', at) >>> 0)
-    const span = text.slice(at, end)
-    // Only a call's arguments (the op and its own: isCallArgs); `args = {}` and `{ name }` are a tools.list's.
-    const objects = [...span.matchAll(/\bargs = (\{[\s\S]*?\});/g)].map((m) => m[1]).filter((o) => /\bname:/.test(o) && /\bargs(File)?:/.test(o))
-    out.push({
-      file: rel, line: text.slice(0, at).split('\n').length, fn: 'daemon-source walnut',
-      clients: objects.length ? objects.map((o) => /\bclient: ('[a-z]+')/.exec(o)?.[1] ?? null) : [null],
-    })
-  })
-  // A frame written out in the twin ({ v: 1, op: 'tools.call', sid: sid, args: { ... } }) names its client on its line.
-  for (const m of text.matchAll(/\bop: ['"]tools\.call['"][^\n]*/g)) {
-    out.push({ file: rel, line: text.slice(0, m.index).split('\n').length, fn: 'daemon-source frame', clients: [/\bclient: ('[a-z]+')/.exec(m[0])?.[1] ?? null] })
-  }
-  return out
-}
-
 const senders = walk(SRC)
-  .filter((f) => /tools\.call|toolsCallLine/.test(fs.readFileSync(f, 'utf8')) && !f.endsWith('daemon-source.ts'))
+  .filter((f) => /tools\.call|toolsCallLine/.test(fs.readFileSync(f, 'utf8')))
   .flatMap(sendersIn)
-  .concat(twinSenders())
 
 describe('every gateway tools.call names its client', () => {
-  it('finds the senders it guards (wn-cli, its JS twin, the MCP server, plugin jobs, a check\'s fault report)', () => {
+  it('finds the senders it guards (wn-cli, the MCP server, plugin jobs, a check\'s fault report)', () => {
     const files = new Set(senders.map((s) => s.file))
-    for (const f of ['src/providers/wn-cli.ts', 'src/providers/daemon-source.ts', 'src/providers/walnut-mcp-stdio.ts', 'src/providers/plugin-job-harness.ts', 'src/commands/tools-daemon-fallback.ts']) expect([...files]).toContain(f)
+    for (const f of ['src/providers/wn-cli.ts', 'src/providers/walnut-mcp-stdio.ts', 'src/providers/plugin-job-harness.ts', 'src/commands/tools-daemon-fallback.ts']) expect([...files]).toContain(f)
     expect(senders.length).toBeGreaterThanOrEqual(14)
   })
 
@@ -256,11 +231,6 @@ describe('every gateway tools.call names its client', () => {
       const body = text.slice(text.indexOf(`async function ${loop}(`), text.indexOf('\n}\n', text.indexOf(`async function ${loop}(`)))
       expect(body, loop).toContain('gatewayOpCall(')
     }
-  })
-
-  it('the JS twin\'s wait is a program and its tools call and guide print', () => {
-    const twin = senders.filter((s) => s.file === 'src/providers/daemon-source.ts').flatMap((s) => s.clients)
-    expect(twin).toEqual(expect.arrayContaining([`'program'`, `'cli'`]))
   })
 })
 

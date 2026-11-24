@@ -15,9 +15,9 @@
  * read with it becomes the session's identity (persisted), and the usual check
  * compares a second reading against it.
  *
- * Both twins run from their own text: stopSessionProcess and
- * recordMissingStartTime are sliced out of daemon-standalone.ts and the
- * daemon-source.ts template and evaluated with every free identifier injected.
+ * The daemon runs from its own text: stopSessionProcess and
+ * recordMissingStartTime are sliced out of daemon-standalone.ts and evaluated
+ * with every free identifier injected.
  * process.kill is spied (signal 0 answers "alive", any other signal fails the
  * test), and the process-group kill is a stub that records.
  */
@@ -26,7 +26,6 @@ import nodeFs from 'node:fs'
 import nodeCrypto from 'node:crypto'
 import nodePath from 'node:path'
 import ts from 'typescript'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { argvNamesSession } from '../../src/providers/daemon-core.js'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 
@@ -44,7 +43,6 @@ const ARGV_FILES = createCliArgvFiles({ fs: nodeFs, path: nodePath, crypto: node
 const CLI_ARGV_FILES = ['/usr/local/bin/claude', ...SPAWN_ARGS.slice(1, -2), '--settings',
   `/home/u/.cache/open-walnut/streams/argv/${ARGV_FILES.namesIn(SPAWN_ARGS)[0]}`].join(' ')
 
-type Twin = 'standalone' | 'template'
 interface Reply { id: number; ok: boolean; error?: string; data?: Record<string, unknown> }
 
 function sliceTopLevelFn(src: string, name: string): string | null {
@@ -63,7 +61,7 @@ interface World {
   argv: string | null
 }
 
-function buildTwin(kind: Twin, world: World) {
+function buildDaemon(world: World) {
   const replies: Reply[] = []
   const signals: string[] = []
   const logs: Array<{ level: string; msg: string; data?: Record<string, unknown> }> = []
@@ -91,24 +89,15 @@ function buildTwin(kind: Twin, world: World) {
     wsId: () => 7,
     cliArgvFiles: ARGV_FILES,
   }
-  const src = kind === 'standalone'
-    ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    : getDaemonSource()
+  const src = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
   const parts = [sliceTopLevelFn(src, 'stopSessionProcess')!]
   const reused = sliceTopLevelFn(src, 'pidNowRunsAnotherProgram')
-  expect(reused, 'both twins carry pidNowRunsAnotherProgram').toBeTruthy()
+  expect(reused, 'the daemon carries pidNowRunsAnotherProgram').toBeTruthy()
   parts.push(reused!)
   const backfill = sliceTopLevelFn(src, 'recordMissingStartTime')
   if (backfill) parts.push(backfill)
   else parts.push('function recordMissingStartTime() { return false }')
-  if (kind === 'template') {
-    // The template carries the helper as injected text (__ARGV_NAMES_SESSION__).
-    const at = src.indexOf('const argvNamesSession = (')
-    if (at >= 0) parts.unshift(src.slice(at, src.indexOf('\nfunction recordMissingStartTime', at)))
-    else injected.argvNamesSession = argvNamesSession
-  } else {
-    injected.argvNamesSession = argvNamesSession
-  }
+  injected.argvNamesSession = argvNamesSession
   const js = ts.transpileModule(parts.join('\n') + '\nreturn { stopSessionProcess };', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText
@@ -118,7 +107,7 @@ function buildTwin(kind: Twin, world: World) {
   return { stop, replies, signals, logs, reaped, persisted: () => persisted }
 }
 
-describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a process with no recorded start time', (kind) => {
+describe('stop of a process with no recorded start time', () => {
   let world: World
   let killSpy: ReturnType<typeof vi.spyOn>
 
@@ -140,12 +129,12 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a proces
   })
 
   it('stops it when its command line resumes this session, and records the start time', async () => {
-    const twin = buildTwin(kind, world)
-    await twin.stop()
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
-    expect(twin.signals).toEqual(['SIGINT'])
+    const daemon = buildDaemon(world)
+    await daemon.stop()
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
+    expect(daemon.signals).toEqual(['SIGINT'])
     expect(world.session.startTime).toBe(START)
-    expect(twin.persisted()).toBeGreaterThanOrEqual(1)
+    expect(daemon.persisted()).toBeGreaterThanOrEqual(1)
   })
 
   it.each([
@@ -157,47 +146,47 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a proces
     ['a command line that could not be read', null],
   ])('still refuses when the pid now runs %s, and logs the sid', async (_label, argv) => {
     world.argv = argv
-    const twin = buildTwin(kind, world)
-    await twin.stop()
-    expect(twin.replies).toEqual([{ id: 1, ok: false, error: 'stop: process identity is unknown; refusing to signal' }])
-    expect(twin.signals).toEqual([])
+    const daemon = buildDaemon(world)
+    await daemon.stop()
+    expect(daemon.replies).toEqual([{ id: 1, ok: false, error: 'stop: process identity is unknown; refusing to signal' }])
+    expect(daemon.signals).toEqual([])
     expect(world.session.startTime).toBeNull()
-    expect(twin.logs.some((l) => l.msg.startsWith('cmdStop: process identity is unknown') && l.data?.sid === SID && l.data?.pid === PID)).toBe(true)
+    expect(daemon.logs.some((l) => l.msg.startsWith('cmdStop: process identity is unknown') && l.data?.sid === SID && l.data?.pid === PID)).toBe(true)
   })
 
   it('a record without spawn args still needs print mode and a resume of this sid', async () => {
     delete world.session.args
     world.argv = `claude -p --resume ${SID}`
-    const ok = buildTwin(kind, world)
+    const ok = buildDaemon(world)
     await ok.stop()
     expect(ok.signals).toEqual(['SIGINT'])
 
     world.session = { pid: PID, state: 'running', exitCode: null, startTime: null }
     world.argv = `claude --resume ${SID}`
-    const interactive = buildTwin(kind, world)
+    const interactive = buildDaemon(world)
     await interactive.stop()
     expect(interactive.replies[0]!.ok).toBe(false)
     expect(interactive.signals).toEqual([])
   })
 
   it('refuses when the start time changes between the two readings', async () => {
-    const twin = buildTwin(kind, world)
+    const daemon = buildDaemon(world)
     let reads = 0
     world.liveStartTime = START
     Object.defineProperty(world, 'liveStartTime', { get: () => (reads++ === 0 ? START : 'Wed Oct 28 01:00:00 2026') })
-    await twin.stop()
-    expect(twin.replies[0]!.ok).toBe(false)
-    expect(twin.signals).toEqual([])
+    await daemon.stop()
+    expect(daemon.replies[0]!.ok).toBe(false)
+    expect(daemon.signals).toEqual([])
   })
 
   it('a recorded start time is compared as before: a match stops, a mismatch refuses', async () => {
     world.session.startTime = START
-    const ok = buildTwin(kind, world)
+    const ok = buildDaemon(world)
     await ok.stop()
     expect(ok.signals).toEqual(['SIGINT'])
 
     world.session = { pid: PID, state: 'running', exitCode: null, startTime: 'Mon Oct 26 09:00:00 2026' }
-    const recycled = buildTwin(kind, world)
+    const recycled = buildDaemon(world)
     await recycled.stop()
     expect(recycled.replies[0]!.error).toBe('stop: process identity is unknown; refusing to signal')
     expect(recycled.signals).toEqual([])
@@ -209,7 +198,7 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a proces
 // reused by another program, and every send to the session failed with "process identity is
 // unknown; refusing to signal" (the server stops a dead record before it resumes) until that
 // program ended. A pid proven to run another program means the recorded process is gone.
-describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a record whose pid another program took', (kind) => {
+describe('stop of a record whose pid another program took', () => {
   let world: World
   let killSpy: ReturnType<typeof vi.spyOn>
   const OTHER = 'Wed Nov  4 22:10:00 2026'
@@ -232,12 +221,12 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a record
   })
 
   it('answers already gone (pid_reused) and signals nothing: the send can resume the session', async () => {
-    const twin = buildTwin(kind, world)
-    await twin.stop()
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true, noop: true, reason: 'pid_reused' } }])
-    expect(twin.signals).toEqual([])
-    expect(twin.reaped, 'a dead record is not reaped twice').toEqual([])
-    expect(twin.persisted()).toBeGreaterThanOrEqual(1)
+    const daemon = buildDaemon(world)
+    await daemon.stop()
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: true, noop: true, reason: 'pid_reused' } }])
+    expect(daemon.signals).toEqual([])
+    expect(daemon.reaped, 'a dead record is not reaped twice').toEqual([])
+    expect(daemon.persisted()).toBeGreaterThanOrEqual(1)
   })
 
 
@@ -251,11 +240,11 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop of a record
     ['the record is idle, not dead', { session: { pid: PID, state: 'idle', startTime: START, args: SPAWN_ARGS } }],
   ])('still refuses when %s: no proof the recorded process is gone', async (_label, change) => {
     Object.assign(world, change)
-    const twin = buildTwin(kind, world)
-    await twin.stop()
-    expect(twin.replies).toEqual([{ id: 1, ok: false, error: 'stop: process identity is unknown; refusing to signal' }])
-    expect(twin.signals).toEqual([])
-    expect(twin.reaped).toEqual([])
+    const daemon = buildDaemon(world)
+    await daemon.stop()
+    expect(daemon.replies).toEqual([{ id: 1, ok: false, error: 'stop: process identity is unknown; refusing to signal' }])
+    expect(daemon.signals).toEqual([])
+    expect(daemon.reaped).toEqual([])
   })
 })
 

@@ -1,6 +1,6 @@
 /**
- * A busy bridge on a slow link, on every daemon runtime booted for real (gate
- * 2026-10-04).
+ * A busy bridge on a slow link, on the session daemon (daemon-standalone.ts)
+ * booted for real (gate 2026-10-04).
  *
  * 1. On a busy link the answers to the daemon's markers are the only frames it
  *    hears, and its watchdog tears the link down three pings after the last
@@ -11,62 +11,33 @@
  *    the replica asked (256 KB), so a 60 s dip to 2 KB/s still dropped the
  *    link twice (gate 2026-10-05). Now no more than 64 KB goes out between two
  *    markers, whatever chunk size the replica asks for.
- * 2. A link the daemon gives up on must be reset. The JS twin dialed with
- *    Node's global WebSocket, which has no terminate(): close() waits for a
- *    close handshake that never finishes on a dead path, so the old flow stayed
- *    open, and on a shared slow link it kept draining. Then it destroyed the
- *    socket, and the kernel still sent what it had buffered before the FIN
- *    (gate 2026-10-05: 8 dials, 7 drops, no reply behind a slow link). Now
- *    both Node clients reset the TCP socket, and so does Bun's terminate() on
- *    ws:// (these links are ws://). On wss:// Bun 1.3.9 ends nothing; see
- *    daemon-bridge-wss-twins-e2e.test.ts and abandonBridgeSocket.
- *
- * Runtimes: the source twin on this runner's bun, where ws is built in (one
- * install, and the client getWsClientCtor picks for ws:// on that Bun); when
- * the machine has a real Node (tests/helpers/source-twin.ts), the source twin
- * on that Node too, with no ws package (its own client) and with the ws
- * package next to it (as deploySource installs it on a remote host); and the
- * bun twin.
+ * 2. A link the daemon gives up on must be reset. A close() waits for a close
+ *    handshake that never finishes on a dead path, so the old flow stayed
+ *    open, and on a shared slow link it kept draining; a destroy still lets
+ *    the kernel send what it had buffered before the FIN (gate 2026-10-05:
+ *    8 dials, 7 drops, no reply behind a slow link). Bun's terminate() on
+ *    ws:// (these links are ws://) resets the TCP socket. On wss:// Bun 1.3.9
+ *    ends nothing; see daemon-bridge-wss-twins-e2e.test.ts and
+ *    abandonBridgeSocket.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the
  * "cloud" is a local ws server; the links are local proxies; daemons are
  * SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { createRequire } from 'node:module'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const WS_PACKAGE_DIR = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
-
-let srcDir = ''
-type Twin = { name: string; wsClient: string; command: () => [string, string[]] }
-/** Bun 1.4.4 and later: the JS twin dials ws:// with the ws module over its own TCP socket (BRIDGE_OWN_TCP in daemon-source.ts). */
-const BUN_OWN_TCP = !!(globalThis as { Bun?: { version: string; semver: { satisfies(v: string, r: string): boolean } } }).Bun?.semver.satisfies(process.versions.bun ?? '0.0.0', '>=1.4.4')
-const SOURCE_TWINS: Twin[] = [
-  // A source deploy runs the JS twin on bun too: on every bun run.
-  ...(process.versions.bun ? [{ name: 'source twin (bun)', wsClient: BUN_OWN_TCP ? 'ws' : 'bun', command: (): [string, string[]] => [process.execPath, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] }] : []),
-  ...(SOURCE_TWIN.runtime === 'node' ? [
-    { name: 'source twin (node), no ws package', wsClient: 'builtin', command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'plain/daemon.cjs'), '--start']] },
-    { name: 'source twin (node), ws package installed', wsClient: 'ws', command: (): [string, string[]] => [SOURCE_TWIN.file, [path.join(srcDir, 'withws/daemon.cjs'), '--start']] },
-  ] : []),
-]
-const TWINS: Twin[] = [
-  ...SOURCE_TWINS,
-  ...(BUN ? [{ name: 'standalone twin (bun)', wsClient: 'bun', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 /** The chunk size this cloud asks for: what replicas asked before 2026-10-05. */
 const ASKED_CHUNK = 256 * 1024
@@ -96,25 +67,7 @@ let proc: ChildProcess | null = null
 let port = 0
 const closers: Array<() => Promise<void> | void> = []
 
-beforeAll(() => {
-  srcDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-slowlink-src-')))
-  const source = getDaemonSource()
-  for (const d of ['plain', 'withws']) {
-    fs.mkdirSync(path.join(srcDir, d))
-    fs.writeFileSync(path.join(srcDir, d, 'daemon.cjs'), source, { mode: 0o755 })
-  }
-  fs.mkdirSync(path.join(srcDir, 'withws/node_modules'))
-  fs.symlinkSync(WS_PACKAGE_DIR, path.join(srcDir, 'withws/node_modules/ws'))
-  // The plain case is only meaningful if nothing above it resolves ws, asked of the
-  // Node that runs it (Bun builds ws in, so its resolver always finds one).
-  if (SOURCE_TWIN.runtime === 'node') {
-    const found = spawnSync(SOURCE_TWIN.file, ['-e', "require.resolve('ws')"], { cwd: path.join(srcDir, 'plain'), stdio: 'ignore', env: { ...process.env, NODE_PATH: undefined } })
-    expect(found.status, 'ws resolves from the install with no ws package').not.toBe(0)
-  }
-})
-afterAll(() => { if (srcDir) fs.rmSync(srcDir, { recursive: true, force: true }) })
-
-async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void> {
+async function boot(extraEnv: Record<string, string>): Promise<void> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-slowlink-')))
   const home = path.join(root, 'home')
   const streams = path.join(root, 'streams')
@@ -132,8 +85,7 @@ async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void>
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
     ...extraEnv,
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -310,7 +262,7 @@ async function startCloud() {
   return cloud
 }
 
-describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
+describe.skipIf(!BUN)('bridge on a slow link: standalone daemon (bun)', () => {
   it('a large reply crosses a busy slow link without a teardown', async () => {
     const bound = bridgeSilenceTeardownMs({ ...BRIDGE_WATCHDOG, pingIntervalMs: PING })
     // The case sits where it matters: the bytes between two markers fit the
@@ -323,7 +275,7 @@ describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
     closers.push(() => fs.rmSync(file, { force: true }))
     const cloud = await startCloud()
     const link = await startLink(cloud.port, RATE)
-    await boot(twin, { WALNUT_BRIDGE_PING_MS: String(PING) })
+    await boot({ WALNUT_BRIDGE_PING_MS: String(PING) })
     await configureBridge(port, link.port)
     await waitFor(() => cloud.hellos.length >= 1, 15_000, 'the first hello')
     await sleep(500)
@@ -343,13 +295,13 @@ describe.each(TWINS)('bridge on a slow link: $name', (twin) => {
     expect(cloud.largestChunk).toBeLessThanOrEqual(MARKER_RUN)
     expect(cloud.hellos).toHaveLength(1)
     expect(daemonLog(/inbound silence/)).toHaveLength(0)
-    expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual([twin.wsClient])
+    expect(daemonLog(/^bridge-conn-open$/).map((r) => r.wsClient)).toEqual(['bun'])
   }, 120_000)
 
   it('resets a link it gave up on, so the dead flow does not stay open or drain', async () => {
     const cloud = await startCloud()
     const link = await startLink(cloud.port, 0)
-    await boot(twin, { WALNUT_BRIDGE_PING_MS: '300' })
+    await boot({ WALNUT_BRIDGE_PING_MS: '300' })
     await configureBridge(port, link.port)
     await waitFor(() => cloud.hellos.length >= 1, 15_000, 'the first hello')
     await sleep(600)

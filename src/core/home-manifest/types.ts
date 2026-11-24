@@ -52,7 +52,7 @@ export interface HomeEntry extends EntryBase {
   appendOnly?: true
   /**
    * This machine's daemon writes here as it runs, whichever home leads (an installed daemon keeps
-   * its state in the data home's tmp/ and local/, daemon-standalone.ts and daemon-source.ts). On
+   * its state in the data home's tmp/ and local/, daemon-standalone.ts). On
    * `machine` entries, and on `rebuildable` ones the running daemon writes (its host server's
    * install, plugin job bundles). A home that handed the leader over keeps every other path of its
    * leader data and machine data byte for byte; these go on changing (home-kept.ts skips them and

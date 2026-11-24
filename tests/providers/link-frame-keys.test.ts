@@ -3,7 +3,7 @@
  * a parameter or an answer field named like a frame key re-addresses the frame, and its answer never
  * reaches the caller (2026-11-21: `follower.triggers {id}` and the trigger answers' `id` timed out
  * every trigger call a host's server made while its leader was away). The class guard: the frame's
- * own keys always win on the daemon's answers (both twins), the follower link refuses a parameter
+ * own keys always win on the daemon's answers, the follower link refuses a parameter
  * named like one, and no follower command a host's server sends names one.
  */
 import fs from 'node:fs'
@@ -21,18 +21,16 @@ function fnBody(src: string, name: string): string {
 }
 
 describe('link frames: a field never takes a frame key', () => {
-  for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-    it(`${twin}: an answer's id comes after its data, and a refusal's ok:false in its data survives`, () => {
-      const src = read(twin)
-      // ok first (a refusal sent through sendOk with ok:false keeps it: 2026-11-21 review, R2-1), id last.
-      expect(fnBody(src, 'sendOk')).toMatch(/\{\s*ok:\s*true,\s*\.\.\.data,\s*id\s*\}/)
-      expect(fnBody(src, 'sendError')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*false/)
-      // The same object built the way the twin builds it.
-      const data: Record<string, unknown> = { ok: false, error: 'session_stopped', id: 'trigger-1' }
-      const frame = { ok: true, ...data, id: 7 }
-      expect(frame).toMatchObject({ ok: false, error: 'session_stopped', id: 7 })
-    })
-  }
+  it("the daemon: an answer's id comes after its data, and a refusal's ok:false in its data survives", () => {
+    const src = read('src/providers/daemon-standalone.ts')
+    // ok first (a refusal sent through sendOk with ok:false keeps it: 2026-11-21 review, R2-1), id last.
+    expect(fnBody(src, 'sendOk')).toMatch(/\{\s*ok:\s*true,\s*\.\.\.data,\s*id\s*\}/)
+    expect(fnBody(src, 'sendError')).toMatch(/\{\s*\.\.\.data,\s*id,\s*ok:\s*false/)
+    // The same object built the way the daemon builds it.
+    const data: Record<string, unknown> = { ok: false, error: 'session_stopped', id: 'trigger-1' }
+    const frame = { ok: true, ...data, id: 7 }
+    expect(frame).toMatchObject({ ok: false, error: 'session_stopped', id: 7 })
+  })
 
   it('the follower link refuses a parameter named like a frame key before it sends', () => {
     expect([...FRAME_KEYS]).toEqual(['id', 'cmd'])

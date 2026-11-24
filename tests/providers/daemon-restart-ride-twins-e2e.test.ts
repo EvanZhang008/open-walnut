@@ -1,8 +1,7 @@
 /**
  * A `walnut` call made while its host's daemon is being replaced waits for the
- * next daemon and gets its answer, on the real daemon twins and their own CLIs
- * (the JS source twin under node, the standalone twin under bun when bun is
- * installed).
+ * next daemon and gets its answer, on the real session daemon (daemon-standalone.ts
+ * under bun) and its own CLI.
  *
  * 2026-11-03 on a dev box: a deploy replaced the daemon, and for 6 s there was no
  * gateway socket; every call in that window failed at once. A daemon that stops
@@ -17,28 +16,21 @@
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths and every
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: (...args: string[]) => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: (...args) => [SOURCE_TWIN.file, [scriptPath, ...args]] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (...args: string[]): [string, string[]] => [BUN, [STANDALONE, ...args]] }] : []),
-]
+const command = (...args: string[]): [string, string[]] => [BUN!, [STANDALONE, ...args]]
 const procs: ChildProcess[] = []
 const sockets: WebSocket[] = []
 let rpcId = 1
@@ -72,8 +64,8 @@ function env(extra: Record<string, string> = {}): Record<string, string | undefi
 // Walnut, which a daemon takes for an older server, so a call arriving while it is open is relayed
 // to it and lost when it closes (a task_send is never sent twice): 3 runs in 12 under load
 // (2026-11-04, CI's Node side job). The server's own hello is that daemon's round trip.
-async function boot(twin: Twin, extra: Record<string, string>, probe = true): Promise<{ proc: ChildProcess; port: number }> {
-  const [cmd, args] = twin.command('--start')
+async function boot(extra: Record<string, string>, probe = true): Promise<{ proc: ChildProcess; port: number }> {
+  const [cmd, args] = command('--start')
   const proc = spawn(cmd, args, { env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] })
   procs.push(proc)
   const port = await new Promise<number>((resolve, reject) => {
@@ -102,10 +94,10 @@ async function stop(proc: ChildProcess): Promise<void> {
   await exited
 }
 
-/** The twin's own CLI: `walnut tools call <op> '{}'` as a session on this host runs it. */
-function cli(twin: Twin, op = 'task_send', json = '{}'): Promise<{ out: string; err: string; code: number | null; ms: number }> {
+/** The daemon's own CLI: `walnut tools call <op> '{}'` as a session on this host runs it. */
+function cli(op = 'task_send', json = '{}'): Promise<{ out: string; err: string; code: number | null; ms: number }> {
   const t0 = Date.now()
-  const [cmd, args] = twin.command('walnut', 'tools', 'call', op, json)
+  const [cmd, args] = command('walnut', 'tools', 'call', op, json)
   const child = spawn(cmd, args, {
     env: env({ WALNUT_AGENT_SOCKET: dirs().sock, WALNUT_SESSION_ID: 'external', WALNUT_CLI_WAIT_MS: '30000' }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -156,12 +148,6 @@ async function waitFor(check: () => boolean, ms = 8_000): Promise<boolean> {
   return check()
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-restart-ride-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   for (const s of sockets.splice(0)) { try { s.close() } catch { /* closed */ } }
   for (const p of procs.splice(0)) {
@@ -181,134 +167,132 @@ function newRoot(): void {
   fs.mkdirSync(dirs().home, { recursive: true })
 }
 
-for (const twin of TWINS) {
-  describe(`a walnut call while the daemon is replaced, ${twin.name}`, () => {
-    // WALNUT_DAEMON_KEEP_SESSIONS=1: this daemon has a successor, as a production one does.
-    const SUCCESSOR = { WALNUT_DAEMON_KEEP_SESSIONS: '1' }
+describe.skipIf(!BUN)('a walnut call while the daemon is replaced, standalone daemon (bun)', () => {
+  // WALNUT_DAEMON_KEEP_SESSIONS=1: this daemon has a successor, as a production one does.
+  const SUCCESSOR = { WALNUT_DAEMON_KEEP_SESSIONS: '1' }
 
-    it('the call made between the two daemons waits and gets the next one\'s answer', async () => {
-      newRoot()
-      const first = await boot(twin, SUCCESSOR)
-      await stop(first.proc)
-      // The stopping daemon left the mark and took its socket with it.
-      expect(fs.existsSync(dirs().sock)).toBe(false)
-      const sec = Number(fs.readFileSync(dirs().mark, 'utf-8'))
-      expect(Math.abs(Math.floor(Date.now() / 1000) - sec)).toBeLessThan(10)
+  it('the call made between the two daemons waits and gets the next one\'s answer', async () => {
+    newRoot()
+    const first = await boot(SUCCESSOR)
+    await stop(first.proc)
+    // The stopping daemon left the mark and took its socket with it.
+    expect(fs.existsSync(dirs().sock)).toBe(false)
+    const sec = Number(fs.readFileSync(dirs().mark, 'utf-8'))
+    expect(Math.abs(Math.floor(Date.now() / 1000) - sec)).toBeLessThan(10)
 
-      const call = cli(twin)
-      await new Promise((r) => setTimeout(r, 1_500))
-      const next = await boot(twin, SUCCESSOR, false)
-      // Listening again: the mark is gone, so nothing else waits on it.
-      expect(await waitFor(() => !fs.existsSync(dirs().mark))).toBe(true)
-      const server = await connect(next.port, 'run-b')
-      expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
-      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { sent: true } })).ok).toBe(true)
+    const call = cli()
+    await new Promise((r) => setTimeout(r, 1_500))
+    const next = await boot(SUCCESSOR, false)
+    // Listening again: the mark is gone, so nothing else waits on it.
+    expect(await waitFor(() => !fs.existsSync(dirs().mark))).toBe(true)
+    const server = await connect(next.port, 'run-b')
+    expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
+    expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { sent: true } })).ok).toBe(true)
 
-      const r = await call
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toEqual({ sent: true })
-      // stderr is a pipe here, as for an agent: no notice in what it reads back.
-      expect(r.err).not.toContain(WAIT_LINE)
-      expect(r.ms).toBeGreaterThanOrEqual(1_500)
-      expect(server.requests).toHaveLength(1)
-    }, 120_000)
+    const r = await call
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ sent: true })
+    // stderr is a pipe here, as for an agent: no notice in what it reads back.
+    expect(r.err).not.toContain(WAIT_LINE)
+    expect(r.ms).toBeGreaterThanOrEqual(1_500)
+    expect(server.requests).toHaveLength(1)
+  }, 120_000)
 
-    // 2026-11-03 live: a `host_list` whose CLI connected while the daemon finished its
-    // stop got "read ECONNRESET" and failed. Only Linux promises that reset means unread.
-    it.runIf(process.platform === 'linux')('a call the exiting daemon never read waits and gets the next one\'s answer', async () => {
-      newRoot()
-      fs.mkdirSync(dirs().daemon, { recursive: true, mode: 0o700 })
-      fs.writeFileSync(dirs().mark, String(Math.floor(Date.now() / 1000)), { mode: 0o600 })
-      // The exiting daemon: it takes the connection, never reads it, and goes with it.
-      let took = 0
-      let gone = false
-      const exiting = net.createServer({ pauseOnConnect: true }, (s) => {
-        took += 1
-        setTimeout(() => {
-          s.destroy()
-          exiting.close(() => { gone = true })
-        }, 400)
-      })
-      await new Promise<void>((resolve) => exiting.listen(dirs().sock, () => resolve()))
-      const call = cli(twin, 'host_list')
-      expect(await waitFor(() => took === 1 && gone, 20_000)).toBe(true)
-      try { fs.unlinkSync(dirs().sock) } catch { /* removed with the server */ }
-      const next = await boot(twin, SUCCESSOR, false)
-      const server = await connect(next.port, 'run-b')
-      expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
-      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
+  // 2026-11-03 live: a `host_list` whose CLI connected while the daemon finished its
+  // stop got "read ECONNRESET" and failed. Only Linux promises that reset means unread.
+  it.runIf(process.platform === 'linux')('a call the exiting daemon never read waits and gets the next one\'s answer', async () => {
+    newRoot()
+    fs.mkdirSync(dirs().daemon, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(dirs().mark, String(Math.floor(Date.now() / 1000)), { mode: 0o600 })
+    // The exiting daemon: it takes the connection, never reads it, and goes with it.
+    let took = 0
+    let gone = false
+    const exiting = net.createServer({ pauseOnConnect: true }, (s) => {
+      took += 1
+      setTimeout(() => {
+        s.destroy()
+        exiting.close(() => { gone = true })
+      }, 400)
+    })
+    await new Promise<void>((resolve) => exiting.listen(dirs().sock, () => resolve()))
+    const call = cli('host_list')
+    expect(await waitFor(() => took === 1 && gone, 20_000)).toBe(true)
+    try { fs.unlinkSync(dirs().sock) } catch { /* removed with the server */ }
+    const next = await boot(SUCCESSOR, false)
+    const server = await connect(next.port, 'run-b')
+    expect(await waitFor(() => server.requests.length > 0, 20_000)).toBe(true)
+    expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
 
-      const r = await call
-      expect(r.err).not.toContain('ECONNRESET')
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toEqual({ hosts: [] })
-      expect(server.requests).toHaveLength(1)
-      expect(took).toBe(1)
-    }, 120_000)
+    const r = await call
+    expect(r.err).not.toContain('ECONNRESET')
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ hosts: [] })
+    expect(server.requests).toHaveLength(1)
+    expect(took).toBe(1)
+  }, 120_000)
 
-    it('a read still at the server when the daemon stops is sent again through the next daemon', async () => {
-      newRoot()
-      const first = await boot(twin, SUCCESSOR)
-      const before = await connect(first.port, 'run-a', ['host_list'])
-      const call = cli(twin, 'host_list')
-      expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
-      // The server has it and has not answered when the daemon is replaced.
-      await stop(first.proc)
-      const next = await boot(twin, SUCCESSOR, false)
-      const server = await connect(next.port, 'run-a', ['host_list'])
-      expect(await waitFor(() => server.requests.length === 1, 20_000)).toBe(true)
-      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
-      const r = await call
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toEqual({ hosts: [] })
-    }, 120_000)
+  it('a read still at the server when the daemon stops is sent again through the next daemon', async () => {
+    newRoot()
+    const first = await boot(SUCCESSOR)
+    const before = await connect(first.port, 'run-a', ['host_list'])
+    const call = cli('host_list')
+    expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
+    // The server has it and has not answered when the daemon is replaced.
+    await stop(first.proc)
+    const next = await boot(SUCCESSOR, false)
+    const server = await connect(next.port, 'run-a', ['host_list'])
+    expect(await waitFor(() => server.requests.length === 1, 20_000)).toBe(true)
+    expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, result: { hosts: [] } })).ok).toBe(true)
+    const r = await call
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ hosts: [] })
+  }, 120_000)
 
-    it('a call that may change something, still at the server when the daemon stops, is told it may have run and is not sent again', async () => {
-      newRoot()
-      const first = await boot(twin, SUCCESSOR)
-      const before = await connect(first.port, 'run-a', ['host_list'])
-      const call = cli(twin, 'task_send')
-      expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
-      await stop(first.proc)
-      const r = await call
-      // hub_timeout: the answer did not come back. Never hub_unreachable, which every client
-      // reads as "nothing ran, send it again" (the Mac's CLI even sends it again over HTTP).
-      expect(r.code).toBe(5)
-      expect(r.err).toContain('hub_timeout')
-      expect(r.err).toContain('it may have run, so check before running it again')
-      expect(r.err).not.toContain('socket closed without a response')
-      // The next daemon never gets it.
-      const next = await boot(twin, SUCCESSOR, false)
-      const server = await connect(next.port, 'run-a', ['host_list'])
-      await new Promise((res) => setTimeout(res, 1_500))
-      expect(server.requests).toEqual([])
-    }, 120_000)
+  it('a call that may change something, still at the server when the daemon stops, is told it may have run and is not sent again', async () => {
+    newRoot()
+    const first = await boot(SUCCESSOR)
+    const before = await connect(first.port, 'run-a', ['host_list'])
+    const call = cli('task_send')
+    expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
+    await stop(first.proc)
+    const r = await call
+    // hub_timeout: the answer did not come back. Never hub_unreachable, which every client
+    // reads as "nothing ran, send it again" (the Mac's CLI even sends it again over HTTP).
+    expect(r.code).toBe(5)
+    expect(r.err).toContain('hub_timeout')
+    expect(r.err).toContain('it may have run, so check before running it again')
+    expect(r.err).not.toContain('socket closed without a response')
+    // The next daemon never gets it.
+    const next = await boot(SUCCESSOR, false)
+    const server = await connect(next.port, 'run-a', ['host_list'])
+    await new Promise((res) => setTimeout(res, 1_500))
+    expect(server.requests).toEqual([])
+  }, 120_000)
 
-    it('a host_exec still at the server when the daemon stops names its job to read, never "call it again"', async () => {
-      newRoot()
-      const first = await boot(twin, SUCCESSOR)
-      const before = await connect(first.port, 'run-a', ['host_list'])
-      const call = cli(twin, 'host_exec', JSON.stringify({ host: 'gpu-box', command: 'make' }))
-      expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
-      const jobId = ((before.requests[0].payload as { args?: { job_id?: unknown } }).args?.job_id)
-      expect(typeof jobId).toBe('string')
-      await stop(first.proc)
-      const r = await call
-      expect(r.code).toBe(5)
-      expect(r.err).toContain(`host_exec may have started on gpu-box as job ${String(jobId)}: do not run it again`)
-      expect(r.err).not.toMatch(/nothing ran|call it again/)
-    }, 120_000)
+  it('a host_exec still at the server when the daemon stops names its job to read, never "call it again"', async () => {
+    newRoot()
+    const first = await boot(SUCCESSOR)
+    const before = await connect(first.port, 'run-a', ['host_list'])
+    const call = cli('host_exec', JSON.stringify({ host: 'gpu-box', command: 'make' }))
+    expect(await waitFor(() => before.requests.length === 1, 20_000)).toBe(true)
+    const jobId = ((before.requests[0].payload as { args?: { job_id?: unknown } }).args?.job_id)
+    expect(typeof jobId).toBe('string')
+    await stop(first.proc)
+    const r = await call
+    expect(r.code).toBe(5)
+    expect(r.err).toContain(`host_exec may have started on gpu-box as job ${String(jobId)}: do not run it again`)
+    expect(r.err).not.toMatch(/nothing ran|call it again/)
+  }, 120_000)
 
-    it('a daemon with no successor leaves no mark: the call fails at once, as before', async () => {
-      newRoot()
-      const only = await boot(twin, {})
-      await stop(only.proc)
-      expect(fs.existsSync(dirs().mark)).toBe(false)
-      const r = await cli(twin)
-      expect(r.code).toBe(6)
-      expect(r.err).toContain('Walnut daemon socket unreachable')
-      expect(r.err).not.toContain('restarting')
-      expect(r.ms).toBeLessThan(10_000)
-    }, 120_000)
-  })
-}
+  it('a daemon with no successor leaves no mark: the call fails at once, as before', async () => {
+    newRoot()
+    const only = await boot({})
+    await stop(only.proc)
+    expect(fs.existsSync(dirs().mark)).toBe(false)
+    const r = await cli()
+    expect(r.code).toBe(6)
+    expect(r.err).toContain('Walnut daemon socket unreachable')
+    expect(r.err).not.toContain('restarting')
+    expect(r.ms).toBeLessThan(10_000)
+  }, 120_000)
+})

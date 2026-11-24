@@ -12,8 +12,7 @@
  *
  * A self-contained factory: the server names triggers with it, and so does a
  * host's daemon creating one while the server is away (offline-host-core.ts).
- * daemon-source.ts inlines `createTriggerLabel.toString()`, so the factory body
- * references NOTHING at module scope (types are erased).
+ * The factory body references NOTHING at module scope (types are erased).
  */
 
 export interface TriggerLabelInput {

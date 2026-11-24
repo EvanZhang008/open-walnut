@@ -138,10 +138,8 @@ describe('host.facts', () => {
 
 // 'host-caps-v1': what a host can do. The Mac probes run absolute paths
 // (/usr/bin/xcode-select, xcodebuild, xcrun), so the darwin case answers them
-// from a fake execFile; files come from a temp HOME. Each case also runs the
-// factory from its TEXT, as daemon-source.ts inlines it.
+// from a fake execFile; files come from a temp HOME.
 describe('host.facts capabilities (host-caps-v1)', () => {
-  const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
   const SECRET = 'tok-must-never-leave-the-host'
 
   function home(name: string): string {
@@ -181,43 +179,41 @@ describe('host.facts capabilities (host-caps-v1)', () => {
     return reply('', 1)
   }) as unknown as HostFactsDeps['execFile']
 
-  for (const [label, factory] of [['imported', createHostFacts], ['inlined', strict(createHostFacts)]] as const) {
-    it(`${label}: a Mac with Xcode and the browser extension reports iOS, the browser and MCP names only`, async () => {
-      const h = home(`mac-${label}`)
-      fs.mkdirSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts'), { recursive: true })
-      fs.writeFileSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts', 'com.walnut.browser.json'), '{}')
-      const r = await factory({
-        fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
-        env: { PATH: bin }, home: h, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
-      }).facts({ network: false })
-      expect(r.ios).toEqual({ xcode: 'Xcode 26.1', runtimes: ['iOS 26.1'] })
-      expect(r.browsers).toContainEqual({ name: 'chrome', relay: true })
-      expect(r.mcp).toEqual([
-        { name: 'mail-mcp' }, { name: 'notes-mcp' },
-        { name: 'docs-mcp', plugin: 'PluginA' }, { name: 'second-mcp', plugin: 'PluginA' },
-      ])
-      // Names only: no command, environment, header or token rides the answer.
-      const text = JSON.stringify(r)
-      expect(text).not.toContain(SECRET)
-      expect(text).not.toContain('disabled-mcp')
-      expect(text).not.toContain('project-only')
-    })
+  it('a Mac with Xcode and the browser extension reports iOS, the browser and MCP names only', async () => {
+    const h = home('mac')
+    fs.mkdirSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts'), { recursive: true })
+    fs.writeFileSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts', 'com.walnut.browser.json'), '{}')
+    const r = await createHostFacts({
+      fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
+      env: { PATH: bin }, home: h, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
+    }).facts({ network: false })
+    expect(r.ios).toEqual({ xcode: 'Xcode 26.1', runtimes: ['iOS 26.1'] })
+    expect(r.browsers).toContainEqual({ name: 'chrome', relay: true })
+    expect(r.mcp).toEqual([
+      { name: 'mail-mcp' }, { name: 'notes-mcp' },
+      { name: 'docs-mcp', plugin: 'PluginA' }, { name: 'second-mcp', plugin: 'PluginA' },
+    ])
+    // Names only: no command, environment, header or token rides the answer.
+    const text = JSON.stringify(r)
+    expect(text).not.toContain(SECRET)
+    expect(text).not.toContain('disabled-mcp')
+    expect(text).not.toContain('project-only')
+  })
 
-    // 2026-11-12: a smoke boot's daemon, run from the land queue with no app responsible for it,
-    // probed 169.254.169.254 and macOS asked "Allow walnut-darwin-arm64 to find devices on local
-    // networks?" for its stage path. A Mac never sends that request; github is still asked.
-    it(`${label}: a Mac never asks the link-local cloud metadata address, and reads as no cloud VM`, async () => {
-      calls.length = 0
-      const r = await factory({
-        fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
-        env: { PATH: bin }, home: home(`mac-imds-${label}`), platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
-      }).facts({})
-      expect(r.cloud).toEqual({ imds: false })
-      expect(r.internet).toEqual({ github: true })
-      expect(calls.filter((c) => c.includes('169.254.169.254'))).toEqual([])
-      expect(calls).toContain('HEAD github.com/')
-    })
-  }
+  // 2026-11-12: a smoke boot's daemon, run from the land queue with no app responsible for it,
+  // probed 169.254.169.254 and macOS asked "Allow walnut-darwin-arm64 to find devices on local
+  // networks?" for its stage path. A Mac never sends that request; github is still asked.
+  it('a Mac never asks the link-local cloud metadata address, and reads as no cloud VM', async () => {
+    calls.length = 0
+    const r = await createHostFacts({
+      fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
+      env: { PATH: bin }, home: home('mac-imds'), platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
+    }).facts({})
+    expect(r.cloud).toEqual({ imds: false })
+    expect(r.internet).toEqual({ github: true })
+    expect(calls.filter((c) => c.includes('169.254.169.254'))).toEqual([])
+    expect(calls).toContain('HEAD github.com/')
+  })
 
   it('servers offered to other hosts (local/host-mcp.json) come first, marked, with their one word; values stay home', async () => {
     const h = home('offered')
@@ -287,10 +283,8 @@ describe('host.facts capabilities (host-caps-v1)', () => {
 })
 
 // host.load's own-thread share (2026-11-08: no session started on the Mac for an hour at a load
-// near 98, mostly a music app and a security agent). Both the imported factory and its text, as
-// daemon-source.ts inlines it.
+// near 98, mostly a music app and a security agent).
 describe('host.load: our own share of the runnable threads', () => {
-  const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
   // A tree with an agent CLI and its shell's child, a bun runner, a music app and an endpoint agent;
   // the second tree also has a compiler our CLI started between the samples.
   const tree1 = ['    1     0 /sbin/launchd', '  500     1 /Applications/Music.app/Contents/MacOS/music',
@@ -317,37 +311,35 @@ describe('host.load: our own share of the runnable threads', () => {
       return reply('', 1)
     }) as unknown as HostFactsDeps['execFile']
   }
-  for (const [label, factory] of [['imported', createHostFacts], ['inlined', strict(createHostFacts)]] as const) {
-    it(`${label}: counts an agent CLI's children, bun and a child started between the samples as ours`, async () => {
-      const r = await factory({
-        fs, os, execFile: psExec([tree1, tree2]), http: {} as never, https: {} as never,
-        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
-      }).load()
-      expect(r.ownThreads).toEqual({ ours: 4, others: 4 })
-    })
-    it(`${label}: averages the two samples`, async () => {
-      const r = await factory({
-        fs, os, execFile: psExec([tree1, tree2], [axm, axmQuiet]), http: {} as never, https: {} as never,
-        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
-      }).load()
-      expect(r.ownThreads).toEqual({ ours: 4, others: 2 })
-    })
-    it(`${label}: a ps too slow for the share's deadline leaves no share, and the rest of the answer stands`, async () => {
-      const t0 = Date.now()
-      const r = await factory({
-        fs, os, execFile: psExec([tree1, tree2], [axm, axm], 700), http: {} as never, https: {} as never,
-        env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1000 },
-      }).load()
-      expect(r.ownThreads).toBeNull()
-      expect(r.cpus).toBeGreaterThan(0)
-      expect(Date.now() - t0).toBeLessThan(2500)
-    })
-    it(`${label}: Linux reports no share, and an unreadable ps none either`, async () => {
-      const linux = await factory({ fs, os, execFile: psExec([]), http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'linux', arch: 'x64', timeouts: { probeMs: 500 } }).load()
-      expect(linux.ownThreads).toBeNull()
-      const broken = ((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => setImmediate(() => cb(Object.assign(new Error('x'), { code: 1 }), '', ''))) as unknown as HostFactsDeps['execFile']
-      const mac = await factory({ fs, os, execFile: broken, http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 500 } }).load()
-      expect(mac.ownThreads).toBeNull()
-    })
-  }
+  it("counts an agent CLI's children, bun and a child started between the samples as ours", async () => {
+    const r = await createHostFacts({
+      fs, os, execFile: psExec([tree1, tree2]), http: {} as never, https: {} as never,
+      env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
+    }).load()
+    expect(r.ownThreads).toEqual({ ours: 4, others: 4 })
+  })
+  it('averages the two samples', async () => {
+    const r = await createHostFacts({
+      fs, os, execFile: psExec([tree1, tree2], [axm, axmQuiet]), http: {} as never, https: {} as never,
+      env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500 },
+    }).load()
+    expect(r.ownThreads).toEqual({ ours: 4, others: 2 })
+  })
+  it("a ps too slow for the share's deadline leaves no share, and the rest of the answer stands", async () => {
+    const t0 = Date.now()
+    const r = await createHostFacts({
+      fs, os, execFile: psExec([tree1, tree2], [axm, axm], 700), http: {} as never, https: {} as never,
+      env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1000 },
+    }).load()
+    expect(r.ownThreads).toBeNull()
+    expect(r.cpus).toBeGreaterThan(0)
+    expect(Date.now() - t0).toBeLessThan(2500)
+  })
+  it('Linux reports no share, and an unreadable ps none either', async () => {
+    const linux = await createHostFacts({ fs, os, execFile: psExec([]), http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'linux', arch: 'x64', timeouts: { probeMs: 500 } }).load()
+    expect(linux.ownThreads).toBeNull()
+    const broken = ((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => setImmediate(() => cb(Object.assign(new Error('x'), { code: 1 }), '', ''))) as unknown as HostFactsDeps['execFile']
+    const mac = await createHostFacts({ fs, os, execFile: broken, http: {} as never, https: {} as never, env: {}, home: tmp, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 500 } }).load()
+    expect(mac.ownThreads).toBeNull()
+  })
 })

@@ -1,6 +1,6 @@
 /**
  * A host server answering alone, end to end (docs/plan/walnut-servers-everywhere.md,
- * "Host server, leader away"): real daemon twins, the real host server, a mock
+ * "Host server, leader away"): the real daemon, the real host server, a mock
  * CLI session, a stand-in Mac (tests/helpers/host-alone-harness.ts). No companion.
  *
  *   - while the Mac answers, /_alone/ says so and answers nothing else;
@@ -65,15 +65,13 @@ async function followerSocket(port: number, token: string) {
   return { ws, ask, hello }
 }
 
-const twins: Array<'source' | 'standalone'> = BUN ? ['source', 'standalone'] : ['source']
-
-describe.each(twins)('a host server answering alone (%s twin)', (twin) => {
+describe.skipIf(!BUN)('a host server answering alone (standalone daemon)', () => {
   let h: HostAloneHarness
   let port = 0
   const sessionsOf = async () => (await call(port, 'GET', '/_alone/sessions', { token: TOKEN })).json.sessions as Array<Record<string, any>>
 
   beforeAll(async () => {
-    h = await startHostAloneHarness({ twin })
+    h = await startHostAloneHarness()
     port = h.publicPort
   }, 180_000)
 

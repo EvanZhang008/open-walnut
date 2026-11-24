@@ -21,9 +21,7 @@
  * read from the end of each file and MAX_FILES files per source; a line over
  * MAX_LINE_CHARS is cut. Regular files only (a symlink is skipped).
  *
- * How the daemon twins get it: daemon-standalone.ts imports createReplicaLogs;
- * daemon-source.ts inlines its `toString()` through `__CREATE_REPLICA_LOGS__`.
- * So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createReplicaLogs). The factory body references NOTHING at module scope.
  */
 
 export type ReplicaLogSource = 'replica' | 'journal' | 'stdout'

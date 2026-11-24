@@ -103,7 +103,7 @@ export class SessionReaper {
     // Sessions still running or idle may stream from their capture file, so
     // they are excluded regardless of file age. Two dirs share the leak: the
     // daemon's prod streams dir (~/.open-walnut/tmp/streams — the 15GB pileup,
-    // PROD_STREAMS_DIR in daemon-source.ts) and the server's legacy
+    // PROD_STREAMS_DIR in daemon-standalone.ts) and the server's legacy
     // SESSION_STREAMS_DIR (pre-daemon LocalIO captures).
     const activeIds = new Set(
       sessions

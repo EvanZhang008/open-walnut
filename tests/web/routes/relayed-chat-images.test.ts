@@ -168,7 +168,7 @@ describe('adopting staged images into this box\'s own store', () => {
 })
 
 describe('the staging directory is the SAME dir on both sides of the bridge', () => {
-  it('matches the daemon twins\' IMAGE_SAVE_DIR expression', async () => {
+  it('matches the daemon\'s IMAGE_SAVE_DIR expression', async () => {
     // No compiler link exists between this server constant and the daemon's own
     // IMAGE_SAVE_DIR: the daemon is a separately-built binary. If either side is
     // moved, adoption silently refuses every relayed image (the dirname gate
@@ -177,10 +177,8 @@ describe('the staging directory is the SAME dir on both sides of the bridge', ()
     expect(MOBILE_STAGED_IMAGES_DIR).toBe(path.join(IMAGES_DIR, 'mobile'))
 
     const root = path.resolve(import.meta.dirname, '../../..')
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = await fs.readFile(path.join(root, twin), 'utf-8')
-      expect(src).toMatch(/IMAGE_SAVE_DIR = path\.join\(DAEMON_DIR, 'images', 'mobile'\)/)
-    }
+    const src = await fs.readFile(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    expect(src).toMatch(/IMAGE_SAVE_DIR = path\.join\(DAEMON_DIR, 'images', 'mobile'\)/)
   })
 })
 

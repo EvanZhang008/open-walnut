@@ -5,7 +5,7 @@
  * Why (2026-10-25): a restart emptied /tmp, and with it several tasks' clones,
  * one task's only copy of an unmerged commit, and kept evidence. Each pin below
  * is one way that could come back: a role that never hears the rule, a session
- * spawned before it with no way to read it, a twin that stops handing out the
+ * spawned before it with no way to read it, a daemon that stops handing out the
  * directory, a spawn path that drops the guard, an ephemeral or test server
  * writing into the real directories, or a personal path in the public text.
  */
@@ -134,29 +134,22 @@ describe('the program side', () => {
     }
   })
 
-  it('both daemon twins hand out the directory at spawn, scrub an inherited one, and report their root', () => {
+  it('the daemon hands out the directory at spawn, scrubs an inherited one, and reports its root', () => {
     const standalone = read('src/providers/daemon-standalone.ts')
-    const source = read('src/providers/daemon-source.ts')
     expect(standalone).toMatch(/WALNUT_TASK_DIR: taskDir \?\? undefined,/)
-    expect(source).toMatch(/WALNUT_TASK_DIR: taskDir \|\| undefined,/)
-    for (const twin of [standalone, source]) {
-      expect(twin).toMatch(/taskDirRoot: TASK_DIR_ROOT/)
-      for (const cmd of ['taskdir.ensure', 'taskdir.list', 'taskdir.remove', 'taskdir.prune']) expect(twin).toContain(`case '${cmd}'`)
-      // The ACP spawn (Codex and other ACP engines) gets it too.
-      expect(twin).toMatch(/cmdAcpStart[\s\S]{0,2500}WALNUT_TASK_DIR/)
-    }
+    expect(standalone).toMatch(/taskDirRoot: TASK_DIR_ROOT/)
+    for (const cmd of ['taskdir.ensure', 'taskdir.list', 'taskdir.remove', 'taskdir.prune']) expect(standalone).toContain(`case '${cmd}'`)
+    // The ACP spawn (Codex and other ACP engines) gets it too.
+    expect(standalone).toMatch(/cmdAcpStart[\s\S]{0,2500}WALNUT_TASK_DIR/)
     // The cloud bridge may never delete host files.
     const bridgeList = standalone.match(/const BRIDGE_ALLOWED_COMMANDS = new Set\(\[[\s\S]*?\n\]\)/)?.[0] ?? ''
     expect(bridgeList).toContain("'status'")
     expect(bridgeList).not.toContain('taskdir.')
   })
 
-  it('the sidecar ships, is hashed into the daemon version, and gates the capability', () => {
-    expect(read('scripts/build-daemon.sh')).toMatch(/--outfile "\$OUTDIR\/task-dir-core.cjs"/)
-    for (const f of ['src/providers/daemon-connection.ts', 'src/providers/local-daemon.ts']) expect(read(f)).toContain("'task-dir-core.cjs'")
+  it('the task directory core is hashed into the daemon version, and the daemon advertises the capability', () => {
     expect(read('src/providers/daemon-version-check.ts')).toContain("'src/providers/task-dir-core.ts'")
     expect(read('src/providers/daemon-version-check.ts')).toContain("'src/lib/task-dir.ts'")
-    expect(read('src/providers/daemon-source.ts')).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'task-dir-v1'/)
     expect(read('src/providers/daemon-capabilities.ts')).toMatch(/^\s+'task-dir-v1',$/m)
   })
 

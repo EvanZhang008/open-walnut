@@ -11,7 +11,7 @@
  * to delayed redelivery.
  *
  * This test drives the REAL artifacts end to end:
- *   1. real source-template daemon (isolated dir) spawns a mock CLI that
+ *   1. real standalone daemon (isolated dir) spawns a mock CLI that
  *      echoes every FIFO line into its jsonl (stdout);
  *   2. the phone's message is enqueued durably with its qm-mobile id — and a
  *      phone RETRY of the same id dedupes to one row (idempotent enqueue);
@@ -36,8 +36,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-kill-redeliver'))
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import {
   enqueueMessage,
   getQueue,
@@ -49,25 +48,27 @@ import {
 import { WALNUT_HOME } from '../../src/constants.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 const SID = 'phone-kill-redeliver-1'
 const MESSAGE = 'phone message that must survive the daemon death'
 const MESSAGE_ID = 'qm-mobile-killtest01'
 
 let daemonDir = ''
 let streamsDir = ''
-let scriptPath = ''
 let mockCliPath = ''
 let cwdDir = ''
 let daemonProc: ChildProcess | null = null
 let ws: WebSocket | null = null
 
 async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number }> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 20_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -115,8 +116,6 @@ beforeAll(async () => {
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-kill-redeliver-'))
   streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-kill-redeliver-streams-'))
   cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-kill-redeliver-cwd-'))
-  scriptPath = path.join(daemonDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   // Mock CLI: echoes each stdin (FIFO) line to stdout (the daemon points
   // stdout at the session jsonl), then stays alive like a real long-running
   // `claude -p` process.
@@ -142,7 +141,7 @@ afterAll(async () => {
   await fs.promises.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 30_000)
 
-describe('daemon death between enqueue and delivery → exactly-once redelivery', () => {
+describe.skipIf(!BUN)('daemon death between enqueue and delivery → exactly-once redelivery', () => {
   it('survives the kill and delivers the phone message exactly once', async () => {
     // ── 1. daemon generation A spawns the mock CLI session ──
     const genA = await spawnDaemon()

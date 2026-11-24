@@ -16,7 +16,13 @@ import path from 'node:path'
 import { DaemonConnection, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
-import { EXPECTED, OLD, TARGET, priv, state, probe, stub } from '../helpers/daemon-connection-update-stubs.js'
+import { EXPECTED, OLD, TARGET, priv, state, probe, stub as baseStub } from '../helpers/daemon-connection-update-stubs.js'
+
+/** The shared stub, for a host whose daemon is the compiled one (what this leader deploys and starts). */
+const stub: typeof baseStub = (c, routes) => {
+  if ((c as unknown as { _runtime?: unknown })._runtime == null) (c as unknown as { _runtime: unknown })._runtime = 'binary'
+  return baseStub(c, routes)
+}
 
 let conns: DaemonConnection[] = []
 function make(): DaemonConnection {
@@ -45,7 +51,7 @@ function startedThenGone(agoMs: number, boot?: number, recorded = EXPECTED) {
   const c = make()
   const seen = stub(c, { probe: probe(), version: OLD })
   for (const level of ['info', 'warn', 'error'] as const) vi.spyOn(log.session, level).mockImplementation(() => {})
-  state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now() - agoMs, stopped: true }
+  state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now() - agoMs, stopped: true }
   state(c)._replacing = { expected: recorded, dir: state(c)._remoteDir, at: Date.now() - agoMs, started: { pid: 7001, at: Date.now() - agoMs, ...(boot ? { boot } : {}) } }
   vi.spyOn(priv(c), 'scheduleStayCheck').mockImplementation(() => {})
   const fresh = vi.spyOn(priv(c), 'deployAndStartNew').mockResolvedValue(32400)
@@ -77,10 +83,10 @@ describe('the probation of a new SSH daemon', () => {
     // dying was started unwatched on every connect, and the old one never again).
     expect(state(c)._replacing).toMatchObject({ expected: EXPECTED, started: expect.objectContaining({ at: expect.any(Number) }) })
     expect(Date.now() - state(c)._replacing.started.at).toBeLessThan(5_000)
-    expect(state(c)._previous).toMatchObject({ stopped: true, runtime: 'node' })
+    expect(state(c)._previous).toMatchObject({ stopped: true, runtime: 'binary' })
     // It dies inside that window: now it is the build's failure, and the old one starts again.
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('node')
+    expect(start).toHaveBeenCalledWith()
     expect(seen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
     expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, reason: expect.stringMatching(/stopped within \d+ s/) })
   })
@@ -103,14 +109,14 @@ describe('the probation of a new SSH daemon', () => {
     const { c, fresh, start } = startedThenGone(STAY_MS + 3 * 3600_000, undefined, 'walnut-daemon-recorded0')
     fresh.mockRejectedValueOnce(new Error('the new daemon did not answer'))
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('node')
+    expect(start).toHaveBeenCalledWith()
     expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED })
   })
 
   it('gone inside its window is still the build\'s failure: the old one starts again', async () => {
     const { c, seen, fresh, start } = startedThenGone(5 * 60_000)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('node')
+    expect(start).toHaveBeenCalledWith()
     expect(fresh).not.toHaveBeenCalled()
     expect(seen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
     expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, reason: expect.stringMatching(/stopped within \d+ s/) })
@@ -128,7 +134,7 @@ describe('the probation of a new SSH daemon', () => {
     // Watched anew from now, in the new boot, with the old one's files still the way back.
     expect(state(c)._replacing).toMatchObject({ expected: EXPECTED, started: { pid: 7101, boot: boot + 4 * 3600 } })
     expect(Date.now() - state(c)._replacing.started.at).toBeLessThan(5_000)
-    expect(state(c)._previous).toMatchObject({ stopped: true, runtime: 'node' })
+    expect(state(c)._previous).toMatchObject({ stopped: true, runtime: 'binary' })
     await updateStoresSettled()
     expect(Object.values(JSON.parse(fs.readFileSync(process.env.WALNUT_UPDATE_PENDING_FILE!, 'utf8')))).toEqual([expect.objectContaining({ started: expect.objectContaining({ boot: boot + 4 * 3600 }) })])
   })
@@ -138,7 +144,7 @@ describe('the probation of a new SSH daemon', () => {
     const { c, start } = startedThenGone(5 * 60_000, boot)
     bootIs(c, boot)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('node')
+    expect(start).toHaveBeenCalledWith()
     expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED })
   })
 

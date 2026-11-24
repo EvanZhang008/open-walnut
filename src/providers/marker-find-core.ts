@@ -15,8 +15,7 @@
  * MARKER_FIND_MAX_ID_LEN characters, at most MARKER_FIND_MAX_BYTES read, in
  * MARKER_FIND_CHUNK_BYTES reads that each yield to the event loop.
  * `complete` = the whole file was searched (no marker past the bound was
- * missed). The bun twin imports this; daemon-source.ts carries a hand-inlined
- * copy (the template cannot import). Keep the two in sync.
+ * missed). The daemon imports this.
  */
 
 import fsp from 'node:fs/promises'

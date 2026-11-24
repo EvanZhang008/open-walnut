@@ -15,7 +15,7 @@
  *    address instead. A new launch path fails here until it does one or the other;
  *  - each in-server launch builder, run with a server root set, carries exactly that root.
  *    (ClaudeCodeSession: session-walnut-api-env.test.ts; ACP: acp-walnut-api-env.test.ts;
- *    the daemon twins' process env: daemon-session-walnut-twins-e2e.test.ts.)
+ *    the daemon's process env: daemon-session-walnut-twins-e2e.test.ts.)
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -29,7 +29,6 @@ const SRC = path.resolve(import.meta.dirname, '../../src')
 /** Launch builders that get the address another way, and how. */
 const ELSEWHERE: Record<string, string> = {
   'providers/daemon-standalone.ts': 'mirrors the address its Walnut named (sessionWalnutApiUrl), never its own',
-  'providers/daemon-source.ts': 'mirrors the address its Walnut named (sessionWalnutApiUrl), never its own',
   'providers/engine-model-probe.ts': 'asks an engine for its model list; runs no turn and calls no Walnut op',
 }
 

@@ -16,10 +16,7 @@
  * does the same without a JDK: those are only run once `xcode-select -p` (or
  * `/usr/libexec/java_home`) says the real thing is there.
  *
- * How each twin gets it: daemon-standalone.ts imports createHostFacts;
- * daemon-source.ts inlines `createHostFacts.toString()` through
- * `__CREATE_HOST_FACTS__`. So the factory body references NOTHING at module
- * scope, every capability comes from `deps`, and it carries no backticks.
+ * Imported by daemon-standalone.ts (createHostFacts). The factory body references NOTHING at module scope, every capability comes from `deps`, and it carries no backticks.
  */
 
 import type fsType from 'node:fs'

@@ -1,13 +1,9 @@
 /**
- * 'pty-stream-v1' on the real daemon twins, booted for real: a terminal on the
+ * 'pty-stream-v1' on the real session daemon (daemon-standalone.ts under bun), booted for real: a terminal on the
  * daemon's host carried as a stream on the server's link (pty-stream-core.ts),
  * read through the server's own endpoint (src/lib/link-stream.ts) and the Pty the
  * terminal manager drives (src/web/terminal/link-pty.ts). What every host without
  * an SSH route (the host network, the cloud box) gets where an SSH host has `ssh -tt`.
- *
- * Twins: the standalone twin under bun, the JS source twin under bun (both have a
- * pty), and the source twin under Node when the machine has one, which has no pty
- * and so must not advertise the capability and must refuse an open.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths. The only
  * process this test ends itself is the daemon it spawned, through its own handle
@@ -15,7 +11,7 @@
  * the daemon (the behaviour under test), and the test only asks whether the pids it
  * was told are still there (signal 0).
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -34,33 +30,23 @@ vi.mock('node:child_process', async (importOriginal) => {
   }
 })
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { accountInfo } from '../../src/lib/account.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createStreamEndpoint, type StreamEndpoint, type PtyStream } from '../../src/lib/link-stream.js'
 import { ptyOverStream } from '../../src/web/terminal/link-pty.js'
 import type { Pty, PtyExit } from '../../src/lib/pty.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
-let scriptDir = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; pty: boolean; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, pty: SOURCE_TWIN.runtime === 'bun', command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN && SOURCE_TWIN.runtime === 'node' ? [{ name: 'source twin (bun)', pty: true, command: (): [string, string[]] => [BUN, [scriptPath, '--start']] }] : []),
-  ...(BUN ? [{ name: 'standalone twin (bun)', pty: true, command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 const sockets: WebSocket[] = []
 let rpcId = 1
 
-async function boot(twin: Twin): Promise<number> {
+async function boot(): Promise<number> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.platform() === 'win32' ? os.tmpdir() : '/tmp', 'wpty-')))
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
@@ -75,8 +61,7 @@ async function boot(twin: Twin): Promise<number> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -139,17 +124,6 @@ function watch(pty: Pty): { text: () => string; exited: Promise<PtyExit> } {
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
 
-beforeAll(() => {
-  scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-pty-stream-twins-src-'))
-  scriptPath = path.join(scriptDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
-afterAll(() => {
-  if (scriptDir) fs.rmSync(scriptDir, { recursive: true, force: true })
-  scriptDir = ''
-})
-
 /** End the daemon this test spawned (its own handle only): TERM, then KILL after a deadline. */
 async function stopOwnDaemon(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -183,22 +157,22 @@ function passwdShellHere(): string | null {
   } catch { return null }
 }
 
-for (const twin of TWINS.filter((t) => t.pty)) {
-  describe(`terminal streams, ${twin.name}`, () => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
+  describe('terminal streams', () => {
     // The daemon runs with SHELL=/bin/sh (as from cron), and bun's os.userInfo() gives that
     // back: the terminal still gets the passwd shell, as an ssh login does (2026-11-18: clouddev's
     // terminal came up in sh, not the user's zsh).
     it('runs the passwd shell, not the SHELL the daemon was started with', async () => {
       const want = passwdShellHere()
       if (!want) return
-      const { ep } = await link(await boot(twin))
+      const { ep } = await link(await boot())
       const t = watch(ptyOverStream(await ep.openPty('echo "shell=$SHELL"; exit 0', { cols: 80, rows: 24 })))
       await t.exited
       expect(t.text().replace(/\r/g, '')).toContain(`shell=${want}\n`)
     }, 90_000)
 
     it('advertises pty-stream-v1, runs the command under the login shell on a pty, keeps UTF-8 whole and reports the exit after the output', async () => {
-      const { ep, caps } = await link(await boot(twin))
+      const { ep, caps } = await link(await boot())
       expect(caps).toContain('pty-stream-v1')
       // Bytes split across pieces stay whole: 3000 of a 3-byte character, then a 2-byte one.
       const snow = '\u2603'
@@ -219,7 +193,7 @@ for (const twin of TWINS.filter((t) => t.pty)) {
     }, 90_000)
 
     it('takes input, and a resize changes what the pty says its size is', async () => {
-      const { ep } = await link(await boot(twin))
+      const { ep } = await link(await boot())
       const stream = await ep.openPty('stty size; read a; echo "got:$a"; stty size; read b; exit 0', { cols: 90, rows: 30 })
       const pty = ptyOverStream(stream)
       const t = watch(pty)
@@ -233,7 +207,7 @@ for (const twin of TWINS.filter((t) => t.pty)) {
     }, 90_000)
 
     it('a plain shell\'s job printing far past the window is held, not hung up: every byte arrives', async () => {
-      const { ep } = await link(await boot(twin))
+      const { ep } = await link(await boot())
       // 30 MB is past the 16 MB hard cap: only stopping the job printing (the pty's foreground
       // group, not the shell alone) keeps the stream inside its window until it is acked.
       const stream = await ep.openPty('yes | head -c 30000000; echo; echo done-$((40+2))', { cols: 80, rows: 24 })
@@ -248,7 +222,7 @@ for (const twin of TWINS.filter((t) => t.pty)) {
     }, 180_000)
 
     it('a close from the link hangs the terminal up with SIGHUP', async () => {
-      const { ep } = await link(await boot(twin))
+      const { ep } = await link(await boot())
       const mark = path.join(root, 'hup')
       const stream = await ep.openPty(`trap 'echo hup > ${mark}; exit 0' HUP; echo ready; while :; do sleep 1; done`, { cols: 80, rows: 24 })
       const pty = ptyOverStream(stream)
@@ -261,7 +235,7 @@ for (const twin of TWINS.filter((t) => t.pty)) {
     }, 90_000)
 
     it('refuses a bad command or size, holds at most 32 per link, and the link dropping hangs every one up', async () => {
-      const { ws, ep } = await link(await boot(twin))
+      const { ws, ep } = await link(await boot())
       await expect(ep.openPty('', { cols: 80, rows: 24 })).rejects.toThrow(/needs a command/)
       await expect(ep.openPty('true', { cols: 0, rows: 24 })).rejects.toThrow(/cols and rows/)
       const open: PtyStream[] = []
@@ -275,15 +249,15 @@ for (const twin of TWINS.filter((t) => t.pty)) {
     }, 120_000)
 
     it('a socket that said it is a probe opens no terminal', async () => {
-      const { ws, ep } = await link(await boot(twin))
+      const { ws, ep } = await link(await boot())
       expect((await rpc(ws, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
       await expect(ep.openPty('echo no', { cols: 80, rows: 24 })).rejects.toThrow(/only the Walnut server linked here opens a terminal stream/)
     }, 90_000)
   })
 
-  describe(`a host network machine's terminal end to end, ${twin.name}`, () => {
+  describe("a host network machine's terminal end to end", () => {
     it('opens through DaemonConnection with SSH refused', async () => {
-      const port = await boot(twin)
+      const port = await boot()
       const conn = new DaemonConnection('joined-box', { hostname: 'joined-box.walnut-net.invalid', via: 'net', endpoint: 'ab'.repeat(32) /* an invented endpoint key */ })
       conns.push(conn)
       const inner = conn as unknown as { ws: unknown; streams: { closeAll(r: string): void } | null; streamEndpoint(): { handle(m: Record<string, unknown>): boolean } }
@@ -300,33 +274,20 @@ for (const twin of TWINS.filter((t) => t.pty)) {
       expect(sshSpawns).toEqual([])
     }, 90_000)
   })
-}
+})
 
-for (const twin of TWINS.filter((t) => !t.pty)) {
-  describe(`terminal streams, ${twin.name}`, () => {
-    it('has no pty, so it does not advertise pty-stream-v1 and refuses an open', async () => {
-      const { ep, caps } = await link(await boot(twin))
-      expect(caps).toContain('port-stream-v1')
-      expect(caps).not.toContain('pty-stream-v1')
-      await expect(ep.openPty('echo no', { cols: 80, rows: 24 })).rejects.toThrow(/no pty/)
-    }, 90_000)
-  })
-}
-
-describe('pty-stream-v1 wiring in both twins', () => {
+describe('pty-stream-v1 wiring in the daemon', () => {
   const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '../..', p), 'utf8')
-  const twins = { standalone: read('src/providers/daemon-standalone.ts'), source: read('src/providers/daemon-source.ts') }
+  const src = read('src/providers/daemon-standalone.ts')
 
-  it('each twin opens a terminal only for its own server socket, routes stream.resize to the relay, and hands it the pty streams', () => {
-    for (const src of Object.values(twins)) {
-      const at = src.indexOf("if (cmd.to === 'pty')")
-      expect(at).toBeGreaterThan(-1)
-      const branch = src.slice(at, at + 400)
-      expect(branch.indexOf('isServerClient(ws)')).toBeGreaterThan(-1)
-      expect(branch.indexOf('isServerClient(ws)')).toBeLessThan(branch.indexOf('streamRelay.openPty('))
-      expect(src.match(/streamRelay\.openPty\(/g)).toHaveLength(1)
-      expect(src).toContain("case 'stream.resize':")
-      expect(src).toMatch(/ptys: ptyStreams/)
-    }
+  it('opens a terminal only for its own server socket, routes stream.resize to the relay, and hands it the pty streams', () => {
+    const at = src.indexOf("if (cmd.to === 'pty')")
+    expect(at).toBeGreaterThan(-1)
+    const branch = src.slice(at, at + 400)
+    expect(branch.indexOf('isServerClient(ws)')).toBeGreaterThan(-1)
+    expect(branch.indexOf('isServerClient(ws)')).toBeLessThan(branch.indexOf('streamRelay.openPty('))
+    expect(src.match(/streamRelay\.openPty\(/g)).toHaveLength(1)
+    expect(src).toContain("case 'stream.resize':")
+    expect(src).toMatch(/ptys: ptyStreams/)
   })
 })

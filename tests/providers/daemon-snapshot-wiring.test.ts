@@ -1,10 +1,9 @@
 /**
- * C1 daemon snapshot wiring — integration tests
+ * C1 daemon snapshot wiring: integration tests
  * (docs/plan/session-snapshot-source-of-truth.md §4).
  *
- * Runs the REAL daemon (the source template produced by getDaemonSource(),
- * spawned via node — the same artifact SSH-deployed to remote hosts, fold
- * functions injected via fn.toString()) in a fully isolated temp dir, and
+ * Runs the REAL daemon (src/providers/daemon-standalone.ts under bun, the
+ * same program every host runs) in a fully isolated temp dir, and
  * drives it over a real WebSocket. This is the strongest existing precedent
  * (tests/e2e/daemon-lifecycle-e2e.test.ts): the tailer, the coalescer, the
  * reap path, and getState all execute their production code.
@@ -22,16 +21,13 @@
  *   4. getState includes the assembled snapshot (live session).
  *   5. rebuild-from-disk: unknown-sid getState on a synthetic ~3MB whale file
  *      converges (turnActive correct both ways) and completes < 2s.
- *   6. getDaemonSource() deploy-time validation: no placeholder residue,
- *      injected text parses under strict mode + smoke fold passes (implicit —
- *      getDaemonSource throws otherwise), corrupt injection throws.
- *   7. torn-tail carry: a result line split across two polls still settles the
+ *   6. torn-tail carry: a result line split across two polls still settles the
  *      turn (contract §4 "Feed"; without the carry the complete line is lost
  *      forever behind the `v > foldState.v` guard).
- *   8. push storm: lines that change nothing but `v` produce NO pushes.
- *   9. daemon restart: SIGKILL daemon A mid-turn, daemon B adopts and rebuilds
+ *   7. push storm: lines that change nothing but `v` produce NO pushes.
+ *   8. daemon restart: SIGKILL daemon A mid-turn, daemon B adopts and rebuilds
  *      foldState from the jsonl → turnActive survives.
- *  10. unit level (no daemon): the extracted push plumbing coalesces two pushes
+ *   9. unit level (no daemon): the extracted push plumbing coalesces two pushes
  *      5ms apart into ONE wire push carrying the LATEST state.
  *
  * MACHINE SAFETY: isolated WALNUT_DAEMON_DIR/WALNUT_STREAMS_DIR temp dirs,
@@ -45,12 +41,15 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
-import { getDaemonSource, validateFoldInjection, undefinedInjectedHelpers, INJECTED_HELPERS_SOURCE } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import ts from 'typescript'
+import { testBun } from '../helpers/bun-runtime.js'
 import { createDaemonCore } from '../../src/providers/daemon-core.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
+const BUN = testBun()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
+const STANDALONE_TEXT = fs.readFileSync(STANDALONE, 'utf-8')
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-'))
 const STREAMS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-streams-'))
@@ -60,7 +59,6 @@ if (path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)) {
 
 let daemonProc: ChildProcess | null = null
 let daemonPort = 0
-let scriptPath = ''
 let rpcId = 1
 
 // ── Line factories (same synthetic shapes as the fold golden set) ──
@@ -131,6 +129,17 @@ async function startSleepSession(ws: WebSocket, sid: string, message = 'hello'):
   return res.pid as number
 }
 
+/** Functions of the standalone daemon, as JS: the text between two markers, transpiled. */
+function standaloneBlock(startMarker: string, endMarker: string): string {
+  const start = STANDALONE_TEXT.indexOf(startMarker)
+  expect(start, `${startMarker} in the daemon`).toBeGreaterThan(-1)
+  const end = STANDALONE_TEXT.indexOf(endMarker, start)
+  expect(end, `${endMarker} after ${startMarker}`).toBeGreaterThan(start)
+  return ts.transpileModule(STANDALONE_TEXT.slice(start, end), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText
+}
+
 function snapshotsOf(events: TimedEvent[]): Array<{ snapshot: SessionSnapshot; at: number }> {
   return events
     .filter((e) => e.msg.ev === 'snapshot')
@@ -138,11 +147,8 @@ function snapshotsOf(events: TimedEvent[]): Array<{ snapshot: SessionSnapshot; a
 }
 
 beforeAll(async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-script-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-
-  daemonProc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  if (!BUN) return
+  daemonProc = spawn(BUN, [STANDALONE, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: DAEMON_DIR, WALNUT_STREAMS_DIR: STREAMS_DIR },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -176,12 +182,12 @@ afterAll(async () => {
       if (pid > 1) { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch {} } }
     }
   } catch {}
-  for (const d of [DAEMON_DIR, STREAMS_DIR, path.dirname(scriptPath)]) {
+  for (const d of [DAEMON_DIR, STREAMS_DIR]) {
     try { await fsp.rm(d, { recursive: true, force: true }) } catch {}
   }
 }, 20_000)
 
-describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
+describe.skipIf(!BUN)('C1 snapshot wiring: real daemon, real tailer, real WS', () => {
   // ── Scenario 1: tailer feed + marker fold → snapshot events ──
   it('tailer folds appended lines and pushes snapshot events to a subscriber', async () => {
     const ws = await connectWs()
@@ -666,7 +672,7 @@ describe('C1 snapshot wiring — real daemon, real tailer, real WS', () => {
 // whole stream file back through foldLine — otherwise a mid-turn session comes
 // back as turnActive=false and walnut projects a running session as idle
 // (exactly the class of permanent status mismatch C1 exists to remove).
-describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on adopt', () => {
+describe.skipIf(!BUN)('C1 snapshot wiring: daemon restart (SIGKILL) rebuilds foldState on adopt', () => {
   // Each restart scenario gets its OWN daemon+streams dir pair. Sharing them
   // across scenarios is not safe here: a scenario's successor daemon is still
   // alive when the next one starts, so the next "daemon A" loses the pid-file
@@ -682,7 +688,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
   const spawned: ChildProcess[] = []
 
   function spawnDaemon(daemonDir: string, streamsDir: string): Promise<{ proc: ChildProcess; port: number }> {
-    const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+    const proc = spawn(BUN!, [STANDALONE, '--start'], {
       env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
@@ -942,9 +948,8 @@ describe('C1 appendUserMarker (real daemon-core, injected CLI race)', () => {
 // The 100ms tailer poll makes sub-50ms bursts unreachable through the real
 // path, so the coalescer's core promise — two pushes inside one window collapse
 // into ONE wire frame carrying the LATEST state — is exercised by evaluating the
-// template's OWN pushSnapshot/emitSnapshot/snapshotDiffers text with stub deps.
-// (The standalone twin's identical shape is locked by the parity suite.)
-describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
+// daemon's OWN pushSnapshot/emitSnapshot text with stub deps.
+describe('C1 snapshot push plumbing (daemon source, stubbed deps)', () => {
   interface FakeWs { readyState: number }
   interface Frame { ev: string; payload: Record<string, unknown> }
   interface Harness {
@@ -953,27 +958,13 @@ describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
     frames: Frame[]
   }
 
-  /** Extract + evaluate the contiguous snapshot-push block from the template. */
+  /** Extract + evaluate the contiguous snapshot-push block of the daemon. */
   function loadHarness(): Harness {
-    const src = fs.readFileSync(new URL('../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
-    const coalesce = src.match(/const SNAPSHOT_COALESCE_MS = \d+;/)
-    expect(coalesce, 'SNAPSHOT_COALESCE_MS declaration not found in the template').toBeTruthy()
-    const start = src.indexOf('function assembleSessionSnapshot')
-    const end = src.indexOf('// ── Startup reconcile')
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const block = src.slice(start, end)
-    // The block lives inside a JS template literal; anything escaped there would
-    // not survive a raw eval. Assert it is escape-free rather than guess.
-    expect(block.includes('${'), 'extracted block contains template interpolation').toBe(false)
-    expect(block.includes('\\'), 'extracted block contains backslash escapes').toBe(false)
+    const coalesce = STANDALONE_TEXT.match(/const SNAPSHOT_COALESCE_MS = \d+/)
+    expect(coalesce, 'SNAPSHOT_COALESCE_MS declaration not found in the daemon').toBeTruthy()
+    const block = standaloneBlock('function streamEpochOf', '// ── daemon-core wiring ──')
     expect(block).toContain('function pushSnapshot')
     expect(block).toContain('function emitSnapshot')
-    // snapshotDiffers is no longer part of this block — it moved into
-    // daemon-fold.ts and rides the placeholder injection (C19), so it comes in
-    // as a binding here exactly the way the assembled template supplies it.
-    expect(block, 'snapshotDiffers must not be re-declared in the template block')
-      .not.toContain('function snapshotDiffers')
     expect(block).toContain('snapshotDiffers(prev, snapshot)')
 
     const frames: Frame[] = []
@@ -981,9 +972,10 @@ describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
     const sendEvent = (_ws: FakeWs, ev: string, payload: Record<string, unknown>) => { frames.push({ ev, payload }) }
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const factory = new Function(
-      'sessions', 'sendEvent', 'assembleSnapshot', 'snapshotDiffers', 'SNAPSHOT_COALESCE_MS',
+      'fs', 'sessions', 'sendEvent', 'assembleSnapshot', 'snapshotDiffers', 'SNAPSHOT_COALESCE_MS',
       `${block}\nreturn { pushSnapshot, emitSnapshot };`,
     ) as (
+      f: typeof fs,
       s: Map<string, Record<string, unknown>>,
       se: typeof sendEvent,
       as: typeof assembleSnapshot,
@@ -992,7 +984,7 @@ describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
     ) => { pushSnapshot: (sid: string, immediate: boolean) => void }
     const coalesceMs = parseInt(coalesce![0].match(/\d+/)![0], 10)
     expect(coalesceMs).toBe(50)
-    const api = factory(sessions, sendEvent, assembleSnapshot, snapshotDiffers, coalesceMs)
+    const api = factory(fs, sessions, sendEvent, assembleSnapshot, snapshotDiffers, coalesceMs)
     return { pushSnapshot: api.pushSnapshot, sessions, frames }
   }
 
@@ -1088,18 +1080,17 @@ describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
   })
 })
 
-// ── C18: pre-death fold drain (template source, stubbed deps) ──
+// ── C18: pre-death fold drain (daemon source, stubbed deps) ──
 // The CLI writes its final `result` + companion `idle` microseconds before
 // exiting, and the tailer's poll returns early once `state !== 'running'` (which
 // reapSession sets FIRST). Without a synchronous drain, the death snapshot — and
 // every later getState pull, which just re-assembles the same frozen fold —
 // reports turnActive=true for a turn that provably ended on disk.
 //
-// This runs the TEMPLATE's OWN drainSessionFold/drainFoldRange text against real
+// This runs the daemon's OWN drainSessionFold/drainFoldRange text against real
 // files with stubbed deps, which makes it DETERMINISTIC (the daemon-level
-// integration check below can't control the 100ms poll boundary). The standalone
-// twin's identical body is locked by the parity suite's normalized byte compare.
-describe('C18 pre-death fold drain (template source, real files, stubbed deps)', () => {
+// integration check above can't control the 100ms poll boundary).
+describe('C18 pre-death fold drain (daemon source, real files, stubbed deps)', () => {
   interface FakeWs { readyState: number; id: string }
   interface SentFrame { ws: FakeWs; ev: string; data: { sid: string; line: string; v: number } }
   interface DrainApi {
@@ -1117,14 +1108,7 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
     logs: Array<{ level: string; msg: string }>
     sent: SentFrame[]
   } {
-    const src = fs.readFileSync(new URL('../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
-    const start = src.indexOf('function drainSessionFold')
-    const end = src.indexOf('function assembleSessionSnapshot')
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const block = src.slice(start, end)
-    expect(block.includes('${'), 'extracted block contains template interpolation').toBe(false)
-    expect(block.includes('\\'), 'extracted block contains backslash escapes').toBe(false)
+    const block = standaloneBlock('function drainSessionFold', 'function streamEpochOf')
     expect(block).toContain('function drainFoldRange')
 
     const logs: Array<{ level: string; msg: string }> = []
@@ -1138,13 +1122,14 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
     }
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const factory = new Function(
-      'fs', 'logMsg', 'foldLine', 'FOLD_REBUILD_CHUNK', 'TAILER_CARRY_MAX', 'sendEvent',
+      'fs', 'logMsg', 'foldLine', 'FOLD_REBUILD_CHUNK', 'TAILER_CARRY_MAX', 'sendEvent', 'applyTaskEvent',
       `${block}\nreturn { drainSessionFold, drainFoldRange };`,
     ) as (
       f: typeof fs, l: typeof logMsg, fl: typeof foldLine, chunk: number, cap: number,
-      se: typeof sendEvent,
+      se: typeof sendEvent, ate: () => boolean,
     ) => DrainApi
-    return { api: factory(fs, logMsg, foldLine, 1024 * 1024, 32 * 1024 * 1024, sendEvent), logs, sent }
+    // The task-state step of the drain is not under test here: a stub keeps it inert.
+    return { api: factory(fs, logMsg, foldLine, 1024 * 1024, 32 * 1024 * 1024, sendEvent, () => false), logs, sent }
   }
 
   it('folds the result + idle the CLI wrote just before exiting (frozen-fold repro)', async () => {
@@ -1392,21 +1377,14 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
 // repeated Buffer.concat (O(n²) copying) on EVERY rebuild — adopt, attach,
 // resume, and every unknown-sid getState pull. The cap + realign is shared now.
 // (32MB is impractical to write in a unit test, so the cap is exercised through
-// the template's own rebuild text with a small injected cap — the constant
-// itself is parity-locked at 32MB.)
-describe('C13 fold rebuild carry cap (template source, injected small cap)', () => {
+// the daemon's own rebuild text with a small injected cap; the constant
+// itself is locked at 32MB by daemon-wiring-* text checks.)
+describe('C13 fold rebuild carry cap (daemon source, injected small cap)', () => {
   function loadRebuild(cap: number): {
     rebuild: (p: string) => { state: ReturnType<typeof initialFoldState>; boundary: number }
     logs: Array<{ level: string; msg: string }>
   } {
-    const src = fs.readFileSync(new URL('../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
-    const start = src.indexOf('function rebuildFoldStateFromJsonl')
-    const end = src.indexOf('// ── C18: synchronous pre-death fold drain ──')
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const block = src.slice(start, end)
-    expect(block.includes('${')).toBe(false)
-    expect(block.includes('\\')).toBe(false)
+    const block = standaloneBlock('function rebuildFoldStateFromJsonl', '// ── Fold prewarm')
     const logs: Array<{ level: string; msg: string }> = []
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const factory = new Function(
@@ -1468,73 +1446,5 @@ describe('C13 fold rebuild carry cap (template source, injected small cap)', () 
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true })
     }
-  })
-})
-
-describe('C1 getDaemonSource deploy-time validation', () => {
-  it('assembled template has no fold placeholder residue and parses', () => {
-    const src = getDaemonSource()
-    for (const ph of ['__FOLD_LINE__', '__INITIAL_FOLD_STATE__', '__ASSEMBLE_SNAPSHOT__', '__DAEMON_VERSION__', '__DAEMON_CAPABILITIES__']) {
-      expect(src.includes(ph), `placeholder residue: ${ph}`).toBe(false)
-    }
-    // The injected daemon must advertise snapshot-v1 in its hello caps
-    // (JSON.stringify → double quotes).
-    expect(src).toContain('"snapshot-v1"')
-    // Injected function text parses under strict mode in a bare scope.
-    for (const m of [/const foldLine = (function foldLine[\s\S]*?)\nconst initialFoldState =/]) {
-      const hit = src.match(m)
-      expect(hit, 'injected foldLine body not found in template').toBeTruthy()
-    }
-  })
-
-  it('injected functions survive strict reconstruction + smoke fold (validateFoldInjection passes)', () => {
-    expect(() => validateFoldInjection([
-      ['__FOLD_LINE__', foldLine.toString()],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).not.toThrow()
-  })
-
-  it('a body calling __name (a keepNames loader, e.g. tsx) runs with the helper the daemon defines', () => {
-    // What tsx makes of foldLine: a named inner function wrapped in __name.
-    const kept = foldLine.toString().replace(/\{/, '{ const named = __name(function () {}, "named"); if (named.name !== "named") throw new Error("helper"); ')
-    expect(kept).not.toBe(foldLine.toString())
-    expect(() => validateFoldInjection([
-      ['__FOLD_LINE__', kept],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).not.toThrow()
-    const src = getDaemonSource()
-    expect(src.split(INJECTED_HELPERS_SOURCE)).toHaveLength(2)
-    expect(src).not.toContain('__INJECTED_HELPERS__')
-  })
-
-  it('corrupt injection throws (never deploy a corrupt daemon)', () => {
-    // Simulates a bundler-mangled toString: a module-scope helper the generated
-    // daemon does not define (tsc's async helper here).
-    const corrupt = 'function foldLine(s, l, v) { return __awaiter(this, void 0, void 0, function* () { return s }) }'
-    expect(() => validateFoldInjection([
-      ['__FOLD_LINE__', corrupt],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).toThrow(/__FOLD_LINE__ calls __awaiter, a bundler helper the generated daemon does not define/)
-    // A member call or a longer name is not a helper call.
-    expect(undefinedInjectedHelpers('function f(o) { return o.__awaiter(1) + x__awaiter(2) }')).toEqual([])
-    expect(undefinedInjectedHelpers('function f() { return __name(g, "g") && __spreadValues({}, a) && __spreadValues(b) }')).toEqual(['__spreadValues'])
-
-    // Non-function injection throws too.
-    expect(() => validateFoldInjection([
-      ['__FOLD_LINE__', '42'],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).toThrow(/did not evaluate to a function/)
-
-    // Semantically wrong function (parses, but the smoke fold disagrees) throws.
-    const wrong = 'function foldLine(s, l, v) { return s }' // never advances v / never folds
-    expect(() => validateFoldInjection([
-      ['__FOLD_LINE__', wrong],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ])).toThrow(/smoke fold/)
   })
 })

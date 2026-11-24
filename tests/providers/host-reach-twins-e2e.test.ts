@@ -1,45 +1,29 @@
 /**
  * mcp.list / mcp.tools / mcp.call / mcp.result (host-mcp-v1) and http.request
- * (host-http-v1), src/providers/host-mcp-core.ts and host-http-core.ts, on BOTH daemon
- * twins booted for real: the capabilities are advertised, the host's own MCP config is
+ * (host-http-v1), src/providers/host-mcp-core.ts and host-http-core.ts, on the daemon
+ * booted for real (daemon-standalone.ts under bun): the capabilities are advertised, the host's own MCP config is
  * read, a stdio server is started under the login shell and called, a call past its
  * caller's wait is read later, and one HTTP request is made from the host.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the task root are temp paths; the MCP server
  * is a node script fixture; the HTTP server listens on 127.0.0.1; the daemon is
- * SIGKILLed after each twin.
+ * SIGKILLed after each test.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import http from 'node:http'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-reach-twins-')))
 afterAll(() => { if (root.includes('walnut-host-reach-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds both sidecars next to it, as deployed.
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core', 'host-reach-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -55,7 +39,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> {
+async function boot(dir: string): Promise<string> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -66,8 +50,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -101,9 +84,9 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
 
 const FAKE = path.resolve(__dirname, '../fixtures/mcp/host-mcp-fake.cjs')
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('calls this host\'s MCP servers and web services for another host', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
+    const dir = path.join(root, 'standalone')
     // The host's own Claude Code config, written before the daemon starts.
     const h = path.join(dir, 'home')
     fs.mkdirSync(h, { recursive: true })
@@ -116,7 +99,7 @@ describe.each(TWINS)('$name', (twin) => {
     fs.writeFileSync(path.join(h, '.open-walnut', 'local', 'host-mcp.json'), JSON.stringify({ mcpServers: {
       shared: { command: process.execPath, args: [FAKE], capability: 'wiki', description: 'For other hosts' },
     } }))
-    await boot(twin, dir)
+    await boot(dir)
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toEqual(expect.arrayContaining(['host-mcp-v1', 'host-http-v1']))
 

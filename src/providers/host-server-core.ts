@@ -43,10 +43,7 @@
  * service's own, and its spec keeps the service's home, the one service-mode.json names, so the
  * next `--service` start finds it (review A3b S34-L3: a second follower, then a daemon start).
  *
- * How the daemon twins get it: daemon-standalone.ts imports
- * createHostServerSupervisor; daemon-source.ts inlines its `toString()` through
- * `__CREATE_HOST_SERVER__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createHostServerSupervisor). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface HostServerSpec {

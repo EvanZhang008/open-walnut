@@ -22,10 +22,7 @@
  * reconnect (`offline.drain` / `offline.ack`); until the journal is empty the
  * gateway keeps answering here, so no id the server has not seen yet reaches it.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createOfflineHostCore;
- * daemon-source.ts inlines `createOfflineHostCore.toString()` through
- * `__CREATE_OFFLINE_HOST__`. So the factory body references NOTHING at module
- * scope; the envelope kit, the journal store (offline-journal-core.ts) and every
+ * Imported by daemon-standalone.ts (createOfflineHostCore). The factory body references NOTHING at module scope; the envelope kit, the journal store (offline-journal-core.ts) and every
  * side effect arrive through deps. `createOfflineHost` (tests, other callers)
  * builds the journal store itself when none is given.
  */
@@ -494,7 +491,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
 
   const { fs, path, kit, rules } = deps
   // The same as the module's escapeSenderWords: the factory body reaches nothing at
-  // module scope, because daemon-source.ts inlines only its source text.
+  // module scope.
   const escapeSenderWords = (text: string): string => {
     if (!/system-reminder/i.test(text)) return text
     return text.replace(/(<|&(?:amp;)*lt;)(\/?)(system-reminder)/gi, (_m, open: string, slash: string, name: string) =>

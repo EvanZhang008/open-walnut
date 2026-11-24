@@ -1,9 +1,9 @@
 /**
  * Local routes of a host replica (docs/plan/walnut-replica-servers-impl.md WP6),
- * on REAL daemon processes, both twins, with the real startServer booted in this
+ * on a REAL standalone daemon process, with the real startServer booted in this
  * process as the host's replica:
  *
- *   stand-in Mac ==trusted WS==> daemon (source twin on node, standalone on bun)
+ *   stand-in Mac ==trusted WS==> daemon (standalone, on bun)
  *     (counts every stream the     ^ follower WS (owner scoped, replica-reads-v1)
  *      follower opens to it)       |
  *                               startServer as `web --replica` (this process)
@@ -32,7 +32,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-local'))
 
@@ -179,18 +178,16 @@ const ENV_KEYS = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER', 'WALN
   'OPEN_WALNUT_HOME', 'WALNUT_LEADER_HOME', 'WALNUT_HOST_KEY', 'WALNUT_HOST_LABEL', 'WALNUT_LEADER_QUIET_MS'] as const
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone', fakeHome: string): Promise<{ port: number; pid: number }> {
+async function spawnDaemon(dir: string, fakeHome: string): Promise<{ port: number; pid: number }> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir, WALNUT_STREAMS_DIR: path.join(dir, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_REPLICA_DIR: path.join(dir, 'host-replica'), WALNUT_HOME_OVERRIDE: fakeHome, WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
   }
   for (const k of ['VITEST', 'VITEST_MODE', 'VITEST_WORKER_ID', 'VITEST_POOL_ID', 'WALNUT_FOLLOWER_TOKEN', 'WALNUT_HOST_DAEMON_DIR', 'WALNUT_ROLE', 'WALNUT_HOST_SERVER']) delete env[k]
-  const args = twin === 'source' ? [path.join(dir, 'daemon.cjs'), '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
-  if (twin === 'source') fs.writeFileSync(args[0]!, (await import('../../src/providers/daemon-source.js')).getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(twin === 'source' ? SOURCE_TWIN.file : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
+  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   pids.add(pid)
   return { port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10), pid }
@@ -267,277 +264,275 @@ afterAll(async () => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 }, 60_000)
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a host replica reads its own host's sessions, files and notes`, () => {
-    let mac: Mac
-    let port = 0
-    let stop: (() => Promise<void>) | null = null
+describe.skipIf(!BUN)(`standalone daemon: a host replica reads its own host's sessions, files and notes`, () => {
+  let mac: Mac
+  let port = 0
+  let stop: (() => Promise<void>) | null = null
 
-    beforeAll(async () => {
-      const dir = path.join(base, twin.slice(0, 2))
-      const fakeHome = path.join(base, `${twin}-home`)
-      fs.mkdirSync(dir, { recursive: true })
-      // The CLI's transcript of the marina session, where the CLI keeps it on this host.
-      const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
-      const projectDir = path.join(fakeHome, '.claude', 'projects', encodeProjectPath(cwdA))
-      fs.mkdirSync(projectDir, { recursive: true })
-      fs.writeFileSync(path.join(projectDir, `${SID}.jsonl`), transcript(cwdA, editedFile))
-      // Who started what here: the marina session and one of another Walnut (the spawn journal).
-      fs.writeFileSync(path.join(dir, 'spawn-journal.jsonl'), [
-        JSON.stringify({ v: 1, sid: SID, at: '2026-10-01T10:00:00.000Z', kind: 'new', cwd: cwdA, home: HOME }),
-        JSON.stringify({ v: 1, sid: OTHER_SID, at: '2026-10-01T10:00:00.000Z', kind: 'new', cwd: cwdB, home: '/fixture/acme-home' }),
-      ].join('\n') + '\n')
-      const d = await spawnDaemon(dir, twin, fakeHome)
-      mac = await linkMac(d.port)
-      expect((await mac.cmd({ cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
-      const slice = { v: 1, home: HOME, hash: 'h-local', asOf: Date.now(), host: HOST_KEY, sessions: [{ sid: SID, title: 'Fix the build' }], tasks: [], requests: [] }
-      expect((await mac.cmd({ cmd: 'host.slice', slice })).ok).toBe(true)
-      await pushNotes(mac, NOTES)
-      const tokenFile = path.join(base, `${twin}-token`)
-      const spec = {
-        v: 1, home: HOME, walnutId: WALNUT, command: process.execPath,
-        args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
-        cwd: base, env: {}, log: path.join(base, `${twin}-placeholder.log`), port: 42_000 + (twin === 'source' ? 1 : 2),
-        settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
-      }
-      expect((await mac.cmd({ cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
-      const [token, placeholder] = (await waitFor(() => { try { return fs.readFileSync(tokenFile, 'utf8') } catch { return '' } }, 20_000, 'the token')).split(' ')
-      pids.add(Number(placeholder))
+  beforeAll(async () => {
+    const dir = path.join(base, 'st')
+    const fakeHome = path.join(base, 'standalone-home')
+    fs.mkdirSync(dir, { recursive: true })
+    // The CLI's transcript of the marina session, where the CLI keeps it on this host.
+    const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
+    const projectDir = path.join(fakeHome, '.claude', 'projects', encodeProjectPath(cwdA))
+    fs.mkdirSync(projectDir, { recursive: true })
+    fs.writeFileSync(path.join(projectDir, `${SID}.jsonl`), transcript(cwdA, editedFile))
+    // Who started what here: the marina session and one of another Walnut (the spawn journal).
+    fs.writeFileSync(path.join(dir, 'spawn-journal.jsonl'), [
+      JSON.stringify({ v: 1, sid: SID, at: '2026-10-01T10:00:00.000Z', kind: 'new', cwd: cwdA, home: HOME }),
+      JSON.stringify({ v: 1, sid: OTHER_SID, at: '2026-10-01T10:00:00.000Z', kind: 'new', cwd: cwdB, home: '/fixture/acme-home' }),
+    ].join('\n') + '\n')
+    const d = await spawnDaemon(dir, fakeHome)
+    mac = await linkMac(d.port)
+    expect((await mac.cmd({ cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
+    const slice = { v: 1, home: HOME, hash: 'h-local', asOf: Date.now(), host: HOST_KEY, sessions: [{ sid: SID, title: 'Fix the build' }], tasks: [], requests: [] }
+    expect((await mac.cmd({ cmd: 'host.slice', slice })).ok).toBe(true)
+    await pushNotes(mac, NOTES)
+    const tokenFile = path.join(base, 'standalone-token')
+    const spec = {
+      v: 1, home: HOME, walnutId: WALNUT, command: process.execPath,
+      args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
+      cwd: base, env: {}, log: path.join(base, 'standalone-placeholder.log'), port: 42_002,
+      settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
+    }
+    expect((await mac.cmd({ cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
+    const [token, placeholder] = (await waitFor(() => { try { return fs.readFileSync(tokenFile, 'utf8') } catch { return '' } }, 20_000, 'the token')).split(' ')
+    pids.add(Number(placeholder))
 
-      // This process becomes the host's replica (`web --replica`), following that daemon.
-      Object.assign(process.env, {
-        WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1', WALNUT_WALNUT_ID: WALNUT,
-        WALNUT_FOLLOWER_TOKEN: token, WALNUT_HOST_DAEMON_DIR: dir, OPEN_WALNUT_HOME: walnutHome,
-        WALNUT_LEADER_HOME: HOME, WALNUT_HOST_KEY: HOST_KEY, WALNUT_HOST_LABEL: HOST_KEY, WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
-      })
-      ;(await import('../../src/core/server-role.js'))._resetServerRoleForTesting()
-      // The env scrub reads the follower secrets once per process: this boot follows this twin's daemon.
-      ;(await import('../../src/host-server/env.js'))._resetFollowerSecretsForTesting()
-      const server = await import('../../src/web/server.js')
-      const listening = await server.startServer({ port: 0, dev: true })
-      stop = server.stopServer
-      port = (listening.address() as net.AddressInfo).port
-      await pushDevices(server.getHostReplicaLeaderDoor()!)
-      const front = server.getHostReplicaFront()!
-      await waitFor(() => front.route().kind === 'leader' && front.link.capabilities()?.includes('replica-reads-v1'), 30_000, 'the replica to follow a Mac that answers')
-    }, 180_000)
-
-    afterAll(async () => {
-      try { await stop?.() } catch { /* already down */ }
-      clearInterval(mac?.beat)
-      try { mac?.ws.close() } catch { /* closed */ }
-      await new Promise<void>((r) => (mac?.door ? mac.door.close(() => r()) : r()))
-    }, 60_000)
-
-    it('while the Mac answers: a host session\'s history is read here (no stream to the Mac) and equals the leader\'s parse', async () => {
-      const { parseSessionMessages } = await import('../../src/core/session-history.js')
-      const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
-      const fakeHome = path.join(base, `${twin}-home`)
-      const text = fs.readFileSync(path.join(fakeHome, '.claude', 'projects', encodeProjectPath(cwdA), `${SID}.jsonl`), 'utf8')
-      const leaderView = parseSessionMessages(text).map((m) => ({ role: m.role, text: m.text }))
-      expect(leaderView.length).toBeGreaterThanOrEqual(4)
-      const opened = mac.opened
-      const seen = mac.seen.length
-      const h = await get(port, `/api/sessions/${SID}/history`)
-      expect(h.status, h.text.slice(0, 300)).toBe(200)
-      expect((h.json.messages as Array<{ role: string; text: string }>).map((m) => ({ role: m.role, text: m.text }))).toEqual(leaderView)
-      expect(h.text).toContain('Caf\u00e9 \u2603 \u{1F330}')
-      expect(mac.opened).toBe(opened)
-      expect(mac.seen.length).toBe(seen)
-      // A route that is the Mac's still goes there: the counter counts.
-      const tasks = await get(port, '/api/tasks')
-      expect(tasks.json).toMatchObject({ from: 'mac' })
-      expect(mac.opened).toBe(opened + 1)
+    // This process becomes the host's replica (`web --replica`), following that daemon.
+    Object.assign(process.env, {
+      WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1', WALNUT_WALNUT_ID: WALNUT,
+      WALNUT_FOLLOWER_TOKEN: token, WALNUT_HOST_DAEMON_DIR: dir, OPEN_WALNUT_HOME: walnutHome,
+      WALNUT_LEADER_HOME: HOME, WALNUT_HOST_KEY: HOST_KEY, WALNUT_HOST_LABEL: HOST_KEY, WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
     })
+    ;(await import('../../src/core/server-role.js'))._resetServerRoleForTesting()
+    // The env scrub reads the follower secrets once per process: this boot follows this daemon.
+    ;(await import('../../src/host-server/env.js'))._resetFollowerSecretsForTesting()
+    const server = await import('../../src/web/server.js')
+    const listening = await server.startServer({ port: 0, dev: true })
+    stop = server.stopServer
+    port = (listening.address() as net.AddressInfo).port
+    await pushDevices(server.getHostReplicaLeaderDoor()!)
+    const front = server.getHostReplicaFront()!
+    await waitFor(() => front.route().kind === 'leader' && front.link.capabilities()?.includes('replica-reads-v1'), 30_000, 'the replica to follow a Mac that answers')
+  }, 180_000)
 
-    it('while the Mac answers: a file of this host is read here, inside the Walnut\'s session cwds only', async () => {
-      const opened = mac.opened
-      const own = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'src', 'own.txt'))}`)
-      expect(own.status, own.text.slice(0, 300)).toBe(200)
-      expect(own.text).toContain('marina file')
-      // Another Walnut's file, and one outside every session here: what a missing file answers.
-      const other = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdB, 'secret.txt'))}`)
-      expect(other.text).not.toContain('acme secret')
-      expect(other.status === 404 || other.json?.content === null, other.text.slice(0, 200)).toBe(true)
-      const outside = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent('/etc/hosts')}`)
-      expect(outside.status === 404 || outside.json?.content === null, outside.text.slice(0, 200)).toBe(true)
-      expect(mac.opened).toBe(opened)
-      // Another host's file is the Mac's.
-      const elsewhere = await get(port, `/api/file-content?host=other-box&path=${encodeURIComponent('/x')}`)
-      expect(elsewhere.json).toMatchObject({ from: 'mac' })
-    })
+  afterAll(async () => {
+    try { await stop?.() } catch { /* already down */ }
+    clearInterval(mac?.beat)
+    try { mac?.ws.close() } catch { /* closed */ }
+    await new Promise<void>((r) => (mac?.door ? mac.door.close(() => r()) : r()))
+  }, 60_000)
 
-    it('while the Mac answers: a file route with no host is the Mac\'s, whatever its sessionId names (never this disk)', async () => {
-      const own = path.join(cwdA, 'src', 'own.txt')
-      for (const p of [
-        `/api/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`,
-        `/api/files/list?path=${encodeURIComponent('/')}&sessionId=${SID}`,
-        `/api/files/resolve-path?rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`,
-        `/api/files/references?path=${encodeURIComponent(own)}&symbol=marina&sessionId=${SID}`,
-        // The phone's twins of the same reads.
-        `/api/v1/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`,
-        `/api/v1/files/list?path=${encodeURIComponent('/')}&sessionId=${SID}`,
-        `/api/v1/files/resolve-path?rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`,
-      ]) {
-        const opened = mac.opened
-        const r = await get(port, p)
-        expect(r.json, p).toMatchObject({ from: 'mac' })
-        expect(mac.opened, p).toBe(opened + 1)
-      }
-    })
-
-    it('while the Mac answers: the Files tree, path resolve, references and the git-base changes of this host answer here', async () => {
-      const opened = mac.opened
-      const list = await get(port, `/api/files/list?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'src'))}`)
-      expect(list.status, list.text.slice(0, 300)).toBe(200)
-      expect(list.text).toContain('own.txt')
-      const resolved = await get(port, `/api/files/resolve-path?host=${HOST_KEY}&rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`)
-      expect(resolved.status, resolved.text.slice(0, 300)).toBe(200)
-      expect(resolved.json).toMatchObject({ path: path.join(cwdA, 'src', 'own.txt'), resolved: true })
-      const refs = await get(port, `/api/files/references?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'tracked.txt'))}&symbol=marina_symbol`)
-      expect(refs.status, refs.text.slice(0, 300)).toBe(200)
-      expect((refs.json.matches as Array<{ file: string }>).map((m) => m.file)).toEqual([path.join(cwdA, 'tracked.txt')])
-      // The repository the session wrote in, against its last commit (git.diff through the follower link).
-      expect(mac.opened).toBe(opened)
-      const changeReads = [`/api/sessions/${SID}/changes?base=uncommitted`, `/api/sessions/${SID}/changes`, `/api/sessions/${SID}/changes/file?path=${encodeURIComponent(editedFile)}`]
-      const server = await import('../../src/web/server.js')
-      if (!server.getHostReplicaFront()!.link.capabilities()?.includes('changes-v1')) {
-        // A daemon without the host-local changes pipeline (a source deploy with no sidecar):
-        // the changes view is the Mac's, as before WP6 (the reader path would miss edited.txt).
-        for (const p of changeReads) expect((await get(port, p)).json, p).toMatchObject({ from: 'mac' })
-        return
-      }
-      const diff = await get(port, changeReads[0]!)
-      expect(diff.status, diff.text.slice(0, 300)).toBe(200)
-      expect(diff.text).toContain('tracked.txt')
-      expect(diff.text).toContain('tracked v2 marina_symbol')
-      // A file the session wrote outside its cwd is that session's change, read by the daemon's pipeline.
-      const changes = await get(port, changeReads[1]!)
-      expect(changes.status, changes.text.slice(0, 300)).toBe(200)
-      expect(changes.text).toContain('edited.txt')
-      const one = await get(port, changeReads[2]!)
-      expect(one.status, one.text.slice(0, 300)).toBe(200)
-      expect(one.text).toContain('edited by marina')
-      expect(mac.opened).toBe(opened)
-    })
-
-    it('while the Mac answers: a local history read plus the turn the Mac streams renders the timeline the Mac\'s own parse gives', async () => {
-      const { parseSessionMessages } = await import('../../src/core/session-history.js')
-      const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
-      const { planDeltaMerge } = await import('../../web/src/hooks/history-merge.js')
-      const file = path.join(base, `${twin}-home`, '.claude', 'projects', encodeProjectPath(cwdA), `${SID}.jsonl`)
-      const opened = mac.opened
-      // The console's first read: the full history, here.
-      const full = await get(port, `/api/sessions/${SID}/history`)
-      expect(full.status).toBe(200)
-      const held = full.json.messages
-      const cursor = full.json.cursor ?? full.json.total ?? held.length
-      // A turn streams through the Mac (its WS carries the blocks); the CLI writes it to the transcript here.
-      fs.appendFileSync(file, lines(cwdA, [
-        { type: 'user', uuid: 'u-4', parentUuid: 'u-3', message: { role: 'user', content: 'Now tag the release \u00e9t\u00e9' } },
-        { type: 'assistant', uuid: 'a-4', parentUuid: 'u-4', message: { role: 'assistant', content: [{ type: 'text', text: 'Tagged v2.4.0.' }] } },
-      ], 20))
-      // At the turn's end the console asks for what is new since its cursor, again here, and folds it in.
-      const delta = await get(port, `/api/sessions/${SID}/history?since=${cursor}`)
-      expect(delta.status, delta.text.slice(0, 300)).toBe(200)
-      const plan = planDeltaMerge(held, delta.json, cursor)
-      expect(plan.kind, JSON.stringify(plan).slice(0, 300)).toBe('merged')
-      const shown = (plan as { messages: Array<{ role: string; text: string; msgId?: string }> }).messages
-      // The Mac's history of the same session is its parse of the same transcript.
-      const macView = parseSessionMessages(fs.readFileSync(file, 'utf8'))
-      const key = (m: { role: string; text: string }) => ({ role: m.role, text: m.text })
-      expect(shown.map(key)).toEqual(macView.map(key))
-      // Folded by identity: no row twice.
-      const ids = shown.map((m) => m.msgId).filter(Boolean)
-      expect(new Set(ids).size).toBe(ids.length)
-      expect(shown.map((m) => m.text)).toContain('Tagged v2.4.0.')
-      expect(mac.opened).toBe(opened)
-    })
-
-    it('while the Mac is away: the terminal needs the Mac, and the notes come from the daemon\'s copy (3,000 notes, 13 MB: tree under 1 s warm)', async () => {
-      const server = await import('../../src/web/server.js')
-      const front = server.getHostReplicaFront()!
-      // This host's session, read while the Mac answers (WP6's routes, through the daemon) ...
-      const changesHere = front.link.capabilities()?.includes('changes-v1') === true
-      const sessionReads = [`/api/sessions/${SID}/history`, `/api/v1/sessions/${SID}/history`, `/api/v1/sessions/${SID}/transcript`,
-        ...(changesHere ? [`/api/sessions/${SID}/changes?base=uncommitted`, `/api/sessions/${SID}/changes`, `/api/sessions/${SID}/changes/file?path=${encodeURIComponent(editedFile)}`] : [])]
-      const awake = new Map<string, string>()
-      for (const p of sessionReads) {
-        const r = await get(port, p)
-        expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
-        expect(r.json, p).not.toMatchObject({ from: 'mac' })
-        awake.set(p, r.text)
-      }
-      mac.silence()
-      await waitFor(() => front.route().kind === 'alone', 20_000, 'the replica to call the Mac away')
-      expect(front.rpcGate('terminal:open')).toBe('needs_leader: terminal_needs_mac')
-      // ... answers the same while the Mac is away: the same routes, the same JSON, never the stream-file fallback.
-      for (const [p, text] of awake) {
-        const r = await get(port, p)
-        expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
-        // The transcript's export stamp is the time of the answer.
-        const same = (t: string) => { const j = JSON.parse(t); delete j.exportedAt; return j }
-        expect(same(r.text), p).toEqual(same(text))
-      }
-      const history = JSON.parse(awake.get(`/api/sessions/${SID}/history`)!)
-      expect(history.windowed).toBeUndefined()
-      expect((history.messages as Array<{ text: string }>).map((m) => m.text)).toContain('Tagged v2.4.0.')
-      // A file with no host (the Mac's) or of another host needs the Mac; never this disk.
-      const own = path.join(cwdA, 'src', 'own.txt')
-      for (const p of [`/api/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`, `/api/files/list?path=${encodeURIComponent(cwdA)}`, `/api/file-content?host=other-box&path=${encodeURIComponent(own)}`,
-        `/api/v1/file-content?path=${encodeURIComponent(own)}`, `/api/v1/files/list?path=${encodeURIComponent(cwdA)}`, `/api/v1/file-raw/local${own.split('/').map(encodeURIComponent).join('/')}`]) {
-        const r = await get(port, p)
-        expect(r.status, p).toBe(503)
-        expect(r.text, p).toContain('needs_leader')
-        expect(r.text, p).not.toContain('marina file')
-      }
-      // This host's file is still read here, through the daemon.
-      const here = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(own)}`)
-      expect(here.status, here.text.slice(0, 200)).toBe(200)
-      expect(here.text).toContain('marina file')
-      const hereV1 = await get(port, `/api/v1/file-content?host=${HOST_KEY}&path=${encodeURIComponent(own)}`)
-      expect(hereV1.status, hereV1.text.slice(0, 200)).toBe(200)
-      expect(hereV1.text).toContain('marina file')
-      const cold = await get(port, '/api/notes-v2')
-      expect(cold.status, cold.text.slice(0, 300)).toBe(200)
-      expect(cold.headers.get('x-walnut-offline')).toBeTruthy()
-      const countNotes = (nodes: Array<{ type: string; children?: unknown[] }>): number =>
-        nodes.reduce((n, x) => n + (x.type === 'folder' ? countNotes(x.children as never) : 1), 0)
-      expect(countNotes(cold.json.tree)).toBe(3000)
-      const warm: number[] = []
-      for (let i = 0; i < 5; i++) {
-        await sleep(i === 2 ? 2_100 : 0) // one run after the manifest window: a list call, the same hash
-        const r = await get(port, '/api/notes-v2')
-        expect(r.text).toBe(cold.text)
-        warm.push(r.ms)
-      }
-      const bytes = Object.values(NOTES).reduce((n, b) => n + Buffer.byteLength(b), 0)
-      console.log(JSON.stringify({ probe: 'replica notes tree', twin, notes: 3000, bytes, coldMs: Math.round(cold.ms), warmMs: warm.map((m) => Math.round(m)), treeBytes: cold.text.length }))
-      expect(bytes).toBeGreaterThan(13 * 1000 * 1000)
-      expect(Math.max(...warm)).toBeLessThan(1000)
-      // A body, byte for byte, and the v1 shape of the same read.
-      const key = 'Area 07/Note 0712.md'
-      const body = await get(port, `/api/notes-v2/content/${encodeURIComponent(key.replace(/\.md$/, ''))}`)
-      expect(body.json).toMatchObject({ content: NOTES[key], contentHash: sha12(NOTES[key]!) })
-      const v1 = await get(port, `/api/v1/notes/content/${encodeURIComponent(key.replace(/\.md$/, ''))}`)
-      expect(v1.json).toMatchObject({ content: NOTES[key], contentHash: sha12(NOTES[key]!) })
-      // The first index read builds it from the whole copy (4 MB answers), never holding the loop long.
-      let lagMax = 0
-      let last = performance.now()
-      const probe = setInterval(() => { const t = performance.now(); lagMax = Math.max(lagMax, t - last - 10); last = t }, 10)
-      const back = await get(port, `/api/notes-v2/backlinks/${encodeURIComponent('Area 07/Note 0712')}`)
-      clearInterval(probe)
-      expect((back.json.backlinks as Array<{ path: string }>).map((b) => b.path)).toEqual(['Area 07/Note 0711.md'])
-      const warmBack = await get(port, `/api/notes-v2/backlinks/${encodeURIComponent('Area 07/Note 0712')}`)
-      console.log(JSON.stringify({ probe: 'replica notes index', twin, coldBacklinksMs: Math.round(back.ms), warmBacklinksMs: Math.round(warmBack.ms), loopLagMaxMs: Math.round(lagMax) }))
-      expect(lagMax).toBeLessThan(300)
-      // Warm: one pass over the parsed links, names looked up in a per-manifest map.
-      expect(warmBack.ms).toBeLessThan(250)
-      const tags = await get(port, '/api/notes-v2/tags')
-      expect(tags.json.tags).toEqual([{ tag: 'marina', count: 3000 }])
-      // A write is still the Mac's.
-      const put = await fetch(`http://127.0.0.1:${port}/api/notes-v2/content/x`, { method: 'PUT', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ content: 'x' }) })
-      expect(put.status).toBe(503)
-    }, 120_000)
+  it('while the Mac answers: a host session\'s history is read here (no stream to the Mac) and equals the leader\'s parse', async () => {
+    const { parseSessionMessages } = await import('../../src/core/session-history.js')
+    const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
+    const fakeHome = path.join(base, 'standalone-home')
+    const text = fs.readFileSync(path.join(fakeHome, '.claude', 'projects', encodeProjectPath(cwdA), `${SID}.jsonl`), 'utf8')
+    const leaderView = parseSessionMessages(text).map((m) => ({ role: m.role, text: m.text }))
+    expect(leaderView.length).toBeGreaterThanOrEqual(4)
+    const opened = mac.opened
+    const seen = mac.seen.length
+    const h = await get(port, `/api/sessions/${SID}/history`)
+    expect(h.status, h.text.slice(0, 300)).toBe(200)
+    expect((h.json.messages as Array<{ role: string; text: string }>).map((m) => ({ role: m.role, text: m.text }))).toEqual(leaderView)
+    expect(h.text).toContain('Caf\u00e9 \u2603 \u{1F330}')
+    expect(mac.opened).toBe(opened)
+    expect(mac.seen.length).toBe(seen)
+    // A route that is the Mac's still goes there: the counter counts.
+    const tasks = await get(port, '/api/tasks')
+    expect(tasks.json).toMatchObject({ from: 'mac' })
+    expect(mac.opened).toBe(opened + 1)
   })
-}
+
+  it('while the Mac answers: a file of this host is read here, inside the Walnut\'s session cwds only', async () => {
+    const opened = mac.opened
+    const own = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'src', 'own.txt'))}`)
+    expect(own.status, own.text.slice(0, 300)).toBe(200)
+    expect(own.text).toContain('marina file')
+    // Another Walnut's file, and one outside every session here: what a missing file answers.
+    const other = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdB, 'secret.txt'))}`)
+    expect(other.text).not.toContain('acme secret')
+    expect(other.status === 404 || other.json?.content === null, other.text.slice(0, 200)).toBe(true)
+    const outside = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent('/etc/hosts')}`)
+    expect(outside.status === 404 || outside.json?.content === null, outside.text.slice(0, 200)).toBe(true)
+    expect(mac.opened).toBe(opened)
+    // Another host's file is the Mac's.
+    const elsewhere = await get(port, `/api/file-content?host=other-box&path=${encodeURIComponent('/x')}`)
+    expect(elsewhere.json).toMatchObject({ from: 'mac' })
+  })
+
+  it('while the Mac answers: a file route with no host is the Mac\'s, whatever its sessionId names (never this disk)', async () => {
+    const own = path.join(cwdA, 'src', 'own.txt')
+    for (const p of [
+      `/api/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`,
+      `/api/files/list?path=${encodeURIComponent('/')}&sessionId=${SID}`,
+      `/api/files/resolve-path?rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`,
+      `/api/files/references?path=${encodeURIComponent(own)}&symbol=marina&sessionId=${SID}`,
+      // The phone's twins of the same reads.
+      `/api/v1/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`,
+      `/api/v1/files/list?path=${encodeURIComponent('/')}&sessionId=${SID}`,
+      `/api/v1/files/resolve-path?rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`,
+    ]) {
+      const opened = mac.opened
+      const r = await get(port, p)
+      expect(r.json, p).toMatchObject({ from: 'mac' })
+      expect(mac.opened, p).toBe(opened + 1)
+    }
+  })
+
+  it('while the Mac answers: the Files tree, path resolve, references and the git-base changes of this host answer here', async () => {
+    const opened = mac.opened
+    const list = await get(port, `/api/files/list?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'src'))}`)
+    expect(list.status, list.text.slice(0, 300)).toBe(200)
+    expect(list.text).toContain('own.txt')
+    const resolved = await get(port, `/api/files/resolve-path?host=${HOST_KEY}&rel=src/own.txt&cwd=${encodeURIComponent(cwdA)}&sessionId=${SID}`)
+    expect(resolved.status, resolved.text.slice(0, 300)).toBe(200)
+    expect(resolved.json).toMatchObject({ path: path.join(cwdA, 'src', 'own.txt'), resolved: true })
+    const refs = await get(port, `/api/files/references?host=${HOST_KEY}&path=${encodeURIComponent(path.join(cwdA, 'tracked.txt'))}&symbol=marina_symbol`)
+    expect(refs.status, refs.text.slice(0, 300)).toBe(200)
+    expect((refs.json.matches as Array<{ file: string }>).map((m) => m.file)).toEqual([path.join(cwdA, 'tracked.txt')])
+    // The repository the session wrote in, against its last commit (git.diff through the follower link).
+    expect(mac.opened).toBe(opened)
+    const changeReads = [`/api/sessions/${SID}/changes?base=uncommitted`, `/api/sessions/${SID}/changes`, `/api/sessions/${SID}/changes/file?path=${encodeURIComponent(editedFile)}`]
+    const server = await import('../../src/web/server.js')
+    if (!server.getHostReplicaFront()!.link.capabilities()?.includes('changes-v1')) {
+      // A daemon without the host-local changes pipeline (a source deploy with no sidecar):
+      // the changes view is the Mac's, as before WP6 (the reader path would miss edited.txt).
+      for (const p of changeReads) expect((await get(port, p)).json, p).toMatchObject({ from: 'mac' })
+      return
+    }
+    const diff = await get(port, changeReads[0]!)
+    expect(diff.status, diff.text.slice(0, 300)).toBe(200)
+    expect(diff.text).toContain('tracked.txt')
+    expect(diff.text).toContain('tracked v2 marina_symbol')
+    // A file the session wrote outside its cwd is that session's change, read by the daemon's pipeline.
+    const changes = await get(port, changeReads[1]!)
+    expect(changes.status, changes.text.slice(0, 300)).toBe(200)
+    expect(changes.text).toContain('edited.txt')
+    const one = await get(port, changeReads[2]!)
+    expect(one.status, one.text.slice(0, 300)).toBe(200)
+    expect(one.text).toContain('edited by marina')
+    expect(mac.opened).toBe(opened)
+  })
+
+  it('while the Mac answers: a local history read plus the turn the Mac streams renders the timeline the Mac\'s own parse gives', async () => {
+    const { parseSessionMessages } = await import('../../src/core/session-history.js')
+    const { encodeProjectPath } = await import('../../src/core/session-file-reader.js')
+    const { planDeltaMerge } = await import('../../web/src/hooks/history-merge.js')
+    const file = path.join(base, 'standalone-home', '.claude', 'projects', encodeProjectPath(cwdA), `${SID}.jsonl`)
+    const opened = mac.opened
+    // The console's first read: the full history, here.
+    const full = await get(port, `/api/sessions/${SID}/history`)
+    expect(full.status).toBe(200)
+    const held = full.json.messages
+    const cursor = full.json.cursor ?? full.json.total ?? held.length
+    // A turn streams through the Mac (its WS carries the blocks); the CLI writes it to the transcript here.
+    fs.appendFileSync(file, lines(cwdA, [
+      { type: 'user', uuid: 'u-4', parentUuid: 'u-3', message: { role: 'user', content: 'Now tag the release \u00e9t\u00e9' } },
+      { type: 'assistant', uuid: 'a-4', parentUuid: 'u-4', message: { role: 'assistant', content: [{ type: 'text', text: 'Tagged v2.4.0.' }] } },
+    ], 20))
+    // At the turn's end the console asks for what is new since its cursor, again here, and folds it in.
+    const delta = await get(port, `/api/sessions/${SID}/history?since=${cursor}`)
+    expect(delta.status, delta.text.slice(0, 300)).toBe(200)
+    const plan = planDeltaMerge(held, delta.json, cursor)
+    expect(plan.kind, JSON.stringify(plan).slice(0, 300)).toBe('merged')
+    const shown = (plan as { messages: Array<{ role: string; text: string; msgId?: string }> }).messages
+    // The Mac's history of the same session is its parse of the same transcript.
+    const macView = parseSessionMessages(fs.readFileSync(file, 'utf8'))
+    const key = (m: { role: string; text: string }) => ({ role: m.role, text: m.text })
+    expect(shown.map(key)).toEqual(macView.map(key))
+    // Folded by identity: no row twice.
+    const ids = shown.map((m) => m.msgId).filter(Boolean)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(shown.map((m) => m.text)).toContain('Tagged v2.4.0.')
+    expect(mac.opened).toBe(opened)
+  })
+
+  it('while the Mac is away: the terminal needs the Mac, and the notes come from the daemon\'s copy (3,000 notes, 13 MB: tree under 1 s warm)', async () => {
+    const server = await import('../../src/web/server.js')
+    const front = server.getHostReplicaFront()!
+    // This host's session, read while the Mac answers (WP6's routes, through the daemon) ...
+    const changesHere = front.link.capabilities()?.includes('changes-v1') === true
+    const sessionReads = [`/api/sessions/${SID}/history`, `/api/v1/sessions/${SID}/history`, `/api/v1/sessions/${SID}/transcript`,
+      ...(changesHere ? [`/api/sessions/${SID}/changes?base=uncommitted`, `/api/sessions/${SID}/changes`, `/api/sessions/${SID}/changes/file?path=${encodeURIComponent(editedFile)}`] : [])]
+    const awake = new Map<string, string>()
+    for (const p of sessionReads) {
+      const r = await get(port, p)
+      expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
+      expect(r.json, p).not.toMatchObject({ from: 'mac' })
+      awake.set(p, r.text)
+    }
+    mac.silence()
+    await waitFor(() => front.route().kind === 'alone', 20_000, 'the replica to call the Mac away')
+    expect(front.rpcGate('terminal:open')).toBe('needs_leader: terminal_needs_mac')
+    // ... answers the same while the Mac is away: the same routes, the same JSON, never the stream-file fallback.
+    for (const [p, text] of awake) {
+      const r = await get(port, p)
+      expect(r.status, `${p}: ${r.text.slice(0, 200)}`).toBe(200)
+      // The transcript's export stamp is the time of the answer.
+      const same = (t: string) => { const j = JSON.parse(t); delete j.exportedAt; return j }
+      expect(same(r.text), p).toEqual(same(text))
+    }
+    const history = JSON.parse(awake.get(`/api/sessions/${SID}/history`)!)
+    expect(history.windowed).toBeUndefined()
+    expect((history.messages as Array<{ text: string }>).map((m) => m.text)).toContain('Tagged v2.4.0.')
+    // A file with no host (the Mac's) or of another host needs the Mac; never this disk.
+    const own = path.join(cwdA, 'src', 'own.txt')
+    for (const p of [`/api/file-content?path=${encodeURIComponent(own)}&sessionId=${SID}`, `/api/files/list?path=${encodeURIComponent(cwdA)}`, `/api/file-content?host=other-box&path=${encodeURIComponent(own)}`,
+      `/api/v1/file-content?path=${encodeURIComponent(own)}`, `/api/v1/files/list?path=${encodeURIComponent(cwdA)}`, `/api/v1/file-raw/local${own.split('/').map(encodeURIComponent).join('/')}`]) {
+      const r = await get(port, p)
+      expect(r.status, p).toBe(503)
+      expect(r.text, p).toContain('needs_leader')
+      expect(r.text, p).not.toContain('marina file')
+    }
+    // This host's file is still read here, through the daemon.
+    const here = await get(port, `/api/file-content?host=${HOST_KEY}&path=${encodeURIComponent(own)}`)
+    expect(here.status, here.text.slice(0, 200)).toBe(200)
+    expect(here.text).toContain('marina file')
+    const hereV1 = await get(port, `/api/v1/file-content?host=${HOST_KEY}&path=${encodeURIComponent(own)}`)
+    expect(hereV1.status, hereV1.text.slice(0, 200)).toBe(200)
+    expect(hereV1.text).toContain('marina file')
+    const cold = await get(port, '/api/notes-v2')
+    expect(cold.status, cold.text.slice(0, 300)).toBe(200)
+    expect(cold.headers.get('x-walnut-offline')).toBeTruthy()
+    const countNotes = (nodes: Array<{ type: string; children?: unknown[] }>): number =>
+      nodes.reduce((n, x) => n + (x.type === 'folder' ? countNotes(x.children as never) : 1), 0)
+    expect(countNotes(cold.json.tree)).toBe(3000)
+    const warm: number[] = []
+    for (let i = 0; i < 5; i++) {
+      await sleep(i === 2 ? 2_100 : 0) // one run after the manifest window: a list call, the same hash
+      const r = await get(port, '/api/notes-v2')
+      expect(r.text).toBe(cold.text)
+      warm.push(r.ms)
+    }
+    const bytes = Object.values(NOTES).reduce((n, b) => n + Buffer.byteLength(b), 0)
+    console.log(JSON.stringify({ probe: 'replica notes tree', notes: 3000, bytes, coldMs: Math.round(cold.ms), warmMs: warm.map((m) => Math.round(m)), treeBytes: cold.text.length }))
+    expect(bytes).toBeGreaterThan(13 * 1000 * 1000)
+    expect(Math.max(...warm)).toBeLessThan(1000)
+    // A body, byte for byte, and the v1 shape of the same read.
+    const key = 'Area 07/Note 0712.md'
+    const body = await get(port, `/api/notes-v2/content/${encodeURIComponent(key.replace(/\.md$/, ''))}`)
+    expect(body.json).toMatchObject({ content: NOTES[key], contentHash: sha12(NOTES[key]!) })
+    const v1 = await get(port, `/api/v1/notes/content/${encodeURIComponent(key.replace(/\.md$/, ''))}`)
+    expect(v1.json).toMatchObject({ content: NOTES[key], contentHash: sha12(NOTES[key]!) })
+    // The first index read builds it from the whole copy (4 MB answers), never holding the loop long.
+    let lagMax = 0
+    let last = performance.now()
+    const probe = setInterval(() => { const t = performance.now(); lagMax = Math.max(lagMax, t - last - 10); last = t }, 10)
+    const back = await get(port, `/api/notes-v2/backlinks/${encodeURIComponent('Area 07/Note 0712')}`)
+    clearInterval(probe)
+    expect((back.json.backlinks as Array<{ path: string }>).map((b) => b.path)).toEqual(['Area 07/Note 0711.md'])
+    const warmBack = await get(port, `/api/notes-v2/backlinks/${encodeURIComponent('Area 07/Note 0712')}`)
+    console.log(JSON.stringify({ probe: 'replica notes index', coldBacklinksMs: Math.round(back.ms), warmBacklinksMs: Math.round(warmBack.ms), loopLagMaxMs: Math.round(lagMax) }))
+    expect(lagMax).toBeLessThan(300)
+    // Warm: one pass over the parsed links, names looked up in a per-manifest map.
+    expect(warmBack.ms).toBeLessThan(250)
+    const tags = await get(port, '/api/notes-v2/tags')
+    expect(tags.json.tags).toEqual([{ tag: 'marina', count: 3000 }])
+    // A write is still the Mac's.
+    const put = await fetch(`http://127.0.0.1:${port}/api/notes-v2/content/x`, { method: 'PUT', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ content: 'x' }) })
+    expect(put.status).toBe(503)
+  }, 120_000)
+})

@@ -9,7 +9,7 @@
  * three times while the subagent worked.
  *
  * The trackers: the daemon fold (snapshot), the server's reconcile fold, the live runner, and the
- * task count of both daemon twins (the standalone source transpiled, the template as emitted).
+ * session daemon's own task count (daemon-standalone.ts, transpiled).
  * A new tracker must join this list.
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -23,7 +23,6 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { foldLines, assembleSnapshot } from '../../src/providers/daemon-fold.js'
 import { foldSessionTail } from '../../src/core/session-reconcile.js'
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { resumesEndedCall } from '../../src/providers/bg-task-resume.js'
 import { PARKED, parkedSubagentStream as stream } from '../helpers/parked-subagent-stream.js'
 
@@ -62,8 +61,8 @@ function extractFn(src: string, name: string): string {
   throw new Error(`unbalanced braces extracting ${name}`)
 }
 
-type TwinState = { tasks: Record<string, { status: string; isBackgrounded?: boolean }> }
-function twin(src: string): (lines: string[]) => number {
+type DaemonTaskState = { tasks: Record<string, { status: string; isBackgrounded?: boolean }> }
+function daemonTaskCount(src: string): (lines: string[]) => number {
   const body = [
     "const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);",
     'const BG_TRANSITION_CAP = 50;',
@@ -71,7 +70,7 @@ function twin(src: string): (lines: string[]) => number {
     'return { empty: emptyTaskState, apply: applyTaskEvent };',
   ].join('\n')
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const fns = new Function(body)() as { empty: () => TwinState; apply: (ts: TwinState, p: Record<string, unknown>, v: number, now: number) => boolean }
+  const fns = new Function(body)() as { empty: () => DaemonTaskState; apply: (ts: DaemonTaskState, p: Record<string, unknown>, v: number, now: number) => boolean }
   return (lines) => {
     const ts = fns.empty()
     lines.forEach((l, i) => fns.apply(ts, JSON.parse(l), i + 1, i))
@@ -88,8 +87,7 @@ const TRACKERS: Array<[string, (lines: string[]) => number]> = [
   ['daemon fold', daemonFold],
   ['reconcile fold', reconcileFold],
   ['live runner', runner],
-  ['daemon template twin', twin(getDaemonSource())],
-  ['daemon standalone twin', twin(standaloneSource())],
+  ['session daemon task count', daemonTaskCount(standaloneSource())],
 ]
 
 describe.each(TRACKERS)('a parked background subagent started again: %s', (_name, running) => {

@@ -5,10 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import { createDemoDaemonQuiesce } from '../../src/providers/demo-daemon-quiesce-core.js'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createRegistryWriter } from '../../src/providers/registry-writer-core.js'
 import { armFilePoolDeadline } from '../../src/providers/file-pool-deadline.js'
-import { reconcileVerdict } from '../../src/providers/daemon-core.js'
 import { createHostFix } from '../../src/providers/host-fix-core.js'
 import { createClaudeInstall } from '../../src/providers/claude-install-core.js'
 import { createClaudeDownload } from '../../src/providers/claude-download-core.js'
@@ -66,7 +64,7 @@ function compile<T>(source: string, environment: Record<string, unknown>): T {
   return new Function(...Object.keys(environment), js)(...Object.values(environment)) as T
 }
 
-/** A twin's `NAME = new Set([...])` literal. */
+/** The daemon's `NAME = new Set([...])` literal. */
 function literalSet(source: string, name: string): Set<string> {
   const match = source.match(new RegExp(name + ' = new Set\\(\\[([\\s\\S]*?)\\]'))
   if (!match) throw new Error(`Missing ${name}`)
@@ -74,7 +72,7 @@ function literalSet(source: string, name: string): Set<string> {
 }
 
 /**
- * A twin's handleCommand with its real dispatcher. Every module-level name handleCommand
+ * The daemon's handleCommand with its real dispatcher. Every module-level name handleCommand
  * reads is handed in (missingNames), whichever branch reads it: what its preamble reads is
  * here, a test's own `environment` adds the handlers it drives.
  */
@@ -88,11 +86,9 @@ function noDemoQuiesce() {
 }
 
 function compileHandle(source: string, environment: Record<string, unknown>): (ws: unknown, msg: string) => void {
-  // The standalone twin parses a socket's text in handleCommand and handles the frame in
+  // The daemon parses a socket's text in handleCommand and handles the frame in
   // handleCommandFrame (a client in its own process hands the object over): both are the command path.
-  const text = source.includes('function handleCommandFrame(')
-    ? `${extract(source, 'handleCommand')}\n${extract(source, 'handleCommandFrame')}`
-    : extract(source, 'handleCommand')
+  const text = `${extract(source, 'handleCommand')}\n${extract(source, 'handleCommandFrame')}`
   const env: Record<string, unknown> = {
     demoQuiesce: noDemoQuiesce(), sendOk: vi.fn(),
     SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
@@ -106,9 +102,9 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
     hostExec: { resumableJob: () => false },
     ...environment,
   }
-  // The standalone twin answers through sendFrame (an in-process client takes the object): a
+  // The daemon answers through sendFrame (an in-process client takes the object): a
   // socket's text is the frame's JSON, through the safeSend this run watches.
-  if (source.includes('function sendFrame(') && !('sendFrame' in env)) {
+  if (!('sendFrame' in env)) {
     env.sendFrame = (ws: unknown, frame: unknown) => (env.safeSend as (ws: unknown, text: string) => void)(ws, JSON.stringify(frame))
   }
   expect(missingNames(text, [...Object.keys(env), 'dispatchCommand', 'handleCommandFrame']), 'names handleCommand reads that this run lacks').toEqual([])
@@ -120,35 +116,23 @@ const standalone = fs.readFileSync(path.resolve('src/providers/daemon-standalone
 const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEnded: async () => {} })
 
 /**
- * stopDaemon as its source runs it: the template ends through exitDaemon (a host_exec file look
- * still in flight gets its grace first). The standalone's stopDaemon resolves to the exit code and
+ * stopDaemon as its source runs it: the daemon's stopDaemon resolves to the exit code and
  * its caller exits (requestDaemonShutdown: options.exit); past the drain limit it ends hard first
  * (options.hardExit). A daemon process passes process.exit and a SIGKILL of itself as those two,
- * so the compiled standalone gets them as runDaemonProcess wires them, over the injected process.
+ * so the compiled daemon gets them as runDaemonProcess wires them, over the injected process.
  */
 // The runtime exits through exitRuntime (options.exit, then in process what an exit gives back).
 const STANDALONE_SHUTDOWN = 'requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => exitRuntime(code)) }'
 // A production dir's stop never reaps (tests/providers/in-process-stop-reap.test.ts covers the reap).
 const STOP_REAP_OFF = 'const shouldReapOnExit = () => false; const ownsDaemonDir = () => true; const reapAllSessionGroups = async () => {};'
 const stopDaemonSource = (source: string) => {
-  if (/function exitDaemon\(/.test(source)) {
-    const exit = `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
-    // The stop's registry write is made only while daemon.pid is ours (daemon-stale-pid-twins-e2e covers a successor's).
-    return `let shutdown = null; const ownsDaemonDir = () => true; ${exit}const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`
-  }
   if (!source.includes(STANDALONE_SHUTDOWN)) throw new Error('standalone: requestDaemonShutdown no longer exits with stopDaemon\'s code')
   const options = "const options = { exit: (code) => process.exit(code), hardExit: () => process.kill(process.pid, 'SIGKILL') };"
   return `${options} const exitRuntime = (code) => options.exit(code); const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; ${STOP_REAP_OFF} const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
 }
-const template = getDaemonSource()
-const templateDrain = compile<typeof createDaemonCommandDrain>(
-  `return ${extract(template, 'daemonCommands').replace(/\(\)$/, '')};`, {},
-)
-
-describe.each([
-  ['standalone', standalone, createDaemonCommandDrain],
-  ['template', template, templateDrain],
-] as const)('%s daemon command drain', (_kind, source, createDrain) => {
+describe('daemon command drain', () => {
+  const source = standalone
+  const createDrain = createDaemonCommandDrain
   it('cancels only an absent initial start and rejects its late command without spawning', async () => {
     const cancelled = new Set<string>();
     const gate = new DaemonSessionGate();
@@ -229,10 +213,8 @@ describe.each([
     const sessions = new Map([['session', { state: 'running', pid: 4242, turnRetry }]])
     const writeFileSync = vi.fn()
     const registryFs = { writeFileSync, unlinkSync: vi.fn(), openSync: () => 123, fsyncSync: vi.fn(), closeSync: vi.fn(), renameSync: vi.fn(), promises: fs.promises }
-    // Both twins write through the one registry writer (registry-writer-core.ts): the bun twin
-    // imports it into daemon-core.ts, the JS twin inlines its text.
-    if (_kind === 'standalone') expect(fs.readFileSync(path.resolve('src/providers/daemon-core.ts'), 'utf8')).toMatch(/createRegistryWriter\(\{/)
-    else expect(source).toMatch(/var registryWriter = \(function createRegistryWriter\(/)
+    // The daemon writes through the one registry writer (registry-writer-core.ts), imported into daemon-core.ts.
+    expect(fs.readFileSync(path.resolve('src/providers/daemon-core.ts'), 'utf8')).toMatch(/createRegistryWriter\(\{/)
     const writer = createRegistryWriter({
       fs: registryFs as unknown as typeof fs, dirname: path.dirname, file: '/fixture/sessions.json', sessions, now: () => 0,
       strict: () => true, log: vi.fn(), armDeadline: armFilePoolDeadline,
@@ -247,31 +229,13 @@ describe.each([
     const sessions = new Map<string, { turnRetry?: typeof turnRetry; turnRetryTimer?: unknown }>()
     // The adopt folds both states in one async pass (stream-fold-core.ts foldFile).
     const streamFold = { foldFile: async () => ({ fold: {}, task: {}, boundary: 400, checkpointV: 0 }) }
-    if (_kind === 'standalone') {
-      const adopt = compile<(sid: string, value: typeof entry) => Promise<{ turnRetry?: typeof turnRetry }>>(
-        `return ${extract(source, 'createAdoptedSession')};`,
-        // The adopt also stamps a cron origin; neither call is what this test is
-        // about, so both are stubbed to their "nothing known" answers.
-        { streamFold, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map(), Subscribers: Set },
-      )
-      sessions.set('session', await adopt('session', entry))
-    } else {
-      // The verdict is daemon-core.ts reconcileVerdict, inlined as text; the pass writes once at its end.
-      const reconcile = compile<() => Promise<void>>(`const reconcileVerdictCore = (${reconcileVerdict.toString()});\n${extract(source, 'reconcileVerdict')}\nconst RECONCILE_SLICE_MS = 8;\nlet reconcilingRegistry = 0;\nlet reconcileWriteAsked = false;\n${extract(source, 'reconcileRegistry')}\n${extract(source, 'reconcilePass')}\nreturn reconcileRegistry;`, {
-        readRegistry: () => ({ session: entry }), sessions, streamFold, persistRegistry: vi.fn(),
-        daemonBootId: 'boot', reapSession: vi.fn(), logMsg: vi.fn(), fs: { readdirSync: () => [] },
-        STREAMS_DIR: '/fixture', process: { kill: vi.fn() }, readStartTime: () => 'start', readStartTimeAsync: async () => 'start',
-        readStartTimes: () => new Map([[4242, 'start']]),
-        logStateTransition: vi.fn(), startOrphanPoll: vi.fn(), broadcastSessionState: vi.fn(),
-        processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }),
-        // Adopting a live CLI locks its stdin FIFO write-only (LIVE_FIFO_MODE); no FIFO here.
-        lockLiveFifo: () => true,
-        budgetStopGroups: new Map(),
-        // A session's subscriber set (the daemon's Subscribers keeps when it was last watched).
-        Subscribers: Set,
-      })
-      await reconcile()
-    }
+    const adopt = compile<(sid: string, value: typeof entry) => Promise<{ turnRetry?: typeof turnRetry }>>(
+      `return ${extract(source, 'createAdoptedSession')};`,
+      // The adopt also stamps a cron origin; neither call is what this test is
+      // about, so both are stubbed to their "nothing known" answers.
+      { streamFold, processStartedAtMs: () => null, cronProcess: () => ({ identity: 'fixture' }), budgetStopGroups: new Map(), Subscribers: Set },
+    )
+    sessions.set('session', await adopt('session', entry))
     expect(sessions.get('session')?.turnRetry).toEqual(turnRetry)
     expect(sessions.get('session')?.turnRetryTimer).toBeUndefined()
   })
@@ -369,7 +333,7 @@ describe.each([
   })
 
   /**
-   * The twin's handover, compiled with its real dispatcher, so a host.fix sent
+   * The daemon's handover, compiled with its real dispatcher, so a host.fix sent
    * through it (`fixFrame`) is tracked exactly as the daemon tracks it. The shutdown
    * a handover requests is stopDaemon: it cancels the fix, then drains.
    */
@@ -995,10 +959,8 @@ describe('command drain settle (demo.quiesce)', () => {
   })
 })
 
-describe.each([
-  ['standalone', standalone],
-  ['template', template],
-] as const)('%s handleCommand demo.quiesce fence', (_kind, source) => {
+describe('handleCommand demo.quiesce fence', () => {
+  const source = standalone
   const DATA = '/fixture/open-walnut-demo/data/g1'
   const demoQuiesce = (settle: () => Promise<void>) => createDemoDaemonQuiesce({
     env: { WALNUT_DEMO_ROOT: '/fixture/open-walnut-demo', WALNUT_DEMO_GENERATION: 'g1', HOME: '/fixture/open-walnut-demo/homes/g1' },

@@ -27,10 +27,8 @@
  * Codex resume writes a NEW rollout file for the SAME session id, so results
  * are deduped by id keeping the newest file.
  *
- * ⚠️ This module is compiled into the bun daemon binary AND textually inlined
- * into the source-deployed daemon twin (see daemon-source.ts). Keep it free of
- * imports beyond node builtins, and free of backticks — the source twin is an
- * embedded template literal.
+ * ⚠️ This module is compiled into the bun daemon binary. Keep it free of
+ * imports beyond node builtins.
  */
 
 import fs from 'node:fs'

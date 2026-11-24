@@ -2,8 +2,8 @@
  * The daemon's places in the data home (HomeEntry.daemonState, docs/reference/data-locations.md
  * "Daemon state"):
  *
- *   - a ratchet over both daemon twins (daemon-standalone.ts, daemon-source.ts): every path they
- *     name in the data home (`<HOME>/.open-walnut/...`, by a literal join or through the constants
+ *   - a ratchet over the daemon (daemon-standalone.ts): every path it
+ *     names in the data home (`<HOME>/.open-walnut/...`, by a literal join or through the constants
  *     an installed daemon's tmp/ state hangs off) is named by the manifest and is either marked
  *     daemon state or rebuildable. The manifest's own source ratchet only sees joins under
  *     WALNUT_HOME, which the daemon never uses; this covers that side. A new place turns it red.
@@ -21,7 +21,7 @@ import { backupTakes } from '../../../src/core/backup/scan.js'
 import { makeFileClass } from '../../../src/core/standby/scan.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
-const TWINS = ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']
+const DAEMON = 'src/providers/daemon-standalone.ts'
 
 /** Data home paths a daemon names that are neither daemon state nor rebuildable, each with why. */
 const NAMED_ELSEWHERE: Record<string, string> = {
@@ -75,20 +75,14 @@ function unclassified(paths: Iterable<string>): string[] {
 }
 
 describe('the daemon\'s places in the data home', () => {
-  const found = TWINS.map((f) => daemonHomePaths(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+  const found = daemonHomePaths(fs.readFileSync(path.join(ROOT, DAEMON), 'utf8'))
 
   it('finds the places an installed daemon keeps (the extractor sees literal joins and the tmp/ constants)', () => {
-    for (const set of found) {
-      for (const p of ['tmp/streams', 'tmp/offline-host', 'tmp/leader', 'tmp/usage-budgets', 'tmp/host-vitals', 'local/spawn-journal.jsonl', 'local/cli-owners', 'distributed-skills', 'tmp/host-server']) expect(set, p).toContain(p)
-    }
+    for (const p of ['tmp/streams', 'tmp/offline-host', 'tmp/leader', 'tmp/usage-budgets', 'tmp/host-vitals', 'local/spawn-journal.jsonl', 'local/cli-owners', 'distributed-skills', 'tmp/host-server']) expect(found, p).toContain(p)
   })
 
   it('every one of them is named, and is daemon state or rebuildable', () => {
-    for (const [i, set] of found.entries()) expect(unclassified(set), TWINS[i]).toEqual([])
-  })
-
-  it('the twins name the same places', () => {
-    expect([...found[1]!].sort()).toEqual([...found[0]!].sort())
+    expect(unclassified(found)).toEqual([])
   })
 
   it('turns red on a new place a daemon names that is neither (the control)', () => {
@@ -111,11 +105,9 @@ describe('the daemon\'s places in the data home', () => {
     for (const e of marked) expect(['machine', 'rebuildable'], e.id).toContain(e.class)
   })
 
-  it('marks every tmp/ place a daemon twin names (a promotion leaves each where it is, so none may be missed)', () => {
-    for (const [i, set] of found.entries()) {
-      const missing = [...set].filter((rel) => rel.startsWith('tmp/')).map((rel) => classifyHomePath(rel)).filter((e) => e && !e.daemonState).map((e) => e!.id)
-      expect(missing, TWINS[i]).toEqual([])
-    }
+  it('marks every tmp/ place the daemon names (a promotion leaves each where it is, so none may be missed)', () => {
+    const missing = [...found].filter((rel) => rel.startsWith('tmp/')).map((rel) => classifyHomePath(rel)).filter((e) => e && !e.daemonState).map((e) => e!.id)
+    expect(missing).toEqual([])
   })
 })
 

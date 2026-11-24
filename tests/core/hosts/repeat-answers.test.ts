@@ -147,16 +147,14 @@ describe('the class: answers about an id with no run', () => {
     expect(jobs).toMatch(/err\.code === 'unknown_job' \? await unknownJob\(err, caller, host, String\(params\.job_id\), 'stop'\)/)
   })
 
-  it('a daemon that stops ends the check runs it started, in both twins (2026-11-23: orphaned runs got 403 session_only)', () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const text = read(twin)
-      const at = text.search(/\nfunction cleanup\(/)
-      expect(at, twin).toBeGreaterThan(0)
-      const body = text.slice(at, text.indexOf('\n}\n', at))
-      expect(body, `${twin}: cleanup() must abort the check runs' signal`).toMatch(/demoTriggerChecks\.abort\(\)/)
-      // The only signal every check run listens to is that one (checkRunFence): a new one would need its own abort here.
-      expect(text.match(/signal: demoTriggerChecks\.signal|fence\.signal = demoTriggerChecks\.signal/g)?.length, twin).toBe(1)
-    }
+  it('a daemon that stops ends the check runs it started (2026-11-23: orphaned runs got 403 session_only)', () => {
+    const text = read('src/providers/daemon-standalone.ts')
+    const at = text.search(/\nfunction cleanup\(/)
+    expect(at).toBeGreaterThan(0)
+    const body = text.slice(at, text.indexOf('\n}\n', at))
+    expect(body, "cleanup() must abort the check runs' signal").toMatch(/demoTriggerChecks\.abort\(\)/)
+    // The only signal every check run listens to is that one (checkRunFence): a new one would need its own abort here.
+    expect(text.match(/signal: demoTriggerChecks\.signal|fence\.signal = demoTriggerChecks\.signal/g)?.length).toBe(1)
   })
 
   it('every route that answers a host refusal marks its repeats', () => {
@@ -166,9 +164,8 @@ describe('the class: answers about an id with no run', () => {
     for (const r of routes) expect(fs.readFileSync(path.join(dir, r), 'utf8'), r).toMatch(/markHostRefusalRepeat\(req, res, err\)/)
   })
 
-  it('a lost answer\'s hint says unknown_job is final and names the call that converges, in both twins', () => {
+  it('a lost answer\'s hint says unknown_job is final and names the call that converges', () => {
     const [, , last] = lostRunLines('host_exec', { host: 'mac' }, 'hx-1234')
     expect(last).toContain('no later read finds it: stop reading, and send this host_exec call again with "job_id":"hx-1234", which runs it at most once')
-    expect(read('src/providers/daemon-source.ts')).toContain(`' and no later read finds it: stop reading, and send this ' + wnRunId.op + ' call again with "job_id":"' + wnRunId.id + '", which runs it at most once; host_exec_list '`)
   })
 })

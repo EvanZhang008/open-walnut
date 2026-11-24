@@ -1,5 +1,3 @@
-import path from 'node:path'
-import os from 'node:os'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
@@ -47,18 +45,11 @@ function fixture(allow: () => Promise<BudgetGate>) {
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
-function stopWriterTwin(twin: 'standalone' | 'source', events: string[], rejectSync = false) {
-  const file = new URL(`../../src/providers/daemon-${twin}.ts`, import.meta.url)
-  const text = fs.readFileSync(file, 'utf8')
-  let body = text
-  if (twin === 'source') {
-    const source = ts.createSourceFile(String(file), text, ts.ScriptTarget.Latest, true)
-    const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'DAEMON_SOURCE' && node.initializer && ts.isNoSubstitutionTemplateLiteral(node.initializer)) body = node.initializer.text
-      ts.forEachChild(node, visit)
-    }
-    visit(source)
-  }
+const DAEMON_FILE = new URL('../../src/providers/daemon-standalone.ts', import.meta.url)
+
+/** The daemon's real persistBudgetStops, run against a recording fs. */
+function stopWriter(events: string[], rejectSync = false) {
+  const body = fs.readFileSync(DAEMON_FILE, 'utf8')
   const start = body.indexOf('function persistBudgetStops(')
   const end = body.indexOf('async function budgetGroupMembers(', start)
   if (start < 0 || end < 0) throw new Error('Budget stop writer not found')
@@ -89,22 +80,14 @@ function stopWriterTwin(twin: 'standalone' | 'source', events: string[], rejectS
   }) as () => Promise<void>
 }
 
-function budgetStopSinkTwin(twin: 'standalone' | 'source') {
-  const file = new URL(`../../src/providers/daemon-${twin}.ts`, import.meta.url)
-  let body = fs.readFileSync(file, 'utf8')
-  if (twin === 'source') {
-    const wrapper = ts.createSourceFile(String(file), body, ts.ScriptTarget.Latest, true)
-    const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.name.getText(wrapper) === 'DAEMON_SOURCE' && node.initializer && ts.isNoSubstitutionTemplateLiteral(node.initializer)) body = node.initializer.text
-      ts.forEachChild(node, visit)
-    }
-    visit(wrapper)
-  }
+/** The daemon's real budget stop sink and the protocol helpers it replies through. */
+function budgetStopSink() {
+  const body = fs.readFileSync(DAEMON_FILE, 'utf8')
   const source = ts.createSourceFile('daemon.ts', body, ts.ScriptTarget.Latest, true)
   const functions = new Map<string, ts.FunctionDeclaration>()
   for (const node of daemonStatements(ts, source)) if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node)
   const pause = functions.get('pauseBudgetSession')
-  const protocolNames = twin === 'standalone' ? ['enqueueForDrain', 'safeSend', 'sendFrame', 'sendOk', 'sendError'] : ['sendOk', 'sendError']
+  const protocolNames = ['enqueueForDrain', 'safeSend', 'sendFrame', 'sendOk', 'sendError']
   if (!pause) throw new Error('Actual budget pause function not found')
   let sink: ts.VariableDeclaration | undefined
   const visitSink = (node: ts.Node) => {
@@ -125,9 +108,9 @@ function budgetStopSinkTwin(twin: 'standalone' | 'source') {
   }) as { sink: { data: Record<string, unknown>; readyState: number; send(raw: string): number }; sendOk(ws: unknown, id: number, data: Record<string, unknown>): void; sendError(ws: unknown, id: number, error: string): void; reply(): Record<string, unknown> | undefined }
 }
 
-describe('budget stop reply sink in actual daemon twins', () => {
-  it.each(['standalone', 'source'] as const)('%s captures a successful stop through its real protocol helper', twin => {
-    const actual = budgetStopSinkTwin(twin)
+describe('budget stop reply sink in the actual daemon', () => {
+  it('captures a successful stop through its real protocol helper', () => {
+    const actual = budgetStopSink()
     expect(actual.sink.data).toEqual({})
     expect(actual.sink.readyState).toBe(1)
     expect(() => actual.sendOk(actual.sink, 0, { stopped: true })).not.toThrow()
@@ -137,25 +120,25 @@ describe('budget stop reply sink in actual daemon twins', () => {
     expect(actual.sink.data).toEqual({})
   })
 
-  it.each(['standalone', 'source'] as const)('%s captures a refused stop without a socket-data exception', twin => {
-    const actual = budgetStopSinkTwin(twin)
+  it('captures a refused stop without a socket-data exception', () => {
+    const actual = budgetStopSink()
     expect(() => actual.sendError(actual.sink, 0, 'stop: process identity changed')).not.toThrow()
     expect(actual.reply()).toEqual({ id: 0, ok: false, error: 'stop: process identity changed' })
     expect(actual.sink.data).toEqual({})
   })
 })
 
-describe('budget stop proof durability in daemon twins', () => {
-  it.each(['standalone', 'source'] as const)('%s syncs the renamed stop proof directory before resolving', async twin => {
+describe('budget stop proof durability in the daemon', () => {
+  it('syncs the renamed stop proof directory before resolving', async () => {
     const events: string[] = []
-    await stopWriterTwin(twin, events)()
+    await stopWriter(events)()
     expect(events).toEqual(['mkdir', 'file-open', 'file-write', 'file-sync', 'file-close', 'rename', 'directory-open', 'directory-sync', 'directory-close', 'unlink-temp'])
   })
 
-  it.each(['standalone', 'source'] as const)('%s rejects a failed directory sync and does not run stop controls', async twin => {
+  it('rejects a failed directory sync and does not run stop controls', async () => {
     const events: string[] = []
     const sendStop = vi.fn()
-    await expect(stopWriterTwin(twin, events, true)().then(sendStop)).rejects.toThrow('Directory sync failed')
+    await expect(stopWriter(events, true)().then(sendStop)).rejects.toThrow('Directory sync failed')
     expect(sendStop).not.toHaveBeenCalled()
     expect(events).toContain('directory-close')
     expect(events.at(-1)).toBe('unlink-temp')
@@ -264,49 +247,5 @@ describe('owning daemon budget FIFO gate', () => {
     expect(f.session.exitCode).toBe(0)
     expect(f.groupSignal).not.toHaveBeenCalled()
     expect(f.signal.mock.calls.every(call => call[1] === 0)).toBe(true)
-  })
-})
-
-/** The source twin's sidecar-less fallback, run against real files in a temp budget dir. */
-function savedBudgetLimitTwin(dir: string): (sid: string) => Promise<boolean> {
-  const file = new URL('../../src/providers/daemon-source.ts', import.meta.url)
-  const text = fs.readFileSync(file, 'utf8')
-  let body = ''
-  const wrapper = ts.createSourceFile(String(file), text, ts.ScriptTarget.Latest, true)
-  const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(wrapper) === 'DAEMON_SOURCE' && node.initializer && ts.isNoSubstitutionTemplateLiteral(node.initializer)) body = node.initializer.text
-    ts.forEachChild(node, visit)
-  }
-  visit(wrapper)
-  const source = ts.createSourceFile('daemon.js', body, ts.ScriptTarget.Latest, true)
-  const fn = source.statements.find((n): n is ts.FunctionDeclaration => ts.isFunctionDeclaration(n) && n.name?.text === 'savedBudgetLimit')
-  if (!fn) throw new Error('savedBudgetLimit not found in the source twin')
-  return vm.runInNewContext(`${fn.getText(source)}\nsavedBudgetLimit`, { fs, path, BUDGET_DIR: dir, JSON }) as (sid: string) => Promise<boolean>
-}
-
-describe('source twin without its budget sidecar', () => {
-  it('holds a session only while a saved budget still names a limit', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-fallback-'))
-    try {
-      const held = savedBudgetLimitTwin(dir)
-      expect(await held('none')).toBe(false)
-      // First version only: its last policy line decides.
-      fs.writeFileSync(path.join(dir, 'v1.json'), '{}')
-      fs.writeFileSync(path.join(dir, 'v1.jsonl'), [JSON.stringify({ kind: 'policy', policy: { limitUsd: 5 } }), JSON.stringify({ kind: 'policy', policy: { limitUsd: null } })].join('\n') + '\n')
-      expect(await held('v1')).toBe(false)
-      fs.appendFileSync(path.join(dir, 'v1.jsonl'), JSON.stringify({ kind: 'policy', policy: { limitUsd: 2 } }) + '\n')
-      expect(await held('v1')).toBe(true)
-      // A v2 file decides over the first version's copy, a removed limit included.
-      fs.mkdirSync(path.join(dir, 'v2'))
-      fs.writeFileSync(path.join(dir, 'v2', 'v1.json'), JSON.stringify({ version: 2, limitUsd: null }))
-      expect(await held('v1')).toBe(false)
-      fs.writeFileSync(path.join(dir, 'v2', 'v1.json'), JSON.stringify({ version: 2, limitUsd: 3 }))
-      expect(await held('v1')).toBe(true)
-      // Unreadable holds.
-      fs.writeFileSync(path.join(dir, 'v2', 'bad.json'), '{"version":2,')
-      expect(await held('bad')).toBe(true)
-      fs.writeFileSync(path.join(dir, 'marker-only.json'), '{}')
-      expect(await held('marker-only')).toBe(true)
-    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })

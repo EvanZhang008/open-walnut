@@ -1,13 +1,13 @@
 /**
- * Both daemon twins judge a task directory busy from ALL the work running on
- * the host, never from their sessions alone. 2026-11-08: a cleanup pass took a
+ * The daemon judges a task directory busy from ALL the work running on the
+ * host, never from its sessions alone. 2026-11-08: a cleanup pass took a
  * running simulator check's Walnut.app; the check ran through host_exec, which
  * the daemon's busy test never counted, and the paths were compared as
  * strings (/home vs /local/home, /var vs /private/var).
  *
- * The guard reads the sources: a new kind of host work added to one twin's
- * `hostWorkNow` and not the other's, or a task-dir command that builds its own
- * `busy` again, fails here.
+ * The guard reads the source: a new kind of host work missing from
+ * `hostWorkNow`, or a task-dir command that builds its own `busy` again,
+ * fails here.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -20,23 +20,23 @@ const fnBody = (src: string, name: string) => {
   const end = src.indexOf('\n}\n', start)
   return src.slice(start, end)
 }
-const twins = { standalone: read('daemon-standalone.ts'), source: read('daemon-source.ts') }
+const src = read('daemon-standalone.ts')
 
-describe('task directory busy check in both daemon twins', () => {
-  it.each(Object.entries(twins))('%s counts sessions, host commands and ACP workers', (_name, src) => {
+describe('task directory busy check in the daemon', () => {
+  it('counts sessions, host commands and ACP workers', () => {
     const body = fnBody(src, 'hostWorkNow')
     for (const kind of ['sessions.values()', 'spawnInfo', 'hostExec', '.active()', 'taskId', 'acp', 'workers.values()', 'w.taskDir']) expect(body).toContain(kind)
   })
 
-  it.each(Object.entries(twins))('%s reads the open files for a low-disk prune of directories in use', (_name, src) => {
+  it('reads the open files for a low-disk prune of directories in use', () => {
     const body = fnBody(src, 'cmdTaskDirPrune')
     expect(body).toMatch(/cmd\.live === true/)
-    // The bun binary passes its runtime's child-process use as the second argument.
-    expect(body).toMatch(/readOpenPaths\(TASK_DIR_ROOT(, childUse)?\)/)
+    // The daemon passes its runtime's child-process use as the second argument.
+    expect(body).toMatch(/readOpenPaths\(TASK_DIR_ROOT, childUse\)/)
     expect(body).toMatch(/openPaths/)
   })
 
-  it.each(Object.entries(twins))('%s task-dir commands use taskDirBusy, never their own string test', (_name, src) => {
+  it('task-dir commands use taskDirBusy, never their own string test', () => {
     for (const cmd of ['cmdTaskDirRemove', 'cmdTaskDirPrune']) {
       const body = fnBody(src, cmd)
       expect(body).toMatch(/busy = taskDirBusy/)

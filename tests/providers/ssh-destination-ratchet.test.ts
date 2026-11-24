@@ -37,7 +37,7 @@ const INLINE_DEST_ALLOWED: Record<string, string> = {
   'src/core/hosts/host-warmup.ts': 'error classification text',
 }
 
-const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
+const EXEMPT = new Set(['src/providers/daemon-standalone.ts'])
 const SSH_CALLEES = new Set(['spawn', 'execFile', 'execFileSync', 'spawnSync', 'run', 'runProgram'])
 const INLINE_DEST = /\$\{[^}]*\buser\b[^}]*\}@\$\{[^}]*\bhost(name)?\b[^}]*\}/
 

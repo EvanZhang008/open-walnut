@@ -4,8 +4,8 @@
  * the text, or Anthropic content blocks (image blocks with a base64 source, then text).
  *
  * The one serializer for the server side (session-io.ts, micro-claude-warm.ts, the claude-cli
- * model adapter). The daemon twins write the same envelope inline: they must stay self-contained
- * (daemon-core.ts, daemon-source.ts).
+ * model adapter). The daemon writes the same envelope inline: it stays self-contained
+ * (daemon-core.ts).
  */
 
 export type StreamJsonContent = string | ReadonlyArray<Record<string, unknown>>

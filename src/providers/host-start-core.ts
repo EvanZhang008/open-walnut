@@ -52,10 +52,7 @@
  * never serves follower.start: every field of a routine start comes from the Mac's
  * own clock def, never from a follower.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createHostStart;
- * daemon-source.ts inlines `createHostStart.toString()` through
- * `__CREATE_HOST_START__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createHostStart). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export type SpawnSlot = 'sid' | 'mode' | 'model' | 'effort' | 'persona' | 'tools'

@@ -1,5 +1,5 @@
 /**
- * Stream compaction (stream-compact-core.ts), run by both daemon twins booted
+ * Stream compaction (stream-compact-core.ts), run by the session daemon booted
  * for real.
  *
  * Why: the CLI's stdout IS the stream file, and token deltas made up about half
@@ -14,27 +14,20 @@
  * "CLI" is /bin/sh cat-ing a prepared file, and the daemon is SIGKILLed after
  * each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
+const command = (): [string, string[]] => [BUN!, [STANDALONE, '--start']]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -48,7 +41,7 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon') }
 }
 
-async function boot(twin: Twin, dirs: Dirs, extra: Record<string, string>): Promise<void> {
+async function boot(dirs: Dirs, extra: Record<string, string>): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -63,7 +56,7 @@ async function boot(twin: Twin, dirs: Dirs, extra: Record<string, string>): Prom
     WALNUT_STREAM_COMPACT_MIN_BYTES: '4096',
     ...extra,
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -155,26 +148,20 @@ function streamContent(deltaBytes: number, keptBytes = 0): string {
   return parts.join('')
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-compact-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   await stop()
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
 
-describe.each(TWINS)('stream compaction: $name', (twin) => {
+describe.skipIf(!BUN)('stream compaction, standalone daemon (bun)', () => {
   it('a live CLI\'s file is never touched; once it is gone the file loses its deltas, and a resume continues from the new file', async () => {
     const dirs = makeDirs()
     const source = path.join(root, 'stream-source.jsonl')
     const content = streamContent(512 * 1024, 9 * 1024 * 1024)
     fs.writeFileSync(source, content)
     // Idle 2 s: the test reads the dead file's mtime before the copy starts.
-    await boot(twin, dirs, { WALNUT_STREAM_COMPACT_IDLE_MS: '2000' })
+    await boot(dirs, { WALNUT_STREAM_COMPACT_IDLE_MS: '2000' })
     const jsonl = path.join(dirs.streams, 'cmp-1.jsonl')
 
     // Live: the "CLI" wrote everything and sleeps. Several sweeps pass; nothing changes.
@@ -234,7 +221,7 @@ describe.each(TWINS)('stream compaction: $name', (twin) => {
 
     // A restarted daemon (nothing in memory) answers the same from disk.
     await stop()
-    await boot(twin, dirs, { WALNUT_STREAM_COMPACT_SWEEP_MS: '600000' })
+    await boot(dirs, { WALNUT_STREAM_COMPACT_SWEEP_MS: '600000' })
     const cold = await rpc({ cmd: 'getState', sid: 'cmp-1' })
     expect(cold.snapshot).toMatchObject({ streamEpoch: epochOf(jsonl), rewrittenFrom: liveEpoch, v: ck.boundary, cronActive: true })
 
@@ -261,7 +248,7 @@ describe.each(TWINS)('stream compaction: $name', (twin) => {
     const content = streamContent(6 * 1024 * 1024)
     fs.writeFileSync(source, content)
     // Small reads keep the copy running long enough to race it.
-    await boot(twin, dirs, { WALNUT_STREAM_COMPACT_CHUNK: '2048', WALNUT_STREAM_COMPACT_SWEEP_MS: '100' })
+    await boot(dirs, { WALNUT_STREAM_COMPACT_CHUNK: '2048', WALNUT_STREAM_COMPACT_SWEEP_MS: '100' })
     const jsonl = path.join(dirs.streams, 'cmp-2.jsonl')
     const started = await rpc({
       cmd: 'start', sid: 'cmp-2', cwd: root, message: '', mode: 'default',

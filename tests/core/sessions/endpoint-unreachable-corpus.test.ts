@@ -13,10 +13,9 @@
  *   terminal   an answer that a retry cannot change (auth, refusal, too long, quota, a cancel)
  *
  * Guards for the class:
- *  - each text is handled as listed, by both daemon twins' classifier;
+ *  - each text is handled as listed, by the daemon's classifier;
  *  - every pattern of the three lists is exercised by a text here: a new pattern (a new error text
  *    someone met) fails until its text is added with how it is handled;
- *  - the two twins carry the same patterns;
  *  - every wait pattern is also a retryable one (an older daemon retries what the wait owns).
  */
 import { describe, it, expect } from 'vitest'
@@ -125,21 +124,20 @@ const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
 /** The regex literals of `const|var NAME = [ ... ]` in a source file, as the regex reads them. */
-function patternList(src: string, name: string, template: boolean): RegExp[] {
+function patternList(src: string, name: string): RegExp[] {
   const at = src.search(new RegExp(`(?:const|var) ${name}(?::[^=]+)? = \\[`))
   expect(at, name).toBeGreaterThan(-1)
   const body = src.slice(src.indexOf('[', at) + 1, src.indexOf('\n]', at))
   return body.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/') && !l.startsWith('//'))
     .map((l) => {
       const lit = l.replace(/,$/, '')
-      const m = /^\/(.*)\/([a-z]*)$/.exec(template ? lit.replace(/\\\\/g, '\\') : lit)
+      const m = /^\/(.*)\/([a-z]*)$/.exec(lit)
       expect(m, `not one regex literal per line: ${l}`).toBeTruthy()
       return new RegExp(m![1], m![2])
     })
 }
 
 const core = read('src/providers/daemon-core.ts')
-const twin = read('src/providers/daemon-source.ts')
 const LISTS = ['RETRYABLE_TURN_ERROR_PATTERNS', 'TERMINAL_TURN_ERROR_PATTERNS', 'AUTH_TURN_ERROR_PATTERNS'] as const
 
 describe('every known turn error text is handled as listed', () => {
@@ -162,7 +160,7 @@ describe('every known turn error text is handled as listed', () => {
 
 describe('every pattern is exercised by a known text', () => {
   it.each(LISTS)('%s (daemon-core.ts)', (name) => {
-    const unused = patternList(core, name, false).filter((re) => !CORPUS.some(([t]) => re.test(t)))
+    const unused = patternList(core, name).filter((re) => !CORPUS.some(([t]) => re.test(t)))
     expect(unused.map(String), 'add the error text this pattern exists for to CORPUS, with how it is handled').toEqual([])
   })
 
@@ -180,11 +178,5 @@ describe('every pattern is exercised by a known text', () => {
   it('every wait text is retryable to the daemon (an older server or daemon still retries it)', () => {
     for (const [text, h] of CORPUS) if (h === 'wait' || h === 'drop') expect(classifyTurnError(text), text).toBe('retryable')
     for (const [text, h] of CORPUS) if (h !== 'wait' && h !== 'drop' && matchesEndpointUnreachable(text)) expect(classifyTurnError(text), text).toBe('terminal')
-  })
-})
-
-describe('the two daemon twins carry the same patterns', () => {
-  it.each(LISTS)('%s', (name) => {
-    expect(patternList(twin, name, true).map(String)).toEqual(patternList(core, name, false).map(String))
   })
 })

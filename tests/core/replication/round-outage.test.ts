@@ -73,8 +73,6 @@ describe('targetUnreachable', () => {
       const src = fs.readFileSync(path.join(ROOT, s.producer), 'utf8')
       expect(src, `${s.producer} no longer says ${s.literal}: update UNREACHABLE_SIGNATURES`).toContain(s.literal)
     }
-    // The daemon's JS twin says the same as the bun binary.
-    expect(fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8')).toContain('no server on this host follows that Walnut')
   })
 })
 

@@ -42,10 +42,7 @@
  * upgrade the way sessions do. One spec per Walnut (keyed by the leader's data
  * dir, `home`), so a test server never touches the real one's jobs.
  *
- * How the daemon twins get it: daemon-standalone.ts imports
- * createPluginJobSupervisor; daemon-source.ts inlines its `toString()` through
- * `__CREATE_PLUGIN_JOBS__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createPluginJobSupervisor). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 import type { GatewayCaller } from './follower-gateway-core.js'
 

@@ -1,8 +1,8 @@
 /**
  * Daemon policy descriptors — pure data, ZERO daemon code.
  *
- * These policies are enforced inside the session daemon (daemon-standalone.ts /
- * daemon-source.ts twins). They appear in the unified hook registry as
+ * These policies are enforced inside the session daemon (daemon-standalone.ts).
+ * They appear in the unified hook registry as
  * runtime:'daemon' entries so every intervention Walnut can perform is visible
  * in one place — the dispatcher never executes them.
  *

@@ -35,10 +35,7 @@
  * turn of that session runs, and a comparison of named files with the
  * session's newest snapshot (the rewind guard's first fact, turn-guard-core.ts).
  *
- * How each twin gets it: daemon-standalone.ts imports createTurnSnapshots;
- * daemon-source.ts inlines `createTurnSnapshots.toString()` through
- * `__CREATE_TURN_SNAPSHOTS__`. So the factory body references NOTHING at
- * module scope: every helper lives inside it and every capability comes from
+ * Imported by daemon-standalone.ts (createTurnSnapshots). The factory body references NOTHING at module scope: every helper lives inside it and every capability comes from
  * `deps`.
  */
 

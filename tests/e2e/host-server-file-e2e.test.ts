@@ -15,7 +15,7 @@
  *     |   that runs each command here and cuts any transfer over 8 MB as a proxy
  *     |   does, so the 50 MB file goes in 256 KB chunks
  *     v
- *   a real session daemon (the source twin, a process), linked as the Mac links
+ *   a real session daemon (the standalone under bun, a process), linked as the Mac links
  *     | server.configure: `<root>/app/<id>/walnut host-server`, then the replica
  *     |   `<root>/app/<id>/walnut web --replica`
  *     v
@@ -41,8 +41,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { WebSocket } from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager } from '../../src/core/host-server/manager.js'
 import { createHostFileSource, runningOrigin, versionHere, type BuildOrigin } from '../../src/core/host-server/host-file.js'
@@ -54,6 +53,7 @@ import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
+const BUN = testBun()
 const HOME = '/fixture/mac-home'
 const WALNUT = 'wmachostfile1'
 
@@ -153,7 +153,7 @@ function host(): HostServerHost {
 
 const cacheDir = process.env.WALNUT_HOST_FILE_E2E_CACHE || path.join(os.tmpdir(), 'walnut-host-file-e2e-cache')
 
-describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file built, installed and started by the manager', () => {
+describe.skipIf('why' in bunPick || !BUN)('a host server from nothing: the compiled file built, installed and started by the manager', () => {
   beforeAll(async () => {
     base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hsfe-')))
     hostHome = path.join(base, 'host-home')
@@ -192,9 +192,7 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
       WALNUT_SPAWN_JOURNAL: path.join(daemonDir, 'spawn-journal.jsonl'),
     }
     delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-    const script = path.join(daemonDir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
     if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
     else daemon.stderr?.resume()
     await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')), 60_000, 'the daemon')

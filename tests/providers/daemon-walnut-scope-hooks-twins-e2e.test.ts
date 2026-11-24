@@ -1,5 +1,5 @@
 /**
- * One daemon, two Walnuts: hooks and the commands that name a Walnut, on the real twins.
+ * One daemon, two Walnuts: hooks and the commands that name a Walnut, on the real daemon (bun).
  *
  * 2026-11-03: a host shared by two people's Walnuts held ONE hook rule set; whichever server
  * pushed last decided what every session on the host was denied, the other Walnut's included.
@@ -19,22 +19,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 const HOME_A = '/walnuts/alice/.open-walnut'
 const HOME_B = '/walnuts/bob/.open-walnut'
@@ -68,7 +60,7 @@ const sockets: WebSocket[] = []
 const spawnedPids = new Set<number>()
 let rpcId = 1
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   const daemonDir = path.join(root, 'daemon')
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -84,8 +76,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', '.open-walnut', 'local', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc.stdout?.on('data', (chunk) => {
@@ -152,8 +143,6 @@ async function settle(): Promise<void> { await new Promise((r) => setTimeout(r, 
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-scope-hooks-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -177,10 +166,10 @@ function freshRoot(): void {
   fs.mkdirSync(path.join(root, 'home'), { recursive: true })
 }
 
-describe.each(TWINS)('one daemon, two Walnuts: hooks ($name)', (twin) => {
+describe.skipIf(!BUN)('one daemon, two Walnuts: hooks (standalone daemon, bun)', () => {
   it('each Walnut\'s rules apply to its own sessions only, and survive a restart in their own file', async () => {
     freshRoot()
-    const d = await boot(twin)
+    const d = await boot()
     const a = await client(d)
     const b = await client(d)
     expect(await rpc(a, { cmd: 'hooks.configure', home: HOME_A, config: DENY_DURABLE })).toMatchObject({ ok: true, changed: true })
@@ -202,7 +191,7 @@ describe.each(TWINS)('one daemon, two Walnuts: hooks ($name)', (twin) => {
     await new Promise<void>((resolve) => d.proc.once('exit', () => resolve()))
     for (const pid of spawnedPids) { try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ } }
     spawnedPids.clear()
-    const d2 = await boot(twin)
+    const d2 = await boot()
     const c = await client(d2)
     const outA2 = await startSession(c, 3, HOME_A)
     const outB2 = await startSession(c, 4, HOME_B)
@@ -213,7 +202,7 @@ describe.each(TWINS)('one daemon, two Walnuts: hooks ($name)', (twin) => {
 
   it('a push with no home is the unnamed copy: it covers every session whose Walnut pushed none, as before', async () => {
     freshRoot()
-    const d = await boot(twin)
+    const d = await boot()
     const old = await client(d)
     expect(await rpc(old, { cmd: 'hooks.configure', config: DENY_DURABLE })).toMatchObject({ ok: true })
     expect(JSON.parse(fs.readFileSync(path.join(d.dir, 'hooks.json'), 'utf8'))).toMatchObject({ hash: 'deny-durable', scoped: 1 })
@@ -236,7 +225,7 @@ describe.each(TWINS)('one daemon, two Walnuts: hooks ($name)', (twin) => {
     freshRoot()
     fs.mkdirSync(path.join(root, 'daemon'), { recursive: true })
     fs.writeFileSync(path.join(root, 'daemon', 'hooks.json'), JSON.stringify(DENY_DURABLE))
-    const d = await boot(twin)
+    const d = await boot()
     const b = await client(d)
     const outB = await startSession(b, 8, HOME_B)
     expect(await waitFor(() => denied(outB))).toBe(true)
@@ -249,10 +238,10 @@ describe.each(TWINS)('one daemon, two Walnuts: hooks ($name)', (twin) => {
   }, 180_000)
 })
 
-describe.each(TWINS)('one daemon, two Walnuts: a command naming another Walnut ($name)', (twin) => {
+describe.skipIf(!BUN)('one daemon, two Walnuts: a command naming another Walnut (standalone daemon, bun)', () => {
   it('is refused on a socket bound to another one; an unbound socket may name any', async () => {
     freshRoot()
-    const d = await boot(twin)
+    const d = await boot()
     const a = await client(d)
     expect(await rpc(a, { cmd: 'leader.configure', home: HOME_A, walnutId: 'walnuta' })).toMatchObject({ ok: true })
     const foreign = [

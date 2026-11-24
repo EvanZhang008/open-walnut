@@ -1,8 +1,7 @@
 /**
- * The daemon twins' journal boot migration (createJournalMigration in
- * src/providers/offline-journal-core.ts, which both twins run: daemon-source.ts inlines it
- * by toString), the state.json read rule, and the ONE journal root each twin computes
- * (evaluated from both twins' own text, so the two rules cannot drift). Temp dirs pose as
+ * The daemon's journal boot migration (createJournalMigration in
+ * src/providers/offline-journal-core.ts), the state.json read rule, and the ONE journal
+ * root the daemon computes (evaluated from its own text). Temp dirs pose as
  * the home, the prod dir and the daemon dirs; faults are injected through deps.fs.
  */
 import { describe, it, expect, afterEach } from 'vitest'
@@ -45,7 +44,7 @@ function legacyDir(records: Array<Record<string, unknown>>, rows?: Record<string
   return { dir, file }
 }
 
-/** One daemon boot over `dir`: a new store and a new migration (as each twin builds them). */
+/** One daemon boot over `dir`: a new store and a new migration (as the daemon builds them). */
 function boot(dir: string, legacyDirs: string[], clock: Clock, over: Parameters<typeof journalStore>[2] = {}) {
   const logs: Array<{ level: string; msg: string; data?: Record<string, unknown> }> = []
   const journal = journalStore(dir, clock, { log: (level, msg, data) => { logs.push({ level, msg, data }) }, ...over })
@@ -460,32 +459,30 @@ describe('the offline host adopts a journal another process wrote after it was b
   })
 })
 
-const twinText = (file: string) => standaloneAsTwin(file, fs.readFileSync(path.join(ROOT, 'src/providers', file), 'utf8'))
-const ruleBlock = (file: string, from: RegExp, to: RegExp) => {
-  const text = twinText(file)
+/** The daemon's text as plain JS (types stripped), so a block of it can be run. */
+const DAEMON = standaloneAsTwin('daemon-standalone.ts', fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8'))
+const ruleBlock = (from: RegExp, to: RegExp) => {
+  const text = DAEMON
   const start = text.search(from)
   const end = text.slice(start).search(to)
   expect(start).toBeGreaterThan(0)
   expect(end).toBeGreaterThan(0)
   return text.slice(start, start + end)
 }
-const RULE = {
-  standalone: ruleBlock('daemon-standalone.ts', /const JOURNAL_PROD_STATE_DIR =/, /\/\*\* Whether daemon\.pid names this process/),
-  source: ruleBlock('daemon-source.ts', /var JOURNAL_PROD_STATE_DIR =/, /\/\/ Whether daemon\.pid names this process/),
-}
+const RULE = ruleBlock(/const JOURNAL_PROD_STATE_DIR =/, /\/\*\* Whether daemon\.pid names this process/)
 interface Rule { JOURNAL_ROOT: string; OFFLINE_HOST_DIR: string; LEADER_BOOK_DIR: string; LEGACY_JOURNAL_DIRS: string[]; LEGACY_LEADER_DIRS: string[] }
 interface RuleEnv { daemonDir: string; service: boolean; prod: boolean; stateDir?: string; knob?: string; home?: string; prodDir?: string; set?: string }
 const PROD = '/tmp/open-walnut'
-/** A twin's rule block run with this mode (no fs access: the block only joins paths). */
+/** The daemon's rule block run with this mode (no fs access: the block only joins paths). */
 const runRule = (text: string, env: RuleEnv): Rule => new Function(
   'path', 'HOME_DIR', 'DAEMON_DIR', 'DAEMON_STATE_DIR', 'SERVICE_MODE', 'IS_PROD_DAEMON_DIR', 'SET_ID', 'KEEPS_SESSIONS', 'PROD_DAEMON_DIR', 'FALLBACK_DAEMON_DIR', 'process',
   `${text}\nreturn { JOURNAL_ROOT, OFFLINE_HOST_DIR, LEADER_BOOK_DIR, LEGACY_JOURNAL_DIRS, LEGACY_LEADER_DIRS }`,
-  // The twins' own rule for these two (SET_ID: a service set's runtime, service-set.ts; KEEPS_SESSIONS: the prod dir or a set).
+  // The daemon's own rule for these two (SET_ID: a service set's runtime, service-set.ts; KEEPS_SESSIONS: the prod dir or a set).
 )(path, env.home ?? '/home/marina', env.daemonDir, env.stateDir, env.service, env.prod, env.set ?? '', env.prod || !!env.set, env.prodDir ?? PROD,
   path.join(env.home ?? '/home/marina', '.cache', 'open-walnut'),
   { platform: 'linux', env: env.knob ? { WALNUT_JOURNAL_DIR: env.knob } : {} }) as Rule
 
-describe('ONE journal root per host in every mode, the same in both twins (evaluated from their own text)', () => {
+describe('ONE journal root per host in every mode (evaluated from the daemon\'s own text)', () => {
   const MINE = '/home/marina/.open-walnut/tmp'
   const STATE = '/home/marina/.local/share/open-walnut/daemon'
   const FALLBACK = '/home/marina/.cache/open-walnut'
@@ -509,8 +506,7 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
     { name: 'a service set\'s daemon', env: { daemonDir: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/rt', stateDir: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/daemon', service: true, prod: false, set: '0123456789abcdef', knob: '/tmp/acme-j' }, root: '/home/marina/.open-walnut-host/walnuts/0123456789abcdef/daemon', legacy: ['/home/marina/.open-walnut-host/walnuts/0123456789abcdef/rt'] },
   ]
   it.each(cases)('$name', ({ env, root, legacy }) => {
-    const a = runRule(RULE.standalone, env)
-    expect(runRule(RULE.source, env)).toEqual(a)
+    const a = runRule(RULE, env)
     expect(a.JOURNAL_ROOT).toBe(root)
     expect(a.OFFLINE_HOST_DIR).toBe(path.join(root, 'offline-host'))
     expect(a.LEADER_BOOK_DIR).toBe(path.join(root, 'leader'))
@@ -522,8 +518,8 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
     const dirs = ['/tmp/acme-run', '/home/marina/acme-run', '/tmp/open-walnut-acme', '/tmp/open-walnut/acme', '/var/folders/x/T/marina-runtime']
     let checked = 0
     for (const daemonDir of dirs) for (const service of [false, true]) for (const stateDir of [undefined, STATE])
-      for (const knob of [undefined, '/tmp/acme-j']) for (const text of [RULE.standalone, RULE.source]) {
-        const r = runRule(text, { daemonDir, service, prod: false, stateDir, knob })
+      for (const knob of [undefined, '/tmp/acme-j']) {
+        const r = runRule(RULE, { daemonDir, service, prod: false, stateDir, knob })
         const all = [r.JOURNAL_ROOT, r.OFFLINE_HOST_DIR, r.LEADER_BOOK_DIR, ...r.LEGACY_JOURNAL_DIRS, ...r.LEGACY_LEADER_DIRS]
         for (const d of all) {
           // Every dir is the daemon's own dir or the knob's, never the prod dir's own files.
@@ -534,118 +530,114 @@ describe('ONE journal root per host in every mode, the same in both twins (evalu
         expect(r.JOURNAL_ROOT).toBe(knob ?? daemonDir)
         checked++
       }
-    expect(checked).toBe(80)
+    expect(checked).toBe(40)
   })
 
   it('the home fallback daemon never lists /tmp/open-walnut (another user\'s or a symlink when the server picks the fallback)', () => {
     let checked = 0
     for (const home of ['/home/marina', '/Users/acme', '/var/lib/acme-home']) for (const service of [false, true])
-      for (const stateDir of [undefined, STATE]) for (const knob of [undefined, '/tmp/acme-j']) for (const text of [RULE.standalone, RULE.source]) {
+      for (const stateDir of [undefined, STATE]) for (const knob of [undefined, '/tmp/acme-j']) {
         const fallback = path.join(home, '.cache', 'open-walnut')
-        const r = runRule(text, { daemonDir: fallback, service, prod: true, stateDir, knob, home })
+        const r = runRule(RULE, { daemonDir: fallback, service, prod: true, stateDir, knob, home })
         for (const d of [...r.LEGACY_JOURNAL_DIRS, ...r.LEGACY_LEADER_DIRS]) {
           expect(d === PROD || d.startsWith(PROD + '/')).toBe(false)
           expect(d.startsWith(fallback + '/')).toBe(true)
         }
         expect(r.LEGACY_JOURNAL_DIRS).toEqual([path.join(fallback, 'offline-host')])
         // The prod dir's daemon of that HOME reads that HOME's fallback, never another HOME's.
-        const onProd = runRule(text, { daemonDir: PROD, service, prod: true, stateDir, knob, home })
+        const onProd = runRule(RULE, { daemonDir: PROD, service, prod: true, stateDir, knob, home })
         expect(onProd.LEGACY_JOURNAL_DIRS).toEqual([path.join(PROD, 'offline-host'), path.join(fallback, 'offline-host')])
         expect(onProd.LEGACY_LEADER_DIRS).toEqual([path.join(PROD, 'leader'), path.join(fallback, 'leader')])
         checked++
       }
-    expect(checked).toBe(48)
+    expect(checked).toBe(24)
   })
 
-  it('neither rule reads the service state dir but for a service set: the mode never moves the default set\'s journal', () => {
-    for (const text of [RULE.standalone, RULE.source]) {
-      expect(text).not.toMatch(/STATE_CANDIDATES|SERVICE_STATE_DIR/)
-      // A service set's journal is in its own install root (its state dir): read only behind SET_ID.
-      expect(text.replace(/\(SET_ID && DAEMON_STATE_DIR\)/g, '')).not.toMatch(/DAEMON_STATE_DIR/)
-    }
+  it('the rule never reads the service state dir but for a service set: the mode never moves the default set\'s journal', () => {
+    expect(RULE).not.toMatch(/STATE_CANDIDATES|SERVICE_STATE_DIR/)
+    // A service set's journal is in its own install root (its state dir): read only behind SET_ID.
+    expect(RULE.replace(/\(SET_ID && DAEMON_STATE_DIR\)/g, '')).not.toMatch(/DAEMON_STATE_DIR/)
   })
 
   /** A temp host: HOME, the prod dir (both modes' runtime dir), and a service state dir of its own. */
-  function host(text: string) {
+  function host() {
     const home = journalTmpDir('journal-home-')
     const prodDir = journalTmpDir('journal-prod-')
     const stateDir = path.join(home, 'acme-state')
     return {
       home, prodDir,
-      service: runRule(text, { daemonDir: prodDir, stateDir, service: true, prod: true, home, prodDir }),
-      plain: runRule(text, { daemonDir: prodDir, service: false, prod: true, home, prodDir }),
+      service: runRule(RULE, { daemonDir: prodDir, stateDir, service: true, prod: true, home, prodDir }),
+      plain: runRule(RULE, { daemonDir: prodDir, service: false, prod: true, home, prodDir }),
     }
   }
 
-  for (const twin of ['standalone', 'source'] as const) {
-    it(`${twin} twin: service-mode and plain-mode daemons on the same HOME write and drain the same journal file`, () => {
-      const h = host(RULE[twin])
-      const clock = { now: T0 }
-      expect(h.service.OFFLINE_HOST_DIR).toBe(path.join(h.home, '.open-walnut', 'tmp', 'offline-host'))
-      expect(h.plain.OFFLINE_HOST_DIR).toBe(h.service.OFFLINE_HOST_DIR)
-      expect(h.plain.LEADER_BOOK_DIR).toBe(h.service.LEADER_BOOK_DIR)
-      const svc = journalStore(h.service.OFFLINE_HOST_DIR, clock)
-      const plain = journalStore(h.plain.OFFLINE_HOST_DIR, clock)
-      expect(svc.append(JHOME, settings('from-the-service'))).toMatchObject({ ok: true, seq: 1 })
-      expect(plain.append(JHOME, settings('from-the-plain-daemon'))).toMatchObject({ ok: true, seq: 2 })
-      expect(svc.append(JHOME, settings('service-again'))).toMatchObject({ ok: true, seq: 3 })
-      expect(fs.readdirSync(h.service.OFFLINE_HOST_DIR).filter((n) => n.endsWith('.ndjson'))).toEqual([`journal-${keyOf(JHOME)}.ndjson`])
-      expect(drainAll(plain).map((r) => r.effort)).toEqual(['from-the-service', 'from-the-plain-daemon', 'service-again'])
-      svc.refresh(JHOME)
-      expect(svc.records(JHOME)).toEqual([])
-    })
+  it('service-mode and plain-mode daemons on the same HOME write and drain the same journal file', () => {
+    const h = host()
+    const clock = { now: T0 }
+    expect(h.service.OFFLINE_HOST_DIR).toBe(path.join(h.home, '.open-walnut', 'tmp', 'offline-host'))
+    expect(h.plain.OFFLINE_HOST_DIR).toBe(h.service.OFFLINE_HOST_DIR)
+    expect(h.plain.LEADER_BOOK_DIR).toBe(h.service.LEADER_BOOK_DIR)
+    const svc = journalStore(h.service.OFFLINE_HOST_DIR, clock)
+    const plain = journalStore(h.plain.OFFLINE_HOST_DIR, clock)
+    expect(svc.append(JHOME, settings('from-the-service'))).toMatchObject({ ok: true, seq: 1 })
+    expect(plain.append(JHOME, settings('from-the-plain-daemon'))).toMatchObject({ ok: true, seq: 2 })
+    expect(svc.append(JHOME, settings('service-again'))).toMatchObject({ ok: true, seq: 3 })
+    expect(fs.readdirSync(h.service.OFFLINE_HOST_DIR).filter((n) => n.endsWith('.ndjson'))).toEqual([`journal-${keyOf(JHOME)}.ndjson`])
+    expect(drainAll(plain).map((r) => r.effort)).toEqual(['from-the-service', 'from-the-plain-daemon', 'service-again'])
+    svc.refresh(JHOME)
+    expect(svc.records(JHOME)).toEqual([])
+  })
 
-    it(`${twin} twin: the prod dir's daemon moves the v1 records a home fallback daemon left, with the prod dir's, oldest first`, () => {
-      const h = host(RULE[twin])
-      const clock = { now: T0 }
-      // /tmp was full: a 1fe1fd194 daemon ran from ~/.cache/open-walnut and journaled there.
-      const fallbackV1 = path.join(h.home, '.cache', 'open-walnut', 'offline-host')
-      fs.mkdirSync(fallbackV1, { recursive: true, mode: 0o700 })
-      fs.writeFileSync(path.join(fallbackV1, `slice-${keyOf(JHOME)}.json`), JSON.stringify(jslice({ asOf: T0 })))
-      fs.writeFileSync(path.join(fallbackV1, `journal-${keyOf(JHOME)}.json`), v1Journal([settings('while-tmp-was-full')]))
-      // After a reboot the server picked /tmp/open-walnut again, and a v1 daemon journaled there later.
-      const prodV1 = path.join(h.prodDir, 'offline-host')
-      fs.mkdirSync(prodV1, { recursive: true })
-      fs.writeFileSync(path.join(prodV1, `journal-${keyOf(JHOME)}.json`), JSON.stringify({ nextSeq: 2, records: [{ seq: 1, at: T0 + 60_000, ...settings('after-reboot') }], rows: {}, settledCopies: [] }))
-      expect(h.plain.LEGACY_JOURNAL_DIRS).toEqual([prodV1, fallbackV1])
-      const journal = journalStore(h.plain.OFFLINE_HOST_DIR, clock)
-      createJournalMigration({ path, journal, dir: h.plain.OFFLINE_HOST_DIR, legacyDirs: h.plain.LEGACY_JOURNAL_DIRS, log: () => {} }).boot()
-      expect(drainAll(journal).map((r) => r.effort)).toEqual(['while-tmp-was-full', 'after-reboot'])
-      for (const d of [fallbackV1, prodV1]) expect(fs.readdirSync(d).filter((n) => n.endsWith('.migrated'))).toHaveLength(1)
-    })
+  it("the prod dir's daemon moves the v1 records a home fallback daemon left, with the prod dir's, oldest first", () => {
+    const h = host()
+    const clock = { now: T0 }
+    // /tmp was full: a 1fe1fd194 daemon ran from ~/.cache/open-walnut and journaled there.
+    const fallbackV1 = path.join(h.home, '.cache', 'open-walnut', 'offline-host')
+    fs.mkdirSync(fallbackV1, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(fallbackV1, `slice-${keyOf(JHOME)}.json`), JSON.stringify(jslice({ asOf: T0 })))
+    fs.writeFileSync(path.join(fallbackV1, `journal-${keyOf(JHOME)}.json`), v1Journal([settings('while-tmp-was-full')]))
+    // After a reboot the server picked /tmp/open-walnut again, and a v1 daemon journaled there later.
+    const prodV1 = path.join(h.prodDir, 'offline-host')
+    fs.mkdirSync(prodV1, { recursive: true })
+    fs.writeFileSync(path.join(prodV1, `journal-${keyOf(JHOME)}.json`), JSON.stringify({ nextSeq: 2, records: [{ seq: 1, at: T0 + 60_000, ...settings('after-reboot') }], rows: {}, settledCopies: [] }))
+    expect(h.plain.LEGACY_JOURNAL_DIRS).toEqual([prodV1, fallbackV1])
+    const journal = journalStore(h.plain.OFFLINE_HOST_DIR, clock)
+    createJournalMigration({ path, journal, dir: h.plain.OFFLINE_HOST_DIR, legacyDirs: h.plain.LEGACY_JOURNAL_DIRS, log: () => {} }).boot()
+    expect(drainAll(journal).map((r) => r.effort)).toEqual(['while-tmp-was-full', 'after-reboot'])
+    for (const d of [fallbackV1, prodV1]) expect(fs.readdirSync(d).filter((n) => n.endsWith('.migrated'))).toHaveLength(1)
+  })
 
-    for (const order of [['service', 'plain'], ['plain', 'service']] as const) {
-      it(`${twin} twin: a ${order[0]} daemon followed by a ${order[1]} daemon loses and reorders nothing (v1 records first)`, () => {
-        const h = host(RULE[twin])
-        const clock = { now: T0 }
-        // What a 1fe1fd194 daemon left in the prod dir, the runtime dir of both modes.
-        const v1 = path.join(h.prodDir, 'offline-host')
-        fs.mkdirSync(v1, { recursive: true })
-        fs.writeFileSync(path.join(v1, `slice-${keyOf(JHOME)}.json`), JSON.stringify(jslice({ asOf: T0 })))
-        fs.writeFileSync(path.join(v1, `journal-${keyOf(JHOME)}.json`), v1Journal([settings('v1-a'), settings('v1-b')]))
-        const bootAs = (mode: 'service' | 'plain') => {
-          const r = h[mode]
-          const journal = journalStore(r.OFFLINE_HOST_DIR, clock)
-          createJournalMigration({ path, journal, dir: r.OFFLINE_HOST_DIR, legacyDirs: r.LEGACY_JOURNAL_DIRS, log: () => {} }).boot()
-          return journal
-        }
-        const first = bootAs(order[0])
-        for (const e of ['first-1', 'first-2']) expect(first.append(JHOME, settings(e)).ok).toBe(true)
-        first.close()
-        const second = bootAs(order[1])
-        expect(second.append(JHOME, settings('second-1')).ok).toBe(true)
-        expect(drainAll(second).map((r) => r.effort)).toEqual(['v1-a', 'v1-b', 'first-1', 'first-2', 'second-1'])
-        // The first mode boots again: nothing comes back.
-        expect(bootAs(order[0]).records(JHOME)).toEqual([])
-      })
-    }
+  for (const order of [['service', 'plain'], ['plain', 'service']] as const) {
+    it(`a ${order[0]} daemon followed by a ${order[1]} daemon loses and reorders nothing (v1 records first)`, () => {
+      const h = host()
+      const clock = { now: T0 }
+      // What a 1fe1fd194 daemon left in the prod dir, the runtime dir of both modes.
+      const v1 = path.join(h.prodDir, 'offline-host')
+      fs.mkdirSync(v1, { recursive: true })
+      fs.writeFileSync(path.join(v1, `slice-${keyOf(JHOME)}.json`), JSON.stringify(jslice({ asOf: T0 })))
+      fs.writeFileSync(path.join(v1, `journal-${keyOf(JHOME)}.json`), v1Journal([settings('v1-a'), settings('v1-b')]))
+      const bootAs = (mode: 'service' | 'plain') => {
+        const r = h[mode]
+        const journal = journalStore(r.OFFLINE_HOST_DIR, clock)
+        createJournalMigration({ path, journal, dir: r.OFFLINE_HOST_DIR, legacyDirs: r.LEGACY_JOURNAL_DIRS, log: () => {} }).boot()
+        return journal
+      }
+      const first = bootAs(order[0])
+      for (const e of ['first-1', 'first-2']) expect(first.append(JHOME, settings(e)).ok).toBe(true)
+      first.close()
+      const second = bootAs(order[1])
+      expect(second.append(JHOME, settings('second-1')).ok).toBe(true)
+      expect(drainAll(second).map((r) => r.effort)).toEqual(['v1-a', 'v1-b', 'first-1', 'first-2', 'second-1'])
+      // The first mode boots again: nothing comes back.
+      expect(bootAs(order[0]).records(JHOME)).toEqual([])
+    })
   }
 })
 
-describe('both twins wire the migration the same way', () => {
+describe('the daemon wires the migration', () => {
   it('build it from that rule, run it after daemon.pid names them, and serve the gateway only after it', () => {
-    // One host journal for both twins (host-journal-core.ts): its store, the offline host on it,
-    // the migration and the minute sweep. The twins hand it their dirs and their ties.
+    // One host journal (host-journal-core.ts): its store, the offline host on it,
+    // the migration and the minute sweep. The daemon hands it its dirs and its ties.
     const core = fs.readFileSync(path.join(ROOT, 'src/providers/host-journal-core.ts'), 'utf8')
     expect(core).toMatch(/legacyDirs: deps\.legacyDirs,/)
     expect(core).toMatch(/importLegacyLeaders: \(\) => deps\.importLegacyLeaders\(\)/)
@@ -664,33 +656,31 @@ describe('both twins wire the migration the same way', () => {
     // Nothing at build time copies, imports or sweeps (the binary also runs as the walnut CLI).
     const body = core.slice(core.indexOf('export function createHostJournal('))
     expect(body).not.toMatch(/^  (const|let) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy|boot|sweep)\(/m)
-    for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
-      const text = twinText(file)
-      expect(text, file).toMatch(/legacyDirs: LEGACY_JOURNAL_DIRS,/)
-      expect(text, file).toMatch(/legacyDirs: LEGACY_LEADER_DIRS,/)
-      expect(text, file).toMatch(/importLegacyLeaders: (\(\) => |function \(\) \{ )leaderBook\.importLegacy\(\)/)
-      expect(text, file).toMatch(/rearm: (\(\) => |function \(\) \{ )triggerHoldsChanged\(\)/)
-      expect(text, file).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
-      expect(text, file).toMatch(/createMigration: (createJournalMigration|\(__CREATE_JOURNAL_MIGRATION__\)),/)
-      // Nothing moves v2 records between dirs: no state dir candidates, no conflict view.
-      expect(text, file).not.toMatch(/stateDirs:|JOURNAL_STATE_CANDIDATES|conflictOf\(|journalMigration\.afterAck/)
-      // The twins never sweep or migrate on their own: only through the host journal.
-      expect(text, file).not.toMatch(/offlineHost\.sweep\(|setInterval\(offlineSweepTick/)
-      expect(text.split('hostJournal.migrate()').length - 1, file).toBe(1)
-      // Nothing at module load copies, imports or sweeps (the binary also runs as the walnut CLI).
-      expect(text, file).not.toMatch(/^(const|var) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy)\(/m)
-      expect(text, file).not.toMatch(/^hostJournal\.store\.(migrateSlices|sweepBlobs)\(/m)
-      // daemon.pid is written directly (the JS twin) or through the door module (the bun twin,
-      // daemon-door.ts publishDoorFiles, which writes it before daemon.port).
-      const pid = Math.max(text.indexOf('fs.writeFileSync(PID_FILE, String(process.pid))'), text.indexOf('publishDoorFiles(fs, { pidFile: PID_FILE,'))
-      const migrate = text.indexOf('hostJournal.migrate()', pid)
-      expect(pid, file).toBeGreaterThan(0)
-      expect(migrate, file).toBeGreaterThan(pid)
-      // The gateway listener of the --start path starts after the migration (no write ahead of the v1 records).
-      const gatewayStarts = [...text.matchAll(/^\s*startGatewayListener\(\)/gm)].map((m) => m.index ?? 0)
-      expect(gatewayStarts.length, file).toBeGreaterThan(0)
-      for (const at of gatewayStarts) expect(at, `${file}: the gateway starts after the migration`).toBeGreaterThan(migrate)
-    }
+    const text = DAEMON
+    expect(text).toMatch(/legacyDirs: LEGACY_JOURNAL_DIRS,/)
+    expect(text).toMatch(/legacyDirs: LEGACY_LEADER_DIRS,/)
+    expect(text).toMatch(/importLegacyLeaders: \(\) => leaderBook\.importLegacy\(\)/)
+    expect(text).toMatch(/rearm: \(\) => triggerHoldsChanged\(\)/)
+    expect(text).toMatch(/fenced: \(\) => demoQuiesce\.fenced/)
+    expect(text).toMatch(/createMigration: createJournalMigration,/)
+    // Nothing moves v2 records between dirs: no state dir candidates, no conflict view.
+    expect(text).not.toMatch(/stateDirs:|JOURNAL_STATE_CANDIDATES|conflictOf\(|journalMigration\.afterAck/)
+    // The daemon never sweeps or migrates on its own: only through the host journal.
+    expect(text).not.toMatch(/offlineHost\.sweep\(|setInterval\(offlineSweepTick/)
+    expect(text.split('hostJournal.migrate()').length - 1).toBe(1)
+    // Nothing at module load copies, imports or sweeps (the binary also runs as the walnut CLI).
+    expect(text).not.toMatch(/^(const|var) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy)\(/m)
+    expect(text).not.toMatch(/^hostJournal\.store\.(migrateSlices|sweepBlobs)\(/m)
+    // daemon.pid is written through the door module (daemon-door.ts publishDoorFiles, which
+    // writes it before daemon.port).
+    const pid = text.indexOf('publishDoorFiles(fs, { pidFile: PID_FILE,')
+    const migrate = text.indexOf('hostJournal.migrate()', pid)
+    expect(pid).toBeGreaterThan(0)
+    expect(migrate).toBeGreaterThan(pid)
+    // The gateway listener of the --start path starts after the migration (no write ahead of the v1 records).
+    const gatewayStarts = [...text.matchAll(/^\s*startGatewayListener\(\)/gm)].map((m) => m.index ?? 0)
+    expect(gatewayStarts.length).toBeGreaterThan(0)
+    for (const at of gatewayStarts) expect(at, 'the gateway starts after the migration').toBeGreaterThan(migrate)
   })
 
   it('the minute sweep runs only unfenced, and only after migrate()', async () => {
@@ -723,13 +713,6 @@ describe('both twins wire the migration the same way', () => {
     failing.sweepTick()
     await new Promise((r) => setTimeout(r, 0))
     expect(logs).toContain('offline host: the minute sweep failed')
-  })
-
-  it('the source twin inlines createJournalMigration once, and the generated text passes its build-time smoke', async () => {
-    const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const src = getDaemonSource()
-    expect(src).not.toContain('__CREATE_JOURNAL_MIGRATION__')
-    expect(src.split('function createJournalMigration(').length - 1).toBe(1)
   })
 
   it('the leader book imports a v1 record from the legacy dirs; one it cannot read is left for the next boot', () => {

@@ -322,7 +322,6 @@ import {
   isBusyRefusal,
   GATEWAY_BUSY_AGAIN_MS,
 } from '../../../src/providers/gateway-core.js';
-import { getDaemonSource } from '../../../src/providers/daemon-source.js';
 
 const BUSY = 'Walnut API error (busy): This task already runs 4 commands on other hosts, and no slot came free in time for this call; nothing ran.';
 
@@ -362,53 +361,5 @@ describe('a busy host_exec is asked again', () => {
     expect(busyRelayAgainMs('host_exec', BUSY, 10_000, 20_000, hub)).toBeNull();
     expect(busyRelayAgainMs('host_copy', BUSY, 90_000, 5_000, hub)).toBeNull();
     expect(busyRelayAgainMs('host_exec', 'Walnut API error (host_offline): x', 90_000, 5_000, hub)).toBeNull();
-  });
-
-  it('the JS twin\'s copy of a call\'s plan and its identify wait (daemon-source.ts) decides the same', () => {
-    const src = getDaemonSource();
-    const a = src.indexOf('var GATEWAY_WAIT_MAX_MS =');
-    const b = src.indexOf('\n}\n', src.indexOf('function gatewayIdentifyPlan('));
-    expect(a).toBeGreaterThan(-1);
-    expect(b).toBeGreaterThan(a);
-    const twin = new Function(`${src.slice(a, b + 3)}\nreturn { gatewayCallPlan, gatewayIdentifyPlan, GATEWAY_IDENTIFY_WAIT_MS, GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS };`)() as {
-      gatewayCallPlan: typeof gatewayCallPlan; gatewayIdentifyPlan: typeof gatewayIdentifyPlan; GATEWAY_IDENTIFY_WAIT_MS: number; GATEWAY_MIN_RELAY_MS: number; GATEWAY_WAIT_MAX_MS: number;
-    };
-    expect([twin.GATEWAY_IDENTIFY_WAIT_MS, twin.GATEWAY_MIN_RELAY_MS, twin.GATEWAY_WAIT_MAX_MS]).toEqual([GATEWAY_IDENTIFY_WAIT_MS, GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS]);
-    const waits = [undefined, 0, -3, 1, 7_999, 8_000, 12_345.7, 60_000, 10 ** 9, Number.NaN];
-    for (const w of waits) for (const hub of [1_000, 11_000, 20_000]) for (const now of [0, 5_000]) {
-      const plan = gatewayCallPlan(w, hub, now);
-      expect(twin.gatewayCallPlan(w, hub, now), JSON.stringify([w, hub, now])).toEqual(plan);
-      for (const later of [now, now + 100, now + 5_999, now + 6_000, now + 30_000]) {
-        const mine = gatewayIdentifyPlan(plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later);
-        expect(twin.gatewayIdentifyPlan(plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later), JSON.stringify([w, hub, now, later])).toEqual(mine);
-        if (mine) expect(twin.gatewayIdentifyPlan(mine.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later + 50)).toEqual(gatewayIdentifyPlan(mine.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later + 50));
-      }
-    }
-  });
-
-  it('the JS twin\'s copy (daemon-source.ts) decides the same', () => {
-    const src = getDaemonSource();
-    // From `from` to the end of the line or function that follows `through`.
-    const slice = (from: string, through: string, end: string) => {
-      const a = src.indexOf(from);
-      const b = src.indexOf(end, src.indexOf(through, a));
-      expect(a, from).toBeGreaterThan(-1);
-      expect(b, through).toBeGreaterThan(a);
-      return src.slice(a, b + end.length);
-    };
-    const minRelay = slice('var GATEWAY_MIN_RELAY_MS =', '=', ';');
-    const rule = slice('var GATEWAY_BUSY_AGAIN_MS =', 'function busyRelayAgainMs(', '\n}\n');
-    const twin = new Function(`${minRelay}\n${rule}\nreturn { busyRelayAgainMs, busyRelayMinLeftMs, GATEWAY_BUSY_AGAIN_MS };`)() as {
-      busyRelayAgainMs: typeof busyRelayAgainMs; busyRelayMinLeftMs: typeof busyRelayMinLeftMs; GATEWAY_BUSY_AGAIN_MS: number;
-    };
-    expect(twin.GATEWAY_BUSY_AGAIN_MS).toBe(GATEWAY_BUSY_AGAIN_MS);
-    const ops = ['host_exec', 'host_copy', 'host_http', 'task_send', undefined, 3];
-    const texts = [BUSY, 'Walnut API error (busy):', 'Walnut API error (host_offline): x', ' Walnut API error (busy): y', 'busy', undefined];
-    const times: Array<[number, number, number]> = [[90_000, 5_000, 20_000], [20_000, 4_000, 20_000], [100_000, 79_000, 20_000], [100_000, 79_001, 20_000], [20_000, 100, 1_500], [9_000, 100, 1_500], [0, 1, 1]];
-    for (const hub of [1, 1_500, 8_000, 20_000, 60_000]) expect(twin.busyRelayMinLeftMs(hub), String(hub)).toBe(busyRelayMinLeftMs(hub));
-    for (const op of ops) for (const text of texts) for (const [deadline, now, hub] of times) {
-      expect(twin.busyRelayAgainMs(op, text, deadline, now, hub), JSON.stringify([op, text, deadline, now, hub]))
-        .toBe(busyRelayAgainMs(op, text, deadline, now, hub));
-    }
   });
 });

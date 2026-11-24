@@ -6,9 +6,7 @@
  *
  * How each consumer gets it:
  *   - daemon-standalone.ts (bun binary) and session-io.ts import it normally.
- *   - daemon-source.ts cannot import: it inlines `createHostRuntime.toString()`
- *     through the `__CREATE_HOST_RUNTIME__` placeholder, like the fold functions.
- *     So the factory body must reference NOTHING at module scope: every helper
+ *   - the factory body must reference NOTHING at module scope: every helper
  *     lives inside it and every capability (fs, exec, env) is passed in `deps`.
  *     Constructing it must stay side-effect free (the module-level exports below
  *     build one with no deps just to read its pure methods).

@@ -1,5 +1,5 @@
 /**
- * cli-owner-v1 on the real daemon twins: one CLI per session id on a host,
+ * cli-owner-v1 on the real session daemon (daemon-standalone.ts): one CLI per session id on a host,
  * whichever daemon asks (src/providers/cli-owner-core.ts).
  *
  * Two real daemons share one HOME (one ~/.claude, one spawn journal dir, so one
@@ -25,30 +25,14 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-// The JS twin on the Node a host runs it on when this machine has one (tests/helpers/source-twin.ts).
-const SOURCE: Twin = { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] }
-const STANDALONE_TWIN: Twin | null = BUN ? { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] } : null
-/** [first daemon, second daemon]: each twin against itself, and the two against each other. */
-const PAIRS: Array<{ name: string; a: Twin; b: Twin }> = [
-  // Named by their twins, so `-t 'source twin \(node\)'` (test:source-twin-node) picks the pairs with the JS twin.
-  { name: `${SOURCE.name} + ${SOURCE.name}`, a: SOURCE, b: SOURCE },
-  ...(STANDALONE_TWIN ? [
-    { name: `${STANDALONE_TWIN.name} + ${STANDALONE_TWIN.name}`, a: STANDALONE_TWIN, b: STANDALONE_TWIN },
-    { name: `${STANDALONE_TWIN.name} + ${SOURCE.name}`, a: STANDALONE_TWIN, b: SOURCE },
-  ] : []),
-]
 
 const FAKE_CLI = `
 const fs = require('fs')
@@ -84,7 +68,7 @@ const received = (): Array<{ pid: number; content: string }> => {
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 }
 
-async function boot(twin: Twin, name: string, binDirs: string[] = []): Promise<Daemon> {
+async function boot(name: string, binDirs: string[] = []): Promise<Daemon> {
   const { daemonDir, streams } = dirsFor(name)
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -98,8 +82,7 @@ async function boot(twin: Twin, name: string, binDirs: string[] = []): Promise<D
     // Shared by both daemons, as the real HOME's journal is: the owner records live beside it.
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', '.open-walnut', 'local', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc.stdout?.on('data', (chunk) => {
@@ -176,8 +159,6 @@ const send = (d: Daemon, sid: string, message: string) => rpc(d, { cmd: 'send', 
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-cli-owner-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -195,11 +176,11 @@ function newRoot(): void {
   fs.mkdirSync(path.join(root, 'home'), { recursive: true })
 }
 
-describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
+describe.skipIf(!BUN)('cli-owner-v1: two standalone daemons (bun)', () => {
   it('a second daemon never starts a live session again; messages reach the one process in order', async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    const a = await boot('a')
+    const b = await boot('b')
     const sid = 'aaaaaaaa-0000-4000-8000-00000000000a'
     const first = await start(a, sid)
     track(first)
@@ -222,8 +203,8 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it('cli-holder-v1: any daemon of the host says which process holds a session and which Walnut started it', async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    const a = await boot('a')
+    const b = await boot('b')
     const sid = 'abababab-0000-4000-8000-0000000000ab'
     // Asked before anything ran: nobody, no journal line.
     expect(await rpc(b, { cmd: 'cli.holder', sid })).toMatchObject({ ok: true, holder: null, journaledHome: null })
@@ -250,8 +231,8 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it('two daemons starting one session at once start one CLI', async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    const a = await boot('a')
+    const b = await boot('b')
     for (let round = 0; round < 3; round++) {
       const sid = `bbbbbbbb-0000-4000-8000-00000000000${round}`
       const replies = await Promise.all([start(a, sid), start(b, sid)])
@@ -265,8 +246,8 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it('a CLI that exits on its own frees the session for the other daemon', async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    const a = await boot('a')
+    const b = await boot('b')
     const sid = 'cccccccc-0000-4000-8000-00000000000c'
     const first = await start(a, sid)
     track(first)
@@ -283,14 +264,14 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it('a restarted daemon adopts its CLI and keeps the record; a CLI no record names still refuses', async () => {
     newRoot()
-    let a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    let a = await boot('a')
+    const b = await boot('b')
     const sid = 'dddddddd-0000-4000-8000-00000000000d'
     const first = await start(a, sid)
     track(first)
     await killDaemon(a) // the CLI survives its daemon
     expect(liveClis(sid)).toEqual([first.pid])
-    a = await boot(twinA, 'a')
+    a = await boot('a')
     // Adopted: a send reaches the same process.
     let sent: Record<string, unknown> = {}
     const until = Date.now() + 20_000
@@ -318,8 +299,8 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it("a test server's strict start never runs another Walnut's session, live or not", async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
-    const b = await boot(twinB, 'b')
+    const a = await boot('a')
+    const b = await boot('b')
     const sid = 'ffffffff-0000-4000-8000-00000000000f'
     const prod = { origin: { home: '/walnut/prod' } }
     const test = { origin: { home: '/walnut/test' }, strict: true }
@@ -351,7 +332,7 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
 
   it('a daemon replacing its own CLI never has two alive at once', async () => {
     newRoot()
-    const a = await boot(twinA, 'a')
+    const a = await boot('a')
     const sid = 'eeeeeeee-0000-4000-8000-00000000000e'
     const first = await start(a, sid)
     track(first)
@@ -389,7 +370,7 @@ fi
 exec /bin/ps "$@"
 `
 
-describe.each([SOURCE, ...(STANDALONE_TWIN ? [STANDALONE_TWIN] : [])])('cli-owner-v1 with a ps that never exits: $name', (twin) => {
+describe.skipIf(!BUN)('cli-owner-v1 with a ps that never exits: standalone daemon (bun)', () => {
   it('start answers within the scan deadline and the stuck ps is killed', async () => {
     newRoot()
     const bin = path.join(root, 'hung-bin')
@@ -398,7 +379,7 @@ describe.each([SOURCE, ...(STANDALONE_TWIN ? [STANDALONE_TWIN] : [])])('cli-owne
     const log = path.join(root, 'hung-ps.log')
     process.env.WALNUT_TEST_HUNG_PS_LOG = log
     let a: Daemon
-    try { a = await boot(twin, 'a', [bin]) } finally { delete process.env.WALNUT_TEST_HUNG_PS_LOG }
+    try { a = await boot('a', [bin]) } finally { delete process.env.WALNUT_TEST_HUNG_PS_LOG }
     const sid = 'abababab-0000-4000-8000-00000000000a'
     const began = Date.now()
     const reply = await start(a, sid, '', {})

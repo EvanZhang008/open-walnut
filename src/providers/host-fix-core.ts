@@ -21,12 +21,7 @@
  * thing is already there) and one fix runs at a time per daemon (`busy`).
  * `cancel()` stops the one in flight at once, for a daemon that is stopping.
  *
- * How each twin gets it: daemon-standalone.ts imports it; daemon-source.ts
- * inlines `createHostFix.toString()` through the `__CREATE_HOST_FIX__`
- * placeholder, exactly like createHostRuntime, and passes the step factories in
- * the same way (`deps.claudeInstall`, `deps.claudeDownload`, `deps.dtachBuild`,
- * each through its own placeholder). So the factory body references
- * NOTHING at module scope (the type imports below are erased), and
+ * Imported by daemon-standalone.ts. The factory body references NOTHING at module scope (the type imports below are erased), and
  * constructing it has no side effects.
  */
 

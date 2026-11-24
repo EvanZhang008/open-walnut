@@ -1,6 +1,6 @@
 /**
  * A host's latest quiet or failed check reaches the server when it comes back, on
- * BOTH real daemon twins.
+ * the real standalone daemon.
  *
  * The incident (2026-11-14): the server lost its link to a dev host for about six
  * hours. The daemon's log shows it kept checking all four triggers the whole time,
@@ -12,22 +12,18 @@
  * restart too; and a restarted daemon runs its first check within one interval
  * (the old 15 s boot delay was longer than the 10 s minimum interval).
  *
- * What's real: the daemon process (source twin with its trigger sidecar bundled
- * beside it; standalone twin under bun), its trigger and state files, restarts,
- * /bin/sh checks that stay quiet, die mid-run or outlive the daemon. What's faked:
- * the Walnut server is a bare WS client. No triggers.run, pause or resume is sent:
+ * What's real: the daemon process (the standalone, under bun), its trigger and
+ * state files, restarts, /bin/sh checks that stay quiet, die mid-run or outlive
+ * the daemon. What's faked: the Walnut server is a bare WS client. No triggers.run, pause or resume is sent:
  * every check here is the daemon's own clock. Every daemon is stopped by SIGTERM
  * to the pid it wrote into its own temp dir.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -42,11 +38,7 @@ const BACKOFF_MS = 5 * 60_000
 const IDS = ['mrpl0000-0001', 'mrpl0000-0002', 'mrpl0000-0003', 'mrpl0000-0004']
 const [, , T_DIES, T_HANGS] = IDS
 
-const bunPath = (() => {
-  const own = testBun()
-  if (own) return own
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 type Ev = Record<string, any> & { at: number }
 interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; readyAt: number }
@@ -64,8 +56,8 @@ async function waitFor<T>(pick: () => T | undefined | false, ms: number, label: 
 }
 
 /** A daemon on `dir` (a fresh one when absent; the same dir again is a restart). */
-async function spawnDaemon(twin: 'source' | 'standalone', existing?: string): Promise<Daemon> {
-  const dir = existing ?? fs.mkdtempSync(path.join(os.tmpdir(), `walnut-ckrp-${twin}-`))
+async function spawnDaemon(existing?: string): Promise<Daemon> {
+  const dir = existing ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ckrp-'))
   for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(dir, f)) } catch { /* fresh dir */ } }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -77,24 +69,10 @@ async function spawnDaemon(twin: 'source' | 'standalone', existing?: string): Pr
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID; delete env.OPEN_WALNUT_HOME
   const stdio: ['ignore', 'ignore', 'pipe' | 'ignore'] = ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore']
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    if (!existing) {
-      fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-      // The sidecar the deploy ships beside the script (scripts/build-daemon.sh).
-      buildSync({
-        entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-        bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-      })
-    }
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio, cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio, cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir, readyAt: Date.now(),
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -146,9 +124,7 @@ class FakeServer {
   }
 }
 
-const twins: Array<'source' | 'standalone'> = bunPath ? ['source', 'standalone'] : ['source']
-
-describe.each(twins)('latest trigger check replayed on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('latest trigger check replayed on the real standalone daemon', () => {
   let d: Daemon
   let s: FakeServer
   let check: string
@@ -179,7 +155,7 @@ describe.each(twins)('latest trigger check replayed on the real %s daemon', (twi
     await stopDaemon(d)
     seedErrors(T_DIES, n)
     setMode(T_DIES, 'die')
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
   }
   /** One replayed checked event per trigger, each within 2 s of the reply: not the next scheduled run. */
   async function replays(server: FakeServer, ids: string[], repliedAt: number): Promise<Map<string, Ev>> {
@@ -193,7 +169,7 @@ describe.each(twins)('latest trigger check replayed on the real %s daemon', (twi
   }
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     check = path.join(d.dir, 'check.sh')
     // Quiet unless its mode file says otherwise: `die` prints half an answer and exits
     // mid-run, `hang` is still running when the daemon is stopped (it ends by itself).
@@ -263,7 +239,7 @@ describe.each(twins)('latest trigger check replayed on the real %s daemon', (twi
       expect(kept.get(id), id).toMatchObject({ type: 'trigger.checked', id, outcome: 'quiet', reason: 'fire-false', atMs: expect.any(Number), durationMs: expect.any(Number), nextRunAtMs: expect.any(Number), consecutiveErrors: 0 })
     }
     const spawnedAt = Date.now()
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
     s = await FakeServer.connect(d.port)
     expect(await s.cmd(push())).toMatchObject({ ok: true, applied: true, count: 4 })
     const got = await replays(s, IDS, Date.now())
@@ -314,7 +290,7 @@ describe.each(twins)('latest trigger check replayed on the real %s daemon', (twi
     await s.close()
     await stopDaemon(d)
     setMode(T_HANGS, null)
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
     s = await FakeServer.connect(d.port)
     expect(await s.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME, replayChecks: true })).toMatchObject({ ok: true, held: true, count: 4 })
     const got = await replays(s, [T_HANGS], Date.now())

@@ -115,7 +115,6 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
     'src/providers/claude-code-session.ts',
     'src/providers/inline-subagent.ts',
     'src/providers/daemon-standalone.ts',
-    'src/providers/daemon-source.ts',
   ]
 
   for (const rel of SPAWN_SITES) {
@@ -166,20 +165,17 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
   })
 })
 
-describe('daemon twins agree on the mode vocabulary', () => {
-  // daemon-source.ts is an SSH-deployed plain-JS template that cannot import
-  // daemon-core.ts, so the map is duplicated on purpose. Lock the duplicate.
-  it('both twins define the same MODE_CLI mapping', () => {
+describe('the daemon agrees on the mode vocabulary', () => {
+  // daemon-core.ts keeps its own copy of the map; lock it to the registry.
+  it('daemon-core defines the same MODE_CLI mapping as the registry', () => {
     const core = read('src/providers/daemon-core.ts')
-    const template = read('src/providers/daemon-source.ts')
     for (const [id, cli] of Object.entries(SESSION_MODE_CLI_MAP)) {
       const pair = new RegExp(`${id}:\\s*'${cli}'`)
       expect(core).toMatch(pair)
-      expect(template).toMatch(pair)
     }
   })
 
-  it('both twins refuse to auto-approve on behalf of auto/dontAsk', async () => {
+  it('the daemon refuses to auto-approve on behalf of auto/dontAsk', async () => {
     const { shouldAutoRespond } = await import('../../src/providers/daemon-core.js')
     // bypass = full trust, so the daemon answers for the user.
     expect(shouldAutoRespond('bypass', 'Write')).toBe(true)

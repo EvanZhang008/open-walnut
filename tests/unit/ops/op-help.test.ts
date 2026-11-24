@@ -7,7 +7,6 @@
  * CLI faces render from here, so pin the rendering itself: pure, no socket, no
  * server.
  */
-import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
 import {
@@ -133,12 +132,6 @@ describe('formatOpHelp', () => {
     }
   })
 
-  it('the daemon source twin builds its example from the required parameters too', () => {
-    const twin = readFileSync(new URL('../../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
-    expect(twin).toContain('PARITY: op-help.ts exampleArgs')
-    expect(twin).not.toContain(`" '{...}'");`)
-  })
-
   it('distinguishes "takes no parameters" from "this server did not tell me"', () => {
     expect(formatOpHelp({ name: 'walnut_status', params: [] })).toContain('Parameters: none')
     const old = formatOpHelp({ name: 'walnut_status' })
@@ -155,19 +148,6 @@ describe('the catalog and the op detail point back to the skill', () => {
     expect(formatOpHelp({ name: 'task_list', params: [] })).toContain(SKILL_POINTER)
     expect(SKILL_POINTER).toContain('skill_read')
     expect(SKILL_POINTER).toContain('Task model')
-  })
-
-  it('the daemon source twin prints the same pointer', () => {
-    // daemon-source.ts cannot import, so the string is hand-inlined there.
-    const twin = readFileSync(
-      new URL('../../../src/providers/daemon-source.ts', import.meta.url), 'utf-8',
-    )
-    // Compare on the quote-free part: the twin escapes its quotes for the
-    // enclosing template literal, so the raw bytes differ by backslashes only.
-    const [prefix] = SKILL_POINTER.split(':')
-    expect(twin).toContain(prefix)
-    expect(twin).toContain('{"dirName":"walnut"}')
-    expect(twin).toContain('out(wnSkillPointer)')
   })
 })
 

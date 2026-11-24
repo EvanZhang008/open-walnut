@@ -1,5 +1,5 @@
 /**
- * `stop` on both real daemon twins when the CLI exits on the SIGINT at once but a child it
+ * `stop` on the real session daemon (daemon-standalone.ts under bun) when the CLI exits on the SIGINT at once but a child it
  * started is still in its process group. The CLI (the group leader) is reaped by the daemon's
  * exit handler, so its pid no longer reads as the recorded process; the group is still alive.
  * Pinned: the stop keeps waiting for the group and answers { stopped: true } once it is empty,
@@ -19,10 +19,8 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { bunRuntime } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN = bunRuntime()
@@ -65,25 +63,17 @@ setTimeout(() => process.exit(0), 30000)
 `
 
 let lib = ''
-let scriptDir = ''
 beforeAll(() => {
   lib = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsl-lib-')))
   fs.writeFileSync(path.join(lib, 'native-cli.cjs'), CLI)
   fs.writeFileSync(path.join(lib, 'lingering-child.cjs'), CHILD)
-  scriptDir = path.join(lib, 'source')
-  fs.mkdirSync(scriptDir)
-  fs.writeFileSync(path.join(scriptDir, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 })
 })
 // A fixture or daemon that outlived cleanup may still run a script from lib: then lib stays.
 let keepLib = false
 afterAll(() => { if (!keepLib && lib.includes('wsl-lib-')) fs.rmSync(lib, { recursive: true, force: true }) })
 
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
-  // No bun is a failure here, never a skip.
-  { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] },
-]
+// No bun is a failure here, never a skip.
+const command = (): [string, string[]] => [BUN, [STANDALONE, '--start']]
 
 interface Daemon { proc: ChildProcess; ws: WebSocket; base: string }
 // Registered right after the spawn, so a boot that fails at the port is still stopped.
@@ -133,7 +123,7 @@ afterEach(async () => {
   }
 })
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wsl-')))
   const home = path.join(base, 'home')
   const daemonDir = path.join(base, 'd')
@@ -146,7 +136,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(base, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(base, 'spawn-journal.jsonl'),
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const entry: Omit<Daemon, 'ws'> & { ws: WebSocket | null } = { proc, ws: null, base }
   daemons.push(entry)
@@ -189,9 +179,9 @@ function nativeStart(d: Daemon, sid: string, lead: string[]) {
   return rpc(d, { cmd: 'start', sid, cwd: lib, message: '', resume: false, mode: 'default', args: ['/bin/sh', '-c', sh, 'sh', '--session-id', sid] })
 }
 
-describe.each(TWINS)('stop with a lingering child on the $name', (twin) => {
+describe('stop with a lingering child on the standalone daemon (bun)', () => {
   it('waits for the group after the CLI exits on SIGINT, and answers stopped instead of "identity changed"', async () => {
-    const d = await boot(twin)
+    const d = await boot()
     const sid = 'cccccccc-0000-4000-8000-0000000000c1'
     const ready = path.join(d.base, 'child.pid')
     const started = await nativeStart(d, sid, [ready])

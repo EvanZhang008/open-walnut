@@ -1,6 +1,6 @@
 /**
  * A session pauses its trigger while the Mac is away, through the REAL server
- * and a REAL daemon (source twin, with its trigger sidecar), and the Mac takes
+ * and a REAL daemon (the standalone under bun, its trigger checks built in), and the Mac takes
  * the pause back (offline-triggers-v1):
  *
  *   server --direct WS--> devbox daemon --- session S (live, idle)
@@ -24,21 +24,20 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Server as HttpServer } from 'node:http'
 import { WebSocket } from 'ws'
-import { buildSync } from 'esbuild'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-offline-triggers-e2e'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { getDirectDaemonConnection, pushHostSliceToAllHosts } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
+const BUN = testBun()
 const SID = 'feedface-9999-4999-8999-999999999999'
 const HOST = 'devbox'
 
@@ -122,16 +121,11 @@ async function bootServer(): Promise<void> {
 }
 
 beforeAll(async () => {
+  if (!BUN) return
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-offtrig-e2e-'))
   const mock = path.join(dir, 'mock-cli.cjs')
   fs.writeFileSync(mock, MOCK_CLI)
   fs.writeFileSync(path.join(dir, 'check.sh'), 'echo \'{"fire":false}\'\n')
-  const script = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  buildSync({
-    entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-    bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-  })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -142,7 +136,7 @@ beforeAll(async () => {
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   daemonPort = parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10)
@@ -182,7 +176,7 @@ afterAll(async () => {
   if (dir) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-describe('a trigger paused on its host while the Mac is away', () => {
+describe.skipIf(!BUN)('a trigger paused on its host while the Mac is away', () => {
   it('with the server gone, the session lists and pauses it on the host, and the check stops', async () => {
     await stopServer()
     server = null

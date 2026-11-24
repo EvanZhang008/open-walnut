@@ -6,8 +6,7 @@
  * online is refused on the host with the same words, and one the host saved is one
  * the store takes when the Mac drains it.
  *
- * Pure, no state. daemon-standalone.ts imports createLetterCheck; daemon-source.ts
- * inlines `createLetterCheck.toString()` through `__CREATE_LETTER_CHECK__`, so the
+ * Pure, no state. daemon-standalone.ts imports createLetterCheck; the
  * body references nothing at module scope. Its caps are types.ts's and its op inputs
  * are human_inbox_send's (tests/core/human-inbox-letter-check.test.ts pins both).
  */

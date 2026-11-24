@@ -1,5 +1,5 @@
 /**
- * Both daemon twins, booted for real, say this machine's stable id in their hello
+ * The session daemon (daemon-standalone.ts), booted for real under bun, says this machine's stable id in its hello
  * (`machineId`, machine-id-core.ts): the id in `~/.local/state/open-walnut/machine-id`, made
  * once, seeded from the data dir's older id (the same rule as the server's), the same for every daemon of the account whatever
  * its dir, and never under XDG_STATE_HOME.
@@ -7,35 +7,20 @@
  * MACHINE SAFETY: HOME is a temp dir per test, every daemon dir is under it, and every daemon is
  * SIGKILLed after its test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 const procs: ChildProcess[] = []
 const sockets: WebSocket[] = []
 const cleanup: string[] = []
-
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-machine-id-twins-src-'))
-  cleanup.push(dir)
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
 
 afterEach(async () => {
   for (const s of sockets.splice(0)) { try { s.close() } catch { /* already closed */ } }
@@ -45,7 +30,7 @@ afterEach(async () => {
     p.once('exit', () => { clearTimeout(t); resolve() })
     p.kill('SIGKILL')
   })))
-  for (const d of cleanup.splice(1)) fs.rmSync(d, { recursive: true, force: true })
+  for (const d of cleanup.splice(0)) fs.rmSync(d, { recursive: true, force: true })
 })
 
 function tempHome(): string {
@@ -54,11 +39,10 @@ function tempHome(): string {
   return home
 }
 
-/** A daemon of `twin` under `home`, in its own dir there; resolves with its port. */
-function start(twin: Twin, home: string, dirName: string, env: Record<string, string> = {}): Promise<number> {
-  const [cmd, args] = twin.command()
+/** A daemon under `home`, in its own dir there; resolves with its port. */
+function start(home: string, dirName: string, env: Record<string, string> = {}): Promise<number> {
   const dir = path.join(home, dirName)
-  const p = spawn(cmd, args, {
+  const p = spawn(BUN!, [STANDALONE, '--start'], {
     env: {
       ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_LEGACY_STREAMS_DIR: '/nonexistent-walnut-legacy-streams',
       HOME: home, WALNUT_HOME_OVERRIDE: '', OPEN_WALNUT_HOME: '', WALNUT_DAEMON_DIR: dir, WALNUT_STREAMS_DIR: `${dir}-streams`, ...env,
@@ -97,16 +81,16 @@ async function hello(port: number): Promise<Record<string, unknown>> {
 
 const idFile = (home: string) => path.join(home, '.local', 'state', 'open-walnut', 'machine-id')
 
-describe.each(TWINS)('machine id in hello: $name', (twin) => {
+describe.skipIf(!BUN)('machine id in hello: standalone daemon (bun)', () => {
   it('is the id kept under the account\'s home, the same for a second daemon in another dir, never under XDG_STATE_HOME', async () => {
     const home = tempHome()
-    const first = await hello(await start(twin, home, 'a', { XDG_STATE_HOME: path.join(home, 'xdg') }))
+    const first = await hello(await start(home, 'a', { XDG_STATE_HOME: path.join(home, 'xdg') }))
     expect(first.ok).toBe(true)
     expect(first.machineId).toMatch(/^[0-9a-f]{32}$/)
     expect(fs.readFileSync(idFile(home), 'utf8')).toBe(`${first.machineId}\n`)
     expect(fs.statSync(idFile(home)).mode & 0o777).toBe(0o600)
     expect(fs.existsSync(path.join(home, 'xdg', 'open-walnut', 'machine-id'))).toBe(false)
-    const second = await hello(await start(twin, home, 'b'))
+    const second = await hello(await start(home, 'b'))
     expect(second.machineId).toBe(first.machineId)
   })
 
@@ -115,7 +99,7 @@ describe.each(TWINS)('machine id in hello: $name', (twin) => {
     const legacy = path.join(home, '.open-walnut', 'local', 'machine-id')
     fs.mkdirSync(path.dirname(legacy), { recursive: true })
     fs.writeFileSync(legacy, `${'f'.repeat(32)}\n`)
-    const res = await hello(await start(twin, home, 'a'))
+    const res = await hello(await start(home, 'a'))
     expect(res.machineId).toBe('f'.repeat(32))
     expect(fs.readFileSync(idFile(home), 'utf8').trim()).toBe('f'.repeat(32))
   })
@@ -127,7 +111,7 @@ describe.each(TWINS)('machine id in hello: $name', (twin) => {
       fs.mkdirSync(path.join(dir, 'local'), { recursive: true })
       fs.writeFileSync(path.join(dir, 'local', 'machine-id'), `${id}\n`)
     }
-    const res = await hello(await start(twin, home, 'a', { OPEN_WALNUT_HOME: custom }))
+    const res = await hello(await start(home, 'a', { OPEN_WALNUT_HOME: custom }))
     expect(res.machineId).toBe('1'.repeat(32))
     expect(fs.readFileSync(idFile(home), 'utf8').trim()).toBe('1'.repeat(32))
   })

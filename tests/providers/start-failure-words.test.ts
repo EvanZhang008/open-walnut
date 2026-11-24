@@ -78,10 +78,8 @@ describe('a start whose Claude Code stopped before it read the message', () => {
     for (const [reason, kind] of Object.entries(SEND_REASONS)) {
       expect(cliStoppedBeforeFirstLine(`start: initial message not delivered (${reason})`), reason).toBe(kind === 'cli_gone')
     }
-    // Both daemon twins still word the failure the way the server reads it.
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      expect(fs.readFileSync(path.join(ROOT, twin), 'utf8'), twin).toMatch(/start: initial message not delivered \(/)
-    }
+    // The daemon still words the failure the way the server reads it.
+    expect(fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')).toMatch(/start: initial message not delivered \(/)
     // start() throws no raw daemon text.
     const rsm = fs.readFileSync(path.join(ROOT, 'src/providers/remote-session-manager.ts'), 'utf8')
     expect(rsm).not.toMatch(/Daemon start failed on host/)

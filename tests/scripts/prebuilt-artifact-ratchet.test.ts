@@ -17,7 +17,6 @@ const PREBUILT = 'dist/daemon-binaries/acp-worker.js'
 const ALLOWED: Record<string, string> = {
   'tests/providers/budget-process-identity.test.ts': 'a ps line fixture: the path is text, nothing runs',
   'tests/providers/system-codex-path.test.ts': 'asserts the shipped path the server resolves',
-  'tests/e2e/acp-daemon-e2e.test.ts': 'runs the built daemon sidecar with its bundle; skips with both',
   'tests/e2e/acp-session-server-e2e.test.ts': 'runs the built daemon binary with its bundle; skips with both',
   'tests/e2e/acp-codex.live.test.ts': 'live layer: the shipped artifacts against the real engine',
   'tests/live/provider-matrix/specs/codex.ts': 'live layer: the shipped artifacts against the real engine',

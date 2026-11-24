@@ -1,5 +1,5 @@
 /**
- * The spawn journal, written by both daemon twins booted for real: every CLI a
+ * The spawn journal, written by the session daemon (daemon-standalone.ts) booted for real: every CLI a
  * daemon starts gets one line in ~/.open-walnut/local/spawn-journal.jsonl, under
  * the CLI's own session id (from the args when they name it, else from the init
  * line), with the asking Walnut's data dir and task. At startup the older
@@ -13,27 +13,20 @@
  * under the temp HOME is what gets tested, the "CLI" is /bin/sh printing one
  * init line, and the daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { readSpawnJournal } from '../../src/providers/external-session-scan-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
+const command = (): [string, string[]] => [BUN!, [STANDALONE, '--start']]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -52,7 +45,7 @@ function makeDirs(): Dirs {
   }
 }
 
-async function boot(twin: Twin, dirs: Dirs, extraEnv: Record<string, string> = {}): Promise<void> {
+async function boot(dirs: Dirs, extraEnv: Record<string, string> = {}): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -64,7 +57,7 @@ async function boot(twin: Twin, dirs: Dirs, extraEnv: Record<string, string> = {
   }
   delete env.WALNUT_SPAWN_JOURNAL
   Object.assign(env, extraEnv)
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -121,12 +114,6 @@ function start(sid: string, sessionId: string, extraArgs: string[], opts: { resu
 
 const lines = (file: string) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-spawn-journal-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
@@ -143,10 +130,10 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('spawn journal: $name', (twin) => {
+describe.skipIf(!BUN)('spawn journal, standalone daemon (bun)', () => {
   it('journals new, forked and resumed sessions under the CLI\'s own id, once each', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const origin = { home: '/tmp/walnut-ephemeral-x', task: 'task-1' }
 
     // New: the tmp id never reaches the journal, the init line's id does.
@@ -189,7 +176,7 @@ describe.each(TWINS)('spawn journal: $name', (twin) => {
     fs.mkdirSync(path.dirname(dirs.journal), { recursive: true })
     fs.writeFileSync(dirs.journal, JSON.stringify({ v: 1, sid: 'known-1', kind: 'new', home: '/h' }) + '\n{"v":1,"sid":"torn","ki')
 
-    await boot(twin, dirs)
+    await boot(dirs)
 
     const byId = readSpawnJournal(dirs.journal)
     expect([...byId.keys()].sort()).toEqual(['known-1', 'old-1', 'old-2', 'str-9'])
@@ -211,7 +198,7 @@ describe.each(TWINS)('spawn journal: $name', (twin) => {
     fs.writeFileSync(path.join(dirs.legacy, 'real-marker'), '')
     const relocated = path.join(root, 'elsewhere', 'spawn-journal.jsonl')
 
-    await boot(twin, dirs, { WALNUT_SPAWN_JOURNAL: relocated })
+    await boot(dirs, { WALNUT_SPAWN_JOURNAL: relocated })
     await start('tmp-x', 'reloc-1', [])
 
     expect(await waitFor(() => fs.existsSync(relocated) && readSpawnJournal(relocated).has('reloc-1'))).toBe(true)

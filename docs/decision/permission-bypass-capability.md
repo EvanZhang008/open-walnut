@@ -83,5 +83,4 @@ already answered pending request.
 - [Claude session provider](../../src/providers/claude-code-session.ts)
 - [Daemon core](../../src/providers/daemon-core.ts)
 - [Standalone daemon](../../src/providers/daemon-standalone.ts)
-- [Fallback daemon source](../../src/providers/daemon-source.ts)
 - [Agent Client Protocol Claude adapter](https://github.com/agentclientprotocol/claude-agent-acp)

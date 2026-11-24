@@ -58,7 +58,6 @@ const REMOTE_SH_ALLOWED: Record<string, string> = {
   'src/providers/remote-daemon-dir.ts': 'the SSH route: daemon dir',
   'src/providers/remote-fold-prewarm.ts': 'the SSH route: prewarm before the daemon answers',
   'src/providers/remote-isolation.ts': 'the SSH route: a test server\'s isolated daemon scripts',
-  'src/providers/remote-runtime.ts': 'the SSH route: runtime bootstrap',
   'src/providers/ssh-control-master.ts': 'the SSH route: control master',
   'src/providers/upload-resume.ts': 'the SSH route: chunked deploy upload',
   'src/providers/walnut-file-delta.ts': 'the SSH route: the walnut file sent as a delta',
@@ -86,7 +85,7 @@ const EXEC_RUN_ALLOWED: Record<string, string> = {
   'src/core/standby/remote-apply.ts': 'the standby copy\'s apply on its host, a fixed walnut command the user turned on (standby.host): a background job, since exec.script stops at 10 minutes and a first batch applies longer; one job id per batch, so it never runs twice',
 }
 
-const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
+const EXEMPT = new Set(['src/providers/daemon-standalone.ts'])
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

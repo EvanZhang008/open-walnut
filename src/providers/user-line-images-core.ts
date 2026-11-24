@@ -1,9 +1,8 @@
 /**
  * The pictures of a user line go to the CLI as image blocks (2026-11-01, the user:
  * "if we can directly input it to AI that is one round less"). Pure and
- * self-contained, shared by both daemon twins: daemon-core.ts imports it,
- * daemon-source.ts inlines its text (fn.toString()), so NOTHING here may
- * reference module scope, imports, or helpers.
+ * self-contained: daemon-core.ts imports it, and NOTHING here references
+ * module scope, imports, or helpers.
  *
  * A picture reaches the session's host as a file, and the message names it under
  * the images header every surface knows (`IMAGES_ATTACHED_LINE`,

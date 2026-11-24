@@ -2,8 +2,7 @@
  * The block a session reads back after a compaction (open-items.ts), as a
  * self-contained factory: the server formats with it, and so does a host's
  * daemon answering `open_items` from its copy while the server is away
- * (offline-host-core.ts). daemon-source.ts inlines `createOpenItemsText.toString()`,
- * so the factory body references NOTHING at module scope (types are erased).
+ * (offline-host-core.ts). The factory body references NOTHING at module scope (types are erased).
  */
 
 /** `partial`: what its latest result says is not done (peers/structured-reply.ts). */

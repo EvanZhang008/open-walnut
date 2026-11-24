@@ -1,6 +1,6 @@
 /**
- * A session's call while the Mac is back but has not taken this host's journal yet, on REAL
- * daemon processes, both twins (sendGatewayRequest's first rule: `!target ||
+ * A session's call while the Mac is back but has not taken this host's journal yet, on a REAL
+ * standalone daemon process (sendGatewayRequest's first rule: `!target ||
  * offlineHost.pendingHandover(home)` hands it to this host's own Walnut server):
  *
  *   test as the Mac ==trusted WS==> daemon: start, host.slice, leader.configure, server.configure;
@@ -24,7 +24,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { BUN, cleanupFollowerTwins, cmd, connectWs, gatewayCall, linkFollower, nextFrameId, spawnFollowerTwin, startMockSession, sleep } from '../helpers/follower-twin-rig.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOME = '/fixture/marina-home'
 const WALNUT = 'wmarinadrain1'
@@ -70,75 +69,73 @@ afterAll(async () => {
   await cleanupFollowerTwins(base, started)
 }, 60_000)
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin === 'source' ? `source twin (${SOURCE_TWIN.runtime})` : 'standalone twin'}: a session's call while the Mac is back but has not drained this host's journal`, () => {
-    it('goes to this host\'s Walnut server until the Mac drains and acks, then to the Mac', async () => {
-      const alias = `${twin.slice(0, 3)}drn`
-      const d = await spawnFollowerTwin({ base, name: alias, twin, takeoverMs: T, beatMs: BEAT, started })
-      const macAnswer = (op: string) => ({ result: { who: 'mac', op } })
-      let mac = await connectWs(d.port)
-      // What each Mac socket was asked (the one before it went away, the one after it came back).
-      const macOps = [answers(mac, macAnswer)]
-      let beat: ReturnType<typeof setInterval> | null = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
-      const slice = { v: 1, home: HOME, hash: `h-${alias}`, asOf: Date.now(), host: alias, sessions: [{ sid: SID, taskId: TASK, title: 'Ship it' }], tasks: [{ id: TASK, title: 'Ship it', phase: 'IN_PROGRESS', project: 'Acme' }], requests: [], boards: [], boardOf: {} }
-      let follower: WebSocket | null = null
-      try {
-        const startedSession = await startMockSession({ base, name: alias, d, mac, sid: SID, home: HOME, task: TASK })
-        expect(startedSession.ok, JSON.stringify(startedSession)).toBe(true)
-        expect((await cmd(mac, { cmd: 'host.slice', slice })).ok).toBe(true)
-        expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
-        const linked = await linkFollower({ base, name: alias, d, mac, home: HOME, walnutId: WALNUT, serverPort: 41_239 })
-        follower = linked.follower
-        expect(linked.hello.ok, JSON.stringify(linked.hello)).toBe(true)
-        // Step 1 the follower hands back (as a server too old for the op does); later it answers.
-        let followerHandsBack = true
-        const followerAsked = answers(follower, (op) => followerHandsBack
-          ? { errorCode: 'needs_leader', error: `${op} needs your Mac` }
-          : { result: { who: 'follower', op } })
+describe.skipIf(!BUN)("standalone daemon: a session's call while the Mac is back but has not drained this host's journal", () => {
+  it('goes to this host\'s Walnut server until the Mac drains and acks, then to the Mac', async () => {
+    const alias = 'stadrn'
+    const d = await spawnFollowerTwin({ base, name: alias, takeoverMs: T, beatMs: BEAT, started })
+    const macAnswer = (op: string) => ({ result: { who: 'mac', op } })
+    let mac = await connectWs(d.port)
+    // What each Mac socket was asked (the one before it went away, the one after it came back).
+    const macOps = [answers(mac, macAnswer)]
+    let beat: ReturnType<typeof setInterval> | null = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
+    const slice = { v: 1, home: HOME, hash: `h-${alias}`, asOf: Date.now(), host: alias, sessions: [{ sid: SID, taskId: TASK, title: 'Ship it' }], tasks: [{ id: TASK, title: 'Ship it', phase: 'IN_PROGRESS', project: 'Acme' }], requests: [], boards: [], boardOf: {} }
+    let follower: WebSocket | null = null
+    try {
+      const startedSession = await startMockSession({ base, name: alias, d, mac, sid: SID, home: HOME, task: TASK })
+      expect(startedSession.ok, JSON.stringify(startedSession)).toBe(true)
+      expect((await cmd(mac, { cmd: 'host.slice', slice })).ok).toBe(true)
+      expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
+      const linked = await linkFollower({ base, name: alias, d, mac, home: HOME, walnutId: WALNUT, serverPort: 41_239 })
+      follower = linked.follower
+      expect(linked.hello.ok, JSON.stringify(linked.hello)).toBe(true)
+      // Step 1 the follower hands back (as a server too old for the op does); later it answers.
+      let followerHandsBack = true
+      const followerAsked = answers(follower, (op) => followerHandsBack
+        ? { errorCode: 'needs_leader', error: `${op} needs your Mac` }
+        : { result: { who: 'follower', op } })
 
-        // 1. The Mac goes away; a session's write is journaled here.
-        clearInterval(beat); beat = null
-        mac.close()
-        await statusUntil(follower, (s) => s.primaryConnected === false, 'the daemon to see the Mac gone')
-        const away = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written while the Mac was away' })
-        expect(away.reply, JSON.stringify(away.reply)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
-        expect(followerAsked).toEqual(['task_update'])
-        const awayStatus = await statusUntil(follower, (s) => s.drainablePending === 1, 'one drainable journal record')
-        const ownBefore = Number(awayStatus.offlineAnswers?.total ?? 0)
+      // 1. The Mac goes away; a session's write is journaled here.
+      clearInterval(beat); beat = null
+      mac.close()
+      await statusUntil(follower, (s) => s.primaryConnected === false, 'the daemon to see the Mac gone')
+      const away = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written while the Mac was away' })
+      expect(away.reply, JSON.stringify(away.reply)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
+      expect(followerAsked).toEqual(['task_update'])
+      const awayStatus = await statusUntil(follower, (s) => s.drainablePending === 1, 'one drainable journal record')
+      const ownBefore = Number(awayStatus.offlineAnswers?.total ?? 0)
 
-        // 2. The Mac is back and heard, and has not drained: the call is the follower's.
-        followerHandsBack = false
-        const backAt = Date.now()
-        mac = await connectWs(d.port)
-        macOps.push(answers(mac, macAnswer))
-        beat = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
-        const probe = await cmd(mac, { cmd: 'host.slice', home: HOME, hash: slice.hash, asOf: slice.asOf })
-        expect(probe, JSON.stringify(probe)).toMatchObject({ ok: true, have: true, pendingHandover: true })
-        await statusUntil(follower, (s) => s.primaryConnected === true && Number(s.primaryHeardAgoMs) < Date.now() - backAt, 'the daemon to hear the Mac again')
-        const pending = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written while the Mac takes the journal' })
-        expect(pending.reply, JSON.stringify(pending.reply)).toMatchObject({ ok: true, result: { who: 'follower', op: 'task_update' } })
-        expect(followerAsked).toEqual(['task_update', 'task_update'])
-        expect(macOps.flat()).toEqual([])
-        const pendingStatus = await cmd(follower, { cmd: 'follower.status' })
-        expect(pendingStatus.offlineAnswers?.total ?? 0, JSON.stringify(pendingStatus.offlineAnswers)).toBe(ownBefore)
-        expect(pendingStatus.drainablePending).toBe(1)
+      // 2. The Mac is back and heard, and has not drained: the call is the follower's.
+      followerHandsBack = false
+      const backAt = Date.now()
+      mac = await connectWs(d.port)
+      macOps.push(answers(mac, macAnswer))
+      beat = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
+      const probe = await cmd(mac, { cmd: 'host.slice', home: HOME, hash: slice.hash, asOf: slice.asOf })
+      expect(probe, JSON.stringify(probe)).toMatchObject({ ok: true, have: true, pendingHandover: true })
+      await statusUntil(follower, (s) => s.primaryConnected === true && Number(s.primaryHeardAgoMs) < Date.now() - backAt, 'the daemon to hear the Mac again')
+      const pending = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written while the Mac takes the journal' })
+      expect(pending.reply, JSON.stringify(pending.reply)).toMatchObject({ ok: true, result: { who: 'follower', op: 'task_update' } })
+      expect(followerAsked).toEqual(['task_update', 'task_update'])
+      expect(macOps.flat()).toEqual([])
+      const pendingStatus = await cmd(follower, { cmd: 'follower.status' })
+      expect(pendingStatus.offlineAnswers?.total ?? 0, JSON.stringify(pendingStatus.offlineAnswers)).toBe(ownBefore)
+      expect(pendingStatus.drainablePending).toBe(1)
 
-        // 3. The Mac drains and acks: the next call is the Mac's.
-        const drained = await cmd(mac, { cmd: 'offline.drain', home: HOME })
-        expect(drained.ok, JSON.stringify(drained)).toBe(true)
-        expect(drained.records.map((r: Record<string, unknown>) => [r.kind, r.op]), JSON.stringify(drained.records)).toEqual([['op', 'task_update']])
-        const acked = await cmd(mac, { cmd: 'offline.ack', home: HOME, upTo: drained.records.at(-1).seq })
-        expect(acked, JSON.stringify(acked)).toMatchObject({ ok: true, remaining: 0 })
-        await statusUntil(follower, (s) => s.drainablePending === 0, 'the journal to be taken')
-        const after = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written once the Mac took the journal' })
-        expect(after.reply, JSON.stringify(after.reply)).toMatchObject({ ok: true, result: { who: 'mac', op: 'task_update' } })
-        expect(macOps.flat()).toEqual(['task_update'])
-        expect(followerAsked).toEqual(['task_update', 'task_update'])
-      } finally {
-        if (beat) clearInterval(beat)
-        follower?.close()
-        mac.close()
-      }
-    }, 180_000)
-  })
-}
+      // 3. The Mac drains and acks: the next call is the Mac's.
+      const drained = await cmd(mac, { cmd: 'offline.drain', home: HOME })
+      expect(drained.ok, JSON.stringify(drained)).toBe(true)
+      expect(drained.records.map((r: Record<string, unknown>) => [r.kind, r.op]), JSON.stringify(drained.records)).toEqual([['op', 'task_update']])
+      const acked = await cmd(mac, { cmd: 'offline.ack', home: HOME, upTo: drained.records.at(-1).seq })
+      expect(acked, JSON.stringify(acked)).toMatchObject({ ok: true, remaining: 0 })
+      await statusUntil(follower, (s) => s.drainablePending === 0, 'the journal to be taken')
+      const after = await gatewayCall(d, SID, 'task_update', { id: TASK, description: 'written once the Mac took the journal' })
+      expect(after.reply, JSON.stringify(after.reply)).toMatchObject({ ok: true, result: { who: 'mac', op: 'task_update' } })
+      expect(macOps.flat()).toEqual(['task_update'])
+      expect(followerAsked).toEqual(['task_update', 'task_update'])
+    } finally {
+      if (beat) clearInterval(beat)
+      follower?.close()
+      mac.close()
+    }
+  }, 180_000)
+})

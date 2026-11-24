@@ -1,7 +1,7 @@
 /**
  * What an isolated connection (a test server on a remote host, remote-isolation.ts)
  * sends to the host: every script of the connect path (dir probe, live daemon scan,
- * bun probe and install, the start) is captured and must name only the test
+ * the start) is captured and must name only the test
  * server's own dirs, and the hello of a daemon that is not the test server's own
  * is refused, never redeployed. The production side: a real server refuses a
  * test server's daemon.
@@ -47,7 +47,7 @@ afterEach(() => {
 })
 
 describe('an isolated connection writes only under its own root', () => {
-  it('captures every connect-path script: own dirs only, installs under its own HOME', async () => {
+  it('captures every connect-path script: own dirs only, nothing under the real HOME', async () => {
     const key = isolationKey(WALNUT_HOME)
     const root = `/tmp/open-walnut-test-${key}`
     cleanup.push(root)
@@ -67,6 +67,7 @@ describe('an isolated connection writes only under its own root', () => {
       // The dir probe runs for real, in a temp HOME; everything else gets a reply that ends its step.
       if (s.includes('walnut-dir-probe v1')) return execFileSync('/bin/sh', ['-s'], { input: s, encoding: 'utf-8', env: { PATH: guardedPath([fakeBin], '/usr/bin:/bin'), HOME: home } })
       if (s.includes('walnut-live')) return 'walnut-live none\n'
+      if (s.includes('uname -m')) return 'x86_64'
       return ''
     })
 
@@ -75,20 +76,11 @@ describe('an isolated connection writes only under its own root', () => {
     expect(conn.isolatedRoot).toBe(root)
 
     await priv(conn).checkDaemonRunning().catch(() => null)
-    await priv(conn).probeOrInstallBun().catch(() => null)
-    priv(conn)._bunPath = `${root}/home/.bun/bin/bun`
-    priv(conn)._deployedViaSource = true
-    await priv(conn).startDaemon('bun').catch(() => null)
+    await priv(conn).startDaemon().catch(() => null)
 
-    expect(scripts.length).toBeGreaterThanOrEqual(4)
+    expect(scripts.length).toBeGreaterThanOrEqual(3)
     for (const s of scripts) expect(s, s.slice(0, 400)).not.toMatch(PROD_PATH)
-    // The bun probe may run a bun the user already has (`--version`, a read); only the installer writes, and never into ~/.bun.
-    for (const s of scripts.filter((x) => !x.includes('bun_path='))) expect(s, s.slice(0, 400)).not.toMatch(/\$HOME\/\.bun|~\/\.bun/)
-
-    const install = scripts.find((s) => s.includes('BUN_INSTALL='))
-    expect(install).toBeDefined()
-    expect(install).toContain(`HOME='${root}/home'`)
-    expect(install).toContain(`BUN_INSTALL='${root}/home/.bun'`)
+    for (const s of scripts) expect(s, s.slice(0, 400)).not.toMatch(/\$HOME\/\.bun|~\/\.bun/)
 
     const start = scripts.find((s) => s.includes('nohup'))
     expect(start).toBeDefined()
@@ -104,7 +96,7 @@ describe('an isolated connection writes only under its own root', () => {
     expect(iso.mode).toBe('isolated')
     vi.spyOn(priv(conn), '_sendHandshake').mockResolvedValue({ ok: true, dir: '/tmp/open-walnut', capabilities: [] })
     const redeploy = vi.spyOn(priv(conn), 'forceRedeployAndReconnect').mockResolvedValue(undefined)
-    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue('bun')
+    const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
     await expect(priv(conn).verifyCapabilities()).rejects.toBeInstanceOf(DaemonIdentityError)
     expect(redeploy).not.toHaveBeenCalled()
     expect(deploy).not.toHaveBeenCalled()
@@ -170,9 +162,12 @@ describe('an isolated connection never acts on the real server\'s update records
     if (iso.mode !== 'isolated') throw new Error('expected isolated')
     const dir = String(priv(conn)._remoteDir)
     const root = path.posix.dirname(dir)
-    priv(conn)._staged = { runtime: 'node', dir, at: Date.now(), bunPath: null }
+    priv(conn)._staged = { dir, at: Date.now() }
     const scripts: string[] = []
-    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => { scripts.push(String(script)); return '' })
+    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => {
+      if (String(script).includes('uname -m')) return 'x86_64'
+      scripts.push(String(script)); return ''
+    })
     await priv(conn).trialStaged()
     expect(scripts.length).toBeGreaterThan(0)
     const runtimeDir = isolatedDaemonEnv(root, iso.key).WALNUT_RUNTIME_DIR
@@ -188,10 +183,14 @@ describe('an isolated connection never acts on the real server\'s update records
   it('a real server\'s trial runs as always', async () => {
     state.ephemeral = false
     const conn = new DaemonConnection('devbox', target)
-    priv(conn)._staged = { runtime: 'node', dir: '/tmp/open-walnut', at: Date.now(), bunPath: null }
+    priv(conn)._staged = { dir: '/tmp/open-walnut', at: Date.now() }
     const scripts: string[] = []
-    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => { scripts.push(String(script)); return '' })
+    vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (script: unknown) => {
+      if (String(script).includes('uname -m')) return 'x86_64'
+      scripts.push(String(script)); return ''
+    })
     await priv(conn).trialStaged()
+    expect(scripts.length).toBeGreaterThan(0)
     for (const s of scripts) {
       expect(s).toContain("mktemp -d '/tmp'/walnut-proof.")
       expect(s).toContain('trd="$HOME/.open-walnut/local/runtime"')

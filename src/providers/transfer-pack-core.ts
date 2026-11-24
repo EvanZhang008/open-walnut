@@ -20,10 +20,7 @@
  *
  * The reply lists each file with its size and a streamed sha256.
  *
- * How each twin gets it: daemon-standalone.ts imports createTransferPack;
- * daemon-source.ts inlines `createTransferPack.toString()` through
- * `__CREATE_TRANSFER_PACK__`. So the factory body references NOTHING at module
- * scope, every capability comes from `deps`, and it carries no backticks.
+ * Imported by daemon-standalone.ts (createTransferPack). The factory body references NOTHING at module scope, every capability comes from `deps`, and it carries no backticks.
  */
 
 import type fsType from 'node:fs'

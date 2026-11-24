@@ -58,7 +58,7 @@ const DIAL_SITES: Record<string, string> = {
   'src/providers/daemon-connection.ts new DaemonConnection': 'the pool itself (getDaemonConnection, getDirectDaemonConnection)',
   'src/providers/remote-session-manager.ts new DaemonConnection': 'a private connection to a direct daemon URL (tests\' per-test daemons)',
 }
-const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
+const EXEMPT = new Set(['src/providers/daemon-standalone.ts'])
 const DIALS = new Set(['getDaemonConnection', 'getDirectDaemonConnection'])
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

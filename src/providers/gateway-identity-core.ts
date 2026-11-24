@@ -35,9 +35,7 @@
  * - A result for a call whose Walnut is known is taken only from a socket of that
  *   Walnut (`mayAnswer`).
  *
- * How the daemon twins get it: daemon-standalone.ts imports createGatewayIdentity;
- * daemon-source.ts inlines `createGatewayIdentity.toString()` through
- * `__CREATE_GATEWAY_IDENTITY__`. So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createGatewayIdentity). The factory body references NOTHING at module scope.
  */
 
 /** One server socket as the pick sees it: bound home, server run. */

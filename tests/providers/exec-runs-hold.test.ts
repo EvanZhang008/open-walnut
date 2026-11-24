@@ -4,7 +4,7 @@
  * there through host_exec; the run wrote to the old daemon's pipes and ended with it.
  *
  * Pinned here: the reason and the ask, the local daemon's upgrade (unmanaged and managed),
- * and the daemon twins: hello says how many runs go on, and a service handover refuses while
+ * and the daemon: hello says how many runs go on, and a service handover refuses while
  * one runs. The SSH and host network paths are pinned in
  * daemon-connection-deferred-upgrade.test.ts and daemon-net-update.test.ts.
  */
@@ -256,10 +256,9 @@ describe('LocalDaemon upgrade', () => {
   })
 })
 
-describe('the daemon twins', () => {
-  const twins = ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']
-  it.each(twins)('%s: hello says how many host_exec runs go on, and a service handover refuses while one runs', (file) => {
-    const src = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8')
+describe('the daemon', () => {
+  it('hello says how many host_exec runs go on, and a service handover refuses while one runs', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../..', 'src/providers/daemon-standalone.ts'), 'utf8')
     expect(src).toMatch(/execRunning: hostExec\.running\(\)/)
     // An older server waits for the detached runs too; a newer one reads what holds an update.
     expect(src).toMatch(/execHolding: (typeof hostExec\.holdingForOlder === 'function' \? )?hostExec\.holdingForOlder\(\)/)

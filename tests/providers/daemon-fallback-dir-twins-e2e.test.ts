@@ -1,9 +1,9 @@
 /**
- * The two daemon twins, booted for real, on the two things this change gave
- * them: a daemon dir moved to ~/.cache/open-walnut (because /tmp could not take
- * it) keeps PRODUCTION semantics (streams under ~/.open-walnut/tmp/streams, the
- * user's `walnut` shim installed), and fs.ls answers through the shared budgeted
- * lister (the source twin gets it injected as text, the standalone imports it).
+ * The session daemon (daemon-standalone.ts), booted for real, on the two things
+ * this change gave it: a daemon dir moved to ~/.cache/open-walnut (because /tmp
+ * could not take it) keeps PRODUCTION semantics (streams under
+ * ~/.open-walnut/tmp/streams, the user's `walnut` shim installed), and fs.ls
+ * answers through the shared budgeted lister.
  *
  * MACHINE SAFETY: HOME is a temp dir, so "~/.cache/open-walnut" and every path
  * the production branch writes (streams, ~/.local/bin) live inside it; the
@@ -12,36 +12,27 @@
  * daemon is SIGKILLed after each test (no session is ever started, so there is
  * no process group to reap).
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 
-async function boot(twin: Twin, env: Record<string, string>): Promise<void> {
+async function boot(env: Record<string, string>): Promise<void> {
   const full: Record<string, string | undefined> = { ...process.env, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', ...env }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME', 'WALNUT_STREAMS_DIR']) {
     if (!(k in env)) delete full[k]
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env: full, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env: full, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -80,12 +71,6 @@ async function waitFor(check: () => boolean, ms = 10_000): Promise<boolean> {
   return check()
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fallback-dir-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
@@ -101,13 +86,13 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('daemon twin: $name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('a daemon in ~/.cache/open-walnut is a production daemon: home streams dir, user shim installed', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fallback-dir-')))
     const home = path.join(root, 'home')
     const daemonDir = path.join(home, '.cache', 'open-walnut')
     fs.mkdirSync(daemonDir, { recursive: true })
-    await boot(twin, { HOME: home, WALNUT_DAEMON_DIR: daemonDir, WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
+    await boot({ HOME: home, WALNUT_DAEMON_DIR: daemonDir, WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
 
     expect(fs.existsSync(path.join(home, '.open-walnut', 'tmp', 'streams'))).toBe(true)
     expect(fs.existsSync(`${daemonDir}-streams`)).toBe(false)
@@ -125,7 +110,7 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fallback-dir-')))
     const home = path.join(root, 'home')
     fs.mkdirSync(home, { recursive: true })
-    await boot(twin, { HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
+    await boot({ HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
     const r = await rpc({ id: 1, cmd: 'fs.ls', path: root })
     expect(r.ok).toBe(true)
     expect(fs.existsSync(path.join(root, 'daemon-streams'))).toBe(true)
@@ -139,14 +124,13 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
     const other = path.join(home, '.cache', 'open-walnut')
     fs.mkdirSync(other, { recursive: true })
     fs.writeFileSync(path.join(other, 'daemon.pid'), '1')
-    await boot(twin, { HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
+    await boot({ HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
     const r = await rpc({ id: 5, cmd: 'fs.rm', path: path.join(other, 'daemon.pid') })
     expect(r.ok).toBe(false)
     expect(String(r.error)).toMatch(/EDENIED/)
     expect(fs.existsSync(path.join(other, 'daemon.pid'))).toBe(true)
     const hello = await rpc({ id: 6, cmd: 'hello' })
-    // The standalone twin is bun; the source twin runs on Node where the machine has it (tests/helpers/source-twin.ts).
-    expect(hello.runtime).toBe(twin.name.startsWith('standalone') ? 'bun' : SOURCE_TWIN.runtime)
+    expect(hello.runtime).toBe('bun')
   }, 60_000)
 
   it('fs.ls answers through the shared lister: types, links, dangling links, detail, no partial flag when all answered', async () => {
@@ -158,7 +142,7 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
     fs.writeFileSync(path.join(tree, 'a.txt'), 'hello')
     fs.symlinkSync(path.join(tree, 'src'), path.join(tree, 'linked'))
     fs.symlinkSync(path.join(root, 'nowhere'), path.join(tree, 'dangling'))
-    await boot(twin, { HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
+    await boot({ HOME: home, WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams') })
 
     const r = await rpc({ id: 2, cmd: 'fs.ls', path: tree })
     expect(r.ok).toBe(true)

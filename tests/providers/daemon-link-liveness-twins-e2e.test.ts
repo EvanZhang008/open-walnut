@@ -1,17 +1,17 @@
 /**
- * Dead links, on both daemon twins booted for real (connection matrix
- * 2026-10-02, gate 2026-10-03).
+ * Dead links, on the session daemon (daemon-standalone.ts) booted for real
+ * under bun (connection matrix 2026-10-02, gate 2026-10-03).
  *
  * 1. The cloud bridge goes silent and the old flow never draws a reset (a
  *    middlebox dropped it: matrix B7/H7). The watchdog used to only call
  *    close() and wait for onclose to redial; Node's WebSocket close handshake
- *    has no timeout, so the source twin never redialed. It also took 77 to
+ *    has no timeout, so the daemon never redialed. It also took 77 to
  *    105 s to notice. Now: after a ping interval with nothing heard the daemon
  *    pings, and when the third ping is due with still nothing it tears the
  *    link down and redials by itself.
  * 2. A trusted client goes silent: an SSH forward that died on the far side
  *    while sshd keeps this end open ACKs every byte and never resets (gate P5).
- *    Both twins ping every trusted client each beat and close one nothing was
+ *    The daemon pings every trusted client each beat and closes one nothing was
  *    heard from for 8 beats in a row, and relays then reach the live client.
  *    The bridge adapter is never one of those clients.
  *
@@ -19,7 +19,7 @@
  * "cloud" is a local ws server; proxies are local; daemons are SIGKILLed
  * after each test.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -27,19 +27,12 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-let scriptPath = ''
-type Twin = { name: string; command: () => [string, string[]] }
-const SOURCE_DAEMON: Twin = { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] }
-const BUN_TWIN: Twin | null = BUN ? { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] } : null
-const TWINS: Twin[] = [SOURCE_DAEMON, ...(BUN_TWIN ? [BUN_TWIN] : [])]
 
 /** The trusted-client beat and the bridge ping interval the tests run at. */
 const BEAT = 200
@@ -59,14 +52,8 @@ let proc: ChildProcess | null = null
 let port = 0
 const closers: Array<() => Promise<void> | void> = []
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-liveness-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-afterAll(() => { fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true }) })
 
-async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void> {
+async function boot(extraEnv: Record<string, string>): Promise<void> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-liveness-')))
   const home = path.join(root, 'home')
   const streams = path.join(root, 'streams')
@@ -83,8 +70,7 @@ async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void>
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
     ...extraEnv,
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -270,11 +256,11 @@ async function configureBridge(ctl: WebSocket, cloudPort: number): Promise<void>
   expect(conf.ok).toBe(true)
 }
 
-describe.each(TWINS)('bridge silence watchdog: $name', (twin) => {
+describe.skipIf(!BUN)('bridge silence watchdog: standalone daemon (bun)', () => {
   it('a blackholed bridge link is torn down and redialed without waiting for its close', async () => {
     const cloud = await startCloud()
     const proxy = await startProxy(cloud.port)
-    await boot(twin, { WALNUT_BRIDGE_PING_MS: String(PING) })
+    await boot({ WALNUT_BRIDGE_PING_MS: String(PING) })
     const ctl = await connect(port)
     await configureBridge(ctl, proxy.port)
     await waitFor(() => cloud.hellos.length >= 1, 15_000, 'the first hello')
@@ -298,7 +284,7 @@ describe.each(TWINS)('bridge silence watchdog: $name', (twin) => {
 
   it('pings a quiet bridge, and gives up when the third ping is due with nothing heard', async () => {
     const cloud = await startCloud()
-    await boot(twin, { WALNUT_BRIDGE_PING_MS: String(PING) })
+    await boot({ WALNUT_BRIDGE_PING_MS: String(PING) })
     const ctl = await connect(port)
     await configureBridge(ctl, cloud.port)
     await waitFor(() => cloud.hellos.length >= 1, 15_000, 'the first hello')
@@ -327,9 +313,9 @@ describe.each(TWINS)('bridge silence watchdog: $name', (twin) => {
   }, 60_000)
 })
 
-describe.each(TWINS)('trusted client keepalive: $name', (twin) => {
+describe.skipIf(!BUN)('trusted client keepalive: standalone daemon (bun)', () => {
   it('closes a client that never answers on the 8th silent beat, and keeps one that answers', async () => {
-    await boot(twin, { WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
+    await boot({ WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
     const live = await connect(port)
     let livePings = 0
     live.on('ping', () => { livePings++ })
@@ -349,7 +335,7 @@ describe.each(TWINS)('trusted client keepalive: $name', (twin) => {
 
   it('never closes the bridge as a silent client', async () => {
     const cloud = await startCloud()
-    await boot(twin, { WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
+    await boot({ WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
     const ctl = await connect(port)
     await configureBridge(ctl, cloud.port)
     await waitFor(() => cloud.hellos.length >= 1, 15_000, 'the first hello')
@@ -360,11 +346,11 @@ describe.each(TWINS)('trusted client keepalive: $name', (twin) => {
     expect(daemonLog(/client silent, closing it/)).toHaveLength(0)
   }, 60_000)
 
-  // Gate P5 (2026-10-03): the dead client came first and the JS twin never
+  // Gate P5 (2026-10-03): the dead client came first and the daemon never
   // closed it, so every relay went into it (165 s and on).
   it('closes a dead first client that still takes bytes, and relays then reach the live one', async () => {
     const cloud = await startCloud()
-    await boot(twin, { WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
+    await boot({ WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
     const proxy = await startProxy(port)
     await connect(proxy.port)
     const live = await connect(port)
@@ -383,11 +369,11 @@ describe.each(TWINS)('trusted client keepalive: $name', (twin) => {
     await waitFor(() => liveGot.length > 0, 5_000, 'the stt relay to reach the live client')
   }, 60_000)
 
-  // Gate 2026-10-04: the JS twin's socket wrapper listened only for close and
+  // Gate 2026-10-04: the daemon's socket wrapper listened only for close and
   // error, so a client that half-closed (sent its FIN and nothing else) stayed
   // in wsClients until the keepalive's 8 beats ran out.
   it('drops a client that half-closes at once, without waiting for the keepalive', async () => {
-    await boot(twin, {})
+    await boot({})
     const live = await connect(port)
     const fin = await muteClient(port)
     await waitFor(() => daemonLog(/"msg":"client connected"/).length >= 2, 5_000, 'both clients to be connected')

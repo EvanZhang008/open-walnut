@@ -92,7 +92,7 @@ export async function setup(): Promise<void> {
  * get the same treatment from tests/setup/runtime-dir-isolation.ts (a setupFile),
  * because env set here does not reliably reach an already-forked worker. Both use
  * the same pid-suffixed shape so a daemon's `WALNUT_DAEMON_DIR + '-streams'`
- * sibling (see daemon-source.ts) also stays per-process.
+ * sibling (see daemon-standalone.ts) also stays per-process.
  */
 function isolateRuntimeDir(): void {
   const current = process.env.WALNUT_DAEMON_DIR;

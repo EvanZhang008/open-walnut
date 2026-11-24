@@ -111,12 +111,6 @@ describe('the label', () => {
     expect(L.label({ run: 'bash ~/.open-walnut/triggers/pr-comments/poll-pr.sh' })).toBe('poll-pr');
     expect(L.label({})).toBe('Unnamed trigger');
   });
-
-  it('rebuilds from its own source, as the host daemon\'s inlined twin does', () => {
-    const rebuilt = new Function(`return (${createTriggerLabel.toString()})`)()() as typeof L;
-    expect(rebuilt.label(COOKIE)).toBe(L.label(COOKIE));
-    expect(rebuilt.isFromPrompt(COOKIE.name, COOKIE.prompt)).toBe(true);
-  });
 });
 
 // \u2500\u2500 Where names are made and stored \u2500\u2500
@@ -261,7 +255,6 @@ describe('no surface names a trigger from its prompt', () => {
       'src/core/cron/store.ts',
       'src/providers/offline-host-core.ts',
       'src/providers/daemon-standalone.ts',
-      'src/providers/daemon-source.ts',
     ];
     for (const file of makers) {
       expect(await fs.readFile(path.join(ROOT, file), 'utf-8'), file).toMatch(/createTriggerLabel|deps\.labels/);

@@ -65,7 +65,6 @@ const NOT_A_WAIT: Record<string, string> = {
   'src/lib/history-session-envelope.ts': 'reads a task_get call out of a transcript',
   'src/ops/tasks.ts': 'defines task_get',
   'src/providers/offline-host-core.ts': 'answers task_get from a host\'s offline copy',
-  'src/providers/daemon-source.ts': 'the daemon\'s embedded minimal CLI (plain JS that imports nothing): its wait mirrors wn-cli.ts runWait, which goes through the helper',
 }
 
 describe('every wait on a person keeps its asks across a restart', () => {

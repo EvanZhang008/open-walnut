@@ -1,6 +1,6 @@
 /**
- * A session's `walnut` call never reaches another Walnut's server, on the real daemon
- * twins (the JS source twin, and the standalone twin under bun when bun is installed).
+ * A session's `walnut` call never reaches another Walnut's server, on the real session
+ * daemon (daemon-standalone.ts under bun, when bun is installed).
  *
  * 2026-11-10 (a Mac shared by two people's Walnuts): the first person's link to the
  * daemon dropped three times in ten minutes. Each time, the gateway's fallback to "any
@@ -30,21 +30,13 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-let scriptPath = ''
 let cliPath = ''
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 /** The daemon's beat to its server sockets: quiet after 3, closed after 8. */
 const BEAT = 400
@@ -99,7 +91,7 @@ function rpc(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 20_000): P
   })
 }
 
-async function boot(twin: Twin): Promise<number> {
+async function boot(): Promise<number> {
   root = fs.realpathSync(fs.mkdtempSync('/tmp/wgp-'))
   daemonDir = path.join(root, 'd')
   const env: Record<string, string | undefined> = {
@@ -115,8 +107,7 @@ async function boot(twin: Twin): Promise<number> {
     WALNUT_GATEWAY_TIMEOUT_MS: String(ATTEMPT_MS),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -221,8 +212,6 @@ async function answerAll(walnut: 'A' | 'B', done: Set<unknown>): Promise<number>
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-gateway-pin-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -240,174 +229,172 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`a session's call stays with its own Walnut, ${twin.name}`, () => {
-    // 2026-11-14 19:41Z: a 250 KB answer on the session link was what the relay cut. The server
-    // sends a big answer on its bulk channel instead, which names only its run: the daemon takes it.
-    it("a call relayed on A's main socket is answered from A's bulk socket", async () => {
-      const port = await boot(twin)
-      const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
-      const bulkA = await open(port, 'bulkA', 'A', 'run-a')
-      const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
-      const bulkB = await open(port, 'bulkB', 'B', 'run-b')
-      const sidA = await startSession(mainA, HOME_A)
-      const answer = call(sidA, 'task_create', 8_000)
-      const deadline = Date.now() + 8_000
-      while (mainA.requests.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-      const relay = mainA.requests[0]
-      expect(relay).toBeDefined()
-      // Another Walnut's bulk socket may not settle it.
-      const foreign = await rpc(bulkB.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'B' } }, 5_000)
-      expect(foreign.ok).toBe(false)
-      expect((await rpc(bulkA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A-bulk', sid: sidA } }, 5_000)).ok).toBe(true)
-      expect(await answer).toMatchObject({ ok: true, result: { from: 'A-bulk', sid: sidA } })
-      void mainB
-    }, 60_000)
+describe.skipIf(!BUN)('a session\'s call stays with its own Walnut, standalone daemon (bun)', () => {
+  // 2026-11-14 19:41Z: a 250 KB answer on the session link was what the relay cut. The server
+  // sends a big answer on its bulk channel instead, which names only its run: the daemon takes it.
+  it("a call relayed on A's main socket is answered from A's bulk socket", async () => {
+    const port = await boot()
+    const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
+    const bulkA = await open(port, 'bulkA', 'A', 'run-a')
+    const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
+    const bulkB = await open(port, 'bulkB', 'B', 'run-b')
+    const sidA = await startSession(mainA, HOME_A)
+    const answer = call(sidA, 'task_create', 8_000)
+    const deadline = Date.now() + 8_000
+    while (mainA.requests.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    const relay = mainA.requests[0]
+    expect(relay).toBeDefined()
+    // Another Walnut's bulk socket may not settle it.
+    const foreign = await rpc(bulkB.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'B' } }, 5_000)
+    expect(foreign.ok).toBe(false)
+    expect((await rpc(bulkA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A-bulk', sid: sidA } }, 5_000)).ok).toBe(true)
+    expect(await answer).toMatchObject({ ok: true, result: { from: 'A-bulk', sid: sidA } })
+    void mainB
+  }, 60_000)
 
-    it('A\'s link drops again and again beside B and a nameless server: none of A\'s calls reach them', async () => {
-      const port = await boot(twin)
-      // Walnut B: its main socket bound, its bulk socket naming only its run (as a real server's does).
-      const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
-      await open(port, 'bulkB', 'B', 'run-b')
-      // An older server that names no Walnut and no run.
-      await open(port, 'legacy', 'none')
-      let mainA = await open(port, 'mainA-0', 'A', 'run-a-0', HOME_A)
-      let bulkA = await open(port, 'bulkA-0', 'A', 'run-a-0')
-      const sidA = await startSession(mainA, HOME_A)
-      const sidB = await startSession(mainB, HOME_B)
-      const answered = new Set<unknown>()
-      const pending: Array<Promise<Frame>> = []
-      const answers = setInterval(() => { void answerAll('A', answered); void answerAll('B', answered) }, 100)
-      try {
-        // Before any drop: both sessions' calls are answered by their own Walnut.
-        expect(await call(sidA, 'task_create', 8_000)).toMatchObject({ ok: true, result: { from: 'A', sid: sidA } })
-        expect(await call(sidB, 'task_create', 8_000)).toMatchObject({ ok: true, result: { from: 'B', sid: sidB } })
+  it('A\'s link drops again and again beside B and a nameless server: none of A\'s calls reach them', async () => {
+    const port = await boot()
+    // Walnut B: its main socket bound, its bulk socket naming only its run (as a real server's does).
+    const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
+    await open(port, 'bulkB', 'B', 'run-b')
+    // An older server that names no Walnut and no run.
+    await open(port, 'legacy', 'none')
+    let mainA = await open(port, 'mainA-0', 'A', 'run-a-0', HOME_A)
+    let bulkA = await open(port, 'bulkA-0', 'A', 'run-a-0')
+    const sidA = await startSession(mainA, HOME_A)
+    const sidB = await startSession(mainB, HOME_B)
+    const answered = new Set<unknown>()
+    const pending: Array<Promise<Frame>> = []
+    const answers = setInterval(() => { void answerAll('A', answered); void answerAll('B', answered) }, 100)
+    try {
+      // Before any drop: both sessions' calls are answered by their own Walnut.
+      expect(await call(sidA, 'task_create', 8_000)).toMatchObject({ ok: true, result: { from: 'A', sid: sidA } })
+      expect(await call(sidB, 'task_create', 8_000)).toMatchObject({ ok: true, result: { from: 'B', sid: sidB } })
 
-        for (let round = 1; round <= ROUNDS; round++) {
-          const stalls = round % 2 === 1
-          // A call in flight when the link goes (a resend's turn comes while it is down).
-          pending.push(call(sidA, round % 2 ? 'task_create' : 'task_get', 5_000))
-          await sleep(50)
-          if (stalls) { stall(mainA); stall(bulkA) } else { cut(mainA); cut(bulkA) }
-          // Calls while A is going quiet and while it is gone, reads and writes.
-          for (let i = 0; i < 3; i++) {
-            pending.push(call(sidA, i % 2 ? 'task_get' : 'note_write', 4_000))
-            pending.push(call(sidB, 'task_create', 4_000))
-            await sleep(stalls ? BEAT * 2 : BEAT)
-          }
-          // Long enough for A to read quiet (3 beats) and, when stalled, be closed (8 beats).
-          await sleep(stalls ? BEAT * 10 : BEAT * 3)
-          // A comes back as a new server run.
-          mainA = await open(port, `mainA-${round}`, 'A', `run-a-${round}`, HOME_A)
-          bulkA = await open(port, `bulkA-${round}`, 'A', `run-a-${round}`)
-          await sleep(BEAT)
+      for (let round = 1; round <= ROUNDS; round++) {
+        const stalls = round % 2 === 1
+        // A call in flight when the link goes (a resend's turn comes while it is down).
+        pending.push(call(sidA, round % 2 ? 'task_create' : 'task_get', 5_000))
+        await sleep(50)
+        if (stalls) { stall(mainA); stall(bulkA) } else { cut(mainA); cut(bulkA) }
+        // Calls while A is going quiet and while it is gone, reads and writes.
+        for (let i = 0; i < 3; i++) {
+          pending.push(call(sidA, i % 2 ? 'task_get' : 'note_write', 4_000))
+          pending.push(call(sidB, 'task_create', 4_000))
+          await sleep(stalls ? BEAT * 2 : BEAT)
         }
-
-        // B's server tries to settle a call of A's: refused, and A's own answer goes through.
-        await sleep(300)
-        clearInterval(answers)
-        await answerAll('A', answered)
-        const before = new Set([...mainA.requests, ...bulkA.requests].map((r) => r.relayId))
-        const held = call(sidA, 'task_create', 8_000)
-        const fresh = () => [...mainA.requests, ...bulkA.requests].filter((r) => !before.has(r.relayId))
-        expect(await waitFor(() => fresh().length > 0)).toBe(true)
-        const relay = fresh()[0]!
-        const stolen = await rpc(mainB.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'B' } })
-        expect(stolen).toMatchObject({ ok: false })
-        expect((await rpc(mainA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A', sid: sidA } })).ok).toBe(true)
-        expect(await held).toMatchObject({ ok: true, result: { from: 'A' } })
-
-        const results = await Promise.all(pending)
-        // Every frame any socket got: A's calls only ever on A's sockets, B's only on B's.
-        const wrong: string[] = []
-        let onA = 0
-        for (const s of socks) {
-          for (const r of s.requests) {
-            if (r.callerSid === sidA && s.walnut !== 'A') wrong.push(`${s.name} got A's relay ${r.relayId} (${r.payload?.name})`)
-            if (r.callerSid === sidB && s.walnut !== 'B') wrong.push(`${s.name} got B's relay ${r.relayId}`)
-            if (r.callerSid === sidA && s.walnut === 'A') onA += 1
-          }
-        }
-        expect(wrong).toEqual([])
-        expect(onA).toBeGreaterThanOrEqual(ROUNDS)
-        // A's calls end answered by A, or with an error that says nothing was answered for it.
-        for (const r of results) {
-          if (r.ok) expect(r.result.from === 'A' || r.result.sid === sidB).toBe(true)
-          else expect(['hub_unreachable', 'hub_timeout']).toContain(r.error?.code)
-        }
-        // B was never interrupted: every one of its calls answered by B.
-        const bAnswers = results.filter((r) => r.ok && r.result.sid === sidB)
-        expect(bAnswers.length).toBe(ROUNDS * 3)
-        expect(bAnswers.every((r) => r.result.from === 'B')).toBe(true)
-      } finally {
-        clearInterval(answers)
+        // Long enough for A to read quiet (3 beats) and, when stalled, be closed (8 beats).
+        await sleep(stalls ? BEAT * 10 : BEAT * 3)
+        // A comes back as a new server run.
+        mainA = await open(port, `mainA-${round}`, 'A', `run-a-${round}`, HOME_A)
+        bulkA = await open(port, `bulkA-${round}`, 'A', `run-a-${round}`)
+        await sleep(BEAT)
       }
-    }, 180_000)
 
-    it('an older Walnut that never names itself: its call never reaches a new server between its hello and its bind', async () => {
-      const port = await boot(twin)
-      const legacy = await open(port, 'legacyB', 'B')
-      const sidB = await startSession(legacy, HOME_B)
-      cut(legacy)
-      await sleep(BEAT)
-      // A new server's socket says hello; its leader.configure has not come yet.
-      const mainA = await open(port, 'mainA', 'A', 'run-a')
-      const pendingCall = call(sidB, 'task_create', 20_000)
-      await sleep(600)
-      expect(mainA.requests).toEqual([])
-      // Bound now: it speaks for A, never for B.
-      expect((await rpc(mainA.ws, { cmd: 'leader.configure', home: HOME_A, walnutId: walnutIdOf(HOME_A), backup: false })).ok).toBe(true)
-      await sleep(600)
-      expect(mainA.requests).toEqual([])
-      // B's own (older) server comes back: the call goes there.
-      const back = await open(port, 'legacyB-2', 'B')
-      expect(await waitFor(() => back.requests.length > 0)).toBe(true)
-      expect(back.requests[0]!.callerSid).toBe(sidB)
-      expect((await rpc(back.ws, { cmd: 'gateway-result', relayId: back.requests[0]!.relayId, result: { from: 'B' } })).ok).toBe(true)
-      expect(await pendingCall).toMatchObject({ ok: true, result: { from: 'B' } })
-      expect(mainA.requests).toEqual([])
-    }, 60_000)
+      // B's server tries to settle a call of A's: refused, and A's own answer goes through.
+      await sleep(300)
+      clearInterval(answers)
+      await answerAll('A', answered)
+      const before = new Set([...mainA.requests, ...bulkA.requests].map((r) => r.relayId))
+      const held = call(sidA, 'task_create', 8_000)
+      const fresh = () => [...mainA.requests, ...bulkA.requests].filter((r) => !before.has(r.relayId))
+      expect(await waitFor(() => fresh().length > 0)).toBe(true)
+      const relay = fresh()[0]!
+      const stolen = await rpc(mainB.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'B' } })
+      expect(stolen).toMatchObject({ ok: false })
+      expect((await rpc(mainA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A', sid: sidA } })).ok).toBe(true)
+      expect(await held).toMatchObject({ ok: true, result: { from: 'A' } })
 
-    it('an older server that names its run but never binds still gets its own session\'s calls at once', async () => {
-      const port = await boot(twin)
-      const old = await open(port, 'oldB', 'B', 'run-old', undefined, false)
-      const sidB = await startSession(old, HOME_B)
-      const pendingCall = call(sidB, 'task_create', 4_000)
-      expect(await waitFor(() => old.requests.length > 0, 3_000)).toBe(true)
-      expect((await rpc(old.ws, { cmd: 'gateway-result', relayId: old.requests[0]!.relayId, result: { from: 'B' } })).ok).toBe(true)
-      expect(await pendingCall).toMatchObject({ ok: true, result: { from: 'B' } })
-    }, 60_000)
+      const results = await Promise.all(pending)
+      // Every frame any socket got: A's calls only ever on A's sockets, B's only on B's.
+      const wrong: string[] = []
+      let onA = 0
+      for (const s of socks) {
+        for (const r of s.requests) {
+          if (r.callerSid === sidA && s.walnut !== 'A') wrong.push(`${s.name} got A's relay ${r.relayId} (${r.payload?.name})`)
+          if (r.callerSid === sidB && s.walnut !== 'B') wrong.push(`${s.name} got B's relay ${r.relayId}`)
+          if (r.callerSid === sidA && s.walnut === 'A') onA += 1
+        }
+      }
+      expect(wrong).toEqual([])
+      expect(onA).toBeGreaterThanOrEqual(ROUNDS)
+      // A's calls end answered by A, or with an error that says nothing was answered for it.
+      for (const r of results) {
+        if (r.ok) expect(r.result.from === 'A' || r.result.sid === sidB).toBe(true)
+        else expect(['hub_unreachable', 'hub_timeout']).toContain(r.error?.code)
+      }
+      // B was never interrupted: every one of its calls answered by B.
+      const bAnswers = results.filter((r) => r.ok && r.result.sid === sidB)
+      expect(bAnswers.length).toBe(ROUNDS * 3)
+      expect(bAnswers.every((r) => r.result.from === 'B')).toBe(true)
+    } finally {
+      clearInterval(answers)
+    }
+  }, 180_000)
 
-    it('a call from outside any session goes to the one Walnut connected, and to none when two are', async () => {
-      const port = await boot(twin)
-      const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
-      const bulkA = await open(port, 'bulkA', 'A', 'run-a')
-      const one = external('task_list', 4_000)
-      expect(await waitFor(() => mainA.requests.length > 0)).toBe(true)
-      expect(bulkA.requests).toEqual([])
-      expect((await rpc(mainA.ws, { cmd: 'gateway-result', relayId: mainA.requests[0]!.relayId, result: { from: 'A' } })).ok).toBe(true)
-      expect(await one).toMatchObject({ ok: true, result: { from: 'A' } })
-      // A second Walnut on the host: nothing says which one the terminal means.
-      const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
-      const bulkB = await open(port, 'bulkB', 'B', 'run-b')
-      const two = await external('task_list', 1_000)
-      expect(two).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-      expect(mainA.requests).toHaveLength(1)
-      expect([...mainB.requests, ...bulkB.requests, ...bulkA.requests]).toEqual([])
-    }, 60_000)
+  it('an older Walnut that never names itself: its call never reaches a new server between its hello and its bind', async () => {
+    const port = await boot()
+    const legacy = await open(port, 'legacyB', 'B')
+    const sidB = await startSession(legacy, HOME_B)
+    cut(legacy)
+    await sleep(BEAT)
+    // A new server's socket says hello; its leader.configure has not come yet.
+    const mainA = await open(port, 'mainA', 'A', 'run-a')
+    const pendingCall = call(sidB, 'task_create', 20_000)
+    await sleep(600)
+    expect(mainA.requests).toEqual([])
+    // Bound now: it speaks for A, never for B.
+    expect((await rpc(mainA.ws, { cmd: 'leader.configure', home: HOME_A, walnutId: walnutIdOf(HOME_A), backup: false })).ok).toBe(true)
+    await sleep(600)
+    expect(mainA.requests).toEqual([])
+    // B's own (older) server comes back: the call goes there.
+    const back = await open(port, 'legacyB-2', 'B')
+    expect(await waitFor(() => back.requests.length > 0)).toBe(true)
+    expect(back.requests[0]!.callerSid).toBe(sidB)
+    expect((await rpc(back.ws, { cmd: 'gateway-result', relayId: back.requests[0]!.relayId, result: { from: 'B' } })).ok).toBe(true)
+    expect(await pendingCall).toMatchObject({ ok: true, result: { from: 'B' } })
+    expect(mainA.requests).toEqual([])
+  }, 60_000)
 
-    it('with no server of its Walnut connected, the call fails at once, retryable, naming why', async () => {
-      const port = await boot(twin)
-      const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
-      await open(port, 'mainB', 'B', 'run-b', HOME_B)
-      await open(port, 'bulkB', 'B', 'run-b')
-      const sidA = await startSession(mainA, HOME_A)
-      cut(mainA)
-      expect(await waitFor(() => mainA.ws.readyState === WebSocket.CLOSED)).toBe(true)
-      const r = await call(sidA, 'task_create', 1_000)
-      expect(r).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-      expect(String(r.error.message)).toMatch(/another Walnut's server on this host was not asked\); nothing was sent, try again/)
-      expect(socks.filter((s) => s.walnut === 'B').every((s) => s.requests.length === 0)).toBe(true)
-    }, 60_000)
-  })
-}
+  it('an older server that names its run but never binds still gets its own session\'s calls at once', async () => {
+    const port = await boot()
+    const old = await open(port, 'oldB', 'B', 'run-old', undefined, false)
+    const sidB = await startSession(old, HOME_B)
+    const pendingCall = call(sidB, 'task_create', 4_000)
+    expect(await waitFor(() => old.requests.length > 0, 3_000)).toBe(true)
+    expect((await rpc(old.ws, { cmd: 'gateway-result', relayId: old.requests[0]!.relayId, result: { from: 'B' } })).ok).toBe(true)
+    expect(await pendingCall).toMatchObject({ ok: true, result: { from: 'B' } })
+  }, 60_000)
+
+  it('a call from outside any session goes to the one Walnut connected, and to none when two are', async () => {
+    const port = await boot()
+    const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
+    const bulkA = await open(port, 'bulkA', 'A', 'run-a')
+    const one = external('task_list', 4_000)
+    expect(await waitFor(() => mainA.requests.length > 0)).toBe(true)
+    expect(bulkA.requests).toEqual([])
+    expect((await rpc(mainA.ws, { cmd: 'gateway-result', relayId: mainA.requests[0]!.relayId, result: { from: 'A' } })).ok).toBe(true)
+    expect(await one).toMatchObject({ ok: true, result: { from: 'A' } })
+    // A second Walnut on the host: nothing says which one the terminal means.
+    const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
+    const bulkB = await open(port, 'bulkB', 'B', 'run-b')
+    const two = await external('task_list', 1_000)
+    expect(two).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    expect(mainA.requests).toHaveLength(1)
+    expect([...mainB.requests, ...bulkB.requests, ...bulkA.requests]).toEqual([])
+  }, 60_000)
+
+  it('with no server of its Walnut connected, the call fails at once, retryable, naming why', async () => {
+    const port = await boot()
+    const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
+    await open(port, 'mainB', 'B', 'run-b', HOME_B)
+    await open(port, 'bulkB', 'B', 'run-b')
+    const sidA = await startSession(mainA, HOME_A)
+    cut(mainA)
+    expect(await waitFor(() => mainA.ws.readyState === WebSocket.CLOSED)).toBe(true)
+    const r = await call(sidA, 'task_create', 1_000)
+    expect(r).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    expect(String(r.error.message)).toMatch(/another Walnut's server on this host was not asked\); nothing was sent, try again/)
+    expect(socks.filter((s) => s.walnut === 'B').every((s) => s.requests.length === 0)).toBe(true)
+  }, 60_000)
+})

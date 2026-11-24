@@ -22,10 +22,7 @@
  *   - a companion command that carries an old epoch, or arrives while the
  *     primary leads, is refused (`fence`).
  *
- * How the daemon twins get it: daemon-standalone.ts imports createLeaderBook;
- * daemon-source.ts inlines `createLeaderBook.toString()` through
- * `__CREATE_LEADER_BOOK__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createLeaderBook). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export type LeaderHolder = 'primary' | 'backup'

@@ -9,7 +9,6 @@ import { createOneShotCore, type OneShotChild } from '../../src/providers/onesho
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import ts from 'typescript'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createHostJournal } from '../../src/providers/host-journal-core.js'
 
 const ROOT = '/fixture/share/open-walnut-demo'
@@ -23,11 +22,11 @@ function deferred() {
   return { promise, resolve }
 }
 
-function make(over: Partial<DemoQuiesceDeps> = {}, factory = createDemoDaemonQuiesce) {
+function make(over: Partial<DemoQuiesceDeps> = {}) {
   const drain = createDaemonCommandDrain()
   const workers: Array<{ sid: string; state: string; pid: number | null; stopping: boolean }> = []
   let ended = 0
-  const q = factory({
+  const q = createDemoDaemonQuiesce({
     env: demoEnv, daemonDir: path.join(ROOT, 'd', GEN), isProdDaemonDir: false, serviceMode: false, keepSessions: false,
     resolve: (...parts) => path.resolve(...parts), basename: (p) => path.basename(p),
     settle: () => drain.settle(),
@@ -149,41 +148,26 @@ describe('demo.quiesce', () => {
     runChild.exit()
     expect(await q.quiesce(undefined, { home: DATA })).toMatchObject({ ok: true, quiet: true })
   })
-
-  it('builds from its own text, as the source twin inlines it', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const inlined = new Function(`"use strict"; return (${createDemoDaemonQuiesce.toString()})`)() as typeof createDemoDaemonQuiesce
-    const { q } = make({}, inlined)
-    expect(await q.quiesce(undefined, { home: DATA })).toMatchObject({ ok: true, quiet: true })
-    expect(q.allows('start')).toBe(false)
-    const refused = make({ isProdDaemonDir: true }, inlined).q
-    expect(await refused.quiesce(undefined, { home: DATA })).toMatchObject({ ok: false })
-    expect(refused.fenced).toBe(false)
-  })
 })
 
-describe('demo.quiesce twin wiring', () => {
+describe('demo.quiesce daemon wiring', () => {
   const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
   const standalone = read('src/providers/daemon-standalone.ts')
-  const source = read('src/providers/daemon-source.ts')
 
-  it('both twins answer it before the drain, refuse what the fence refuses, and fence every start', () => {
-    for (const src of [standalone, source]) {
-      const at = src.indexOf("if (cmd.cmd === 'demo.quiesce') {")
-      expect(at).toBeGreaterThan(0)
-      const gate = src.indexOf('if (!demoQuiesce.allows(cmd.cmd)) {', at)
-      expect(gate).toBeGreaterThan(at)
-      const admit = src.indexOf('daemonCommands.admit(work)', gate)
-      expect(admit).toBeGreaterThan(gate)
-      expect(src.slice(at, admit)).not.toContain('daemonCommands.admit')
-      expect(src).toContain("if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')")
-      expect(src).toContain("if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')")
-      expect(src).toMatch(/settle: [^\n]*daemonCommands\.settle\(\)/)
-      expect(src).toMatch(/endWarmPool: [^\n]*oneShot\.endWarmPool\(\)/)
-    }
+  it('the daemon answers it before the drain, refuses what the fence refuses, and fences every start', () => {
+    const src = standalone
+    const at = src.indexOf("if (cmd.cmd === 'demo.quiesce') {")
+    expect(at).toBeGreaterThan(0)
+    const gate = src.indexOf('if (!demoQuiesce.allows(cmd.cmd)) {', at)
+    expect(gate).toBeGreaterThan(at)
+    const admit = src.indexOf('daemonCommands.admit(work)', gate)
+    expect(admit).toBeGreaterThan(gate)
+    expect(src.slice(at, admit)).not.toContain('daemonCommands.admit')
+    expect(src).toContain("if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')")
+    expect(src).toContain("if (demoQuiesce.fenced) throw new Error('acpStart: Demo is stopping; no new worker starts')")
+    expect(src).toMatch(/settle: [^\n]*daemonCommands\.settle\(\)/)
+    expect(src).toMatch(/endWarmPool: [^\n]*oneShot\.endWarmPool\(\)/)
     expect(standalone).toContain('demoQuiesce.quiesce(ws.data?.origin, cmd)')
-    expect(source).toContain('demoQuiesce.quiesce(ws.origin, cmd)')
-    expect(source).toContain("['__CREATE_DEMO_QUIESCE__', createDemoDaemonQuiesce.toString()]")
   })
 
   /** The text of `name`'s body: from its declaration to the first line that closes it at column 0 (or 2 inside a factory). */
@@ -202,7 +186,6 @@ describe('demo.quiesce twin wiring', () => {
       // A CLI starts through spawn, the registry barrier, or (inside another program) the spawn pool's
       // thread, which spawnDetached asks at once: each is a launch, each after the final fence read.
       ['standalone startSessionProcess', body(standalone, 'async function startSessionProcess('), CLI_LAUNCH, 'demoQuiesce.fenced'],
-      ['source startSessionProcess', body(source, 'async function startSessionProcess('), CLI_LAUNCH, 'demoQuiesce.fenced'],
       // The ACP daemon spawns through its runtime's own spawn when it has one: `(use.spawn ?? spawn)(`.
       ['ACP worker spawn', body(read('src/providers/acp-daemon.ts'), 'async function acpStart(', '\n  }\n'), /\bspawn\)?\(/g, 'deps.maySpawn'],
       ['one-shot prewarm', body(read('src/providers/oneshot-core.ts'), 'function prewarm(', '\n  }\n'), /\bspawnChild\(/g, 'poolClosed'],
@@ -217,9 +200,8 @@ describe('demo.quiesce twin wiring', () => {
         expect(text.slice(checked, at), name + ': no await between the guard and the spawn').not.toMatch(/\bawait\b/)
       }
     }
-    // The ACP fence is wired into both twins' ACP daemon.
+    // The ACP fence is wired into the daemon's ACP daemon.
     expect(standalone).toContain('maySpawn: () => !demoQuiesce.fenced')
-    expect(source).toContain('maySpawn: function () { return !demoQuiesce.fenced; }')
   })
 
   it('adds no signal of its own', () => {
@@ -229,7 +211,7 @@ describe('demo.quiesce twin wiring', () => {
 })
 
 // A CLI whose leader exited while a child of its group lives on: the window before the
-// existing reap ends that group. Driven through each twin's own cmdList and stopSessionProcess,
+// existing reap ends that group. Driven through the daemon's own cmdList and stopSessionProcess,
 // with a real exited leader and a real child in its group; nothing here signals either.
 describe('fenced list counts a live group whose CLI leader exited', () => {
   const LEADER = `
@@ -246,7 +228,7 @@ setInterval(() => { if (fs.existsSync(process.argv[2])) process.exit(0) }, 20)
 setTimeout(() => process.exit(0), 60000)
 `
   function extract(source: string, name: string): string {
-    const parsed = ts.createSourceFile('twin.ts', source, ts.ScriptTarget.ES2022, true)
+    const parsed = ts.createSourceFile('daemon.ts', source, ts.ScriptTarget.ES2022, true)
     let found: ts.Node | undefined
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) && node.name?.text === name) found = node
@@ -262,12 +244,9 @@ setTimeout(() => process.exit(0), 60000)
     while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 20))
     return check()
   }
-  const twins: Array<[string, string]> = [
-    ['standalone', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')],
-    ['source', getDaemonSource()],
-  ]
+  const daemonText = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
 
-  it.each(twins)('%s twin: alive while fenced, unchanged unfenced, stop refused, quiet once the child exits', async (_name, source) => {
+  it('alive while fenced, unchanged unfenced, stop refused, quiet once the child exits', async () => {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wq-group-')))
     const release = path.join(dir, 'release')
     let childPid = 0
@@ -296,14 +275,14 @@ setTimeout(() => process.exit(0), 60000)
         cronRuntime: null, daemonBootId: undefined, SERVICE_MODE: false, logMsg: () => {},
         reapSession: () => {}, persistRegistry: () => {}, recordMissingStartTime: () => {},
       }
-      const text = ['isProcessGroupAlive', 'cmdList', 'stopSessionProcess'].map((n) => extract(source, n)).join('\n')
+      const text = ['isProcessGroupAlive', 'cmdList', 'stopSessionProcess'].map((n) => extract(daemonText, n)).join('\n')
       const js = ts.transpileModule(text + '\nreturn { cmdList, stopSessionProcess };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-      const twin = new Function(...Object.keys(env), js)(...Object.values(env)) as {
+      const daemon = new Function(...Object.keys(env), js)(...Object.values(env)) as {
         cmdList: (ws: unknown, id: number) => void
         stopSessionProcess: (ws: unknown, id: number, sid: string) => void
       }
       const list = (id: number) => {
-        twin.cmdList({}, id)
+        daemon.cmdList({}, id)
         const rows = replies.find((r) => r.id === id)!.data.sessions as Array<{ sid: string; alive: boolean }>
         return Object.fromEntries(rows.map((r) => [r.sid, r.alive]))
       }
@@ -312,7 +291,7 @@ setTimeout(() => process.exit(0), 60000)
       expect(list(1)).toEqual({ 'pgid-row': false, 'memory-row': false })
       fenced.fenced = true
       expect(list(2)).toEqual({ 'pgid-row': true, 'memory-row': true })
-      twin.stopSessionProcess({}, 3, 'memory-row')
+      daemon.stopSessionProcess({}, 3, 'memory-row')
       expect(replies.find((r) => r.id === 3)).toMatchObject({ ok: false, data: { error: expect.stringMatching(/process group still exists/) } })
       expect(alive(childPid)).toBe(true)
 
@@ -402,12 +381,10 @@ describe('demo.quiesce stops the daemon\'s own background work', () => {
     }
   })
 
-  it('the inlined text builds with the new deps too', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const inlined = new Function(`"use strict"; return (${createDemoDaemonQuiesce.toString()})`)() as typeof createDemoDaemonQuiesce
+  it('builds with the background deps', async () => {
     let stops = 0
     let counts: Record<string, number> = { triggerChecks: 1 }
-    const { q } = make({ stopInternalWork: () => { stops++ }, background: () => counts }, inlined)
+    const { q } = make({ stopInternalWork: () => { stops++ }, background: () => counts })
     expect(q.isDemo).toBe(true)
     expect(await q.quiesce(undefined, { home: DATA })).toMatchObject({ ok: false, background: { triggerChecks: 1 } })
     counts = { triggerChecks: 0 }
@@ -417,11 +394,9 @@ describe('demo.quiesce stops the daemon\'s own background work', () => {
   })
 })
 
-describe('demo.quiesce background wiring in both twins', () => {
+describe('demo.quiesce background wiring in the daemon', () => {
   const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
-  const standalone = read('src/providers/daemon-standalone.ts')
-  const source = read('src/providers/daemon-source.ts')
-  const twins: Array<[string, string]> = [['standalone', standalone], ['source', source]]
+  const src = read('src/providers/daemon-standalone.ts')
 
   /** One top-level function's text, from its declaration to its closing brace at column 0. */
   function fn(src: string, name: string): string {
@@ -431,8 +406,8 @@ describe('demo.quiesce background wiring in both twins', () => {
     return src.slice(at, src.indexOf('\n}\n', at) + 2)
   }
 
-  it.each(twins)('%s: the quiesce deps stop the trigger checks and the plugin jobs of the Demo\'s home, and count what is left', (_n, src) => {
-    const at = src.indexOf('createDemoDaemonQuiesce({') >= 0 ? src.indexOf('createDemoDaemonQuiesce({') : src.indexOf('(__CREATE_DEMO_QUIESCE__)({')
+  it('the quiesce deps stop the trigger checks and the plugin jobs of the Demo\'s home, and count what is left', () => {
+    const at = src.indexOf('createDemoDaemonQuiesce({')
     expect(at).toBeGreaterThan(0)
     const deps = src.slice(at, src.indexOf('\n})', at))
     expect(deps).toMatch(/stopInternalWork:[\s\S]*demoTriggerChecks\.abort\(\)[\s\S]*pluginJobs\.quiesce\(home\)/)
@@ -442,7 +417,7 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect(deps).toMatch(/pluginJobs\.pending\(home\)/)
   })
 
-  it.each(twins)('%s: the plugin supervisor and the ACP daemon read the fence; strict stops only on a Demo', (_n, src) => {
+  it('the plugin supervisor and the ACP daemon read the fence; strict stops only on a Demo', () => {
     const jobs = src.slice(src.indexOf('pluginJobs = '), src.indexOf('\n})', src.indexOf('pluginJobs = ')))
     expect(jobs).toMatch(/maySpawn: (\(\) => !demoQuiesce\.fenced|function \(\) \{ return !demoQuiesce\.fenced; \})/)
     const acpAt = /createAcpDaemon(?:<[^(]*>)?\(\{/.exec(src)!.index
@@ -450,7 +425,7 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect(acp).toMatch(/strictStop: (\(\) => demoQuiesce\.isDemo|function \(\) \{ return demoQuiesce\.isDemo; \})/)
   })
 
-  it.each(twins)('%s: tick, run, host delivery, routine start and test each read the fence before they start anything', (_n, src) => {
+  it('tick, run, host delivery, routine start and test each read the fence before they start anything', () => {
     expect(fn(src, 'tickTriggers')).toMatch(/^function tickTriggers\(\)[^{]*\{\n(?:\s*\/\/[^\n]*\n)*\s*if \(demoQuiesce\.fenced\) return;?\n/)
     expect(fn(src, 'runTrigger')).toMatch(/^async function runTrigger\([^\n]*\{\n\s*if \(demoQuiesce\.fenced\) return \{ outcome: 'quiet', reason: 'demo_stopping' \};?\n/)
     expect(fn(src, 'deliverUnclaimedFires')).toMatch(/^function deliverUnclaimedFires\([^\n]*\{\n\s*if \(demoQuiesce\.fenced\) return;?\n/)
@@ -470,7 +445,7 @@ describe('demo.quiesce background wiring in both twins', () => {
 
   // Class guard: a new site that starts host work on its own (check, delivery, routine start, journal sweep) fails until it reads the fence first.
   const PRIMITIVES = [/\b(?:triggerCheckCore\.)?runCheckProcess\(/g, /\bofflineHost\.deliverTrigger\(/g, /\bclockHostStart\.start\(/g, /\bofflineHost\.sweep\(/g]
-  it.each(twins)('%s: every automatic start site reads the fence first', (_n, src) => {
+  it('every automatic start site reads the fence first', () => {
     let sites = 0
     for (const re of PRIMITIVES) {
       for (const m of src.matchAll(re)) {
@@ -491,12 +466,12 @@ describe('demo.quiesce background wiring in both twins', () => {
       }
     }
     // runTrigger, runTriggerTest (checks), deliverFireOwn (delivery: deliverUnclaimedFires hands the fire to it, through the follower core), startUnclaimedRun (routine).
-    // The journal sweep is the host journal's (host-journal-core.ts sweepTick, checked below): the twins hand it the fence.
+    // The journal sweep is the host journal's (host-journal-core.ts sweepTick, checked below): the daemon hands it the fence.
     expect(sites).toBe(4)
     expect(src).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
   })
 
-  it('the host journal\'s minute sweep reads the fence the twins hand it first, and is its only sweep', () => {
+  it('the host journal\'s minute sweep reads the fence the daemon hands it first, and is its only sweep', () => {
     const core = fs.readFileSync(path.resolve(__dirname, '../../src/providers/host-journal-core.ts'), 'utf8')
     const sweeps = [...core.matchAll(/\bhost\.sweep\(/g)].map((m) => m.index!)
     expect(sweeps).toHaveLength(1)
@@ -507,7 +482,7 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect(before.slice(before.indexOf('deps.fenced()'))).not.toMatch(/\bawait\b/)
   })
 
-  it.each(twins)('%s: a check never starts but through runTrigger or runTriggerTest, and tick is the only clock that runs them', (_n, src) => {
+  it('a check never starts but through runTrigger or runTriggerTest, and tick is the only clock that runs them', () => {
     const callers = [...src.matchAll(/(?<!function )\brunTrigger\(entry\)/g)].map((m) => {
       const start = Math.max(src.lastIndexOf('\nfunction ', m.index!), src.lastIndexOf('\nasync function ', m.index!))
       return /function (\w+)/.exec(src.slice(start, start + 80))![1]
@@ -517,23 +492,21 @@ describe('demo.quiesce background wiring in both twins', () => {
     expect([...src.matchAll(/setInterval\(tickTriggers/g)]).toHaveLength(1)
   })
 
-  it('the check fence is the same in both twins: an abort controller only demo.quiesce and the daemon\'s own cleanup abort, a pid set, the final gate', () => {
-    for (const src of [standalone, source]) {
-      // demo.quiesce, and cleanup(): a check run never outlives its daemon (2026-11-23, repeat-answers.test.ts).
-      expect([...src.matchAll(/demoTriggerChecks\.abort\(\)/g)]).toHaveLength(2)
-      expect(fn(src, 'cleanup')).toMatch(/demoTriggerChecks\.abort\(\)/)
-      const fence = fn(src, 'checkRunFence')
-      expect(fence).toContain('!demoQuiesce.fenced')
-      expect(fence).toContain('demoTriggerChecks.signal')
-      expect(fence).toContain('demoTriggerCheckPids')
-    }
+  it('the check fence: an abort controller only demo.quiesce and the daemon\'s own cleanup abort, a pid set, the final gate', () => {
+    // demo.quiesce, and cleanup(): a check run never outlives its daemon (2026-11-23, repeat-answers.test.ts).
+    expect([...src.matchAll(/demoTriggerChecks\.abort\(\)/g)]).toHaveLength(2)
+    expect(fn(src, 'cleanup')).toMatch(/demoTriggerChecks\.abort\(\)/)
+    const fence = fn(src, 'checkRunFence')
+    expect(fence).toContain('!demoQuiesce.fenced')
+    expect(fence).toContain('demoTriggerChecks.signal')
+    expect(fence).toContain('demoTriggerCheckPids')
   })
 })
 
-// Each twin's own trigger functions run against stubs (no process, signal or file); the check stub holds its pid until closed.
-describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each twin', () => {
+// The daemon's own trigger functions run against stubs (no process, signal or file); the check stub holds its pid until closed.
+describe('a fenced Demo: a tick mid-run, a late spawn and the counts', () => {
   function extract(source: string, names: string[]): string {
-    const parsed = ts.createSourceFile('twin.ts', source, ts.ScriptTarget.ES2022, true)
+    const parsed = ts.createSourceFile('daemon.ts', source, ts.ScriptTarget.ES2022, true)
     const found = new Map<string, string>()
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) && node.name && names.includes(node.name.text) && !found.has(node.name.text)) found.set(node.name.text, node.getText(parsed))
@@ -543,12 +516,9 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
     for (const n of names) if (!found.has(n)) throw new Error('Missing ' + n)
     return names.map((n) => found.get(n)!).join('\n')
   }
-  const twinTexts: Array<[string, string]> = [
-    ['standalone', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')],
-    ['source', getDaemonSource()],
-  ]
+  const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
 
-  it.each(twinTexts)('%s', async (twinName, text) => {
+  it('the daemon\'s trigger functions', async () => {
     const core = await import('../../src/providers/trigger-check-core.js')
     type Opts = { maySpawn: () => boolean; signal?: AbortSignal; children: Set<number> }
     const checks: Array<{ opts: Opts; finish: () => void; aborted: boolean }> = []
@@ -577,7 +547,7 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
       applyCheckError: core.applyCheckError, decideCheck: core.decideCheck, applyCheckOutcome: core.applyCheckOutcome,
       triggerCheckCore: { ...core, runCheckProcess },
       triggerCadenceMs: () => 60_000, runClock: () => 'held', GATEWAY_SHIM_DIR: '/stub-shim',
-      // A run's gateway token (trigger-caller-v1): each twin's own way of minting it.
+      // A run's gateway token (trigger-caller-v1): the daemon's own way of minting it.
       checkCallers: core.createCheckCallers(), checkCallerEnv: core.checkCallerEnv, GATEWAY_SOCK_PATH: '/stub-sock',
       checkRunCaller: () => ({ env: {}, release: () => {} }),
       persistTriggerState: (_h: string, id: string) => { persisted.push(id) },
@@ -595,7 +565,7 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const twin = new Function(...Object.keys(env), js)(...Object.values(env)) as {
+    const daemon = new Function(...Object.keys(env), js)(...Object.values(env)) as {
       tickTriggers: () => void
       startUnclaimedRun: (e: unknown, f: unknown, now: number) => void
       deliverUnclaimedFires: (now: number) => void
@@ -603,11 +573,11 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
     }
     const pids = env.demoTriggerCheckPids as Set<number>
     const abort = env.demoTriggerChecks as AbortController
-    const background = () => ({ triggerChecks: pids.size, triggerRuns: twin.inFlight() })
+    const background = () => ({ triggerChecks: pids.size, triggerRuns: daemon.inFlight() })
 
     // Unfenced (production): the tick runs the check with the fence options and replays.
-    twin.tickTriggers()
-    expect(checks, twinName).toHaveLength(1)
+    daemon.tickTriggers()
+    expect(checks).toHaveLength(1)
     expect(checks[0]!.opts.maySpawn()).toBe(true)
     expect(checks[0]!.opts.children).toBe(pids)
     expect(events).toContain('replay')
@@ -624,9 +594,9 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
     // A second trigger, due and not running, so only the fence keeps the tick from it.
     armedTriggers.set('/h\nt2', { ...entry, def: { ...entry.def, id: 't2' }, running: false, nextRunAtMs: 0, fireSentAt: new Map() })
     events.length = 0
-    twin.tickTriggers()
-    twin.deliverUnclaimedFires(Date.now())
-    twin.startUnclaimedRun({ ...entry, def: { ...entry.def, start: { kind: 'stub' } } }, { seq: 1 }, Date.now())
+    daemon.tickTriggers()
+    daemon.deliverUnclaimedFires(Date.now())
+    daemon.startUnclaimedRun({ ...entry, def: { ...entry.def, start: { kind: 'stub' } } }, { seq: 1 }, Date.now())
     expect(checks).toHaveLength(1)
     expect(events).toEqual([])
     expect(delivered).toEqual([])
@@ -644,11 +614,11 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
   })
 })
 
-// The offline host's minute sweep and its delivery into a session bypass the command drain; each twin's own text, all stubs.
-describe('offline host sweep and delivery in a fenced Demo, in each twin', () => {
+// The offline host's minute sweep and its delivery into a session bypass the command drain; the daemon's own text, all stubs.
+describe('offline host sweep and delivery in a fenced Demo', () => {
   const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
   function extract(source: string, names: string[]): string {
-    const parsed = ts.createSourceFile('twin.ts', source, ts.ScriptTarget.ES2022, true)
+    const parsed = ts.createSourceFile('daemon.ts', source, ts.ScriptTarget.ES2022, true)
     const found = new Map<string, string>()
     const visit = (node: ts.Node) => {
       if (ts.isFunctionDeclaration(node) && node.name && names.includes(node.name.text) && !found.has(node.name.text)) found.set(node.name.text, node.getText(parsed))
@@ -658,21 +628,10 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     for (const n of names) if (!found.has(n)) throw new Error('Missing ' + n)
     return names.map((n) => found.get(n)!).join('\n')
   }
-  /** The host journal factory as the source twin carries it (its inlined text, the one function). */
-  function hostJournalFromText(text: string): typeof createHostJournal {
-    const at = text.indexOf('function createHostJournal(')
-    const end = text.indexOf('\n}', at) + 2
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    // `__name`: the one bundler helper the generated daemon defines (daemon-source.ts INJECTED_HELPERS_SOURCE).
-    return new Function('__name', '"use strict"; return ' + text.slice(at, end))((f: unknown) => f) as typeof createHostJournal
-  }
-  const twinTexts: Array<[string, string]> = [
-    ['standalone', read('src/providers/daemon-standalone.ts')],
-    ['source', getDaemonSource()],
-  ]
+  const daemonText = read('src/providers/daemon-standalone.ts')
 
   function build(text: string, isDemo: boolean) {
-    // The twin reads its fence through this view, so a test can point it at a real quiesce.
+    // The daemon reads its fence through this view, so a test can point it at a real quiesce.
     let fenceSource: { fenced: boolean } = { fenced: false }
     const fence = { get fenced() { return fenceSource.fenced }, set fenced(v: boolean) { fenceSource = { fenced: v } }, isDemo }
     const drain = createDaemonCommandDrain()
@@ -695,38 +654,36 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     const delivery = new Function(...Object.keys(env), js)(...Object.values(env)) as {
       deliverFromOfflineHost: (sid: string, text: string, messageId: string) => Promise<{ ok: boolean; reason?: string }>
     }
-    // The minute sweep is the host journal's (host-journal-core.ts), as each twin wires it: the
-    // standalone twin imports it, the source twin inlines its text.
-    const make = text.includes('function createHostJournal(') ? hostJournalFromText(text) : createHostJournal
-    const journal = make({
+    // The minute sweep is the host journal's (host-journal-core.ts), as the daemon wires it.
+    const journal = createHostJournal({
       fenced: () => fence.fenced,
       createJournal: () => ({}),
       createMigration: () => ({ boot: () => {} }),
       createHost: () => ({ sweep: () => { sweeps.push(1); return Promise.resolve(0) }, reloadSlices: () => {} }),
       host: {}, log: () => {},
     } as unknown as Parameters<typeof createHostJournal>[0])
-    const twin = { offlineSweepTick: () => journal.sweepTick(), deliverFromOfflineHost: delivery.deliverFromOfflineHost }
+    const daemon = { offlineSweepTick: () => journal.sweepTick(), deliverFromOfflineHost: delivery.deliverFromOfflineHost }
     return {
-      twin, fence, drain, sends, sweeps,
+      daemon, fence, drain, sends, sweeps,
       openGate: () => gateOpen.resolve(), finishSend: () => sendDone.resolve(),
       readFenceFrom: (q: { fenced: boolean }) => { fenceSource = q },
     }
   }
   const tick = () => new Promise((r) => setTimeout(r, 0))
 
-  it.each(twinTexts)('%s: the sweep runs unfenced and not once fenced', (_n, text) => {
-    const t = build(text, true)
-    t.twin.offlineSweepTick()
+  it('the sweep runs unfenced and not once fenced', () => {
+    const t = build(daemonText, true)
+    t.daemon.offlineSweepTick()
     expect(t.sweeps).toHaveLength(1)
     t.fence.fenced = true
-    t.twin.offlineSweepTick()
+    t.daemon.offlineSweepTick()
     expect(t.sweeps).toHaveLength(1)
   })
 
-  it.each(twinTexts)('%s: a delivery admitted before the fence is waited for by quiesce settle', async (_n, text) => {
-    const t = build(text, true)
+  it('a delivery admitted before the fence is waited for by quiesce settle', async () => {
+    const t = build(daemonText, true)
     t.openGate()
-    const delivered = t.twin.deliverFromOfflineHost('s1', 'hi', 'qm-1')
+    const delivered = t.daemon.deliverFromOfflineHost('s1', 'hi', 'qm-1')
     await tick()
     expect(t.sends).toEqual(['s1:hi'])
     const { q } = make({ settle: () => t.drain.settle(), deadlineMs: 5000 })
@@ -735,7 +692,7 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     const pending = q.quiesce(undefined, { home: DATA }).then((r) => { reply = r })
     expect(t.fence.fenced).toBe(true)
     // A delivery after the fence is refused, and the one in flight keeps quiesce waiting.
-    expect(await t.twin.deliverFromOfflineHost('s1', 'late', 'qm-2')).toEqual({ ok: false, reason: 'demo_stopping' })
+    expect(await t.daemon.deliverFromOfflineHost('s1', 'late', 'qm-2')).toEqual({ ok: false, reason: 'demo_stopping' })
     await new Promise((r) => setTimeout(r, 30))
     expect(reply).toBeUndefined()
     t.finishSend()
@@ -744,9 +701,9 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     expect(reply).toMatchObject({ ok: true, quiet: true })
   })
 
-  it.each(twinTexts)('%s: a delivery queued at the gate when the fence closes sends nothing', async (_n, text) => {
-    const t = build(text, true)
-    const delivered = t.twin.deliverFromOfflineHost('s1', 'hi', 'qm-1')
+  it('a delivery queued at the gate when the fence closes sends nothing', async () => {
+    const t = build(daemonText, true)
+    const delivered = t.daemon.deliverFromOfflineHost('s1', 'hi', 'qm-1')
     let settled = false
     void t.drain.settle().then(() => { settled = true })
     await tick()
@@ -759,17 +716,17 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     expect(settled).toBe(true)
   })
 
-  it.each(twinTexts)('%s: once fenced a delivery is refused before the gate', async (_n, text) => {
-    const t = build(text, true)
+  it('once fenced a delivery is refused before the gate', async () => {
+    const t = build(daemonText, true)
     t.fence.fenced = true
-    expect(await t.twin.deliverFromOfflineHost('s1', 'hi', 'qm-1')).toEqual({ ok: false, reason: 'demo_stopping' })
+    expect(await t.daemon.deliverFromOfflineHost('s1', 'hi', 'qm-1')).toEqual({ ok: false, reason: 'demo_stopping' })
     expect(t.sends).toEqual([])
   })
 
-  it.each(twinTexts)('%s: an ordinary daemon delivers as before and admits nothing into the drain', async (_n, text) => {
-    const t = build(text, false)
+  it('an ordinary daemon delivers as before and admits nothing into the drain', async () => {
+    const t = build(daemonText, false)
     t.openGate()
-    const delivered = t.twin.deliverFromOfflineHost('s1', 'hi', 'qm-1')
+    const delivered = t.daemon.deliverFromOfflineHost('s1', 'hi', 'qm-1')
     // The drain does not see it: settle answers at once and a pause is not refused.
     let settled = false
     void t.drain.settle().then(() => { settled = true })
@@ -781,8 +738,8 @@ describe('offline host sweep and delivery in a fenced Demo, in each twin', () =>
     expect(t.sends).toEqual(['s1:hi'])
   })
 
-  it.each(twinTexts)('%s: the offline host is wired to these two and the gate rechecks the fence before the send', (_n, text) => {
-    const src = text
+  it('the offline host is wired to these two and the gate rechecks the fence before the send', () => {
+    const src = daemonText
     expect(src).toMatch(/fenced: (\(\) => |function \(\) \{ return )demoQuiesce\.fenced/)
     // `o`: a resend's options (a trigger fire again: dedupe by the line record, offline-host-core.ts).
     expect(src).toMatch(/deliver: (\(sid, text, messageId, o\) => |function \(sid, text, messageId, o\) \{ return )deliverFromOfflineHost\(sid, text, messageId, o\)/)

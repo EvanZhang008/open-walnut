@@ -27,9 +27,8 @@
  * literal segments case-insensitively, `:name` one segment, a last `*name` the rest,
  * a trailing slash optional, HEAD answered by a GET route without its body.
  *
- * How the twins get it: daemon-standalone.ts and wn-cli.ts import createPluginJobDoor;
- * daemon-source.ts inlines its `toString()` through `__CREATE_PLUGIN_JOB_DOOR__`. So the
- * factory body references NOTHING at module scope; every side effect arrives through deps.
+ * daemon-standalone.ts and wn-cli.ts import createPluginJobDoor. The factory body
+ * references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface PluginJobDoorDeps {

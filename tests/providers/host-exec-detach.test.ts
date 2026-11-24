@@ -413,12 +413,10 @@ describe('the stop script a launcher runs before a rollback ends listed work (ST
     w.kill('SIGKILL')
   }, 30_000)
 
-  it('the service tells the launcher it is ready only once it said what it adopts (both twins; review F1)', () => {
-    for (const file of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = fs.readFileSync(path.join(fileURLToPath(new URL('../..', import.meta.url)), file), 'utf8')
-      expect(src, file).toMatch(/adoptionSettled\.then\([^\n]*launcherBeat[^\n]*\.ready\(/)
-      expect(src, file).not.toMatch(/void launcherBeat\.ready\(/)
-    }
+  it('the service tells the launcher it is ready only once it said what it adopts (review F1)', () => {
+    const src = fs.readFileSync(path.join(fileURLToPath(new URL('../..', import.meta.url)), 'src/providers/daemon-standalone.ts'), 'utf8')
+    expect(src).toMatch(/adoptionSettled\.then\([^\n]*launcherBeat[^\n]*\.ready\(/)
+    expect(src).not.toMatch(/void launcherBeat\.ready\(/)
   })
 
   it('a service says what it adopts, and ends listed work of a kind it cannot adopt (settleAdoption)', async () => {

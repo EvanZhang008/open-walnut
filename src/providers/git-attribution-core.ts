@@ -34,10 +34,7 @@
  * insertions, pure deletions, or replacements whose owner runs line up), so two
  * sessions appending to the same list still get one hunk each.
  *
- * How each twin gets it: daemon-standalone.ts imports createGitAttribution;
- * daemon-source.ts inlines `createGitAttribution.toString()` through
- * `__CREATE_GIT_ATTRIBUTION__`. So the factory body references NOTHING at module
- * scope (no imports, no helpers outside it), and it carries no backticks.
+ * Imported by daemon-standalone.ts (createGitAttribution). The factory body references NOTHING at module scope (no imports, no helpers outside it), and it carries no backticks.
  */
 
 export type LineOwner = 'mine' | 'other' | 'unknown'

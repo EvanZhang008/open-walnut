@@ -151,7 +151,7 @@ describe('triggers from the follower', () => {
     name: 'Review request clock', everyMs: 300_000, taskId: TASK_A, cwd: '/work/session-cwd', timeoutSeconds: 30, watches: null, own: true,
   }
 
-  /** A host whose daemon runs triggers (the twins' deps.triggers, its own def check), random parts fixed. */
+  /** A host whose daemon runs triggers (the daemon's deps.triggers, its own def check), random parts fixed. */
   function trigHost(drains: string[] = [...MAC_DRAINS]) {
     const dir = journalTmpDir('follower-triggers-')
     const clock = { now: T0 }
@@ -251,17 +251,15 @@ describe('triggers from the follower', () => {
   })
 })
 
-describe('the twins carry the follower\'s trigger commands', () => {
-  it('both twins allow, route and implement follower.triggers and follower.trigger.test', () => {
-    for (const twin of ['daemon-standalone.ts', 'daemon-source.ts']) {
-      const src = fs.readFileSync(path.join(import.meta.dirname, '../../src/providers', twin), 'utf8')
-      expect(src, twin).toContain("'follower.triggers', 'follower.trigger.test',")
-      expect(src, twin).toMatch(/case 'follower\.triggers': return cmdFollowerTriggers\(/)
-      expect(src, twin).toMatch(/case 'follower\.trigger\.test': return cmdFollowerTriggerTest\(/)
-      // Through the follower entry both twins share (follower-entry-core.ts).
-      expect(src, twin).toContain('followerEntry.triggers(home, cmd)')
-      expect(src, twin).toContain('followerEntry.triggerTest(home, cmd)')
-    }
+describe('the daemon carries the follower\'s trigger commands', () => {
+  it('the daemon allows, routes and implements follower.triggers and follower.trigger.test', () => {
+    const src = fs.readFileSync(path.join(import.meta.dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    expect(src).toContain("'follower.triggers', 'follower.trigger.test',")
+    expect(src).toMatch(/case 'follower\.triggers': return cmdFollowerTriggers\(/)
+    expect(src).toMatch(/case 'follower\.trigger\.test': return cmdFollowerTriggerTest\(/)
+    // Through the follower entry (follower-entry-core.ts).
+    expect(src).toContain('followerEntry.triggers(home, cmd)')
+    expect(src).toContain('followerEntry.triggerTest(home, cmd)')
     const entry = fs.readFileSync(path.join(import.meta.dirname, '../../src/providers/follower-entry-core.ts'), 'utf8')
     expect(entry).toContain('offline.followerTriggers(home, cmd.triggerId)')
     expect(entry).toContain('offline.followerTriggerTest(home, { actor: cmd.actor, args: cmd.args })')

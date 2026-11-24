@@ -15,9 +15,8 @@
  * launchd/init), so the floor guard rejects nothing legitimate. Callers get
  * `false` back and must treat it like "process already gone".
  *
- * The self-contained daemon twins (daemon-source.ts / daemon-standalone.ts /
- * acp-daemon.ts) cannot import this file; they carry the same inline guard.
- * Keep all of them in sync.
+ * The self-contained daemon (daemon-standalone.ts / acp-daemon.ts) does not import this file;
+ * it carries the same inline guard. Keep them in sync.
  */
 import { log } from '../logging/index.js'
 

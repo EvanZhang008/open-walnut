@@ -1,26 +1,21 @@
 /**
- * One-shot claude runs ('oneshot-v1') are wired the same way in both daemon
- * twins: the bun binary imports oneshot-core.ts, the JS source twin inlines its
- * factory as text. This pins the wiring (commands, capability, bridge and
+ * One-shot claude runs ('oneshot-v1') are wired into the daemon, which imports
+ * oneshot-core.ts. This pins the wiring (commands, capability, bridge and
  * follower exclusion, version/build lists, socket close and shutdown cleanup)
- * and runs the INLINED text against a real child, so a factory that grew a
- * module-scope reference fails here instead of on a host.
+ * and the core's warm pool.
  */
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import * as vm from 'node:vm'
 import { createOneShotCore, type OneShotChild } from '../../src/providers/oneshot-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const standalone = read('src/providers/daemon-standalone.ts')
-const source = read('src/providers/daemon-source.ts')
 const COMMANDS = ['oneshot.run', 'oneshot.prewarm', 'oneshot.cancel']
 const FAKE = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
 
@@ -32,24 +27,20 @@ function allowlist(src: string, name: string): string {
   return src.slice(start, end)
 }
 
-describe('oneshot-v1 twin wiring', () => {
-  it('both twins dispatch the three commands, end runs with their socket, and dispose at shutdown', () => {
-    for (const src of [standalone, source]) {
-      for (const cmd of COMMANDS) expect(src).toContain(`case '${cmd}':`)
-      expect(src).toContain('oneShot.dropClient(ws)')
-      expect(src).toMatch(/function cleanup\([^)]*\) \{\n {2}\/\/ One-shot claude runs[^\n]*\n {2}try \{ oneShot\.disposeAll\(\)/)
-    }
+describe('oneshot-v1 daemon wiring', () => {
+  it('the daemon dispatches the three commands, ends runs with their socket, and disposes at shutdown', () => {
+    for (const cmd of COMMANDS) expect(standalone).toContain(`case '${cmd}':`)
+    expect(standalone).toContain('oneShot.dropClient(ws)')
+    expect(standalone).toMatch(/function cleanup\([^)]*\) \{\n {2}\/\/ One-shot claude runs[^\n]*\n {2}try \{ oneShot\.disposeAll\(\)/)
   })
 
   it('the capability is advertised, not required, and no command reaches the bridge or a follower', () => {
     expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('oneshot-v1')
     expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('oneshot-v1')
-    for (const src of [standalone, source]) {
-      for (const list of ['BRIDGE_ALLOWED_COMMANDS', 'FOLLOWER_ALLOWED_COMMANDS', 'LANE_ALLOWED_COMMANDS']) {
-        if (src.indexOf(list + ' = new Set([') < 0) continue
-        const allow = allowlist(src, list)
-        for (const cmd of COMMANDS) expect(allow, list).not.toContain(cmd)
-      }
+    for (const list of ['BRIDGE_ALLOWED_COMMANDS', 'FOLLOWER_ALLOWED_COMMANDS', 'LANE_ALLOWED_COMMANDS']) {
+      if (standalone.indexOf(list + ' = new Set([') < 0) continue
+      const allow = allowlist(standalone, list)
+      for (const cmd of COMMANDS) expect(allow, list).not.toContain(cmd)
     }
   })
 
@@ -57,22 +48,13 @@ describe('oneshot-v1 twin wiring', () => {
     expect(read('src/providers/daemon-version-check.ts')).toContain("'src/providers/oneshot-core.ts'")
     expect(read('scripts/build-daemon.sh')).toContain('src/providers/oneshot-core.ts')
   })
-
-  it('the source twin inlines the factory exactly once and still parses', () => {
-    expect(source).toContain("['__CREATE_ONESHOT__', createOneShotCore.toString()]")
-    expect(source).toContain('const oneShot = (__CREATE_ONESHOT__)({')
-    const out = getDaemonSource()
-    expect(out).not.toContain('__CREATE_ONESHOT__')
-    expect(out).toContain('oneshot.prewarm')
-    expect(() => new vm.Script(out, { filename: 'daemon-source.js' })).not.toThrow()
-  })
 })
 
-describe('the inlined factory runs like the imported one', () => {
-  async function runWith(factory: typeof createOneShotCore): Promise<{ lines: string[]; exit: Record<string, unknown> }> {
+describe('a run of a real child', () => {
+  it('streams its lines and reports its exit', async () => {
     const lines: string[] = []
     let exit: Record<string, unknown> | null = null
-    const core = factory<string>({
+    const core = createOneShotCore<string>({
       spawn: spawn as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
       send: (_ws, ev, data) => {
         if (ev === 'oneshot.out') lines.push(...(data.lines as string[]))
@@ -83,15 +65,8 @@ describe('the inlined factory runs like the imported one', () => {
     const until = Date.now() + 20_000
     while (!exit && Date.now() < until) await new Promise((r) => setTimeout(r, 25))
     expect(core.stats()).toEqual({ runs: 0, pool: 0 })
-    return { lines: lines.map((l) => JSON.parse(l).type), exit: { code: (exit as Record<string, unknown> | null)?.code } }
-  }
-
-  it('produces the same stream and exit', async () => {
-    const strict = (fn: { toString(): string }) => new Function('"use strict"; return (' + fn.toString() + ')')()
-    const imported = await runWith(createOneShotCore)
-    const fromText = await runWith(strict(createOneShotCore))
-    expect(imported).toEqual({ lines: ['system', 'assistant', 'result'], exit: { code: 0 } })
-    expect(fromText).toEqual(imported)
+    expect(lines.map((l) => JSON.parse(l).type)).toEqual(['system', 'assistant', 'result'])
+    expect((exit as Record<string, unknown> | null)?.code).toBe(0)
   }, 60_000)
 })
 

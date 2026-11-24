@@ -48,7 +48,13 @@ import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/
 import { recentLinkDrops, resetLinkDropsForTest } from '../../src/providers/daemon-link-drops.js'
 import { __resetHostLinkLedgerForTest, linkDownIntervals } from '../../src/providers/host-link-ledger.js'
 import { waitHostLink } from '../../src/providers/daemon-drain-resend.js'
-import { EXPECTED, OLD, TARGET, priv, state, probe, MANAGED, stub, destructive } from '../helpers/daemon-connection-update-stubs.js'
+import { EXPECTED, OLD, TARGET, priv, state, probe, MANAGED, stub as baseStub, destructive } from '../helpers/daemon-connection-update-stubs.js'
+
+/** The shared stub, for a host whose daemon is the compiled one (what this leader deploys and starts). */
+const stub: typeof baseStub = (c, routes) => {
+  if ((c as unknown as { _runtime?: unknown })._runtime == null) (c as unknown as { _runtime: unknown })._runtime = 'binary'
+  return baseStub(c, routes)
+}
 
 let conns: DaemonConnection[] = []
 function make(): DaemonConnection {
@@ -245,7 +251,7 @@ describe('the background update of a service-managed daemon', () => {
       vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
       vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
       let uploaded = false
-      vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); uploaded = true; return 'node' })
+      vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); uploaded = true })
       managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
         uploaded = true
         return (await opts?.onStaged?.()) === false ? 'held' : 'applied'
@@ -1209,7 +1215,8 @@ describe('the host\'s mode rides the managed update', () => {
     await priv(c).recheckPostponedUpgrade()
     expect(managedUpdate).not.toHaveBeenCalled()
     expect((state(c)._serveUnfit as { expected: string }).expected).toBe(EXPECTED)
-    expect((state(c)._failedRuntimes as Map<string, string>).has('binary')).toBe(false)
+    // The walnut file's failure is not remembered as the daemon binary's (it would hold back the next deploy of the binary).
+    expect(state(c)._fileFailed).toBeNull()
     // Asked again, this build gets no offer: nothing is due.
     await expect(priv(c).serviceModeWant()).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/walnut file cannot go/) })
     followerFact.mockReturnValue({ kind: 'unknown' })

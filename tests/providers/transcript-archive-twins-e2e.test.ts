@@ -1,23 +1,21 @@
 /**
- * The session history archive on both daemon twins (transcript-archive.ts):
+ * The session history archive on the daemon (transcript-archive.ts):
  * `transcript.archive` compresses an old session and leaves a live one, and
  * every file command a reader uses (fs.stat, fs.read, fs.readRange, fs.ls,
  * fs.find) gets the archived session back plain, byte for byte, before it
  * answers. `transcript.restore` brings one back by id, and the capability is
- * advertised on both twins.
+ * advertised.
  *
  * MACHINE SAFETY: HOME, the Claude config dir and the daemon dirs are temp
  * paths; the only processes started and stopped are the daemons this file spawns.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { startFakeS3, type FakeS3 } from '../helpers/fake-s3.js'
@@ -26,27 +24,12 @@ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-archi
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const CORE = path.resolve(__dirname, '../../src/providers/task-dir-core.ts')
-const scriptPath = path.join(root, 'src', 'daemon.cjs')
-// The source twin loads the archive from its sidecar, which only bun builds (as scripts/build-daemon.sh does).
-const TWINS: Array<{ name: string; command: [string, string[]] }> = BUN ? [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  { name: 'standalone twin (bun)', command: [BUN, [STANDALONE, '--start']] },
-] : []
 
 interface Daemon { proc: ChildProcess; ws: WebSocket }
 const daemons: Daemon[] = []
 let rpcId = 1
 
-beforeAll(() => {
-  if (!BUN) return
-  fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(path.dirname(scriptPath), 'task-dir-core.cjs'), CORE], { encoding: 'utf8' })
-  if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-})
-
-async function boot(command: [string, string[]], name: string, home: string): Promise<Daemon> {
+async function boot(name: string, home: string): Promise<Daemon> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -60,7 +43,7 @@ async function boot(command: [string, string[]], name: string, home: string): Pr
     WALNUT_SPAWN_JOURNAL: path.join(root, name, 'spawn-journal.jsonl'),
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
-  const proc = spawn(command[0], command[1], { env, stdio: ['ignore', 'pipe', 'ignore'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     let out = ''
@@ -121,14 +104,14 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true })
 }, 60_000)
 
-describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
-  const slug = name.replace(/\W+/g, '-')
+describe.skipIf(!BUN)('session history archive: standalone daemon (bun)', () => {
+  const slug = 'standalone'
 
   it('archives an old session, and every file command reads it back whole', async () => {
     const home = path.join(root, slug, 'home')
     const proj = path.join(home, '.claude', 'projects', '-work-marina')
     for (const sid of ['sid-a', 'sid-b', 'sid-c']) writeSession(proj, sid)
-    const d = await boot(command, slug, home)
+    const d = await boot(slug, home)
     const caps = (await rpc(d, { cmd: 'hello' })).capabilities as string[]
     expect(caps).toContain('transcript-archive-v1')
     expect(caps).toContain('host-cache-prune-v1')
@@ -150,7 +133,7 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
     const { archiveTranscripts } = await import('../../src/providers/transcript-archive.js')
     const r = await archiveTranscripts([path.join(home, '.claude', 'projects')], { olderThanMs: 86_400_000, now: Date.now() + 2 * 86_400_000 })
     expect(r.sessions).toBe(6)
-    const d = await boot(command, slug + '-r', home)
+    const d = await boot(slug + '-r', home)
 
     const st = await rpc(d, { cmd: 'fs.stat', path: path.join(proj, 's-stat.jsonl') })
     expect(st.ok).toBe(true)
@@ -206,7 +189,7 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       expect(fs.readdirSync(proj).filter((n) => n.endsWith('.gz'))).toEqual([])
       setRemoteFetcher(null)
 
-      const d = await boot(command, slug + '-s3', home)
+      const d = await boot(slug + '-s3', home)
       await rpc(d, { cmd: 'hello' })
       // This test plays the daemon's server: it answers history.fetch the way the server does.
       const asked: unknown[] = []
@@ -280,7 +263,7 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       expect((await offloadArchived(projects, { ...tier, now: later + OFFLOAD_KEEP_MS, store })).offloaded).toBe(1)
       setRemoteFetcher(null)
 
-      const d = await boot(command, slug + '-named', home)
+      const d = await boot(slug + '-named', home)
       // A server of today: names its run, binds, and names its Walnut.
       expect((await rpc(d, { cmd: 'hello', run: 'named-run-' + slug, binds: true })).ok).toBe(true)
       const walnutHome = path.join(root, slug + '-named', 'walnut-home')
@@ -328,7 +311,7 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       "console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: a[a.indexOf('--session-id') + 1] }))",
       'process.stdin.resume()',
     ].join('\n'))
-    const d = await boot(command, slug + '-f', home)
+    const d = await boot(slug + '-f', home)
     const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"`
     const reply = await rpc(d, { cmd: 'start', sid: 'fork-child', cwd: root, message: '', resume: false, args: ['/bin/sh', '-c', sh, 'sh', '--resume', 'fork-parent', '--fork-session', '--session-id', 'fork-child'] })
     expect(reply.ok).toBe(true)

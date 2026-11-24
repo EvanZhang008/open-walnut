@@ -1,31 +1,25 @@
 /**
- * fs-read-range-gz-v1 on a REAL daemon (both twins): `fs.readRange {gz: true}` answers a
+ * fs-read-range-gz-v1 on a REAL standalone daemon: `fs.readRange {gz: true}` answers a
  * range of 16 KB or more as `dataGz`, byte-exact once unpacked; without `gz`, or for a short
  * range, `data` as before. 2026-11-20: older pages of large transcripts on one dev host
  * moved their 4 MB windows over the tunnel as plain base64, and 8 at a time took over 15 s.
  *
- * What's real: the daemon process (source twin under node, standalone under bun when bun is
- * installed) and its WS. Every daemon is killed by the pid it wrote into its own temp dir.
+ * What's real: the daemon process (daemon-standalone.ts under bun, when bun is installed) and
+ * its WS. Every daemon is killed by the pid it wrote into its own temp dir.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 
-const bunPath = (() => {
-  const own = testBun()
-  if (own) return own
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 interface Daemon { proc: ChildProcess; dir: string; port: number; sock: string; pid: number }
 
@@ -41,8 +35,8 @@ function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> 
   })
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-range-gz-${twin}-`))
+async function spawnDaemon(): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-range-gz-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -51,17 +45,10 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_GATEWAY_TIMEOUT_MS: '2000',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   const portFile = path.join(dir, 'daemon.port')
   const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir, sock,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -103,20 +90,18 @@ function data(reply: Record<string, unknown>): Record<string, unknown> {
   return (reply.data && typeof reply.data === 'object' ? reply.data : reply) as Record<string, unknown>
 }
 
-const twins: Array<'source' | 'standalone'> = bunPath ? ['source', 'standalone'] : ['source']
-
 it('advertises fs-read-range-gz-v1', () => {
   expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('fs-read-range-gz-v1')
 })
 
-describe.each(twins)('fs.readRange gz on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('fs.readRange gz on the real standalone daemon', () => {
   let d: Daemon
   let ws: WebSocket
   let file: string
   let bytes: Buffer
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     ws = await connectWs(d.port)
     const line = '{"type":"assistant","message":{"content":[{"type":"text","text":"step \\u597d done"}]},"timestamp":"2026-11-20T16:00:00.000Z"}\n'
     bytes = Buffer.from(line.repeat(4000), 'utf8')

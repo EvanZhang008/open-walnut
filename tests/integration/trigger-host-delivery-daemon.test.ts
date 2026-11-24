@@ -1,6 +1,6 @@
 /**
  * Trigger fires reach a session on the same host while the Walnut server is away
- * (trigger-claim-v1), end to end on a REAL daemon (both twins).
+ * (trigger-claim-v1), end to end on a REAL standalone daemon.
  *
  * The incident (2026-10-05): the Mac slept, the host kept running a one-minute
  * chat check, and five fires waited up to 42 minutes for the server while the
@@ -9,20 +9,16 @@
  * session by the daemon itself, and replayed with `host` set so the server only
  * records it. A server that claims keeps delivering alone.
  *
- * What's real: the daemon process (source twin under node with its trigger
- * sidecar bundled into its dir; standalone twin under bun), /bin/sh checks, the
+ * What's real: the daemon process (the standalone, under bun), /bin/sh checks, the
  * state files, a mock CLI reading its FIFO. What's faked: the Walnut server is a
  * bare WS client. Every daemon is killed by the pid it wrote into its own temp dir.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import type { HostDelivery } from '../../src/providers/trigger-check-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
@@ -35,12 +31,7 @@ const TASK = 'mslack00-0b27'
 const TRIGGER = 'mtrig000-c9bb'
 const GRACE_MS = 1_500
 
-const bunPath = (() => {
-  // The runner's own bun first, then the real home's (the test setup fakes HOME): testBun().
-  const own = testBun()
-  if (own) return own
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 /** The mock CLI: every user message it reads lands in its inbox file. */
 const MOCK_CLI = `
@@ -77,8 +68,8 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
   }
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-trighost-${twin}-`))
+async function spawnDaemon(): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trighost-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -88,22 +79,10 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_TRIGGER_REPLAY_MS: '60000',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    // The sidecar the deploy ships beside the script (scripts/build-daemon.sh).
-    buildSync({
-      entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-    })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -165,7 +144,7 @@ function slice(home = HOME): HostSlice {
 
 const PROMPT = 'New chat messages are in this fire. Handle each one. é中'
 
-describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)('trigger host delivery on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('trigger host delivery on the real standalone daemon', () => {
   let d: Daemon
   let itemsFile: string
   let inbox: string
@@ -197,7 +176,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
   }
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     itemsFile = path.join(d.dir, 'items.json')
     inbox = path.join(d.dir, 'inbox.jsonl')
     setItems([])

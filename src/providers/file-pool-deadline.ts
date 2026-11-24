@@ -16,10 +16,8 @@
  * The probe answers: the pool is alive and the disk is slow, so nothing changes and the deadline
  * is armed again. It does not answer in time: the pool is wedged, and `onWedged` runs once.
  *
- * How each twin gets it: the writers take it through their deps (`armDeadline`);
- * daemon-standalone.ts and daemon-core.ts import it, daemon-source.ts inlines
- * `armFilePoolDeadline.toString()` through `__ARM_FILE_POOL_DEADLINE__`. So the body references
- * NOTHING at module scope.
+ * The writers take it through their deps (`armDeadline`); daemon-standalone.ts and
+ * daemon-core.ts import it. The body references NOTHING at module scope.
  */
 
 export interface FilePoolDeadlineOptions {

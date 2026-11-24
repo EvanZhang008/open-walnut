@@ -32,7 +32,7 @@ const NODE_FREE: Record<string, string[]> = {
 /** Jobs that keep Node, each for a reason. */
 const KEEPS_NODE: Record<string, Record<string, string>> = {
   'ci.yml': {
-    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel, the JS daemon on Node (every suite that starts it)',
+    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel',
     browser: 'the Playwright runner',
     'browser-baseline': 'the Playwright runner: it runs the new failures again alone',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
@@ -296,105 +296,5 @@ describe('the Playwright fixtures start Walnut on bun', () => {
     for (const good of ["spawn(bunRuntime(), [", "execFileSync('git', [", "spawn('nodemon-free', ["]) expect(good).not.toMatch(SPAWNS_NODE)
     for (const bad of ["promisify(execFile)(process.execPath, ['dist/cli.js', 'tools'", "spawn(process.execPath, ['src/cli.ts'", "execFileSync(process.execPath, ['./dist/cli.js'"]) expect(bad).toMatch(WALNUT_ON_RUNNER)
     for (const good of ["promisify(execFile)(bunRuntime(), ['dist/cli.js'", "args: [process.execPath, path.resolve(dir, 'mock-claude.mjs')]", "spawn(process.execPath, [MOCK_CLI"]) expect(good).not.toMatch(WALNUT_ON_RUNNER)
-  })
-})
-
-/** The runtimes a test starts bun with: the runner's own, or the bun on PATH. */
-const BUN_RUNTIME = String.raw`(?:process\.execPath|HOST_RUNTIME|bunRuntime\(\))`
-/** The JS twin started on bun, in the forms the twin suites used before tests/helpers/source-twin.ts. */
-const TWIN_ON_BUN = [
-  // spawn(<bun>, [script, '--start']), [<bun>, [sourceDaemonScript(), '--start']], [<bun>, script, '--start'], spawn(<bun>, [twin, 'wn', ...])
-  new RegExp(BUN_RUNTIME + String.raw`\s*,\s*\[?\s*[\w.]+(?:\([^()]*\))?\s*,\s*['"](?:--start|--service|--status|--stop|--version|wn|walnut)['"]`, 'g'),
-  // spawn(binary ?? <bun>, [...(binary ? [] : [path.join(home, 'daemon.cjs')]), '--start'])
-  new RegExp(BUN_RUNTIME + String.raw`\s*,\s*\[(?:\[\]|[^\]])*?\bdaemon[\w-]*\.cjs`, 'g'),
-  // spawn(twin === 'source' ? <bun> : BUN!, args)
-  new RegExp(String.raw`['"]source['"]\s*\?\s*` + BUN_RUNTIME, 'g'),
-  // twin === 'standalone' ? [BUN!, [...]] : [<bun>, [script]]
-  new RegExp(String.raw`\[\s*` + BUN_RUNTIME + String.raw`\s*,\s*\[\s*\w*[sS]cript\w*\s*\]\s*\]`, 'g'),
-]
-function twinOnBun(text: string): string[] {
-  const hits: string[] = []
-  for (const re of TWIN_ON_BUN) {
-    for (const m of text.matchAll(re)) {
-      const end = text.indexOf('\n', m.index)
-      const line = text.slice(text.lastIndexOf('\n', m.index) + 1, end === -1 ? undefined : end)
-      // A deliberate bun leg names itself; the standalone twin is bun's own.
-      if (line.includes('source twin (bun)') || m[0].includes('daemon-standalone')) continue
-      hits.push(m[0])
-    }
-  }
-  return hits
-}
-/** Every script under tests (test files and the helpers they share), but this one. */
-const walkScripts = (dir: string): string[] => fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) =>
-  e.isDirectory() ? walkScripts(path.join(dir, e.name)) : /\.[cm]?[jt]s$/.test(e.name) ? [path.join(dir, e.name).split(path.sep).join('/')] : [])
-const TWIN_SCRIPTS = ['test:source-twin-node', 'test:source-twin-node-suites']
-describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
-  it('test:source-twin-node requires Node and runs the node cases of the suites that run both twins', () => {
-    const script = SCRIPTS['test:source-twin-node']!
-    expect(vitestPartsOf(script).length).toBeGreaterThan(0)
-    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .* -t 'source twin \\\(node\\\)' /)
-  })
-
-  it('test:source-twin-node-suites requires Node, and node-side runs it', () => {
-    const script = SCRIPTS['test:source-twin-node-suites']!
-    expect(vitestPartsOf(script).length).toBeGreaterThan(0)
-    // One worker, as the other heavy tiers: these suites start servers, daemons and timed windows.
-    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .*--maxWorkers=1 /)
-    const runs = (workflow('ci.yml').jobs['node-side']!.steps ?? []).map((s) => s.run ?? '')
-    expect(runs).toContain('bun run test:source-twin-node-suites -- --shard=${{ matrix.shard }}/4')
-  })
-
-  it('node-side runs those suites in four legs, every leg with its own quarter, the short checks in leg 1', () => {
-    // 2026-11-08: the suites took 40 of the one job's 50 minutes, the longest pole of CI.
-    const job = workflow('ci.yml').jobs['node-side'] as unknown as { strategy: { matrix: { shard: number[] } }; steps: Array<{ run?: string; if?: string }> }
-    expect(job.strategy.matrix.shard).toEqual([1, 2, 3, 4])
-    for (const cmd of ['test:plugin-packages', 'test:npm-channel', 'playwright test --list']) {
-      const step = job.steps.find((s) => (s.run ?? '').includes(cmd))
-      expect(step?.if, cmd).toBe('matrix.shard == 1')
-    }
-    expect(job.steps.find((s) => (s.run ?? '').includes('test:source-twin-node-suites'))?.if).toBeUndefined()
-  })
-
-  it('every file those scripts name exists (vitest skips a filter that matches nothing)', () => {
-    for (const name of TWIN_SCRIPTS) {
-      const named = SCRIPTS[name]!.split(/\s+/).filter((w) => /^tests\/.+\.test\.ts$/.test(w))
-      expect(named.length, name).toBeGreaterThan(10)
-      for (const f of named) expect(fs.existsSync(path.join(REPO, f)), `${name}: ${f}`).toBe(true)
-    }
-  })
-
-  it('no test file or helper starts the JS twin on bun (SOURCE_TWIN.file from tests/helpers/source-twin.ts)', () => {
-    const twinFiles = walkScripts('tests').filter((f) => f !== 'tests/scripts/ci-bun-only.test.ts')
-      .map((f) => [f, fs.readFileSync(path.join(REPO, f), 'utf8')] as const)
-      .filter(([, text]) => /getDaemonSource|daemon-source|\bdaemon[\w-]*\.cjs/.test(text))
-    expect(twinFiles.length).toBeGreaterThan(60)
-    const offenders = twinFiles.flatMap(([f, text]) => twinOnBun(text).map((hit) => `${f}: ${hit}`))
-    expect(offenders).toEqual([])
-  })
-
-  it('the check catches the forms a test used', () => {
-    for (const bad of [
-      "spawn(process.execPath, [script, '--start'], { env })",
-      "command: () => [process.execPath, [sourceDaemonScript(dir), '--start']]",
-      "daemonArgv = [process.execPath, script, '--start']",
-      "spawn(process.execPath, [twin, 'wn', 'tools', 'list'])",
-      "spawn(HOST_RUNTIME, [script, '--start'])",
-      ": [process.execPath, [path.join(BIN, 'daemon.cjs'), '--start']]",
-      "spawn(daemonBinary ?? process.execPath, [\n    ...(daemonBinary ? [] : [path.join(HOME, 'daemon.cjs')]), '--start'])",
-      "spawn(twin === 'source' ? process.execPath : BUN!, args)",
-      "twin === 'standalone' ? [BUN!, [standalone]] : [process.execPath, [script]]",
-    ]) expect(twinOnBun(bad), bad).not.toEqual([])
-    for (const good of [
-      "spawn(SOURCE_TWIN.file, [script, '--start'], { env })",
-      "args: [process.execPath, mock, sid]",
-      "workerCmd: [process.execPath, WORKER_BUNDLE]",
-      "spawn(process.execPath, [FAKE, '-p'])",
-      "spawn(process.execPath, ['-e', snippet])",
-      "spawn(process.execPath, [script, cfgFile])",
-      "spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'])",
-      "spawn(process.execPath, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'])",
-      "{ name: 'source twin (bun)', command: () => [process.execPath, [path.join(dir, 'daemon.cjs'), '--start']] }",
-    ]) expect(twinOnBun(good), good).toEqual([])
   })
 })

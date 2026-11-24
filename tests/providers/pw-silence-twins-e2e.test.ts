@@ -1,5 +1,5 @@
 /**
- * Every session either daemon twin starts carries the page silencer's preload first in
+ * Every session the daemon starts carries the page silencer's preload first in
  * NODE_OPTIONS (src/providers/pw-silence-core.ts), so a Playwright run a task session starts
  * on a Mac is silent whatever branch it builds (2026-11-08: such runs, from branches cut
  * before the in-repo silence, switched a Mac's speaker on all night). Booted for real: the
@@ -13,36 +13,19 @@
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { PW_SILENCE_PRELOAD_NAME, pwSilencePreloadSource } from '../../src/providers/pw-silence-core.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-pw-silence-twins-')))
 afterAll(() => { if (root.includes('walnut-pw-silence-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed (the preload rides task-dir-core, ACP needs acp-daemon-core).
-if (BUN) {
-  for (const name of ['task-dir-core', 'secrets-core', 'acp-daemon']) {
-    const out = name === 'acp-daemon' ? 'acp-daemon-core.cjs' : `${name}.cjs`
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, out),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 // A real Node for the runner stand-in (the preload is CommonJS for Node, as Playwright runs on it).
 const NODE = ['/usr/local/bin/node', '/usr/bin/node', '/opt/homebrew/bin/node'].find((p) => fs.existsSync(p))
 
@@ -62,7 +45,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string, extra: Record<string, string> = {}): Promise<void> {
+async function boot(dir: string, extra: Record<string, string> = {}): Promise<void> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -77,8 +60,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string, extra: Record<str
     ...extra,
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'WALNUT_PW_SILENCE']) if (!(k in extra)) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -166,10 +148,10 @@ function fakeCheckout(dir: string): void {
   ].join('\n'))
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('starts every session with the silencer preload first in NODE_OPTIONS, and the runner installs it', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    await boot(dir)
     const preload = path.join(dir, 'state', 'pw-silence', PW_SILENCE_PRELOAD_NAME)
     const seen = path.join(dir, 'seen.txt')
     fakeCheckout(dir)
@@ -207,8 +189,8 @@ describe.each(TWINS)('$name', (twin) => {
 
   it('an ACP agent gets it too, and an engine env that clears NODE_OPTIONS keeps only the silencer', async () => {
     if (!NODE) return
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-acp')
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone' + '-acp')
+    await boot(dir)
     const preload = path.join(dir, 'state', 'pw-silence', PW_SILENCE_PRELOAD_NAME)
     // A stand-in agent worker: records its NODE_OPTIONS, answers initialize and newSession.
     const worker = path.join(dir, 'worker.cjs')
@@ -234,8 +216,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 
   it('WALNUT_PW_SILENCE=0 on the daemon writes no preload and leaves NODE_OPTIONS as it was', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-off')
-    await boot(twin, dir, { WALNUT_PW_SILENCE: '0' })
+    const dir = path.join(root, 'standalone' + '-off')
+    await boot(dir, { WALNUT_PW_SILENCE: '0' })
     const seen = path.join(dir, 'seen.txt')
     const script = `printf '%s|%s|END' "\${NODE_OPTIONS-unset}" "\${BUN_OPTIONS-unset}" > '${seen}'; exec /bin/sleep 60`
     const reply = await rpc({ cmd: 'start', sid: 'pw-silence-session-off', args: ['/bin/sh', '-c', script], cwd: dir, message: 'init\n' })
@@ -247,19 +229,17 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 })
 
-describe('every session spawn in both twins carries the silencer', () => {
+describe('every session spawn in the daemon carries the silencer', () => {
   // A new spawn env (a Claude Code start, an ACP start) is found by the task-dir key every
   // session env must set (tests/core/work-place-rule.test.ts); each must set NODE_OPTIONS and
   // BUN_OPTIONS through pwSilenceOptions or pwSilenceAcpOptions in the same object. The dynamic cases above run both kinds.
-  for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
-    it(file, () => {
-      const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers', file), 'utf8')
-      const sites = [...src.matchAll(/WALNUT_TASK_DIR: /g)].map((m) => m.index!)
-      expect(sites.length).toBe(2)
-      for (const at of sites) {
-        const around = src.slice(at, at + 600)
-        expect(around, `${file} at ${src.slice(0, at).split('\n').length}`).toMatch(/\.\.\.pwSilence(Acp)?Options\(/)
-      }
-    })
-  }
+  it('daemon-standalone.ts', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    const sites = [...src.matchAll(/WALNUT_TASK_DIR: /g)].map((m) => m.index!)
+    expect(sites.length).toBe(2)
+    for (const at of sites) {
+      const around = src.slice(at, at + 600)
+      expect(around, `daemon-standalone.ts at ${src.slice(0, at).split('\n').length}`).toMatch(/\.\.\.pwSilence(Acp)?Options\(/)
+    }
+  })
 })

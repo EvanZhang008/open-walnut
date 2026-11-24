@@ -6,8 +6,7 @@
  * ('follower-peer-v1'), its triggers and trigger_test ('follower-triggers-v1'), what is
  * pending for it, and a new ask started here ('replica-start-v1'; WP12).
  *
- * Shared by both daemon twins (daemon-source.ts inlines it by `toString()`): one function,
- * every helper inside it, types only imported. The twins' `cmdFollower*` handlers check the
+ * One function, every helper inside it, types only imported. The daemon's `cmdFollower*` handlers check the
  * socket speaks for `home` (followerHomeOf), call one function here and send its answer; a
  * server that holds the daemon runtime in its own process calls the same functions with no
  * socket at all.

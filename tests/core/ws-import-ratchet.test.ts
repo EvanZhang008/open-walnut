@@ -8,16 +8,15 @@
  * (host-read-silent-link-e2e on bun, 2026-10-22). This test keeps every import
  * on the seam.
  *
- * The daemon twins are exempt: they are separate programs with their own `ws`
- * (the bun-compiled daemon serves with Bun.serve, the JS fallback requires the
- * package at run time), and they read no byte counters.
+ * The daemon is exempt: it is a separate program that serves with Bun.serve,
+ * and it reads no byte counters.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
-const EXEMPT = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
+const EXEMPT = new Set(['src/providers/daemon-standalone.ts'])
 const BARE_WS = /\bfrom\s+['"]ws['"]|\bimport\s*\(\s*['"]ws['"]\s*\)|^\s*import\s+['"]ws['"]/m
 
 function sourceFiles(dir: string): string[] {

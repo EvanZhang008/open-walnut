@@ -20,7 +20,7 @@
  * `setImmediate` does NOT count as a fix: deferred sync work still blocks.
  *
  * Files that never share the web server's event loop are exempt (workers/,
- * the daemon twins, CLI-only hooks) — listed in EXEMPT_PATHS.
+ * the daemon's child wrapper, CLI-only hooks) — listed in EXEMPT_PATHS.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -33,7 +33,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 /** Files whose code never runs on the web server's event loop. */
 const EXEMPT_PATHS = [
   'src/workers/',            // separate child processes by design
-  'src/providers/daemon-source.ts',     // daemon twin (JS fallback)
   'src/providers/daemon-child-spawn.ts', // the daemon's child wrapper: it only forwards the daemon's own calls, counted where daemon-standalone.ts makes them
   // daemon-standalone.ts is NOT exempt: a server can run the daemon runtime on its own main
   // thread (experiment in_process_daemon, src/providers/in-process-daemon.ts).

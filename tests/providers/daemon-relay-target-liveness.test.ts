@@ -1,5 +1,5 @@
 /**
- * Which trusted client a daemon relay goes to (pickTrustedClient, both twins).
+ * Which trusted client a daemon relay goes to (pickTrustedClient).
  *
  * The field state this pins (2026-10-01): the walnut server's SSH port forward
  * to a host died on the far side, the host's sshd kept the forwarded socket to
@@ -7,9 +7,7 @@
  * phone send to that socket (the FIRST trusted client), each relay timed out,
  * and even after the Mac reconnected its fresh socket sat behind the dead one.
  *
- * Real daemon processes: the source twin under node (no `ws` package next to
- * it, so its hand-rolled WebSocket server runs, as on a remote host), and the
- * standalone twin under bun when bun is installed. A "dead" client is a real
+ * A real daemon process: daemon-standalone.ts under bun. A "dead" client is a real
  * socket whose reader is paused: it stays open and sends nothing, exactly a
  * forward with no one behind it. A fake cloud plays the bridge, which is where
  * phone sends come from. The beat is shortened to 500ms through the test-only
@@ -22,8 +20,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -50,8 +46,8 @@ async function waitFor(pred: () => boolean, ms: number, what: string): Promise<v
 
 interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number }
 
-async function spawnDaemon(twin: 'source' | 'standalone', extraEnv: Record<string, string> = {}): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-liveness-${twin}-`))
+async function spawnDaemon(extraEnv: Record<string, string> = {}): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-liveness-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -61,17 +57,10 @@ async function spawnDaemon(twin: 'source' | 'standalone', extraEnv: Record<strin
     ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ${b.toString()}`))
+  const proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[daemon] ${b.toString()}`))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'daemon')
   return {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -118,7 +107,7 @@ interface Client {
   goSilent: () => void
 }
 
-describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as const))('relay target liveness (%s twin)', (twin) => {
+describe.skipIf(!bunPath)('relay target liveness', () => {
   let daemon: Daemon
   let cloud: WebSocketServer
   let bridgeSide: WebSocket | null = null
@@ -160,7 +149,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
         try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'hello') bridgeSide = ws as unknown as WebSocket } catch { /* frame */ }
       })
     })
-    daemon = await spawnDaemon(twin)
+    daemon = await spawnDaemon()
     // The configuring socket is a trusted client too: it closes once the bridge is up.
     const setup = await connect(daemon.port)
     const port = (cloud.address() as { port: number }).port
@@ -185,7 +174,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
 
   // First, while no case has connected a client yet: a client a case closed
   // leaves the list only when the daemon sees its close, which on a half-closed
-  // socket is the JS twin's own FIN handling, not the pick this case pins.
+  // socket is the daemon's own FIN handling, not the pick this case pins.
   it('no trusted client at all keeps the plain contract text', async () => {
     const res = await phoneSend('qm-mobile-empty-1')
     expect(res.ok).not.toBe(true)
@@ -257,7 +246,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
 // the lead claimable from 3s. The Mac holds two sockets, as a Walnut server
 // does: the one its leader.configure named, and its bulk channel, which names
 // no Walnut (with only the first held to it, CI still failed: cf87118c).
-describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as const))('relay target while the companion leads (%s twin)', (twin) => {
+describe.skipIf(!bunPath)('relay target while the companion leads', () => {
   const LONG_BEAT_MS = 2_000
   const TAKEOVER_MS = 3_000
   const WALNUT_ID = 'wrelayliveness01'
@@ -275,7 +264,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
         try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'hello') bridgeSide = ws as unknown as WebSocket } catch { /* frame */ }
       })
     })
-    daemon = await spawnDaemon(twin, { WALNUT_TRUSTED_CLIENT_BEAT_MS: String(LONG_BEAT_MS), WALNUT_LEADER_TAKEOVER_MS: String(TAKEOVER_MS) })
+    daemon = await spawnDaemon({ WALNUT_TRUSTED_CLIENT_BEAT_MS: String(LONG_BEAT_MS), WALNUT_LEADER_TAKEOVER_MS: String(TAKEOVER_MS) })
     const setup = await connect(daemon.port)
     const port = (cloud.address() as { port: number }).port
     expect((await rpc(setup, 'bridge.configure', { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: 't', hostAlias: HOST_ALIAS })).ok).toBe(true)

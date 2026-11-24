@@ -21,7 +21,7 @@ import {
   bundledSidecarVersion,
   readSidecarDaemonVersion,
   resolveDaemonSourceVersion,
-} from '../../src/providers/daemon-source.js'
+} from '../../src/providers/daemon-version-resolve.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
 let tmp: string

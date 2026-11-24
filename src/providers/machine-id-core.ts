@@ -7,8 +7,7 @@
  * It lives outside every Walnut data dir, so a new or moved data dir, a reinstall that keeps the
  * account's home, a new port and a renamed hosts alias all keep it, and a copy of the data dir on
  * another machine does not carry it. The server reads it through src/core/machine-id.ts; the
- * daemon twins send it in their hello (daemon-standalone.ts imports this file, daemon-source.ts
- * inlines `machineIdOf` as `__MACHINE_ID_OF__`, so its body references nothing at module scope).
+ * daemon sends it in its hello (daemon-standalone.ts imports this file; `machineIdOf` references nothing at module scope).
  */
 
 /** A machine id's form, the one every reader checks an id with (machineIdOf keeps its own copy: its body is inlined). */

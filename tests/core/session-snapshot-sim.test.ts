@@ -216,7 +216,7 @@ function withDaemonRestarts(events: SimEvent[], rand: () => number): SimEvent[] 
 
 // Emit-on-change: the REAL `snapshotDiffers`, imported directly.
 // It used to be a hand-written mirror of a copy in daemon-standalone.ts, guarded
-// by a source-parity regex test. Both twins' copies were collapsed into the
+// by a source-parity regex test. The daemon's copies were collapsed into the
 // zero-import, side-effect-free daemon-fold.ts (C19), which the sim can simply
 // import — so the mirror AND its anti-drift guard are gone: the sim now models
 // the daemon's push decision by CONSTRUCTION, not by textual agreement.
@@ -502,23 +502,20 @@ describe('snapshot projection — fault-injection interleaving simulator (§6.5)
     expect(neverWritten, 'the vast majority of scenarios must exercise a real write').toBeLessThan(60)
   }, 120_000)
 
-  it('the daemon twins hold NO private copy of snapshotDiffers (single-source guard)', async () => {
+  it('the daemon holds NO private copy of snapshotDiffers (single-source guard)', async () => {
     // The sim's emit-on-change imports the real snapshotDiffers from
     // daemon-fold.ts. That is only a faithful model of the daemon while the
     // daemon has no private copy of its own: a re-duplicated
-    // `function snapshotDiffers` in either twin could drift (e.g. dropping a
+    // `function snapshotDiffers` in the daemon could drift (e.g. dropping a
     // field from the compare = a silently suppressed push) and the whole
     // 300-scenario sweep would validate a daemon that no longer exists.
-    for (const file of ['daemon-standalone.ts', 'daemon-source.ts']) {
-      const src = await fsp.readFile(new URL(`../../src/providers/${file}`, import.meta.url), 'utf-8')
-      expect(
-        /function\s+snapshotDiffers\s*\(/.test(src),
-        `RE-DUPLICATION: src/providers/${file} declares its own snapshotDiffers again. It must `
-        + 'consume the single exported copy from src/providers/daemon-fold.ts (imported by the '
-        + 'standalone twin, textually injected as __SNAPSHOT_DIFFERS__ into the source twin), '
-        + 'or this sim silently models a different daemon.',
-      ).toBe(false)
-    }
+    const src = await fsp.readFile(new URL('../../src/providers/daemon-standalone.ts', import.meta.url), 'utf-8')
+    expect(
+      /function\s+snapshotDiffers\s*\(/.test(src),
+      'RE-DUPLICATION: src/providers/daemon-standalone.ts declares its own snapshotDiffers again. It must '
+      + 'import the single exported copy from src/providers/daemon-fold.ts, '
+      + 'or this sim silently models a different daemon.',
+    ).toBe(false)
     // …and the shared copy is actually reachable + behaving (bare v advance is
     // not a change; a real state flip is).
     const base: SessionSnapshot = {

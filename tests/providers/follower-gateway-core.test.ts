@@ -1,8 +1,8 @@
 /**
  * The daemon's hand-off of a host's `walnut` calls to its own Walnut server while the leader
  * is away (follower-gateway-core.ts): who gets a call, what comes back, and when the
- * daemon's own away answer takes over. Both twins run this same core (daemon-source.ts
- * inlines it); tests/providers/follower-gateway-twins.test.ts holds the wiring alike.
+ * daemon's own away answer takes over. tests/providers/follower-gateway-twins.test.ts holds
+ * the daemon's wiring of it.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { type FollowerGatewayResponse } from '../../src/providers/follower-gateway-core.js'
@@ -176,7 +176,7 @@ describe('follower gateway', () => {
     let routedAgain = 0
     expect(s.g.routeJob(job, vi.fn(), () => { routedAgain++ })).toBe('waiting')
     s.fire()
-    // The twin routes it afresh: its leader target found, it relays there and never asks the follower.
+    // The daemon routes it afresh: its leader target found, it relays there and never asks the follower.
     expect(routedAgain).toBe(1)
     expect(s.sock.sent).toEqual([])
     s.state.now = job.deadline - 1_000

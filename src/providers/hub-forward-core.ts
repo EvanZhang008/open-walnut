@@ -28,9 +28,7 @@
  * not be bound, which is tried again then). A connection accepted just as the link went is closed
  * at once and unbinds the port then.
  *
- * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts inlines its
- * `toString()` through `__CREATE_HUB_FORWARDS__` / `__PARSE_HUB_FORWARDS__`. So neither body
- * references anything at module scope.
+ * Imported by daemon-standalone.ts. Neither body references anything at module scope.
  */
 
 /** One forward a machine's file names. */

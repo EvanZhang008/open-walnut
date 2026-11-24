@@ -33,7 +33,6 @@ const CROSS_PLATFORM_FILES = [
   'scripts/lib/find-bun.sh',
   'src/constants.ts',
   'src/providers/local-daemon.ts',
-  'src/providers/daemon-source.ts',
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
 ]

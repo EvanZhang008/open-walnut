@@ -24,7 +24,7 @@ import { rangeBytes } from '../../src/core/range-gz.js'
 const ROOT = join(import.meta.dirname, '..', '..')
 const CHUNK_SIZE = (DaemonFileReader as unknown as { CHUNK_SIZE: number }).CHUNK_SIZE
 
-/** A daemon answering fs.readRange the way the twins do: gzipped when asked and smaller. */
+/** A daemon answering fs.readRange the way the real daemon does: gzipped when asked and smaller. */
 function serve(file: Buffer): void {
   sendMock.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
     if (cmd === 'fs.stat') return { ok: true, exists: true, mtimeMs: 1, size: file.length }
@@ -105,14 +105,12 @@ describe('class guard: every range read the reader makes may come gzipped', () =
     expect(src).not.toMatch(/Buffer\.from\(res\.data as string, 'base64'\)/)
   })
 
-  it('both daemon twins answer gz with dataGz, and advertise it', () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = readFileSync(join(ROOT, twin), 'utf8')
-      const body = src.slice(src.indexOf('async function cmdFsReadRange('))
-      const fn = body.slice(0, body.indexOf('\n}\n'))
-      expect(fn, twin).toMatch(/cmd\.gz === true/)
-      expect(fn, twin).toMatch(/dataGz: gz\.toString\('base64'\)/)
-    }
+  it('the daemon answers gz with dataGz, and advertises it', () => {
+    const src = readFileSync(join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+    const body = src.slice(src.indexOf('async function cmdFsReadRange('))
+    const fn = body.slice(0, body.indexOf('\n}\n'))
+    expect(fn).toMatch(/cmd\.gz === true/)
+    expect(fn).toMatch(/dataGz: gz\.toString\('base64'\)/)
     const caps = readFileSync(join(ROOT, 'src/providers/daemon-capabilities.ts'), 'utf8')
     expect(caps).toMatch(/'fs-read-range-gz-v1',/)
   })

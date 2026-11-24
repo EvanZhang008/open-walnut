@@ -1,5 +1,6 @@
 /**
- * Fold checkpoints, written and used by both daemon twins booted for real.
+ * Fold checkpoints, written and used by the session daemon (daemon-standalone.ts)
+ * booted for real.
  *
  * The incident: a daemon restart folded every live session's whole stream file
  * before listening (a 1.76 GB stream took 99s, the boot 2.5 min). Now a session's
@@ -13,27 +14,19 @@
  * "CLI" is /bin/sh cat-ing a prepared file, and the daemon is SIGKILLed after
  * each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { FOLD_CHECKPOINT_FORMAT } from '../../src/providers/fold-checkpoint-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -60,10 +53,9 @@ function daemonEnv(dirs: Dirs): Record<string, string | undefined> {
   }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+async function boot(dirs: Dirs): Promise<void> {
   const env = daemonEnv(dirs)
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -173,25 +165,19 @@ function eraseInPlace(file: string, needle: string): void {
   fs.closeSync(fd)
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fold-ck-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   await stop('SIGKILL')
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
 
-describe.each(TWINS)('fold checkpoints: $name', (twin) => {
+describe.skipIf(!BUN)('fold checkpoints: standalone daemon (bun)', () => {
   it('a dead session leaves a checkpoint, and every later rebuild continues from it', async () => {
     const dirs = makeDirs()
     const source = path.join(root, 'stream-source.jsonl')
     fs.writeFileSync(source, streamContent())
     const size = fs.statSync(source).size
-    await boot(twin, dirs)
+    await boot(dirs)
 
     // The "CLI" writes the whole stream and exits: the death drain folds it all.
     const started = await rpc({
@@ -217,7 +203,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     expect(JSON.parse(fs.readFileSync(ckPath, 'utf8'))).toEqual(ck)
 
     // A fresh daemon with nothing in memory: getState rebuilds from disk.
-    await boot(twin, dirs)
+    await boot(dirs)
     const baseline = await rpc({ cmd: 'getState', sid: 'ck-1' })
     expect((baseline.taskState as { tasks: Record<string, unknown> }).tasks['early-task']).toBeDefined()
 
@@ -252,7 +238,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     const source = path.join(root, 'stream-source.jsonl')
     fs.writeFileSync(source, streamContent())
     const size = fs.statSync(source).size
-    await boot(twin, dirs)
+    await boot(dirs)
     const started = await rpc({
       cmd: 'start', sid: 'ck-2', cwd: root, message: '', mode: 'default',
       args: ['/bin/sh', '-c', `cat ${JSON.stringify(source)}; sleep 30`, 'sh'],
@@ -270,7 +256,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     expect(ck.fold.cronIds).toEqual({ 'job-1': 1 })
 
     // A fresh (non-resume) spawn recreates the stream file and drops the old checkpoint.
-    await boot(twin, dirs)
+    await boot(dirs)
     const again = await rpc({
       cmd: 'start', sid: 'ck-2', cwd: root, message: '', mode: 'default',
       args: ['/bin/sh', '-c', 'sleep 30', 'sh'],
@@ -289,7 +275,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     const source = path.join(root, 'stream-source.jsonl')
     fs.writeFileSync(source, streamContent())
     const size = fs.statSync(source).size
-    await boot(twin, dirs)
+    await boot(dirs)
     const started = await rpc({
       cmd: 'start', sid: 'ck-3', cwd: root, message: '', mode: 'default',
       args: ['/bin/sh', '-c', `cat ${JSON.stringify(source)}; sleep 60`, 'sh'],
@@ -306,8 +292,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     fs.writeFileSync(jsonl + '.fold', foreign)
     expect(Object.keys(JSON.parse(fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8')).sessions)).toEqual(['ck-3'])
 
-    const [cmd, args] = twin.command()
-    const prewarm = spawnSync(cmd, args.map((a) => (a === '--start' ? '--prewarm-folds' : a)), {
+    const prewarm = spawnSync(BUN!, [STANDALONE, '--prewarm-folds'], {
       env: daemonEnv(dirs), encoding: 'utf8', timeout: 60_000,
     })
     expect(prewarm.status, prewarm.stderr).toBe(0)
@@ -326,13 +311,13 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     fs.appendFileSync(jsonl, L({ type: 'system', subtype: 'task_notification', task_id: 'late-task', status: 'completed' }))
     // A prewarm stopped by its deadline reports the cut and leaves the prepared
     // checkpoint valid (the server's clock rides WALNUT_FOLD_PREWARM_DEADLINE).
-    const cut = spawnSync(cmd, args.map((a) => (a === '--start' ? '--prewarm-folds' : a)), {
+    const cut = spawnSync(BUN!, [STANDALONE, '--prewarm-folds'], {
       env: { ...daemonEnv(dirs), WALNUT_FOLD_PREWARM_DEADLINE: '1' }, encoding: 'utf8', timeout: 60_000,
     })
     expect(cut.status, cut.stderr).toBe(0)
     expect(JSON.parse(cut.stdout.trim().split('\n').pop()!)).toMatchObject({ sessions: 1, written: 0, cut: 1 })
     expect(JSON.parse(fs.readFileSync(jsonl + '.fold.next', 'utf8')).boundary).toBe(next.boundary)
-    await boot(twin, dirs)
+    await boot(dirs)
     const state = await rpc({ cmd: 'getState', sid: 'ck-3' })
     expect(Object.keys((state.taskState as { tasks: Record<string, unknown> }).tasks).sort()).toEqual(['early-task', 'late-task'])
     await rpc({ cmd: 'stop', sid: 'ck-3' })

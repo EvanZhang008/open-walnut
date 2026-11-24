@@ -238,7 +238,7 @@ describe('upload.part', () => {
   })
 })
 
-describe('upload.part twin wiring', () => {
+describe('upload.part daemon wiring', () => {
   const ROOT = path.resolve(__dirname, '../..')
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
   const setLiteral = (src: string, name: string) => {
@@ -247,16 +247,14 @@ describe('upload.part twin wiring', () => {
     return src.slice(start, end).split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n')
   }
 
-  it('both twins dispatch it, allow it over the bridge, and never to a follower', () => {
-    for (const rel of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(rel)
-      expect(src, rel).toContain("case 'upload.part':")
-      expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS'), rel).toContain("'upload.part'")
-      expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS'), rel).not.toContain("'upload.part'")
-      expect(src, rel).toContain('function uploadsRootFor(')
-      // The folder no task owns is named to the core, which sweeps its finished uploads by age.
-      expect(src, rel).toMatch(/transferCore\.uploadPart\(cmd, root, root === (UPLOADS_OWNERLESS_ROOT|uploadsOwnerlessRoot\(\))\)/)
-    }
+  it('the daemon dispatches it, allows it over the bridge, and never to a follower', () => {
+    const src = read('src/providers/daemon-standalone.ts')
+    expect(src).toContain("case 'upload.part':")
+    expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS')).toContain("'upload.part'")
+    expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS')).not.toContain("'upload.part'")
+    expect(src).toContain('function uploadsRootFor(')
+    // The folder no task owns is named to the core, which sweeps its finished uploads by age.
+    expect(src).toMatch(/transferCore\.uploadPart\(cmd, root, root === uploadsOwnerlessRoot\(\)\)/)
   })
 
   it('is advertised, not required, and rides the bulk lane', () => {

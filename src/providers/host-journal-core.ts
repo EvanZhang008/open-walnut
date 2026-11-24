@@ -2,9 +2,8 @@
  * This host's journal: the one store of its journal dir (offline-journal-core.ts), the
  * offline host that answers and journals on it while a Walnut's leader is away
  * (offline-host-core.ts), the boot migration of what an older daemon left
- * (createJournalMigration), and the minute sweep. Shared by both daemon twins
- * (daemon-source.ts inlines it by `toString()`): one function, every helper inside it,
- * the three factories passed in, types only imported.
+ * (createJournalMigration), and the minute sweep. One function,
+ * every helper inside it, the three factories passed in, types only imported.
  *
  * Building it reads the slices (the offline host's copies) and writes nothing: the binary
  * also runs as the walnut CLI (--status, --stop, a `walnut wait` that lives for hours), so

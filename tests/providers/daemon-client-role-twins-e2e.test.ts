@@ -1,6 +1,6 @@
 /**
- * client-role-v1 on the real daemon twins, booted for real (the JS source twin
- * under node, and the standalone twin under bun when bun is installed).
+ * client-role-v1 on the real session daemon (daemon-standalone.ts under bun),
+ * booted for real.
  *
  * 2026-11-02: a test server attached read only to a host's shared daemon sat ahead
  * of the real Walnut in the daemon's socket order, so an env-less `walnut` call
@@ -11,36 +11,28 @@
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths and the
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 const sockets: WebSocket[] = []
 let rpcId = 1
 let daemonDir = ''
 
-async function boot(twin: Twin): Promise<number> {
+async function boot(): Promise<number> {
   // Short on purpose: a unix socket path is limited to 104 bytes on macOS, and the gateway
-  // socket sits three levels down (the Node twin cannot bind it under a long temp dir).
+  // socket sits three levels down (it cannot be bound under a long temp dir).
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.platform() === 'win32' ? os.tmpdir() : '/tmp', 'wrt-')))
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
@@ -55,8 +47,7 @@ async function boot(twin: Twin): Promise<number> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -134,12 +125,6 @@ async function waitFor(check: () => boolean, ms = 8_000): Promise<boolean> {
   return check()
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-role-twins-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   for (const s of sockets.splice(0)) { try { s.close() } catch { /* closed */ } }
   if (proc && proc.exitCode === null) {
@@ -154,54 +139,52 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`client.role probe, ${twin.name}`, () => {
-    it('advertises client-role-v1', async () => {
-      const port = await boot(twin)
-      const ws = await connect(port)
-      const hello = await rpc(ws, { cmd: 'hello' })
-      expect((hello.capabilities ?? (hello.result as { capabilities?: string[] } | undefined)?.capabilities) as string[]).toContain('client-role-v1')
-    }, 90_000)
+describe.skipIf(!BUN)('client.role probe, standalone daemon (bun)', () => {
+  it('advertises client-role-v1', async () => {
+    const port = await boot()
+    const ws = await connect(port)
+    const hello = await rpc(ws, { cmd: 'hello' })
+    expect((hello.capabilities ?? (hello.result as { capabilities?: string[] } | undefined)?.capabilities) as string[]).toContain('client-role-v1')
+  }, 90_000)
 
-    it('control: without the role, the first socket in order gets an env-less call', async () => {
-      const port = await boot(twin)
-      const first = await connect(port)
-      const second = await connect(port)
-      const gotFirst = collect(first, 'gateway-request')
-      const gotSecond = collect(second, 'gateway-request')
-      void externalCall().catch(() => undefined)
-      expect(await waitFor(() => gotFirst.length + gotSecond.length > 0)).toBe(true)
-      expect(gotFirst.length).toBe(1)
-      expect(gotSecond.length).toBe(0)
-    }, 90_000)
+  it('control: without the role, the first socket in order gets an env-less call', async () => {
+    const port = await boot()
+    const first = await connect(port)
+    const second = await connect(port)
+    const gotFirst = collect(first, 'gateway-request')
+    const gotSecond = collect(second, 'gateway-request')
+    void externalCall().catch(() => undefined)
+    expect(await waitFor(() => gotFirst.length + gotSecond.length > 0)).toBe(true)
+    expect(gotFirst.length).toBe(1)
+    expect(gotSecond.length).toBe(0)
+  }, 90_000)
 
-    it('a probe ahead of the real server never gets the call; the server does', async () => {
-      const port = await boot(twin)
-      const probe = await connect(port)
-      const server = await connect(port)
-      expect((await rpc(probe, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
-      const gotProbe = collect(probe, 'gateway-request')
-      const gotServer = collect(server, 'gateway-request')
-      void externalCall().catch(() => undefined)
-      expect(await waitFor(() => gotServer.length > 0)).toBe(true)
-      expect(gotProbe.length).toBe(0)
-    }, 90_000)
+  it('a probe ahead of the real server never gets the call; the server does', async () => {
+    const port = await boot()
+    const probe = await connect(port)
+    const server = await connect(port)
+    expect((await rpc(probe, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
+    const gotProbe = collect(probe, 'gateway-request')
+    const gotServer = collect(server, 'gateway-request')
+    void externalCall().catch(() => undefined)
+    expect(await waitFor(() => gotServer.length > 0)).toBe(true)
+    expect(gotProbe.length).toBe(0)
+  }, 90_000)
 
-    it('with only a probe attached, the call is not handed to it', async () => {
-      const port = await boot(twin)
-      const probe = await connect(port)
-      expect((await rpc(probe, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
-      const gotProbe = collect(probe, 'gateway-request')
-      const reply = await externalCall()
-      expect(gotProbe.length).toBe(0)
-      expect(reply.ok).not.toBe(true)
-    }, 90_000)
+  it('with only a probe attached, the call is not handed to it', async () => {
+    const port = await boot()
+    const probe = await connect(port)
+    expect((await rpc(probe, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
+    const gotProbe = collect(probe, 'gateway-request')
+    const reply = await externalCall()
+    expect(gotProbe.length).toBe(0)
+    expect(reply.ok).not.toBe(true)
+  }, 90_000)
 
-    it('refuses an unknown role', async () => {
-      const port = await boot(twin)
-      const ws = await connect(port)
-      const reply = await rpc(ws, { cmd: 'client.role', role: 'admin' })
-      expect(reply.ok).toBe(false)
-    }, 90_000)
-  })
-}
+  it('refuses an unknown role', async () => {
+    const port = await boot()
+    const ws = await connect(port)
+    const reply = await rpc(ws, { cmd: 'client.role', role: 'admin' })
+    expect(reply.ok).toBe(false)
+  }, 90_000)
+})

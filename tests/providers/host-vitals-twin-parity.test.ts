@@ -1,25 +1,20 @@
 /**
- * Host vitals ('host-vitals-v1', `host.vitals`) are wired the same way in both
- * daemon twins: the bun binary imports host-vitals-core.ts, the JS source twin
- * inlines its factory as text. This pins the wiring (command, capability,
- * bridge and follower exclusion, version/build lists, the ledger directory and
- * its start at boot) and runs the INLINED text against a real ledger, so a
- * factory that grew a module-scope reference fails here instead of on a host.
+ * Host vitals ('host-vitals-v1', `host.vitals`) in the daemon: daemon-standalone.ts
+ * imports host-vitals-core.ts. This pins the wiring (command, capability, bridge and
+ * follower exclusion, version/build lists, the ledger directory and its start at
+ * boot) and runs the core against a real ledger.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import * as vm from 'node:vm'
 import { createHostVitals, type HostVitalsDeps } from '../../src/providers/host-vitals-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => twinText(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'))
 const standalone = read('src/providers/daemon-standalone.ts')
-const source = read('src/providers/daemon-source.ts')
 const CORE = 'src/providers/host-vitals-core.ts'
 
 function setLiteral(src: string, name: string): string {
@@ -29,14 +24,12 @@ function setLiteral(src: string, name: string): string {
   return src.slice(start, end).split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n')
 }
 
-describe('host vitals twin wiring', () => {
-  it('both twins dispatch host.vitals, start the ledger at boot and keep it under HOME', () => {
-    for (const src of [standalone, source]) {
-      expect(src).toContain("case 'host.vitals':")
-      expect(src).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|(if \(LISTEN\) )?options\.onListening\?\.\(port\))/)
-      expect(src).toContain("path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals')")
-      expect(src).toContain("path.join(DAEMON_DIR, 'host-vitals')")
-    }
+describe('host vitals daemon wiring', () => {
+  it('the daemon dispatches host.vitals, starts the ledger at boot and keeps it under HOME', () => {
+    expect(standalone).toContain("case 'host.vitals':")
+    expect(standalone).toMatch(/hostVitals\.start\(\);?\n\s+(console\.log\(port\)|(if \(LISTEN\) )?options\.onListening\?\.\(port\))/)
+    expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals')")
+    expect(standalone).toContain("path.join(DAEMON_DIR, 'host-vitals')")
   })
 
   it('the capability is advertised, not required', () => {
@@ -45,10 +38,8 @@ describe('host vitals twin wiring', () => {
   })
 
   it('the command is not reachable over the bridge or from a follower', () => {
-    for (const src of [standalone, source]) {
-      expect(setLiteral(src, 'BRIDGE_ALLOWED_COMMANDS')).not.toContain("'host.vitals'")
-      expect(setLiteral(src, 'FOLLOWER_ALLOWED_COMMANDS')).not.toContain("'host.vitals'")
-    }
+    expect(setLiteral(standalone, 'BRIDGE_ALLOWED_COMMANDS')).not.toContain("'host.vitals'")
+    expect(setLiteral(standalone, 'FOLLOWER_ALLOWED_COMMANDS')).not.toContain("'host.vitals'")
   })
 
   it('the core is in the version hash list and the binary build list, right after host facts', () => {
@@ -59,20 +50,11 @@ describe('host vitals twin wiring', () => {
     expect(versionList.indexOf('host-facts-core.ts')).toBeLessThan(versionList.indexOf(CORE))
     expect(build.indexOf('host-facts-core.ts')).toBeLessThan(build.indexOf(CORE))
   })
-
-  it('the source twin inlines the factory once and still parses', () => {
-    expect(source).toContain("['__CREATE_HOST_VITALS__', createHostVitals.toString()]")
-    const out = getDaemonSource()
-    expect(out).not.toContain('__CREATE_HOST_VITALS__')
-    expect(() => new vm.Script(out, { filename: 'daemon-source.js' })).not.toThrow()
-    expect(createHostVitals.toString()).not.toContain('`')
-  })
 })
 
-describe('the inlined factory behaves like the imported one', () => {
+describe('the vitals core keeps a ledger', () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-vitals-twin-')))
   afterAll(() => { if (tmp.includes('walnut-vitals-twin-')) fs.rmSync(tmp, { recursive: true, force: true }) })
-  const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
   const T0 = Date.UTC(2026, 9, 20, 6)
 
   // A host with none of the tools: each command fails at once. A stub that never called back
@@ -104,15 +86,13 @@ describe('the inlined factory behaves like the imported one', () => {
     }
   }
 
-  it('tick and vitals give the same answers', async () => {
+  it('tick and vitals answer from the ledger', async () => {
     const began = Date.now()
     const imported = await run(createHostVitals, 'imported')
-    const inlined = await run(strict(createHostVitals), 'inlined')
     // Nothing here waits on a real command: well inside the 30 s test timeout on any runner.
     expect(Date.now() - began).toBeLessThan(10_000)
     expect(imported.lines).toHaveLength(10)
     expect(imported.windows[0]).toMatchObject({ days: 1, minutes: 10, up: 10, linked: 5, drops: 1 })
     expect(imported.memKnown).toBe(true)
-    expect(inlined).toEqual(imported)
   })
 })

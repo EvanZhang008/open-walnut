@@ -1,5 +1,5 @@
 /**
- * Task workspaces ('workspace-v1') in both daemon twins booted for real: the
+ * Task workspaces ('workspace-v1') in the daemon booted for real (bun): the
  * built-in git worktree and a plugin provider (the fake multi-repo fixture)
  * created, probed and removed through the daemon's own command surface, the
  * allowlist push and its stale answer, and the bridge refusal.
@@ -8,27 +8,19 @@
  * live under one temp dir (asserted before any spawn); no CLI is started; the
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 const PROVIDER = path.resolve(__dirname, '../fixtures/workspace-providers/fake-multirepo/provider.mjs')
-let scriptDir = ''
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(scriptDir, 'daemon.cjs'), '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let root = ''
 let proc: ChildProcess | null = null
@@ -40,13 +32,6 @@ function inRoot(p: string): string {
   if (!root || !abs.startsWith(root + path.sep)) throw new Error(`refusing ${abs}: outside the test temp dir`)
   return abs
 }
-
-beforeAll(() => {
-  scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-src-'))
-  fs.writeFileSync(path.join(scriptDir, 'daemon.cjs'), getDaemonSource())
-})
-
-afterAll(() => { if (scriptDir) fs.rmSync(scriptDir, { recursive: true, force: true }) })
 
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
@@ -61,7 +46,7 @@ afterEach(async () => {
   root = ''
 })
 
-async function boot(twin: Twin, home: string, daemonDir: string): Promise<void> {
+async function boot(home: string, daemonDir: string): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -75,8 +60,7 @@ async function boot(twin: Twin, home: string, daemonDir: string): Promise<void> 
     GIT_DIR: path.join(root, 'not-a-repo'),
   }
   delete env.WALNUT_WORKTREES_ROOT
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -125,163 +109,157 @@ function git(args: string[], cwd: string, home: string): string {
   }).trim()
 }
 
-describe('task workspaces in both daemon twins', () => {
-  for (const twin of TWINS) {
-    it(`${twin.name}: git worktree and a multi-repo plugin provider, created, probed and removed`, async () => {
-      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-')))
-      const home = path.join(root, 'home')
-      const daemonDir = path.join(root, 'daemon')
-      const repo = path.join(root, 'repos', 'app')
-      fs.mkdirSync(home, { recursive: true })
-      fs.mkdirSync(repo, { recursive: true })
-      git(['init', '-q'], repo, home)
-      fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
-      git(['add', '.'], repo, home)
-      git(['commit', '-qm', 'init'], repo, home)
+describe.skipIf(!BUN)('task workspaces in the standalone daemon (bun)', () => {
+  it('git worktree and a multi-repo plugin provider, created, probed and removed', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-')))
+    const home = path.join(root, 'home')
+    const daemonDir = path.join(root, 'daemon')
+    const repo = path.join(root, 'repos', 'app')
+    fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(repo, { recursive: true })
+    git(['init', '-q'], repo, home)
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
+    git(['add', '.'], repo, home)
+    git(['commit', '-qm', 'init'], repo, home)
 
-      await boot(twin, home, daemonDir)
-      const hello = await rpc({ cmd: 'hello' })
-      expect(hello.capabilities).toContain('workspace-v1')
+    await boot(home, daemonDir)
+    const hello = await rpc({ cmd: 'hello' })
+    expect(hello.capabilities).toContain('workspace-v1')
 
-      // ── git-worktree ──
-      const det = await rpc({ cmd: 'workspace.detect', anchor: repo })
-      expect(det.ok).toBe(true)
-      expect((det.candidates as Array<Record<string, unknown>>)[0]).toMatchObject({ provider: 'git-worktree', claimed: true, root: repo })
-      const started = await rpc({ cmd: 'workspace.create', provider: 'git-worktree', jobId: 'job-git-1', anchor: repo, name: 'Twin task 1' })
-      expect(started).toMatchObject({ ok: true, jobId: 'job-git-1' })
-      const made = await job('job-git-1')
-      expect(made.state, JSON.stringify(made)).toBe('done')
-      const res = made.result as { root: string; branch: string; sourceRepo: string; repos: unknown[]; baseRef: unknown }
-      expect(res.root).toBe(path.join(home, '.open-walnut-worktrees', 'app', 'twin-task-1'))
-      expect(res.branch).toBe('walnut/twin-task-1')
-      expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], res.root, home)).toBe('walnut/twin-task-1')
-      // ── project scripts (workspace-scripts-v1): the file, then a setup line run in the worktree ──
-      expect(hello.capabilities).toContain('workspace-scripts-v1')
-      fs.writeFileSync(path.join(res.root, 'walnut.json'), '{"scripts":[{"name":"Install","command":"x","setup":true}]}')
-      expect(await rpc({ cmd: 'workspace.scriptsFile', dir: res.root })).toMatchObject({ ok: true, dir: res.root, file: { name: 'walnut.json', content: expect.stringContaining('Install') } })
-      fs.rmSync(path.join(res.root, 'walnut.json'))
-      const run = await rpc({ cmd: 'workspace.runScript', provider: 'git-worktree', jobId: 'job-script-1', root: res.root, command: 'echo "set up $WALNUT_TASK_ID in $(pwd)"; printf "\\033[1mbold\\033[0m\\n"', env: { WALNUT_TASK_ID: 'twin-1' }, timeoutSec: 30 })
-      expect(run, JSON.stringify(run)).toMatchObject({ ok: true, jobId: 'job-script-1' })
-      const ran = await job('job-script-1')
-      expect(ran, JSON.stringify(ran)).toMatchObject({ kind: 'script', state: 'done', result: { exitCode: 0 } })
-      expect(String((ran.result as Record<string, unknown>).output)).toBe(`set up twin-1 in ${res.root}\nbold\n`)
-      expect(await rpc({ cmd: 'workspace.runScript', provider: 'git-worktree', jobId: 'job-script-2', root: repo, command: 'true' })).toMatchObject({ ok: false, code: 'forbidden_path' })
-      const status = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef })
-      expect(status.probe).toMatchObject({ clean: true, merged: true })
-      // ── a kept workspace's re-check (workspace-recheck-v1): this repository has no remote, so nothing to fetch ──
-      expect(hello.capabilities).toContain('workspace-recheck-v1')
-      const rechecked = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, recheck: true })
-      expect(rechecked.probe).toMatchObject({ clean: true, merged: true, rechecked: true })
-      fs.writeFileSync(path.join(res.root, 'dirty.txt'), 'x')
-      const kept = await rpc({ cmd: 'workspace.remove', provider: 'git-worktree', jobId: 'job-git-rm1', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, anchor: repo, deleteBranch: 'if-merged', requireMerged: true })
-      expect(kept.ok).toBe(true)
-      expect(await job('job-git-rm1')).toMatchObject({ state: 'failed', code: 'not_clean' })
-      expect(fs.existsSync(path.join(res.root, 'dirty.txt'))).toBe(true)
-      fs.rmSync(path.join(res.root, 'dirty.txt'))
-      await rpc({ cmd: 'workspace.remove', provider: 'git-worktree', jobId: 'job-git-rm2', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, anchor: repo, deleteBranch: 'if-merged', requireMerged: true })
-      expect(await job('job-git-rm2')).toMatchObject({ state: 'done', result: { removed: true, branchDeleted: true } })
-      expect(fs.existsSync(res.root)).toBe(false)
+    // ── git-worktree ──
+    const det = await rpc({ cmd: 'workspace.detect', anchor: repo })
+    expect(det.ok).toBe(true)
+    expect((det.candidates as Array<Record<string, unknown>>)[0]).toMatchObject({ provider: 'git-worktree', claimed: true, root: repo })
+    const started = await rpc({ cmd: 'workspace.create', provider: 'git-worktree', jobId: 'job-git-1', anchor: repo, name: 'Twin task 1' })
+    expect(started).toMatchObject({ ok: true, jobId: 'job-git-1' })
+    const made = await job('job-git-1')
+    expect(made.state, JSON.stringify(made)).toBe('done')
+    const res = made.result as { root: string; branch: string; sourceRepo: string; repos: unknown[]; baseRef: unknown }
+    expect(res.root).toBe(path.join(home, '.open-walnut-worktrees', 'app', 'twin-task-1'))
+    expect(res.branch).toBe('walnut/twin-task-1')
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], res.root, home)).toBe('walnut/twin-task-1')
+    // ── project scripts (workspace-scripts-v1): the file, then a setup line run in the worktree ──
+    expect(hello.capabilities).toContain('workspace-scripts-v1')
+    fs.writeFileSync(path.join(res.root, 'walnut.json'), '{"scripts":[{"name":"Install","command":"x","setup":true}]}')
+    expect(await rpc({ cmd: 'workspace.scriptsFile', dir: res.root })).toMatchObject({ ok: true, dir: res.root, file: { name: 'walnut.json', content: expect.stringContaining('Install') } })
+    fs.rmSync(path.join(res.root, 'walnut.json'))
+    const run = await rpc({ cmd: 'workspace.runScript', provider: 'git-worktree', jobId: 'job-script-1', root: res.root, command: 'echo "set up $WALNUT_TASK_ID in $(pwd)"; printf "\\033[1mbold\\033[0m\\n"', env: { WALNUT_TASK_ID: 'twin-1' }, timeoutSec: 30 })
+    expect(run, JSON.stringify(run)).toMatchObject({ ok: true, jobId: 'job-script-1' })
+    const ran = await job('job-script-1')
+    expect(ran, JSON.stringify(ran)).toMatchObject({ kind: 'script', state: 'done', result: { exitCode: 0 } })
+    expect(String((ran.result as Record<string, unknown>).output)).toBe(`set up twin-1 in ${res.root}\nbold\n`)
+    expect(await rpc({ cmd: 'workspace.runScript', provider: 'git-worktree', jobId: 'job-script-2', root: repo, command: 'true' })).toMatchObject({ ok: false, code: 'forbidden_path' })
+    const status = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef })
+    expect(status.probe).toMatchObject({ clean: true, merged: true })
+    // ── a kept workspace's re-check (workspace-recheck-v1): this repository has no remote, so nothing to fetch ──
+    expect(hello.capabilities).toContain('workspace-recheck-v1')
+    const rechecked = await rpc({ cmd: 'workspace.status', provider: 'git-worktree', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, recheck: true })
+    expect(rechecked.probe).toMatchObject({ clean: true, merged: true, rechecked: true })
+    fs.writeFileSync(path.join(res.root, 'dirty.txt'), 'x')
+    const kept = await rpc({ cmd: 'workspace.remove', provider: 'git-worktree', jobId: 'job-git-rm1', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, anchor: repo, deleteBranch: 'if-merged', requireMerged: true })
+    expect(kept.ok).toBe(true)
+    expect(await job('job-git-rm1')).toMatchObject({ state: 'failed', code: 'not_clean' })
+    expect(fs.existsSync(path.join(res.root, 'dirty.txt'))).toBe(true)
+    fs.rmSync(path.join(res.root, 'dirty.txt'))
+    await rpc({ cmd: 'workspace.remove', provider: 'git-worktree', jobId: 'job-git-rm2', root: res.root, repos: res.repos, branch: res.branch, sourceRepo: res.sourceRepo, baseRef: res.baseRef, anchor: repo, deleteBranch: 'if-merged', requireMerged: true })
+    expect(await job('job-git-rm2')).toMatchObject({ state: 'done', result: { removed: true, branchDeleted: true } })
+    expect(fs.existsSync(res.root)).toBe(false)
 
-      // ── plugin provider ──
-      const spec = {
-        id: 'fake-multirepo', displayName: 'Fake multi-repo', priority: 50, markers: ['fake-workspace.json'],
-        command: [process.execPath, '{script}'], script: { name: 'provider.mjs', content: fs.readFileSync(PROVIDER, 'utf8') },
-      }
-      const stale = await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-0', anchor: repo, name: 'x' })
-      expect(stale).toMatchObject({ ok: false, code: 'providers_stale' })
-      expect(await rpc({ cmd: 'workspace.configure', config: { version: 1, hash: 'h1', providers: [spec] } })).toMatchObject({ ok: true, changed: true })
-      expect(await rpc({ cmd: 'workspace.configure', config: { version: 1, hash: 'h1', providers: [spec] } })).toMatchObject({ ok: true, changed: false })
-      // The adapter landed in the daemon's state dir, owner-only.
-      const adapter = path.join(daemonDir, 'workspace-providers', 'fake-multirepo.mjs')
-      expect((fs.statSync(adapter).mode & 0o777).toString(8)).toBe('700')
-      const pStart = await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-1', anchor: repo, name: 'Multi One', inputs: { packages: ['alpha', 'beta'] } })
-      expect(pStart.ok, JSON.stringify(pStart)).toBe(true)
-      const pMade = await job('job-p-1')
-      expect(pMade.state, JSON.stringify(pMade)).toBe('done')
-      const pRes = pMade.result as { root: string; repos: Array<{ path: string; name: string }> }
-      expect(pRes.root).toBe(path.join(home, 'fake-workspaces', 'multi-one'))
-      expect(pRes.repos.map((r) => r.name)).toEqual(['alpha', 'beta'])
-      const pDet = await rpc({ cmd: 'workspace.detect', anchor: path.join(pRes.root, 'src', 'beta'), providersHash: 'h1' })
-      expect((pDet.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ claimed: true, root: pRes.root })
-      await rpc({ cmd: 'workspace.remove', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-rm', root: pRes.root, repos: pRes.repos, requireMerged: true })
-      expect(await job('job-p-rm')).toMatchObject({ state: 'done', result: { removed: true, rootGone: true } })
+    // ── plugin provider ──
+    const spec = {
+      id: 'fake-multirepo', displayName: 'Fake multi-repo', priority: 50, markers: ['fake-workspace.json'],
+      command: [process.execPath, '{script}'], script: { name: 'provider.mjs', content: fs.readFileSync(PROVIDER, 'utf8') },
+    }
+    const stale = await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-0', anchor: repo, name: 'x' })
+    expect(stale).toMatchObject({ ok: false, code: 'providers_stale' })
+    expect(await rpc({ cmd: 'workspace.configure', config: { version: 1, hash: 'h1', providers: [spec] } })).toMatchObject({ ok: true, changed: true })
+    expect(await rpc({ cmd: 'workspace.configure', config: { version: 1, hash: 'h1', providers: [spec] } })).toMatchObject({ ok: true, changed: false })
+    // The adapter landed in the daemon's state dir, owner-only.
+    const adapter = path.join(daemonDir, 'workspace-providers', 'fake-multirepo.mjs')
+    expect((fs.statSync(adapter).mode & 0o777).toString(8)).toBe('700')
+    const pStart = await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-1', anchor: repo, name: 'Multi One', inputs: { packages: ['alpha', 'beta'] } })
+    expect(pStart.ok, JSON.stringify(pStart)).toBe(true)
+    const pMade = await job('job-p-1')
+    expect(pMade.state, JSON.stringify(pMade)).toBe('done')
+    const pRes = pMade.result as { root: string; repos: Array<{ path: string; name: string }> }
+    expect(pRes.root).toBe(path.join(home, 'fake-workspaces', 'multi-one'))
+    expect(pRes.repos.map((r) => r.name)).toEqual(['alpha', 'beta'])
+    const pDet = await rpc({ cmd: 'workspace.detect', anchor: path.join(pRes.root, 'src', 'beta'), providersHash: 'h1' })
+    expect((pDet.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ claimed: true, root: pRes.root })
+    await rpc({ cmd: 'workspace.remove', provider: 'fake-multirepo', providersHash: 'h1', jobId: 'job-p-rm', root: pRes.root, repos: pRes.repos, requireMerged: true })
+    expect(await job('job-p-rm')).toMatchObject({ state: 'done', result: { removed: true, rootGone: true } })
 
-      // ── a refused path never reaches git ──
-      const refused = await rpc({ cmd: 'workspace.create', provider: 'git-worktree', jobId: 'job-home', anchor: home, name: 'h' })
-      expect(refused.ok).toBe(true)
-      const homeJob = await job('job-home')
-      expect(homeJob).toMatchObject({ state: 'failed', code: 'forbidden_path' })
-      expect(String(homeJob.error)).toMatch(/the home folder/)
-    }, 120_000)
-  }
+    // ── a refused path never reaches git ──
+    const refused = await rpc({ cmd: 'workspace.create', provider: 'git-worktree', jobId: 'job-home', anchor: home, name: 'h' })
+    expect(refused.ok).toBe(true)
+    const homeJob = await job('job-home')
+    expect(homeJob).toMatchObject({ state: 'failed', code: 'forbidden_path' })
+    expect(String(homeJob.error)).toMatch(/the home folder/)
+  }, 120_000)
 
   // Two Walnuts on one daemon (walnut-scope-core.ts): each keeps its own allowlist,
   // adapter dir and jobs, so neither push replaces the other's, and a push with no
   // home keeps the legacy place.
-  for (const twin of TWINS) {
-    it(`${twin.name}: two Walnuts keep their own allowlists, adapters and jobs; an unnamed push stays as before`, async () => {
-      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-')))
-      const home = path.join(root, 'home')
-      const daemonDir = path.join(root, 'daemon')
-      const repo = path.join(root, 'repos', 'app')
-      fs.mkdirSync(home, { recursive: true })
-      fs.mkdirSync(repo, { recursive: true })
-      git(['init', '-q'], repo, home)
-      fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
-      git(['add', '.'], repo, home)
-      git(['commit', '-qm', 'init'], repo, home)
-      await boot(twin, home, daemonDir)
+  it('two Walnuts keep their own allowlists, adapters and jobs; an unnamed push stays as before', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ws-twins-')))
+    const home = path.join(root, 'home')
+    const daemonDir = path.join(root, 'daemon')
+    const repo = path.join(root, 'repos', 'app')
+    fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(repo, { recursive: true })
+    git(['init', '-q'], repo, home)
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n')
+    git(['add', '.'], repo, home)
+    git(['commit', '-qm', 'init'], repo, home)
+    await boot(home, daemonDir)
 
-      const A = path.join(root, 'walnut-a')
-      const B = path.join(root, 'walnut-b')
-      const keyOf = (h: string) => crypto.createHash('sha1').update(h).digest('hex').slice(0, 16)
-      const spec = (tag: string) => ({
-        id: 'fake-multirepo', displayName: 'Fake ' + tag, priority: 50, markers: ['fake-workspace.json'],
-        command: [process.execPath, '{script}'], script: { name: 'provider.mjs', content: '// ' + tag + '\n' + fs.readFileSync(PROVIDER, 'utf8') },
-      })
-      const cfg = (hash: string, tag: string) => ({ version: 1, hash, providers: [spec(tag)] })
-      expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: true })
-      expect(await rpc({ cmd: 'workspace.configure', home: B, config: cfg('hB', 'b') })).toMatchObject({ ok: true, changed: true })
-      expect(await rpc({ cmd: 'workspace.configure', config: cfg('h0', 'unnamed') })).toMatchObject({ ok: true, changed: true })
-      // B's push did not replace A's: A's same hash is still a no-op.
-      expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: false })
+    const A = path.join(root, 'walnut-a')
+    const B = path.join(root, 'walnut-b')
+    const keyOf = (h: string) => crypto.createHash('sha1').update(h).digest('hex').slice(0, 16)
+    const spec = (tag: string) => ({
+      id: 'fake-multirepo', displayName: 'Fake ' + tag, priority: 50, markers: ['fake-workspace.json'],
+      command: [process.execPath, '{script}'], script: { name: 'provider.mjs', content: '// ' + tag + '\n' + fs.readFileSync(PROVIDER, 'utf8') },
+    })
+    const cfg = (hash: string, tag: string) => ({ version: 1, hash, providers: [spec(tag)] })
+    expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: true })
+    expect(await rpc({ cmd: 'workspace.configure', home: B, config: cfg('hB', 'b') })).toMatchObject({ ok: true, changed: true })
+    expect(await rpc({ cmd: 'workspace.configure', config: cfg('h0', 'unnamed') })).toMatchObject({ ok: true, changed: true })
+    // B's push did not replace A's: A's same hash is still a no-op.
+    expect(await rpc({ cmd: 'workspace.configure', home: A, config: cfg('hA', 'a') })).toMatchObject({ ok: true, changed: false })
 
-      // Each Walnut's adapter in its own dir; the unnamed one where it always was.
-      const adapterOf = (dir: string) => fs.readFileSync(path.join(dir, 'workspace-providers', 'fake-multirepo.mjs'), 'utf8').split('\n')[0]
-      expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(A)))).toBe('// a')
-      expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(B)))).toBe('// b')
-      expect(adapterOf(daemonDir)).toBe('// unnamed')
+    // Each Walnut's adapter in its own dir; the unnamed one where it always was.
+    const adapterOf = (dir: string) => fs.readFileSync(path.join(dir, 'workspace-providers', 'fake-multirepo.mjs'), 'utf8').split('\n')[0]
+    expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(A)))).toBe('// a')
+    expect(adapterOf(path.join(daemonDir, 'walnuts', keyOf(B)))).toBe('// b')
+    expect(adapterOf(daemonDir)).toBe('// unnamed')
 
-      // A command answers against its own Walnut's hash only.
-      const crossed = await rpc({ cmd: 'workspace.create', home: A, provider: 'fake-multirepo', providersHash: 'hB', jobId: 'job-x-1', anchor: repo, name: 'x' })
-      expect(crossed).toMatchObject({ ok: false, code: 'providers_stale' })
-      expect(await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'hA', jobId: 'job-x-2', anchor: repo, name: 'x' }))
-        .toMatchObject({ ok: false, code: 'providers_stale' })
-      const detB = await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hB' })
-      expect((detB.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake b' })
-      expect(await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hA' })).toMatchObject({ ok: false, code: 'providers_stale' })
-      const det0 = await rpc({ cmd: 'workspace.detect', anchor: repo, providersHash: 'h0' })
-      expect((det0.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake unnamed' })
+    // A command answers against its own Walnut's hash only.
+    const crossed = await rpc({ cmd: 'workspace.create', home: A, provider: 'fake-multirepo', providersHash: 'hB', jobId: 'job-x-1', anchor: repo, name: 'x' })
+    expect(crossed).toMatchObject({ ok: false, code: 'providers_stale' })
+    expect(await rpc({ cmd: 'workspace.create', provider: 'fake-multirepo', providersHash: 'hA', jobId: 'job-x-2', anchor: repo, name: 'x' }))
+      .toMatchObject({ ok: false, code: 'providers_stale' })
+    const detB = await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hB' })
+    expect((detB.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake b' })
+    expect(await rpc({ cmd: 'workspace.detect', home: B, anchor: repo, providersHash: 'hA' })).toMatchObject({ ok: false, code: 'providers_stale' })
+    const det0 = await rpc({ cmd: 'workspace.detect', anchor: repo, providersHash: 'h0' })
+    expect((det0.candidates as Array<Record<string, unknown>>).find((c) => c.provider === 'fake-multirepo')).toMatchObject({ displayName: 'Fake unnamed' })
 
-      // A job belongs to the Walnut that started it.
-      expect(await rpc({ cmd: 'workspace.create', home: A, provider: 'git-worktree', jobId: 'job-a-1', anchor: repo, name: 'Walnut A' })).toMatchObject({ ok: true })
-      expect((await rpc({ cmd: 'workspace.job', home: B, jobId: 'job-a-1' })).job).toBeNull()
-      expect((await rpc({ cmd: 'workspace.job', jobId: 'job-a-1' })).job).toBeNull()
-      for (let i = 0; i < 400; i++) {
-        const j = (await rpc({ cmd: 'workspace.job', home: A, jobId: 'job-a-1' })).job as Record<string, unknown> | null
-        expect(j).toBeTruthy()
-        if (j!.state !== 'running') { expect(j!.state, JSON.stringify(j)).toBe('done'); break }
-        await new Promise((res) => setTimeout(res, 100))
-      }
-    }, 120_000)
-  }
-
-  it('the bridge allowlist does not name any workspace command (both twins)', () => {
-    for (const file of ['../../src/providers/daemon-source.ts', '../../src/providers/daemon-standalone.ts']) {
-      const text = fs.readFileSync(path.resolve(__dirname, file), 'utf8')
-      const m = text.match(/BRIDGE_ALLOWED_COMMANDS = new Set(?:<[^>]*>)?\(\[([\s\S]*?)\]\)/)
-      expect(m, file).toBeTruthy()
-      expect(m![1]).not.toMatch(/workspace\./)
+    // A job belongs to the Walnut that started it.
+    expect(await rpc({ cmd: 'workspace.create', home: A, provider: 'git-worktree', jobId: 'job-a-1', anchor: repo, name: 'Walnut A' })).toMatchObject({ ok: true })
+    expect((await rpc({ cmd: 'workspace.job', home: B, jobId: 'job-a-1' })).job).toBeNull()
+    expect((await rpc({ cmd: 'workspace.job', jobId: 'job-a-1' })).job).toBeNull()
+    for (let i = 0; i < 400; i++) {
+      const j = (await rpc({ cmd: 'workspace.job', home: A, jobId: 'job-a-1' })).job as Record<string, unknown> | null
+      expect(j).toBeTruthy()
+      if (j!.state !== 'running') { expect(j!.state, JSON.stringify(j)).toBe('done'); break }
+      await new Promise((res) => setTimeout(res, 100))
     }
+  }, 120_000)
+
+  it('the bridge allowlist does not name any workspace command', () => {
+    const text = fs.readFileSync(STANDALONE, 'utf8')
+    const m = text.match(/BRIDGE_ALLOWED_COMMANDS = new Set(?:<[^>]*>)?\(\[([\s\S]*?)\]\)/)
+    expect(m).toBeTruthy()
+    expect(m![1]).not.toMatch(/workspace\./)
   })
 })

@@ -17,10 +17,7 @@
  * keeps its clock on the server (`supports` is false), so a daemon never meets a
  * pattern it would read differently.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createClockSchedule;
- * daemon-source.ts inlines `createClockSchedule.toString()` through
- * `__CREATE_CLOCK_SCHEDULE__`. So the factory body references NOTHING at module
- * scope.
+ * Imported by daemon-standalone.ts (createClockSchedule). The factory body references NOTHING at module scope.
  */
 
 export type ClockScheduleSpec =

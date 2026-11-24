@@ -1,8 +1,8 @@
 /**
  * Real daemon + real server end-to-end test for the CRON JOB METADATA wire.
  *
- * Harness copied from tests/e2e/session-cron-supervision.test.ts (own daemon
- * binary built from the JS twin, own fake HOME, own isolated ports) — a
+ * Harness copied from tests/e2e/session-cron-supervision.test.ts (own daemon,
+ * the standalone under bun or a compiled one, own fake HOME, own isolated ports) — a
  * different SID and a different mock-constants label so the two files can never
  * share a directory or a daemon.
  *
@@ -19,7 +19,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { build } from 'esbuild'
 import { WebSocket } from 'ws'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -32,8 +31,7 @@ vi.mock('../../src/constants.js', () => {
 })
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { disconnectAllDaemons, getDirectDaemonConnection, type DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { cliOneShotTime, nextCliCronMinute } from '../../src/providers/daemon-cron-schedule.js'
@@ -49,6 +47,10 @@ const home = path.join(WALNUT_HOME, 'home')
 const program = path.join(WALNUT_HOME, 'fixture-cli')
 const phasesFile = path.join(WALNUT_HOME, 'phases.json')
 const daemonBinary = process.env.WALNUT_CRON_TEST_DAEMON_BINARY
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
+/** A compiled daemon when the run names one, else the standalone under bun. */
+const daemonCommand = daemonBinary ? [daemonBinary] : BUN ? [BUN, path.join(ROOT, 'src/providers/daemon-standalone.ts')] : null
 let daemon: ChildProcess | undefined
 let connection: DaemonConnection | undefined
 let origin: string
@@ -177,9 +179,10 @@ const PHASES: Row[][] = [
 ]
 
 async function boot(managed = true) {
-  const child = spawn(daemonBinary ?? SOURCE_TWIN.file, [
-    ...(daemonBinary ? [] : [path.join(WALNUT_HOME, 'daemon.cjs')]), managed ? '--service' : '--start',
-  ], {
+  if (!daemonCommand) throw new Error('no bun for the standalone daemon, and no WALNUT_CRON_TEST_DAEMON_BINARY')
+  const [command, ...args] = daemonCommand
+  const child = spawn(command!, [...args, managed ? '--service' : '--start'], {
+    cwd: ROOT,
     env: {
       HOME: home, PATH: '/usr/bin:/bin', SHELL: '/bin/sh', WALNUT_HOME_OVERRIDE: home,
       WALNUT_DAEMON_DIR: runtime, WALNUT_DAEMON_STATE_DIR: state,
@@ -194,7 +197,7 @@ async function boot(managed = true) {
   let stderr = ''
   child.stderr!.on('data', (chunk) => { stderr += chunk.toString() })
   const daemonPort = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Daemon did not boot: ${stderr}`)), 15_000)
+    const timer = setTimeout(() => reject(new Error(`Daemon did not boot: ${stderr}`)), 30_000)
     let output = ''
     child.stdout!.on('data', (chunk) => {
       output += chunk.toString()
@@ -220,10 +223,6 @@ async function shutdownDaemon() {
 
 beforeAll(async () => {
   for (const dir of [WALNUT_HOME, runtime, state, home]) await fs.mkdir(dir, { recursive: true, mode: 0o700 })
-  for (const name of ['daemon-cron-runtime', 'daemon-instance-lock']) {
-    await build({ entryPoints: [path.resolve(`src/providers/${name}.ts`)], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(WALNUT_HOME, `${name}.cjs`) })
-  }
-  await fs.writeFile(path.join(WALNUT_HOME, 'daemon.cjs'), getDaemonSource())
   await fs.writeFile(phasesFile, JSON.stringify(PHASES))
   // The fixture CLI: one scripted phase per message it reads from its FIFO.
   // Each phase lands in the CLI-owned JSONL and on stdout as stream-json, both

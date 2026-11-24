@@ -16,9 +16,6 @@
  *             ephemeral or a deploy's smoke server: its copy goes with it, never left in the
  *             home), and when the home cannot take the copy (a quota, a full disk). Both are
  *             read, the newest copy first, so an older build's <daemon dir>/previous still is.
- *               the source daemon (npm installs, the companion): its script and sidecars
- *                 move there before the new ones are written (keepPreviousSource, from
- *                 materializeSourceDaemon);
  *               a daemon binary on Linux: the running process's own file, /proc/<pid>/exe
  *                 (there even after a deploy replaced the path), is copied there.
  *               a daemon binary elsewhere (a Mac): a clone of the file it was started from,
@@ -52,7 +49,7 @@
  *             starts. 2026-11-04 review: the port file (one answer) counted, so a build that
  *             listened and then exited was started again on the next connect, and the old
  *             daemon never came back. Till it passed, its own files wait in the pending slot
- *             (keepPendingBinary, keepPreviousSource 'next'), and become the way back then.
+ *             (keepPendingBinary), and become the way back then.
  */
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -117,10 +114,15 @@ export const LOCAL_REPLACE_RETRY_MS = 10 * 60_000
 /** How long a build that passed its trial and then did not start on the real dir is left alone (a newer build ends it sooner; wall clock, kept across restarts). */
 export const REAL_DIR_BACKOFF_MS = BUILD_BACKOFF_MS
 
+/** The daemon as a script this server's runtime runs (its source in a checkout, or the runtime bundle of a daemon build), not a file that runs by itself. */
+export function isDaemonScript(binaryPath: string): boolean {
+  return binaryPath.endsWith('.ts') || binaryPath.endsWith('.js')
+}
+
 /** How the daemon file is started: the compiled walnut file as `__daemon`, a script under this runtime, else the binary itself. */
 export function daemonLaunch(binaryPath: string, compiledSelf: boolean): { cmd: string; args: string[] } {
   if (compiledSelf) return { cmd: process.execPath, args: ['__daemon', '--start'] }
-  if (binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')) return { cmd: process.execPath, args: [binaryPath, '--start'] }
+  if (isDaemonScript(binaryPath)) return { cmd: process.execPath, args: [binaryPath, '--start'] }
   return { cmd: binaryPath, args: ['--start'] }
 }
 
@@ -136,67 +138,20 @@ export function trialDaemon(binaryPath: string, compiledSelf: boolean, env: Node
 export class KeepFailedError extends Error {}
 
 /**
- * Before the source daemon's files are rewritten: the ones there now move to previous/
- * (renames, no copies). `running`: the build that ran last here (daemon.version), stamped as
- * `stamp`. A previous/ already of that build stays as it is, and files that are another
- * build's (written for one whose trial failed or never ran) are no way back and are not moved
- * over it. 2026-11-04 review: previous/ was emptied every time, so A running, B written and
- * refused, then C made previous/ B's files, and A had nothing to go back to.
- */
-export async function keepPreviousSource(daemonDir: string, names: string[], running: string | null = null, stamp = 'daemon-fallback.cjs.version', durable = false, slot: 'previous' | 'next' = 'previous'): Promise<void> {
-  // Async: the server's event loop (2026-11-04 review 5: a copy across disks ran sync there).
-  const stampOf = async (dir: string) => (await fsp.readFile(path.join(dir, stamp), 'utf8').catch(() => '')).trim()
-  if (running) {
-    if (await stampOf(daemonDir) !== running) return
-    for (const dir of keepDirs(daemonDir)) if (await stampOf(dir) === running) return
-  }
-  // 'next' (the build that runs is on its probation): beside the way back, which it must not take yet.
-  if (slot === 'next' && !running) return
-  const targets = keepTargets(daemonDir, durable).map((keep) => (slot === 'next' ? `${keep}${NEXT_SUFFIX}` : keep))
-  for (const keep of targets) {
-    try {
-      await fsp.mkdir(path.dirname(keep), { recursive: true, mode: 0o700 })
-      await fsp.rm(keep, { recursive: true, force: true })
-      await fsp.mkdir(keep, { mode: 0o700 })
-    } catch { continue }
-    const moved: string[] = []
-    let full = false
-    for (const name of names) {
-      try {
-        await moveFile(path.join(daemonDir, name), path.join(keep, name))
-        moved.push(name)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-        full = true
-        break
-      }
-    }
-    if (!full) {
-      if (slot === 'next') await fsp.writeFile(path.join(keep, NEXT_STAMP), `${running}\n`, { mode: 0o600 }).catch(() => {})
-      return
-    }
-    // It did not fit there (a quota, a full disk): what moved goes back, and the next place is tried.
-    let back = true
-    for (const name of moved) { try { await moveFile(path.join(keep, name), path.join(daemonDir, name)) } catch { back = false } }
-    if (back) await fsp.rm(keep, { recursive: true, force: true }).catch(() => {})
-  }
-}
-
-/**
  * The file to start again when the new daemon does not start, or null. `version`: the build
  * the old daemon answered with; a kept script of another build is never taken for it.
  */
 export async function previousDaemon(o: { daemonDir: string; binaryPath: string; compiledSelf: boolean; pid: number | null; version: string; platform?: string; durable?: boolean }): Promise<string | null> {
   if (!o.version) return null
   await recoverPromote(o.daemonDir)
-  // A copy of that build, kept here or by an older build in the daemon dir: the source daemon's
-  // (keepPreviousSource), or a clone kept once that build served (keepRunningBinary).
+  // A copy of that build, kept here or by an older build in the daemon dir: a clone kept once
+  // that build served (keepRunningBinary), or the copy an older server's source daemon left.
   for (const dir of keepDirs(o.daemonDir)) {
     const file = path.join(dir, path.basename(o.binaryPath))
     const was = (await fsp.readFile(`${file}.version`, 'utf8').catch(() => '')).trim()
     if (was === o.version && await fsp.stat(file).then((s) => s.isFile(), () => false)) return file
   }
-  if (o.binaryPath.endsWith('.cjs') || o.binaryPath.endsWith('.js')) return null
+  if (isDaemonScript(o.binaryPath)) return null
   if ((o.platform ?? process.platform) !== 'linux') {
     // No clone kept yet: one now, while the file on disk still is the build that runs (else the
     // known gap in the header: nothing to keep). A clone that fails keeps the old daemon serving.
@@ -307,7 +262,7 @@ export async function discardPending(daemonDir: string, version?: string): Promi
 
 /** keepRunningBinary's work: the file kept, or why not (failed: a copy that did not work; neither: not this build's file, or not one to clone). */
 async function cloneRunningBinary(o: { daemonDir: string; binaryPath: string; compiledSelf: boolean; version: string | null; platform?: string; durable?: boolean }, slot: 'previous' | 'next' = 'previous'): Promise<{ kept: string | null; failed?: string }> {
-  if (!o.version || (o.platform ?? process.platform) === 'linux' || o.binaryPath.endsWith('.cjs') || o.binaryPath.endsWith('.js')) return { kept: null }
+  if (!o.version || (o.platform ?? process.platform) === 'linux' || isDaemonScript(o.binaryPath)) return { kept: null }
   for (const dir of keepDirs(o.daemonDir)) {
     const file = path.join(dir, path.basename(o.binaryPath))
     if ((await fsp.readFile(`${file}.version`, 'utf8').catch(() => '')).trim() === o.version) return { kept: file }

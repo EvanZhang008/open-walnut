@@ -409,7 +409,6 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/daemon-snapshot-wiring.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: a real change pushes exactly once, no second push (first push awaited by waitFor)" },
   { file: "tests/providers/daemon-snapshot-wiring.test.ts", sleep: "await new Promise((r) => setTimeout(r, 160))", reason: "time under test: two pushes inside the 50 ms coalesce window give one frame (real timers; the coalesce timer always fires before this later one)" },
   { file: "tests/providers/daemon-snapshot-wiring.test.ts", sleep: "await new Promise((r) => setTimeout(r, 160))", reason: "negative: the cancelled coalesce timer must not fire a duplicate" },
-  { file: "tests/providers/daemon-source-bridge-tcp.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: the reset socket must not connect or be accepted" },
   { file: "tests/providers/daemon-spawn-barrier.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 50))", reason: "negative: the gated process must not run before release" },
   { file: "tests/providers/daemon-spawn-gate-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: the refused respawn must not kill the live CLI" },
   { file: "tests/providers/daemon-ssh-master-restart.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: disconnecting must not exit the master or remove its socket" },

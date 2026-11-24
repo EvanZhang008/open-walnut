@@ -20,8 +20,7 @@
  * made). A key or runs file that is not this user's private regular file is never used or replaced:
  * no tokens then, and every caller uses the socket as before.
  *
- * Shared by both daemon twins (daemon-source.ts inlines it by `toString()`): self-contained, no
- * imports at runtime, nothing at module scope that the factory references.
+ * Self-contained: no imports at runtime, nothing at module scope that the factory references.
  */
 
 /** The follower's entry socket dir inside the daemon dir (the factory keeps its own copy; tests pin both). */

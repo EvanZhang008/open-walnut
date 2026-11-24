@@ -45,10 +45,7 @@
  * `inlineArgs` puts them back before a start records its args, so the registry
  * always holds the inline form an older daemon re-spawns.
  *
- * How each twin gets it: daemon-standalone.ts imports createCliArgvFiles;
- * daemon-source.ts inlines `createCliArgvFiles.toString()` through
- * `__CREATE_CLI_ARGV_FILES__`. So the factory body references NOTHING at module
- * scope and carries no backticks.
+ * Imported by daemon-standalone.ts (createCliArgvFiles). The factory body references NOTHING at module scope and carries no backticks.
  */
 
 export interface CliArgvFilesDeps {

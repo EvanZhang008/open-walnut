@@ -4,7 +4,7 @@
  *
  *   supertest GET /api/v1/asks (CLOUD_MODE replica route)
  *     -> relayControlAction -> the REAL bridge registry (bridgeRequest)
- *     -> a localhost WebSocket -> the REAL daemon-source process (cmdControlRelay)
+ *     -> a localhost WebSocket -> the REAL standalone daemon (cmdControlRelay)
  *     -> control-request on its trusted socket -> the REAL DaemonConnection
  *        handler (host policy, handleSessionControlRelay -> computeAgentAsks over
  *        a real task store)
@@ -39,8 +39,7 @@ vi.mock('../../src/core/session-tracker.js', async (orig) => ({
 
 import express from 'express'
 import request from 'supertest'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { attachBridge, closeAllBridges, bridgeForHost } from '../../src/web/ws/bridge-registry.js'
 import { asksV1Router, computeAgentAsks } from '../../src/web/routes/asks-v1.js'
@@ -52,6 +51,8 @@ import type { Task } from '../../src/core/types.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const PRIMARY_ALIAS = '__local__'
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 let tmpRoot: string
 let daemonProc: ChildProcess | null = null
@@ -69,9 +70,8 @@ function createApp() {
 }
 
 async function spawnDaemon(): Promise<void> {
-  const script = path.join(tmpRoot, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: {
       ...process.env,
       // Every directory the daemon owns is ours: it must never see the real
@@ -84,7 +84,7 @@ async function spawnDaemon(): Promise<void> {
   })
   daemonProc = proc
   daemonPort = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 15_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -222,7 +222,7 @@ afterAll(async () => {
   else process.env.WALNUT_BRIDGE_BLIP_GRACE_MS = savedGrace
 })
 
-describe('GET /api/v1/asks on a replica, over a real bridge and daemon', () => {
+describe.skipIf(!BUN)('GET /api/v1/asks on a replica, over a real bridge and daemon', () => {
   it("answers exactly the primary's list, launch flag included", async () => {
     for (const agentId of ['general', 'mentor']) {
       const res = await request(createApp()).get(`/api/v1/asks?agentId=${agentId}&limit=1000`)

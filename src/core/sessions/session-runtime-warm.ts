@@ -5,7 +5,7 @@
  * daemon's PATH shim behind `walnut ...`, the CLI hooks that call it) runs with
  * neither WALNUT_RUNTIME_DIR nor OPEN_WALNUT_HOME: the local daemon starts with no
  * OPEN_WALNUT_HOME (local-daemon.ts) and hands every CLI no WALNUT_RUNTIME_DIR
- * (daemon-standalone.ts, daemon-source.ts), because the server's own tree lives in
+ * (daemon-standalone.ts), because the server's own tree lives in
  * a deploy stage that a later deploy deletes. So they use the account's default
  * tree, `~/.open-walnut/local/runtime/<build>`, and the first one after a deploy
  * unpacks it (448 files, 28 MB) and prunes old builds' trees before it does

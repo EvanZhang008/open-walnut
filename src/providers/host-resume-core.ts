@@ -19,10 +19,7 @@
  *     forks), the permission mode the session has now, and the bypass
  *     capability without the bare flag that would select bypass on its own.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createHostResume;
- * daemon-source.ts inlines `createHostResume.toString()` through
- * `__CREATE_HOST_RESUME__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createHostResume). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface ResumeRecord {

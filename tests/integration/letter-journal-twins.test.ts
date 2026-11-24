@@ -1,6 +1,6 @@
 /**
- * A session's letter to the user while its Mac is away, on REAL daemon processes, both
- * twins (source twin on node, standalone on bun):
+ * A session's letter to the user while its Mac is away, on a REAL daemon process (the
+ * standalone, on bun):
  *
  *   test as the Mac ==trusted WS==> daemon <== agent gateway (the session's human_inbox_send)
  *
@@ -18,9 +18,6 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { fetchOfflineBlob } from '../../src/core/offline-merge/blob.js'
 import { LETTER_ID_RE } from '../../src/core/human-inbox/normalize.js'
@@ -36,15 +33,15 @@ const TASK_A = 'mtaskaaa-0006'
 // Accents, CJK and an astral emoji: the body crosses the host byte for byte.
 const BODY = '## Two layouts\n\nPick one: café 中文 🚀.\n'
 const ITEMS: InboxLetterItem[] = Array.from({ length: 30 }, (_, n) => ({
-  id: `twin-mail-${n}`, subject: `Marina update ${n}`, summary: 'Details: \u{e9} \u{4e2d}\u{6587} \u{1f680}.\nAn independent mail action.',
-  source: { kind: 'mail', account: `twin-account-${n}`, message: `twin-message-${n}` },
+  id: `marina-mail-${n}`, subject: `Marina update ${n}`, summary: 'Details: \u{e9} \u{4e2d}\u{6587} \u{1f680}.\nAn independent mail action.',
+  source: { kind: 'mail', account: `marina-account-${n}`, message: `marina-message-${n}` },
   display: { sender: { name: 'Marina desk', address: 'desk@example.test' }, sentAt: '2026-10-14T09:30:00Z', accountLabel: `Mailbox ${n}` },
   actions: [
-    { id: `twin-read-${n}`, kind: 'op', intent: 'mark_read' },
-    { id: `twin-find-${n}`, kind: 'op', intent: 'find_task' },
-    { id: `twin-create-${n}`, kind: 'op', intent: 'create_task' },
-    { id: `twin-attach-${n}`, kind: 'op', intent: 'attach_task' },
-    { id: `twin-ask-${n}`, kind: 'reply_ai', label: 'Ask about this mail', question: `Explain mail ${n}` },
+    { id: `marina-read-${n}`, kind: 'op', intent: 'mark_read' },
+    { id: `marina-find-${n}`, kind: 'op', intent: 'find_task' },
+    { id: `marina-create-${n}`, kind: 'op', intent: 'create_task' },
+    { id: `marina-attach-${n}`, kind: 'op', intent: 'attach_task' },
+    { id: `marina-ask-${n}`, kind: 'reply_ai', label: 'Ask about this mail', question: `Explain mail ${n}` },
   ],
 }))
 const LETTER = { subject: 'Pick a layout', type: 'action_required', markdown: BODY, actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }], items: ITEMS }
@@ -63,8 +60,7 @@ process.stdin.on('data', () => {})
 setInterval(() => {}, 1 << 30)
 `
 
-type Twin = 'source' | 'standalone'
-interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string; twin: Twin }
+interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
@@ -81,7 +77,7 @@ function alive(pid: number): boolean {
 let base = ''
 const started: number[] = []
 
-async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
+async function spawnDaemon(dir: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -94,26 +90,14 @@ async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
-  let proc: ChildProcess
-  if (twin === 'standalone') {
-    const binary = process.env.WALNUT_LETTER_TEST_BINARY
-    proc = spawn(binary ?? BUN!, [...(binary ? [] : [path.join(ROOT, 'src/providers/daemon-standalone.ts')]), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
-  } else {
-    const script = path.join(dir, 'daemon.cjs')
-    const compiledModule = process.env.WALNUT_LETTER_TEST_SOURCE_MODULE
-    const source = compiledModule
-      ? (await import(compiledModule) as { getDaemonSource(): string }).getDaemonSource()
-      : getDaemonSource()
-    fs.writeFileSync(script, source, { mode: 0o755 })
-    buildSync({ entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent' })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const binary = process.env.WALNUT_LETTER_TEST_BINARY
+  const proc: ChildProcess = spawn(binary ?? BUN!, [...(binary ? [] : [path.join(ROOT, 'src/providers/daemon-standalone.ts')]), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   started.push(pid)
-  return { proc, dir, sock, twin, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
+  return { proc, dir, sock, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
 }
 
 function connectWs(port: number): Promise<WebSocket> {
@@ -197,14 +181,12 @@ afterAll(() => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 })
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a letter while the Mac is away`, () => {
-    it('an older Mac: needs the server; a Mac that drains letters: saved, listed, drained with its body, acked', async () => {
-      const d = await spawnDaemon(path.join(base, `${twin}-d`), twin)
-      try { await run(d) } catch (err) { throw new Error(`${(err as Error).message}\n${twin} daemon log:\n${daemonLog(d)}`) }
-    }, 120_000)
-  })
-}
+describe.skipIf(!BUN)('standalone daemon: a letter while the Mac is away', () => {
+  it('an older Mac: needs the server; a Mac that drains letters: saved, listed, drained with its body, acked', async () => {
+    const d = await spawnDaemon(path.join(base, 'd'))
+    try { await run(d) } catch (err) { throw new Error(`${(err as Error).message}\ndaemon log:\n${daemonLog(d)}`) }
+  }, 120_000)
+})
 
 async function run(d: Daemon): Promise<void> {
   // An older Mac (its drains leave letters out) leads, then goes away.

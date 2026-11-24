@@ -16,14 +16,10 @@
 import { DAEMON_BINARY_NAMES, START_READER_SH } from './daemon-live-sh.js'
 
 export interface DaemonStartCmdOpts {
-  /** How the daemon runs on the remote host. */
-  runtime: 'bun' | 'binary' | 'node'
-  /** Absolute path to the bun executable ('bun') or the daemon binary ('binary'). */
-  execPath?: string
+  /** Absolute path to the compiled daemon on the host: a daemon binary, or the Walnut file in its slot. */
+  execPath: string
   /** Env vars for the daemon process — rendered as `nohup env K='V' cmd`. */
   env?: Record<string, string>
-  /** Shell preamble prepended for the 'node' runtime (PATH discovery). */
-  preamble?: string
   /** Daemon dir on the remote host. Tests override; production default below. */
   dir?: string
 }
@@ -69,6 +65,7 @@ export function buildDaemonStopCmd(dir = '/tmp/open-walnut', procRoot = '/proc')
     '[ "$STATUS" -eq 0 ] && [ -n "$IDENTITY" ] || exit 1',
     'COMMAND=$(read_command) || exit 1',
     '[ ! -s "$ERROR_FILE" ] || exit 1',
+    // `daemon.cjs`: the source daemon an older leader deployed, which this stop still ends on an update.
     `case "$COMMAND" in ${DAEMON_BINARY_NAMES.map((name) => shq(`${dir}/${name} --start`)).join('|')}|*${shq(` ${dir}/daemon.cjs --start`)}) ;; *) exit 1;; esac`,
     'CURRENT=$(read_identity); STATUS=$?',
     'if [ "$STATUS" -eq 1 ] && [ -z "$CURRENT" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
@@ -105,9 +102,7 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
     ? `env ${entries.map(([k, v]) => `${k}=${shq(v)}`).join(' ')} `
     : ''
 
-  if ((opts.runtime === 'bun' || opts.runtime === 'binary') && !opts.execPath) {
-    throw new Error(`runtime '${opts.runtime}' requires execPath`)
-  }
+  if (!opts.execPath) throw new Error('the daemon start command requires execPath')
 
   // Readiness probe: POLL for the port file + live pid, up to ~45s. A fixed
   // `sleep 2` raced daemon boot on loaded hosts (a busy dev box took ~20s
@@ -138,8 +133,7 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   // CPU the build does not support, a loader error) prints nothing: a killed
   // background job has no shell left to report it. So the poll also watches
   // the job itself, and once it is gone, reaps it ONCE and appends
-  // `walnut-daemon-exit=<status>` to the start log. The server reads that line
-  // to decide whether to fall back to another runtime (remote-runtime.ts).
+  // `walnut-daemon-exit=<status>` to the start log, which the start's error carries.
   // A zombie still answers kill -0, so `ps` confirms; a `ps` that cannot answer
   // (busybox without -p) reads as alive, never as dead: `wait` on a live job
   // would block the whole start.
@@ -148,8 +142,7 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   const log = shq(`${dir}/daemon-start.log`)
   const pidFile = shq(`${dir}/daemon.pid`)
   const portFile = shq(`${dir}/daemon.port`)
-  const script = shq(`${dir}/daemon.cjs`)
-  const exec = opts.execPath ? shq(opts.execPath) : ''
+  const exec = shq(opts.execPath)
   const files = `$(cat ${portFile} ${pidFile} 2>/dev/null)`
   const before = `WALNUT_BEFORE="${files}"; `
   const waitReady =
@@ -165,32 +158,9 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
     `if [ "$WALNUT_BG_RC" -ne 0 ]; then echo "walnut-daemon-exit=$WALNUT_BG_RC" >> ${log}; break; fi; continue; fi; fi; ` +
     'sleep 2; done'
 
-  // `[ -n "$DPID" ]` guards against an empty pid file (cat succeeds but
-  // yields empty → `kill -0 ""` behavior is shell-dependent; some emit the
-  // current shell's pid). Nothing is confirmed unless the poll saw the daemon ready.
-  const confirmRunning =
-    `[ -n "$WALNUT_READY" ] && cat ${portFile} && echo && ` +
-    `DPID=$(cat ${pidFile} 2>/dev/null) && ` +
-    `[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"`
-
-  switch (opts.runtime) {
-    case 'bun':
-      // Source deployed under bun — exec bun by absolute path (no preamble).
-      // The daemon source itself sources ~/.zshrc / ~/.bashrc on startup to
-      // populate process.env.PATH so cmdStart's spawn('claude', ...) finds
-      // the CLI. See daemon-source.ts "PATH setup" block.
-      return `${before}nohup ${envPrefix}${exec} ${script} --start > ${log} 2>&1 & ` +
-        `${waitReady}; ${confirmRunning}`
-    case 'binary':
-      // Binary deploy — run directly, no PATH setup needed. Binary has a
-      // `--status` subcommand (the pid alive AND the daemon answering on its
-      // port), so use it as the liveness confirmation.
-      return `${before}nohup ${envPrefix}${exec} --start > ${log} 2>&1 & ` +
-        `${waitReady}; [ -n "$WALNUT_READY" ] && cat ${portFile} && echo && ${envPrefix}${exec} --status`
-    case 'node':
-      // Source deploy under node — needs the shell preamble for node PATH
-      // discovery (rc files, nvm init).
-      return `${opts.preamble ?? 'true'}; ${before}nohup ${envPrefix}node ${script} --start > ${log} 2>&1 & ` +
-        `${waitReady}; ${confirmRunning}`
-  }
+  // The compiled daemon has a `--status` subcommand (the pid alive AND the daemon
+  // answering on its port): it is the liveness confirmation. Run directly, so no
+  // PATH setup is needed.
+  return `${before}nohup ${envPrefix}${exec} --start > ${log} 2>&1 & ` +
+    `${waitReady}; [ -n "$WALNUT_READY" ] && cat ${portFile} && echo && ${envPrefix}${exec} --status`
 }

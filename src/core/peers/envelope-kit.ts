@@ -8,10 +8,7 @@
  * server modules (walnut-message-tag.ts, peer-wrapper.ts, session-requests.ts)
  * delegate here instead of keeping their own copy.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createEnvelopeKit;
- * daemon-source.ts inlines `createEnvelopeKit.toString()` through
- * `__CREATE_ENVELOPE_KIT__`. So the factory body references NOTHING at module
- * scope (not even a helper import), and every constant lives inside it.
+ * Imported by daemon-standalone.ts (createEnvelopeKit). The factory body references NOTHING at module scope (not even a helper import), and every constant lives inside it.
  */
 
 /** `app-state`: what a plugin App shares about the task (sessions/app-state.ts). */

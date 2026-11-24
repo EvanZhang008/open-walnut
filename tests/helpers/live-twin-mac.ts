@@ -585,9 +585,7 @@ export async function setupTwinMac(prefix: string, firstBoot = '', opts: TwinOpt
   world.net.cloud = await startSilentLinkProxy(world.companion.port, '127.0.0.1', {
     exempt: (head) => { const h = head.toString('latin1'); return h.includes(world.tokens.keeper) || h.includes(world.tokens.found) },
   })
-  // The standalone twin here; node-side (test:source-twin-node-suites) the JS twin, on Node.
-  const twin = BUN && process.env.WALNUT_REQUIRE_NODE !== '1' ? 'standalone' : 'source'
-  world.devbox = await spawnLiveDaemon(daemonCtx(), 'devbox', twin, { WALNUT_LEADER_TAKEOVER_MS: String(T), WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
+  world.devbox = await spawnLiveDaemon(daemonCtx(), 'devbox', 'standalone', { WALNUT_LEADER_TAKEOVER_MS: String(T), WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT) })
   world.daemons.push(world.devbox)
   world.net.keeper = await startSilentLinkProxy(world.devbox.port)
   world.net.found = await startSilentLinkProxy(world.devbox.port)

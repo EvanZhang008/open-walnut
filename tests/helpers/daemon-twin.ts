@@ -1,7 +1,6 @@
 /**
- * The real session daemon (the JS twin from getDaemonSource, on the Node a host runs
- * it on: tests/helpers/source-twin.ts) for server e2e tests, with a `claude` that
- * runs the mock CLI.
+ * The real session daemon (src/providers/daemon-standalone.ts under bun) for server
+ * e2e tests, with a `claude` that runs the mock CLI.
  *
  * Use it when a test asserts what the daemon decides (reap exit codes, snapshots,
  * the stopped/idle projection): the in-process MockDaemon pushes no snapshots, so a
@@ -17,8 +16,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from './source-twin.js'
+import { testBun } from './bun-runtime.js'
+
+const ROOT = path.resolve(import.meta.dirname, '../..')
+const STANDALONE = path.join(ROOT, 'src/providers/daemon-standalone.ts')
 
 export interface DaemonTwin {
   port: number
@@ -38,8 +39,8 @@ export async function startDaemonTwin(opts: {
 }): Promise<DaemonTwin> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-daemon-twin-'))
   const runDir = path.join(dir, 'run')
-  const script = path.join(dir, 'daemon.cjs')
-  await fs.writeFile(script, getDaemonSource(), { mode: 0o755 })
+  const bun = testBun()
+  if (!bun) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
   const bin = path.join(opts.home, '.local', 'bin')
   await fs.mkdir(bin, { recursive: true })
   await fs.writeFile(path.join(bin, 'claude'),
@@ -57,7 +58,7 @@ export async function startDaemonTwin(opts: {
   }
   for (const k of TOOLCHAIN_VARS) delete env[k]
 
-  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
+  const proc = spawn(bun, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'], cwd: ROOT })
   const port = await new Promise<number>((resolve, reject) => {
     let out = ''
     const timer = setTimeout(() => reject(new Error('daemon twin did not print its port within 30s')), 30_000)

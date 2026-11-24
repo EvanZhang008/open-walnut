@@ -7,8 +7,8 @@
  *    check's caller reaches callerOf only inside withTriggerCaller. So every way in from the web
  *    layer to a module that calls callerOf must run its work under withTriggerCaller. A new route
  *    file (or a new host op module reached from one) without it is a check refused again.
- * 2. Every place a daemon twin starts a check gives the run its token (checkCallers.mint or the
- *    source twin's checkRunCaller), or that run's calls go up as nobody's again.
+ * 2. Every place the daemon starts a check gives the run its token (checkCallers.mint), or that
+ *    run's calls go up as nobody's again.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -80,17 +80,13 @@ describe('every task-only host route is one a check reaches', () => {
   })
 })
 
-describe('every check a daemon twin starts carries its run\'s token', () => {
-  for (const [file, minted] of [
-    ['src/providers/daemon-standalone.ts', /checkCallers\.mint\(/],
-    ['src/providers/daemon-source.ts', /checkRunCaller\(/],
-  ] as const) {
-    it(file, () => {
-      const lines = read(file).split('\n')
-      const starts = lines.flatMap((l, i) => (/runCheckProcess\(/.test(l) && !/function runCheckProcess/.test(l) ? [i] : []))
-      expect(starts.length, 'a twin runs checks').toBeGreaterThanOrEqual(2)
-      const bare = starts.filter((i) => !lines.slice(Math.max(0, i - 6), i + 1).some((l) => minted.test(l)))
-      expect(bare.map((i) => `${file}:${i + 1}`), 'a check started here has no token (trigger-check-core.ts checkCallers)').toEqual([])
-    })
-  }
+describe('every check the daemon starts carries its run\'s token', () => {
+  it('src/providers/daemon-standalone.ts', () => {
+    const file = 'src/providers/daemon-standalone.ts'
+    const lines = read(file).split('\n')
+    const starts = lines.flatMap((l, i) => (/runCheckProcess\(/.test(l) && !/function runCheckProcess/.test(l) ? [i] : []))
+    expect(starts.length, 'the daemon runs checks').toBeGreaterThanOrEqual(2)
+    const bare = starts.filter((i) => !lines.slice(Math.max(0, i - 6), i + 1).some((l) => /checkCallers\.mint\(/.test(l)))
+    expect(bare.map((i) => `${file}:${i + 1}`), 'a check started here has no token (trigger-check-core.ts checkCallers)').toEqual([])
+  })
 })

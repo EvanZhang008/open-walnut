@@ -124,15 +124,6 @@ export async function runSelftest(): Promise<number> {
       },
     },
     {
-      name: 'daemon-source', required: true, run: async () => {
-        const { getDaemonSource } = await import('../providers/daemon-source.js')
-        const source = getDaemonSource()
-        const bun = (globalThis as { Bun?: { Transpiler: new (options: { loader: 'js' }) => { scan(code: string): unknown } } }).Bun
-        new bun!.Transpiler({ loader: 'js' }).scan(source)
-        return `${source.length} bytes, parses`
-      },
-    },
-    {
       // Not required: a file whose bytecode was rejected still works, it only starts
       // about 10x slower. The release rehearsal requires it on every target.
       name: 'bytecode', required: false, run: async () => {

@@ -3,8 +3,7 @@
  * (0600, never through a link, never seen half made by a second opener) and kept across daemon
  * restarts; a token per RUN of a caller sid (a nonce recorded beside the key), checked in constant
  * time against that sid's current run, so the next run of the sid ends the old token; the
- * follower's entry socket kept only as this daemon dir's private entry socket. Run as imported and
- * as the text the source twin inlines.
+ * follower's entry socket kept only as this daemon dir's private entry socket.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -14,7 +13,6 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { HOST_CALL_SOCKET_DIR, HOST_CALL_SOCKET_MAX_BYTES, createHostCallTokens, hostCallSocketPath } from '../../src/providers/host-call-token-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { bunRuntime } from '../helpers/bun-runtime.js'
 
 let dir = ''
@@ -22,13 +20,12 @@ beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hct-')) })
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
 const uid = typeof process.getuid === 'function' ? process.getuid() : null
-// eslint-disable-next-line @typescript-eslint/no-implied-eval
-const inlined = new Function(`"use strict"; return (${createHostCallTokens.toString()})`)() as typeof createHostCallTokens
 
 const keyOf = () => Buffer.from(fs.readFileSync(path.join(dir, 'host-call.key'), 'utf8').trim(), 'hex')
 const runsOf = () => JSON.parse(fs.readFileSync(path.join(dir, 'host-call-runs.json'), 'utf8')).runs as Record<string, [string, number]>
 
-describe.each([['imported', createHostCallTokens], ['inlined', inlined]] as const)('host call tokens (%s)', (_label, make) => {
+describe('host call tokens', () => {
+  const make = createHostCallTokens
   const tokens = (over: Partial<Parameters<typeof createHostCallTokens>[0]> = {}) => make({ fs, path, crypto, dir, uid, ...over })
 
   it('makes one private key on first use; a restarted daemon in the same dir takes a live run\'s token', () => {
@@ -156,8 +153,8 @@ describe('the follower\'s entry socket, as the daemon keeps it', () => {
     return s
   }
 
-  it.each([['imported', createHostCallTokens], ['inlined', inlined]] as const)('%s: only this dir\'s entry path to a private socket of this uid', async (_l, make) => {
-    const t = make({ fs, path, crypto, dir, uid })
+  it('only this dir\'s entry path to a private socket of this uid', async () => {
+    const t = createHostCallTokens({ fs, path, crypto, dir, uid })
     const good = hostCallSocketPath(path, crypto, dir, 'wmarina01')
     expect(path.dirname(good)).toBe(path.join(dir, HOST_CALL_SOCKET_DIR))
     expect(path.basename(good)).toMatch(/^[0-9a-f]{16}\.sock$/)
@@ -237,16 +234,5 @@ describe('the key race: two daemons of one dir making the key at once', () => {
     expect(fs.readFileSync(path.join(dir, 'host-call.key'), 'utf8').trim()).toBe(winner)
     expect(tok).toBe(crypto.createHmac('sha256', Buffer.from(winner, 'hex')).update('sid-1\n' + runsOf()['sid-1']![0]).digest('hex'))
     expect(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp'))).toEqual([])
-  })
-})
-
-describe('host call tokens in the source twin', () => {
-  it('the generated daemon carries the inlined factory with no placeholder left', () => {
-    const generated = getDaemonSource()
-    expect(generated).not.toContain('__CREATE_HOST_CALL_TOKENS__')
-    expect(generated).toContain(`var hostCallTokens = (${createHostCallTokens.toString()})(`)
-    // The factory keeps its own copies of the module's socket constants.
-    expect(createHostCallTokens.toString()).toMatch(new RegExp(`['"]${HOST_CALL_SOCKET_DIR}['"]`))
-    expect(createHostCallTokens.toString()).toContain(String(HOST_CALL_SOCKET_MAX_BYTES))
   })
 })

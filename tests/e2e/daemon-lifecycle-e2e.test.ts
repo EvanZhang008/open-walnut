@@ -1,9 +1,10 @@
 /**
- * True E2E daemon lifecycle tests — spawn the REAL daemon-source.ts template
- * as a child process, connect via WebSocket, exercise Phase A/B/C/D paths.
+ * True E2E daemon lifecycle tests — spawn the REAL standalone daemon
+ * (daemon-standalone.ts under bun) as a child process, connect via WebSocket,
+ * exercise Phase A/B/C/D paths.
  *
  * What's real:
- *   - Actual daemon process (DAEMON_SOURCE template run via `node`)
+ *   - Actual daemon process (daemon-standalone.ts run by bun)
  *   - Real WebSocket protocol
  *   - Real FIFO + file I/O + process spawning
  *   - Real reapSession / broadcastSessionState / reconcileRegistry
@@ -12,15 +13,14 @@
  *   - Claude CLI replaced by `cat` (long-lived, reads stdin FIFO, writes to output)
  *   - No SSH — we talk to 127.0.0.1:<port> directly
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 interface DaemonProc {
@@ -28,17 +28,12 @@ interface DaemonProc {
   port: number
   daemonDir: string
   streamsDir: string
-  scriptPath: string
 }
 
-async function writeDaemonScript(): Promise<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-e2e-'))
-  const scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  return scriptPath
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
-async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<DaemonProc> {
+async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
   // The daemon reads DAEMON_DIR from env (fallback to ~/.walnut/daemon in source)
   const env = {
     ...process.env,
@@ -46,8 +41,9 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
   }
 
   // Start daemon (prints port to stdout)
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
     env,
+    cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
   })
@@ -56,7 +52,7 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
   }
 
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const s = chunk.toString().trim()
       const m = s.match(/^\d+$/m)
@@ -74,7 +70,6 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
     port,
     daemonDir,
     streamsDir: path.join(daemonDir, 'streams'),
-    scriptPath,
   }
 }
 
@@ -151,18 +146,13 @@ function waitForEvent(
 
 // ════════════════════════════════════════════════════════════════════════
 
-describe('daemon E2E — real process, real WS, real FIFO', () => {
-  let scriptPath: string
+describe.skipIf(!BUN)('daemon E2E — real process, real WS, real FIFO', () => {
   let daemonDir: string
   let daemon: DaemonProc | null = null
 
-  beforeAll(async () => {
-    scriptPath = await writeDaemonScript()
-  })
-
   beforeEach(async () => {
     daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-data-'))
-    daemon = await spawnDaemon(scriptPath, daemonDir)
+    daemon = await spawnDaemon(daemonDir)
   })
 
   afterEach(async () => {
@@ -171,10 +161,6 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
       daemon = null
     }
     try { await fsp.rm(daemonDir, { recursive: true, force: true }) } catch {}
-  })
-
-  afterAll(async () => {
-    try { await fsp.rm(path.dirname(scriptPath), { recursive: true, force: true }) } catch {}
   })
 
   // ─────────────────────────────────────────────────────────────────
@@ -305,7 +291,7 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
     expect(stillAlive).toBe(true)
 
     // Restart daemon → reconcile should adopt
-    daemon = await spawnDaemon(scriptPath, daemonDir)
+    daemon = await spawnDaemon(daemonDir)
     const ws2 = await connectWs(daemon.port)
 
     const statusMsg = await sendCmd(ws2, { cmd: 'status', sid })
@@ -365,7 +351,7 @@ describe('daemon E2E — real process, real WS, real FIFO', () => {
     await new Promise((r) => setTimeout(r, 300))
 
     // Restart daemon → reconcile probes: kill(pid,0) throws → reap
-    daemon = await spawnDaemon(scriptPath, daemonDir)
+    daemon = await spawnDaemon(daemonDir)
     const ws2 = await connectWs(daemon.port)
 
     // Session should report dead authoritatively

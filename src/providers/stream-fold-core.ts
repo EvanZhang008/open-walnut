@@ -30,10 +30,7 @@
  *     2026-10-31: the old rule kept such a file instead, and a session with two
  *     loops armed had a 2.6 GB stream file that grew from August on.
  *
- * How each twin gets it: daemon-standalone.ts imports createStreamFold;
- * daemon-source.ts inlines `createStreamFold.toString()` through
- * `__CREATE_STREAM_FOLD__`. So the factory body references NOTHING at module
- * scope; every helper arrives through deps.
+ * Imported by daemon-standalone.ts (createStreamFold). The factory body references NOTHING at module scope; every helper arrives through deps.
  */
 
 export interface StreamFoldCheckpoint<F, T> {

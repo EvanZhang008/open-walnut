@@ -349,8 +349,7 @@ export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');
  * `path.join(DAEMON_DIR, 'images', 'mobile')` from the same WALNUT_DAEMON_DIR,
  * which is what keeps an isolated instance isolated). Kept here rather than
  * inline so the two consumers (session image serving, chat-turn relay adoption)
- * can never drift apart. See IMAGE_SAVE_DIR in providers/daemon-standalone.ts
- * and providers/daemon-source.ts.
+ * can never drift apart. See IMAGE_SAVE_DIR in providers/daemon-standalone.ts.
  */
 export const MOBILE_STAGED_IMAGES_DIR = path.join(IMAGES_DIR, 'mobile');
 // Oversized chat-input pastes spilled to disk (POST /api/pastes); the message

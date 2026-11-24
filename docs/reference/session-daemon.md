@@ -233,7 +233,7 @@ journal names them for), and send no stop at all to a daemon without `owner-home
 
 A host's own server starts its sessions naming its data dir as their home, while its follower link,
 the leader's link and the slices name that Walnut by its leader's home. Every owner lookup and compare
-in the daemon goes through `walnutOfHome` (both twins): a data dir of a server the daemon runs for a
+in the daemon goes through `walnutOfHome`: a data dir of a server the daemon runs for a
 leader (`host-server-core.ts walnutOf`, from the spec files it reads again at boot) is that leader's
 Walnut, and the spawn journal line names that Walnut (`walnut`, beside `home`) so it stays so after the
 spec is gone. Without it, after a restart of the host's service, the host's runner could not read its
@@ -292,7 +292,7 @@ spawn journal records for another Walnut (`session_other_walnut`), live or not. 
 ## A session's walnut call reaches only its own Walnut's server
 
 **A session's `walnut` call reaches only its own Walnut's server** (`src/providers/gateway-identity-core.ts`,
-both twins; 2026-11-10: on a host shared by two people's Walnuts, one person's link dropped three
+2026-11-10: on a host shared by two people's Walnuts, one person's link dropped three
 times in ten minutes and the gateway's fallback to "any server socket that names no Walnut" sent
 that person's sessions' calls to the other person's bulk socket, which never names one). A socket
 speaks for the Walnut it is bound to (`leader.configure`, `host.slice`), else for the Walnut of a
@@ -714,11 +714,11 @@ call (`core/session-channel/person-call.ts`), never a session's, a routine's, a 
 peer's. Only a person's own lines and a stop reach a session already running there; every other row
 is parked with why. Reads that only bring an answer back stay.
 
-## Keep the twins in sync, and auto-deploy
+## One daemon source, and auto-deploy
 
-**Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.
+**One daemon source:** `daemon-standalone.ts` and the modules it imports. It is compiled into the daemon binaries and into the walnut file (`walnut __daemon`), and a checkout with no built daemon runs it directly under bun. Build: `bash scripts/build-daemon.sh`. (Until 2026-11 a second, hand-synced copy, `daemon-source.ts`, ran on hosts under bun or node; it is gone, and so is the `ws` install and the bun probe.)
 
-**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
+**Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, it puts the new daemon on the host while the old one still serves: this build's `daemon-linux-<arch>` binary (gzipped, one stream, else 256 KB chunks each over its own SSH connection, which bypasses proxies that kill large transfers), else the walnut file in the same slot (the host downloads it from the release itself, else a delta, else an upload that resumes). The new daemon's fold checkpoints are prepared from that staged file (`--prewarm-folds`) before the swap, and the staged daemon runs in a trial first. A host where neither file can be had gets an error that says why (a Walnut that runs from an uncommitted checkout, a host that is not Linux, no room); a host needs no bun, node or `ws`. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
 ## Every hold on that update has an end
 

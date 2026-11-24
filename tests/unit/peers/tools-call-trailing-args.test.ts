@@ -4,11 +4,9 @@
  * Each face read the one argument and dropped the rest, so `tools call task_send '{...}' --dry-run`
  * sent a real message from a sender who believed it was a preview (2026-10-31). The faces:
  * src/providers/wn-cli.ts (the in-session CLI in the daemon binary), src/commands/tools.ts (the
- * hub CLI), the template CLI inlined in src/providers/daemon-source.ts, and the `walnut mcp ...
- * tools call` parser. The ratchet at the bottom fails when a new place reads a call's arguments.
+ * hub CLI), and the `walnut mcp ... tools call` parser. The ratchet at the bottom fails when a new place reads a call's arguments.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -18,8 +16,6 @@ import { parseMcpCliArgs } from '../../../src/providers/mcp-cli-args.js'
 import { trailingArgsMessage } from '../../../src/providers/tool-args-source.js'
 import { runTools } from '../../../src/commands/tools.js'
 import { spyCliStreams } from '../../helpers/cli-streams.js'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../../..')
 const PAYLOAD = '{"to":"acme-task","text":"hi"}'
@@ -86,36 +82,6 @@ describe('the in-session CLI (wn-cli.ts)', () => {
   })
 })
 
-describe('the template CLI (daemon-source.ts)', () => {
-  it('sends nothing to the gateway and exits 2', async () => {
-    const twin = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(twin, getDaemonSource())
-    const gw = await recordingGateway(dir)
-    const run = (extra: string[]) => new Promise<{ code: number | null; err: string }>((resolve) => {
-      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', 'tools', 'call', 'task_send', PAYLOAD, ...extra], {
-        env: { ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_AGENT_SOCKET: gw.sock, WALNUT_SESSION_ID: 'probe-sid' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let err = ''
-      let out = ''
-      child.stderr.on('data', (d) => { err += d })
-      child.stdout.on('data', (d) => { out += d })
-      child.on('close', (code) => resolve({ code, err: err || out }))
-    })
-    for (const extra of EXTRAS) {
-      const r = await run(extra)
-      expect(r.code).toBe(2)
-      // One JSON object: on stderr, or on stdout with --json (tool-call-output.ts).
-      const failure = JSON.parse(r.err) as { error: { code: string; message: string } }
-      expect(failure.error.code).toBe('usage_error')
-      expect(failure.error.message).toMatch(/^nothing was run: tools call reads <op> and one argument/)
-      expect(failure.error.message).toContain(`so ${extra.find((a) => a !== '--json')} would have been ignored`)
-    }
-    expect(gw.received()).toBe('')
-    gw.close()
-  }, 60_000)
-})
-
 describe('the hub CLI (commands/tools.ts)', () => {
   it('runs nothing, prints the refusal and exits 1', async () => {
     const errors: string[] = []
@@ -146,7 +112,6 @@ describe('ratchet: every place that reads a tools call argument refuses an extra
   const READERS: Record<string, RegExp> = {
     'src/providers/wn-cli.ts': /trailingArgsMessage\(rest\.slice\(2\)\)/,
     'src/commands/tools.ts': /trailingArgsMessage\(rest\.slice\(1\)\)/,
-    'src/providers/daemon-source.ts': /var wnExtra = rest\.slice\(2\)/,
     'src/commands/mcp-client.ts': /parseMcpCliArgs\(/,
   }
 
@@ -162,7 +127,7 @@ describe('ratchet: every place that reads a tools call argument refuses an extra
   it('finds exactly the known readers, each with its refusal', () => {
     const found = walk(path.join(ROOT, 'src'), [])
       .filter((f) => !f.endsWith('src/providers/tool-args-source.ts'))
-      .filter((f) => /\bclassifyArgsSource\(|\bwnArgsSource\((?!raw\))/.test(fs.readFileSync(f, 'utf8')))
+      .filter((f) => /\bclassifyArgsSource\(/.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(ROOT, f))
       .sort()
     // A new reader: make it refuse a word after the argument (trailingArgsMessage), then add it here.

@@ -14,8 +14,7 @@
  * companion already matched it against the catalog), a known effort, a known
  * mode, a permission answer of the shape the server takes.
  *
- * Text-injected into the source twin by fn.toString() (daemon-source.ts): no
- * imports, and nothing from module scope.
+ * Self-contained: no imports, and nothing from module scope.
  */
 
 export interface LiveSettingsDeps {

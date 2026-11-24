@@ -35,9 +35,7 @@
  * it; for a plain shell it is the job printing (`yes | head`). Past HARD_CAP unacked
  * bytes the stream still ends rather than fill the daemon: the last resort.
  *
- * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts
- * inlines its `toString()` through `__CREATE_PTY_STREAMS__`. So the factory body
- * references NOTHING at module scope.
+ * Imported by daemon-standalone.ts. The factory body references NOTHING at module scope.
  */
 
 /** A pty as Bun's `Bun.spawn(argv, { terminal })` gives it (src/lib/pty.ts uses the same). */

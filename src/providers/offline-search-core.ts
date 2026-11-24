@@ -13,8 +13,7 @@
  * and the whole phrase over scattered words. A finished task ranks below an
  * open one with the same words.
  *
- * Text-injected into the source twin by fn.toString() (daemon-source.ts): no
- * imports, and nothing from module scope.
+ * Self-contained: no imports, and nothing from module scope.
  */
 
 export interface OfflineSearchTask {

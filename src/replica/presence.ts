@@ -22,7 +22,7 @@
 
 import type { FollowerView } from '../host-server/daemon-link.js'
 import { SUSPECT_MS, VIEW_STALE_MS, type Route } from '../host-server/route.js'
-// The daemon twins' own parse of a timer knob (daemon-source.ts mirrors it verbatim).
+// The daemon's own parse of a timer knob.
 import { envTimerMs } from '../providers/daemon-core.js'
 import { LEADER_READ_DEADLINE_MS } from '../core/leader-read-recovery.js'
 

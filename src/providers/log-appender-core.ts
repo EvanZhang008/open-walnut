@@ -23,9 +23,7 @@
  *     stuck append ends (its batch may then land a second time). A pool that answers means a
  *     slow disk: the append is left to finish, never turned into a sync write on this thread.
  *
- * How each twin gets it: daemon-standalone.ts imports createLogAppender; daemon-source.ts inlines
- * `createLogAppender.toString()` through `__CREATE_LOG_APPENDER__`. So the factory body references
- * NOTHING at module scope; every helper arrives through deps.
+ * Imported by daemon-standalone.ts (createLogAppender). The factory body references NOTHING at module scope; every helper arrives through deps.
  */
 
 export interface LogAppenderDeps {

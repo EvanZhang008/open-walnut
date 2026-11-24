@@ -37,17 +37,18 @@ describe('uploads never ride the shared SSH master', () => {
   })
 
   it('a call that writes stdin data names the fresh args, or goes through sshExec', () => {
-    const calls = [...SRC.matchAll(/runSshBounded\(([^)]*?)\{\s*input:/gs)]
-    expect(calls.length).toBeGreaterThan(0)
-    for (const c of calls) {
-      const head = c[1]
+    const bounded = [...SRC.matchAll(/runSshBounded\(([^)]*?)\{\s*input:/gs)].map((c) => c[1])
+    // An ssh spawned with a stdin pipe (the walnut file's stream and chunk uploads): the args it was given.
+    const piped = [...SRC.matchAll(/spawn\('ssh', args, \{ stdio: \['pipe'/g)].map((m) => {
+      const body = SRC.slice(SRC.lastIndexOf('\n  private ', m.index!), m.index!)
+      return body.slice(body.lastIndexOf('const args = '))
+    })
+    expect(bounded.length + piped.length).toBeGreaterThan(0)
+    for (const head of [...bounded, ...piped]) {
       const ok = /freshSshArgs|\bsshArgs\b|\bargs\b/.test(head) && !/baseSshArgs/.test(head)
       expect(ok, `stdin upload over the master: ${head.slice(0, 120)}`).toBe(true)
     }
-  })
-
-  it('the source and sidecar uploads take the fresh args', () => {
-    expect(SRC).toMatch(/const sshArgs = this\.freshSshArgs\n/)
+    for (const head of piped) expect(head).toMatch(/^const args = \[\s*\.\.\.this\.freshSshArgs/)
   })
 
   it('rideMaster draws the line at MASTER_STDIN_MAX_BYTES', () => {

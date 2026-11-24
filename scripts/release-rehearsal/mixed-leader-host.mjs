@@ -9,14 +9,12 @@
  * The older side is the release people run, `npm install -g open-walnut@<older>` from the
  * real registry (its launcher and its compiled file). The new side is the source tree in
  * --new-src (this checkout by default): its server run by bun from src/cli.ts, its daemon
- * twins from src/providers (daemon-standalone.ts under bun, the JS twin daemon-source.ts
- * under Node, as a host without the compiled daemon runs it).
+ * from src/providers (daemon-standalone.ts under bun).
  *
  * Pairings (each its own HOME, data, daemon dir and port; mock `claude`; no auto-update):
  *   old-leader+old-host         the control: the old release with its own daemon.
  *   old-leader+new-host         A: the new standalone daemon, which names the job in the
  *                               relay frame's `caller` (vouched), under the old leader.
- *   old-leader+new-source-host  A with the new JS twin (names the job, never vouches).
  *   new-leader+new-host         the contrast: the job vouched for, its bypass starts go through.
  *   new-leader+old-host         B: the old daemon names no job; the new leader caps the call.
  *
@@ -44,7 +42,6 @@ import { IsolatedWalnut } from './walnut.mjs'
 import { outsideFetch } from './outside-fetch.mjs'
 import { PACKAGE, UPSTREAM } from './registry.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
-import { realNodeOnPath } from '../outside-node.mjs'
 import {
   daemonHeads, errorHeads, installProbePlugin, judgeNewLeaderOldHost, judgeNewPair, judgeOldLeader, newHeads, outcomesOf, readProbeOut, startStatuses,
 } from './plugin-job-probe.mjs'
@@ -57,7 +54,6 @@ const daemonBinaryName = `daemon-${process.platform}-${process.arch}`
 export const PAIRINGS = {
   'old-leader+old-host': { leader: 'old', host: 'old' },
   'old-leader+new-host': { leader: 'old', host: 'new' },
-  'old-leader+new-source-host': { leader: 'old', host: 'new-source' },
   'new-leader+new-host': { leader: 'new', host: 'new' },
   'new-leader+old-host': { leader: 'new', host: 'old' },
 }
@@ -111,26 +107,10 @@ export async function installOlder(work, manifest) {
 const sh = (lines) => `#!/bin/sh\n${lines.join('\n')}\n`
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`
 
-/** The JS twin of the new source, labelled `version`, written to `file`. */
-function writeSourceTwin(newSrc, version, file) {
-  const r = spawnSync(process.execPath, ['-e', `const { getDaemonSource } = await import(${JSON.stringify(path.join(newSrc, 'src/providers/daemon-source.ts'))}); process.stdout.write(getDaemonSource())`],
-    { cwd: newSrc, env: { ...process.env, DAEMON_VERSION: version }, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 120_000 })
-  if (r.status !== 0 || !r.stdout) throw new Error(`could not build the JS twin: ${(r.stderr ?? '').slice(-600)}`)
-  // A source run bakes the hash of its source tree in, over DAEMON_VERSION: relabel that one literal.
-  const label = /^const DAEMON_VERSION = '[^']*';$/gm
-  if ((r.stdout.match(label) ?? []).length !== 1) throw new Error('the JS twin has no single DAEMON_VERSION literal to label')
-  fs.writeFileSync(file, r.stdout.replace(label, () => `const DAEMON_VERSION = ${JSON.stringify(version)};`), { mode: 0o755 })
-}
-
-/** Command and args that run a daemon of `kind` ('old', 'new', 'new-source') from its own files. */
-function daemonCommand(kind, { older, newSrc, dir, version }) {
+/** Command and args that run a daemon of `kind` ('old', 'new') from its own files. */
+function daemonCommand(kind, { older, newSrc }) {
   if (kind === 'old') return { cmd: older.file, args: ['__daemon'] }
-  if (kind === 'new') return { cmd: process.execPath, args: [path.join(newSrc, 'src/providers/daemon-standalone.ts')] }
-  const node = realNodeOnPath(process.env)
-  if (!node) throw new Error('the JS twin runs on Node, and there is no Node on PATH')
-  const file = path.join(dir, 'daemon-source.cjs')
-  writeSourceTwin(newSrc, version, file)
-  return { cmd: node, args: [file] }
+  return { cmd: process.execPath, args: [path.join(newSrc, 'src/providers/daemon-standalone.ts')] }
 }
 
 /** Start the daemon in `w`'s daemon dir ourselves, under `version`; resolves its pid. */
@@ -217,7 +197,7 @@ async function runPairing(name, pairing, { work, older, newSrc, out }) {
     if (run.servedDaemon.pid) {
       const cmdline = read(`/proc/${run.servedDaemon.pid}/cmdline`).split('\0').join(' ')
       run.servedDaemon.cmdline = cmdline
-      const want = pairing.host === 'old' ? older.file : pairing.host === 'new' ? 'daemon-standalone.ts' : 'daemon-source.cjs'
+      const want = pairing.host === 'old' ? older.file : 'daemon-standalone.ts'
       if (cmdline && !cmdline.includes(want)) run.daemonProblems.push(`the daemon serving runs "${cmdline}", not ${want}`)
     }
   } catch (err) {
@@ -272,7 +252,7 @@ export function judgeAll(runs) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   const work = opts.work ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-mixed-'))
-  // A daemon's gateway is a unix socket in its dir: past about 100 bytes the JS twin cannot bind it.
+  // A daemon's gateway is a unix socket in its dir: past about 100 bytes it cannot be bound.
   const sock = path.join(work, Object.keys(PAIRINGS).sort((a, b) => b.length - a.length)[0], 'daemon', 'agent-gateway.sock')
   if (Buffer.byteLength(sock) > 100) throw new Error(`--work ${work} is too deep: a daemon's socket there (${sock}) passes the unix socket path limit; pick a shorter one`)
   const out = opts.out ?? path.join(work, 'evidence')

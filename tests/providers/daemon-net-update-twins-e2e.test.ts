@@ -1,34 +1,32 @@
 /**
- * The host network update io (src/providers/daemon-net-update-io.ts) against BOTH daemon
- * twins booted for real: the upload rides fs.writePart (each chunk checked by the
+ * The host network update io (src/providers/daemon-net-update-io.ts) against the session
+ * daemon (daemon-standalone.ts) booted for real under bun: the upload rides fs.writePart (each chunk checked by the
  * daemon), the checks and the launch ride exec.run (the login shell, then /bin/sh), the
  * final `walnut daemon update` runs from a script outside every exec job's process group,
  * is asked again while it answers "has active operations", and its answer is read back
  * with fs.read; the staging dir is gone afterwards.
  *
  * What it cannot show: a real service handover. `walnut daemon update` refuses a test
- * account (daemon-service-cli.ts: VITEST, a fake HOME) and a twin started here is no
+ * account (daemon-service-cli.ts: VITEST, a fake HOME) and a daemon started here is no
  * OS service, so the uploaded "daemon" is a fake script that answers like one. The
  * handover itself is covered by daemon-service-handover-busy-twins-e2e.test.ts.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the task root are temp paths; the only
  * staging dirs touched are the /tmp/open-walnut-update.* ones this file's runs made;
- * the daemon is SIGKILLed after each twin.
+ * the daemon is SIGKILLed after each test.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createNetUpdateIo } from '../../src/providers/daemon-net-update-io.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { acpTurnsHoldOverLink } from '../../src/providers/daemon-net-update.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const VERSION = 'walnut-daemon-288f4bee1ea6'
@@ -39,22 +37,8 @@ afterAll(() => {
   for (const dir of made) if (STAGING.test(dir)) fs.rmSync(dir, { recursive: true, force: true })
   if (root.includes('walnut-net-update-twins-')) fs.rmSync(root, { recursive: true, force: true })
 })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-// The source twin runs exec.run only with its sidecar, which needs bun to build.
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = BUN ? [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  { name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] },
-] : []
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -70,7 +54,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<void> {
+async function boot(dir: string): Promise<void> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -80,8 +64,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<void> {
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -112,12 +95,12 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
   })
 }
 
-describe.skipIf(TWINS.length === 0)('host network update over the daemon link', () => {
-  it.each(TWINS)('$name: uploads, checks and runs the update detached over the daemon\'s own commands', async (twin) => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
+describe.skipIf(!BUN)('host network update over the daemon link (standalone daemon, bun)', () => {
+  it('uploads, checks and runs the update detached over the daemon\'s own commands', async () => {
+    const dir = path.join(root, 'update')
     const state = path.join(dir, 'fake-state')
     fs.mkdirSync(state, { recursive: true })
-    await boot(twin, dir)
+    await boot(dir)
     const caps = (await rpc({ cmd: 'hello' })).capabilities as string[]
     for (const cap of ['host-exec-v1', 'fs-write-part-v1']) expect(caps).toContain(cap)
 
@@ -144,7 +127,7 @@ describe.skipIf(TWINS.length === 0)('host network update over the daemon link', 
         return reply
       },
     }
-    const latestMarker = path.join(root, `latest-${twin.name.replace(/\W+/g, '-')}`)
+    const latestMarker = path.join(root, 'latest-update')
     await updateRemoteDaemonService({ binary }, VERSION, createNetUpdateIo(conn, { pauseSeconds: 0.3, settleSeconds: 0, pollMs: 200, waitMs: 60_000, latestMarker }), 'user')
 
     const cmds = sent.map((s) => s.cmd)
@@ -166,9 +149,9 @@ describe.skipIf(TWINS.length === 0)('host network update over the daemon link', 
 
   // The updater's ACP-turn hold (acpTurnsHoldOverLink): the dir the daemon's hello names is where
   // its ACP workers keep acp-busy.json, and fs.read over the link reads it there.
-  it.each(TWINS)('$name: open ACP turns in its hello dir hold the update over the link, a stale file does not', async (twin) => {
-    const dir = path.join(root, `acp-${twin.name.replace(/\W+/g, '-')}`)
-    await boot(twin, dir)
+  it('open ACP turns in its hello dir hold the update over the link, a stale file does not', async () => {
+    const dir = path.join(root, 'acp')
+    await boot(dir)
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.dir).toBe(path.join(dir, 'daemon'))
     const holds = path.join(dir, 'holds.json')

@@ -10,7 +10,7 @@ import { guardedPath } from '../setup/exec-guard.js'
 const execFileAsync = promisify(execFile)
 
 // Behavior tests for the daemon start command: we EXECUTE the generated shell
-// against a fake runtime (a script standing in for bun / the daemon binary)
+// against a fake runtime (a script standing in for the daemon binary)
 // and assert the daemon actually boots and receives its env. This is what the
 // 2026-08-12 clouddev outage taught us — a string-level review missed that
 // `nohup VAR=1 cmd` makes nohup exec 'VAR=1' as the program; running the real
@@ -35,6 +35,7 @@ describe('buildDaemonStartCmd', () => {
     const p = path.join(dir, name)
     await fsp.writeFile(p, [
       '#!/bin/sh',
+      'if [ "$1" = "--status" ]; then echo "{\\"running\\":true,\\"port\\":41673}"; exit 0; fi',
       `printenv > "${dir}/env.txt"`,
       `echo $$ > "${dir}/daemon.pid"`,
       `echo 41673 > "${dir}/daemon.port"`,
@@ -47,17 +48,16 @@ describe('buildDaemonStartCmd', () => {
     return execFileAsync('sh', ['-c', cmd], { encoding: 'utf-8', timeout: 30_000 })
   }
 
-  it('bun runtime boots and reports running (no env vars)', async () => {
-    const fake = await writeFakeRuntime('fake-bun')
-    const { stdout } = await run(buildDaemonStartCmd({ runtime: 'bun', execPath: fake, dir }))
+  it('the daemon boots and reports running (no env vars)', async () => {
+    const fake = await writeFakeRuntime('fake-daemon')
+    const { stdout } = await run(buildDaemonStartCmd({ execPath: fake, dir }))
     expect(stdout).toContain('41673')
     expect(stdout).toContain('"running":true')
   })
 
-  it('bun runtime delivers env vars through nohup (the outage shape)', async () => {
-    const fake = await writeFakeRuntime('fake-bun')
+  it('env vars reach the daemon through nohup (the outage shape)', async () => {
+    const fake = await writeFakeRuntime('fake-daemon')
     const cmd = buildDaemonStartCmd({
-      runtime: 'bun',
       execPath: fake,
       dir,
       env: { WALNUT_ENFORCE_SESSION_CRON: '1' },
@@ -72,22 +72,7 @@ describe('buildDaemonStartCmd', () => {
     expect(startLog).not.toContain('failed to run command')
   })
 
-  it('node runtime runs the preamble and delivers env', async () => {
-    const fake = await writeFakeRuntime('node')
-    const cmd = buildDaemonStartCmd({
-      runtime: 'node',
-      dir,
-      env: { WALNUT_ENFORCE_SESSION_CRON: '1' },
-      preamble: `PATH="${dir}:$PATH"; touch "${dir}/preamble-ran"`,
-    })
-    const { stdout } = await run(cmd)
-    expect(stdout).toContain('"running":true')
-    await expect(fsp.access(path.join(dir, 'preamble-ran')).then(() => true)).resolves.toBe(true)
-    const envDump = await fsp.readFile(path.join(dir, 'env.txt'), 'utf-8')
-    expect(envDump).toContain('WALNUT_ENFORCE_SESSION_CRON=1')
-  })
-
-  it('binary runtime passes --start under nohup with env', async () => {
+  it('the daemon is started with --start under nohup with env', async () => {
     // Binary fake also answers --status (the binary-deploy confirm path).
     const p = path.join(dir, 'fake-binary')
     await fsp.writeFile(p, [
@@ -99,7 +84,6 @@ describe('buildDaemonStartCmd', () => {
       'sleep 5',
     ].join('\n'), { mode: 0o755 })
     const cmd = buildDaemonStartCmd({
-      runtime: 'binary',
       execPath: p,
       dir,
       env: { WALNUT_ENFORCE_SESSION_CRON: '1' },
@@ -111,12 +95,12 @@ describe('buildDaemonStartCmd', () => {
     expect(envDump).toContain('WALNUT_ENFORCE_SESSION_CRON=1')
   })
 
-  it.each(['bun', 'binary', 'node'] as const)('%s: a daemon dir and runtime path with spaces (HOME="/home/John Smith") still boot', async (runtime) => {
+  it('a daemon dir and path with spaces (HOME="/home/John Smith") still boot', async () => {
     // The ~/.cache fallback puts the daemon under HOME, and a HOME with a space
     // used to split every path in the start command.
     const spaced = path.join(dir, 'John Smith', '.cache', 'open-walnut')
     await fsp.mkdir(spaced, { recursive: true })
-    const exec = path.join(spaced, runtime === 'node' ? 'node' : `fake ${runtime}`)
+    const exec = path.join(spaced, 'fake daemon')
     await fsp.writeFile(exec, [
       '#!/bin/sh',
       'if [ "$1" = "--status" ]; then echo "{\\"running\\":true,\\"port\\":41673}"; exit 0; fi',
@@ -125,21 +109,18 @@ describe('buildDaemonStartCmd', () => {
       'echo 41673 > "$(dirname "$0")/daemon.port"',
       'sleep 5',
     ].join('\n'), { mode: 0o755 })
-    const cmd = runtime === 'node'
-      ? buildDaemonStartCmd({ runtime, dir: spaced, preamble: `PATH=${"'"}${spaced}${"'"}:"$PATH"` })
-      : buildDaemonStartCmd({ runtime, execPath: exec, dir: spaced, env: { WALNUT_DAEMON_DIR: spaced } })
+    const cmd = buildDaemonStartCmd({ execPath: exec, dir: spaced, env: { WALNUT_DAEMON_DIR: spaced } })
     const { stdout } = await run(cmd)
     expect(stdout).toContain('41673')
     expect(stdout).toContain('"running":true')
     const args = (await fsp.readFile(path.join(spaced, 'args.txt'), 'utf-8')).trim().split('\n')
-    expect(args).toEqual(runtime === 'binary' ? ['--start'] : [path.join(spaced, 'daemon.cjs'), '--start'])
+    expect(args).toEqual(['--start'])
     expect(await fsp.readFile(path.join(spaced, 'daemon-start.log'), 'utf-8')).not.toMatch(/No such file|not found/)
   })
 
   it('env values with spaces/quotes survive shell quoting', async () => {
-    const fake = await writeFakeRuntime('fake-bun')
+    const fake = await writeFakeRuntime('fake-daemon')
     const cmd = buildDaemonStartCmd({
-      runtime: 'bun',
       execPath: fake,
       dir,
       env: { WALNUT_TEST_VALUE: `a b'c$d;e` },
@@ -156,7 +137,6 @@ describe('buildDaemonStartCmd', () => {
     // since the env prefix hits it first; "nohup: ..." without one), and the
     // poll must bail on iteration 2 (~2s), not run all 22 iterations (~44s).
     const cmd = buildDaemonStartCmd({
-      runtime: 'bun',
       execPath: path.join(dir, 'nonexistent-runtime'),
       dir,
       env: { WALNUT_ENFORCE_SESSION_CRON: '1' },
@@ -166,12 +146,12 @@ describe('buildDaemonStartCmd', () => {
     expect(Date.now() - started).toBeLessThan(15_000)
   })
 
-  it('a runtime killed by SIGILL before it writes a pid is reaped once and logged as walnut-daemon-exit=132', async () => {
-    // A bun build the CPU cannot run dies silently: no shell is left to say so,
+  it('a daemon killed by SIGILL before it writes a pid is reaped once and logged as walnut-daemon-exit=132', async () => {
+    // A build the CPU cannot run dies silently: no shell is left to say so,
     // and without this the poll spun its whole ~45s and the log said nothing.
-    const p = path.join(dir, 'fake-bun-sigill')
+    const p = path.join(dir, 'fake-daemon-sigill')
     await fsp.writeFile(p, '#!/bin/sh\nkill -ILL $$\n', { mode: 0o755 })
-    const cmd = buildDaemonStartCmd({ runtime: 'bun', execPath: p, dir, env: { WALNUT_ENFORCE_SESSION_CRON: '1' } })
+    const cmd = buildDaemonStartCmd({ execPath: p, dir, env: { WALNUT_ENFORCE_SESSION_CRON: '1' } })
     const started = Date.now()
     await expect(run(cmd)).rejects.toThrow()
     expect(Date.now() - started).toBeLessThan(10_000)
@@ -179,11 +159,11 @@ describe('buildDaemonStartCmd', () => {
     expect(log).toMatch(/walnut-daemon-exit=132\b/)
   })
 
-  it('a runtime that exits non-zero with a loader error keeps that error AND the exit line', async () => {
-    const p = path.join(dir, 'fake-node-glibc')
-    await fsp.writeFile(p, "#!/bin/sh\necho \"node: /lib64/libc.so.6: version \\\`GLIBC_2.28' not found\" >&2\nexit 1\n", { mode: 0o755 })
+  it('a daemon that exits non-zero with a loader error keeps that error AND the exit line', async () => {
+    const p = path.join(dir, 'fake-daemon-glibc')
+    await fsp.writeFile(p, "#!/bin/sh\necho \"daemon: /lib64/libc.so.6: version \\\`GLIBC_2.28' not found\" >&2\nexit 1\n", { mode: 0o755 })
     const started = Date.now()
-    await expect(run(buildDaemonStartCmd({ runtime: 'binary', execPath: p, dir }))).rejects.toThrow()
+    await expect(run(buildDaemonStartCmd({ execPath: p, dir }))).rejects.toThrow()
     expect(Date.now() - started).toBeLessThan(10_000)
     const log = await fsp.readFile(path.join(dir, 'daemon-start.log'), 'utf-8')
     expect(log).toContain('GLIBC_2.28')
@@ -192,7 +172,6 @@ describe('buildDaemonStartCmd', () => {
 
   it('fail-fast also triggers without an env prefix (bare nohup failure)', async () => {
     const cmd = buildDaemonStartCmd({
-      runtime: 'bun',
       execPath: path.join(dir, 'nonexistent-runtime'),
       dir,
     })
@@ -218,14 +197,12 @@ describe('buildDaemonStartCmd', () => {
       await fsp.writeFile(p, ['#!/bin/sh', 'if [ "$1" = "--status" ]; then echo "{\\"running\\":true}"; exit 0; fi', ...body].join('\n'), { mode: 0o755 })
       return p
     }
-    const startOf = (runtime: 'bun' | 'binary' | 'node', exec: string) => runtime === 'node'
-      ? buildDaemonStartCmd({ runtime, dir, preamble: `PATH=${"'"}${dir}${"'"}:"$PATH"` })
-      : buildDaemonStartCmd({ runtime, execPath: exec, dir })
+    const startOf = (exec: string) => buildDaemonStartCmd({ execPath: exec, dir })
 
-    it.each(['bun', 'binary', 'node'] as const)('%s: the old pid file names a live process: the start waits for the new daemon and reports its port', async (runtime) => {
+    it('the old pid file names a live process: the start waits for the new daemon and reports its port', async () => {
       // The new daemon takes a moment, so the first polls see only the old files.
-      const exec = await fake(runtime === 'node' ? 'node' : `fake-${runtime}`, ['sleep 3', `echo 41999 > "${dir}/daemon.port"`, `echo $$ > "${dir}/daemon.pid"`, 'sleep 5'])
-      const { stdout } = await run(startOf(runtime, exec))
+      const exec = await fake('fake-daemon', ['sleep 3', `echo 41999 > "${dir}/daemon.port"`, `echo $$ > "${dir}/daemon.pid"`, 'sleep 5'])
+      const { stdout } = await run(startOf(exec))
       expect(stdout.split('\n')[0]).toBe('41999')
       expect(stdout).toContain('"running":true')
       expect(stdout).not.toContain('41673')
@@ -233,29 +210,28 @@ describe('buildDaemonStartCmd', () => {
     }, 30_000)
 
     it('the old pid file names a live process and the new daemon dies before it writes: no running line', async () => {
-      const exec = await fake('fake-bun', ['sleep 1', 'exit 1'])
-      const failed = await run(startOf('bun', exec)).then(() => null, (err: { stdout?: string }) => err)
+      const exec = await fake('fake-daemon', ['sleep 1', 'exit 1'])
+      const failed = await run(startOf(exec)).then(() => null, (err: { stdout?: string }) => err)
       expect(failed).not.toBeNull()
       expect(failed!.stdout ?? '').not.toContain('"running":true')
       expect(await fsp.readFile(path.join(dir, 'daemon-start.log'), 'utf8')).toContain('walnut-daemon-exit=1')
     }, 30_000)
 
-    it.each(['bun', 'binary'] as const)('%s: a start that yields to the daemon already running (exit 0, its files untouched) reports that daemon', async (runtime) => {
-      const exec = await fake(`fake-${runtime}`, ['echo 41673', 'exit 0'])
-      const { stdout } = await run(startOf(runtime, exec))
+    it('a start that yields to the daemon already running (exit 0, its files untouched) reports that daemon', async () => {
+      const exec = await fake('fake-daemon', ['echo 41673', 'exit 0'])
+      const { stdout } = await run(startOf(exec))
       expect(stdout.split('\n')[0]).toBe('41673')
       expect(stdout).toContain('"running":true')
     }, 30_000)
   })
 
   it('rejects invalid env var names and multi-line values', () => {
-    expect(() => buildDaemonStartCmd({ runtime: 'node', dir, env: { 'BAD NAME': '1' } })).toThrow()
-    expect(() => buildDaemonStartCmd({ runtime: 'node', dir, env: { OK: 'a\nb' } })).toThrow()
+    expect(() => buildDaemonStartCmd({ execPath: '/x/daemon', dir, env: { 'BAD NAME': '1' } })).toThrow()
+    expect(() => buildDaemonStartCmd({ execPath: '/x/daemon', dir, env: { OK: 'a\nb' } })).toThrow()
   })
 
-  it('requires execPath for bun/binary runtimes', () => {
-    expect(() => buildDaemonStartCmd({ runtime: 'bun', dir })).toThrow()
-    expect(() => buildDaemonStartCmd({ runtime: 'binary', dir })).toThrow()
+  it('requires execPath', () => {
+    expect(() => buildDaemonStartCmd({ dir } as never)).toThrow()
   })
 
   it.each(['drain', 'timeout', 'reused', 'unknown', 'warning', 'denied', 'invalid', 'foreign', 'exited-before-signal'])('stop waits for identity exit without deleting markers: %s', async (scenario) => {
@@ -316,15 +292,8 @@ describe('buildDaemonStartCmd', () => {
   })
 
   it('never renders a bare VAR= directly after nohup (regression shape)', () => {
-    for (const runtime of ['bun', 'binary', 'node'] as const) {
-      const cmd = buildDaemonStartCmd({
-        runtime,
-        execPath: runtime === 'node' ? undefined : '/x/runtime',
-        dir,
-        env: { WALNUT_ENFORCE_SESSION_CRON: '1', OTHER: '2' },
-      })
-      expect(cmd).not.toMatch(/nohup +[A-Za-z_]+=/)
-      expect(cmd).toMatch(/nohup env /)
-    }
+    const cmd = buildDaemonStartCmd({ execPath: '/x/daemon', dir, env: { WALNUT_ENFORCE_SESSION_CRON: '1', OTHER: '2' } })
+    expect(cmd).not.toMatch(/nohup +[A-Za-z_]+=/)
+    expect(cmd).toMatch(/nohup env /)
   })
 })

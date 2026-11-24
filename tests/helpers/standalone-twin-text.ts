@@ -1,20 +1,20 @@
 /**
- * daemon-standalone.ts as the twin text checks compare it with daemon-source.ts.
+ * daemon-standalone.ts as text checks read it.
  *
- * The standalone twin is a runtime its process creates (createDaemonRuntime): its body reads
- * the runtime's own env, `daemonEnv`, where the source twin reads `process.env`. For the
- * program run they are the same object (runDaemonProcess passes process.env), so a check that
- * both twins compute a value from the same expression compares them with that one name mapped
- * back. Only the standalone file is mapped; any other text is returned as it is.
+ * The daemon is a runtime its process creates (createDaemonRuntime): its body reads the
+ * runtime's own env, `daemonEnv`. For the program run that is process.env (runDaemonProcess
+ * passes it), so a check that looks for an expression on `process.env` (as the server's own
+ * modules write it) reads the daemon with that one name mapped back. Only the standalone file
+ * is mapped; any other text is returned as it is.
  */
 export function twinText(rel: string, text: string): string {
   return rel.endsWith('daemon-standalone.ts') ? text.replace(/\bdaemonEnv\b/g, 'process.env') : text
 }
 
 /**
- * The statements that hold a twin's daemon code: the source twin's are its file's own, the
- * standalone twin's the body of createDaemonRuntime (its code lives in that closure). For checks
- * that look up one of the daemon's functions in the parsed source.
+ * The statements that hold the daemon's code: the body of createDaemonRuntime (its code lives
+ * in that closure), or a file's own statements when it has none. For checks that look up one of
+ * the daemon's functions in the parsed source.
  */
 export function daemonStatements<S extends { statements: ReadonlyArray<unknown> }>(
   ts: typeof import('typescript'), source: S,

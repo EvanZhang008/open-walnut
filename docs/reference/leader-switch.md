@@ -588,7 +588,7 @@ The hosts and the daemon twins are unchanged.
 
 Tests: `tests/core/home-move.test.ts`, `tests/core/leader/switch/moved-home.test.ts`,
 `tests/core/leader/primary-leader-home-moves.test.ts`, and case (s) of
-`tests/providers/daemon-home-alias-twins-e2e.test.ts` on both twins. That case covers one set,
+`tests/providers/daemon-home-alias-twins-e2e.test.ts` on the daemon. That case covers one set,
 job set and copy, all the new leader's, nothing keyed by the new path, a fire in delivery at the
 aliasing moment taken once by the new leader with the old socket refused, and the switch back.
 

@@ -41,9 +41,7 @@
  * pty on this host as its other end: pty-stream-core.ts, handed in as `ptys`, so
  * every stream on a link shares one id space, one frame dispatch and one drop.
  *
- * Shared by both daemon twins: daemon-standalone.ts imports it, daemon-source.ts
- * inlines its `toString()` through `__CREATE_STREAM_RELAY__`. So the factory
- * body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts. The factory body references NOTHING at module scope.
  */
 
 /** The TCP socket a port stream plugs into (node:net Socket, opened with allowHalfOpen). */

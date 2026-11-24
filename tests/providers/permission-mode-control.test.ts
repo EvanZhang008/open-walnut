@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
-import vm from 'node:vm'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { observedPermissionMode, shouldAutoRespond } from '../../src/providers/daemon-core.js'
 
 interface SessionInternals {
@@ -111,15 +109,6 @@ describe('ClaudeCodeSession.applyPermissionMode', () => {
 })
 
 describe('daemon approval follows confirmed engine mode', () => {
-  it('the plain source daemon reconstructs the same mode observer', () => {
-    const source = getDaemonSource()
-    const start = source.indexOf('var observedPermissionMode = (')
-    const end = source.indexOf('function shouldAutoRespond', start)
-    expect(start).toBeGreaterThan(0)
-    const context = vm.createContext({ MODE_CLI: { default: 'default', auto: 'auto', bypass: 'bypassPermissions' } })
-    vm.runInContext(source.slice(start, end), context)
-    expect(vm.runInContext('observedPermissionMode({type:"system",subtype:"init",permissionMode:"default"})', context)).toBe('default')
-  })
   it('replaces a stale bypass preview with the actual restrictive init before a request', () => {
     const mode = observedPermissionMode({ type: 'system', subtype: 'init', permissionMode: 'default' })
     expect(mode).toBe('default')

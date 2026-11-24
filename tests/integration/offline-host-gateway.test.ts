@@ -1,12 +1,11 @@
 /**
- * Offline host, end to end on a REAL daemon (both twins): two sessions on one
+ * Offline host, end to end on a REAL daemon (the standalone): two sessions on one
  * host keep talking while their Walnut server is away, and the server takes the
  * record back when it reconnects (docs/plan/daemon-first-hosts.md).
  *
  * What's real:
- *   - the daemon process: the source twin (DAEMON_SOURCE under node) and the
- *     standalone twin (daemon-standalone.ts under bun, when bun is installed),
- *     each in its own temp dir with its own spawn journal;
+ *   - the daemon process: daemon-standalone.ts under bun (when bun is installed),
+ *     in its own temp dir with its own spawn journal;
  *   - the agent-gateway unix socket, NDJSON, exactly as the `walnut` CLI speaks it;
  *   - the sessions: a mock CLI (node) reading its FIFO and writing stream-json,
  *     so delivery, the turn-opening marker and the result line are the real path.
@@ -18,13 +17,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js'
@@ -38,12 +35,7 @@ const B = 'bbbbbbbb-2222-4222-8222-222222222222'
 const TASK_A = 'mtaskaaa-0001'
 const TASK_B = 'mtaskbbb-0002'
 
-const bunPath = (() => {
-  // The runner's own bun first, then the real home's (the test setup fakes HOME): testBun().
-  const own = testBun()
-  if (own) return own
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 /** The mock CLI: stream-json on stdout, one result line per message that asks for one. */
 const MOCK_CLI = `
@@ -92,8 +84,8 @@ function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> 
   })
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-offline-${twin}-`))
+async function spawnDaemon(): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-offline-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -102,18 +94,11 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_GATEWAY_TIMEOUT_MS: '3000',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc: ChildProcess = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
   const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir, sock,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -191,14 +176,12 @@ function slice(overrides: Partial<HostSlice> = {}): HostSlice {
   }
 }
 
-const twins: Array<'source' | 'standalone'> = bunPath ? ['source', 'standalone'] : ['source']
-
-describe.each(twins)('offline host on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('offline host on the real standalone daemon', () => {
   let d: Daemon
   let mock: string
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     mock = path.join(d.dir, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
     const ws = await connectWs(d.port)
@@ -369,7 +352,7 @@ describe.each(twins)('offline host on the real %s daemon', (twin) => {
  * is still the host's to deliver (offline-host-core.ts handleLocal); the server
  * is nudged and drains it, and everything else goes to the server as before.
  */
-describe.each(twins)('same-host messages while the server answers, on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('same-host messages while the server answers, on the real standalone daemon', () => {
   const C = 'cccccccc-3333-4333-8333-333333333333'
   const TASK_C = 'mtaskccc-0003'
   let d: Daemon
@@ -382,7 +365,7 @@ describe.each(twins)('same-host messages while the server answers, on the real %
   })
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     const mock = path.join(d.dir, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
     server = await connectWs(d.port)

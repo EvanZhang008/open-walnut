@@ -1,34 +1,33 @@
 /**
  * remote-fold-prewarm.ts: the probe and the run are EXECUTED, not string-matched
  * (the daemon-start-cmd.test.ts lesson). "ssh" here is a local /bin/sh, the
- * upload is a file write, and the run is the real daemon source under this
- * node, folding a real stream into `<stream>.jsonl.fold.next`.
+ * the run is the real standalone daemon under bun (a one-line wrapper stands in for
+ * the staged daemon file), folding a real stream into `<stream>.jsonl.fold.next`.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the
  * only processes are /bin/sh and the prewarm child, which never listens,
  * signals, or touches a session.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { FOLD_CHECKPOINT_FORMAT } from '../../src/providers/fold-checkpoint-core.js'
 import {
   REMOTE_FOLD_PREWARM_MIN_BYTES, buildRemoteFoldPrewarmProbe, parseRemoteFoldPrewarmPoll, parseRemoteFoldPrewarmProbe,
   remoteFoldPrewarmDir, remoteFoldPrewarmPidFile, runRemoteFoldPrewarm, type RemoteFoldPrewarmIo,
 } from '../../src/providers/remote-fold-prewarm.js'
 import { guardedPath } from '../setup/exec-guard-core.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
 const execFileAsync = promisify(execFile)
 let root = ''
 let daemonDir = ''
 let streams = ''
-let source = ''
 
-beforeAll(() => { source = getDaemonSource() })
+const STANDALONE = path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts')
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-remote-prewarm-')))
   daemonDir = path.join(root, 'daemon')
@@ -69,6 +68,15 @@ function registry(sessions: Record<string, string>): void {
   fs.writeFileSync(path.join(daemonDir, 'sessions.json'), JSON.stringify({ version: 1, sessions: entries }))
 }
 
+/** An executable that runs the standalone daemon with its arguments, as the staged file does. */
+function realDaemon(): string {
+  const bun = testBun()
+  if (!bun) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
+  const file = path.join(root, 'real-daemon')
+  fs.writeFileSync(file, `#!/bin/sh\nexec '${bun}' '${STANDALONE}' "$@"\n`, { mode: 0o755 })
+  return file
+}
+
 function io(overrides: Partial<RemoteFoldPrewarmIo> = {}): RemoteFoldPrewarmIo & { calls: string[] } {
   const calls: string[] = []
   return {
@@ -76,11 +84,8 @@ function io(overrides: Partial<RemoteFoldPrewarmIo> = {}): RemoteFoldPrewarmIo &
     daemonDir,
     format: FOLD_CHECKPOINT_FORMAT,
     exec: (script, timeoutMs) => { calls.push(script); return sh(script, timeoutMs) },
-    upload: async (remotePath, content) => { calls.push(`upload ${remotePath}`); fs.writeFileSync(remotePath, content) },
-    source: () => source,
-    // Stands in for the host's bun: this node runs the same source.
-    bunPath: async () => process.execPath,
-    preamble: 'true',
+    // Stands in for the staged daemon file on the host: the real standalone daemon under bun.
+    execPath: realDaemon(),
     pollMs: 100,
     env: {
       WALNUT_DAEMON_DIR: daemonDir,
@@ -131,7 +136,7 @@ describe('the remote probe, run by a real shell', () => {
   })
 })
 
-describe('runRemoteFoldPrewarm against the real daemon source', () => {
+describe('runRemoteFoldPrewarm against the real standalone daemon', () => {
   it('prepares the new-format checkpoint for a stream that has only an old one, then needs nothing', async () => {
     const jsonl = path.join(streams, 'live.jsonl')
     const size = bigStream(jsonl)
@@ -140,23 +145,23 @@ describe('runRemoteFoldPrewarm against the real daemon source', () => {
 
     const first = io()
     const result = await runRemoteFoldPrewarm(first)
-    expect(result).toMatchObject({ outcome: 'ran', streams: 1, runtime: 'bun', summary: { sessions: 1, written: 1 } })
+    expect(result).toMatchObject({ outcome: 'ran', streams: 1, summary: { sessions: 1, written: 1 } })
     const next = JSON.parse(fs.readFileSync(jsonl + '.fold.next', 'utf8'))
     expect(next.v).toBe(FOLD_CHECKPOINT_FORMAT)
     expect(next.boundary).toBe(size)
     expect(next.fold.cronIds).toEqual({ 'job-1': 1 })
     expect(Object.keys(next.task.tasks)).toEqual(['early-task'])
-    // The old daemon's own checkpoint is left as it was, and the new source is gone.
+    // The old daemon's own checkpoint is left as it was, and the prewarm dir is gone.
     expect(JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8')).v).toBe(FOLD_CHECKPOINT_FORMAT + 100)
     expect(fs.existsSync(remoteFoldPrewarmDir(daemonDir))).toBe(false)
 
     const second = io()
     expect(await runRemoteFoldPrewarm(second)).toEqual({ outcome: 'not-needed' })
-    // Nothing needed: the probe was the only round trip, nothing was uploaded.
+    // Nothing needed: the probe was the only round trip.
     expect(second.calls).toHaveLength(1)
   }, 120_000)
 
-  it('no stream worth preparing: one probe, no upload', async () => {
+  it('no stream worth preparing: one probe, no run', async () => {
     const small = path.join(streams, 'small.jsonl')
     fs.writeFileSync(small, L({ type: 'system' }))
     registry({ s: small })
@@ -165,21 +170,21 @@ describe('runRemoteFoldPrewarm against the real daemon source', () => {
     expect(run.calls).toHaveLength(1)
   })
 
-  it('a run that fails rejects and still removes the uploaded source', async () => {
+  it('a run that fails rejects and still removes its dir', async () => {
     const jsonl = path.join(streams, 'live.jsonl')
     bigStream(jsonl)
     registry({ live: jsonl })
     const failing = path.join(root, 'failing-runtime')
     fs.writeFileSync(failing, '#!/bin/sh\nexit 7\n', { mode: 0o755 })
-    await expect(runRemoteFoldPrewarm(io({ bunPath: async () => failing }))).rejects.toThrow('code 7')
+    await expect(runRemoteFoldPrewarm(io({ execPath: failing }))).rejects.toThrow('code 7')
     expect(fs.existsSync(remoteFoldPrewarmDir(daemonDir))).toBe(false)
     expect(fs.existsSync(jsonl + '.fold.next')).toBe(false)
   })
 
-  it('a probe with no answer rejects before anything is uploaded', async () => {
+  it('a probe with no answer rejects before anything is started', async () => {
     const run = io({ exec: async (script) => { run.calls.push(script); return '' } })
     await expect(runRemoteFoldPrewarm(run)).rejects.toThrow('did not finish')
-    expect(run.calls.some((c) => c.startsWith('upload'))).toBe(false)
+    expect(run.calls).toHaveLength(1)
   })
 })
 
@@ -196,7 +201,7 @@ describe('a prewarm outlives the ssh and the server that started it', () => {
     registry({ live: jsonl })
     const slow = fakeRuntime('echo run >> "$HOME/runs.txt"; sleep 2; echo \'{"sessions":1,"written":1}\'')
     let open = true
-    const first = io({ bunPath: async () => slow, alive: () => open })
+    const first = io({ execPath: slow, alive: () => open })
     const running = runRemoteFoldPrewarm(first)
     await expect.poll(() => fs.existsSync(remoteFoldPrewarmPidFile(daemonDir))).toBe(true)
     open = false
@@ -206,9 +211,9 @@ describe('a prewarm outlives the ssh and the server that started it', () => {
     // The next server: the probe finds the live run and waits for it.
     const probe = parseRemoteFoldPrewarmProbe(await sh(buildRemoteFoldPrewarmProbe(daemonDir, FOLD_CHECKPOINT_FORMAT)))
     expect(probe?.running).toBe(true)
-    const second = io({ bunPath: async () => slow })
+    const second = io({ execPath: slow })
     expect(await runRemoteFoldPrewarm(second)).toMatchObject({ outcome: 'waited' })
-    expect(second.calls.some((c) => c.startsWith('upload'))).toBe(false)
+    expect(second.calls.some((c) => c.includes('fold-prewarm.log'))).toBe(false)
     expect(fs.readFileSync(path.join(root, 'home', 'runs.txt'), 'utf8').trim().split('\n')).toHaveLength(1)
     expect(fs.existsSync(remoteFoldPrewarmDir(daemonDir))).toBe(false)
     expect(fs.existsSync(remoteFoldPrewarmPidFile(daemonDir))).toBe(false)
@@ -221,7 +226,7 @@ describe('a prewarm outlives the ssh and the server that started it', () => {
     const quick = fakeRuntime('sleep 1; echo \'{"sessions":1,"written":1}\'')
     let dropped = 0
     const run = io({
-      bunPath: async () => quick,
+      execPath: quick,
       exec: async (script, timeoutMs) => {
         if (script.includes('walnut-fold-prewarm-gone') && dropped++ === 0) throw new Error('ssh: connection reset')
         return sh(script, timeoutMs)

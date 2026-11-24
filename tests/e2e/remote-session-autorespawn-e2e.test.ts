@@ -10,7 +10,7 @@
  *   3. Fire onExit so the runner can gracefulStop + --resume respawn
  *   4. writeMessage must return a strict false on pipe dead (no silent drop)
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -21,8 +21,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -34,17 +33,10 @@ interface DaemonProc {
   proc: ChildProcess
   port: number
   daemonDir: string
-  scriptPath: string
 }
 
-let scriptPath: string
-
-async function writeDaemonScript(): Promise<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-daemon-e2e-'))
-  const p = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(p, getDaemonSource(), { mode: 0o755 })
-  return p
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 /**
  * RemoteSessionManager always launches `claude` (it prepends it to the args),
@@ -70,12 +62,12 @@ async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
     WALNUT_DAEMON_DIR: daemonDir,
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME']) delete env[k]
-  // execPath, not 'node': spawn resolves the command on env.PATH, pinned above.
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
-    env, stdio: ['ignore', 'pipe', 'pipe'], detached: false,
+  // An absolute bun: spawn resolves a bare command on env.PATH, pinned above.
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    env, cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], detached: false,
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const t = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(t); resolve(parseInt(m[0], 10)) }
@@ -83,7 +75,7 @@ async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
     proc.on('error', (e) => { clearTimeout(t); reject(e) })
     proc.on('exit', (c) => { clearTimeout(t); reject(new Error('daemon exited: ' + c)) })
   })
-  return { proc, port, daemonDir, scriptPath }
+  return { proc, port, daemonDir }
 }
 
 async function stopDaemon(d: DaemonProc): Promise<void> {
@@ -98,16 +90,11 @@ async function stopDaemon(d: DaemonProc): Promise<void> {
 
 beforeAll(async () => {
   fs.mkdirSync(SESSION_STREAMS_DIR, { recursive: true })
-  scriptPath = await writeDaemonScript()
-})
-
-afterAll(async () => {
-  try { await fsp.rm(path.dirname(scriptPath), { recursive: true, force: true }) } catch {}
 })
 
 // ════════════════════════════════════════════════════════════════════════
 
-describe('RemoteSessionManager → real daemon full chain', () => {
+describe.skipIf(!BUN)('RemoteSessionManager → real daemon full chain', () => {
   let daemon: DaemonProc
   let daemonDir: string
   let transports: RemoteSessionManager[] = []

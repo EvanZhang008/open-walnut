@@ -1,5 +1,5 @@
 /**
- * One bad item never fails a check run, on a REAL daemon (both twins).
+ * One bad item never fails a check run, on a REAL standalone daemon.
  *
  * The incident (2026-10-09): a check printed one item id of 490 chars; the daemon
  * rejected the whole run as a check error five times in a row, the server stopped
@@ -7,31 +7,23 @@
  * Now the daemon shortens the id to a stable one (head + hash), drops what it
  * cannot use, and reports the repairs as warnings on the fire and the checked event.
  *
- * What's real: the daemon process (source twin under node with its trigger sidecar
- * bundled beside it; standalone twin under bun), /bin/sh checks, the state files.
- * The Walnut server is a bare WS client. Each daemon is stopped by the pid it wrote
- * into its own temp dir.
+ * What's real: the daemon process (the standalone, under bun), /bin/sh checks, the
+ * state files. The Walnut server is a bare WS client. Each daemon is stopped by the
+ * pid it wrote into its own temp dir.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { CHECK_ITEM_ID_MAX, shortItemId } from '../../src/providers/trigger-check-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const TRIGGER = 'mrep0000-a1b2'
 
-const bunPath = (() => {
-  const own = testBun()
-  if (own) return own
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number }
 
@@ -45,8 +37,8 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
   }
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-trigrep-${twin}-`))
+async function spawnDaemon(): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trigrep-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -55,21 +47,10 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_TRIGGER_REPLAY_MS: '60000',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    buildSync({
-      entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-    })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -118,7 +99,7 @@ class FakeServer {
 // The real shape: a pipeline approval path that grew past the limit, plus Unicode.
 const LONG_ID = `${'acme/deploy-pipeline/stage-approval/'.repeat(13)}run-42-é中`
 
-describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)('a check with one bad item on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('a check with one bad item on the real standalone daemon', () => {
   let d: Daemon
   let server: FakeServer
   let outFile: string
@@ -128,7 +109,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
   }
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     outFile = path.join(d.dir, 'out.json')
     print({ fire: false })
     server = await FakeServer.connect(d.port)

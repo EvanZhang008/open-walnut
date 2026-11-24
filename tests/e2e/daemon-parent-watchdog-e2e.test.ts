@@ -1,5 +1,5 @@
 /**
- * Parent-liveness watchdog E2E — spawn the REAL daemon-source.ts template and
+ * Parent-liveness watchdog E2E — spawn the REAL standalone daemon (bun) and
  * prove an isolated-dir daemon self-exits once its parent walnut process dies.
  *
  * Root-cause regression test for the 2026-07-23 prod slow-load incident:
@@ -16,25 +16,19 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const procs: ChildProcess[] = []
 const tmpDirs: string[] = []
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
-function writeDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-watchdog-e2e-'))
-  tmpDirs.push(dir)
-  const scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  return scriptPath
-}
-
-async function spawnDaemon(scriptPath: string, extraEnv: Record<string, string>): Promise<ChildProcess> {
+async function spawnDaemon(extraEnv: Record<string, string>): Promise<ChildProcess> {
   const daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-watchdog-dir-'))
   tmpDirs.push(daemonDir)
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,
@@ -45,7 +39,7 @@ async function spawnDaemon(scriptPath: string, extraEnv: Record<string, string>)
   })
   procs.push(proc)
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       if (/^\d+$/m.test(chunk.toString().trim())) { clearTimeout(timer); resolve() }
     })
@@ -72,13 +66,12 @@ afterEach(() => {
   }
 })
 
-describe('daemon parent-liveness watchdog', () => {
+describe.skipIf(!BUN)('daemon parent-liveness watchdog', () => {
   it('exits cleanly after WALNUT_DAEMON_PARENT_PID dies', async () => {
     const fakeParent = spawn('sleep', ['600'], { stdio: 'ignore' })
     procs.push(fakeParent)
 
-    const scriptPath = writeDaemonScript()
-    const daemon = await spawnDaemon(scriptPath, {
+    const daemon = await spawnDaemon({
       WALNUT_DAEMON_PARENT_PID: String(fakeParent.pid),
     })
 
@@ -92,8 +85,7 @@ describe('daemon parent-liveness watchdog', () => {
   })
 
   it('stays alive without the env var (production behavior)', async () => {
-    const scriptPath = writeDaemonScript()
-    const daemon = await spawnDaemon(scriptPath, {})
+    const daemon = await spawnDaemon({})
     // Several heartbeat ticks with no parent var → no self-exit.
     await new Promise((r) => setTimeout(r, 800))
     expect(daemon.exitCode).toBeNull()

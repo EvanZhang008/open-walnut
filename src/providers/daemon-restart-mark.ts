@@ -15,7 +15,7 @@
  * Readers: wn-cli.ts (connect refused, a call the exiting daemon never read, or the
  * stopping daemon's answer) and the
  * user PATH shim (daemon-standalone.ts userWalnutShimText, the same file name and
- * age in shell). daemon-source.ts mirrors all of it.
+ * age in shell).
  */
 
 export const RESTART_MARK_NAME = 'restarting'

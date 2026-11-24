@@ -86,13 +86,13 @@ async function refuses(run: () => Promise<unknown>, code: DaemonArtifactErrorCod
 
 describe('stageDaemonServiceArtifact', () => {
   // npm's own file list: skipped where there is no npm (the Node-free CI jobs), run in node-side (test:npm-channel).
-  it.skipIf(!npmOnPath())('packs the source daemon sidecars without shipping standalone binaries', async () => {
+  it.skipIf(!npmOnPath())('packs the daemon runtime bundle without shipping standalone binaries', async () => {
     const root = await tempHome()
     const pkg = JSON.parse(await fs.readFile(path.resolve('package.json'), 'utf8'))
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'walnut-pack-fixture', version: '1.0.0', files: pkg.files }))
     const dir = path.join(root, 'dist', 'daemon-binaries')
-    await fs.mkdir(dir, { recursive: true })
-    const sidecars = ['daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs']
+    await fs.mkdir(path.join(dir, 'daemon-runtime'), { recursive: true })
+    const sidecars = ['daemon-runtime/daemon-standalone.js', 'daemon-runtime/daemon-standalone.js.version']
     const binaries = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-linux-x64.version', 'daemon-linux-x64.gz']
     for (const name of [...sidecars, ...binaries]) await fs.writeFile(path.join(dir, name), 'fixture')
     const { stdout } = await promisify(execFile)('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {

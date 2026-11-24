@@ -3,8 +3,7 @@
  * (offline-host-core.ts). A compaction then still puts the list of what is open
  * back into the session's context: the compact hook gets the SessionStart JSON,
  * worded by the SAME formatter the server uses (open-items-text.ts), so a session
- * cannot tell which side answered. The last block rebuilds the formatter from its
- * text the way the source twin runs it.
+ * cannot tell which side answered.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -17,7 +16,6 @@ import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import { createBoardOffline } from '../../src/providers/offline-board-core.js'
 import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js'
 import { formatOpenItems } from '../../src/core/sessions/open-items.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const HOME = '/fixture/walnut-home'
 const LEAD = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -144,25 +142,16 @@ describe('open_items from the copy', () => {
   })
 })
 
-describe('the source twin', () => {
-  it('inlines the formatter', () => {
-    const rendered = getDaemonSource()
-    expect(rendered).not.toContain('__CREATE_OPEN_ITEMS_TEXT__')
-    expect(rendered).toContain(createOpenItemsText.toString())
-    expect(rendered).toMatch(/openItems: \(function createOpenItemsText\(\)/)
-  })
-
-  it('a formatter rebuilt from its text words the block the same', () => {
-    // eslint-disable-next-line no-new-func
-    const rebuilt = new Function(`return (${createOpenItemsText.toString()})`)() as typeof createOpenItemsText
+describe('the formatter', () => {
+  it('the host words the block as the server does', () => {
     const items = {
       task: { id: 'mlead000-0001', title: 'Leader \ud83d\ude80 '.repeat(20) },
       subtasks: [{ id: 'mwork111-0002', title: 'Worker', phase: 'IN_PROGRESS' }], moreSubtasks: 3,
       waitingOn: [{ id: 'rq-aaa111', to: 'mwork111-0002', preview: 'x'.repeat(200), createdAt: '2026-10-04T12:00:00Z' }],
       askedOfYou: [], board: { version: 2, updatedAt: '', threads: 0, userMessages: 0, marks: 1 },
     }
-    expect(rebuilt().format(items, NOW)).toBe(formatOpenItems(items, NOW))
+    expect(createOpenItemsText().format(items, NOW)).toBe(formatOpenItems(items, NOW))
     // A cut never leaves half of an astral character (the rocket is a surrogate pair).
-    expect(rebuilt().format(items, NOW)).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
+    expect(createOpenItemsText().format(items, NOW)).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
   })
 })

@@ -55,8 +55,7 @@ turn a message that really posted into a failure. Sessions reach a server only t
   `process.kill` / `safeKillProcessGroup` on a pid read from the sessions store
   (`tests/core/signal-call-ratchet.test.ts` fails on any new signal site).
 - **Daemon socket writes:** every daemon→client WS write in `daemon-standalone.ts` MUST use
-  `safeSend` (Bun silently drops sends under backpressure). Plain-Node `daemon-source.ts` doesn't
-  need it — see the PARITY NOTE there.
+  `safeSend` (Bun silently drops sends under backpressure).
 - **Canonical JSONL** (`~/.claude/projects/<cwd>/<sid>.jsonl`) is owned by Claude Code — Walnut
   never writes to it. Walnut's own copy is the streams-dir jsonl.
 - Task `phase` is the source of truth; `status` is derived (`applyPhase()` mutates both).

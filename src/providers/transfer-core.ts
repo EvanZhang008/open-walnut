@@ -14,10 +14,7 @@
  *   before anything runs. A fetched file lands under a temp name and is renamed
  *   only after its size and sha256 match.
  *
- * How each twin gets it: daemon-standalone.ts imports createTransferCore;
- * daemon-source.ts inlines `createTransferCore.toString()` through
- * `__CREATE_TRANSFER_CORE__`. So the factory body references NOTHING at module
- * scope (the type imports are erased), every capability comes from `deps`, and
+ * Imported by daemon-standalone.ts (createTransferCore). The factory body references NOTHING at module scope (the type imports are erased), every capability comes from `deps`, and
  * it carries no backticks.
  */
 

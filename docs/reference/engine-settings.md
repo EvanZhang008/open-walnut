@@ -352,9 +352,7 @@ check should move to the daemon.
 - `tests/providers/daemon-fs-write-atomic.test.ts`: the daemon's `~`
   expansion, atomic rename through a symlink, mode preservation, the
   `expectSha256` guard, the regular-file and size gates, and the sweep of temp
-  siblings an interrupted write left behind. Runs the source twin's function
-  text; the bun twin is held to the same step ORDER by
-  `daemon-standalone-vs-source-parity.test.ts`.
+  siblings an interrupted write left behind. Runs in the daemon.
 - `tests/e2e/browser/engine-settings.spec.ts` and
   `engine-settings.webkit.spec.ts`: the real Settings page against a dense
   fixture `settings.json` and `config.toml`, asserting on the files on disk.

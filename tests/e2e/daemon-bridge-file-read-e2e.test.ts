@@ -1,5 +1,6 @@
 /**
- * Bridge fs.readBounded E2E — spawn the REAL daemon-source.ts template,
+ * Bridge fs.readBounded E2E — spawn the REAL standalone daemon
+ * (daemon-standalone.ts under bun),
  * connect a fake cloud WS server, and drive the narrow bounded file read over
  * the bridge socket exactly the way the cloud companion does for phone file
  * previews (routes/file-content-bridge.ts serveCloudFileContent).
@@ -21,8 +22,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'bridge-fileread-e2e-host'
@@ -30,7 +30,6 @@ const HTML = '<!doctype html>\n<html><body><h1>loggroup explainer</h1></body></h
 
 interface DaemonProc { proc: ChildProcess; port: number }
 
-let scriptPath: string
 let daemonDir: string
 let filesDir: string
 let fakeHome: string
@@ -39,22 +38,19 @@ let ctl: WebSocket
 let cloud: FakeCloud
 let bridgeSideWs: WebSocket
 
-function writeDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fileread-e2e-'))
-  const p = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(p, getDaemonSource(), { mode: 0o755 })
-  return p
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 async function spawnDaemon(): Promise<DaemonProc> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     // WALNUT_HOME_OVERRIDE pins HOME_DIR so the ~-expansion + HOME-relative
     // denylist tests are deterministic.
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_HOME_OVERRIDE: fakeHome },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -147,7 +143,6 @@ function bridgeRpc(id: number, cmd: string, params: Record<string, unknown> = {}
 }
 
 beforeAll(async () => {
-  scriptPath = writeDaemonScript()
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fileread-dir-'))
   filesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fileread-files-'))
   fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-fileread-home-'))
@@ -185,13 +180,12 @@ afterAll(async () => {
   try { ctl.close() } catch { /* already closed */ }
   await stopDaemon(daemon)
   await cloud.close()
-  fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true })
   fs.rmSync(daemonDir, { recursive: true, force: true })
   fs.rmSync(filesDir, { recursive: true, force: true })
   fs.rmSync(fakeHome, { recursive: true, force: true })
 })
 
-describe('fs.readBounded over the cloud bridge (real source daemon)', () => {
+describe.skipIf(!BUN)('fs.readBounded over the cloud bridge (real standalone daemon)', () => {
   it('serves a real HTML file byte-exact (base64) with its size', async () => {
     const res = await bridgeRpc(901, 'fs.readBounded', { path: path.join(filesDir, 'index.html') })
     expect(res.ok).toBe(true)

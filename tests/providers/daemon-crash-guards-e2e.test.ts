@@ -1,5 +1,5 @@
 /**
- * Silent-death guards E2E — spawn the REAL daemon-source.ts template and
+ * Silent-death guards E2E — spawn the REAL session daemon (daemon-standalone.ts) and
  * prove the three guards added for the 2026-08-13 phone-send data-loss
  * family actually behave:
  *
@@ -12,17 +12,17 @@
  * MACHINE SAFETY: isolated WALNUT_DAEMON_DIR/WALNUT_STREAMS_DIR temp dirs,
  * never /tmp/open-walnut; random port; the daemon is killed in afterEach.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
+const BUN: string | undefined = testBun()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 let daemonDir = ''
 let streamsDir = ''
 let proc: ChildProcess | null = null
@@ -32,7 +32,7 @@ let ws: WebSocket | null = null
 async function spawnDaemon(): Promise<void> {
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-crash-guard-'))
   streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-crash-guard-streams-'))
-  proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  proc = spawn(BUN!, [STANDALONE, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -71,12 +71,6 @@ function rpc(id: number, frame: string | Record<string, unknown>, timeoutMs = 15
   })
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-crash-guard-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
@@ -93,7 +87,7 @@ afterEach(async () => {
   }
 })
 
-describe('daemon crash guards (real source daemon)', () => {
+describe.skipIf(!BUN)('daemon crash guards (real daemon)', () => {
   it('a throwing command handler produces an error reply, NOT process death', async () => {
     await spawnDaemon()
     // A genuine handler-level throw that needs no session: write-inbox with a
@@ -132,17 +126,17 @@ describe('daemon crash guards (real source daemon)', () => {
     })
     expect(fs.readdirSync(daemonDir).filter((f) => f.startsWith('daemon-exit-'))).toEqual([])
     // Second: a JS-level uncaughtException in a process running the SAME
-    // guard code (extracted verbatim from the emitted template) writes a
+    // guard code (extracted verbatim from daemon-standalone.ts) writes a
     // breadcrumb with kind/error/stack/vitals and exits 1.
-    const guardProbe = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      global.__probeDir = ${JSON.stringify(daemonDir)};
-      ${extractGuardSnippet()}
+    const probeFile = path.join(daemonDir, 'guard-probe.ts')
+    fs.writeFileSync(probeFile, `
+      import fs from 'node:fs';
+      import path from 'node:path';
+      ${extractGuardSnippet(daemonDir)}
       setTimeout(() => { throw new Error('probe-boom') }, 10);
-    `
-    // On the runtime the JS twin runs on, which is the one that guard code meets on a host.
-    const probe = spawn(SOURCE_TWIN.file, ['-e', guardProbe], { stdio: 'ignore' })
+    `)
+    // On bun, the runtime the daemon runs on.
+    const probe = spawn(BUN!, [probeFile], { stdio: 'ignore' })
     const code = await new Promise<number | null>((resolve) => probe.on('exit', resolve))
     expect(code).toBe(1)
     const crumbs = fs.readdirSync(daemonDir).filter((f) => f.startsWith('daemon-exit-probe'))
@@ -156,24 +150,33 @@ describe('daemon crash guards (real source daemon)', () => {
 })
 
 /**
- * Extract the breadcrumb + crash funnel from the emitted template so the
- * probe process runs the PRODUCTION guard code (not a re-implementation).
- * The template names its file daemon-exit-<DAEMON_INSTANCE_ID>.log; the probe
- * pins the id to 'probe' via a tiny shim of the two referenced globals.
+ * Extract the breadcrumb + crash funnel and the process entry's crash handlers
+ * from daemon-standalone.ts so the probe process runs the PRODUCTION guard code
+ * (not a re-implementation). The daemon names its file
+ * daemon-exit-<DAEMON_INSTANCE_ID>.log; the probe pins the id to 'probe' via a
+ * tiny shim of the globals the slices reference.
  */
-function extractGuardSnippet(): string {
-  const src = fs.readFileSync(scriptPath, 'utf-8')
+function extractGuardSnippet(dir: string): string {
+  const src = fs.readFileSync(STANDALONE, 'utf-8')
   const start = src.indexOf('const EXIT_BREADCRUMB_FILE')
-  const end = src.indexOf("process.on('unhandledRejection'", start)
+  const end = src.indexOf('options.onCrashReporter?.(daemonCrash)', start)
   expect(start).toBeGreaterThan(-1)
   expect(end).toBeGreaterThan(start)
-  const guard = src.slice(start, src.indexOf('\n', end))
+  const funnel = src.slice(start, end)
+  const hStart = src.indexOf('const onCrashReporter = ')
+  const hEnd = src.indexOf('\n  }\n', hStart)
+  expect(hStart).toBeGreaterThan(-1)
+  expect(hEnd).toBeGreaterThan(hStart)
+  const handlers = src.slice(hStart, hEnd + 4)
   return `
-    const DAEMON_DIR = global.__probeDir;
+    const DAEMON_DIR = ${JSON.stringify(dir)};
     const DAEMON_INSTANCE_ID = 'probe';
     const DAEMON_START_TS = Date.now();
     const sessions = new Map();
-    const logMsg = () => {};
-    ${guard}
+    const logMsg = (..._args: unknown[]) => {};
+    let logAppender: { flushSync(): void } | null = null;
+    ${funnel}
+    ${handlers}
+    onCrashReporter(daemonCrash)
   `
 }

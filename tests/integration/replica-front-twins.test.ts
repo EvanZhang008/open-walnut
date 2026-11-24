@@ -1,7 +1,7 @@
 /**
- * A host replica's front against both daemon twins, every piece a real process
- * (docs/plan/walnut-replica-servers-impl.md, WP2): the daemon (the source twin
- * or the standalone twin, both on bun) supervises a real `web --replica`
+ * A host replica's front against the standalone daemon, every piece a real process
+ * (docs/plan/walnut-replica-servers-impl.md, WP2): the daemon (on bun)
+ * supervises a real `web --replica`
  * child that it started from `server.configure` (a bun boot spec, with the plain
  * host server as its fallback); a stand-in Mac links to the daemon over WS the
  * way the real one does (leader.configure, streams to its door).
@@ -41,8 +41,6 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { WebSocket, WebSocketServer } from '#ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { BUN, freePort, waitFor } from '../helpers/host-alone-harness.js'
 
@@ -218,7 +216,7 @@ function replicaSpec(rig: Rig, extraEnv: Record<string, string> = {}): Record<st
   }
 }
 
-async function startRig(twin: 'source' | 'standalone'): Promise<Rig> {
+async function startRig(): Promise<Rig> {
   // Short: the daemon's unix socket path must fit in 104 bytes on macOS.
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rft-'))
   const daemonDir = path.join(base, 'd')
@@ -230,15 +228,7 @@ async function startRig(twin: 'source' | 'standalone'): Promise<Rig> {
     WALNUT_SPAWN_JOURNAL: path.join(daemonDir, 'spawn-journal.jsonl'), WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let daemon: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(daemonDir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
-    daemon = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
+  const daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')) && fs.existsSync(path.join(daemonDir, 'daemon.pid')), 60_000, 'daemon')
   const daemonPid = Number(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf8'))
@@ -329,14 +319,14 @@ async function macOf(rig: Rig): Promise<Mac> {
   return rig.mac
 }
 
-describe.each(['source', 'standalone'] as const)('a host replica supervised by the %s twin', (twin) => {
+describe.skipIf(!BUN)('a host replica supervised by the standalone daemon', () => {
   let rig: Rig | null = null
   let unwatch: () => void = () => {}
   const port = () => rig!.publicPort
   const asPhone = { authorization: `Bearer ${PHONE_TOKEN}` }
 
   beforeAll(async () => {
-    rig = await startRig(twin)
+    rig = await startRig()
     unwatch = watchServerPids(rig)
     const configured = await rig.mac.cmd({ cmd: 'server.configure', home: HOME, spec: replicaSpec(rig) })
     expect(configured.ok, JSON.stringify(configured)).toBe(true)
@@ -358,7 +348,7 @@ describe.each(['source', 'standalone'] as const)('a host replica supervised by t
     expect(typeof st.since).toBe('number')
     expect(st.reportedAt - st.since).toBeLessThan(5_000)
     expect(st.reportedAt - st.report.startedAt).toBeLessThan(5_000)
-    console.info('[replica-front-twins]', twin, JSON.stringify({ frontToReportMs: st.reportedAt - st.report.startedAt, spawnToReportMs: typeof st.since === 'number' ? st.reportedAt - st.since : null }))
+    console.info('[replica-front-twins]', JSON.stringify({ frontToReportMs: st.reportedAt - st.report.startedAt, spawnToReportMs: typeof st.since === 'number' ? st.reportedAt - st.since : null }))
     await waitFor(async () => (await serverStatus(rig!)).report?.presence?.answers === true, 20_000, 'the Mac answering')
     // The report goes out before the heavy init; the public port listens once that is done.
     await waitFor(async () => { try { return (await call(port(), 'GET', '/api/config')).status > 0 } catch { return false } }, 120_000, 'the public port')

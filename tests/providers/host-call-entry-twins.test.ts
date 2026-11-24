@@ -1,12 +1,11 @@
 /**
  * The host call entry ('host-call-entry-v1') and the count of the daemon's own away answers are
- * wired the same way in both daemon twins: the follower's entry socket kept from its hello and
+ * wired into the daemon: the follower's entry socket kept from its hello and
  * report (through the shared core's socketOf), new sessions, ACP workers and plugin jobs given the
  * entry beside the socket (the core's envFor, a job's run retired when it ends), `follower.gateway`
  * checked for the caller's run token and run through the socket's own handleGatewayLine (never
  * serialized, never with a socket peer), and every own away answer given while a follower was
- * there counted (the gateway core's noteOwnOffline, one copy). The counter itself runs here as
- * imported and as the inlined text.
+ * there counted (the gateway core's noteOwnOffline, one copy). The counter itself runs here.
  */
 import { describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
@@ -17,9 +16,7 @@ import { HOST_CALL_CAPABILITY } from '../../src/replica/host-call-entry.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
-const standalone = read('src/providers/daemon-standalone.ts')
-const source = read('src/providers/daemon-source.ts')
-const TWINS = [['standalone', standalone], ['source', source]] as const
+const src = read('src/providers/daemon-standalone.ts')
 
 function fnBody(src: string, name: string): string {
   const at = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'))
@@ -27,18 +24,18 @@ function fnBody(src: string, name: string): string {
   return src.slice(at, src.indexOf('\n}\n', at))
 }
 
-describe('host call entry twin wiring', () => {
+describe('host call entry daemon wiring', () => {
   it('is advertised, its cores are in the version hash and the binary build', () => {
     expect(ADVERTISED_DAEMON_CAPABILITIES as readonly string[]).toContain(HOST_CALL_CAPABILITY)
     for (const core of ['src/providers/host-call-token-core.ts', 'src/providers/host-call-client-core.ts']) {
       expect(read('src/providers/daemon-version-check.ts')).toContain(`'${core}'`)
       expect(read('scripts/build-daemon.sh')).toContain(core)
     }
-    expect(standalone).toContain("from './host-call-token-core.js'")
+    expect(src).toContain("from './host-call-token-core.js'")
     expect(read('src/providers/wn-cli.ts')).toContain("from './host-call-client-core.js'")
   })
 
-  it.each(TWINS)('%s: a follower may send follower.gateway, dispatched outside the serial queue', (_n, src) => {
+  it('a follower may send follower.gateway, dispatched outside the serial queue', () => {
     const allowed = src.slice(src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set([')))
     expect(allowed).toContain("'follower.gateway'")
     const line = src.split('\n').find((l) => l.includes("case 'follower.gateway':"))!
@@ -46,18 +43,18 @@ describe('host call entry twin wiring', () => {
     expect(line).not.toContain('daemonCommands.run')
   })
 
-  it.each(TWINS)('%s: the entry socket comes from the hello and the report, only for a follower that answers local calls, checked by the shared core', (_n, src) => {
+  it('the entry socket comes from the hello and the report, only for a follower that answers local calls, checked by the shared core', () => {
     expect(fnBody(src, 'cmdFollowerHello')).toMatch(/callSocket = cmd\.answersLocal === true \? hostCallTokens\.socketOf\(cmd\.callSocket\) : undefined/)
     const report = fnBody(src, 'cmdFollowerReport')
     expect(report).toMatch(/answersLocal === true \? hostCallTokens\.socketOf\(report\.callSocket\) : undefined/)
     // The core is given the follower's socket of a home, only for one that answers local calls.
     // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
     expect(src).toMatch(/socketFor: (\(home\) => \{|function \(home\) \{) (const|var) ws = followerSockets\.get\(home\) (\?\?|\|\|) followerSockets\.get\(walnutOfHome\(home\)\); return ws(\?\.data\?\.| && ws\.)answersLocal === true \? ws(\.data)?\.callSocket : undefined/)
-    // No twin copy of the socket check or the env any more.
+    // No copy of the socket check or the env of its own in the daemon.
     for (const gone of ['function hostCallUrlOf(', 'function hostCallEnv(', 'function noteOwnOfflineAnswer(', 'WALNUT_CALL_URL']) expect(src, gone).not.toContain(gone)
   })
 
-  it.each(TWINS)('%s: follower.gateway checks the token for the line\'s sid, then runs the socket\'s handleGatewayLine', (_n, src) => {
+  it('follower.gateway checks the token for the line\'s sid, then runs the socket\'s handleGatewayLine', () => {
     const fn = fnBody(src, 'cmdFollowerGateway')
     const verify = fn.indexOf('hostCallTokens.verify(sid, cmd.token)')
     expect(verify).toBeGreaterThan(0)
@@ -66,43 +63,41 @@ describe('host call entry twin wiring', () => {
     expect(fn).toMatch(/gatewayCallerLeft\.set\(respond/)
   })
 
-  it('the bun twin proves an approval\'s caller only from its gateway socket\'s kernel peer, never a pid a follower names', () => {
-    expect(fnBody(standalone, 'sendSessionGatewayLine')).toContain('gatewayCallerProof(socketPeerPid(socket?.fd), callerSid, socket?.openedAt ?? Date.now())')
-    const gw = fnBody(standalone, 'cmdFollowerGateway')
+  it('the daemon proves an approval\'s caller only from its gateway socket\'s kernel peer, never a pid a follower names', () => {
+    expect(fnBody(src, 'sendSessionGatewayLine')).toContain('gatewayCallerProof(socketPeerPid(socket?.fd), callerSid, socket?.openedAt ?? Date.now())')
+    const gw = fnBody(src, 'cmdFollowerGateway')
     // null: no socket, the token proved the sid (the line's session is not read off a process).
     expect(gw).toContain('handleGatewayLine(line, respond, null, openedAt)')
     expect(gw).not.toContain('peerPid')
   })
 
   // 2026-11-23: a plugin job started after its host's service named its entry posted every call
-  // there; with no socket peer the bun twin could not vouch for its run, so the leader capped each
+  // there; with no socket peer the daemon could not vouch for its run, so the leader capped each
   // bypass start at default. Only the gateway socket's kernel peer vouches for a job's run
   // (jobCallerVouched), so every other door into handleGatewayLine hands a job's line back first.
   // The whole class: every caller whose proof is the kernel's word on the process holding the
   // gateway socket. A door with no socket peer (the host call entry) cannot give that word, so each
   // read of the peer is listed here with its rule for such a door. A new read fails until it is.
   it('every read of a caller\'s process names its rule for a door with no socket peer', () => {
-    const reads = [...standalone.matchAll(/(\w+)\(socketPeerPid\(/g)].map((m) => m[1]).sort()
+    const reads = [...src.matchAll(/(\w+)\(socketPeerPid\(/g)].map((m) => m[1]).sort()
     expect(reads, 'a new proof read from the socket peer: give it a rule for the host call entry and list it here').toEqual([
       'gatewayCallerIdentity', // a session's sid: the entry's run token proves it instead (fd null skips the read)
       'gatewayCallerProof', // an approval's caller proof: the entry hands the line back (caller_proof_on_socket)
       'jobCallerVouched', // a plugin job's run: follower.gateway hands the line back (job_on_socket)
     ])
-    const gw = fnBody(standalone, 'handleGatewayLine')
+    const gw = fnBody(src, 'handleGatewayLine')
     expect(gw.indexOf('if (fd === null) return sendSessionGatewayLine(')).toBeGreaterThan(0)
     expect(gw.indexOf('if (fd === null) return sendSessionGatewayLine(')).toBeLessThan(gw.indexOf('gatewayCallerIdentity(socketPeerPid(fd)'))
     const entry = read('src/replica/host-call-entry.ts')
     const proofBack = entry.indexOf("unavailable(res, 503, 'caller_proof_on_socket'")
     expect(proofBack).toBeGreaterThan(0)
     expect(proofBack).toBeLessThan(entry.indexOf("deps.request('follower.gateway'"))
-    expect(fnBody(standalone, 'cmdFollowerGateway')).toContain("errorKind: 'job_on_socket'")
-    // The JS twin reads no process at all (it never vouches and sends no proof).
-    expect(source).not.toContain('socketPeerPid(')
+    expect(fnBody(src, 'cmdFollowerGateway')).toContain("errorKind: 'job_on_socket'")
   })
 
-  it('the bun twin hands a plugin job\'s line back from every door that has no gateway socket peer', () => {
+  it('the daemon hands a plugin job\'s line back from every door that has no gateway socket peer', () => {
     // Every call, whatever its arguments are named (the definition left out): its third is the peer.
-    const calls = [...standalone.matchAll(/(?<!function )handleGatewayLine\(\s*[^,()]+,\s*[^,()]+,\s*([^,)]+)/g)]
+    const calls = [...src.matchAll(/(?<!function )handleGatewayLine\(\s*[^,()]+,\s*[^,()]+,\s*([^,)]+)/g)]
       .map((m) => Object.assign(m, { 1: m[1].trim() }))
     // Exactly the doors known today: the gateway socket and the host call entry. A new one fails here
     // until it is read for this rule and counted.
@@ -111,8 +106,8 @@ describe('host call entry twin wiring', () => {
     for (const call of calls) {
       if (call[1] === 'socket.fd') continue
       doors++
-      const fnAt = standalone.lastIndexOf('\nfunction ', call.index)
-      const body = standalone.slice(fnAt, call.index)
+      const fnAt = src.lastIndexOf('\nfunction ', call.index)
+      const body = src.slice(fnAt, call.index)
       const name = body.slice('\nfunction '.length, body.indexOf('('))
       const back = body.indexOf('if (pluginJobs.isRunSid(sid)) {')
       expect(back, `${name} runs a line with no socket peer (${call[1]}): it must hand a plugin job's line back first`).toBeGreaterThan(0)
@@ -126,7 +121,7 @@ describe('host call entry twin wiring', () => {
     expect(read('src/providers/host-call-client-core.ts')).toContain("parsed.code === 'entry_unavailable'")
   })
 
-  it.each(TWINS)('%s: a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', (_n, src) => {
+  it('a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', () => {
     // Native spawn: cleared first, then this run's own, keyed by the Walnut's first home here
     // (a resumed record may still name a home that is now its alias: walnut-scope-core.ts), and a
     // host server's own data dir by the Walnut it follows (walnutOfHome).
@@ -139,7 +134,7 @@ describe('host call entry twin wiring', () => {
     expect(src).toMatch(/callEnvEnd: (\(sid\) => |function \(sid\) \{ )hostCallTokens\.retire\(sid\)/)
   })
 
-  it.each(TWINS)('%s: every own away answer is counted where it is given, and shown in follower.status and server.status', (_n, src) => {
+  it('every own away answer is counted where it is given, and shown in follower.status and server.status', () => {
     const send = fnBody(src, 'sendGatewayRequest')
     const handles = send.split('offlineHost.handle(home, callerSid, capability, payload)').length - 1
     // One counter for the call (noteOwn), counted once even when the call waits and comes again.
@@ -150,17 +145,15 @@ describe('host call entry twin wiring', () => {
     // The own same-host delivery (handleLocal) too, while a follower that takes those is linked; an
     // online hand-back relayed to the leader is never counted (its fallback is relayToPrimary).
     expect(send).toContain("if (followerGateway.answersOnline(home)) followerGateway.noteOwnAnswer(payload.name, 'follower_linked', callerSid)")
-    // follower.status: the shared follower entry's view (follower-entry-core.ts) says what the twin hands it.
+    // follower.status: the shared follower entry's view (follower-entry-core.ts) says what the daemon hands it.
     expect(src).toMatch(/offlineAnswers: (\(\) => |function \(\) \{ return )followerGateway\.ownAnswers\(\)/)
     expect(read('src/providers/follower-entry-core.ts')).toContain('offlineAnswers: deps.offlineAnswers(),')
     expect(fnBody(src, 'cmdServerStatus')).toContain('offlineAnswers: followerGateway.ownAnswers()')
   })
 })
 
-// eslint-disable-next-line @typescript-eslint/no-implied-eval
-const inlined = new Function(`"use strict"; return (${createFollowerGateway.toString()})`)() as typeof createFollowerGateway
-
-describe.each([['imported', createFollowerGateway], ['inlined', inlined]] as const)('own away answers counted (%s)', (_label, make) => {
+describe('own away answers counted', () => {
+  const make = createFollowerGateway
   it('counts per op and per reason, with a log line each, and a snapshot the caller cannot change', () => {
     const logs: Array<{ msg: string; data?: Record<string, unknown> }> = []
     const g = make<object>({

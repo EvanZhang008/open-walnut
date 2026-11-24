@@ -6,9 +6,7 @@
  * No I/O here: each caller reads the tasks its own way (the leader its store, a host
  * replica its copy with this host's journal folded in, the daemon its slice) and passes what it read.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createSendRules; daemon-source.ts
- * inlines `createSendRules.toString()` through `__CREATE_SEND_RULES__`. So the factory body
- * references NOTHING at module scope (types are erased), and every constant lives inside it.
+ * Imported by daemon-standalone.ts (createSendRules). The factory body references NOTHING at module scope (types are erased), and every constant lives inside it.
  */
 
 /** A send's inputs these rules read (session-send-core.ts SessionSendInput, the route body's fields). */

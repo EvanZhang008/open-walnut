@@ -1,17 +1,18 @@
 /**
- * Fold prewarm for a REMOTE daemon upgrade: the remote twin of fold-prewarm.ts.
+ * Fold prewarm for a REMOTE daemon upgrade: the remote counterpart of fold-prewarm.ts.
  *
- * A remote daemon of another version is stopped, the new source deployed and
- * started (DaemonConnection.shouldUpgradeDaemon). The new daemon adopts every
- * live CLI by folding its stream before it listens, and a checkpoint FORMAT
- * change rejects every checkpoint: on 2026-10-26 the local daemon was down for
- * 7 minutes that way, and the always-on dev host carries about 2 GB of live
+ * A remote daemon of another version is stopped and the new one started
+ * (DaemonConnection.shouldUpgradeDaemon). The new daemon adopts every live CLI
+ * by folding its stream before it listens, and a checkpoint FORMAT change
+ * rejects every checkpoint: on 2026-10-26 the local daemon was down for 7
+ * minutes that way, and the always-on dev host carries about 2 GB of live
  * streams (one of 1 GB).
  *
  * So before that stop, one read-only probe asks the host whether any registered
  * stream worth a checkpoint lacks one in the NEW format. Only then is the new
- * source uploaded to its own directory and run with `--prewarm-folds` while the
- * old daemon keeps serving; it writes `<stream>.jsonl.fold.next`, which the new
+ * daemon file (already staged in the daemon slot, the old daemon keeps running
+ * from its own copy of the old file) run with `--prewarm-folds` while the old
+ * daemon keeps serving; it writes `<stream>.jsonl.fold.next`, which the new
  * daemon's adopt picks when it reaches further. An ordinary upgrade (same
  * format) costs the one probe and nothing else. Best effort throughout: any
  * failure lets the upgrade go ahead as before.
@@ -34,7 +35,7 @@ const GONE = 'walnut-fold-prewarm-gone'
 const EXIT = 'walnut-fold-prewarm-exit='
 const POLL_MS = 2_000
 
-/** Where the new source runs from: its own dir, so it loads none of the old daemon's sidecars. */
+/** Where the run keeps its exit status and summary. */
 export function remoteFoldPrewarmDir(daemonDir: string): string {
   return `${daemonDir}/fold-prewarm`
 }
@@ -103,10 +104,8 @@ export function parseRemoteFoldPrewarmProbe(output: string): { streams: number; 
 
 export interface RemoteFoldPrewarmCmdOpts {
   daemonDir: string
-  /** bun by absolute path, or node found through the user's shell (`preamble`). */
-  runtime: 'bun' | 'node'
-  execPath?: string
-  preamble?: string
+  /** The new daemon on the host: a daemon binary, or the walnut file in its slot (both take `--prewarm-folds`). */
+  execPath: string
   /** The daemon's own dir env (DaemonConnection.dirEnv), so it reads the same registry. */
   env: Record<string, string>
   /** The child's own fold budget; it saves its progress and exits at the end of it. */
@@ -116,13 +115,12 @@ export interface RemoteFoldPrewarmCmdOpts {
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
- * Start the uploaded source with `--prewarm-folds`, detached: it outlives the
+ * Start the staged daemon file with `--prewarm-folds`, detached: it outlives the
  * ssh that started it, writes its summary and exit status next to it, and the
  * pid file names it. The deadline comes from the host's own clock (the Mac's
  * may differ). Its stdin is /dev/null: the script itself rides this shell's stdin.
  */
 export function buildRemoteFoldPrewarmStartCmd(opts: RemoteFoldPrewarmCmdOpts): string {
-  if (opts.runtime === 'bun' && !opts.execPath) throw new Error("runtime 'bun' requires execPath")
   for (const [key, value] of Object.entries(opts.env)) {
     if (!ENV_KEY_RE.test(key)) throw new Error(`invalid daemon env var name: ${key}`)
     if (value.includes('\n')) throw new Error(`daemon env var ${key} must be single-line`)
@@ -130,10 +128,8 @@ export function buildRemoteFoldPrewarmStartCmd(opts: RemoteFoldPrewarmCmdOpts): 
   const dir = remoteFoldPrewarmDir(opts.daemonDir)
   const env = Object.entries(opts.env).map(([k, v]) => `${k}=${shq(v)}`)
   env.push('WALNUT_FOLD_PREWARM_DEADLINE="$1"')
-  const runner = opts.runtime === 'bun' ? shq(opts.execPath!) : 'node'
-  const child = `env ${env.join(' ')} ${runner} ./daemon.cjs --prewarm-folds > out.json 2>> ${shq(`${opts.daemonDir}/fold-prewarm.log`)}; echo $? > rc`
+  const child = `env ${env.join(' ')} ${shq(opts.execPath)} --prewarm-folds > out.json 2>> ${shq(`${opts.daemonDir}/fold-prewarm.log`)}; echo $? > rc`
   return [
-    ...(opts.runtime === 'node' ? [opts.preamble ?? 'true'] : []),
     `cd ${shq(dir)} || exit 1`,
     'rm -f rc out.json',
     `walnut_pw_dl=$(( $(date +%s) * 1000 + ${Math.max(1000, Math.floor(opts.budgetMs))} ))`,
@@ -182,13 +178,8 @@ export interface RemoteFoldPrewarmIo {
   format: number
   /** sshExec: a `sh -s` script, its marked output. */
   exec: (script: string, timeoutMs: number) => Promise<string>
-  /** Write `content` to `remotePath`. */
-  upload: (remotePath: string, content: string) => Promise<void>
-  /** The new daemon source (getDaemonSource). */
-  source: () => string
-  /** A bun that runs on the host, or null to use node. */
-  bunPath: () => Promise<string | null>
-  preamble: string
+  /** The new daemon file on the host (staged before this runs). */
+  execPath: string
   env: Record<string, string>
   /** False once the connection is gone: stop waiting. */
   alive?: () => boolean
@@ -199,7 +190,7 @@ export interface RemoteFoldPrewarmIo {
 export type RemoteFoldPrewarmResult =
   | { outcome: 'not-needed' }
   | { outcome: 'waited'; ms: number }
-  | { outcome: 'ran'; streams: number; bytes: number; runtime: 'bun' | 'node'; summary: Record<string, unknown> | null; ms: number }
+  | { outcome: 'ran'; streams: number; bytes: number; summary: Record<string, unknown> | null; ms: number }
 
 /**
  * Wait for the prewarm the pid file names. A poll the link did not answer is
@@ -243,11 +234,8 @@ export async function runRemoteFoldPrewarm(io: RemoteFoldPrewarmIo): Promise<Rem
   let started = false
   let ended = false
   try {
-    await io.upload(`${dir}/daemon.cjs`, io.source())
-    const bun = await io.bunPath()
-    const runtime: 'bun' | 'node' = bun ? 'bun' : 'node'
     await io.exec(buildRemoteFoldPrewarmStartCmd({
-      daemonDir: io.daemonDir, runtime, execPath: bun ?? undefined, preamble: io.preamble, env: io.env,
+      daemonDir: io.daemonDir, execPath: io.execPath, env: io.env,
       // The child stops itself first and saves what it folded.
       budgetMs: Math.max(maxMs / 2, maxMs - 30_000),
     }), 20_000)
@@ -257,7 +245,7 @@ export async function runRemoteFoldPrewarm(io: RemoteFoldPrewarmIo): Promise<Rem
     if (end.state === 'gone') throw new Error('fold prewarm ended without an exit status')
     if (end.state === 'exited' && end.code !== 0) throw new Error(`fold prewarm exited with code ${end.code ?? 'unknown'}`)
     return {
-      outcome: 'ran', streams: probe.streams, bytes: probe.bytes, runtime,
+      outcome: 'ran', streams: probe.streams, bytes: probe.bytes,
       summary: end.state === 'exited' ? end.summary : null, ms: Date.now() - startedAt,
     }
   } finally {

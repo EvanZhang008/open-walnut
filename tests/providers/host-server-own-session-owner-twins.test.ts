@@ -1,10 +1,10 @@
 /**
  * A session the host's own server started is its Walnut's, after any restart of the daemon and
- * after the server's spec is gone, on REAL daemon processes, both twins (2026-11-23 release
+ * after the server's spec is gone, on REAL daemon processes (2026-11-23 release
  * rehearsal: a host-judged session's next turn after a restart of the host's service never
  * reached the leader). And what that ownership does NOT open.
  *
- *   leader A (marina) ==trusted WS==>+-- daemon (source twin on node, standalone on bun)
+ *   leader A (marina) ==trusted WS==>+-- daemon (standalone, on bun)
  *   follower of A     ==follower WS=>+    runs the server A configured, on data dir D
  *   A's companion     <==bridge WS===+
  *
@@ -37,8 +37,6 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -136,7 +134,7 @@ async function companion(): Promise<{ url: string; link: (after?: number) => Pro
   }
 }
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone'): Promise<{ port: number; pid: number }> {
+async function spawnDaemon(dir: string): Promise<{ port: number; pid: number }> {
   fs.mkdirSync(path.join(dir, 'home'), { recursive: true })
   for (const f of ['daemon.port', 'daemon.pid']) fs.rmSync(path.join(dir, f), { force: true })
   const env: NodeJS.ProcessEnv = {
@@ -150,22 +148,20 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone'): Promise<
     WALNUT_DAEMON_KEEP_SESSIONS: '1',
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  const args = twin === 'source' ? [path.join(dir, 'daemon.cjs'), '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
-  if (twin === 'source') fs.writeFileSync(args[0]!, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(twin === 'source' ? SOURCE_TWIN.file : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   pids.add(pid)
   return { port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
 }
 
-async function restartDaemon(dir: string, twin: 'source' | 'standalone', d: { pid: number }, between?: () => void): Promise<{ port: number; pid: number }> {
+async function restartDaemon(dir: string, d: { pid: number }, between?: () => void): Promise<{ port: number; pid: number }> {
   process.kill(d.pid, 'SIGTERM')
   await waitFor(() => !alive(d.pid), 20_000, 'the daemon to stop')
   between?.()
-  return spawnDaemon(dir, twin)
+  return spawnDaemon(dir)
 }
 
 beforeAll(() => {
@@ -181,32 +177,32 @@ afterAll(async () => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 })
 
-const CASES = [['source', 'split'], ['source', 'legacy'], ['standalone', 'split'], ['standalone', 'legacy']] as const
-for (const [n, [twin, layout]] of CASES.entries()) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin, ${layout} layout: the host's own server's session stays its Walnut's`, () => {
+const LAYOUTS = ['split', 'legacy'] as const
+for (const [n, layout] of LAYOUTS.entries()) {
+  describe.skipIf(!BUN)(`${layout} layout: the host's own server's session stays its Walnut's`, () => {
     it('A reads it across a restart and stops it after its spec is gone; A\'s bridge and the replica stay fenced; another home stays not_found', async () => {
-      const dir = path.join(base, `${twin.slice(0, 2)}${layout[0]}`)
+      const dir = path.join(base, `d${layout[0]}`)
       // The layouts a leader writes for its server: <host root>/walnuts/<walnut id>/data, or the
       // shared <host root>/data it kept from before the split (marked with its whole id).
-      const root = path.join(base, `${twin}-${layout}-host`)
+      const root = path.join(base, `${layout}-host`)
       const data = layout === 'split' ? path.join(root, 'walnuts', WALNUT_A, 'data') : path.join(root, 'data')
       if (layout === 'legacy') { fs.mkdirSync(data, { recursive: true }); fs.writeFileSync(path.join(data, '.walnut-id'), WALNUT_A) }
-      const cwd = path.join(base, `${twin}-${layout}-work`)
+      const cwd = path.join(base, `${layout}-work`)
       fs.mkdirSync(cwd, { recursive: true })
       const mock = path.join(base, 'mock-cli.cjs')
       fs.writeFileSync(mock, MOCK_CLI)
-      let d = await spawnDaemon(dir, twin)
+      let d = await spawnDaemon(dir)
 
       const leader = await connect(d.port)
       expect((await cmd(leader, { cmd: 'leader.configure', home: HOME_A, walnutId: WALNUT_A, backup: true })).ok).toBe(true)
       const cloud = await companion()
       expect((await cmd(leader, { cmd: 'bridge.configure', enabled: true, url: cloud.url, token: 'fixture-only', hostAlias: 'fixture-host', home: HOME_A })).ok).toBe(true)
       // The server A's daemon runs for it, on its own data dir D (OPEN_WALNUT_HOME), hands over its token.
-      const tokenFile = path.join(base, `${twin}-${layout}-token`)
+      const tokenFile = path.join(base, `${layout}-token`)
       const spec = {
         v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
         args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
-        cwd: base, env: { OPEN_WALNUT_HOME: data }, log: path.join(base, `${twin}-${layout}-placeholder.log`), port: 41_107 + n,
+        cwd: base, env: { OPEN_WALNUT_HOME: data }, log: path.join(base, `${layout}-placeholder.log`), port: 41_107 + n,
         settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
       }
       // A data dir that is a Walnut's own home (here this host's production one) is refused: it would
@@ -289,7 +285,7 @@ for (const [n, [twin, layout]] of CASES.entries()) {
       leader.close()
       const hellosBefore = cloud.count()
       // The aged session's resume record is gone (pruned after its 30 days) while the daemon is down.
-      d = await restartDaemon(dir, twin, d, () => fs.rmSync(path.join(dir, 'resume-records', `${AGED}.json`), { force: true }))
+      d = await restartDaemon(dir, d, () => fs.rmSync(path.join(dir, 'resume-records', `${AGED}.json`), { force: true }))
       judge(await reads(d.port), 'after the restart')
 
       // taken, after the restart: the daemon adopted it with no spawn of its own; the bridge is still refused.
@@ -317,7 +313,7 @@ for (const [n, [twin, layout]] of CASES.entries()) {
       expect((await cmd(again, { cmd: 'leader.configure', home: HOME_A, walnutId: WALNUT_A, backup: true })).ok).toBe(true)
       expect((await cmd(again, { cmd: 'server.configure', home: HOME_A, spec: null })).ok).toBe(true)
       again.close()
-      d = await restartDaemon(dir, twin, d)
+      d = await restartDaemon(dir, d)
       const last = await connect(d.port)
       expect((await cmd(last, { cmd: 'leader.configure', home: HOME_A, walnutId: WALNUT_A, backup: true })).ok).toBe(true)
       const other = await cmd(last, { cmd: 'stop', sid: OTHER, reason: 'user', home: HOME_A })

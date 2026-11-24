@@ -32,7 +32,7 @@ import { applyTriggerFired } from '../../src/core/cron/trigger-apply.js'
 import type { CronServiceState } from '../../src/core/cron/types.js'
 import { fireMessageId, hostBatch, markHostBatch, triggerStateFileName, type PendingFire, type TriggerFiredEvent, type TriggerHostState } from '../../src/providers/trigger-check-core.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { TRIGGER_BUN as BUN, TriggerDaemon, buildSourceTwin, killTriggerDaemons, sleep, waitFor, type Twin } from '../helpers/trigger-daemon.js'
+import { TRIGGER_BUN as BUN, TriggerDaemon, killTriggerDaemons, sleep, waitFor, type Twin } from '../helpers/trigger-daemon.js'
 
 describe('hostBatch: a host delivery cut by a restart goes again as the same batch, by the same id', () => {
   const fire = (seq: number): PendingFire => ({ seq, atMs: 1_000 + seq, items: [], durationMs: 1, arbitrated: true })
@@ -76,8 +76,6 @@ describe('fireMessageId: one id per set of fires, whoever delivers it and howeve
 
 const base = BUN ? fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trig-once-'))) : ''
 afterAll(() => { if (base.includes('walnut-trig-once-')) fs.rmSync(base, { recursive: true, force: true }) })
-const BIN = path.join(base, 'bin')
-if (BUN) buildSourceTwin(BIN)
 
 /** Processes the daemons spawned detached (checks, CLIs) that a SIGKILLed daemon leaves behind. */
 const orphans = new Set<number>()
@@ -110,7 +108,7 @@ function host(twin: Twin, name: string, extraEnv: Record<string, string> = {}) {
     dir, env,
     /** Start this host's daemon (again), and say hello as a server does. */
     async start(): Promise<TriggerDaemon> {
-      const d = await TriggerDaemon.start(twin, { mode: '--start', env, runDir: dir('run'), cwd: HOME, bin: BIN })
+      const d = await TriggerDaemon.start(twin, { mode: '--start', env, runDir: dir('run'), cwd: HOME })
       const hello = await d.rpc({ cmd: 'hello' })
       expect(hello.capabilities as string[]).toContain('triggers-v1')
       return d
@@ -183,9 +181,9 @@ function asFired(frame: Record<string, unknown>): TriggerFiredEvent {
   return { type: 'trigger.fired', ...rest } as unknown as TriggerFiredEvent
 }
 
-const TWINS: Twin[] = BUN ? ['standalone', 'source'] : []
+const twin: Twin = 'standalone'
 
-describe.skipIf(!BUN).each(TWINS)('a trigger across a daemon restart (%s twin)', (twin) => {
+describe.skipIf(!BUN)('a trigger across a daemon restart (standalone daemon)', () => {
   it('1. a check killed mid-run reruns on the next daemon\'s first cycle from the old cursor: what it saw fires once', async () => {
     const h = host(twin, 'killed')
     const ID = 'log-watch'

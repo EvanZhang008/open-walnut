@@ -4,7 +4,7 @@
  * The one legitimate sender of `session.control` is the cloud replica, which
  * always asks the bridge alias '__local__' (the Mac's own daemon). A remote exec
  * host's daemon forwards whatever a process on that host sends it, so every
- * action from it is refused. Two real daemon-source processes stand in for the
+ * action from it is refused. Two real standalone daemon processes stand in for the
  * two hosts:
  *
  *   remote host   a process there -> its daemon (cmdControlRelay) -> control-request
@@ -34,8 +34,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-control-host-e2e'))
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { attachBridge, closeAllBridges, bridgeForHost } from '../../src/web/ws/bridge-registry.js'
 import { callPrimaryControl } from '../../src/web/routes/v1-control-relay.js'
@@ -49,6 +48,9 @@ import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 interface Daemon { proc: ChildProcess; port: number; dir: string }
 
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
+
 let tmpRoot = ''
 const daemons: Daemon[] = []
 const sockets: WebSocket[] = []
@@ -61,15 +63,14 @@ const saved: Record<string, string | undefined> = {}
 async function spawnDaemon(name: string): Promise<Daemon> {
   const dir = path.join(tmpRoot, name)
   fs.mkdirSync(dir, { recursive: true })
-  const script = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     // Every directory the daemon owns is ours: it never sees a real registry or stream.
     env: { ...process.env, WALNUT_DAEMON_DIR: path.join(dir, 'd'), WALNUT_STREAMS_DIR: path.join(dir, 's'), WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'ls') },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 20_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -202,7 +203,7 @@ afterAll(async () => {
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
 })
 
-describe('session.control over real daemons, by host', () => {
+describe.skipIf(!BUN)('session.control over real daemons, by host', () => {
   it('a process on a remote host cannot run a box-level or session action through its daemon', async () => {
     const attempts: Array<[string, string, Record<string, unknown>]> = [
       ['server.tasks.apply', '__server__', createOp('ctl-remote-1')],

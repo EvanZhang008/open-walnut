@@ -8,9 +8,10 @@
  * owner-home-v1, same place: every other stop names the asking Walnut, and the
  * spawn journal decides whether that Walnut may stop the session.
  *
- * Both twins are exercised from their own text: cmdStop, orphanStopRefusal and
- * stopOwnerRefusal are sliced out of daemon-standalone.ts and the daemon-source.ts template and
- * evaluated with every free identifier injected. stopSessionProcess (the only
+ * The daemon is exercised from its own text: cmdStop, orphanStopRefusal and
+ * stopOwnerRefusal are sliced out of daemon-standalone.ts and evaluated with
+ * every free identifier injected (its per-session gate is the real
+ * DaemonSessionGate). stopSessionProcess (the only
  * code that signals) is a stub, and process.kill is spied on and asserted
  * never called. No process, file or socket is touched.
  */
@@ -19,7 +20,6 @@ import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import ts from 'typescript'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
@@ -31,7 +31,6 @@ const HOME = '/fixture/walnut-home'
 const IDLE_WARNING_MS = 5 * 60 * 1000
 const IDLE_KILL_MS = 2 * 60 * 60 * 1000
 
-type Twin = 'standalone' | 'template'
 interface Reply { id: number; ok: boolean; error?: string; data?: Record<string, unknown> }
 
 function sliceTopLevelFn(src: string, name: string): string {
@@ -40,13 +39,6 @@ function sliceTopLevelFn(src: string, name: string): string {
   const end = src.indexOf('\n}', at)
   expect(end).toBeGreaterThan(at)
   return src.slice(at, end + 2)
-}
-
-function sliceTemplateGate(src: string): string {
-  const at = src.indexOf('let sessionStartGate = (function () {')
-  expect(at, 'template gate not found').toBeGreaterThan(-1)
-  const end = src.indexOf('})();', at)
-  return src.slice(at, end + 5)
 }
 
 interface World {
@@ -80,7 +72,7 @@ function freshWorld(): World {
   }
 }
 
-function buildTwin(kind: Twin, world: World) {
+function buildDaemon(world: World) {
   const replies: Reply[] = []
   const stops: string[] = []
   const disables: string[] = []
@@ -128,27 +120,21 @@ function buildTwin(kind: Twin, world: World) {
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },
   }
-  const src = kind === 'standalone'
-    ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    : getDaemonSource()
+  const src = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
   const code = ['cmdStop', 'orphanStopRefusal', 'stopOwnerRefusal'].map((n) => sliceTopLevelFn(src, n)).join('\n')
-  const gate = kind === 'template' ? sliceTemplateGate(src) : ''
-  // The per-session gate each twin really uses: the standalone twin's is injected
-  // (DaemonSessionGate), the template's is sliced from its own text.
-  const js = ts.transpileModule(gate + '\n' + code + '\nreturn { cmdStop, orphanStopRefusal, stopOwnerRefusal, sessionStartGate };', {
+  const js = ts.transpileModule(code + '\nreturn { cmdStop, orphanStopRefusal, stopOwnerRefusal, sessionStartGate };', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText
   const names = Object.keys(injected)
   const values = names.map((n) => injected[n])
-  const built = kind === 'standalone'
-    ? new Function(...names, 'sessionStartGate', js)(...values, new DaemonSessionGate())
-    : new Function(...names, js)(...values)
+  // The per-session gate the daemon really uses (DaemonSessionGate), injected.
+  const built = new Function(...names, 'sessionStartGate', js)(...values, new DaemonSessionGate())
   const stop = (cmd: Record<string, unknown>) => built.cmdStop({}, 1, { sid: SID, home: HOME, ...cmd }) as Promise<unknown>
   const gateRun = built.sessionStartGate.run.bind(built.sessionStartGate) as (sid: string, work: () => Promise<unknown>) => Promise<unknown>
   return { stop, replies, stops, disables, stopVersions, ownershipChecks, gateRun }
 }
 
-describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop reason "orphan"', (kind) => {
+describe('stop reason "orphan"', () => {
   let world: World
   let killSpy: ReturnType<typeof vi.spyOn>
 
@@ -165,22 +151,22 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop reason "orp
   })
 
   async function refusal(): Promise<Record<string, unknown>> {
-    const twin = buildTwin(kind, world)
-    await twin.stop({ reason: 'orphan', expectPid: PID })
-    expect(twin.stops, 'a refused orphan stop must not reach stopSessionProcess').toEqual([])
-    expect(twin.stopVersions.size).toBe(0)
-    expect(twin.replies).toHaveLength(1)
-    expect(twin.replies[0].ok).toBe(true)
-    return twin.replies[0].data!
+    const daemon = buildDaemon(world)
+    await daemon.stop({ reason: 'orphan', expectPid: PID })
+    expect(daemon.stops, 'a refused orphan stop must not reach stopSessionProcess').toEqual([])
+    expect(daemon.stopVersions.size).toBe(0)
+    expect(daemon.replies).toHaveLength(1)
+    expect(daemon.replies[0].ok).toBe(true)
+    return daemon.replies[0].data!
   }
 
   it('ends a session it owns once every proof holds and nothing keeps it alive', async () => {
-    const twin = buildTwin(kind, world)
-    await twin.stop({ reason: 'orphan', expectPid: PID })
-    expect(twin.stops).toEqual([SID])
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
-    expect(twin.stopVersions.get(SID)).toBe(1)
-    expect(twin.disables, 'an orphan stop never touches cron supervision').toEqual([])
+    const daemon = buildDaemon(world)
+    await daemon.stop({ reason: 'orphan', expectPid: PID })
+    expect(daemon.stops).toEqual([SID])
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
+    expect(daemon.stopVersions.get(SID)).toBe(1)
+    expect(daemon.disables, 'an orphan stop never touches cron supervision').toEqual([])
   })
 
   it('a sid this daemon never spawned is not_owned (the ephemeral-server incident)', async () => {
@@ -218,10 +204,10 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop reason "orp
   })
 
   it.each([[undefined], [''], [42]])('home %s is a bad request and ends nothing', async (home) => {
-    const twin = buildTwin(kind, world)
-    await twin.stop({ reason: 'orphan', expectPid: PID, home })
-    expect(twin.stops).toEqual([])
-    expect(twin.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
+    const daemon = buildDaemon(world)
+    await daemon.stop({ reason: 'orphan', expectPid: PID, home })
+    expect(daemon.stops).toEqual([])
+    expect(daemon.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
   })
 
   it('a service daemon does not claim a process from a previous boot', async () => {
@@ -262,17 +248,17 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop reason "orp
   })
 
   it.each([[undefined], [1], [0], [-1], [-PID], [1.5], [String(PID)]])('expectPid %s is a bad request and ends nothing', async (expectPid) => {
-    const twin = buildTwin(kind, world)
-    await twin.stop({ reason: 'orphan', expectPid })
-    expect(twin.stops).toEqual([])
-    expect(twin.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
+    const daemon = buildDaemon(world)
+    await daemon.stop({ reason: 'orphan', expectPid })
+    expect(daemon.stops).toEqual([])
+    expect(daemon.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
   })
 
   it('the other reasons are untouched: an unknown reason is still refused outright', async () => {
-    const twin = buildTwin(kind, world)
-    await twin.stop({ reason: 'bogus', expectPid: PID })
-    expect(twin.replies).toEqual([{ id: 1, ok: false, error: 'stop: invalid reason' }])
-    expect(twin.stops).toEqual([])
+    const daemon = buildDaemon(world)
+    await daemon.stop({ reason: 'bogus', expectPid: PID })
+    expect(daemon.replies).toEqual([{ id: 1, ok: false, error: 'stop: invalid reason' }])
+    expect(daemon.stops).toEqual([])
   })
 })
 
@@ -281,7 +267,7 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop reason "orp
  * hold. Without it, the ownership proof could read the registry halfway through
  * a respawn of the same sid and end the process that respawn just handed over.
  */
-describe.each<[Twin]>([['standalone'], ['template']])('%s twin: an orphan stop waits for the per-session gate', (kind) => {
+describe('an orphan stop waits for the per-session gate', () => {
   let killSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
@@ -296,9 +282,9 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: an orphan stop w
   })
 
   /** Hold the sid's gate, as a queued start or resume does, until `release()`. */
-  function holdGate(twin: ReturnType<typeof buildTwin>, sid: string) {
+  function holdGate(daemon: ReturnType<typeof buildDaemon>, sid: string) {
     let release!: () => void
-    const held = twin.gateRun(sid, () => new Promise<void>((resolve) => { release = resolve }))
+    const held = daemon.gateRun(sid, () => new Promise<void>((resolve) => { release = resolve }))
     return { held, release: () => release() }
   }
 
@@ -308,26 +294,26 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: an orphan stop w
   }
 
   it('checks nothing and stops nothing while the gate is held, then ends the session once it is released', async () => {
-    const twin = buildTwin(kind, freshWorld())
-    const gate = holdGate(twin, SID)
-    const stopping = twin.stop({ reason: 'orphan', expectPid: PID })
+    const daemon = buildDaemon(freshWorld())
+    const gate = holdGate(daemon, SID)
+    const stopping = daemon.stop({ reason: 'orphan', expectPid: PID })
     await drain()
-    expect(twin.ownershipChecks, 'orphanStopRefusal must not run inside the held gate').toEqual([])
-    expect(twin.stops, 'stopSessionProcess must not run inside the held gate').toEqual([])
-    expect(twin.replies).toEqual([])
+    expect(daemon.ownershipChecks, 'orphanStopRefusal must not run inside the held gate').toEqual([])
+    expect(daemon.stops, 'stopSessionProcess must not run inside the held gate').toEqual([])
+    expect(daemon.replies).toEqual([])
     gate.release()
     await gate.held
     await stopping
-    expect(twin.ownershipChecks).toEqual([SID])
-    expect(twin.stops).toEqual([SID])
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
+    expect(daemon.ownershipChecks).toEqual([SID])
+    expect(daemon.stops).toEqual([SID])
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
   })
 
   it('decides on the registry as the gate holder left it: a respawn to a new pid is not_owned', async () => {
     const world = freshWorld()
-    const twin = buildTwin(kind, world)
-    const gate = holdGate(twin, SID)
-    const stopping = twin.stop({ reason: 'orphan', expectPid: PID })
+    const daemon = buildDaemon(world)
+    const gate = holdGate(daemon, SID)
+    const stopping = daemon.stop({ reason: 'orphan', expectPid: PID })
     await drain()
     // The queued start respawned the session: the registry now holds a new process.
     world.session!.pid = PID + 1
@@ -335,15 +321,15 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: an orphan stop w
     gate.release()
     await gate.held
     await stopping
-    expect(twin.stops, 'the process the respawn handed over must not be ended').toEqual([])
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: false, reason: 'not_owned', detail: 'pid_mismatch' } }])
+    expect(daemon.stops, 'the process the respawn handed over must not be ended').toEqual([])
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: false, reason: 'not_owned', detail: 'pid_mismatch' } }])
   })
 
   it('a gate held for a different sid does not delay the stop', async () => {
-    const twin = buildTwin(kind, freshWorld())
-    const other = holdGate(twin, '99999999-2222-4333-8444-555555555555')
-    await twin.stop({ reason: 'orphan', expectPid: PID })
-    expect(twin.stops).toEqual([SID])
+    const daemon = buildDaemon(freshWorld())
+    const other = holdGate(daemon, '99999999-2222-4333-8444-555555555555')
+    await daemon.stop({ reason: 'orphan', expectPid: PID })
+    expect(daemon.stops).toEqual([SID])
     other.release()
     await other.held
   })
@@ -355,7 +341,7 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: an orphan stop w
  * may stop it. A refusal changes nothing: no supervision disabled, no start
  * fenced, no process touched.
  */
-describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop names the asking Walnut (owner-home-v1)', (kind) => {
+describe('stop names the asking Walnut (owner-home-v1)', () => {
   const DECIDED = ['user', 'maintenance', 'idle'] as const
   const INITIATORS = ['human', 'automatic'] as const
   let world: World
@@ -374,24 +360,24 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop names the a
   })
 
   async function outcome(cmd: Record<string, unknown>) {
-    const twin = buildTwin(kind, world)
-    await twin.stop(cmd)
-    expect(twin.replies).toHaveLength(1)
-    return twin
+    const daemon = buildDaemon(world)
+    await daemon.stop(cmd)
+    expect(daemon.replies).toHaveLength(1)
+    return daemon
   }
 
   async function expectRefused(cmd: Record<string, unknown>, detail: string) {
-    const twin = await outcome(cmd)
-    expect(twin.replies[0]).toEqual({ id: 1, ok: true, data: { stopped: false, reason: 'not_owned', detail } })
-    expect(twin.stops, 'a refused stop must not reach stopSessionProcess').toEqual([])
-    expect(twin.disables, 'a refused stop must not disable cron supervision').toEqual([])
-    expect(twin.stopVersions.size, 'a refused stop must not fence a start').toBe(0)
+    const daemon = await outcome(cmd)
+    expect(daemon.replies[0]).toEqual({ id: 1, ok: true, data: { stopped: false, reason: 'not_owned', detail } })
+    expect(daemon.stops, 'a refused stop must not reach stopSessionProcess').toEqual([])
+    expect(daemon.disables, 'a refused stop must not disable cron supervision').toEqual([])
+    expect(daemon.stopVersions.size, 'a refused stop must not fence a start').toBe(0)
   }
 
   async function expectStopped(cmd: Record<string, unknown>) {
-    const twin = await outcome(cmd)
-    expect(twin.stops).toEqual([SID])
-    expect(twin.replies[0]).toEqual({ id: 1, ok: true, data: { stopped: true } })
+    const daemon = await outcome(cmd)
+    expect(daemon.stops).toEqual([SID])
+    expect(daemon.replies[0]).toEqual({ id: 1, ok: true, data: { stopped: true } })
   }
 
   const every = DECIDED.flatMap((reason) => INITIATORS.flatMap((initiator) =>
@@ -452,32 +438,15 @@ describe.each<[Twin]>([['standalone'], ['template']])('%s twin: stop names the a
   })
 
   it.each([[''], [42], [null]])('home %s is a bad request and stops nothing', async (home) => {
-    const twin = await outcome({ reason: 'user', home, initiator: 'human' })
-    expect(twin.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
-    expect(twin.stops).toEqual([])
-    expect(twin.disables).toEqual([])
+    const daemon = await outcome({ reason: 'user', home, initiator: 'human' })
+    expect(daemon.replies[0].data).toMatchObject({ stopped: false, reason: 'bad_request' })
+    expect(daemon.stops).toEqual([])
+    expect(daemon.disables).toEqual([])
   })
 
   it('an orphan stop keeps its own, stricter proof (a matching home alone is not enough)', async () => {
     world.pgidFile = null
-    const twin = await outcome({ reason: 'orphan', expectPid: PID })
-    expect(twin.replies[0].data).toMatchObject({ stopped: false, reason: 'not_owned', detail: 'pgid_mismatch' })
-  })
-})
-
-describe('the twins decide ownership with the same code', () => {
-  /** Type-erased, comment-free, printer-normalized text of one top-level function. */
-  function canonical(src: string, name: string): string {
-    const js = ts.transpileModule(sliceTopLevelFn(src, name), {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, removeComments: true },
-    }).outputText
-    const file = ts.createSourceFile(`${name}.js`, js, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS)
-    return ts.createPrinter({ removeComments: true }).printFile(file)
-  }
-
-  it.each([['stopOwnerRefusal'], ['orphanStopRefusal']])('%s is identical in both twins', (name) => {
-    const standalone = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    const template = getDaemonSource()
-    expect(canonical(template, name)).toBe(canonical(standalone, name))
+    const daemon = await outcome({ reason: 'orphan', expectPid: PID })
+    expect(daemon.replies[0].data).toMatchObject({ stopped: false, reason: 'not_owned', detail: 'pgid_mismatch' })
   })
 })

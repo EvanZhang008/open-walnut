@@ -1,10 +1,9 @@
 /**
- * ACP daemon E2E — spawns a REAL daemon and drives the acp* command family over
- * a real WebSocket, with the scripted mock ACP agent as the adapter. Runs once
- * per twin: the bun-compiled binary (daemon-standalone.ts), and the Node source
- * daemon with its acp-daemon-core.cjs sidecar (daemon-source.ts), which is the
- * local daemon of every npm install. Validates the dispatch wiring the
- * acp-daemon unit tests can't see.
+ * ACP daemon E2E — spawns the REAL standalone daemon (daemon-standalone.ts under
+ * bun) and drives the acp* command family over a real WebSocket, with the
+ * scripted mock ACP agent as the adapter and the ACP worker built from this
+ * checkout's source. Validates the dispatch wiring the acp-daemon unit tests
+ * can't see.
  *
  * Covers: acpStart (new session) → acpSend → jsonl push frames → acpState →
  * acpRespond (permission) → daemon kill → restart → startup repair → lazy
@@ -21,34 +20,17 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { acpEngineIds } from '../../src/core/agents/engine-registry.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
-const DAEMON_BIN = path.join(REPO_ROOT, 'dist/daemon-binaries/daemon-darwin-arm64')
-const WORKER_BUNDLE = path.join(REPO_ROOT, 'dist/daemon-binaries/acp-worker.js')
-const ACP_SIDECAR = path.join(REPO_ROOT, 'dist/daemon-binaries/acp-daemon-core.cjs')
+const STANDALONE = path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts')
 const MOCK_AGENT = path.join(REPO_ROOT, 'tests/providers/mock-acp-agent.mjs')
+const BUN = testBun()
+let workerBundle = ''
 
-const HAVE_BIN = fs.existsSync(DAEMON_BIN) && process.platform === 'darwin' && process.arch === 'arm64'
-const HAVE_SIDECAR = fs.existsSync(ACP_SIDECAR) && fs.existsSync(WORKER_BUNDLE)
-
-/** The source twin runs from a dir holding daemon.cjs and the sidecar, as local-daemon.ts lays it out. */
-function sourceDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-e2e-source-'))
-  fs.writeFileSync(path.join(dir, 'daemon.cjs'), getDaemonSource(), { mode: 0o755 })
-  fs.copyFileSync(ACP_SIDECAR, path.join(dir, 'acp-daemon-core.cjs'))
-  return path.join(dir, 'daemon.cjs')
-}
-
-const TWINS: Array<{ name: string; available: boolean; command: () => [string, string[]] }> = [
-  { name: 'real binary', available: HAVE_BIN, command: () => [DAEMON_BIN, ['--start']] },
-  { name: 'source daemon + acp sidecar', available: HAVE_SIDECAR, command: () => [SOURCE_TWIN.file, [sourceDaemonScript(), '--start']] },
-]
-
-let daemonCmd: [string, string[]] = [DAEMON_BIN, ['--start']]
 let daemonDir: string
 let streamsDir: string
 let proc: ChildProcess | null = null
@@ -57,13 +39,14 @@ let rpcId = 0
 const pushed: Array<Record<string, unknown>> = []
 
 async function spawnDaemon(): Promise<number> {
-  const p = spawn(daemonCmd[0], daemonCmd[1], {
+  const p = spawn(BUN!, [STANDALONE, '--start'], {
+    cwd: REPO_ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   proc = p
   return new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 15_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     p.stdout!.on('data', (chunk: Buffer) => {
       const m = chunk.toString().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -127,14 +110,14 @@ async function waitFor(pred: () => boolean, timeoutMs = 10_000): Promise<void> {
 const startParams = (sid: string, extra: Record<string, unknown> = {}) => ({
   sid,
   cwd: os.tmpdir(),
-  workerCmd: [process.execPath, WORKER_BUNDLE],
+  workerCmd: [process.execPath, workerBundle],
   adapterCmd: [process.execPath, MOCK_AGENT],
   ...extra,
 })
 
-for (const twin of TWINS) describe.runIf(twin.available)(`ACP daemon E2E (${twin.name})`, () => {
+describe.skipIf(!BUN)('ACP daemon E2E (standalone daemon)', () => {
   beforeAll(async () => {
-    daemonCmd = twin.command()
+    workerBundle = acpWorkerBundle()
     pushed.length = 0
     daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-e2e-daemon-'))
     streamsDir = daemonDir + '-streams'
@@ -145,13 +128,12 @@ for (const twin of TWINS) describe.runIf(twin.available)(`ACP daemon E2E (${twin
     fs.writeFileSync(path.join(streamsDir, 'legacy-stream'), 'stream', { mode: 0o666 })
     const port = await spawnDaemon()
     await connect(port)
-  }, 30_000)
+  }, 40_000)
 
   afterAll(async () => {
     await stopDaemon()
     fs.rmSync(daemonDir, { recursive: true, force: true })
     fs.rmSync(streamsDir, { recursive: true, force: true })
-    if (daemonCmd[0] === SOURCE_TWIN.file) fs.rmSync(path.dirname(daemonCmd[1][0]), { recursive: true, force: true })
   })
 
   let providerSessionId: string

@@ -34,9 +34,8 @@
  *     resume there). Every later request is ignored; a `writeSync()` before the hold's write
  *     finished writes the held inventory.
  *
- * How each twin gets it: daemon-core.ts (daemon-standalone.ts) imports createRegistryWriter;
- * daemon-source.ts inlines `createRegistryWriter.toString()` through `__CREATE_REGISTRY_WRITER__`.
- * So the factory body references NOTHING at module scope; every helper arrives through deps.
+ * daemon-core.ts (daemon-standalone.ts) imports createRegistryWriter. The factory body
+ * references NOTHING at module scope; every helper arrives through deps.
  */
 
 /** The session fields the registry records (daemon-core.ts CoreSessionData, a subset). */

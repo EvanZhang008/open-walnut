@@ -9,7 +9,7 @@
  *   1. the name follows the host, for every platform/arch we can be run on;
  *   2. the names match what scripts/build-daemon.sh actually writes — the two
  *      files are the only link between "what we build" and "what we look for";
- *   3. a missing binary degrades to the Node source daemon and NEVER to another
+ *   3. a missing binary degrades to the daemon's source under Bun and NEVER to another
  *      platform's binary sitting in the same directory.
  */
 import { describe, expect, it } from 'vitest'
@@ -70,7 +70,7 @@ describe('scripts/build-daemon.sh without Bun', () => {
     const res = spawnSync('bash', [BUILD_SCRIPT], { env: noBunEnv, encoding: 'utf-8' })
     expect(res.status).toBe(0)
     expect(res.stderr).toMatch(/skipping the daemon binaries/)
-    expect(res.stderr).toMatch(/deploy the daemon from source/)
+    expect(res.stderr).toMatch(/runs its local daemon from source/)
   })
 
   it('still refuses under WALNUT_REQUIRE_BUN=1, so a release cannot ship without them', () => {
@@ -97,7 +97,7 @@ describe('pickDaemonBinary', () => {
   it('never returns a binary built for a different platform', () => {
     const dir = dirWith('daemon-darwin-arm64', 'daemon-darwin-arm64.version')
     // A Linux host looking at a macOS build tree: no match, so the caller
-    // materializes the Node source daemon instead of executing a Mach-O file.
+    // falls back to the daemon's source instead of executing a Mach-O file.
     expect(pickDaemonBinary([dir], getLocalDaemonBinaryName('linux', 'x64'))).toBeNull()
   })
 

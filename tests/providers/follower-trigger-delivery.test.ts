@@ -2,22 +2,20 @@
  * A trigger fire no server claimed, delivered by the host's own Walnut server while its
  * leader is away (follower-trigger-delivery-v1, follower-trigger-delivery-core.ts): the
  * daemon offers it, takes only the live attempt's answer, falls back to its own delivery
- * after three failures in a row (logged and counted as a daemon offline answer), and both
- * twins wire it the same way. The inlined text runs alone.
+ * after three failures in a row (logged and counted as a daemon offline answer), and the
+ * daemon's wiring of it.
  */
 import { describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createFollowerTriggerDelivery, type TriggerFire, type TriggerDeliveryResult } from '../../src/providers/follower-trigger-delivery-core.js'
-import { pickHostTriggerTarget } from '../../src/core/routines/host-trigger-target.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const FIRE: TriggerFire = { home: '/h', triggerId: 'job-1', taskId: 'task-1', text: 'ENVELOPE', messageId: 'qm-trigger-abc' }
 
-function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; own?: TriggerDeliveryResult; mechanics?: TriggerDeliveryResult; make?: typeof createFollowerTriggerDelivery; clock?: { t: number } } = {}) {
+function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; own?: TriggerDeliveryResult; mechanics?: TriggerDeliveryResult; clock?: { t: number } } = {}) {
   const sock = { id: 1 }
   const other = { id: 2 }
   const sent: Array<{ ev: string; data: Record<string, unknown> }> = []
@@ -27,8 +25,7 @@ function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; ow
   const logs: Array<{ msg: string; data?: Record<string, unknown> }> = []
   const ownAnswers: Array<{ fire: TriggerFire; failures: number }> = []
   let n = 0
-  const make = o.make ?? createFollowerTriggerDelivery
-  const d = make<typeof sock>({
+  const d = createFollowerTriggerDelivery<typeof sock>({
     follower: () => (o.follower === false ? null : sock),
     mayWrite: () => o.mayWrite !== false,
     send: (_ws, ev, data) => { if (o.send === false) return false; sent.push({ ev, data }); return true },
@@ -46,7 +43,6 @@ function harness(o: { follower?: boolean; mayWrite?: boolean; send?: boolean; ow
   const fireTimer = () => { const t = timers.find((x) => !x.cleared); t!.cleared = true; t!.fn() }
   return { d, sock, other, sent, own, mechanics, timers, logs, ownAnswers, fireTimer }
 }
-const tick = () => new Promise((r) => setImmediate(r))
 
 describe('the daemon offers a due fire to its host server', () => {
   it('no host server that delivers triggers, or the leader answers: the daemon delivers it itself, as before', async () => {
@@ -222,33 +218,29 @@ describe('a host server that kept failing sits out (no three timeouts before eve
   })
 })
 
-describe('follower trigger delivery twin wiring', () => {
-  const standalone = read('src/providers/daemon-standalone.ts')
-  const source = read('src/providers/daemon-source.ts')
+describe('follower trigger delivery daemon wiring', () => {
+  const src = read('src/providers/daemon-standalone.ts')
   const CORE = 'src/providers/follower-trigger-delivery-core.ts'
   const RULE = 'src/core/routines/host-trigger-target.ts'
 
-  it('both twins: the hello flag, the command on the follower allowlist, the tick offers through it, the socket close ends it', () => {
-    for (const src of [standalone, source]) {
-      expect(src).toMatch(/deliversTriggers = cmd\.deliversTriggers === true/)
-      const allow = src.slice(src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set([')))
-      expect(allow).toContain("'follower.trigger.deliver'")
-      expect(src).toContain("case 'follower.trigger.deliver': return daemonCommands.run(")
-      expect(src).toMatch(/followerTriggers\.deliver\(\{ home: spec\.home, triggerId: id, taskId: spec\.taskId, text(: text)?, messageId(: messageId)? \}\)/)
-      expect(src).not.toMatch(/offlineHost\.deliverTrigger\(spec\.home/)
-      expect(src).toContain('followerTriggers.dropSocket(ws)')
-      // The follower's answer goes to the core from the socket it came on (through the follower entry).
-      expect(src).toMatch(/triggerAnswer: (\(ws, cmd\) => |function \(ws, cmd\) \{ return )followerTriggers\.answer\(ws, cmd\)/)
-      expect(src).toMatch(/followerEntry\.triggerDeliver\(ws, cmd\)/)
-      expect(src).toMatch(/deliversTriggers === true \? (ws|f) : null/)
-      expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerEntry\.mayWrite\(home\)/)
-      expect(src).toContain('offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId)')
-      expect(src).toContain('offlineHost.liveSessionsOf(home)')
-      // The fallback is counted with the gateway's own answers.
-      expect(src).toContain("followerGateway.noteOwnAnswer('trigger_delivery', 'handed_back')")
-    }
-    expect(standalone).toContain('triggerTarget: pickHostTriggerTarget,')
-    expect(source).toContain('triggerTarget: (__PICK_HOST_TRIGGER_TARGET__),')
+  it('the hello flag, the command on the follower allowlist, the tick offers through it, the socket close ends it', () => {
+    expect(src).toMatch(/deliversTriggers = cmd\.deliversTriggers === true/)
+    const allow = src.slice(src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set(['), src.indexOf('])', src.indexOf('FOLLOWER_ALLOWED_COMMANDS = new Set([')))
+    expect(allow).toContain("'follower.trigger.deliver'")
+    expect(src).toContain("case 'follower.trigger.deliver': return daemonCommands.run(")
+    expect(src).toMatch(/followerTriggers\.deliver\(\{ home: spec\.home, triggerId: id, taskId: spec\.taskId, text(: text)?, messageId(: messageId)? \}\)/)
+    expect(src).not.toMatch(/offlineHost\.deliverTrigger\(spec\.home/)
+    expect(src).toContain('followerTriggers.dropSocket(ws)')
+    // The follower's answer goes to the core from the socket it came on (through the follower entry).
+    expect(src).toMatch(/triggerAnswer: (\(ws, cmd\) => |function \(ws, cmd\) \{ return )followerTriggers\.answer\(ws, cmd\)/)
+    expect(src).toMatch(/followerEntry\.triggerDeliver\(ws, cmd\)/)
+    expect(src).toMatch(/deliversTriggers === true \? (ws|f) : null/)
+    expect(src).toMatch(/mayWrite: (\(home\) => |function \(home\) \{ return )followerEntry\.mayWrite\(home\)/)
+    expect(src).toContain('offlineHost.deliverTriggerTo(fire.home, fire.taskId, target, fire.text, fire.messageId)')
+    expect(src).toContain('offlineHost.liveSessionsOf(home)')
+    // The fallback is counted with the gateway's own answers.
+    expect(src).toContain("followerGateway.noteOwnAnswer('trigger_delivery', 'handed_back')")
+    expect(src).toContain('triggerTarget: pickHostTriggerTarget,')
   })
 
   it('the capability is advertised, and both cores are in the version hash list and the binary build list', () => {
@@ -257,23 +249,6 @@ describe('follower trigger delivery twin wiring', () => {
       expect(read('src/providers/daemon-version-check.ts')).toContain(`'${f}'`)
       expect(read('scripts/build-daemon.sh')).toContain(f)
     }
-    expect(standalone).toContain("from './follower-trigger-delivery-core.js'")
-  })
-
-  it('the source twin carries both inlined, and the inlined text runs alone', async () => {
-    const generated = getDaemonSource()
-    expect(generated).not.toContain('__CREATE_FOLLOWER_TRIGGER_DELIVERY__')
-    expect(generated).not.toContain('__PICK_HOST_TRIGGER_TARGET__')
-    expect(generated).toContain('var followerTriggers = (')
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const make = new Function(`"use strict"; return (${createFollowerTriggerDelivery.toString()})`)() as typeof createFollowerTriggerDelivery
-    const h = harness({ make })
-    const result = h.d.deliver(FIRE)
-    await h.d.answer(h.sock, { deliveryId: 'td-1', sid: 's-live' })
-    expect(await result).toEqual({ ok: true, sid: 's-live' })
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const pick = new Function(`"use strict"; return (${pickHostTriggerTarget.toString()})`)() as typeof pickHostTriggerTarget
-    expect(pick({ phase: 'WAITING', session_id: 'b' }, [{ sid: 'a', live: false }, { sid: 'b', live: false }], { resume: true })).toEqual({ ok: true, sid: 'b', resume: true })
-    await tick()
+    expect(src).toContain("from './follower-trigger-delivery-core.js'")
   })
 })

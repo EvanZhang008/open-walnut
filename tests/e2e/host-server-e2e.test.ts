@@ -1,7 +1,7 @@
 /**
  * A host server end to end (docs/plan/walnut-servers-everywhere.md, "A server on
- * a host" and "One kind of link"), without SSH: a real daemon (the source twin,
- * a process), the real host server program (in this process), and stand-ins for
+ * a host" and "One kind of link"), without SSH: a real daemon (the standalone,
+ * a process under bun), the real host server program (in this process), and stand-ins for
  * the Mac and the companion that link to the daemon the way the real ones do.
  *
  *   browser ──► host server public port ─┐ follower link (loopback)
@@ -45,12 +45,13 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { startHostServer, type HostServer } from '../../src/host-server/main.js'
 import { StreamLane, type LaneForward } from '../../src/providers/stream-lane.js'
 
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 const HOME = '/fixture/mac-home'
 const WALNUT = 'wmachostsrv1'
 
@@ -312,9 +313,7 @@ async function setup(program: Program): Promise<void> {
     WALNUT_SPAWN_JOURNAL: path.join(daemonDir, 'spawn-journal.jsonl'),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  const script = path.join(daemonDir, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')) && fs.existsSync(path.join(daemonDir, 'daemon.pid')), 60_000, 'daemon')
   daemonPid = Number(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf8'))
@@ -347,7 +346,7 @@ async function teardown(): Promise<void> {
   fs.rmSync(base, { recursive: true, force: true })
 }
 
-describe.each(PROGRAMS)('%s, linked to its daemon only', (program) => {
+describe.skipIf(!BUN).each(PROGRAMS)('%s, linked to its daemon only', (program) => {
   beforeAll(() => setup(program), 180_000)
   afterAll(teardown, 60_000)
 

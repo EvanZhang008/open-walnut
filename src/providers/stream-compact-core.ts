@@ -34,10 +34,7 @@
  * exactly the output, so the server knows the new epoch holds the same turns,
  * not a new incarnation that ran one.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createStreamCompact;
- * daemon-source.ts inlines `createStreamCompact.toString()` through
- * `__CREATE_STREAM_COMPACT__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createStreamCompact). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface StreamCompactDeps {

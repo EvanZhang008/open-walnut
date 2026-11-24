@@ -1,5 +1,5 @@
 /**
- * Clock routines (clock-routine-v1) on a REAL daemon, both twins: a routine whose
+ * Clock routines (clock-routine-v1) on a REAL standalone daemon: a routine whose
  * work runs on this host keeps its clock in the daemon, fires on the schedule and
  * is delivered into the task's live session here while no server is connected.
  *
@@ -18,21 +18,18 @@
  * replay, a claim) and never starts it again, and a daemon that dies between the CLI
  * and the records starts nothing twice.
  *
- * What's real: the daemon process (source twin under node with its trigger
- * sidecar bundled into its dir; standalone twin under bun), the state files, a
+ * What's real: the daemon process (daemon-standalone.ts under bun), the state files, a
  * mock CLI reading its FIFO. The Walnut server is a bare WS client. Every daemon
  * is stopped by the pid it wrote into its own temp dir, every mock CLI by the pid it
  * recorded.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { buildRoutineSpawnTemplate } from '../../src/providers/spawn-template.js'
@@ -49,10 +46,7 @@ const GRACE_MS = 1_500
 const HOUR = 3_600_000
 const PROMPT = 'Write the daily digest for the team. é中'
 
-const bunPath = (() => {
-  for (const p of [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) if (p && fs.existsSync(p)) return p
-  try { return execFileSync('which', ['bun'], { encoding: 'utf8' }).trim() || null } catch { return null }
-})()
+const BUN: string | undefined = testBun()
 
 /** The mock CLI: every user message it reads lands in its inbox file. */
 const MOCK_CLI = `
@@ -89,8 +83,8 @@ async function waitFor(cond: () => boolean, ms: number, label: string): Promise<
   }
 }
 
-async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string, extraEnv: Record<string, string> = {}): Promise<Daemon> {
-  const dir = reuseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), `walnut-clock-${twin}-`))
+async function spawnDaemon(reuseDir?: string, extraEnv: Record<string, string> = {}): Promise<Daemon> {
+  const dir = reuseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-clock-'))
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -105,21 +99,10 @@ async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string, ext
   delete env.WALNUT_DAEMON_STATE_DIR; delete env.WALNUT_JOURNAL_DIR
   // A run from inside a Walnut session inherits its API root and gateway: none may reach these daemons.
   delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    buildSync({
-      entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-    })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   return {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -181,7 +164,7 @@ function slice(): HostSlice {
   }
 }
 
-describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)('clock routines on the real %s daemon', (twin) => {
+describe.skipIf(!BUN)('clock routines on the real standalone daemon', () => {
   let d: Daemon
   let inbox: string
   const T0 = Date.now()
@@ -226,7 +209,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
   }
 
   beforeAll(async () => {
-    d = await spawnDaemon(twin)
+    d = await spawnDaemon()
     inbox = path.join(d.dir, 'inbox.jsonl')
     const mock = path.join(d.dir, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
@@ -368,7 +351,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     await stopDaemon(d)
     const digestSeq = (JSON.parse(fs.readFileSync(path.join(d.dir, 'trigger-state', `${DIGEST}.json`), 'utf8')) as { seq: number }).seq
     await waitFor(() => Date.now() > Date.parse(onceAt) + 500, 60_000, 'the one-shot slot to pass')
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
     // The boot delay, then one run of the missed one-shot; the digest's slot is still ahead.
     await waitFor(() => { try { return stateOf(ONCE).seq === 1 } catch { return false } }, 40_000, 'the missed one-shot to run')
     await sleep(GRACE_MS + 6_000)
@@ -378,7 +361,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect(once.pendingFires[0].clock).toEqual({ slotMs: Date.parse(onceAt), fromMs: Date.parse(onceAt) })
     expect(stateOf(DIGEST).seq).toBe(digestSeq)
     await stopDaemon(d)
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
     await sleep(15_000 + GRACE_MS + 6_000)
     expect(stateOf(ONCE).seq).toBe(1)
     expect(stateOf(DIGEST).seq).toBe(digestSeq)
@@ -394,7 +377,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
     expect((reply.released as Array<Record<string, unknown>>).find((r) => r.id === OWED)).toMatchObject({ id: OWED, pending: 1 })
     await server.close()
     await stopDaemon(d)
-    d = await spawnDaemon(twin, d.dir)
+    d = await spawnDaemon(d.dir)
     // The one-shot that ran after the last restart was never acked either: it drains too.
     expect(triggersFile().draining?.map((t) => t.id).sort()).toEqual([ONCE, OWED].sort())
     server = await FakeServer.connect(d.port)
@@ -458,7 +441,7 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
-describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)('a claude-code routine run the real %s daemon starts itself', (twin) => {
+describe.skipIf(!BUN)('a claude-code routine run the real standalone daemon starts itself', () => {
   const ROUTINE = 'mclockr0-e5e5'
   const WALNUT = 'wwalnuthome01'
   const MESSAGE = 'Build the nightly and report. é中'
@@ -506,12 +489,12 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
 
   /** A daemon with the Mac's routine template and the routine's clock, and no server connected. */
   async function setUp(name: string, extraEnv: Record<string, string> = {}) {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-rstart-${twin}-${name}-`))
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-rstart-${name}-`))
     bases.push(base)
     const cwd = path.join(base, 'repo')
     fs.mkdirSync(cwd)
     const m = routineMock(base)
-    const d = await spawnDaemon(twin, path.join(base, 'daemon'), extraEnv)
+    const d = await spawnDaemon(path.join(base, 'daemon'), extraEnv)
     const mac = await macConnects(d)
     const hello = await mac.cmd({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toContain('clock-host-start-v1')
@@ -582,12 +565,12 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
   }, 120_000)
 
   it('a server that answers takes the run itself: the host starts nothing', async () => {
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-rstart-${twin}-mac-`))
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-rstart-mac-'))
     bases.push(base)
     const cwd = path.join(base, 'repo')
     fs.mkdirSync(cwd)
     const m = routineMock(base)
-    const d = await spawnDaemon(twin, path.join(base, 'daemon'))
+    const d = await spawnDaemon(path.join(base, 'daemon'))
     try {
       const mac = await macConnects(d)
       const template = buildRoutineSpawnTemplate({ home: HOME, hostKey: 'devbox', cliCommand: m.mock, env: {} })
@@ -615,14 +598,14 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
       const [call] = lines<{ pid: number; sid: string }>(path.join(m.out, 'calls.jsonl'))
       expect(alive(call.pid)).toBe(true)
       for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(d.dir, f)) } catch { /* gone */ } }
-      d = await spawnDaemon(twin, d.dir)
+      d = await spawnDaemon(d.dir)
       // Past the boot, the grace and a tick: the run is marked as started, from its journaled session.
       await waitFor(() => { try { return !!stateIn(d.dir).pendingFires[0]?.host } catch { return false } }, 40_000, 'the started mark after the restart')
       expect(stateIn(d.dir).pendingFires[0].host).toMatchObject({ sessionId: call.sid, started: true })
       await sleep(GRACE_MS + 4_000)
       // One more boot: still nothing new.
       await stopDaemon(d)
-      d = await spawnDaemon(twin, d.dir)
+      d = await spawnDaemon(d.dir)
       await sleep(GRACE_MS + 8_000)
       expect(lines(path.join(m.out, 'calls.jsonl'))).toHaveLength(1)
       const mac = await macConnects(d)
@@ -646,7 +629,7 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
       const [call] = lines<{ pid: number; sid: string }>(path.join(m.out, 'calls.jsonl'))
       for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(d.dir, f)) } catch { /* gone */ } }
       // A long grace: the host does not get to mark the run itself before the server claims it.
-      d = await spawnDaemon(twin, d.dir, { WALNUT_TRIGGER_HOST_GRACE_MS: '120000' })
+      d = await spawnDaemon(d.dir, { WALNUT_TRIGGER_HOST_GRACE_MS: '120000' })
       expect(stateIn(d.dir).pendingFires[0].host).toBeUndefined()
       const mac = await macConnects(d)
       await mac.cmd({ cmd: 'triggers.configure', config: { version: 1, triggers: [routineDef(cwd)] } })

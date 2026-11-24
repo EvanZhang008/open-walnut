@@ -1,6 +1,6 @@
 /**
  * fs.find over the default transcripts root walks the daemon's own
- * CLAUDE_CONFIG_DIR too, on both daemon twins.
+ * CLAUDE_CONFIG_DIR too, on the session daemon (daemon-standalone.ts).
  *
  * Every CLI a daemon spawns inherits its env, so with CLAUDE_CONFIG_DIR set the
  * transcripts live in $CLAUDE_CONFIG_DIR/projects, while a server that does not
@@ -18,27 +18,19 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-find-cfgdir-')))
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const TWINS: Array<{ name: string; command: [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: [BUN, [STANDALONE, '--start']] as [string, string[]] }] : []),
-]
 
 interface Daemon { proc: ChildProcess; ws: WebSocket }
 const daemons: Daemon[] = []
 let rpcId = 1
 
-async function boot(command: [string, string[]], name: string, home: string, configDir: string): Promise<Daemon> {
+async function boot(name: string, home: string, configDir: string): Promise<Daemon> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -52,7 +44,7 @@ async function boot(command: [string, string[]], name: string, home: string, con
     WALNUT_SPAWN_JOURNAL: path.join(root, name, 'spawn-journal.jsonl'),
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
-  const proc = spawn(command[0], command[1], { env, stdio: ['ignore', 'pipe', 'ignore'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     let out = ''
@@ -110,15 +102,15 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true })
 }, 60_000)
 
-describe.each(TWINS)('fs.find default root under CLAUDE_CONFIG_DIR: $name', ({ name, command }) => {
-  const slug = name.replace(/\W+/g, '-')
+describe.skipIf(!BUN)('fs.find default root under CLAUDE_CONFIG_DIR: standalone daemon (bun)', () => {
+  const slug = 'standalone'
 
   it('finds a transcript in the config dir and in ~/.claude; an explicit root walks only itself', async () => {
     const home = path.join(root, slug, 'home')
     const configDir = path.join(root, slug, 'claude-config')
     const inConfig = writeTranscript(path.join(configDir, 'projects'), 'sid-in-config')
     const inHome = writeTranscript(path.join(home, '.claude', 'projects'), 'sid-in-home')
-    const d = await boot(command, slug, home, configDir)
+    const d = await boot(slug, home, configDir)
 
     expect(await rpc(d, { cmd: 'fs.find', path: '~/.claude/projects', name: 'sid-in-config.jsonl', maxDepth: 3 })).toMatchObject({ ok: true, files: [inConfig] })
     // No path: the same default root.
@@ -135,7 +127,7 @@ describe.each(TWINS)('fs.find default root under CLAUDE_CONFIG_DIR: $name', ({ n
     const inHome = writeTranscript(path.join(realClaude, 'projects'), 'sid-linked')
     const link = path.join(root, slug + '-link', 'config-link')
     fs.symlinkSync(realClaude, link)
-    const d = await boot(command, slug + '-link', home, link)
+    const d = await boot(slug + '-link', home, link)
     const found = await rpc(d, { cmd: 'fs.find', path: '~/.claude/projects', name: 'sid-linked.jsonl', maxDepth: 3 })
     expect(found.ok).toBe(true)
     expect(found.files).toHaveLength(1)

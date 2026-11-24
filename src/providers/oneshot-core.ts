@@ -27,9 +27,7 @@
  * - cancel: signal one run. dropClient: the socket that owned runs closed, so
  *   nobody reads them any more: they are killed. disposeAll: shutdown.
  *
- * How each twin gets it: daemon-standalone.ts imports createOneShotCore;
- * daemon-source.ts inlines `createOneShotCore.toString()` through
- * `__CREATE_ONESHOT__`. So the factory body references NOTHING at module scope:
+ * Imported by daemon-standalone.ts (createOneShotCore). The factory body references NOTHING at module scope:
  * every capability comes from `deps`, and it carries no backticks. The server
  * runs the same factory in-process when the local daemon is older than
  * 'oneshot-v1' (src/providers/oneshot-client.ts).

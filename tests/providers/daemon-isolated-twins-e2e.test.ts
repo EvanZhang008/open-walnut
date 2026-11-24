@@ -1,6 +1,6 @@
 /**
  * A test server's isolated daemon on a remote host (src/providers/remote-isolation.ts),
- * both daemon twins booted for real:
+ * the session daemon (daemon-standalone.ts) booted for real under bun:
  *   - its hello says which Walnut it is: its dir, and the test server's key;
  *   - a daemon named for a test server refuses to start in a production daemon dir;
  *   - with no server socket for its lease it ends itself and removes its own root
@@ -10,37 +10,22 @@
  * ~/.cache/open-walnut (never the real /tmp/open-walnut), every isolated root uses a
  * key made for this run, and every daemon is SIGKILLed after its test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { isolatedDaemonEnv, isolatedLayout, ISOLATED_TMP_PREFIX } from '../../src/providers/remote-isolation.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 const cleanup: string[] = []
-
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-isolated-twins-src-'))
-  cleanup.push(dir)
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
 
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
@@ -53,7 +38,7 @@ afterEach(async () => {
     })
   }
   proc = null
-  for (const d of cleanup.splice(1)) fs.rmSync(d, { recursive: true, force: true })
+  for (const d of cleanup.splice(0)) fs.rmSync(d, { recursive: true, force: true })
 })
 
 function tempHome(): string {
@@ -67,9 +52,8 @@ function freshKey(): string {
   return crypto.randomBytes(8).toString('hex')
 }
 
-function launch(twin: Twin, env: Record<string, string>): ChildProcess {
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, {
+function launch(env: Record<string, string>): ChildProcess {
+  proc = spawn(BUN!, [STANDALONE, '--start'], {
     env: { ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_LEGACY_STREAMS_DIR: '/nonexistent-walnut-legacy-streams', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -113,22 +97,21 @@ function exitOf(p: ChildProcess, ms: number): Promise<number | null | 'running'>
   })
 }
 
-describe.each(TWINS)('isolated daemon: $name', (twin) => {
+describe.skipIf(!BUN)('isolated daemon: standalone daemon (bun)', () => {
   it('says its dir and the test server it serves in its hello; a plain daemon names no test server', async () => {
     const home = tempHome()
     const key = freshKey()
     const root = path.join(home, 'iso-root')
     const env = isolatedDaemonEnv(root, key)
-    const port = await portOf(launch(twin, { HOME: home, ...env, WALNUT_DAEMON_ORPHAN_EXIT_MS: '' }))
+    const port = await portOf(launch({ HOME: home, ...env, WALNUT_DAEMON_ORPHAN_EXIT_MS: '' }))
     const res = await hello(port)
     expect(res).toMatchObject({ ok: true, dir: isolatedLayout(root).daemonDir, isolatedFor: key })
-    // The source twin learns its task dir root from the task-dir sidecar a deploy uploads; this test ships none.
-    if (twin.name.startsWith('standalone') || res.taskDirRoot !== undefined) expect(res.taskDirRoot).toBe(isolatedLayout(root).taskDirRoot)
+    expect(res.taskDirRoot).toBe(isolatedLayout(root).taskDirRoot)
     ws?.close(); proc?.kill('SIGKILL'); await exitOf(proc!, 3000)
 
     // The same daemon without the key: its hello names no test server.
     const plainDir = path.join(home, 'plain', 'daemon')
-    const port2 = await portOf(launch(twin, { HOME: home, WALNUT_DAEMON_DIR: plainDir, WALNUT_STREAMS_DIR: plainDir + '-streams' }))
+    const port2 = await portOf(launch({ HOME: home, WALNUT_DAEMON_DIR: plainDir, WALNUT_STREAMS_DIR: plainDir + '-streams' }))
     const res2 = await hello(port2)
     expect(res2).toMatchObject({ ok: true, dir: plainDir })
     expect(res2).not.toHaveProperty('isolatedFor')
@@ -136,9 +119,9 @@ describe.each(TWINS)('isolated daemon: $name', (twin) => {
 
   it('refuses to start in a production daemon dir', async () => {
     const home = tempHome()
-    // $HOME/.cache/open-walnut is a production dir to both twins (the remote home fallback).
+    // $HOME/.cache/open-walnut is a production dir to the daemon (the remote home fallback).
     const prod = path.join(home, '.cache', 'open-walnut')
-    const p = launch(twin, { HOME: home, WALNUT_DAEMON_DIR: prod, WALNUT_STREAMS_DIR: path.join(home, 'streams'), WALNUT_DAEMON_ISOLATED_FOR: freshKey() })
+    const p = launch({ HOME: home, WALNUT_DAEMON_DIR: prod, WALNUT_STREAMS_DIR: path.join(home, 'streams'), WALNUT_DAEMON_ISOLATED_FOR: freshKey() })
     let err = ''
     p.stderr?.on('data', (c) => { err += c.toString() })
     const code = await exitOf(p, 20_000)
@@ -157,7 +140,7 @@ describe.each(TWINS)('isolated daemon: $name', (twin) => {
     fs.mkdirSync(neighbour)
     fs.writeFileSync(path.join(neighbour, 'keep.txt'), 'x')
     const env = { ...isolatedDaemonEnv(root, key), WALNUT_DAEMON_ORPHAN_EXIT_MS: '1500', WALNUT_DAEMON_HEARTBEAT_MS: '300' }
-    const p = launch(twin, { HOME: home, ...env })
+    const p = launch({ HOME: home, ...env })
     await portOf(p)
     expect(fs.existsSync(isolatedLayout(root).daemonDir)).toBe(true)
     // No socket connects: the lease runs out.
@@ -173,7 +156,7 @@ describe.each(TWINS)('isolated daemon: $name', (twin) => {
     const root = `${ISOLATED_TMP_PREFIX}${key}`
     cleanup.push(root)
     const env = { ...isolatedDaemonEnv(root, key), WALNUT_DAEMON_ORPHAN_EXIT_MS: '1500', WALNUT_DAEMON_HEARTBEAT_MS: '300' }
-    const p = launch(twin, { HOME: home, ...env })
+    const p = launch({ HOME: home, ...env })
     await hello(await portOf(p))
     expect(await exitOf(p, 3500)).toBe('running')
     expect(fs.existsSync(isolatedLayout(root).daemonDir)).toBe(true)

@@ -14,8 +14,7 @@
  *                                      would wake (noResume); a slot on another host is the
  *                                      server's to wake
  *
- * A self-contained function: daemon-source.ts inlines `pickHostTriggerTarget.toString()`,
- * so its body references NOTHING at module scope (types are erased).
+ * A self-contained function: its body references NOTHING at module scope (types are erased).
  */
 
 export interface HostTriggerTask { phase?: string; session_id?: string }

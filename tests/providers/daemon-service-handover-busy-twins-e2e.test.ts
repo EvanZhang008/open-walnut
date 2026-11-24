@@ -1,5 +1,5 @@
 /**
- * The service install's handover request against a real daemon that is busy, on BOTH twins.
+ * The service install's handover request against a real daemon that is busy (daemon-standalone.ts under bun).
  *
  * 2026-11-02 (Fresh Mac join, existing Mac): right after an older Walnut's server started, it
  * kept its daemon busy, the daemon refused the install's handover ("Daemon has active operations;
@@ -10,7 +10,7 @@
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the commands it runs are
  * `sleep`, `cat` of a FIFO it made and `mkfifo`; the only signals are signal 0 and SIGTERM to the
- * daemon this file started, SIGKILL to it after each twin, and SIGKILL to the process group of a
+ * daemon this file started, SIGKILL to it after each test, and SIGKILL to the process group of a
  * run this file started (its pid recorded by the run itself) when that run still lives at the end.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
@@ -19,34 +19,18 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { daemonInstallRoot } from '../../src/providers/daemon-service-config.js'
 import { requestDaemonServiceHandover } from '../../src/providers/daemon-service-cli.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-handover-busy-twins-')))
 afterAll(() => { if (root.includes('walnut-handover-busy-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
-/** What a resumable run's log ends with when the daemon stops (RESUMABLE_RUN_ENDED in both twins). */
+/** What a resumable run's log ends with when the daemon stops (RESUMABLE_RUN_ENDED). */
 const RESUMABLE_NOTE = '[walnut] the daemon on this host stopped (an update or a restart); this run was marked resumable, so run it again to go on waiting.'
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed: the handover needs the cron runtime.
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core', 'daemon-cron-runtime']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  ...(BUN ? [{ name: `source twin (${SOURCE_TWIN.runtime})`, command: (): [string, string[]] => [SOURCE_TWIN.file, [scriptPath, '--start']] }] : []),
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -62,7 +46,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ home: string; daemonDir: string }> {
+async function boot(dir: string): Promise<{ home: string; daemonDir: string }> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const daemonDir = path.join(dir, 'daemon')
@@ -73,8 +57,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ home: 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -124,10 +107,10 @@ function alive(pid: number): boolean {
   try { return !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')) } catch { return true }
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('waits out a running command, then hands over and the daemon exits', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    const { home, daemonDir } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    const { home, daemonDir } = await boot(dir)
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     const stateDir = daemonInstallRoot(platform, home)
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
@@ -157,8 +140,8 @@ describe.each(TWINS)('$name', (twin) => {
   it('a background host_exec run holds the handover until it ends, and hello counts it', async () => {
     // 2026-11-03: a deploy updated a Mac's daemon under an iOS test run started in the
     // background through host_exec; the run ended with the old daemon.
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-bg')
-    const { home, daemonDir } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-bg')
+    const { home, daemonDir } = await boot(dir)
     const stateDir = daemonInstallRoot(process.platform === 'darwin' ? 'darwin' : 'linux', home)
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
     fs.chmodSync(stateDir, 0o700)
@@ -179,8 +162,8 @@ describe.each(TWINS)('$name', (twin) => {
 
   it('a resumable run (it only waits; its caller runs it again) does not hold the handover, and its log says to run it again (2026-11-17)', async () => {
     // A chain of 2-hour waits on one host kept its daemon about 3 h behind production.
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-resumable')
-    const { home, daemonDir } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-resumable')
+    const { home, daemonDir } = await boot(dir)
     const stateDir = daemonInstallRoot(process.platform === 'darwin' ? 'darwin' : 'linux', home)
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
     fs.chmodSync(stateDir, 0o700)
@@ -200,8 +183,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 
   it('a detached run holds no update for a server that knows it, but an older server waits for it (its daemon cannot follow it: 2026-11-21 rollback rehearsal)', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-detached')
-    const { home } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-detached')
+    const { home } = await boot(dir)
     prepState(home)
     const taskId = 'handover-detached-task'
     const started = await rpc({ cmd: 'exec.run', jobId: 'hx-handover-det', taskId, command: 'sleep 60', cwd: '~', background: true, endGroup: true, detach: true, caller: { task: taskId, host: 'devbox' } })
@@ -212,8 +195,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 
   it('a resumable run beside one that is not: the handover is refused, and the resumable one is not ended', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-mixed')
-    const { home } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-mixed')
+    const { home } = await boot(dir)
     const stateDir = prepState(home)
     const taskId = 'handover-mixed-task'
     const run = (jobId: string, resumable: boolean) => rpc({ cmd: 'exec.run', jobId, taskId, command: 'sleep 60', cwd: '~', background: true, ...(resumable ? { resumable: true } : {}), caller: { task: taskId, host: 'devbox' } })
@@ -232,8 +215,8 @@ describe.each(TWINS)('$name', (twin) => {
   it('a waiting read of a resumable run does not hold the handover, and no run starts while it drains', async () => {
     // The caller of a resumable run reads it with long waits, almost always in flight: had that read
     // held the pause ("has active operations"), the update would still wait out the overdue bound.
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-drain')
-    const { home } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-drain')
+    const { home } = await boot(dir)
     const stateDir = prepState(home)
     const taskId = 'handover-drain-task'
     const started = await rpc({ cmd: 'exec.run', jobId: 'hx-drain-wait', taskId, command: 'sleep 60', cwd: '~', background: true, resumable: true, caller: { task: taskId, host: 'devbox' } })
@@ -267,8 +250,8 @@ describe.each(TWINS)('$name', (twin) => {
   it('a SIGTERM stop ends a resumable run with its note and leaves the others running, as before', async () => {
     // The unmanaged stop path (stopUnmanagedDaemon, a service restart): runs are their own process
     // groups, so a resumable waiter would outlive the daemon with no deadline.
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-sigterm')
-    const { home } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-sigterm')
+    const { home } = await boot(dir)
     const taskId = 'sigterm-task'
     const pidOf = (name: string) => path.join(home, `${name}.pid`)
     const run = (jobId: string, resumable: boolean) => rpc({ cmd: 'exec.run', jobId, taskId, command: `echo $$ > '${pidOf(jobId)}'; exec sleep 60`, cwd: '~', background: true, ...(resumable ? { resumable: true } : {}), caller: { task: taskId, host: 'devbox' } })

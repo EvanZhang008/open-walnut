@@ -16,7 +16,13 @@ import path from 'node:path'
 import { DaemonConnection, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
-import { EXPECTED, OLD, TARGET, priv, state, probe, stub, destructive, type Routes } from '../helpers/daemon-connection-update-stubs.js'
+import { EXPECTED, OLD, TARGET, priv, state, probe, stub as baseStub, destructive, type Routes } from '../helpers/daemon-connection-update-stubs.js'
+
+/** The shared stub, for a host whose daemon is the compiled one (what this leader deploys and starts). */
+const stub: typeof baseStub = (c, routes) => {
+  if ((c as unknown as { _runtime?: unknown })._runtime == null) (c as unknown as { _runtime: unknown })._runtime = 'binary'
+  return baseStub(c, routes)
+}
 
 let conns: DaemonConnection[] = []
 function make(): DaemonConnection {
@@ -41,7 +47,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
     const lost = vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { priv(c).setConnected(false) })
-    state(c)._runtime = 'node'
+    state(c)._runtime = 'binary'
     state(c)._connected = true
     state(c)._daemonVersion = OLD
     await priv(c).recheckPostponedUpgrade()
@@ -68,11 +74,11 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     vi.spyOn(log.session, 'info').mockImplementation(() => {})
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
-    state(c)._runtime = 'node'
+    state(c)._runtime = 'binary'
     state(c)._connected = true
     state(c)._daemonVersion = OLD
     // OLD replaced the build before it two minutes ago, and its probation runs.
-    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now() - 120_000, stopped: true }
+    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now() - 120_000, stopped: true }
     state(c)._replacing = { expected: OLD, dir: state(c)._remoteDir, at: Date.now() - 120_000, started: { pid: 4242, at: Date.now() - 120_000 } }
     const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
     await priv(c).recheckPostponedUpgrade()
@@ -92,7 +98,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     vi.spyOn(priv(c), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
     const start = vi.spyOn(priv(c), 'startDaemon').mockResolvedValue(32300)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('binary')
+    expect(start).toHaveBeenCalledWith()
     expect(seen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
     state(c)._connected = true
     state(c)._daemonVersion = OLD
@@ -116,7 +122,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     const fresh = vi.spyOn(priv(c), 'deployAndStartNew').mockResolvedValue(32400)
     const start = vi.spyOn(priv(c), 'startDaemon').mockResolvedValue(32300)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('binary')
+    expect(start).toHaveBeenCalledWith()
     expect(fresh).not.toHaveBeenCalled()
     expect(state(c)._runtime).toBe('binary')
     // The old one does not start (its files are gone): the build is deployed as before.
@@ -166,7 +172,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     vi.spyOn(log.session, 'error').mockImplementation(() => {})
     vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
     const lost = vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { priv(c).setConnected(false) })
-    state(c)._runtime = 'node'
+    state(c)._runtime = 'binary'
     state(c)._connected = true
     state(c)._daemonVersion = OLD
     return { seen, lost }
@@ -184,14 +190,14 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     await priv(c).recheckPostponedUpgrade()
     const keep = seen.find((cmd) => cmd.includes('walnut-previous-kept'))!
     expect(keep).toContain(`v='${OLD}'`)
-    expect(keep).toContain('for f in "$d/daemon.cjs"; do [ -f "$f" ] && grep -qF "$v" "$f"')
+    expect(keep).toContain('for f in "$d/daemon-linux-x64" "$d/daemon-linux-arm64"; do [ -f "$f" ] && grep -qF "$v" "$f"')
     expect(keep).toContain('walnut-previous-not-running')
   })
 
   // 2026-11-04 review: the stop did not depend on a copy having been kept: an SSH error or the
   // keep's 120 s timeout read as nothing to keep, and the update still staged, trialled and stopped.
   it.each([
-    ['the keep fails or times out (no answer)', { keep: '' }, 'node'],
+    ['the keep fails or times out (no answer)', { keep: '' }, 'binary'],
     ['the runtime is not known', {}, 'unknown'],
   ] as const)('no copy kept because %s: nothing is staged or stopped, and it is asked again later', async (_what, routes, runtime) => {
     const c = make()
@@ -220,14 +226,14 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     const { seen } = unmanagedOnOld(c)
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
-    vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); clock += 11 * 60_000; return 'node' })
+    vi.spyOn(priv(c), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); clock += 11 * 60_000 })
     await priv(c).recheckPostponedUpgrade()
     expect(seen.some((cmd) => cmd.includes('walnut-daemon-stop-confirmed'))).toBe(true)
     clock += 60_000
     vi.spyOn(priv(c), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
     const start = vi.spyOn(priv(c), 'startDaemon').mockResolvedValue(32300)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-    expect(start).toHaveBeenCalledWith('node')
+    expect(start).toHaveBeenCalledWith()
     expect(seen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
   })
 
@@ -247,7 +253,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
       vi.spyOn(priv(second), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
       const start = vi.spyOn(priv(second), 'startDaemon').mockResolvedValue(32300)
       await expect(priv(second).deployAndStart()).resolves.toBe(32300)
-      expect(start).toHaveBeenCalledWith('node')
+      expect(start).toHaveBeenCalledWith()
       expect(again.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
       expect(state(second)._realDirFail).toMatchObject({ expected: EXPECTED })
       // Used once: the record is gone from the disk too.
@@ -268,7 +274,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
       vi.spyOn(priv(fourth), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
       const back = vi.spyOn(priv(fourth), 'startDaemon').mockResolvedValue(32300)
       await expect(priv(fourth).deployAndStart()).resolves.toBe(32300)
-      expect(back).toHaveBeenCalledWith('node')
+      expect(back).toHaveBeenCalledWith()
       expect(fourthSeen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
     } finally {
       delete process.env.WALNUT_UPDATE_PENDING_FILE
@@ -296,7 +302,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
       vi.spyOn(priv(second), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
       const start = vi.spyOn(priv(second), 'startDaemon').mockResolvedValue(32300)
       await expect(priv(second).deployAndStart()).resolves.toBe(32300)
-      expect(start).toHaveBeenCalledWith('node')
+      expect(start).toHaveBeenCalledWith()
       expect(again.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
     } finally {
       delete process.env.WALNUT_UPDATE_PENDING_FILE
@@ -336,7 +342,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
       expect(state(c)._replacing).toMatchObject({ started: { pid: 7001 } })
       const start = vi.spyOn(priv(c), 'startDaemon').mockResolvedValue(32300)
       await expect(priv(c).deployAndStart()).resolves.toBe(32300)
-      expect(start).toHaveBeenCalledWith('node')
+      expect(start).toHaveBeenCalledWith()
       expect(fresh).toHaveBeenCalledTimes(1)
       expect(seen.some((cmd) => cmd.includes('walnut-previous-restored'))).toBe(true)
       expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, reason: expect.stringMatching(/stopped within \d+ s after it started on the real dir/) })
@@ -425,7 +431,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
   it('a build that did not start on the real dir is not tried again, past the cooldown, until a newer build comes', async () => {
     const c = make()
     const { seen } = unmanagedOnOld(c)
-    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
     vi.spyOn(priv(c), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
     vi.spyOn(priv(c), 'startDaemon').mockResolvedValue(32300)
     await expect(priv(c).deployAndStart()).resolves.toBe(32300)
@@ -456,7 +462,7 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
       seen.push('RESTORE')
       return o.restore
     })
-    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
     vi.spyOn(priv(c), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
     vi.spyOn(priv(c), 'startDaemon').mockRejectedValue(new Error('old start failed'))
     await expect(priv(c).deployAndStart()).rejects.toThrow()

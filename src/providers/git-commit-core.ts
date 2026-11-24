@@ -21,10 +21,7 @@
  * Long operations (hooks can run minutes) are JOBS: start answers at once, the
  * caller polls `job(id)`. One job per repository at a time.
  *
- * How each twin gets it: daemon-standalone.ts imports createGitCommitCore;
- * daemon-source.ts inlines `createGitCommitCore.toString()` through
- * `__CREATE_GIT_COMMIT__`. So the factory body references NOTHING at module
- * scope: every helper lives inside it, every capability comes from `deps`, and
+ * Imported by daemon-standalone.ts (createGitCommitCore). The factory body references NOTHING at module scope: every helper lives inside it, every capability comes from `deps`, and
  * it carries no backticks.
  */
 

@@ -1,14 +1,13 @@
 /**
  * A host reads its own copy of the notes, memory and skills while the Walnut
- * server cannot answer, on REAL daemon processes (docs/plan/walnut-control-plane.md).
+ * server cannot answer, on a REAL standalone daemon process (docs/plan/walnut-control-plane.md).
  *
  *   this process (the primary: the REAL core/host-replica.ts push, a gateway
- *   answerer) ══ freezable TCP proxy ══► daemon (source twin, node) ── session S
- *                                     ╚═► daemon (standalone twin, bun) ── session S2
+ *   answerer) ══ freezable TCP proxy ══► daemon (daemon-standalone.ts, bun) ── session S
  *
  * The proxy is how a Mac falls asleep: frozen, the socket stays open and
  * nothing crosses it either way, so the daemon's keepalive counts missed beats,
- * exactly as with a closed lid. What's real: both twins, their copies on disk,
+ * exactly as with a closed lid. What's real: the daemon, its copy on disk,
  * the agent-gateway socket as the `walnut` CLI speaks it, the replica protocol,
  * the read fallback. The sessions are a mock CLI. What's not here: the real
  * Walnut server (tests/e2e/leader-takeover-live-e2e.test.ts).
@@ -35,8 +34,6 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 
 import crypto from 'node:crypto'
 import { NOTES_DIR, MEMORY_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { syncHostReplica, forgetHostReplica, sha12 } from '../../src/core/host-replica.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
@@ -47,6 +44,9 @@ const ROOT = path.resolve(import.meta.dirname, '../..')
 const BEAT = 600
 const GATEWAY_TIMEOUT = 3_000
 const BUN: string | undefined = testBun()
+/** The host's key: the name its copy and its slice go by. */
+const HOST = 'devbox'
+const SID = 'bbbbbbbb-2222-4222-8222-222222222222'
 
 const MOCK_CLI = `
 const sid = process.argv[2]
@@ -93,7 +93,7 @@ function freezableProxy(targetPort: number) {
   }
 }
 
-interface Daemon { twin: 'source' | 'standalone'; proc: ChildProcess; dir: string; port: number; sock: string; pid: number; sid: string }
+interface Daemon { proc: ChildProcess; dir: string; port: number; sock: string; pid: number; sid: string }
 
 /** The primary as a daemon sees it: one trusted socket, a copy, answers to relays. */
 class Primary {
@@ -143,7 +143,7 @@ class Primary {
 let base = ''
 const daemons: Daemon[] = []
 
-async function spawnDaemon(name: string, twin: 'source' | 'standalone', sid: string): Promise<Daemon> {
+async function spawnDaemon(name: string, sid: string): Promise<Daemon> {
   const dir = path.join(base, name)
   fs.mkdirSync(dir, { recursive: true })
   const portFile = path.join(dir, 'daemon.port')
@@ -161,18 +161,11 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone', sid: str
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${name}] ` + b.toString()))
   await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(pidFile), 60_000, `${name} daemon`)
   return {
-    twin, proc, dir, sock, sid,
+    proc, dir, sock, sid,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
     pid: parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10),
   }
@@ -207,7 +200,7 @@ function gatewayCall(d: Daemon, name: string, args: Record<string, unknown> = {}
 
 function slice(d: Daemon): HostSlice {
   return {
-    v: 1, home: WALNUT_HOME, hash: `h-${d.twin}`, asOf: Date.now(), host: d.twin,
+    v: 1, home: WALNUT_HOME, hash: `h-${HOST}`, asOf: Date.now(), host: HOST,
     sessions: [{ sid: d.sid, taskId: 'mtask000-0001', title: 'Release work' }],
     tasks: [{ id: 'mtask000-0001', title: 'Release work', phase: 'IN_PROGRESS', project: 'Acme' }],
     requests: [],
@@ -220,13 +213,11 @@ function writeNote(rel: string, body: string): void {
   fs.writeFileSync(abs, body)
 }
 
-const twinsToRun: Array<'source' | 'standalone'> = BUN ? ['source', 'standalone'] : ['source']
-
 beforeAll(async () => {
   base = fs.mkdtempSync(path.join(os.tmpdir(), 'whrt-'))
   writeNote('Projects/Release plan.md', '---\nid: n_rel01\n---\n# Release plan\nShip on Friday.')
   writeNote('Projects/Retro.md', RETRO)
-  writeNote('health/Checkup.md', '# Checkup\nBlood test on Friday.')
+  writeNote('health/Checkup.md', '# Checkup\nMarble count on Friday.')
   writeNote('_attachment/scan.md', 'ocr')
   // The pictures of the notes: one kept, one in a folder this host leaves out.
   writeNote('Projects/_attachment/diagram.png', DIAGRAM)
@@ -247,195 +238,193 @@ afterAll(async () => {
   if (base && !process.env.KEEP_REPLICA_TWINS) fs.rmSync(base, { recursive: true, force: true })
 }, 30_000)
 
-for (const twin of twinsToRun) {
-  describe(`${twin} twin: reads from the host's copy while the server cannot answer`, () => {
-    let d: Daemon
-    let proxy: ReturnType<typeof freezableProxy>
-    let primary: Primary
+describe.skipIf(!BUN)("standalone daemon: reads from the host's copy while the server cannot answer", () => {
+  let d: Daemon
+  let proxy: ReturnType<typeof freezableProxy>
+  let primary: Primary
 
-    beforeAll(async () => {
-      d = await spawnDaemon(twin === 'source' ? 'src' : 'bun', twin, twin === 'source' ? 'aaaaaaaa-1111-4111-8111-111111111111' : 'bbbbbbbb-2222-4222-8222-222222222222')
-      daemons.push(d)
-      await startSession(d)
-      proxy = freezableProxy(d.port)
-      primary = new Primary(await proxy.listen(), twin)
-      await primary.connect()
-      expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
-      forgetHostReplica(twin)
-      config = { hosts: { [twin]: { hostname: 'h', keep: { notes_exclude: ['health'] } } } }
-      // Both twins keep the pictures too (attachment-copy-v1): the round sends them after the kinds.
-      const round = await syncHostReplica({ hostKey: twin, send: primary.send, attachments: true })
-      expect(round.map((r) => `${r.kind}:${r.action}`)).toEqual(['notes:synced', 'memory:synced', 'skills:synced'])
-    }, 120_000)
+  beforeAll(async () => {
+    d = await spawnDaemon('daemon', SID)
+    daemons.push(d)
+    await startSession(d)
+    proxy = freezableProxy(d.port)
+    primary = new Primary(await proxy.listen(), HOST)
+    await primary.connect()
+    expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
+    forgetHostReplica(HOST)
+    config = { hosts: { [HOST]: { hostname: 'h', keep: { notes_exclude: ['health'] } } } }
+    // The daemon keeps the pictures too (attachment-copy-v1): the round sends them after the kinds.
+    const round = await syncHostReplica({ hostKey: HOST, send: primary.send, attachments: true })
+    expect(round.map((r) => `${r.kind}:${r.action}`)).toEqual(['notes:synced', 'memory:synced', 'skills:synced'])
+  }, 120_000)
 
-    afterAll(() => { primary?.close(); proxy?.close() })
+  afterAll(() => { primary?.close(); proxy?.close() })
 
-    it('the copy is on disk under the replica dir, and has no left-out folder; the pictures are beside it', async () => {
-      const status = await primary.send('replica.status', { home: WALNUT_HOME })
-      // memory: the two docs' one (MEMORY.md), the files.v1 marker and the daily log, as the companion gets them.
-      expect(status).toMatchObject({ ok: true, kinds: { notes: { entries: 2, pending: 0 }, memory: { entries: 3 }, skills: { entries: 1 } } })
-      const pics = await primary.send('attachments.status', { home: WALNUT_HOME })
-      expect(pics, JSON.stringify(pics)).toMatchObject({ ok: true, entries: 1, pending: 0, bytes: DIAGRAM.length })
-      const homeKey = crypto.createHash('sha1').update(WALNUT_HOME).digest('hex').slice(0, 16)
-      const blob = path.join(d.dir, 'replica', homeKey, 'attachments', 'b', crypto.createHash('sha256').update(DIAGRAM).digest('hex'))
-      expect(fs.readFileSync(blob).equals(DIAGRAM)).toBe(true)
-      expect(fs.statSync(blob).mode & 0o777).toBe(0o600)
-      const files = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String)
-      expect(files.some((f) => f.endsWith('index.json'))).toBe(true)
-      const all = files.filter((f) => /[/\\]f[/\\]/.test(f)).map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')
-      expect(all).toContain('rollback worked')
-      expect(all).not.toContain('Blood test')
-      expect(all).not.toContain('ocr')
-    })
-
-    it('while the server answers, reads go to it', async () => {
-      const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-      expect(r).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
-      expect(primary.relays).toContain('note_read')
-    }, 30_000)
-
-    it('a server that is heard but does not answer: the read comes from the copy at the timeout, a write still times out', async () => {
-      primary.answerRelays = false
-      try {
-        const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-        expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { content: RETRO, contentHash: sha12(RETRO), offline: true } })
-        expect(r.ms).toBeGreaterThanOrEqual(GATEWAY_TIMEOUT - 200)
-        // A search, too: a read, so nothing is applied twice.
-        const s = await gatewayCall(d, 'search', { q: 'release' })
-        expect(s, JSON.stringify(s)).toMatchObject({ ok: true, result: { offline: true } })
-        expect(primary.relays).toContain('search')
-        const w = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
-        expect(w).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
-      } finally {
-        primary.answerRelays = true
-      }
-    }, 60_000)
-
-    it('the Mac falls asleep with its socket open: after 3 missed beats the host answers what it can at once', async () => {
-      proxy.freeze()
-      try {
-        // 3 missed beats land 3 to 4 beats after the freeze; 8 (8 to 9 beats) close the socket.
-        await sleep(BEAT * 4.6)
-        const r = await gatewayCall(d, 'note_read', { id: 'n_rel01' })
-        expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { path: 'Projects/Release plan', id: 'n_rel01', offline: true } })
-        expect(r.ms).toBeLessThan(GATEWAY_TIMEOUT)
-        const s = await gatewayCall(d, 'note_search', { q: 'friday' })
-        expect(s.ok && (s.result.results as Array<{ path: string }>).map((x) => x.path)).toEqual(['Projects/Release plan'])
-        expect(s.ok && s.result.degraded).toBe('offline-keyword')
-        expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { memory: { content: '# Memory\n- deploy with the script\n' } } })
-        expect(await gatewayCall(d, 'skill_read', { dirName: 'deploy' })).toMatchObject({ ok: true, result: { skill: { content: '---\nname: deploy\n---\nRun the deploy script.' } } })
-        // The task copy rides the same path.
-        expect(await gatewayCall(d, 'task_get', { id: 'mtask000-0001' })).toMatchObject({ ok: true, result: { offline: true } })
-        // Search: a keyword search of this host's tasks, sessions and memory copy.
-        const found = await gatewayCall(d, 'search', { q: 'release work', types: 'task' })
-        expect(found, JSON.stringify(found)).toMatchObject({ ok: true, result: { offline: true, degraded: 'offline-keyword' } })
-        expect(found.ok && (found.result.results as Array<{ taskId: string }>).map((x) => x.taskId)).toEqual(['mtask000-0001'])
-        expect(found.ms).toBeLessThan(GATEWAY_TIMEOUT)
-        const remembered = await gatewayCall(d, 'search', { q: 'deploy script', types: 'memory' })
-        expect(remembered.ok && remembered.result.results).toEqual([expect.objectContaining({ type: 'memory', path: 'MEMORY.md' })])
-        // A left-out folder is not in the copy: its notes are the Mac's, never a plain miss (4f).
-        const leftOut = await gatewayCall(d, 'note_read', { path: 'health/Checkup' })
-        expect(leftOut, JSON.stringify(leftOut)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: expect.stringMatching(/kept only on your Mac/), detail: { why: 'not_kept_here' } } })
-        // Its own task: written here at once, journaled for the server.
-        const own = await gatewayCall(d, 'task_update', { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' })
-        expect(own, JSON.stringify(own)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
-        expect(own.ms).toBeLessThan(GATEWAY_TIMEOUT)
-        // What only the server can do is refused at once, not after a timeout.
-        const global = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
-        expect(global).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-        expect(global.ms).toBeLessThan(GATEWAY_TIMEOUT)
-        // After a compaction the session still gets back what is open.
-        expect(await gatewayCall(d, 'open_items', { hook: 'compact' })).toMatchObject({ ok: true })
-      } finally {
-        proxy.thaw()
-      }
-      // Awake again on the same socket: the host's nudge, buffered while it slept,
-      // has the server take the write; then calls go to the server again.
-      await waitFor(() => primary.drained.some((r) => r.kind === 'op' && r.op === 'task_update'), 15_000, 'the server to take the queued write')
-      const op = primary.drained.find((r) => r.kind === 'op') as Extract<OfflineRecord, { kind: 'op' }>
-      expect(op).toMatchObject({ op: 'task_update', args: { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' } })
-      expect(primary.drained.filter((r) => r.kind === 'op')).toHaveLength(1)
-      primary.relays = []
-      await waitFor(async () => (await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).ok === true && primary.relays.includes('note_read'), 15_000, 'reads to go back to the server')
-      primary.relays = []
-      expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
-    }, 60_000)
-
-    it('a note changed on the server reaches the copy with only that note sent', async () => {
-      writeNote('Projects/Retro.md', '# Retro\nThird time lucky.')
-      const round = await syncHostReplica({ hostKey: twin, send: primary.send })
-      expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'synced', sent: 1 })
-      expect(round.filter((r) => r.kind !== 'notes').map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
-      writeNote('Projects/Retro.md', RETRO)
-      await syncHostReplica({ hostKey: twin, send: primary.send })
-    }, 60_000)
-
-    it('a daemon restart keeps the copy: a session reads it with no server at all', async () => {
-      primary.close()
-      try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
-      await waitFor(() => { try { process.kill(d.pid, 0); return false } catch { return true } }, 20_000, 'the daemon to stop')
-      const again = await spawnDaemon(twin === 'source' ? 'src' : 'bun', twin, d.sid)
-      daemons.push(again)
-      Object.assign(d, again)
-      await startSession(d)
-      const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-      expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { content: RETRO, offline: true } })
-    }, 120_000)
-
-    it('notes turned off for this host are removed from it', async () => {
-      proxy.close()
-      proxy = freezableProxy(d.port)
-      primary = new Primary(await proxy.listen(), twin)
-      await primary.connect()
-      expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
-      forgetHostReplica(twin)
-      config = { hosts: { [twin]: { hostname: 'h', keep: { notes: false } } } }
-      const round = await syncHostReplica({ hostKey: twin, send: primary.send, attachments: true })
-      expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'dropped' })
-      // No notes, no pictures of them either.
-      expect(await primary.send('attachments.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, entries: 0, asOf: null })
-      // What is left of it is the off mark (attachment-copy-core.ts drop): no picture.
-      expect(fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => f.includes('attachments') && !/attachments(\/index\.json)?$/.test(f))).toEqual([])
-      // A stuck server: a note read is the server's again (it times out as before),
-      // while memory, still kept here, comes from the copy at the timeout.
-      primary.answerRelays = false
-      expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
-      expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { offline: true } })
-      primary.close()
-      // The server gone: kept only on the Mac, in so many words (4f), never a plain miss.
-      // Poll until the host has seen the link close (a call before that times out at the hub).
-      await vi.waitFor(async () => {
-        const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
-        expect(r).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
-      }, { timeout: 20_000, interval: 50 })
-      // A note written here needs the Mac the same way.
-      const w = await gatewayCall(d, 'note_write', { path: 'Projects/New idea', content: '# New idea\n' })
-      expect(w).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
-      const left = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => /[/\\]f[/\\]/.test(f))
-      expect(left.map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')).not.toContain('rollback')
-      // Memory and skills are still kept.
-      expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true })
-    }, 60_000)
-
-    it('takes the leader\'s moves (host-replica-moves-v1): a move of most of the copy with renamed, refused without it', async () => {
-      proxy.close()
-      proxy = freezableProxy(d.port)
-      primary = new Primary(await proxy.listen(), twin)
-      await primary.connect()
-      const hello = await primary.send('hello', {})
-      expect(hello.capabilities as string[]).toContain('host-replica-moves-v1')
-      expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
-      const body = (i: number) => `# Day ${i}\nShipped build ${i}.`
-      const list = (prefix: string) => Array.from({ length: 250 }, (_, i) => ({ k: `${prefix}day-${i}.md`, h: sha12(body(i)), n: Buffer.byteLength(body(i)), m: { title: `Day ${i}` } }))
-      const first = await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: list('acme/'), asOf: Date.now() })
-      expect(first, JSON.stringify(first)).toMatchObject({ ok: true })
-      expect(await primary.send('replica.put', { home: WALNUT_HOME, kind: 'notes', files: (first.need as string[]).map((k) => ({ k, body: body(Number(/day-(\d+)/.exec(k)![1])) })) })).toMatchObject({ ok: true, stored: 250 })
-      const moved = list('projects/Acme/notes/')
-      expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now() })).toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
-      const renamed = moved.map((e, i) => [`acme/day-${i}.md`, e.k])
-      expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now(), renamed })).toMatchObject({ ok: true, need: [], removed: 0, moved: 250 })
-      expect(await primary.send('replica.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, kinds: { notes: { entries: 250, pending: 0 } } })
-      primary.close()
-    }, 60_000)
+  it('the copy is on disk under the replica dir, and has no left-out folder; the pictures are beside it', async () => {
+    const status = await primary.send('replica.status', { home: WALNUT_HOME })
+    // memory: the two docs' one (MEMORY.md), the files.v1 marker and the daily log, as the companion gets them.
+    expect(status).toMatchObject({ ok: true, kinds: { notes: { entries: 2, pending: 0 }, memory: { entries: 3 }, skills: { entries: 1 } } })
+    const pics = await primary.send('attachments.status', { home: WALNUT_HOME })
+    expect(pics, JSON.stringify(pics)).toMatchObject({ ok: true, entries: 1, pending: 0, bytes: DIAGRAM.length })
+    const homeKey = crypto.createHash('sha1').update(WALNUT_HOME).digest('hex').slice(0, 16)
+    const blob = path.join(d.dir, 'replica', homeKey, 'attachments', 'b', crypto.createHash('sha256').update(DIAGRAM).digest('hex'))
+    expect(fs.readFileSync(blob).equals(DIAGRAM)).toBe(true)
+    expect(fs.statSync(blob).mode & 0o777).toBe(0o600)
+    const files = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String)
+    expect(files.some((f) => f.endsWith('index.json'))).toBe(true)
+    const all = files.filter((f) => /[/\\]f[/\\]/.test(f)).map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')
+    expect(all).toContain('rollback worked')
+    expect(all).not.toContain('Marble count')
+    expect(all).not.toContain('ocr')
   })
-}
+
+  it('while the server answers, reads go to it', async () => {
+    const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
+    expect(r).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
+    expect(primary.relays).toContain('note_read')
+  }, 30_000)
+
+  it('a server that is heard but does not answer: the read comes from the copy at the timeout, a write still times out', async () => {
+    primary.answerRelays = false
+    try {
+      const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
+      expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { content: RETRO, contentHash: sha12(RETRO), offline: true } })
+      expect(r.ms).toBeGreaterThanOrEqual(GATEWAY_TIMEOUT - 200)
+      // A search, too: a read, so nothing is applied twice.
+      const s = await gatewayCall(d, 'search', { q: 'release' })
+      expect(s, JSON.stringify(s)).toMatchObject({ ok: true, result: { offline: true } })
+      expect(primary.relays).toContain('search')
+      const w = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
+      expect(w).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
+    } finally {
+      primary.answerRelays = true
+    }
+  }, 60_000)
+
+  it('the Mac falls asleep with its socket open: after 3 missed beats the host answers what it can at once', async () => {
+    proxy.freeze()
+    try {
+      // 3 missed beats land 3 to 4 beats after the freeze; 8 (8 to 9 beats) close the socket.
+      await sleep(BEAT * 4.6)
+      const r = await gatewayCall(d, 'note_read', { id: 'n_rel01' })
+      expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { path: 'Projects/Release plan', id: 'n_rel01', offline: true } })
+      expect(r.ms).toBeLessThan(GATEWAY_TIMEOUT)
+      const s = await gatewayCall(d, 'note_search', { q: 'friday' })
+      expect(s.ok && (s.result.results as Array<{ path: string }>).map((x) => x.path)).toEqual(['Projects/Release plan'])
+      expect(s.ok && s.result.degraded).toBe('offline-keyword')
+      expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { memory: { content: '# Memory\n- deploy with the script\n' } } })
+      expect(await gatewayCall(d, 'skill_read', { dirName: 'deploy' })).toMatchObject({ ok: true, result: { skill: { content: '---\nname: deploy\n---\nRun the deploy script.' } } })
+      // The task copy rides the same path.
+      expect(await gatewayCall(d, 'task_get', { id: 'mtask000-0001' })).toMatchObject({ ok: true, result: { offline: true } })
+      // Search: a keyword search of this host's tasks, sessions and memory copy.
+      const found = await gatewayCall(d, 'search', { q: 'release work', types: 'task' })
+      expect(found, JSON.stringify(found)).toMatchObject({ ok: true, result: { offline: true, degraded: 'offline-keyword' } })
+      expect(found.ok && (found.result.results as Array<{ taskId: string }>).map((x) => x.taskId)).toEqual(['mtask000-0001'])
+      expect(found.ms).toBeLessThan(GATEWAY_TIMEOUT)
+      const remembered = await gatewayCall(d, 'search', { q: 'deploy script', types: 'memory' })
+      expect(remembered.ok && remembered.result.results).toEqual([expect.objectContaining({ type: 'memory', path: 'MEMORY.md' })])
+      // A left-out folder is not in the copy: its notes are the Mac's, never a plain miss (4f).
+      const leftOut = await gatewayCall(d, 'note_read', { path: 'health/Checkup' })
+      expect(leftOut, JSON.stringify(leftOut)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: expect.stringMatching(/kept only on your Mac/), detail: { why: 'not_kept_here' } } })
+      // Its own task: written here at once, journaled for the server.
+      const own = await gatewayCall(d, 'task_update', { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' })
+      expect(own, JSON.stringify(own)).toMatchObject({ ok: true, result: { queued: true, offline: true } })
+      expect(own.ms).toBeLessThan(GATEWAY_TIMEOUT)
+      // What only the server can do is refused at once, not after a timeout.
+      const global = await gatewayCall(d, 'note_write', { path: 'Projects/New', content: 'x' })
+      expect(global).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+      expect(global.ms).toBeLessThan(GATEWAY_TIMEOUT)
+      // After a compaction the session still gets back what is open.
+      expect(await gatewayCall(d, 'open_items', { hook: 'compact' })).toMatchObject({ ok: true })
+    } finally {
+      proxy.thaw()
+    }
+    // Awake again on the same socket: the host's nudge, buffered while it slept,
+    // has the server take the write; then calls go to the server again.
+    await waitFor(() => primary.drained.some((r) => r.kind === 'op' && r.op === 'task_update'), 15_000, 'the server to take the queued write')
+    const op = primary.drained.find((r) => r.kind === 'op') as Extract<OfflineRecord, { kind: 'op' }>
+    expect(op).toMatchObject({ op: 'task_update', args: { id: 'mtask000-0001', description: 'Drafted while the Mac slept.' } })
+    expect(primary.drained.filter((r) => r.kind === 'op')).toHaveLength(1)
+    primary.relays = []
+    await waitFor(async () => (await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).ok === true && primary.relays.includes('note_read'), 15_000, 'reads to go back to the server')
+    primary.relays = []
+    expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
+  }, 60_000)
+
+  it('a note changed on the server reaches the copy with only that note sent', async () => {
+    writeNote('Projects/Retro.md', '# Retro\nThird time lucky.')
+    const round = await syncHostReplica({ hostKey: HOST, send: primary.send })
+    expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'synced', sent: 1 })
+    expect(round.filter((r) => r.kind !== 'notes').map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
+    writeNote('Projects/Retro.md', RETRO)
+    await syncHostReplica({ hostKey: HOST, send: primary.send })
+  }, 60_000)
+
+  it('a daemon restart keeps the copy: a session reads it with no server at all', async () => {
+    primary.close()
+    try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
+    await waitFor(() => { try { process.kill(d.pid, 0); return false } catch { return true } }, 20_000, 'the daemon to stop')
+    const again = await spawnDaemon('daemon', d.sid)
+    daemons.push(again)
+    Object.assign(d, again)
+    await startSession(d)
+    const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true, result: { content: RETRO, offline: true } })
+  }, 120_000)
+
+  it('notes turned off for this host are removed from it', async () => {
+    proxy.close()
+    proxy = freezableProxy(d.port)
+    primary = new Primary(await proxy.listen(), HOST)
+    await primary.connect()
+    expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
+    forgetHostReplica(HOST)
+    config = { hosts: { [HOST]: { hostname: 'h', keep: { notes: false } } } }
+    const round = await syncHostReplica({ hostKey: HOST, send: primary.send, attachments: true })
+    expect(round.find((r) => r.kind === 'notes')).toMatchObject({ action: 'dropped' })
+    // No notes, no pictures of them either.
+    expect(await primary.send('attachments.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, entries: 0, asOf: null })
+    // What is left of it is the off mark (attachment-copy-core.ts drop): no picture.
+    expect(fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => f.includes('attachments') && !/attachments(\/index\.json)?$/.test(f))).toEqual([])
+    // A stuck server: a note read is the server's again (it times out as before),
+    // while memory, still kept here, comes from the copy at the timeout.
+    primary.answerRelays = false
+    expect(await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })).toMatchObject({ ok: false, error: { code: 'hub_timeout' } })
+    expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true, result: { offline: true } })
+    primary.close()
+    // The server gone: kept only on the Mac, in so many words (4f), never a plain miss.
+    // Poll until the host has seen the link close (a call before that times out at the hub).
+    await vi.waitFor(async () => {
+      const r = await gatewayCall(d, 'note_read', { path: 'Projects/Retro' })
+      expect(r).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    }, { timeout: 20_000, interval: 50 })
+    // A note written here needs the Mac the same way.
+    const w = await gatewayCall(d, 'note_write', { path: 'Projects/New idea', content: '# New idea\n' })
+    expect(w).toMatchObject({ ok: false, error: { code: 'needs_leader', detail: { why: 'not_kept_here' } } })
+    const left = fs.readdirSync(path.join(d.dir, 'replica'), { recursive: true }).map(String).filter((f) => /[/\\]f[/\\]/.test(f))
+    expect(left.map((f) => fs.readFileSync(path.join(d.dir, 'replica', f), 'utf8')).join('\n')).not.toContain('rollback')
+    // Memory and skills are still kept.
+    expect(await gatewayCall(d, 'memory_read', { doc: 'global' })).toMatchObject({ ok: true })
+  }, 60_000)
+
+  it('takes the leader\'s moves (host-replica-moves-v1): a move of most of the copy with renamed, refused without it', async () => {
+    proxy.close()
+    proxy = freezableProxy(d.port)
+    primary = new Primary(await proxy.listen(), HOST)
+    await primary.connect()
+    const hello = await primary.send('hello', {})
+    expect(hello.capabilities as string[]).toContain('host-replica-moves-v1')
+    expect((await primary.send('host.slice', { slice: slice(d) })).ok).toBe(true)
+    const body = (i: number) => `# Day ${i}\nShipped build ${i}.`
+    const list = (prefix: string) => Array.from({ length: 250 }, (_, i) => ({ k: `${prefix}day-${i}.md`, h: sha12(body(i)), n: Buffer.byteLength(body(i)), m: { title: `Day ${i}` } }))
+    const first = await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: list('acme/'), asOf: Date.now() })
+    expect(first, JSON.stringify(first)).toMatchObject({ ok: true })
+    expect(await primary.send('replica.put', { home: WALNUT_HOME, kind: 'notes', files: (first.need as string[]).map((k) => ({ k, body: body(Number(/day-(\d+)/.exec(k)![1])) })) })).toMatchObject({ ok: true, stored: 250 })
+    const moved = list('projects/Acme/notes/')
+    expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now() })).toMatchObject({ ok: false, errorKind: 'manifest_removes_most_rows' })
+    const renamed = moved.map((e, i) => [`acme/day-${i}.md`, e.k])
+    expect(await primary.send('replica.sync', { home: WALNUT_HOME, kind: 'notes', entries: moved, asOf: Date.now(), renamed })).toMatchObject({ ok: true, need: [], removed: 0, moved: 250 })
+    expect(await primary.send('replica.status', { home: WALNUT_HOME })).toMatchObject({ ok: true, kinds: { notes: { entries: 250, pending: 0 } } })
+    primary.close()
+  }, 60_000)
+})

@@ -1,7 +1,6 @@
 /**
- * Unit tests for daemon-core.ts — the shared primitives used by both
- * daemon-source.ts (SSH-deployed Node script) and daemon-standalone.ts
- * (compiled Bun binary). Because the core is fully DI'd, we can exercise
+ * Unit tests for daemon-core.ts — the primitives the session daemon
+ * (daemon-standalone.ts) is built on. Because the core is fully DI'd, we can exercise
  * every death path, idempotency guard, and broadcast with synthetic deps.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'

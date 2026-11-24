@@ -62,7 +62,7 @@ describe('test runtime-dir isolation', () => {
   })
 
   it('the daemon streams sibling (WALNUT_DAEMON_DIR + "-streams") is also isolated', () => {
-    // daemon-source.ts derives STREAMS_DIR as `DAEMON_DIR + '-streams'` — a
+    // daemon-standalone.ts derives STREAMS_DIR as `DAEMON_DIR + '-streams'` — a
     // SIBLING, not a child. A non-pid-suffixed runtime dir would therefore be
     // shared across concurrent workers even though the dir itself looked isolated.
     const sibling = `${process.env.WALNUT_DAEMON_DIR}-streams`

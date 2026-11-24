@@ -1,19 +1,8 @@
 /**
- * Pins the two ways `createCronMetadataTracker` reaches a remote host, because
- * both are text, not imports, and text drifts silently.
- *
- *  1. The JS daemon twin embeds the tracker by `createCronMetadataTracker.toString()`
- *     into `__CREATE_CRON_METADATA__`, so the function BODY must be
- *     self-contained: one module-scope helper (or a bundler-injected
- *     `__spreadValues`/`__name` helper) turns into a ReferenceError on the
- *     remote host at the first cron line. getDaemonSource() already checks the
- *     text reconstructs into a function; nothing DRIVES the reconstructed
- *     tracker, so a body that reconstructs but misbehaves would ship. This file
- *     runs the same scripted scenario through the imported tracker and through a
- *     re-materialized copy and demands identical emitted values.
- *  2. The bun twin (daemon-standalone.ts) constructs the tracker with the same
- *     three wiring arguments, hand-written. A one-sided edit there is invisible
- *     until a host runs the other twin, so both call sites are asserted as text.
+ * Pins how the session daemon (daemon-standalone.ts) wires `createCronMetadataTracker`:
+ * the wiring is hand-written text in a large file, and text drifts silently, so
+ * the call site is asserted as text. The tracker itself is driven by one scripted
+ * session life (the values it emits) and by the edge cases below.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -22,7 +11,6 @@ import { describe, expect, it } from 'vitest'
 import { CRON_PROMPT_LIMIT, createCronMetadataTracker, type CronMetadataProcess } from '../../src/providers/daemon-cron-metadata.js'
 import { cliOneShotTime, nextCliCronMinute } from '../../src/providers/daemon-cron-schedule.js'
 import { DEFAULT_CRON_RESTORE_CONFIG } from '../../src/providers/daemon-cron-transcript.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SESSION_CRON_JOB_LIMIT, SESSION_CRON_PROMPT_LIMIT, type SessionCronMetadata } from '../../src/core/types.js'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -81,90 +69,43 @@ function script(make: typeof createCronMetadataTracker): SessionCronMetadata[] {
   return [...values, ...tracker.list()]
 }
 
-describe('cron metadata tracker twin injection', () => {
-  it('behaves identically after a toString round-trip through new Function', () => {
-    const source = createCronMetadataTracker.toString()
-    // The daemon template runs on a plain remote Node: no module scope, and
-    // getDaemonSource reconstructs under strict mode.
-    const injected = new Function(`"use strict"; return (${source})`)() as typeof createCronMetadataTracker
-    expect(typeof injected).toBe('function')
-    const native = script(createCronMetadataTracker)
-    const remote = script(injected)
-    expect(remote).toEqual(native)
-    // The scenario has to be doing something, or "identical" is meaningless.
-    expect(native.length).toBeGreaterThan(6)
-    expect(new Set(native.map((value) => value.presence))).toEqual(new Set(['active', 'inactive', 'unknown']))
-    expect(native.some((value) => (value.jobs ?? []).some((job) => job.promptTruncated))).toBe(true)
-    expect(native.some((value) => value.sessionId === 'renamed')).toBe(true)
+describe('cron metadata tracker', () => {
+  it('emits every presence over one scripted session life', () => {
+    const emitted = script(createCronMetadataTracker)
+    // The scenario has to be doing something, or the checks below mean nothing.
+    expect(emitted.length).toBeGreaterThan(6)
+    expect(new Set(emitted.map((value) => value.presence))).toEqual(new Set(['active', 'inactive', 'unknown']))
+    expect(emitted.some((value) => (value.jobs ?? []).some((job) => job.promptTruncated))).toBe(true)
+    expect(emitted.some((value) => value.sessionId === 'renamed')).toBe(true)
   })
 
-  it('carries no bundler helper or module-scope identifier into the injected text', () => {
-    const source = createCronMetadataTracker.toString()
-    // esbuild/tsup rewrite object spread and add __name/__spreadValues when the
-    // target is old enough; either one would ship a daemon that ReferenceErrors.
-    for (const helper of ['__spreadValues', '__spreadProps', '__objRest', '__name(', '__require']) {
-      expect(source, `injected tracker references ${helper}`).not.toContain(helper)
-    }
-    // The one module-scope name the tracker legitimately mirrors is the prompt
-    // limit, and it is inlined as a literal rather than referenced.
-    expect(source).not.toMatch(/\bCRON_PROMPT_LIMIT\b/)
-    // Same for the verified CLI band: inlined in the body, not referenced.
-    expect(source).toContain('>= 224')
-    expect(source).not.toMatch(/\bCRON_LINE_MARKER\b/)
-  })
-
-  it('leaves no placeholder in the deployed source and wires the tracker the same way in both twins', () => {
-    const generated = getDaemonSource()
-    expect(generated).not.toContain('__CREATE_CRON_METADATA__')
-    expect(generated).not.toContain('__CRON_PROMPT_LIMIT__')
-    // The tracker body really landed (a marker only its source carries). Quotes
-    // are matched loosely: the injected text is esbuild output, which normalises
-    // string quoting, while the surrounding template is verbatim source.
-    expect(generated).toMatch(/versionOk\(entry\.process\.version\) && !entry\.foreignFormat/)
-    expect(generated).toMatch(/pendingIds: function \(\) \{ return cronMetadata\.pendingIds\(sid\); \}/)
-    // Stamped as a literal, because the tracker is constructed before the cron
-    // sidecar that would otherwise carry the limit is loaded.
-    expect(generated).toContain(`promptLimit: ${CRON_PROMPT_LIMIT}`)
-    expect(generated).toContain('promptLimit: 2000')
-    expect(generated).toMatch(/nextRun: function \(cron, after\)/)
-    expect(generated).toContain('cronRuntimeCore.nextCliCronMinute(cron, after)')
-    expect(generated).toContain('cronRuntimeCore.cliOneShotTime(cron, createdAt, id, cronMetadataConfig)')
-    expect(generated).toMatch(/setInterval\(function \(\) \{ cronMetadata\.refresh\(\); \}, SESSION_SCAN_INTERVAL_MS\)/)
-
+  it('is wired into the daemon the way the daemon file spells it', () => {
     const standalone = fs.readFileSync(path.join(REPO, 'src/providers/daemon-standalone.ts'), 'utf-8')
     expect(standalone).toContain('nextRun: nextCliCronMinute,')
     expect(standalone).toContain('promptLimit: CRON_PROMPT_LIMIT,')
     expect(standalone).toContain('oneShotTime: (cron, createdAt, id) => cronMetadataConfig ? cliOneShotTime(cron, createdAt, id, cronMetadataConfig) : null,')
     expect(standalone).toMatch(/setInterval\(\(\) => cronMetadata\.refresh\(\), SESSION_SCAN_INTERVAL_MS\)/)
     expect(standalone).toContain('pendingIds: () => cronMetadata.pendingIds(sid),')
-    // Both twins synthesize the same adopt origin for a pre-feature session: the
+    // The daemon synthesizes an adopt origin for a pre-feature session: the
     // watcher boundary as the offset (so a daemon rolled back to a build without
     // `byTime` still reads the record its own, narrower way), plus the OS process
-    // start that switches attribution to time — and the extra stream pass is paid
+    // start that switches attribution to time, and the extra stream pass is paid
     // for only when the fold actually saw an armed job.
-    for (const text of [standalone, fs.readFileSync(path.join(REPO, 'src/providers/daemon-source.ts'), 'utf-8')]) {
-      expect(text).toMatch(/cronMetadataOrigin = \{[\s\S]{0,240}offset: adoptFold\.boundary/)
-      expect(text).toMatch(/processStartedAtMs\((entry\.pid|pid), entry\.startTime\)/)
-      expect(text).toMatch(/cronIds[\s\S]{0,20}\)\.length > 0/)
-      // A derived origin is re-derived on the next adopt, and a pre-marker record
-      // is caught by claiming a start long after the OS says the process began.
-      expect(text).toMatch(/derived === true/)
-      expect(text).toMatch(/startedAt > (processStart|cronProcessStart) \+ 5_?000/)
-      expect(text).toMatch(/derived: true/)
-      expect(text).toMatch(/byTime/)
-      expect(text).toMatch(/attributeByTime \? 0 :/)
-      expect(text).toMatch(/attributeByTime \? 120_?000 : 10_?000/)
-    }
+    expect(standalone).toMatch(/cronMetadataOrigin = \{[\s\S]{0,240}offset: adoptFold\.boundary/)
+    expect(standalone).toMatch(/processStartedAtMs\((entry\.pid|pid), entry\.startTime\)/)
+    expect(standalone).toMatch(/cronIds[\s\S]{0,20}\)\.length > 0/)
+    // A derived origin is re-derived on the next adopt, and a pre-marker record
+    // is caught by claiming a start long after the OS says the process began.
+    expect(standalone).toMatch(/derived === true/)
+    expect(standalone).toMatch(/startedAt > (processStart|cronProcessStart) \+ 5_?000/)
+    expect(standalone).toMatch(/derived: true/)
+    expect(standalone).toMatch(/byTime/)
+    expect(standalone).toMatch(/attributeByTime \? 0 :/)
+    expect(standalone).toMatch(/attributeByTime \? 120_?000 : 10_?000/)
 
-    // Same refresh cadence on both twins, read as a number so 60_000 vs 60000
-    // does not hide a real change.
-    const interval = (text: string) => {
-      const match = /const SESSION_SCAN_INTERVAL_MS = ([0-9_]+)/.exec(text)
-      return Number(match![1].replaceAll('_', ''))
-    }
-    const template = fs.readFileSync(path.join(REPO, 'src/providers/daemon-source.ts'), 'utf-8')
-    expect(interval(standalone)).toBe(interval(template))
-    expect(interval(standalone)).toBe(60_000)
+    // The refresh cadence, read as a number so 60_000 vs 60000 does not hide a real change.
+    const match = /const SESSION_SCAN_INTERVAL_MS = ([0-9_]+)/.exec(standalone)
+    expect(Number(match![1].replaceAll('_', ''))).toBe(60_000)
   })
 
   it('agrees with the core contract on the prompt limit and the job cap', () => {

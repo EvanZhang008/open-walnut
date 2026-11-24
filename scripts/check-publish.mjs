@@ -33,18 +33,15 @@ const required = [
   'dist/integrations/walnut-time/manifest.json',
   'dist/integrations/walnut-time/dist/web.mjs',
   'dist/daemon-binaries/acp-worker.js',
-  // The npm install's local daemon is the source twin; this sidecar is what lets
-  // it run Codex, Gemini, OpenCode, Goose and Pi (see daemon-source.ts).
-  'dist/daemon-binaries/acp-daemon-core.cjs',
+  // The session daemon of a package with no prebuilt daemon binary (local-daemon.ts findDaemonBinary).
+  'dist/daemon-binaries/daemon-runtime/daemon-standalone.js',
+  'dist/daemon-binaries/daemon-runtime/daemon-standalone.js.version',
   'dist/daemon-binaries/pi-acp.js',
   'dist/daemon-binaries/pi-acp.LICENSE',
-  // What a remote source-twin host runs ACP engines with (acp-host-artifacts.ts ACP_HOST_FILES).
+  // What a host runs ACP engines with (acp-host-artifacts.ts ACP_HOST_FILES).
   'dist/daemon-binaries/acp-worker.mjs',
   'dist/daemon-binaries/codex-acp.mjs',
   'dist/daemon-binaries/codex-acp.LICENSE',
-  'dist/daemon-binaries/daemon-cron-runtime.cjs',
-  'dist/daemon-binaries/daemon-instance-lock.cjs',
-  'dist/daemon-binaries/daemon-service-cli.cjs',
   'patches',
   'scripts/postinstall.mjs',
 ];
@@ -131,10 +128,8 @@ const files = pack.files.map((f) => f.path);
 const mustInclude = [
   'dist/cli.js', 'dist/cli-fast.js', 'dist/cli-fast.js.jsc', 'dist/web/static/index.html', 'scripts/postinstall.mjs', 'dist/build-info.json',
   'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE',
-  'dist/daemon-binaries/acp-worker.js', 'dist/daemon-binaries/acp-daemon-core.cjs',
-  'dist/daemon-binaries/daemon-cron-runtime.cjs',
-  'dist/daemon-binaries/daemon-instance-lock.cjs',
-  'dist/daemon-binaries/daemon-service-cli.cjs',
+  'dist/daemon-binaries/acp-worker.js',
+  'dist/daemon-binaries/daemon-runtime/daemon-standalone.js', 'dist/daemon-binaries/daemon-runtime/daemon-standalone.js.version',
   // The AWS one-click setup deploys this CDK app; an install without it can only fail.
   'infra/cdk.json', 'infra/package.json', 'infra/bun.lock', 'infra/tsconfig.json',
   'infra/bin/walnut-cloud.ts', 'infra/lib/walnut-cloud-stack.ts',

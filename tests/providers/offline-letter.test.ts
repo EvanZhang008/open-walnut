@@ -12,7 +12,6 @@ import {
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { LETTER_ID_RE } from '../../src/core/human-inbox/normalize.js'
 import { LETTER_BODY_MAX_BYTES } from '../../src/core/human-inbox/types.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createLetterCheck } from '../../src/core/human-inbox/letter-check.js'
 
 const T0 = Date.parse('2026-10-22T08:00:00Z')
@@ -201,14 +200,5 @@ describe('offline letter: an older Mac keeps today\'s answer', () => {
     expect(await gatewayCall(h.host, SID_A, 'human_inbox_send', LETTER)).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
     expect(names(await h.host.handle(JHOME, SID_A, 'tools.list', {}))).not.toContain('human_inbox_send')
     expect(h.journal.records(JHOME)).toEqual([])
-  })
-})
-
-describe('offline letter: the source twin', () => {
-  it('inlines the letter rules into the offline host', () => {
-    const rendered = getDaemonSource()
-    expect(rendered).not.toContain('__CREATE_LETTER_CHECK__')
-    expect(rendered).toContain(createLetterCheck.toString())
-    expect(rendered).toMatch(/letters: \(function createLetterCheck\(\)/)
   })
 })

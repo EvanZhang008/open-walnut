@@ -424,7 +424,7 @@ describe('LocalDaemon managed service updates', () => {
     const error = vi.spyOn(log.session, 'error').mockImplementation(() => {})
     const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
     for (let n = 0; n < 2; n++) {
-      internals.startManagedUpdate(kind === 'source artifact' ? '/fixture/daemon.cjs' : '/fixture/daemon', 'new-version', 'old-version')
+      internals.startManagedUpdate(kind === 'source artifact' ? '/fixture/daemon-standalone.ts' : '/fixture/daemon', 'new-version', 'old-version')
       await daemon.managedUpdatePending
     }
     expect(localUpdate).not.toHaveBeenCalled()

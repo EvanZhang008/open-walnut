@@ -7,12 +7,11 @@
  *                                                     ▼ stand-in CLI A (default) ─► child ─► grandchild
  *                                                     ▼ stand-in CLI B (bypass)
  *
- * - the standalone twin (bun) reads the process on its socket: a process inside session A (A's CLI's
- *   child or grandchild, also after A's CLI was started again under a new pid) is A; the same
- *   process naming B, or a process outside every session naming A, is the anonymous `external`;
- *   the process that started the daemon (it commands the daemon anyway) is believed;
- * - the JS twin cannot read its socket's peer: it keeps the sid named and marks the call
- *   `callerUnproven`, so the leader can hold it to the anonymous caller's start-mode ceiling.
+ * The session daemon (daemon-standalone.ts, under bun) reads the process on its socket: a process
+ * inside session A (A's CLI's child or grandchild, also after A's CLI was started again under a new
+ * pid) is A; the same process naming B, or a process outside every session naming A, is the
+ * anonymous `external`; the process that started the daemon (it commands the daemon anyway) is
+ * believed.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths under /tmp (a unix socket
  * path is at most 104 bytes on macOS); the only processes signalled are the daemons and stand-in
@@ -26,23 +25,15 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-let scriptPath = ''
 let cliPath = ''
 let clientPath = ''
 let root = ''
-type Twin = { name: string; reads: boolean; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, reads: false, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', reads: true, command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 // A gateway client: `client <socket> <line> <depth> [quit]`. At depth > 1 it starts itself one level
 // down (a session's bash starting a script), so the asker is a deeper descendant. `quit`: it exits
@@ -112,7 +103,7 @@ async function waitFor(check: () => boolean, ms = 20_000): Promise<boolean> {
   return check()
 }
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   root = fs.realpathSync(fs.mkdtempSync('/tmp/wci-'))
   const daemonDir = path.join(root, 'd')
   const env: Record<string, string | undefined> = {
@@ -126,8 +117,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc.stdout?.on('data', (chunk) => {
@@ -199,8 +189,6 @@ async function frame(d: Daemon, tag: string, ms = 20_000): Promise<Record<string
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-caller-identity-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
   clientPath = path.join(dir, 'client.cjs')
@@ -221,63 +209,49 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`gateway caller identity, ${twin.name}`, () => {
-    it(twin.reads
-      ? 'believes a sid only from inside its session or from the daemon\'s starter; any other asker is external'
-      : 'keeps the sid named and marks every socket call of a session unproven', async () => {
-      const d = await boot(twin)
-      const A = crypto.randomUUID()
-      const B = crypto.randomUUID()
-      await startCli(d, A, 'default')
-      await startCli(d, B, 'bypass')
+describe.skipIf(!BUN)('gateway caller identity, standalone daemon (bun)', () => {
+  it('believes a sid only from inside its session or from the daemon\'s starter; any other asker is external', async () => {
+    const d = await boot()
+    const A = crypto.randomUUID()
+    const B = crypto.randomUUID()
+    await startCli(d, A, 'default')
+    await startCli(d, B, 'bypass')
 
-      // A's own CLI's child and grandchild: A.
-      await callFromSession(d, A, A, 'own-child')
-      await callFromSession(d, A, A, 'own-grandchild', 2)
-      // A's child naming its bypass sibling B: the forged sid.
-      await callFromSession(d, A, B, 'forged')
-      // The daemon's starter naming B, and a stranger naming A.
-      callFromStarter(d, B, 'starter')
-      callFromStranger(d, A, 'stranger')
+    // A's own CLI's child and grandchild: A.
+    await callFromSession(d, A, A, 'own-child')
+    await callFromSession(d, A, A, 'own-grandchild', 2)
+    // A's child naming its bypass sibling B: the forged sid.
+    await callFromSession(d, A, B, 'forged')
+    // The daemon's starter naming B, and a stranger naming A.
+    callFromStarter(d, B, 'starter')
+    callFromStranger(d, A, 'stranger')
 
-      const own = await frame(d, 'own-child')
-      const deep = await frame(d, 'own-grandchild')
-      const forged = await frame(d, 'forged')
-      const starter = await frame(d, 'starter')
-      const stranger = await frame(d, 'stranger')
-      expect(own?.callerSid).toBe(A)
-      expect(deep?.callerSid).toBe(A)
-      if (twin.reads) {
-        expect(forged?.callerSid).toBe('external')
-        expect(stranger?.callerSid).toBe('external')
-        expect(starter?.callerSid).toBe(B)
-        for (const f of [own, deep, forged, starter, stranger]) expect(f?.payload.callerUnproven).toBeUndefined()
-      } else {
-        // No peer read: the sid stands, marked unproven (for the leader to cap).
-        expect(forged?.callerSid).toBe(B)
-        expect(stranger?.callerSid).toBe(A)
-        expect(starter?.callerSid).toBe(B)
-        for (const f of [own, deep, forged, starter, stranger]) expect(f?.payload.callerUnproven).toBe(true)
-      }
+    const own = await frame(d, 'own-child')
+    const deep = await frame(d, 'own-grandchild')
+    const forged = await frame(d, 'forged')
+    const starter = await frame(d, 'starter')
+    const stranger = await frame(d, 'stranger')
+    expect(own?.callerSid).toBe(A)
+    expect(deep?.callerSid).toBe(A)
+    expect(forged?.callerSid).toBe('external')
+    expect(stranger?.callerSid).toBe('external')
+    expect(starter?.callerSid).toBe(B)
+    for (const f of [own, deep, forged, starter, stranger]) expect(f?.payload.callerUnproven).toBeUndefined()
 
-      // A's CLI started again (a resume: a new process): its new child is A.
-      await startCli(d, A, 'default')
-      await callFromSession(d, A, A, 'after-restart')
-      expect((await frame(d, 'after-restart'))?.callerSid).toBe(A)
+    // A's CLI started again (a resume: a new process): its new child is A.
+    await startCli(d, A, 'default')
+    await callFromSession(d, A, A, 'after-restart')
+    expect((await frame(d, 'after-restart'))?.callerSid).toBe(A)
 
-      if (twin.reads) {
-        // A forger that leaves the moment it wrote its line is never A's sibling either.
-        await callFromSession(d, A, B, 'forged-quit', 1, true)
-        const quit = await frame(d, 'forged-quit', 5_000)
-        expect(quit === undefined || quit.callerSid === 'external').toBe(true)
-        // One warning per forged sid, not one per call.
-        await callFromSession(d, A, B, 'forged-again')
-        expect((await frame(d, 'forged-again'))?.callerSid).toBe('external')
-        const log = fs.readdirSync(d.daemonDir).filter((n) => /^daemon-.*\.log$/.test(n))
-          .map((n) => fs.readFileSync(path.join(d.daemonDir, n), 'utf8')).join('\n')
-        expect(log.split('\n').filter((l) => l.includes('names a session it does not run inside') && l.includes(B)).length).toBe(1)
-      }
-    }, 120_000)
-  })
-}
+    // A forger that leaves the moment it wrote its line is never A's sibling either.
+    await callFromSession(d, A, B, 'forged-quit', 1, true)
+    const quit = await frame(d, 'forged-quit', 5_000)
+    expect(quit === undefined || quit.callerSid === 'external').toBe(true)
+    // One warning per forged sid, not one per call.
+    await callFromSession(d, A, B, 'forged-again')
+    expect((await frame(d, 'forged-again'))?.callerSid).toBe('external')
+    const log = fs.readdirSync(d.daemonDir).filter((n) => /^daemon-.*\.log$/.test(n))
+      .map((n) => fs.readFileSync(path.join(d.daemonDir, n), 'utf8')).join('\n')
+    expect(log.split('\n').filter((l) => l.includes('names a session it does not run inside') && l.includes(B)).length).toBe(1)
+  }, 120_000)
+})

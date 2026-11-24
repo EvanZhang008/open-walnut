@@ -4,8 +4,7 @@
  * Only the host is faked: execFile answers from a script (nothing is installed,
  * no network), the fs records writes, and the runtime resolves commands from a
  * map. The real argv construction, sudo classification, idempotency and the
- * one-fix-at-a-time guard all run. The factory is also re-materialized from its
- * toString(), because that text is what the source-deployed daemon twin runs.
+ * one-fix-at-a-time guard all run.
  *
  * The resumable Claude Code download runs against a fake downloads.claude.ai
  * (an in-memory fs, a clock, a line that cuts off or ignores Range), and once
@@ -22,10 +21,7 @@ import { createHostFix, type HostFixDeps } from '../../src/providers/host-fix-co
 import { createClaudeInstall } from '../../src/providers/claude-install-core.js'
 import { createClaudeDownload } from '../../src/providers/claude-download-core.js'
 import { createDtachBuild } from '../../src/providers/dtach-build-core.js'
-import { getDaemonSource, validateFoldInjection } from '../../src/providers/daemon-source.js'
-import { createHostRuntime } from '../../src/providers/host-runtime-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { foldLine, initialFoldState, assembleSnapshot } from '../../src/providers/daemon-fold.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import type { ClaudeProbe } from '../../src/providers/host-runtime-core.js'
 
@@ -1488,83 +1484,36 @@ describe('guards', () => {
   })
 })
 
-// ── The text the source twin runs ────────────────────────────────────────────
+// ── How the daemon wires host.fix ────────────────────────────────────────────
 
-describe('injection into the source daemon twin', () => {
-  const FORBIDDEN = [/\b__name\b/, /\b__publicField\b/, /\b__defProp\b/, /\b__spreadValues\b/, /\brequire\s*\(/, /\bimport\s*\(/, /\bexports\./, /\bmodule\.exports\b/]
+describe('host.fix in the daemon', () => {
   const root = path.resolve(__dirname, '../..')
   const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf-8')
 
-  /** The text the source twin runs, made into a function again. */
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const rebuilt = <T,>(f: T): T => new Function('"use strict"; return ' + String(f))() as T
-
-  it('every host.fix factory\'s toString() carries no module-scope or bundler identifiers, and re-materialized copies answer the same', async () => {
-    const factories = { createHostFix, createClaudeInstall, createClaudeDownload, createDtachBuild }
-    for (const [name, f] of Object.entries(factories)) {
-      for (const re of FORBIDDEN) expect(f.toString(), `forbidden ${re} in ${name}`).not.toMatch(re)
-    }
-    const copies = { createHostFix: rebuilt(createHostFix), dtachBuild: rebuilt(createDtachBuild) }
-    const compiler = async (factory: typeof createHostFix) => {
-      const h = fakeHost({ bins: { sudo: '/usr/bin/sudo', 'apt-get': '/usr/bin/apt-get' }, script: () => ({ code: 1, stderr: 'sudo: a password is required\n' }) })
-      const r = await factory(h.deps).run('install-compiler')
-      return { ...r, durationMs: 0, calls: h.calls.map(cmdLine) }
-    }
-    expect(await compiler(copies.createHostFix)).toEqual(await compiler(createHostFix))
-    const dtach = async (factory: typeof createHostFix, build: typeof createDtachBuild) => {
-      const h = fakeHost({
-        bins: { cc: '/usr/bin/cc' },
-        script: (file) => (file === DTACH_BIN ? { code: -1, errCode: 'ENOENT' } : file.endsWith('.partial') ? { code: 0, stdout: DTACH_HELP } : { code: 0 }),
-      })
-      const r = await factory({ ...h.deps, now: () => 1_800_000_000_000, dtachBuild: build }).run('build-dtach', { sources: SOURCES })
-      return { ...r, durationMs: 0, calls: h.calls.map(cmdLine), written: Object.keys(h.written).sort(), renamed: h.renamed }
-    }
-    const theirs = await dtach(copies.createHostFix, copies.dtachBuild)
-    expect(theirs).toMatchObject({ ok: true, path: DTACH_BIN })
-    expect(theirs).toEqual(await dtach(createHostFix, createDtachBuild))
-  })
-
-  it('re-materialized copies of the three factories run the resumable install the same: a cut-off line, a bad .zst, then the plain binary', async () => {
-    const scenario = async (factory: typeof createHostFix, installer: typeof createClaudeInstall, download: typeof createClaudeDownload) => {
-      const binary = binaryOf('2.1.317')
-      const h = releaseHost({ zstd: true, line: { chunk: 700 }, releases: { '2.1.317': { binary, zst: zlib.gzipSync(binary), zstChecksum: 'e'.repeat(64) } } })
-      const r = await factory({ ...h.deps, claudeInstall: installer, claudeDownload: download }).run('install-claude-native', ASKED)
-      return { ...r, calls: h.calls.map(cmdLine), files: [...h.files.keys()].sort(), sleeps: h.sleeps }
-    }
-    const theirs = await scenario(rebuilt(createHostFix), rebuilt(createClaudeInstall), rebuilt(createClaudeDownload))
-    expect(theirs).toMatchObject({ ok: true, claude: { version: '2.1.317' } })
-    expect(theirs).toEqual(await scenario(createHostFix, createClaudeInstall, createClaudeDownload))
-  })
-
-  it('both twins register host.fix like host.preflight, the template carries no residue, and the capability is advertised', () => {
-    for (const name of ['HOST_FIX', 'CLAUDE_INSTALL', 'CLAUDE_DOWNLOAD', 'DTACH_BUILD']) expect(getDaemonSource()).not.toContain(`__CREATE_${name}__`)
-    const standalone = read('src/providers/daemon-standalone.ts')
-    const template = read('src/providers/daemon-source.ts')
-    expect(standalone).toMatch(/const hostFix = createHostFix\(\{[^}]*claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,/)
-    expect(template).toMatch(/const hostFix = \(__CREATE_HOST_FIX__\)\(\{[^}]*claudeInstall: \(__CREATE_CLAUDE_INSTALL__\),\s*claudeDownload: \(__CREATE_CLAUDE_DOWNLOAD__\), dtachBuild: \(__CREATE_DTACH_BUILD__\),/)
-    for (const [label, src] of [['standalone', standalone], ['template', template]] as const) {
-      // stopDaemon and the handover calling hostFix.cancel() is pinned by running each
-      // twin's own code: tests/providers/daemon-command-drain.test.ts.
-      // Tracked like start/send: a shutdown drains it, and the fix that runs is kept as
-      // hostFixWork (a handover skips it only when cancellable: the drain test runs that).
-      expect(src, label).toMatch(/case 'host\.fix': \{\s*(\/\/[^\n]*\n\s*)?const starts = !hostFix\.running;?\s*const work = daemonCommands\.run\((\(\) => |function \(\) \{\s*return )hostFix\.run\(cmd\.action, cmd\)[\s\S]{0,300}?if \(starts\) hostFixWork = work;?\s*return work;?\s*\}/)
-      // The result rides under `result`, so its own `ok:false` never reads as an RPC error.
-      expect(src, label).toMatch(/sendOk\(ws, id( as number)?, \{ result: r \}\)/)
-      // The preflight must report the platform the fix planner reads.
-      expect(src, label).toMatch(/platform: process\.platform/)
-      const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
-      expect(src.slice(start, src.indexOf('])', start)), label).not.toContain('host.fix')
-    }
+  it('the daemon registers host.fix like host.preflight, and the capability is advertised', () => {
+    const src = read('src/providers/daemon-standalone.ts')
+    expect(src).toMatch(/const hostFix = createHostFix\(\{[^}]*claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,/)
+    // stopDaemon and the handover calling hostFix.cancel() is pinned by running the
+    // daemon's own code: tests/providers/daemon-command-drain.test.ts.
+    // Tracked like start/send: a shutdown drains it, and the fix that runs is kept as
+    // hostFixWork (a handover skips it only when cancellable: the drain test runs that).
+    expect(src).toMatch(/case 'host\.fix': \{\s*(\/\/[^\n]*\n\s*)?const starts = !hostFix\.running;?\s*const work = daemonCommands\.run\((\(\) => |function \(\) \{\s*return )hostFix\.run\(cmd\.action, cmd\)[\s\S]{0,300}?if \(starts\) hostFixWork = work;?\s*return work;?\s*\}/)
+    // The result rides under `result`, so its own `ok:false` never reads as an RPC error.
+    expect(src).toMatch(/sendOk\(ws, id( as number)?, \{ result: r \}\)/)
+    // The preflight must report the platform the fix planner reads.
+    expect(src).toMatch(/platform: process\.platform/)
+    const start = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+    expect(src.slice(start, src.indexOf('])', start))).not.toContain('host.fix')
     expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('hostfix-v1')
-    // Imported by the binary, inlined into the source twin: it must move the daemon version.
+    // Imported by the daemon: it must move the daemon version.
     for (const file of ['host-fix-core', 'claude-install-core', 'claude-download-core', 'dtach-build-core']) {
       expect(read('scripts/build-daemon.sh')).toMatch(new RegExp(`^\\s*src/providers/${file}\\.ts$`, 'm'))
       expect(read('src/providers/daemon-version-check.ts')).toContain(`'src/providers/${file}.ts'`)
     }
   })
 
-  it('a fix in flight as the twins track it (admit + run) lets a handover pause and drain; admit alone refused it', async () => {
-    // The twins dispatch every command through admit(); host.fix then wraps its
+  it('a fix in flight as the daemon tracks it (admit + run) lets a handover pause and drain; admit alone refused it', async () => {
+    // The daemon dispatches every command through admit(); host.fix then wraps its
     // work in run() like start/send. This is the drain's side of that contract.
     const drain = createDaemonCommandDrain()
     let finish: () => void = () => {}
@@ -1584,33 +1533,6 @@ describe('injection into the source daemon twin', () => {
     void legacy.admit(() => new Promise<void>(() => {}))
     expect(() => legacy.pause()).toThrow(/active operations/)
   })
-
-  it('the deploy-time smoke test refuses a corrupted host-fix text', () => {
-    // validateFoldInjection always smoke-folds the trio, so every call carries it.
-    const fold: Array<[string, string]> = [
-      ['__FOLD_LINE__', foldLine.toString()],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ]
-    const good: Array<[string, string]> = [
-      ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()], ['__CREATE_HOST_FIX__', createHostFix.toString()],
-      ['__CREATE_CLAUDE_INSTALL__', createClaudeInstall.toString()], ['__CREATE_CLAUDE_DOWNLOAD__', createClaudeDownload.toString()],
-      ['__CREATE_DTACH_BUILD__', createDtachBuild.toString()],
-    ]
-    expect(() => validateFoldInjection(fold.concat(good))).not.toThrow()
-    // The installer's manifest reader (its download half): a checksum rule changed in the text is refused.
-    expect(createClaudeDownload.toString()).toContain('{64}')
-    const badDownload: Array<[string, string]> = [['__CREATE_CLAUDE_DOWNLOAD__', createClaudeDownload.toString().replace('{64}', '{65}')]]
-    expect(() => validateFoldInjection(fold.concat(badDownload))).toThrow(/misread a manifest/)
-    // A text that no longer builds a function is refused before it ships.
-    const notCode: Array<[string, string]> = [['__CREATE_DTACH_BUILD__', createDtachBuild.toString().replace('function', 'function (')]]
-    expect(() => validateFoldInjection(fold.concat(notCode))).toThrow()
-    // The transpiled text may quote either way.
-    const MUSL = /(["'])musl-dev\1/
-    expect(createHostFix.toString()).toMatch(MUSL)
-    const broken: Array<[string, string]> = [['__CREATE_HOST_FIX__', createHostFix.toString().replace(MUSL, '"musl"')]]
-    expect(() => validateFoldInjection(fold.concat(broken))).toThrow(/wrong apk argv/)
-  })
 })
 
 // ── A test server's isolated daemon (WALNUT_INSTALL_HOME, src/providers/remote-isolation.ts) ──
@@ -1618,8 +1540,6 @@ describe('injection into the source daemon twin', () => {
 describe('host fixes of a test server\'s isolated daemon install under its own HOME', () => {
   const OWN = '/tmp/open-walnut-test-0123456789abcdef/home'
   const OWN_BIN = `${OWN}/.local/bin/claude`
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const rebuilt = <T,>(f: T): T => new Function('"use strict"; return ' + String(f))() as T
 
   function isolatedHost() {
     const h = fakeHost({
@@ -1637,28 +1557,26 @@ describe('host fixes of a test server\'s isolated daemon install under its own H
     return h
   }
 
-  for (const [label, factory] of [['module', createHostFix], ['re-materialized (the source twin)', rebuilt(createHostFix)]] as const) {
-    it(`${label}: the installer runs with HOME = the isolated home and none of the real home's install dirs`, async () => {
-      const h = isolatedHost()
-      const r = await factory(h.deps).run('install-claude-native')
-      const inst = nonProbe(h.calls).find((c) => c.file === '/bin/bash')!
-      expect(inst.env.HOME).toBe(OWN)
-      expect(inst.cwd).toBe(OWN)
-      for (const k of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'BUN_INSTALL']) expect(inst.env[k], k).toBeUndefined()
-      // PATH still finds the host's tools (a read); every write goes under the isolated HOME.
-      for (const c of nonProbe(h.calls)) {
-        for (const a of [c.file, ...c.args, String(c.cwd ?? '')]) expect(a.startsWith(`${HOME}/`), a).toBe(false)
-      }
-      expect(r).toMatchObject({ ok: true, claude: { path: OWN_BIN } })
-      // The real home's env object is untouched.
-      expect(h.deps.env.HOME).toBe(HOME)
-    })
+  it("the installer runs with HOME = the isolated home and none of the real home's install dirs", async () => {
+    const h = isolatedHost()
+    const r = await createHostFix(h.deps).run('install-claude-native')
+    const inst = nonProbe(h.calls).find((c) => c.file === '/bin/bash')!
+    expect(inst.env.HOME).toBe(OWN)
+    expect(inst.cwd).toBe(OWN)
+    for (const k of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'BUN_INSTALL']) expect(inst.env[k], k).toBeUndefined()
+    // PATH still finds the host's tools (a read); every write goes under the isolated HOME.
+    for (const c of nonProbe(h.calls)) {
+      for (const a of [c.file, ...c.args, String(c.cwd ?? '')]) expect(a.startsWith(`${HOME}/`), a).toBe(false)
+    }
+    expect(r).toMatchObject({ ok: true, claude: { path: OWN_BIN } })
+    // The real home's env object is untouched.
+    expect(h.deps.env.HOME).toBe(HOME)
+  })
 
-    it(`${label}: never installs a compiler system-wide`, async () => {
-      const h = isolatedHost()
-      const r = await factory(h.deps).run('install-compiler')
-      expect(r).toMatchObject({ ok: false, error: 'isolated' })
-      expect(nonProbe(h.calls)).toEqual([])
-    })
-  }
+  it('never installs a compiler system-wide', async () => {
+    const h = isolatedHost()
+    const r = await createHostFix(h.deps).run('install-compiler')
+    expect(r).toMatchObject({ ok: false, error: 'isolated' })
+    expect(nonProbe(h.calls)).toEqual([])
+  })
 })

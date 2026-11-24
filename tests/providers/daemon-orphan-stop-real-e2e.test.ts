@@ -4,8 +4,8 @@
  *
  * The stub tests (tests/core/sessions/owner-stop.test.ts and
  * tests/providers/daemon-orphan-stop-twins.test.ts) pin every decision. This
- * file proves the signal SCOPE with the kernel in the loop: a source-twin
- * daemon ends a dummy CLI it spawned and journaled for the asking Walnut, and a
+ * file proves the signal SCOPE with the kernel in the loop: the session
+ * daemon (daemon-standalone.ts under bun) ends a dummy CLI it spawned and journaled for the asking Walnut, and a
  * look-alike dummy it never spawned survives every request, the successful one
  * included.
  *
@@ -37,12 +37,13 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { readSpawnJournal } from '../../src/providers/external-session-scan-core.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-const ENABLED = process.env.WALNUT_REAL_SIGNAL_TEST === '1' && process.platform !== 'win32'
+const BUN = testBun()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
+const ENABLED = process.env.WALNUT_REAL_SIGNAL_TEST === '1' && process.platform !== 'win32' && !!BUN
 const SID_A = 'orphan-real-a-0000-4000-8000-000000000001'
 const SID_B = 'orphan-real-b-0000-4000-8000-000000000002'
 /** Upper bound on either dummy's life, whatever happens to the test. */
@@ -109,7 +110,7 @@ function writeDummyCli(dir: string): string {
   return file
 }
 
-async function bootDaemon(scriptPath: string): Promise<void> {
+async function bootDaemon(): Promise<void> {
   // A minimal env: nothing inherited can point this daemon at a real dir, a
   // watchdog pid, a bridge or a server.
   const env: Record<string, string> = {
@@ -124,7 +125,7 @@ async function bootDaemon(scriptPath: string): Promise<void> {
     WALNUT_SPAWN_JOURNAL: journal,
   }
   fs.mkdirSync(env.TMPDIR, { recursive: true })
-  daemon = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  daemon = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   daemon.stderr?.resume()
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
@@ -167,7 +168,7 @@ async function endChild(child: ChildProcess | null, graceMs: number, escalate: b
   }
 }
 
-describe.runIf(ENABLED)('orphan stop with real processes (source twin daemon)', () => {
+describe.runIf(ENABLED)('orphan stop with real processes (standalone daemon)', () => {
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-orphan-real-')))
     home = path.join(root, 'home')
@@ -176,9 +177,7 @@ describe.runIf(ENABLED)('orphan stop with real processes (source twin daemon)', 
     fs.mkdirSync(home, { recursive: true })
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true })
     cliPath = writeDummyCli(path.join(root, 'bin'))
-    const scriptPath = path.join(root, 'daemon.cjs')
-    fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o700 })
-    await bootDaemon(scriptPath)
+    await bootDaemon()
   }, 120_000)
 
   afterAll(async () => {

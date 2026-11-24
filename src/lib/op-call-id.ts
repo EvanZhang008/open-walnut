@@ -54,7 +54,6 @@ export function takeCallIdArg(args: Record<string, unknown>): { callId: string |
  * The `_call_id` a JSON text names, found without parsing it (arguments too large to inline
  * travel as a file the server pulls, and take their `_call_id` from it): the client must name
  * the same call. Null when there is none; the raw string otherwise (check it with isCallId).
- * The source daemon's CLI has the same scan (daemon-source.ts wnCallIdInText).
  */
 export function callIdInJsonText(text: string): string | null {
   const at = text.indexOf('"_call_id"')

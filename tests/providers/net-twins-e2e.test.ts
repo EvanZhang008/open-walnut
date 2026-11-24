@@ -1,5 +1,5 @@
 /**
- * The host network on BOTH daemon twins booted for real (net-v1, src/providers/net-core.ts,
+ * The host network on the daemon booted for real (net-v1, src/providers/net-core.ts,
  * native/walnut-net): each daemon runs its own walnut-net once configured; one daemon
  * ("the Mac") reaches the other ("the host") through a forward, and the socket it gets is
  * the host DAEMON's own (its hello names the host's instance); a member the host no longer
@@ -16,14 +16,12 @@
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const NET_BIN = (() => {
@@ -35,19 +33,8 @@ const NET_BIN = (() => {
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wn-net-twins-')))
 afterAll(() => { if (root.includes('wn-net-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-if (BUN && NET_BIN) {
-  const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, 'net-core.cjs'),
-    path.resolve(__dirname, '../../src/providers/net-core.ts')], { encoding: 'utf8' })
-  if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 interface Daemon { proc: ChildProcess; ws: WebSocket; port: number; rpc: (cmd: Record<string, unknown>, timeoutMs?: number) => Promise<Record<string, unknown>> }
 const live: Daemon[] = []
@@ -88,7 +75,7 @@ function openWs(url: string): Promise<WebSocket> {
   })
 }
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<Daemon> {
+async function boot(dir: string): Promise<Daemon> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -98,8 +85,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<Daemon> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'), WALNUT_NET_BIN: NET_BIN!,
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'XDG_STATE_HOME']) delete env[k]
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
@@ -128,11 +114,11 @@ async function until<T>(f: () => Promise<T | null | undefined | false>, what: st
   }
 }
 
-describe.skipIf(!NET_BIN).each(TWINS)('$name', (twin) => {
+describe.skipIf(!NET_BIN || !BUN)('standalone daemon (bun)', () => {
   it('runs walnut-net, carries the Mac to the host daemon, cuts a removed member, restarts a dead one', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-').slice(0, 12))
-    const host = await boot(twin, path.join(dir, 'h'))
-    const mac = await boot(twin, path.join(dir, 'm'))
+    const dir = path.join(root, 'standalone')
+    const host = await boot(path.join(dir, 'h'))
+    const mac = await boot(path.join(dir, 'm'))
     const helloHost = await host.rpc({ cmd: 'hello' })
     expect(helloHost.capabilities as string[]).toContain('net-v1')
 

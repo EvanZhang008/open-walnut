@@ -27,7 +27,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
 import { knownAccount } from '../lib/account.js'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
@@ -50,7 +49,8 @@ import {
   prodDaemonClaimRefusal,
   type DaemonOwnerStamp,
 } from './daemon-ownership.js'
-import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
+import { resolveDaemonSourceVersion } from './daemon-version-resolve.js'
+import { daemonRuntimeCandidates } from './in-process-daemon.js'
 import { resolveSessionHostLaunch } from './session-host.js'
 import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
@@ -59,7 +59,7 @@ import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
 import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { clearDaemonSwap, expectDaemonSwap } from './daemon-drain-resend.js'
-import { daemonLaunch, discardPending, keepPendingBinary, keepPreviousSource, keepRunningBinary, keptPrevious, previousDaemon, promotePending, ReplacementGate, trialDaemon } from './local-daemon-replace.js'
+import { daemonLaunch, discardPending, isDaemonScript, keepPendingBinary, keepRunningBinary, keptPrevious, previousDaemon, promotePending, ReplacementGate, trialDaemon } from './local-daemon-replace.js'
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
@@ -196,8 +196,6 @@ function serviceAccount(): { name: string | null; uid: number | null } {
 export const LOCAL_UPGRADE_RECHECK_MS = 60_000
 /** How long after a managed update of this Mac's daemon the same build is not tried again. */
 export const LOCAL_MANAGED_UPDATE_COOLDOWN_MS = 600_000
-/** The source daemon's sidecar bundles, copied next to its script (materializeSourceDaemon). */
-const SOURCE_SIDECARS = ['changes-core.cjs', 'usage-core.cjs', 'path-resolve-core.cjs', 'port-scan-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'transcript-rewind-core.cjs', 'history-ready-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']
 /** How often at most this server loads a service that runs nothing (reviveManagedService). */
 export const REVIVE_EVERY_MS = 60_000
 
@@ -598,8 +596,7 @@ export class LocalDaemon {
 
   private async ensureRunningInner(revived = false): Promise<number> {
     // The probation a server before this one started, taken up (a deploy restarted it inside it),
-    // before the source daemon's files are written: those of a build on its probation wait beside
-    // the way back (materializeSourceDaemon).
+    // before a daemon is chosen to start.
     await this._stay.resume(() => this.stayDue(true))
     const binaryPath = await this.findDaemonBinary()
     this._binaryPath = binaryPath
@@ -1156,7 +1153,7 @@ export class LocalDaemon {
   }
 
   private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later' | 'backoff'> {
-    if (binaryPath.endsWith('.cjs')) return null
+    if (isDaemonScript(binaryPath)) return null
     const takeover = this.detectServiceTakeover()
     // An unreadable config is temporary, never permission to overwrite a service.
     if (isProductionDaemonDir(this.daemonDir) && takeover.unknown.length) {
@@ -1763,10 +1760,11 @@ export class LocalDaemon {
   }
 
   private async spawnDaemonWithEnv(binaryPath: string, env: NodeJS.ProcessEnv): Promise<number> {
-    // Source-fallback daemons are plain .cjs scripts (no compiled binary in
-    // published npm installs), run under the current Node runtime; the compiled
-    // Walnut file is its own daemon (src/binary/main.ts).
+    // A checkout with no built daemon runs the daemon's script under this server's runtime (bun);
+    // the compiled Walnut file is its own daemon (src/binary/main.ts).
     const { cmd, args } = daemonLaunch(binaryPath, isCompiledSelf(binaryPath))
+    // Run from source, the daemon cannot read the version a build bakes in: it reports this one.
+    if (binaryPath.endsWith('.ts')) env = { ...env, DAEMON_VERSION: resolveDaemonSourceVersion() }
 
     // macOS execution identity. Without this the daemon inherits OUR responsible
     // process — the node running this server — so every file the CLI and its tools
@@ -1957,7 +1955,7 @@ export class LocalDaemon {
   private findDaemonBinary(): string | Promise<string> {
     if (this.overrideBinaryPath) return this.overrideBinaryPath
     // The compiled Walnut file carries the full daemon (`walnut __daemon`), so it
-    // never needs a separate binary or the source fallback.
+    // never needs a separate daemon file.
     if (singleFile()) return process.execPath
     // DAEMON_BINARIES_DIR is the canonical build output location
     const hit = pickDaemonBinary(
@@ -1965,65 +1963,17 @@ export class LocalDaemon {
       getLocalDaemonBinaryName(),
     )
     if (hit) return hit
-    // No compiled binary — the published npm package (bun binaries are ~280MB
-    // and excluded from the tarball), or a non-darwin-arm64 host. Materialize
-    // the embedded daemon source (same code SSH source-deploys ship to remote
-    // hosts) and run it under the current Node. Feature scope matches the
-    // source twin — see daemon-source.ts.
-    return this.materializeSourceDaemon()
-  }
-
-  /**
-   * Write the embedded daemon source to <daemonDir>/daemon-fallback.cjs and
-   * return that path. spawnDaemon() detects the .cjs suffix and runs it with
-   * process.execPath. A .version sidecar mirrors the binary convention so the
-   * version-mismatch restart logic works unchanged — on package upgrade the
-   * stamped version changes, the running daemon reports the old one, and
-   * ensureRunningInner() restarts it with the new source.
-   */
-  /** The build of the daemon that started here last (it writes daemon.version at its start), or null. */
-  private lastStartedVersion(): string | null {
-    try { return fs.readFileSync(path.join(this.daemonDir, 'daemon.version'), 'utf8').trim() || null } catch { return null }
-  }
-
-  private async materializeSourceDaemon(): Promise<string> {
-    const scriptPath = path.join(this.daemonDir, 'daemon-fallback.cjs')
-    const source = getDaemonSource()
-    const sourceHash = createHash('sha256').update(source).digest('hex').slice(0, 12)
-    const hashFile = `${scriptPath}.sha256`
-
-    // Async file work: the server's event loop runs this on every start check (2026-11-04 review 5).
-    await fsp.mkdir(this.daemonDir, { recursive: true })
-    const existingHash = (await fsp.readFile(hashFile, 'utf-8').catch(() => '')).trim() || null
-    if (existingHash !== sourceHash) {
-      // The files the running daemon was started from stay as the fallback for its replacement
-      // (local-daemon-replace.ts); while it is on its probation, beside the build before it, which
-      // stays the way back till it passed (2026-11-04 review 6: they took its place).
-      const running = this.lastStartedVersion()
-      const slot = running && this._stay.watching(running) ? 'next' : 'previous'
-      if (existingHash) await keepPreviousSource(this.daemonDir, ['daemon-fallback.cjs', 'daemon-fallback.cjs.version', ...SOURCE_SIDECARS], running, undefined, this.keepsDurable, slot)
-      await fsp.writeFile(scriptPath, source, 'utf-8')
-      await fsp.writeFile(`${scriptPath}.version`, resolveDaemonSourceVersion(), 'utf-8')
-      await fsp.writeFile(hashFile, sourceHash, 'utf-8')
-      log.session.info('materialized source-fallback local daemon', { scriptPath, sourceHash })
-    }
-    // Sidecar bundles — the template require()s each next to itself and
-    // advertises the matching capability only when the load succeeds.
-    // Best-effort per file: an absent bundle (published npm package) just means
-    // the server keeps its own fallback for that feature.
-    // acp-daemon-core.cjs is local-only on purpose: ACP engines never run on a
-    // remote host, so daemon-connection's remote deploy list leaves it out.
-    for (const sidecarFile of SOURCE_SIDECARS) {
-      try {
-        const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
-        const sidecarDst = path.join(this.daemonDir, sidecarFile)
-        await fsp.copyFile(sidecarSrc, sidecarDst)
-      } catch { /* absent, or not copied: the server-side fallback stays */ }
-    }
-    return scriptPath
+    // No daemon binary for this platform (a checkout that has not run the daemon build, or a
+    // platform it builds none for): the daemon itself, run by this server's runtime: its source
+    // in a checkout, else the bundle the daemon build writes beside the binaries.
+    const script = daemonRuntimeCandidates(import.meta.url, DAEMON_BINARIES_DIR).find((file) => fs.existsSync(file))
+    if (script) return script
+    throw new Error(`no session daemon for this machine: no ${getLocalDaemonBinaryName()} in ${DAEMON_BINARIES_DIR}, and no daemon source or bundle to run. Build it with \`bun run build:daemon\` (it needs Bun), or install a released Walnut, which carries its own daemon.`)
   }
 
   private readBinaryVersion(binaryPath: string): string | null {
+    // The daemon's source, run by this server's runtime: the version this build computes for it (spawnDaemonWithEnv hands it over).
+    if (binaryPath.endsWith('.ts')) return resolveDaemonSourceVersion()
     if (isCompiledSelf(binaryPath)) {
       // An npm update replaced the file this server runs from: a daemon started now runs
       // the new version, so insisting on this build's would restart the daemon on every

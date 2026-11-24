@@ -147,23 +147,9 @@ describe('the mechanisms the caps depend on are actually wired', () => {
     expect(relay).toMatch(/case 'body'/)
   })
 
-  it('both daemon twins carry the same gateway line cap', () => {
-    // The bun twin imports the constant; the JS template cannot import, so it
-    // hand-inlines a copy that must agree.
-    const template = read('src/providers/daemon-source.ts')
-    const mb = GATEWAY_MAX_LINE_BYTES / (1024 * 1024)
-    expect(template).toContain(`GATEWAY_MAX_LINE_BYTES = ${mb} * 1024 * 1024`)
-  })
-
-  it('both CLI faces agree on when a payload leaves the request', () => {
-    // Three implementations of `walnut tools call` exist (wn-cli.ts, the hub CLI,
-    // and the hand-inlined twin inside the daemon-source template). The template
-    // is the one that gets forgotten — a remote host then keeps inlining a 100MB
-    // payload and dies at the gateway line, looking like a server bug.
-    const template = read('src/providers/daemon-source.ts')
-    const bytes = GATEWAY_INLINE_ARGS_MAX_BYTES / 1024
-    expect(template).toContain(`GATEWAY_INLINE_ARGS_MAX_BYTES = ${bytes} * 1024`)
-    expect(template).toMatch(/argsFile: wnArgsFile/)
+  it('the in-session CLI moves a large payload out of the request', () => {
+    // A CLI that keeps inlining a 100MB payload dies at the gateway line, looking
+    // like a server bug.
     const cli = read('src/providers/wn-cli.ts')
     expect(cli).toMatch(/GATEWAY_INLINE_ARGS_MAX_BYTES/)
     expect(cli).toMatch(/argsFile/)

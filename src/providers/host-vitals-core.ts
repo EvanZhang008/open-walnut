@@ -24,10 +24,7 @@
  * Two daemons on one host (one draining during an upgrade) may both write a
  * minute; the fold counts a minute once.
  *
- * How each twin gets it: daemon-standalone.ts imports createHostVitals;
- * daemon-source.ts inlines `createHostVitals.toString()` through
- * `__CREATE_HOST_VITALS__`. So the factory body references NOTHING at module
- * scope, every capability comes from `deps`, and it carries no backticks.
+ * Imported by daemon-standalone.ts (createHostVitals). The factory body references NOTHING at module scope, every capability comes from `deps`, and it carries no backticks.
  */
 
 import type fsType from 'node:fs'

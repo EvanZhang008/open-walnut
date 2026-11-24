@@ -1,6 +1,6 @@
 /**
  * The host daemon's own answer to a session's message runs the server's send rules
- * (core/sessions/send-rules.ts createSendRules, inlined into daemon-source.ts as text), not a copy:
+ * (core/sessions/send-rules.ts createSendRules, imported by the daemon), not a copy:
  * wake=false honoured (a note that asks nothing opens no request; one that also asks is refused),
  * a lead's deadline as the server sets it, and a quiet note left to the server while it answers.
  * Review round 2, N3: the daemon ignored wake and gave a lead 6 h, not 12 h.
@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanupJournalDirs, gatewayCall, JHOME, journalHost, journalTmpDir, jslice, SID_A, TASK_A, TASK_B } from '../helpers/offline-journal-harness.js'
-import { createSendRules, type SendRuleInput } from '../../src/core/sessions/send-rules.js'
+import { createSendRules } from '../../src/core/sessions/send-rules.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 
 const T0 = Date.parse('2026-11-20T12:00:00Z')
@@ -90,39 +90,10 @@ describe('while the server answers, a quiet note is the server\'s', () => {
   })
 })
 
-describe('send rules: one self-contained copy the daemon inlines', () => {
-  const rebuild = <T>(fn: T): T => new Function('"use strict"; return ' + String(fn))() as T
-
-  it('the factory rebuilt from its text answers a table of inputs as the module does', () => {
-    const mod = createSendRules()
-    const copy = rebuild(createSendRules)()
-    const inputs: SendRuleInput[] = []
-    for (const expectReply of [undefined, true, false]) for (const wake of [undefined, true, false]) for (const force of [undefined, true]) {
-      for (const handsOn of [undefined, { id: 'rq-aaaaaa' }]) {
-        inputs.push({ ...(expectReply !== undefined ? { expectReply } : {}), ...(wake !== undefined ? { wake } : {}), ...(force ? { force } : {}), ...(handsOn ? { handsOn } : {}) })
-      }
-    }
-    for (const input of inputs) {
-      for (const goesUp of [false, true]) {
-        expect(copy.asksReply(input, goesUp)).toBe(mod.asksReply(input, goesUp))
-        expect(copy.opensRequest(input, goesUp)).toBe(mod.opensRequest(input, goesUp))
-      }
-      expect(copy.wakeFalseConflict(input)).toEqual(mod.wakeFalseConflict(input))
-      expect(copy.holdsQuietly(input)).toBe(mod.holdsQuietly(input))
-    }
-    for (const kind of ['send', 'lead', 'start'] as const) for (const implicit of [false, true]) for (const secs of [undefined, 5, 7200.7, 10 ** 9, Number.NaN]) {
-      expect(copy.clampReplyTimeoutSecs(secs, implicit, kind)).toBe(mod.clampReplyTimeoutSecs(secs, implicit, kind))
-    }
-    expect(copy.clampReplyTimeoutSecs(undefined, true, 'lead')).toBe(12 * 3600)
-  })
-
-  it('send-rules.ts imports nothing at runtime, and the daemon source inlines it', () => {
+describe('send rules: the daemon runs the server\'s rules', () => {
+  it('gives a lead the server\'s deadline, and the daemon builds its rules from the module', () => {
+    expect(createSendRules().clampReplyTimeoutSecs(undefined, true, 'lead')).toBe(12 * 3600)
     const root = path.resolve(import.meta.dirname, '..', '..')
-    const src = fs.readFileSync(path.join(root, 'src/core/sessions/send-rules.ts'), 'utf8')
-    expect(src.split('\n').filter((l) => /^import\s/.test(l) && !/^import type\s/.test(l))).toEqual([])
-    const twin = fs.readFileSync(path.join(root, 'src/providers/daemon-source.ts'), 'utf8')
-    expect(twin).toContain("['__CREATE_SEND_RULES__', createSendRules.toString()]")
-    expect(twin).toContain('rules: (__CREATE_SEND_RULES__)(),')
     expect(fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf8')).toContain('rules: createSendRules(),')
   })
 })

@@ -1,6 +1,6 @@
 /**
- * E2E: daemon fs.mkdir round-trip against the REAL daemon-source.ts template
- * (same spawn pattern as daemon-lifecycle-e2e). Also pins the `hello`
+ * E2E: daemon fs.mkdir round-trip against the REAL standalone daemon
+ * (daemon-standalone.ts under bun, same spawn pattern as daemon-lifecycle-e2e). Also pins the `hello`
  * capability contract — a daemon missing 'fs.mkdir' would force redeploy.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -9,25 +9,26 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 let proc: ChildProcess
 let port: number
 let tmpDir: string
 
 beforeAll(async () => {
+  if (!BUN) return
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-mkdir-e2e-'))
-  const scriptPath = path.join(tmpDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-
-  proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  proc = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: path.join(tmpDir, 'daemon') },
+    cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -35,7 +36,7 @@ beforeAll(async () => {
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
     onDaemonEarlyExit(proc, { daemonDir: path.join(tmpDir, 'daemon') }, (err) => { clearTimeout(timer); reject(err) })
   })
-}, 20_000)
+}, 40_000)
 
 afterAll(async () => {
   if (proc && proc.exitCode === null) {
@@ -45,7 +46,7 @@ afterAll(async () => {
       proc.once('exit', () => { clearTimeout(t); resolve() })
     })
   }
-  fs.rmSync(tmpDir, { recursive: true, force: true })
+  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
 function connectWs(): Promise<WebSocket> {
@@ -76,7 +77,7 @@ function sendCmd(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 10_000
   })
 }
 
-describe('daemon fs.mkdir round-trip', () => {
+describe.skipIf(!BUN)('daemon fs.mkdir round-trip', () => {
   it('hello advertises the fs.mkdir capability', async () => {
     const ws = await connectWs()
     const res = await sendCmd(ws, { cmd: 'hello' })

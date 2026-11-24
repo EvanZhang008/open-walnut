@@ -1,5 +1,5 @@
 /**
- * Two daemon-side halves of the phone send path, both twins, real processes.
+ * Two daemon-side halves of the phone send path, on the real session daemon.
  *
  * 1. A relay whose target closes before it answers moves to the next trusted
  *    client at once (rerouteMessageRelays). Matrix L5 (2026-10-03): after a
@@ -12,9 +12,8 @@
  *    found come back (gate r3, N6: a marker hours of output back was never
  *    found in the 2 MB tail the companion used to pull).
  *
- * The harness is the one of daemon-relay-target-liveness.test.ts: the source
- * twin under node (its hand-rolled WebSocket server), the standalone twin under
- * bun when bun is installed, a fake cloud that plays the bridge.
+ * The harness is the one of daemon-relay-target-liveness.test.ts: the daemon
+ * (daemon-standalone.ts) under bun, a fake cloud that plays the bridge.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -23,8 +22,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -48,8 +45,8 @@ async function waitFor(pred: () => boolean, ms: number, what: string): Promise<v
 
 interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number }
 
-async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-reroute-${twin}-`))
+async function spawnDaemon(): Promise<Daemon> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-reroute-'))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -57,17 +54,10 @@ async function spawnDaemon(twin: 'source' | 'standalone'): Promise<Daemon> {
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ${b.toString()}`))
+  const proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[daemon] ${b.toString()}`))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'daemon')
   return {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -123,7 +113,7 @@ async function trusted(port: number, answers: boolean): Promise<{ ws: WebSocket;
   return { ws, seen }
 }
 
-describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as const))('relay re-route and markers.find (%s twin)', (twin) => {
+describe.skipIf(!bunPath)('relay re-route and markers.find', () => {
   let daemon: Daemon
   let cloud: WebSocketServer
   let bridgeSide: WebSocket | null = null
@@ -137,7 +127,7 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
         try { if ((JSON.parse(d.toString()) as { ev?: string }).ev === 'hello') bridgeSide = ws as unknown as WebSocket } catch { /* frame */ }
       })
     })
-    daemon = await spawnDaemon(twin)
+    daemon = await spawnDaemon()
     const setup = await connect(daemon.port)
     const port = (cloud.address() as { port: number }).port
     const conf = await rpc(setup, 'bridge.configure', { enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: 't', hostAlias: HOST_ALIAS })
@@ -216,13 +206,9 @@ describe.each(bunPath ? (['source', 'standalone'] as const) : (['source'] as con
   }, 30_000)
 })
 
-describe('one trusted-client beat per twin, and the send-markers flag', () => {
-  const twins = {
-    source: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8'),
-    standalone: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8'),
-  }
-  it.each(Object.keys(twins) as Array<keyof typeof twins>)('%s: the beat is parsed once and every trusted-client timer reads it', (twin) => {
-    const src = twins[twin]
+describe('one trusted-client beat, and the send-markers flag', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
+  it('the beat is parsed once and every trusted-client timer reads it', () => {
     // Two parses (or one shadowing the other in a block) would let the
     // keepalive and the relay pick run on different beats.
     expect(src.match(/WALNUT_TRUSTED_CLIENT_BEAT_MS/g) ?? []).toHaveLength(1)
@@ -230,8 +216,7 @@ describe('one trusted-client beat per twin, and the send-markers flag', () => {
     // No second name for the beat: every timer reads TRUSTED_CLIENT_BEAT_MS.
     expect(src).not.toMatch(/(?<!BRIDGE_)\bPING_INTERVAL_MS\b/)
   })
-  it.each(Object.keys(twins) as Array<keyof typeof twins>)('%s: the status reply says markers ride inside the send, and markers.find is bridge-allowed', (twin) => {
-    const src = twins[twin]
+  it('the status reply says markers ride inside the send, and markers.find is bridge-allowed', () => {
     expect(src).toMatch(/sendMarkers: true/)
     expect(src).toMatch(/'markers\.find',/)
   })

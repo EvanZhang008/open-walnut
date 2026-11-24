@@ -6,8 +6,7 @@
  *     to a remote host) + its own local daemon, each in its own temp dirs
  *     | direct test transport: getDirectDaemonConnection('devbox', ws://127.0.0.1:<port>)
  *     v
- *   host daemon child (the source twin, daemon-source.ts, on the Node a host runs it on
- *     (tests/helpers/source-twin.ts), or the standalone twin on bun)
+ *   host daemon child (daemon-standalone.ts on bun, or its built binary: `daemonBuilt`)
  *     | server.configure from the Mac's real host-server manager (hosts.devbox
  *     |   server_program: replica), with WALNUT_HOST_SERVER_APP_DIR standing in
  *     |   for an install: <base>/app/dist/cli.js runs this tree's src/cli.ts on bun
@@ -60,7 +59,7 @@
  *
  * `hostService`: the host is a launcher's host (src/binary/service-entry.ts). Its daemon is the
  * launcher's `--service` entry (tests/providers/fixtures/one-service-runner.ts, what main.ts runs
- * for it; the standalone twin), and this harness is the launcher: it starts the entry again each
+ * for it), and this harness is the launcher: it starts the entry again each
  * time it ends. The entry runs as the session daemon until a mode file names this Walnut. Once the
  * Mac's manager set its follower up (the spec the daemon keeps), the harness switches the host as
  * `walnut daemon update --serve` does: it writes the mode file and ends the daemon; the launcher
@@ -74,10 +73,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSync } from 'esbuild'
 import Database from '../../src/lib/sqlite.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from './source-twin.js'
 import { bunRuntime, testBun } from './bun-runtime.js'
 import { startSilentLinkProxy, type SilentLinkProxy } from './silent-link-proxy.js'
 import { appendOutput, keepClusterBase, noteTimeline, outputFile, startTimeline } from './cluster-keep.js'
@@ -150,7 +146,8 @@ function seedHostTranscript(hostHome: string, cwd: string): void {
   fs.writeFileSync(path.join(dir, `${HOST_SID}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n', { mode: 0o600 })
 }
 
-export type Twin = 'source' | 'standalone'
+/** The one daemon there is (daemon-standalone.ts); kept so a suite can still name it. */
+export type Twin = 'standalone'
 /** What runs as the app: this tree's sources on bun, or its real build (ROOT/dist). */
 export type ClusterApp = 'source' | 'built'
 
@@ -416,7 +413,7 @@ export const windowEnv = (): Record<string, string> => ({
  * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
  * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
  */
-export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean; release?: string } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+export async function startHostDaemon(_twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean; release?: string } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),
@@ -432,20 +429,10 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
   if (opts.release) {
     // An older release's daemon: its compiled file's own daemon entry.
     proc = spawn(opts.release, ['__daemon', '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    // The trigger sidecar a deploy ships beside the script (scripts/build-daemon.sh):
-    // without it the source twin has no triggers and no clock routines.
-    buildSync({
-      entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-      bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-    })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
-    if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
+    if (!BUN) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
     const binary = path.join(ROOT, 'dist', 'daemon-binaries', `daemon-${process.platform}-${process.arch}`)
-    if (built && !fs.existsSync(binary)) throw new Error(`the built standalone twin is missing: ${binary}`)
+    if (built && !fs.existsSync(binary)) throw new Error(`the built daemon binary is missing: ${binary}`)
     proc = built
       ? spawn(binary, ['--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
       : spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
@@ -456,7 +443,7 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
     if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`the host daemon exited (${proc.exitCode ?? proc.signalCode})`)
     return fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid'))
   }, 90_000, 'the host daemon')
-  // Both twins run in the foreground: the pid is the child's own (the pid file says the same).
+  // The daemon runs in the foreground: the pid is the child's own (the pid file says the same).
   const filePid = readPid(path.join(dir, 'daemon.pid'))
   if (filePid !== proc.pid) {
     signalChild(proc, 'SIGTERM')
@@ -753,16 +740,16 @@ export type SeedMac = (o: { base: string; macData: string; env: Record<string, s
 
 /**
  * `hostService`: the host runs under its launcher and is switched to its one Walnut service (see
- * the header); the twin is the standalone one, the only one a service holds. `macBootExtra`: code
+ * the header), from source (no `daemonBuilt`). `macBootExtra`: code
  * the Mac's boot script runs after its server started, before it reports its port. `macEnv`: more
  * of the Mac's env (a timing knob of a feature under test). `hostRelease`: an older host, a released
  * Walnut's compiled file as its daemon (`__daemon --start`), as a registry install leaves it; its
  * server is still the one the Mac installs there, this tree's, as a leader puts its own build on a
  * host (scripts/release-rehearsal/host-judged-old-host.mjs).
  */
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; macHostExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string>; hostRelease?: string }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; macHostExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string>; hostRelease?: string }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
-  if (opts.hostService && (opts.twin !== 'standalone' || opts.daemonBuilt)) throw new Error('replica-cluster: a host service runs the standalone twin from source')
+  if (opts.hostService && opts.daemonBuilt) throw new Error('replica-cluster: a host service runs the daemon from source')
   if (opts.hostRelease && (opts.hostService || opts.daemonBuilt)) throw new Error('replica-cluster: an older host runs its release\'s daemon, no service and no daemon build of this tree')
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
@@ -896,7 +883,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       launcher = await startHostLauncher({ dir: d.hostDaemon, state: d.hostState, home: d.hostHome, bin: d.bin, host: opts.hostService, afterFile })
       hostDaemon = { proc: launcher.proc, pid: launcher.proc.pid!, port: Number(fs.readFileSync(path.join(d.hostDaemon, 'daemon.port'), 'utf8')) }
     } else {
-      hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true, opts.hostRelease ? { release: opts.hostRelease } : {})
+      hostDaemon = await startHostDaemon('standalone', d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true, opts.hostRelease ? { release: opts.hostRelease } : {})
     }
     // A launcher's host moves its door's port at each start: the proxy asks where it is at each connection.
     const doorPortFile = path.join(d.hostDaemon, 'daemon.port')
@@ -1013,7 +1000,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const offlineOf = (h: http.IncomingHttpHeaders): number | null => (typeof h['x-walnut-offline'] === 'string' ? Number(h['x-walnut-offline']) : null)
 
   return {
-    base, twin: opts.twin, app, macPort, macPid, macDaemonPid, hostDaemonPid: hostDaemon!.pid, replicaPort, replicaData: replicaDataNow(), macData: d.macData,
+    base, twin: 'standalone', app, macPort, macPid, macDaemonPid, hostDaemonPid: hostDaemon!.pid, replicaPort, replicaData: replicaDataNow(), macData: d.macData,
     ids: { ...mac!.ids, macSid: MAC_SID, hostSid: HOST_SID },
     mac: macCall,
     replica: replicaCall,

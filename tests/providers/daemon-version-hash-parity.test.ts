@@ -82,26 +82,25 @@ describe('daemon version hash: the two source lists agree', () => {
     expect(computeExpectedDaemonVersion()).toBe(hashFiles(shellSourceList()))
   })
 
-  // The specific regression this file was written for. Both twins report the
+  // The specific regression this file was written for. The daemon reports the
   // capability list on `hello`, so it is part of the deploy unit's behaviour.
   it('includes daemon-capabilities.ts — editing it must move the version', () => {
     expect(shellSourceList()).toContain('src/providers/daemon-capabilities.ts')
   })
 
-  // Anything the twins import or inline belongs in the list. These are the files
+  // Anything the daemon imports belongs in the list. These are the files
   // whose absence has already caused a real "no host redeployed" incident class.
-  it('includes both daemon twins and the shared core they mirror', () => {
+  it('includes the daemon and its shared core', () => {
     const list = shellSourceList()
     for (const rel of [
       'src/providers/daemon-standalone.ts',
-      'src/providers/daemon-source.ts',
       'src/providers/daemon-core.ts',
     ]) {
       expect(list, `${rel} must be hashed`).toContain(rel)
     }
   })
 
-  // Ratchet: every module the standalone twin imports at runtime ships inside
+  // Ratchet: every module the standalone daemon imports at runtime ships inside
   // the binary, so an edit to it must move the version. fs-ls-core.ts and
   // git-diff-core.ts were missing, so a change there never redeployed a host.
   it("every relative runtime import of daemon-standalone.ts is in BOTH lists", () => {
@@ -112,16 +111,16 @@ describe('daemon version hash: the two source lists agree', () => {
     const shell = shellSourceList()
     const ts = tsSourceList()
     const missing = imports.filter((rel) => !shell.includes(rel) || !ts.includes(rel))
-    expect(missing, `imported by the standalone twin but not hashed: ${missing.join(', ')}`).toEqual([])
+    expect(missing, `imported by the standalone daemon but not hashed: ${missing.join(', ')}`).toEqual([])
     for (const rel of ['src/providers/fs-ls-core.ts', 'src/providers/git-diff-core.ts']) expect(shell).toContain(rel)
   })
 
-  // Same ratchet for the ACP sidecars (acp-daemon-core.cjs, acp-worker.js), which bundle
-  // their whole import tree, plus the codex-acp bundle copied beside them. 2026-10-30: the
+  // Same ratchet for the ACP worker bundle (acp-worker.js), which bundles its whole import
+  // tree, and the ACP daemon module, plus the codex-acp bundle copied beside them. 2026-10-30: the
   // thread restore (acp-thread-restore.ts) and the worker's redaction (src/logging/redact.ts)
   // were bundled there, and a codex-acp patch changes only the bundle's bytes: none of them
   // moved the version, so a host kept the old ACP code after a deploy.
-  it('every module bundled into the ACP sidecars, and the codex-acp bundle, is in BOTH lists', () => {
+  it('every module bundled into the ACP worker and the ACP daemon, and the codex-acp bundle, is in BOTH lists', () => {
     const bundled = new Set<string>()
     const todo = ['src/providers/acp-daemon.ts', 'src/providers/acp-worker/worker-main.ts']
     while (todo.length > 0) {
@@ -139,13 +138,13 @@ describe('daemon version hash: the two source lists agree', () => {
     const shell = shellSourceList()
     const ts = tsSourceList()
     const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
-    expect(missing, `bundled into the ACP sidecars but not hashed: ${missing.join(', ')}`).toEqual([])
+    expect(missing, `bundled into the ACP files but not hashed: ${missing.join(', ')}`).toEqual([])
   })
 
-  // Same ratchet for the daemon-service-cli.cjs sidecar, which ships with every daemon and
-  // bundles its whole import tree. src/utils/file-lock.ts was missing, so a lock change left
+  // Same ratchet for daemon-service-cli.ts, which ships inside every daemon file with its
+  // whole import tree. src/utils/file-lock.ts was missing, so a lock change left
   // old and new lock code running side by side on the service files.
-  it('every module bundled into daemon-service-cli.cjs is in BOTH lists', () => {
+  it('every module daemon-service-cli.ts reaches is in BOTH lists', () => {
     const bundled = new Set<string>()
     const todo = ['src/providers/daemon-service-cli.ts']
     while (todo.length > 0) {
@@ -161,20 +160,21 @@ describe('daemon version hash: the two source lists agree', () => {
     const shell = shellSourceList()
     const ts = tsSourceList()
     const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
-    expect(missing, `bundled into daemon-service-cli.cjs but not hashed: ${missing.join(', ')}`).toEqual([])
+    expect(missing, `reached by daemon-service-cli.ts but not hashed: ${missing.join(', ')}`).toEqual([])
   })
 
-  // The whole class: every bundle build-daemon.sh writes beside the binary (each
+  // The whole class: every artifact build-daemon.sh writes beside the binary (each
   // `--outfile "$OUTDIR/<name>"` with its entry on the next line) ships its whole import
-  // tree. 2026-11-01: net-core.cjs bundled net-binary.ts (the connector download), which
+  // tree. 2026-11-01: a bundle took net-binary.ts (the connector download), which
   // neither list had, so a change to the download would not have moved the version.
   it('every module bundled into any daemon bundle is in BOTH lists', () => {
     const script = fs.readFileSync(BUILD_SCRIPT, 'utf-8')
     const entries = [...script.matchAll(/--outfile "\$OUTDIR\/[^"]+" \\\n\s+(src\/[^\s]+\.ts)/g)].map((m) => m[1]!)
-    expect(entries).toContain('src/providers/net-core.ts')
-    expect(entries.length).toBeGreaterThan(15)
+    expect(entries).toContain('src/providers/daemon-standalone.ts')
+    expect(entries).toContain('src/providers/acp-worker/worker-main.ts')
+    expect(entries.length).toBeGreaterThanOrEqual(4)
     const bundled = new Set<string>()
-    const todo = [...entries]
+    const todo = [...entries, 'src/providers/history-ready-worker.ts']
     while (todo.length > 0) {
       const rel = todo.pop()!
       if (bundled.has(rel)) continue

@@ -8,15 +8,13 @@
  * them idle 2 to 4 hours, while the leader subscribed to them again within the minute. The same
  * happened on every deploy before (13 stops on one morning, 20 on 11-20).
  *
- * Both twins are exercised from their own text: Subscribers and scanIdleSessions are sliced out of
- * daemon-standalone.ts and the daemon-source.ts template and evaluated with every free identifier
- * injected. The kill is a spy; no process, file or socket is touched.
+ * The daemon is exercised from its own text: Subscribers and scanIdleSessions are sliced out of
+ * daemon-standalone.ts and evaluated with every free identifier injected. The kill is a spy; no process, file or socket is touched.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
 import ts from 'typescript'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const REPO_ROOT = nodePath.resolve(__dirname, '../..')
 const SID = '11111111-2222-4333-8444-555555555555'
@@ -28,14 +26,7 @@ const IDLE_WARNING_MS = 5 * MIN
 const IDLE_KILL_MS = 120 * MIN
 const T0 = Date.UTC(2026, 10, 23, 12, 0, 0)
 
-type Twin = 'standalone' | 'template'
-const TWINS: Twin[] = ['standalone', 'template']
-
-function twinSource(kind: Twin): string {
-  return kind === 'standalone'
-    ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    : getDaemonSource()
-}
+const DAEMON_SRC = nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
 function sliceTopLevel(src: string, head: RegExp, name: string): string {
   const at = src.search(head)
@@ -45,7 +36,7 @@ function sliceTopLevel(src: string, head: RegExp, name: string): string {
   return src.slice(at, end + 2)
 }
 
-function buildTwin(kind: Twin, mtimeMs: number) {
+function buildDaemon(mtimeMs: number) {
   const kills: number[] = []
   const sessions = new Map<string, Record<string, unknown>>()
   const injected: Record<string, unknown> = {
@@ -53,7 +44,6 @@ function buildTwin(kind: Twin, mtimeMs: number) {
     SERVICE_MODE: true,
     daemonCommands: { closed: false },
     codeServer: { reapIdleCodeServer: () => false },
-    vscodeServerCore: { reapIdleCodeServer: () => false },
     isProcessGroupAlive: () => false,
     killProcessGroup: () => { throw new Error('killProcessGroup must not run here') },
     process: { kill: (pid: number, sig: number) => { if (pid !== PID || sig !== 0) throw new Error('unexpected signal') } },
@@ -69,7 +59,7 @@ function buildTwin(kind: Twin, mtimeMs: number) {
     logMsg: () => {},
     killSessionProcessGroup: (pid: number) => { kills.push(pid) },
   }
-  const src = twinSource(kind)
+  const src = DAEMON_SRC
   const code = sliceTopLevel(src, /class Subscribers(<T>)? extends Set/, 'Subscribers') + '\n'
     + sliceTopLevel(src, /function scanIdleSessions\(/, 'scanIdleSessions')
   const js = ts.transpileModule(code + '\nreturn { Subscribers, scanIdleSessions };', {
@@ -89,46 +79,46 @@ function buildTwin(kind: Twin, mtimeMs: number) {
   return { ...built, addSession, kills }
 }
 
-describe.each(TWINS)('idle scan and Subscribers (%s twin)', (kind) => {
+describe('idle scan and Subscribers', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0) })
   afterEach(() => { vi.useRealTimers() })
   const at = (min: number) => vi.setSystemTime(T0 + min * MIN)
 
   it('a leader link that drops stops no session: the subscriber that just left still counts', () => {
-    const twin = buildTwin(kind, T0 - 244 * MIN)   // last output 4 h ago, like the stopped sessions
-    const session = twin.addSession()
+    const daemon = buildDaemon(T0 - 244 * MIN)   // last output 4 h ago, like the stopped sessions
+    const session = daemon.addSession()
     const leader = {}
     at(1); session.subscribers.add(leader)
-    at(6); twin.scanIdleSessions()
-    expect(twin.kills, 'a watched session is never idle').toEqual([])
+    at(6); daemon.scanIdleSessions()
+    expect(daemon.kills, 'a watched session is never idle').toEqual([])
     session.subscribers.delete(leader)             // the link drops
-    at(6.2); twin.scanIdleSessions()
-    expect(twin.kills, 'stopped 12 s after its subscriber left').toEqual([])
-    at(6 + 119); twin.scanIdleSessions()
-    expect(twin.kills, 'stopped before 2 h without anyone watching').toEqual([])
+    at(6.2); daemon.scanIdleSessions()
+    expect(daemon.kills, 'stopped 12 s after its subscriber left').toEqual([])
+    at(6 + 119); daemon.scanIdleSessions()
+    expect(daemon.kills, 'stopped before 2 h without anyone watching').toEqual([])
   })
 
   it('a session nobody watches or writes for the whole threshold is still reclaimed', () => {
-    const twin = buildTwin(kind, T0 - 244 * MIN)
-    const session = twin.addSession()
+    const daemon = buildDaemon(T0 - 244 * MIN)
+    const session = daemon.addSession()
     const leader = {}
     session.subscribers.add(leader)
     at(10); session.subscribers.delete(leader)
-    at(10 + 121); twin.scanIdleSessions()
-    expect(twin.kills).toEqual([PID])
+    at(10 + 121); daemon.scanIdleSessions()
+    expect(daemon.kills).toEqual([PID])
   })
 
   it('an adopted session is not stopped before the leader attaches', () => {
-    const twin = buildTwin(kind, T0 - 244 * MIN)
-    twin.addSession()                               // adoption at service start: no subscriber yet
-    at(1); twin.scanIdleSessions()
-    at(30); twin.scanIdleSessions()
-    expect(twin.kills).toEqual([])
+    const daemon = buildDaemon(T0 - 244 * MIN)
+    daemon.addSession()                               // adoption at service start: no subscriber yet
+    at(1); daemon.scanIdleSessions()
+    at(30); daemon.scanIdleSessions()
+    expect(daemon.kills).toEqual([])
   })
 
   it('only the last subscriber leaving moves watchedAt; clear() of a watched set moves it too', () => {
-    const twin = buildTwin(kind, T0)
-    const s = new twin.Subscribers()
+    const daemon = buildDaemon(T0)
+    const s = new daemon.Subscribers()
     expect(s.watchedAt).toBe(T0)
     const a = {}; const b = {}
     s.add(a); s.add(b)
@@ -146,8 +136,8 @@ describe.each(TWINS)('idle scan and Subscribers (%s twin)', (kind) => {
 })
 
 describe('every session subscriber set remembers when it was last watched', () => {
-  it.each(TWINS)('%s twin: each session is built with Subscribers, never a plain Set', (kind) => {
-    const src = twinSource(kind)
+  it('each session is built with Subscribers, never a plain Set', () => {
+    const src = DAEMON_SRC
     const built = src.match(/subscribers\s*[:=]\s*new\s+\w+/g) ?? []
     expect(built.length, 'no session construction found').toBeGreaterThan(0)
     // A new place that builds a session with a plain Set brings the 2026-11-23 stops back.

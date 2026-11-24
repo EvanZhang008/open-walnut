@@ -1,18 +1,18 @@
 /**
  * exec.run / exec.read / exec.kill (host-exec-v1, src/providers/host-exec-core.ts)
- * on BOTH daemon twins booted for real: the capability is advertised, a command
+ * on the daemon booted for real (daemon-standalone.ts under bun): the capability is advertised, a command
  * runs in the login shell with its exit code and output, argv runs with no shell
  * parsing, the log lands in the task's directory, a refusal comes back with its
  * code, a deadline stops the whole process group, a background job is read and
  * stopped (only by the task that started it), a process that left the group does
  * not hold the run open, and every run is in the audit file; host-exec-group-v1 ends a run's group
  * only when asked (`endGroup`); host-exec-wait-v1's
- * exec.read `until` waits for a line, tested in a matcher process each twin starts as its own
+ * exec.read `until` waits for a line, tested in a matcher process the daemon starts as its own
  * program (a runaway pattern kills that process, never the daemon's loop), and a wait_for that
  * could never hold is refused.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the task root are temp paths; the
- * commands are /bin/sh builtins and sleep; the daemon is SIGKILLed after each twin.
+ * commands are /bin/sh builtins and sleep; the daemon is SIGKILLed after each test.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
@@ -20,30 +20,14 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-exec-twins-')))
 afterAll(() => { if (root.includes('walnut-host-exec-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds both sidecars next to it, as deployed.
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -59,7 +43,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> {
+async function boot(dir: string): Promise<string> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -70,8 +54,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -103,10 +86,10 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
   })
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('runs a plugin script with its streams apart, and keeps no job, log or audit line of it', async () => {
-    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-script`)
-    const home = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-script')
+    const home = await boot(dir)
     // What a login profile prints is not the script's stdout.
     fs.writeFileSync(path.join(home, '.profile'), 'echo profile-noise\n')
     const hello = await rpc({ cmd: 'hello' })
@@ -130,8 +113,8 @@ describe.each(TWINS)('$name', (twin) => {
   })
 
   it('runs a command for another host and keeps its log and audit', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    const home = await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    const home = await boot(dir)
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toContain('host-exec-v1')
 
@@ -193,8 +176,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 
   it('host-exec-v2: the line in bash with WALNUT_TASK_DIR, a taken id refused, the jobs listed by task', async () => {
-    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-v2`)
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone-v2')
+    await boot(dir)
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-v2')
     const taskId = 'task-hx-v2'
     const taskDir = path.join(dir, 'state', 'tasks', taskId)
@@ -211,8 +194,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 60_000)
 
   it('host-exec-wait-v1: exec.read until answers at the line, and refuses a bad pattern', async () => {
-    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-wait`)
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone-wait')
+    await boot(dir)
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-wait-v1')
     const taskId = 'task-hx-wait'
     expect(await rpc({ cmd: 'exec.run', jobId: 'hx-wait-one', taskId, command: 'sleep 0.5; echo "listening on :4000"; sleep 30', background: true })).toMatchObject({ ok: true, running: true })
@@ -221,7 +204,7 @@ describe.each(TWINS)('$name', (twin) => {
     expect(hit).toMatchObject({ ok: true, running: true, waitedFor: { matched: 'output', match: 'listening on :4000' } })
     expect(Date.now() - t0).toBeLessThan(10_000)
     expect(await rpc({ cmd: 'exec.read', jobId: 'hx-wait-one', taskId, until: { output: '(a+)+$' } })).toMatchObject({ ok: false, code: 'bad_request' })
-    // An alternation one group down repeats as badly (2026-11-04 review): refused by this twin's own check too.
+    // An alternation one group down repeats as badly (2026-11-04 review): refused by the daemon's own check too.
     expect(await rpc({ cmd: 'exec.read', jobId: 'hx-wait-one', taskId, until: { output: '((a|a)b)*c' } })).toMatchObject({ ok: false, code: 'bad_request' })
     // A file under a task directory this host does not have for the run: refused before anything runs.
     expect(await rpc({ cmd: 'exec.run', jobId: 'hx-wait-nodir', command: 'echo never', background: true, until: { file: '$WALNUT_TASK_DIR/ready' } })).toMatchObject({ ok: false, code: 'task_dir_unset' })
@@ -231,8 +214,8 @@ describe.each(TWINS)('$name', (twin) => {
 
   it('host-exec-group-v1: exec.run endGroup stops what the shell left in its group; without it a redirected child runs on, as before', async () => {
     // Code review 6, item 2: the server asks on each run, so a daemon that updates under an older server keeps the older behaviour.
-    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-group`)
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone-group')
+    await boot(dir)
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('host-exec-group-v1')
     const taskId = 'task-hx-group'
     const ended = await rpc({ cmd: 'exec.run', jobId: 'hx-group-end', taskId, command: 'sleep 65 > /dev/null 2>&1 & echo "child $!"', endGroup: true })
@@ -251,13 +234,13 @@ describe.each(TWINS)('$name', (twin) => {
 
   it('host-exec-wait-v1: lines are tested in a matcher process of the daemon, which a runaway pattern loses while the daemon answers on', async () => {
     // 2026-11-04 review: patterns the static check passed held the daemon's loop 3 to 6 s a line.
-    const dir = path.join(root, `${twin.name.replace(/\W+/g, '-')}-matcher`)
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone-matcher')
+    await boot(dir)
     const taskId = 'task-hx-matcher'
     expect(await rpc({ cmd: 'exec.run', jobId: 'hx-matcher-one', taskId, command: "printf '\\033[32mready\\033[0m on 4000\\n'; printf '%020000d\\n' 0; sleep 30", background: true })).toMatchObject({ ok: true, running: true })
     const hit = await rpc({ cmd: 'exec.read', jobId: 'hx-matcher-one', taskId, wait: 15_000, until: { output: 'READY on \\d+', flags: 'i' } })
     expect(hit).toMatchObject({ ok: true, waitedFor: { matched: 'output', match: 'ready on 4000' } })
-    // The matcher is this daemon's child, run as this twin's own program.
+    // The matcher is this daemon's child, run as the daemon's own program.
     const children = spawnSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout.split('\n')
       .map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter((m): m is RegExpMatchArray => m !== null && Number(m[2]) === proc!.pid)
     const matcher = children.find((m) => /--wait-matcher|runWaitMatcher/.test(m[3]!))

@@ -18,9 +18,7 @@ import { QUEUEABLE_TASK_FIELDS, createOfflineHost } from '../../src/providers/of
 const T0 = Date.parse('2026-10-14T12:00:00Z')
 const fields = (f: Record<string, [unknown, unknown]>) => ({ kind: 'task-fields', op: 'task_update', taskId: TASK_A, fields: Object.fromEntries(Object.entries(f).map(([k, [base, value]]) => [k, { base, value }])) })
 
-const rebuiltJournals: Array<{ close: () => void }> = []
 afterEach(() => {
-  for (const journal of rebuiltJournals.splice(0)) journal.close()
   cleanupJournalDirs()
 })
 
@@ -730,7 +728,7 @@ describe('journal v2: how full the journal came (offline.drain `fill`)', () => {
   it('each drain reports the peak and the writes refused as full since the last report', () => {
     const dir = journalTmpDir()
     const clock = { now: T0 }
-    // The twins give the host and its journal store the same limit (OFFLINE_JOURNAL_MAX).
+    // The daemon gives the host and its journal store the same limit (OFFLINE_JOURNAL_MAX).
     const { deps } = journalHost(dir, clock, { journal: { maxRecords: 2 } })
     const host = createOfflineHost({ ...deps, maxRecords: 2 })
     host.configure(jslice())
@@ -745,45 +743,6 @@ describe('journal v2: how full the journal came (offline.drain `fill`)', () => {
     // The next reply counts afresh: the Mac adds the rounds of one drain up.
     expect(host.drain(JHOME, JOURNAL_V2_DRAINS).fill).toEqual({ records: 0, max: 2, peak: 2, refused: 0 })
     expect(host.drain(JHOME, JOURNAL_V2_DRAINS).fill).toEqual({ records: 0, max: 2, peak: 0, refused: 0 })
-  })
-})
-
-describe('journal v2: rebuilt from its text (the source twin inlines both cores)', () => {
-  it('createOfflineJournal and createOfflineHostCore behave the same when reconstructed with new Function', async () => {
-    const { createOfflineJournal } = await import('../../src/providers/offline-journal-core.js')
-    const { createOfflineHostCore } = await import('../../src/providers/offline-host-core.js')
-    const { createEnvelopeKit } = await import('../../src/core/peers/envelope-kit.js')
-    const { createSendRules } = await import('../../src/core/sessions/send-rules.js')
-    const { randomBytes, createHash } = await import('node:crypto')
-    const rebuiltJournal = new Function('"use strict"; return ' + createOfflineJournal.toString())() as typeof createOfflineJournal
-    const rebuiltHost = new Function('"use strict"; return ' + createOfflineHostCore.toString())() as typeof createOfflineHostCore
-    const dir = journalTmpDir()
-    const clock = { now: T0 }
-    const journal = rebuiltJournal({
-      fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf,
-      sha256: (b) => createHash('sha256').update(b).digest('hex'), log: () => {},
-    })
-    rebuiltJournals.push(journal)
-    const host = rebuiltHost({
-      fs, path, dir, now: () => clock.now, randomHex: (n) => randomBytes(n).toString('hex'), keyOf, kit: createEnvelopeKit(), rules: createSendRules(), log: () => {},
-      isLive: () => true, turnActive: () => false, streamOffset: () => undefined, deliver: async () => ({ ok: true }),
-      journal, drainsOf: () => JOURNAL_V2_DRAINS.slice(),
-    })
-    host.configure(jslice())
-    expect(host.handleFollower(JHOME, { op: 'task_update', args: { id: TASK_A, title: 'x' }, actor: DEVICE })).toMatchObject({ ok: true })
-    expect(host.handleFollower(JHOME, { op: 'task_update', args: { id: TASK_A, title: 'y' }, actor: DEVICE })).toMatchObject({ ok: true, result: { coalesced: true, rev: 2 } })
-    const d = host.drain(JHOME, JOURNAL_V2_DRAINS)
-    expect(d.records).toHaveLength(1)
-    expect(host.ack(JHOME, { seqs: [d.records[0].seq] })).toMatchObject({ remaining: 0 })
-  })
-
-  it('the generated source twin carries the journal core once and passes its build-time smoke', async () => {
-    const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const src = getDaemonSource()
-    expect(src).not.toContain('__CREATE_OFFLINE_JOURNAL__')
-    expect(src.split('function createOfflineJournal(').length - 1).toBe(1)
-    expect(src).toContain("case 'follower.op':")
-    expect(src).toContain("case 'offline.blob':")
   })
 })
 

@@ -370,8 +370,8 @@ describe('ratchet: a new module-level cache goes on the ledger', () => {
         if (e.isDirectory()) { walk(p); continue; }
         if (!/\.tsx?$/.test(e.name) || /\.test\./.test(e.name)) continue;
         const rel = path.relative(ROOT, p).split(path.sep).join('/');
-        // The daemon twins run in another process; their caches are the daemon's own.
-        if (rel === 'src/providers/daemon-source.ts' || rel === 'src/providers/daemon-standalone.ts') continue;
+        // The daemon runs in another process; its caches are the daemon's own.
+        if (rel === 'src/providers/daemon-standalone.ts') continue;
         const text = fs.readFileSync(p, 'utf8');
         if (decl.test(text) && !text.includes('registerMemoryHolder(')) found.push(rel);
       }

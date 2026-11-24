@@ -24,7 +24,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-hostalone-pw-'))
 Object.assign(process.env, { OPEN_WALNUT_HOME: home, WALNUT_DISABLE_SEARCH: '1', WALNUT_DISABLE_BACKGROUND_AI: '1' })
 
 const { startHostAloneHarness, tokenHash, waitFor, TOKEN, DEVICE } = await import('../../helpers/host-alone-harness.js')
-const h = await startHostAloneHarness({ twin: process.env.HOST_ALONE_TWIN === 'standalone' ? 'standalone' : 'source', publicPort: port })
+const h = await startHostAloneHarness({ publicPort: port })
 const pushed = await h.pushDevices([{ name: DEVICE, tokenHash: tokenHash(TOKEN) }])
 if (pushed.status !== 200) throw new Error('device list refused: ' + JSON.stringify(pushed))
 h.unlinkMac()

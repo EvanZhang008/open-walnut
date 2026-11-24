@@ -1,5 +1,6 @@
 /**
- * `walnut daemon handback` with a detached host_exec run in flight, on BOTH real twins.
+ * `walnut daemon handback` with a detached host_exec run in flight, on the real session daemon
+ * (daemon-standalone.ts under bun).
  *
  * The stand-in an update's tail started outside launchd hands back to the LaunchAgent's job
  * (daemon-service-handback.ts): it is asked to prepare an update (`service.update`, carrying the
@@ -19,37 +20,20 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { handBackStandIn } from '../../src/providers/daemon-service-handback.js'
 import { daemonReady, requestDaemonServiceUpdate } from '../../src/providers/daemon-service-cli.js'
 import { ADOPTS_FILE, ROLLBACK_NOTE } from '../../src/providers/detached-registry.js'
 import { STANDIN_PID_NAME } from '../../src/providers/daemon-update-standin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-handback-detached-')))
 afterAll(() => { if (root.includes('walnut-handback-detached-')) fs.rmSync(root, { recursive: true, force: true }) })
-const script = path.join(root, 'daemon.cjs')
-fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed: a --service daemon needs the cron
-// runtime and the instance lock, a detached run the host_exec core.
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core', 'daemon-cron-runtime', 'daemon-instance-lock']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<[string, () => { executable: string; args: string[] }]> = BUN ? [
-  [`source twin (${SOURCE_TWIN.runtime})`, () => ({ executable: SOURCE_TWIN.file, args: [script, '--service'] })],
-  ['standalone twin (bun)', () => ({ executable: BUN, args: [STANDALONE, '--service'] })],
-] : []
 
 const children: ChildProcess[] = []
 const groups = new Set<number>()
@@ -104,7 +88,7 @@ function alive(pid: number): boolean {
 }
 
 describe.skipIf(!BUN)('handback with a detached host_exec run in flight', () => {
-  it.each(TWINS)('%s: the job\'s daemon follows the run to its end, which ran once', async (_name, twin) => {
+  it('the job\'s daemon follows the run to its end, which ran once', async () => {
     const t = fs.mkdtempSync(path.join(root, 'case-'))
     const dir = (name: string) => path.join(t, name)
     for (const name of ['h', 'tmp']) fs.mkdirSync(dir(name))
@@ -118,8 +102,7 @@ describe.skipIf(!BUN)('handback with a detached host_exec run in flight', () => 
       XDG_CACHE_HOME: path.join(dir('h'), '.cache'), XDG_DATA_HOME: path.join(dir('h'), '.local', 'share'),
     }
     const start = () => {
-      const { executable, args } = twin()
-      const child = spawn(executable, args, { cwd: dir('h'), env, detached: true, stdio: 'ignore' })
+      const child = spawn(BUN!, [STANDALONE, '--service'], { cwd: dir('h'), env, detached: true, stdio: 'ignore' })
       children.push(child)
       return child
     }

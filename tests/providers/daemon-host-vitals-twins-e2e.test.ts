@@ -1,5 +1,5 @@
 /**
- * host.vitals ('host-vitals-v1') on both daemon twins booted for real: the
+ * host.vitals ('host-vitals-v1') on the session daemon booted for real: the
  * capability is advertised, the daemon starts its minute ledger at boot inside
  * its isolated daemon dir (never under the real HOME), a Walnut socket counts as
  * linked, and the reply carries real readings and the folded ledger.
@@ -7,33 +7,25 @@
  * MACHINE SAFETY: HOME, the daemon dir, the streams dir and the ledger are temp
  * paths; the daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let port = 0
 const sockets: WebSocket[] = []
 let rpcId = 1
 let root = ''
 
-async function boot(twin: Twin): Promise<{ home: string; daemon: string }> {
+async function boot(): Promise<{ home: string; daemon: string }> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-vitals-e2e-')))
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
@@ -48,8 +40,7 @@ async function boot(twin: Twin): Promise<{ home: string; daemon: string }> {
     WALNUT_HOST_VITALS_DIR: undefined,
   }
   delete env.WALNUT_HOST_VITALS_DIR
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -95,12 +86,6 @@ async function waitFor(check: () => boolean, ms = 20_000): Promise<boolean> {
   return check()
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-vitals-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   for (const s of sockets.splice(0)) { try { s.close() } catch { /* closed */ } }
   if (proc && proc.exitCode === null && proc.signalCode === null) {
@@ -112,9 +97,9 @@ afterEach(async () => {
   if (root.includes('walnut-vitals-e2e-')) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe.each(TWINS)('host.vitals on the $name', (twin) => {
+describe.skipIf(!BUN)('host.vitals on the standalone daemon (bun)', () => {
   it('advertises the capability, writes its ledger beside the daemon dir, and answers with real readings', async () => {
-    const { home, daemon } = await boot(twin)
+    const { home, daemon } = await boot()
     const ws = await connect()
     const hello = await rpc(ws, { cmd: 'hello' })
     expect(hello.capabilities as string[]).toContain('host-vitals-v1')

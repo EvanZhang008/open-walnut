@@ -7,9 +7,8 @@
  *              (CronJob.ownWork, 2026-11-18)
  * None of them is a wait outside the task, so a trigger with any never parks it.
  *
- * The host gets it as a factory whose body holds everything it uses: the source twin
- * (daemon-source.ts) inlines it with toString() and hands it to the offline host as a dep, so
- * nothing in it may reach outside the function.
+ * The host gets it as a factory whose body holds everything it uses, handed to the offline host as a dep:
+ * nothing in it reaches outside the function.
  */
 
 export type TriggerWatch = { kind: 'user'; what: string } | { kind: 'own' };

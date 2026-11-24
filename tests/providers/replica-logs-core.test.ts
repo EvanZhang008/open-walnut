@@ -201,14 +201,12 @@ describe('the supervisor caps a running server\'s stdout log by size', () => {
   })
 })
 
-// ── Both twins carry it the same way (parity) ──
+// ── The daemon carries it, behind replica-logs-v1 ──
 
-describe('logs.tail and the log cap are in both twins, behind replica-logs-v1', async () => {
+describe('logs.tail and the log cap are in the daemon, behind replica-logs-v1', async () => {
   const { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } = await import('../../src/providers/daemon-capabilities.js')
-  const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
   const read = (rel: string) => twinText(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8'))
   const standalone = read('src/providers/daemon-standalone.ts')
-  const source = read('src/providers/daemon-source.ts')
 
   it('advertises the cap (optional) and hashes the core in both version lists, in the same place', () => {
     expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('replica-logs-v1')
@@ -223,30 +221,18 @@ describe('logs.tail and the log cap are in both twins, behind replica-logs-v1', 
     expect(orderSh.indexOf('src/providers/replica-logs-core.ts') - orderSh.indexOf('src/providers/marker-find-core.ts')).toBe(1)
   })
 
-  it('both twins route logs.tail to a handler that checks the leader\'s home first', () => {
+  it('the daemon routes logs.tail to a handler that checks the leader\'s home first', () => {
     expect(standalone).toMatch(/case 'logs\.tail': return cmdLogsTail\(ws, id as number, cmd\)/)
-    expect(source).toMatch(/case 'logs\.tail': return cmdLogsTail\(ws, id, cmd\);/)
-    for (const src of [standalone, source]) {
-      const body = src.slice(src.indexOf('function cmdLogsTail('), src.indexOf('function cmdLogsTail(') + 900)
-      expect(body).toMatch(/origin === 'bridge' \|\| [^\n]*origin === 'follower' \|\| [^\n]*origin === 'lane'/)
-      expect(body).toMatch(/gatewayClientHomes\.get\(ws\) !== home/)
-      expect(body).toMatch(/replicaLogs\.tail\(home, cmd\.sources, cmd\.n, cmd\.match\)/)
-      expect(src).toMatch(/daemonDir: DAEMON_DIR, logsOf: [^\n]*hostServers\.logsOf\(home\)/)
-      expect(src).toMatch(/maxLogBytes: Number\(process\.env\.WALNUT_HOST_SERVER_LOG_MAX_BYTES\) \|\| undefined,/)
-    }
+    const body = standalone.slice(standalone.indexOf('function cmdLogsTail('), standalone.indexOf('function cmdLogsTail(') + 900)
+    expect(body).toMatch(/origin === 'bridge' \|\| [^\n]*origin === 'follower' \|\| [^\n]*origin === 'lane'/)
+    expect(body).toMatch(/gatewayClientHomes\.get\(ws\) !== home/)
+    expect(body).toMatch(/replicaLogs\.tail\(home, cmd\.sources, cmd\.n, cmd\.match\)/)
+    expect(standalone).toMatch(/daemonDir: DAEMON_DIR, logsOf: [^\n]*hostServers\.logsOf\(home\)/)
+    expect(standalone).toMatch(/maxLogBytes: Number\(process\.env\.WALNUT_HOST_SERVER_LOG_MAX_BYTES\) \|\| undefined,/)
     // A follower may never ask (it is not in its allowlist), nor the bridge.
     const allow = standalone.slice(standalone.indexOf('const FOLLOWER_ALLOWED_COMMANDS'), standalone.indexOf('const LANE_ALLOWED_COMMANDS'))
     expect(allow).not.toContain('logs.tail')
     const bridge = standalone.slice(standalone.indexOf('const BRIDGE_ALLOWED_COMMANDS'), standalone.indexOf('const BRIDGE_ALLOWED_COMMANDS') + 4000)
     expect(bridge.slice(0, bridge.indexOf('])'))).not.toContain('logs.tail')
-  })
-
-  it('the rendered source twin inlines the core byte for byte', () => {
-    const rendered = getDaemonSource()
-    expect(rendered).not.toContain('__CREATE_REPLICA_LOGS__')
-    const text = createReplicaLogs.toString()
-    expect(text).not.toMatch(/__name\(|__vite|import\(/)
-    expect(rendered).toContain(text)
-    expect(rendered).toContain(createHostServerSupervisor.toString())
   })
 })

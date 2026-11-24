@@ -1,8 +1,8 @@
 /**
- * Notes written while the Mac is away, on REAL daemon processes, both twins
+ * Notes written while the Mac is away, on a REAL daemon process, the standalone under bun
  * (docs/plan/walnut-replica-servers-impl.md section 6, WP11, `note-journal-v1`):
  *
- *   test as the Mac ==trusted WS==> daemon (source twin on node, standalone on bun)
+ *   test as the Mac ==trusted WS==> daemon (standalone, on bun)
  *   test as the replica ==follower WS (follower.op note_put)==^   ^ agent gateway (a session's note_edit)
  *
  * A phone save and a session's note_edit of one note serialize: the stale one is a 409
@@ -22,9 +22,6 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { buildSync } from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { fetchOfflineBlob } from '../../src/core/offline-merge/blob.js'
 import { applyNoteRecord, type NoteRecordLike } from '../../src/core/offline-merge/notes.js'
@@ -63,8 +60,7 @@ process.stdin.on('data', () => {})
 setInterval(() => {}, 1 << 30)
 `
 
-type Twin = 'source' | 'standalone'
-interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string; twin: Twin }
+interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
@@ -82,7 +78,7 @@ let base = ''
 const started: number[] = []
 const fakePids: number[] = []
 
-async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
+async function spawnDaemon(dir: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -95,21 +91,13 @@ async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
-  let proc: ChildProcess
-  if (twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
-  } else {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    buildSync({ entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent' })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc: ChildProcess = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   started.push(pid)
-  return { proc, dir, sock, twin, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
+  return { proc, dir, sock, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
 }
 
 function connectWs(port: number): Promise<WebSocket> {
@@ -181,10 +169,10 @@ async function startSession(d: Daemon, ws: WebSocket): Promise<void> {
 }
 
 async function followerSocket(d: Daemon, mac: WebSocket): Promise<WebSocket> {
-  const out = path.join(base, `${d.twin}-fake.jsonl`)
+  const out = path.join(base, 'fake.jsonl')
   const fake = path.join(base, 'fake-server.cjs')
   fs.writeFileSync(fake, FAKE_SERVER)
-  const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [fake], cwd: base, env: { FAKE_OUT: out }, log: path.join(base, `server-${d.twin}.log`), port: 41_236, settings: { expose: { enabled: false } } }
+  const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [fake], cwd: base, env: { FAKE_OUT: out }, log: path.join(base, 'server.log'), port: 41_236, settings: { expose: { enabled: false } } }
   expect((await cmd(mac, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
   await waitFor(() => fs.existsSync(out) && fs.readFileSync(out, 'utf8').trim().length > 0, 30_000, 'the host server token')
   const ws = await connectWs(d.port)
@@ -218,17 +206,14 @@ afterAll(() => {
 
 const entry = (body: string) => [{ k: KEY, h: sha12(body), n: Buffer.byteLength(body), m: { title: 'Plan', id: 'n_plan01' } }]
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: notes while the Mac is away`, () => {
-    it('a phone save and a session note_edit serialize with 409; saves coalesce; 120 saves are never throttled; the drain merges; the copy catches up after the ack', async () => {
-      const d = await spawnDaemon(path.join(base, `${twin}-d`), twin)
-      try { await run(d) } catch (err) { throw new Error(`${(err as Error).message}\n${twin} daemon log:\n${daemonLog(d)}`) }
-    }, 180_000)
-  })
-}
+describe.skipIf(!BUN)('standalone daemon: notes while the Mac is away', () => {
+  it('a phone save and a session note_edit serialize with 409; saves coalesce; 120 saves are never throttled; the drain merges; the copy catches up after the ack', async () => {
+    const d = await spawnDaemon(path.join(base, 'd'))
+    try { await run(d) } catch (err) { throw new Error(`${(err as Error).message}\ndaemon log:\n${daemonLog(d)}`) }
+  }, 180_000)
+})
 
 async function run(d: Daemon): Promise<void> {
-  const twin = d.twin
   let mac = await macConnects(d, BODY)
   await startSession(d, mac)
   const follower = await followerSocket(d, mac)
@@ -237,13 +222,13 @@ async function run(d: Daemon): Promise<void> {
   await sleep(300)
   // The phone saves twice: the second folds into the first.
   const p1 = BODY.replace('Ship on Friday.', 'Ship on Thursday.')
-  const r1 = await save(follower, { content: p1, expectedHash: sha12(BODY) }, `op-${twin}-p1`)
+  const r1 = await save(follower, { content: p1, expectedHash: sha12(BODY) }, 'op-p1')
   expect(r1, JSON.stringify(r1)).toMatchObject({ ok: true, queued: true, kind: 'note', mode: 'put', contentHash: sha12(p1), noteId: 'n_plan01' })
   const p2 = p1 + 'A line from the phone.\n'
-  const r2 = await save(follower, { content: p2, expectedHash: sha12(p1) }, `op-${twin}-p2`)
+  const r2 = await save(follower, { content: p2, expectedHash: sha12(p1) }, 'op-p2')
   expect(r2, JSON.stringify(r2)).toMatchObject({ ok: true, coalesced: true, contentHash: sha12(p2) })
   // A lost answer retried with its op id: answered, nothing written.
-  expect(await save(follower, { content: p2, expectedHash: sha12(p1) }, `op-${twin}-p2`)).toMatchObject({ ok: true, duplicate: true, contentHash: sha12(p2), noteId: 'n_plan01' })
+  expect(await save(follower, { content: p2, expectedHash: sha12(p1) }, 'op-p2')).toMatchObject({ ok: true, duplicate: true, contentHash: sha12(p2), noteId: 'n_plan01' })
   // The session edits what it read before the phone saved: 409, nothing written.
   const stale = await gateway(d.sock, 'note_edit', { path: 'Projects/Plan', old_str: 'The rollback is ready.', new_str: 'The rollback is tested.', expectedHash: sha12(BODY) })
   expect(stale, JSON.stringify(stale)).toMatchObject({ ok: false, error: { code: 'conflict' } })
@@ -255,14 +240,14 @@ async function run(d: Daemon): Promise<void> {
   expect(edit.result.coalesced).toBeUndefined()
   const s1 = p2.replace('The rollback is ready.', 'The rollback is tested.')
   // The phone, still on p2: 409 with the text this host shows, for its editor to merge.
-  const late = await save(follower, { content: p2 + 'x\n', expectedHash: sha12(p2) }, `op-${twin}-late`)
+  const late = await save(follower, { content: p2 + 'x\n', expectedHash: sha12(p2) }, 'op-late')
   expect(late).toMatchObject({ ok: false, errorKind: 'conflict', detail: { serverHash: sha12(s1), serverContent: s1 } })
   // An editor's autosave: 120 saves inside a minute, none throttled; after the first they fold.
   let text = s1
   const t0 = Date.now()
   for (let i = 0; i < 120; i++) {
     const next = `${text}autosave ${i}\n`
-    const r = await save(follower, { content: next, expectedHash: sha12(text) }, `op-${twin}-auto-${i}`)
+    const r = await save(follower, { content: next, expectedHash: sha12(text) }, `op-auto-${i}`)
     expect(r.ok, JSON.stringify(r)).toBe(true)
     if (i > 0) expect(r.coalesced, `save ${i}`).toBe(true)
     text = next
@@ -278,18 +263,18 @@ async function run(d: Daemon): Promise<void> {
   expect(dr.ok, JSON.stringify(dr)).toBe(true)
   const notes = (dr.records as NoteRecordLike[]).filter((r) => (r as { kind?: string }).kind === 'note')
   expect(notes.map((r) => [(r.actor as { kind: string }).kind, r.mode])).toEqual([['device', 'put'], ['session', 'put'], ['device', 'put']])
-  expect(notes[0]).toMatchObject({ path: KEY, noteId: 'n_plan01', baseHash: sha12(BODY), oursHash: sha12(p2), opId: `op-${twin}-p1` })
+  expect(notes[0]).toMatchObject({ path: KEY, noteId: 'n_plan01', baseHash: sha12(BODY), oursHash: sha12(p2), opId: 'op-p1' })
   expect(notes[1]).toMatchObject({ baseHash: sha12(p2), oursHash: sha12(s1) })
   expect(notes[2]).toMatchObject({ baseHash: sha12(s1), oursHash: sha12(text) })
   // The real drain code over this daemon's blobs, into a vault holding the Mac's edit.
-  const vault = path.join(base, `${twin}-vault`)
+  const vault = path.join(base, 'vault')
   fs.mkdirSync(path.join(vault, 'Projects'), { recursive: true })
   fs.writeFileSync(path.join(vault, KEY), macNow)
   const conn = { send: (c: string, p: Record<string, unknown> = {}) => cmd(mac, { cmd: c, ...p }) }
   const letters: unknown[] = []
   for (const r of notes) {
     await applyNoteRecord({
-      root: vault, cacheDir: path.join(base, `${twin}-cache`), hostLabel: 'devbox', hostKey: 'devbox',
+      root: vault, cacheDir: path.join(base, 'cache'), hostLabel: 'devbox', hostKey: 'devbox',
       fetchBlob: (sha) => fetchOfflineBlob(conn, sha), merge: async (b, v, o) => mergeVersions(b, v, o),
       pathOfId: () => undefined, lock: (_a, fn) => fn(), written: () => undefined, remove: async () => undefined,
       ensureId: (c, cur) => withNoteId(c, cur).content,
@@ -317,17 +302,17 @@ async function run(d: Daemon): Promise<void> {
   mac.close()
   await sleep(300)
   for (const p of ['Private/new', 'private/new', 'PRIVATE/x/y']) {
-    const r = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: p, content: 'x\n' }, actor: PHONE, opId: `op-${twin}-kx-${p.length}-${p[1]}` })
+    const r = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: p, content: 'x\n' }, actor: PHONE, opId: `op-kx-${p.length}-${p[1]}` })
     expect(r, `${p}: ${JSON.stringify(r)}`).toMatchObject({ ok: false, errorKind: 'needs_leader', detail: { why: 'not_kept_here' } })
   }
-  const nul = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: 'Projects/a\u0000b', content: 'x\n' }, actor: PHONE, opId: `op-${twin}-nul` })
+  const nul = await cmd(follower, { cmd: 'follower.op', op: 'note_put', args: { path: 'Projects/a\u0000b', content: 'x\n' }, actor: PHONE, opId: 'op-nul' })
   expect(nul, JSON.stringify(nul)).toMatchObject({ ok: false, errorKind: 'bad_request' })
   // An `id:` line typed into a save never sends it elsewhere: the record keeps the copy's id,
   // also for a later save over the pending one.
   const forged = merged.replace('id: n_plan01', 'id: n_diary01')
-  const f1 = await save(follower, { content: forged, expectedHash: sha12(merged) }, `op-${twin}-forged-1`)
+  const f1 = await save(follower, { content: forged, expectedHash: sha12(merged) }, 'op-forged-1')
   expect(f1, JSON.stringify(f1)).toMatchObject({ ok: true, noteId: 'n_plan01' })
-  const f2 = await save(follower, { content: forged + 'More.\n', expectedHash: sha12(forged) }, `op-${twin}-forged-2`)
+  const f2 = await save(follower, { content: forged + 'More.\n', expectedHash: sha12(forged) }, 'op-forged-2')
   expect(f2, JSON.stringify(f2)).toMatchObject({ ok: true, noteId: 'n_plan01' })
   follower.close()
 }

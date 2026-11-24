@@ -1,5 +1,5 @@
 /**
- * A simulated reboot, on both daemon twins booted for real: a session's task
+ * A simulated reboot, on the daemon booted for real: a session's task
  * directory, with an unmerged commit and evidence in it, survives the daemon
  * dying and its whole runtime dir (the /tmp of this test) being wiped; the
  * next session for the same task gets the same directory and carries on.
@@ -15,30 +15,20 @@
  * own process groups, SIGKILLed by group in afterEach. git runs only on repos
  * made here, with a temp HOME and no hooks.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
-import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
-let scriptPath = ''
 let root = ''
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const CORE = path.resolve(__dirname, '../../src/providers/task-dir-core.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-// The source twin needs its sidecar, which only bun builds (as scripts/build-daemon.sh does).
-const TWINS: Twin[] = BUN ? [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  { name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] },
-] : []
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 const started: number[] = []
@@ -54,7 +44,7 @@ const paths = () => {
   }
 }
 
-async function boot(twin: Twin, extraEnv: Record<string, string> = {}): Promise<void> {
+async function boot(extraEnv: Record<string, string> = {}): Promise<void> {
   const p = paths()
   fs.mkdirSync(p.home, { recursive: true })
   fs.mkdirSync(p.daemonDir, { recursive: true })
@@ -72,8 +62,7 @@ async function boot(twin: Twin, extraEnv: Record<string, string> = {}): Promise<
   // The default root is what is under test, so no override and no XDG dir.
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'WALNUT_STREAMS_DIR', 'WALNUT_DAEMON_PARENT_PID', 'WALNUT_TASK_DIR_ROOT']) delete env[k]
   if (!('WALNUT_TASK_DIR' in extraEnv)) delete env.WALNUT_TASK_DIR
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -147,22 +136,13 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user
   cwd, encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin:/opt/homebrew/bin'), HOME: gitHome(), GIT_CONFIG_NOSYSTEM: '1' },
 })
 
-beforeAll(() => {
-  if (!BUN) return
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-reboot-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(dir, 'task-dir-core.cjs'), CORE], { encoding: 'utf8' })
-  if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-})
-
 afterEach(async () => {
   await reboot().catch(() => {})
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
 
-describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
+describe.skipIf(!BUN)('task directory across a reboot: standalone daemon (bun)', () => {
   it('keeps the unmerged commit and the evidence, and the next session continues in the same directory', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-reboot-')))
     fs.mkdirSync(gitHome())
@@ -170,7 +150,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     const taskId = '7f35f6b1-0000-4000-8000-000000000001'
     const taskDir = path.join(p.taskRoot, taskId)
 
-    await boot(twin)
+    await boot()
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toContain('task-dir-v1')
     expect(hello.taskDirRoot).toBe(p.taskRoot)
@@ -195,7 +175,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     await reboot()
     expect(fs.existsSync(p.daemonDir)).toBe(false)
 
-    await boot(twin)
+    await boot()
     // Same task, a resumed session: same directory, everything still there.
     await startSession('reboot-b', { home: '/data/home', task: taskId }, path.join(root, 'seen-2'))
     expect(await waitFile(path.join(root, 'seen-2'))).toBe(taskDir)
@@ -215,7 +195,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     expect(kept.removed).toEqual([])
     expect(JSON.stringify(kept.kept)).toMatch(/commits not on any remote|a live session works in it/)
     await reboot()
-    await boot(twin)
+    await boot()
     expect(((await rpc({ cmd: 'taskdir.remove', taskIds: [taskId] })).kept as Array<{ reasons: string[] }>)[0].reasons)
       .toEqual(['app: commits not on any remote'])
     git(app, 'push', '-q', 'origin', 'HEAD:main')
@@ -227,7 +207,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
 
   it('a start without a task gets no directory, even when the daemon inherited one', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-reboot-')))
-    await boot(twin, { WALNUT_TASK_DIR: '/somewhere/another-task' })
+    await boot({ WALNUT_TASK_DIR: '/somewhere/another-task' })
     await startSession('no-task', undefined, path.join(root, 'seen'))
     expect(await waitFile(path.join(root, 'seen'))).toBe('unset')
     // taskdir.ensure makes one on demand (a session spawned before its daemon had them).
@@ -239,7 +219,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
 
   it('taskdir.prune removes a finished task\'s clean clone and build output, never its work', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-prune-')))
-    await boot(twin)
+    await boot()
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('task-dir-prune-v1')
     const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'done-task', home: '/data/home' })).path as string
     fs.mkdirSync(gitHome(), { recursive: true })
@@ -266,7 +246,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
 
   it('taskdir.pruneBuilds takes an idle open task\'s build output alone, never a clone', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-builds-')))
-    await boot(twin)
+    await boot()
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('task-dir-prune-builds-v1')
     const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'open-task', home: '/data/home' })).path as string
     fs.mkdirSync(gitHome(), { recursive: true })
@@ -293,7 +273,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
   // server asks with live:true: old build output of a directory in use goes, except where a process works.
   it('taskdir.pruneBuilds live:true takes a running task\'s old build output, never where a process works', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-live-')))
-    await boot(twin)
+    await boot()
     const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'live-task' })).path as string
     const oldTime = new Date(Date.now() - 2 * 86_400_000)
     for (const copy of ['copy-a', 'copy-b']) {
@@ -317,7 +297,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
   // 2026-11-08: the refill was run folders, which only their task may judge; the host reports sizes.
   it('taskdir.sizes reports each directory\'s bytes and its largest folders, and skips unknown ids', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-sizes-')))
-    await boot(twin)
+    await boot()
     expect((await rpc({ cmd: 'hello' })).capabilities as string[]).toContain('task-dir-sizes-v1')
     const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'size-task' })).path as string
     fs.mkdirSync(path.join(taskDir, 'runs', 'r1'), { recursive: true })
@@ -335,7 +315,7 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
   // directory by path, so its cwd alone did not keep the directory busy.
   it('an ACP worker of the task keeps its directory whole, wherever it was started', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-task-dir-acp-')))
-    await boot(twin)
+    await boot()
     const shared = path.join(root, 'shared-checkout')
     fs.mkdirSync(shared)
     const taskDir = (await rpc({ cmd: 'taskdir.ensure', taskId: 'acp-task' })).path as string
@@ -344,9 +324,6 @@ describe.each(TWINS)('task directory across a reboot: $name', (twin) => {
     fs.writeFileSync(file, 'build\n')
     const startedAcp = await rpc({ cmd: 'acpStart', sid: 'acp-busy', cwd: shared, taskId: 'acp-task',
       workerCmd: [process.execPath, acpWorkerBundle()], adapterCmd: [process.execPath, path.resolve(__dirname, 'mock-acp-agent.mjs')] })
-    // The source twin runs ACP only with its ACP sidecar, which this test does not build:
-    // its hostWorkNow is held to the same kinds by task-dir-busy-twins.test.ts.
-    if (startedAcp.errorKind === 'acp_unsupported' && twin.name.startsWith('source')) return
     expect(startedAcp.ok, JSON.stringify(startedAcp)).toBe(true)
     try {
       const res = await rpc({ cmd: 'taskdir.pruneBuilds', taskIds: ['acp-task'], idleBefore: Date.now() + 60_000 })

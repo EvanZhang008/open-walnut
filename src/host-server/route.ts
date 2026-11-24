@@ -14,7 +14,7 @@
  */
 
 import type { FollowerView } from './daemon-link.js'
-// The daemon twins' own parse of a timer knob (daemon-source.ts mirrors it verbatim).
+// The daemon's own parse of a timer knob.
 import { envTimerMs } from '../providers/daemon-core.js'
 
 export type Route =

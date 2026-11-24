@@ -1,5 +1,5 @@
 /**
- * Walnut skill distribution (skills.sync) — hub payload + daemon twin writes.
+ * Walnut skill distribution (skills.sync) — hub payload + daemon writes.
  *
  * Hand-started sessions get the `walnut` COMMAND from the user-PATH shim but
  * nothing tells the MODEL it exists, so the hub pushes the walnut skill on
@@ -13,14 +13,15 @@
  * marker-guarded (a foreign file is never clobbered; a dir holding anything
  * beyond our SKILL.md is never deleted). v2 also migrates the v1 layout (real
  * claude file, fenced codex AGENTS.md section) and the short-lived v2.0
- * canonical. The daemon-side function is extracted from the deployed node
- * twin and RUN against a temp HOME.
+ * canonical. The daemon-side function is cut from daemon-standalone.ts and
+ * RUN against a temp HOME.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import ts from 'typescript'
 import { withReadOnlyBanner, CODEX_BEGIN, CODEX_END, DISTRIBUTED_MARKER } from '../../src/core/skill-sync.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -49,38 +50,41 @@ describe('withReadOnlyBanner', () => {
   })
 })
 
-// ── the node twin's cmdSkillsSync, actually run against a temp HOME ──
+// ── the daemon's cmdSkillsSync, actually run against a temp HOME ──
 
 type Reply = { ok?: boolean; changed?: boolean; skipped?: string; wrote?: string[]; error?: string }
 
-function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: string, cmd: Record<string, unknown>) => Reply {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
-  const start = src.indexOf('const DAEMON_SOURCE = `')
-  expect(start).toBeGreaterThan(-1)
-  const body = src.slice(src.indexOf('`', start) + 1, src.lastIndexOf('`'))
-  // eslint-disable-next-line no-eval
-  const twin = eval('`' + body + '`') as string
-  const fnStart = twin.indexOf('function cmdSkillsSync(')
+const DAEMON = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+
+/** daemon-standalone.ts from `from` to the end of cmdSkillsSync, as JS. */
+function daemonSlice(from: string): string {
+  const start = DAEMON.indexOf(from)
+  expect(start, from).toBeGreaterThan(-1)
+  const fnStart = DAEMON.indexOf('function cmdSkillsSync(', start)
   expect(fnStart).toBeGreaterThan(-1)
-  const fnEnd = twin.indexOf('\n}', fnStart)
-  const fnSrc = twin.slice(fnStart, fnEnd + 2)
+  const fnEnd = DAEMON.indexOf('\n}\n', fnStart)
+  return ts.transpileModule(DAEMON.slice(start, fnEnd + 2), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+}
+
+function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: string, cmd: Record<string, unknown>) => Reply {
+  const fnSrc = daemonSlice('function cmdSkillsSync(')
   return (homeDir, daemonDir, prodDir, cmd) => {
     let reply: Reply = {}
     const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
     const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
-    // Mirrors the twin's module-level IS_PROD_DAEMON_DIR: /tmp/open-walnut, or the
+    // Mirrors the daemon's module-level IS_PROD_DAEMON_DIR: /tmp/open-walnut, or the
     // $HOME/.cache/open-walnut fallback a connect moves to when /tmp is unusable.
     const isProd = path.resolve(daemonDir) === path.resolve(prodDir)
       || path.resolve(daemonDir) === path.resolve(path.join(homeDir, '.cache', 'open-walnut'))
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const bound = new Function(
-      // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the twin's gate for skills.sync.
-      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
-      // What the held skills keep on disk (held-pushes.json) is the twins tests' to cover.
-      'loadHeldPushes', 'persistHeldPushes',
+      // KEEPS_SESSIONS: the prod dir, or a service set's runtime (none here): the daemon's gate for skills.sync.
+      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
+      // What the held skills keep on disk (held-pushes.json) is heldSkillsProcess's to cover.
+      'loadHeldPushes', 'persistHeldPushes', 'heldSkills',
       fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
     ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {})
+    bound(path, fs, homeDir, daemonDir, prodDir, isProd, isProd, process.env, sendOk, sendError, () => {}, 'walnut-managed v1', cmd, () => {}, () => {}, null)
     return reply
   }
 }
@@ -116,17 +120,7 @@ const run = (cmd: Record<string, unknown> = PAYLOAD) => cmdSkillsSync(tmp, '/tmp
  * same files. 2026-11-13: a daemon update held nothing and the server sent ~360 KB again.
  */
 function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<string, unknown>) => Reply {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
-  const start = src.indexOf('const DAEMON_SOURCE = `')
-  const body = src.slice(src.indexOf('`', start) + 1, src.lastIndexOf('`'))
-  // eslint-disable-next-line no-eval
-  const twin = eval('`' + body + '`') as string
-  const from = twin.indexOf('var heldSkills = null;')
-  const to = twin.indexOf('function cmdSkillsSync(')
-  const fnEnd = twin.indexOf('\n}', to)
-  expect(from).toBeGreaterThan(-1)
-  expect(to).toBeGreaterThan(from)
-  const block = twin.slice(from, to) + twin.slice(to, fnEnd + 2)
+  const block = daemonSlice('let heldSkills')
   // One daemon process: its own module state, the block run once.
   let reply: Reply = {}
   let run: ((cmd: Record<string, unknown>) => void) | null = null
@@ -134,9 +128,9 @@ function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<
     if (!run) {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       run = new Function(
-        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
+        'path', 'fs', 'crypto', 'HOME_DIR', 'OFFLINE_HOST_DIR', 'IS_PROD_DAEMON_DIR', 'KEEPS_SESSIONS', 'daemonEnv', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER',
         block + '\nreturn function (CMD) { return cmdSkillsSync(null, 1, CMD); };',
-      )(path, fs, crypto, homeDir, offlineDir, true, true,
+      )(path, fs, crypto, homeDir, offlineDir, true, true, process.env,
         (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } },
         (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } },
         () => {}, 'walnut-managed v1') as (cmd: Record<string, unknown>) => void
@@ -146,7 +140,7 @@ function heldSkillsProcess(): (homeDir: string, offlineDir: string, cmd: Record<
   }
 }
 
-describe('node twin: the skills held outlive the daemon process', () => {
+describe('the skills held outlive the daemon process', () => {
   it('a new daemon holds what the last one wrote under that hash, and not once the copy changed on disk', () => {
     const offline = path.join(tmp, 'offline-host')
     const first = heldSkillsProcess()
@@ -164,7 +158,7 @@ describe('node twin: the skills held outlive the daemon process', () => {
   })
 })
 
-describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () => {
+describe('the daemon\'s cmdSkillsSync (v2: canonical copy + engine symlinks)', () => {
   it('fresh install: canonical file + claude symlink; no ~/.codex → no ~/.agents', () => {
     const r = run()
     expect(r.ok).toBe(true)
@@ -365,12 +359,11 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
     expect(fs.existsSync(canonical())).toBe(true)
   })
 
-  it("the binding mirrors the twin's own KEEPS_SESSIONS rule (the prod dir, or a service set's runtime)", () => {
-    const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
-    expect(src).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(process\.env\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\);/)
-    expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\);/)
-    expect(src).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== '';/)
-    expect(src).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+  it("the binding mirrors the daemon's own KEEPS_SESSIONS rule (the prod dir, or a service set's runtime)", () => {
+    expect(DAEMON).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(daemonEnv\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\)\n/)
+    expect(DAEMON).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)\n/)
+    expect(DAEMON).toMatch(/const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR \|\| SET_ID !== ''\n/)
+    expect(DAEMON).toMatch(/function cmdSkillsSync[\s\S]*?if \(!KEEPS_SESSIONS\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 
   it('rejects a payload without the managed marker', () => {
@@ -383,7 +376,7 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
 // The engines discover a slash command by SKILL DIRECTORY name, so every skill
 // walnut wants reachable from a hand-started session needs its own canonical
 // copy and its own per-engine link — one payload, N entries.
-describe('node twin cmdSkillsSync (multiple skills in one payload)', () => {
+describe('the daemon\'s cmdSkillsSync (multiple skills in one payload)', () => {
   const TRIGGER_SKILL = `---\nname: walnut-trigger\n---\n<!-- ${DISTRIBUTED_MARKER} — READ-ONLY -->\n# Trigger manual\n`
   const dirFor = (name: string) => path.join(tmp, '.open-walnut', 'distributed-skills', name)
   const linkFor = (name: string) => path.join(tmp, '.claude', 'skills', name)
@@ -477,9 +470,9 @@ describe('buildSkillSyncPayload', () => {
   })
 })
 
-describe('twin parity', () => {
-  it('the bun twin carries the same handler, layout and guards', () => {
-    const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+describe('the daemon wiring', () => {
+  it('the daemon routes skills.sync to its handler, with the layout and guards above', () => {
+    const standalone = DAEMON
     expect(standalone).toContain("case 'skills.sync': return cmdSkillsSync")
     expect(standalone).toContain("SKILL_SYNC_MARKER = 'walnut-managed v1'")
     expect(standalone).toContain("path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')")

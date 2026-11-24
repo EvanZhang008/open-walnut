@@ -9,7 +9,7 @@
  *  - fails on a `hold` whose method never reads the overdue verdict (it would hold for good) or that
  *    names no behaviour test (`proof`) showing it give way, and on a `bounded` one whose limit is not
  *    defined where it says;
- *  - fails when either daemon twin refuses an update as busy without a way past it (`force`), or the
+ *  - fails when the daemon refuses an update as busy without a way past it (`force`), or the
  *    command drain refuses a forced pause.
  */
 import { describe, it, expect } from 'vitest'
@@ -185,7 +185,7 @@ describe('daemon update holds', () => {
     }
     expect(bare, 'a daemon-update hold logged with a bare log.session.warn repeats on every recheck: log it with holdLog (src/providers/daemon-hold-news.ts)').toEqual([])
     // The scan still sees the holds it guards (it would pass on nothing if the pattern drifted):
-    // the postpone hub, ACP turns and host_exec runs on both twins, probation, the managed update,
+    // the postpone hub, ACP turns and host_exec runs, probation, the managed update,
     // a host network machine held by its host setting.
     expect(viaHoldLog.length, viaHoldLog.join('\n')).toBeGreaterThanOrEqual(8)
   })
@@ -207,24 +207,23 @@ describe('daemon update holds', () => {
     expect(LIFECYCLE_WAITS.some((w) => w.file === 'src/providers/daemon-update-behind.ts')).toBe(true)
   })
 
-  it('both daemon twins let a forced update past every busy refusal', () => {
-    for (const file of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const text = read(file)
-      const at = text.indexOf('function cmdServiceHandover(')
-      expect(at, `${file}: cmdServiceHandover not found`).toBeGreaterThan(0)
-      const body = text.slice(at, text.indexOf('\n}\n', at))
-      expect(body).toMatch(/const force = updating && cmd\.force === true/)
-      const refusals = body.split('\n').filter((l) => /must finish first/.test(l))
-      expect(refusals.length, `${file}: no busy refusal found`).toBeGreaterThanOrEqual(2)
-      // Each refusal is its own guarded line, or the line right after a guard that reads `!force`.
-      const lines = body.split('\n')
-      lines.forEach((l, i) => {
-        if (!/must finish first/.test(l)) return
-        const guard = /!force/.test(l) || /!force/.test(lines[i - 1] ?? '')
-        expect(guard, `${file}: "${l.trim()}" refuses an update with no way past it`).toBe(true)
-      })
-      expect(body, `${file}: the command drain's pause must get the force`).toMatch(/daemonCommands\.pause\([^\n]*force/)
-    }
+  it('the daemon lets a forced update past every busy refusal', () => {
+    const file = 'src/providers/daemon-standalone.ts'
+    const text = read(file)
+    const at = text.indexOf('function cmdServiceHandover(')
+    expect(at, `${file}: cmdServiceHandover not found`).toBeGreaterThan(0)
+    const body = text.slice(at, text.indexOf('\n}\n', at))
+    expect(body).toMatch(/const force = updating && cmd\.force === true/)
+    const refusals = body.split('\n').filter((l) => /must finish first/.test(l))
+    expect(refusals.length, `${file}: no busy refusal found`).toBeGreaterThanOrEqual(2)
+    // Each refusal is its own guarded line, or the line right after a guard that reads `!force`.
+    const lines = body.split('\n')
+    lines.forEach((l, i) => {
+      if (!/must finish first/.test(l)) return
+      const guard = /!force/.test(l) || /!force/.test(lines[i - 1] ?? '')
+      expect(guard, `${file}: "${l.trim()}" refuses an update with no way past it`).toBe(true)
+    })
+    expect(body, `${file}: the command drain's pause must get the force`).toMatch(/daemonCommands\.pause\([^\n]*force/)
     const drain = read('src/providers/daemon-command-drain.ts')
     expect(drain).toMatch(/if \(!opts\.force && \[\.\.\.admitted\]/)
   })

@@ -1,5 +1,6 @@
 /**
- * A resumed CLI that fails at startup, run by both daemon twins booted for real.
+ * A resumed CLI that fails at startup, run by the session daemon (daemon-standalone.ts under
+ * bun) booted for real.
  *
  * Claude Code 2.1.314 (2026-10-30) exits 1 and prints the error whenever startup
  * fails. A `--resume` appends to the previous process's stream and stderr; the daemon
@@ -14,26 +15,18 @@
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, and the
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from './bun-runtime.js'
-import { SOURCE_TWIN } from './source-twin.js'
 import { onDaemonEarlyExit } from './daemon-early-exit.js'
 
-let scriptPath = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -42,7 +35,7 @@ let rpcId = 1
 const events: Record<string, unknown>[] = []
 const L = (o: unknown) => JSON.stringify(o) + '\n'
 
-async function boot(twin: Twin): Promise<{ streams: string }> {
+async function boot(): Promise<{ streams: string }> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-startup-fail-')))
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
@@ -52,8 +45,7 @@ async function boot(twin: Twin): Promise<{ streams: string }> {
     WALNUT_DAEMON_DIR: path.join(root, 'daemon'), WALNUT_STREAMS_DIR: streams,
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'), WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => { const m = chunk.toString().trim().match(/^\d+$/m); if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) } })
@@ -85,11 +77,6 @@ async function waitFor<T>(check: () => T | undefined, ms = 60_000): Promise<T | 
 }
 
 function hooks(): void {
-  beforeAll(() => {
-    scriptPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-startup-fail-src-')), 'daemon.cjs')
-    fs.writeFileSync(scriptPath, getDaemonSource())
-  })
-
   afterEach(async () => {
     try { ws?.close() } catch { /* closed */ }
     ws = null
@@ -124,9 +111,9 @@ export function realCli(bin: string): StartupFailureCli {
 
 export function startupFailureTwinsSuite(cli: StartupFailureCli): void {
   hooks()
-  describe.each(TWINS)('a resumed CLI that fails at startup ($name)', (twin) => {
+  describe.skipIf(!BUN)('a resumed CLI that fails at startup', () => {
     it(`reports exit 1 with its own message, not the previous turn's clean end (${cli.label})`, async () => {
-      const { streams } = await boot(twin)
+      const { streams } = await boot()
       fs.mkdirSync(streams, { recursive: true })
       const sid = 'startup-fail-1'
       const jsonl = path.join(streams, `${sid}.jsonl`)

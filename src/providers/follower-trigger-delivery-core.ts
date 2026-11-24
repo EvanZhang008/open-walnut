@@ -1,8 +1,7 @@
 /**
  * A trigger fire no server claimed, delivered on this host by the host's own Walnut
- * server while its leader is away ('follower-trigger-delivery-v1'). Shared by both
- * daemon twins (daemon-source.ts inlines it by `toString()`): self-contained, no
- * imports at runtime.
+ * server while its leader is away ('follower-trigger-delivery-v1'). Self-contained,
+ * no imports at runtime.
  *
  * The daemon's tick (deliverUnclaimedFires) builds the envelope and its message id as
  * before, then asks `deliver(fire)`:

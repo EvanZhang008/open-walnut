@@ -22,9 +22,7 @@
  * it back), so a server deciding whether to replace this daemon knows another Walnut
  * still uses it (daemon-shared.ts). The hello carries the same `walnuts`.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createServedWalnuts;
- * daemon-source.ts inlines `createServedWalnuts.toString()` through
- * `__CREATE_SERVED_WALNUTS__`. So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createServedWalnuts). The factory body references NOTHING at module scope.
  */
 
 export interface ServedWalnutsDeps {
@@ -46,8 +44,8 @@ export interface ServedWalnutsDeps {
   followerHomes?: () => string[]
   /** This daemon's version and its capabilities as its hello says them. */
   version: string
-  /** 'binary' (daemon-standalone.ts, compiled or run by bun) or 'source' (daemon-source.ts). */
-  twin: 'binary' | 'source'
+  /** What runs the daemon, as its hello says it: 'binary' (daemon-standalone.ts, compiled or run by bun). An older daemon may say 'source'. */
+  twin: 'binary'
   capabilities: () => string[]
   /** Whether this daemon's runtime can have a pty at all (pty-stream-v1): a source twin on Node cannot. */
   pty?: () => boolean

@@ -32,10 +32,7 @@
  * A start that cannot be made leaves the run owed for the Mac, as before, and is
  * tried again after HOST_DELIVERY_RETRY_MS; each reason is logged once per run.
  *
- * How the twins get it: daemon-standalone.ts imports createClockHostStart;
- * daemon-source.ts inlines `createClockHostStart.toString()` through
- * `__CREATE_CLOCK_HOST_START__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createClockHostStart). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 import type { ClockStartSpec } from './trigger-clock-core.js'

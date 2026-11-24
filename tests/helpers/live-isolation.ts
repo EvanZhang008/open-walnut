@@ -48,7 +48,6 @@ import path from 'node:path'
 import { EXEC_GUARD_VARS, guardedPath } from '../setup/exec-guard-core.js'
 import { daemonLockPort } from '../../src/providers/daemon-instance-lock.js'
 import { accountInfo } from '../../src/lib/account.js'
-import { SOURCE_TWIN } from './source-twin.js'
 
 /**
  * Set for every child unless the test names its own value: the paths that reach out of
@@ -74,7 +73,7 @@ const QUIET: Record<string, string> = {
 /** Runner variables a child keeps (the exec guard's own wiring, the runtime's location). */
 const KEPT = [...Object.values(EXEC_GUARD_VARS), 'BUN_INSTALL', 'LANG', 'LC_ALL'] as const
 
-/** Preloaded into every child: node through NODE_OPTIONS, bun through BUN_OPTIONS (and `bun --preload` for the daemon twin). */
+/** Preloaded into every child: node through NODE_OPTIONS, bun through BUN_OPTIONS (and `bun --preload` for the daemon). */
 export const LIVE_CONNECT_GUARD = path.resolve(import.meta.dirname, 'live-connect-guard.cjs')
 
 /** The parent of a daemon a test starts itself, inside the same walls (its watchdog asks it). */
@@ -301,8 +300,8 @@ export function walled(cmd: string, args: readonly string[], input: { base: stri
     path.join(tmp, 'open-walnut-exec-guard-unattributed.log'),
     '/private/tmp/open-walnut-exec-guard-unattributed.log',
   ].filter((p): p is string => !!p).map((p) => path.join(real(path.dirname(p)), path.basename(p)))
-  // bun, and the Node the daemon's JS twin runs on (an nvm or volta Node lives under the home).
-  const runtimes = [path.dirname(path.dirname(real(process.execPath))), path.dirname(path.dirname(real(SOURCE_TWIN.file))), process.env.BUN_INSTALL ? real(process.env.BUN_INSTALL) : '', real(path.join(realHome, '.bun')), ...depRoots(input.repo)].filter(Boolean)
+  // bun (the runner's own, BUN_INSTALL's, ~/.bun's) and the repo's dependency roots.
+  const runtimes = [path.dirname(path.dirname(real(process.execPath))), process.env.BUN_INSTALL ? real(process.env.BUN_INSTALL) : '', real(path.join(realHome, '.bun')), ...depRoots(input.repo)].filter(Boolean)
   // The real `claude` outside the home, by name and by what the name points at.
   const noExec = [...new Set(['/opt/homebrew/bin/claude', '/usr/local/bin/claude'].flatMap((p) => (fs.existsSync(p) ? [p, real(p)] : [p])))]
   const profile = liveProfile({

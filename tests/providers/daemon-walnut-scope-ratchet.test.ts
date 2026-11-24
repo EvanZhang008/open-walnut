@@ -1,15 +1,14 @@
 /**
  * Ratchet: one daemon serves several Walnuts, so every setting a server pushes and every
- * file a twin keeps is either kept per Walnut or named here as the host's own, with why.
+ * file the daemon keeps is either kept per Walnut or named here as the host's own, with why.
  *
  * 2026-11-03: a host shared by two people's Walnuts held one trigger set, one hook set and
  * one bridge link for both; each push replaced the other's (walnut-scope-core.ts). This
- * test reads both twins and fails on:
+ * test reads the daemon (daemon-standalone.ts) and fails on:
  *   - a new command that sets daemon state from a server (`*.configure`, `*.sync`) that is
- *     not classified below, or one classified per Walnut whose twin lost the home check;
- *   - a new file or dir constant a twin persists to that is not classified;
- *   - a new fan-out of an event to every server socket that is not listed with its reason;
- *   - a twin that differs from the other in any of these.
+ *     not classified below, or one classified per Walnut that lost the home check;
+ *   - a new file or dir constant the daemon persists to that is not classified;
+ *   - a new fan-out of an event to every server socket that is not listed with its reason.
  * When it fails: decide whether the new state belongs to one Walnut (then key it by the home
  * the push names, with walnutScope, and list it as such) or to the host (list it with why).
  */
@@ -18,38 +17,32 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(__dirname, '../..')
-const TWINS = {
-  standalone: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8'),
-  source: fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf8'),
-}
-type TwinName = keyof typeof TWINS
+const DAEMON = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
 
 /** How a pushed setting is kept. */
 type Push =
-  | { kind: 'scoped'; why: string; proof: Record<TwinName, RegExp> }
-  | { kind: 'keyed'; why: string; proof: Record<TwinName, RegExp> }
+  | { kind: 'scoped'; why: string; proof: RegExp }
+  | { kind: 'keyed'; why: string; proof: RegExp }
   | { kind: 'host'; why: string }
 
-const both = (re: RegExp): Record<TwinName, RegExp> => ({ standalone: re, source: re })
-
 const PUSHES: Record<string, Push> = {
-  'hooks.configure': { kind: 'scoped', why: 'one rule set per Walnut, applied to its own sessions', proof: both(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'hooks\.configure'\)/) },
-  'triggers.configure': { kind: 'scoped', why: 'one trigger set per Walnut; fires go to its own sockets', proof: both(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'triggers\.configure'\)/) },
-  'bridge.configure': { kind: 'scoped', why: 'one bridge link per Walnut (each to its own companion)', proof: both(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'bridge\.configure'\)/) },
-  'turns.configure': { kind: 'scoped', why: 'turn snapshot settings per Walnut, read by the session\'s home', proof: both(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'turns\.configure'\)/) },
-  'workspace.configure': { kind: 'scoped', why: 'workspace providers per Walnut (its plugins)', proof: both(/walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), /) },
-  'secrets.sync': { kind: 'scoped', why: 'a sync prunes only the secrets its own Walnut wrote', proof: both(/refuseForeignHome\(ws, id, cmd, /) },
-  'leader.configure': { kind: 'keyed', why: 'leader book, one record per home (leader-core.ts)', proof: both(/refuseForeignHome\(ws, id, cmd, 'leader\.configure'\)/) },
-  'server.configure': { kind: 'keyed', why: 'host server supervisor, one entry per home (host-server-core.ts)', proof: both(/gatewayClientHomes\.get\(ws\) !== home\) return sendError\(ws, id, 'server\.configure/) },
-  'jobs.configure': { kind: 'keyed', why: 'plugin jobs, one set per home (plugin-jobs-core.ts)', proof: both(/function jobsLeaderHome/) },
-  'usage.budget.configure': { kind: 'keyed', why: 'a budget per session, checked against the session\'s owner', proof: both(/refuseForeignHome\(ws, id, cmd, configure \? 'usage\.budget\.configure' : 'usage\.budget'\)/) },
-  'replica.sync': { kind: 'keyed', why: 'host replica, one copy per home (host-replica-core.ts)', proof: { standalone: /refuseForeignHome\(ws, id, cmd, `replica\.\$\{op\}`\)/, source: /refuseForeignHome\(ws, id, cmd, 'replica\.' \+ op\)/ } },
-  'attachments.sync': { kind: 'keyed', why: 'attachment copy, one per home (attachment-copy-core.ts)', proof: both(/refuseForeignHome\(ws, id, cmd, String\(cmd\.cmd\)\)/) },
+  'hooks.configure': { kind: 'scoped', why: 'one rule set per Walnut, applied to its own sessions', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'hooks\.configure'\)/ },
+  'triggers.configure': { kind: 'scoped', why: 'one trigger set per Walnut; fires go to its own sockets', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'triggers\.configure'\)/ },
+  'bridge.configure': { kind: 'scoped', why: 'one bridge link per Walnut (each to its own companion)', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'bridge\.configure'\)/ },
+  'turns.configure': { kind: 'scoped', why: 'turn snapshot settings per Walnut, read by the session\'s home', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), 'turns\.configure'\)/ },
+  'workspace.configure': { kind: 'scoped', why: 'workspace providers per Walnut (its plugins)', proof: /walnutScope\.resolve\(cmd, gatewayClientHomes\.get\(ws\), / },
+  'secrets.sync': { kind: 'scoped', why: 'a sync prunes only the secrets its own Walnut wrote', proof: /refuseForeignHome\(ws, id, cmd, / },
+  'leader.configure': { kind: 'keyed', why: 'leader book, one record per home (leader-core.ts)', proof: /refuseForeignHome\(ws, id, cmd, 'leader\.configure'\)/ },
+  'server.configure': { kind: 'keyed', why: 'host server supervisor, one entry per home (host-server-core.ts)', proof: /gatewayClientHomes\.get\(ws\) !== home\) return sendError\(ws, id, 'server\.configure/ },
+  'jobs.configure': { kind: 'keyed', why: 'plugin jobs, one set per home (plugin-jobs-core.ts)', proof: /function jobsLeaderHome/ },
+  'usage.budget.configure': { kind: 'keyed', why: 'a budget per session, checked against the session\'s owner', proof: /refuseForeignHome\(ws, id, cmd, configure \? 'usage\.budget\.configure' : 'usage\.budget'\)/ },
+  'replica.sync': { kind: 'keyed', why: 'host replica, one copy per home (host-replica-core.ts)', proof: /refuseForeignHome\(ws, id, cmd, `replica\.\$\{op\}`\)/ },
+  'attachments.sync': { kind: 'keyed', why: 'attachment copy, one per home (attachment-copy-core.ts)', proof: /refuseForeignHome\(ws, id, cmd, String\(cmd\.cmd\)\)/ },
   'net.configure': { kind: 'host', why: 'one network identity and one walnut-net process per account on the machine' },
   'skills.sync': { kind: 'host', why: 'the engines\' own skill stores (~/.claude/skills) are the account\'s, read by every session there' },
 }
 
-/** Every command a twin dispatches that sets daemon state from a server. */
+/** Every command the daemon dispatches that sets daemon state from a server. */
 function pushCommands(src: string): string[] {
   return [...new Set([...src.matchAll(/case '([a-z][a-zA-Z.]*\.(?:configure|sync))'/g)].map((m) => m[1]!))].sort()
 }
@@ -122,16 +115,8 @@ function fileConstants(src: string): string[] {
   return [...new Set([...src.matchAll(/^(?:const|var|let) ([A-Z][A-Z0-9_]*_(?:FILE|DIR|ROOT|PATH)|SPAWN_JOURNAL)\b/gm)].map((m) => m[1]!))].sort()
 }
 
-/** Constants only one twin has, and why the other does not need its own. */
-const TWIN_ONLY: Record<string, string> = {
-  ACP_ARTIFACT_DIR: 'standalone: ACP sessions run only in the bun twin',
-  HOST_EXEC_DIR: 'standalone: the source twin builds the path inline',
-  WORKSPACE_STATE_DIR: 'standalone: the source twin passes the dir inline',
-  WRITES_PID_FILE: 'standalone: only its runtime can run inside a server, which writes no pid file',
-}
-
 /**
- * Events a twin sends to every server socket, with why each is not one Walnut's. A trigger
+ * Events the daemon sends to every server socket, with why each is not one Walnut's. A trigger
  * fire, a relay or a bridge frame is one Walnut's and goes only to its own sockets.
  */
 const FAN_OUT: Record<string, string> = {
@@ -152,53 +137,39 @@ describe('the ratchet\'s own scans see a new member', () => {
 })
 
 describe('one daemon, several Walnuts: every pushed setting is classified', () => {
-  for (const [name, src] of Object.entries(TWINS) as Array<[TwinName, string]>) {
-    it(`${name}: every *.configure / *.sync command is listed`, () => {
-      const found = pushCommands(src)
-      expect(found.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(8)
-      expect(found.filter((c) => !PUSHES[c]), 'classify each in PUSHES (per Walnut, or the host\'s with why)').toEqual([])
-      expect(Object.keys(PUSHES).filter((c) => !found.includes(c)), 'listed but no longer dispatched: drop it').toEqual([])
-    })
-    it(`${name}: each per-Walnut push still checks the Walnut it names`, () => {
-      for (const [cmd, p] of Object.entries(PUSHES)) {
-        if (p.kind === 'host') continue
-        expect(src, `${cmd}: ${p.why}`).toMatch(p.proof[name])
-      }
-    })
-  }
+  it('every *.configure / *.sync command is listed', () => {
+    const found = pushCommands(DAEMON)
+    expect(found.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(8)
+    expect(found.filter((c) => !PUSHES[c]), 'classify each in PUSHES (per Walnut, or the host\'s with why)').toEqual([])
+    expect(Object.keys(PUSHES).filter((c) => !found.includes(c)), 'listed but no longer dispatched: drop it').toEqual([])
+  })
+  it('each per-Walnut push still checks the Walnut it names', () => {
+    for (const [cmd, p] of Object.entries(PUSHES)) {
+      if (p.kind === 'host') continue
+      expect(DAEMON, `${cmd}: ${p.why}`).toMatch(p.proof)
+    }
+  })
 })
 
 describe('one daemon, several Walnuts: every persisted file is classified', () => {
-  for (const [name, src] of Object.entries(TWINS) as Array<[TwinName, string]>) {
-    it(`${name}: every file or dir constant is listed with whose it is`, () => {
-      const found = fileConstants(src)
-      expect(found.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(20)
-      expect(found.filter((c) => !FILES[c]), 'classify each in FILES: walnut (keyed by home), session, or host').toEqual([])
-    })
-  }
-  it('both twins keep the same files', () => {
-    const a = fileConstants(TWINS.standalone).filter((c) => !TWIN_ONLY[c])
-    const b = fileConstants(TWINS.source).filter((c) => !TWIN_ONLY[c])
-    expect(a).toEqual(b)
+  it('every file or dir constant is listed with whose it is', () => {
+    const found = fileConstants(DAEMON)
+    expect(found.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(20)
+    expect(found.filter((c) => !FILES[c]), 'classify each in FILES: walnut (keyed by home), session, or host').toEqual([])
   })
 })
 
 describe('one daemon, several Walnuts: nothing of one Walnut goes to every server', () => {
-  for (const [name, src] of Object.entries(TWINS) as Array<[TwinName, string]>) {
-    it(`${name}: every fan-out to all server sockets is listed`, () => {
-      expect(fanOuts(src).filter((e) => !FAN_OUT[e]), 'one Walnut\'s event goes to its own sockets; list a host-wide one with why').toEqual([])
-    })
-  }
+  it('every fan-out to all server sockets is listed', () => {
+    expect(fanOuts(DAEMON).filter((e) => !FAN_OUT[e]), 'one Walnut\'s event goes to its own sockets; list a host-wide one with why').toEqual([])
+  })
 })
 
 describe('one daemon, several Walnuts: every relay picks a server of its own Walnut', () => {
-  for (const [name, src] of Object.entries(TWINS) as Array<[TwinName, string]>) {
-    it(`${name}: no relay asks for "any trusted server"`, () => {
-      const calls = [...src.matchAll(/pickTrustedClient\(([^)]*)\)/g)].map((m) => m[1]!.trim())
-      // The definition, plus one call per relay (stt, launch, control, message, its reroute).
-      expect(calls.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(4)
-      expect(calls.filter((a) => a === ''), 'pass the home of the bridge link the relay came in on').toEqual([])
-    })
-  }
+  it('no relay asks for "any trusted server"', () => {
+    const calls = [...DAEMON.matchAll(/pickTrustedClient\(([^)]*)\)/g)].map((m) => m[1]!.trim())
+    // The definition, plus one call per relay (stt, launch, control, message, its reroute).
+    expect(calls.length, 'the scan found nothing: it checks nothing').toBeGreaterThan(4)
+    expect(calls.filter((a) => a === ''), 'pass the home of the bridge link the relay came in on').toEqual([])
+  })
 })
-

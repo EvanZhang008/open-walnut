@@ -7,10 +7,10 @@ import crypto from 'node:crypto'
 import vm from 'node:vm'
 import ts from 'typescript'
 
-/** Execute the actual guarded handlers from both twins, without booting a daemon. */
-function handler(twin: 'standalone' | 'source', home: string, fsImpl = fs) {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, `../../src/providers/daemon-${twin}.ts`), 'utf8')
-  const start = source.indexOf(twin === 'standalone' ? 'const FS_READ_BOUNDED_MAX_BYTES' : 'var FS_READ_BOUNDED_MAX_BYTES')
+/** Execute the daemon's actual guarded handler, without booting a daemon. */
+function handler(home: string, fsImpl = fs) {
+  const source = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+  const start = source.indexOf('const FS_READ_BOUNDED_MAX_BYTES')
   const end = source.indexOf('// Bridge-safe image save:', start)
   expect(start).toBeGreaterThan(0)
   expect(end).toBeGreaterThan(start)
@@ -29,10 +29,10 @@ let home: string
 beforeEach(async () => { home = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-bounded-range-')) })
 afterEach(async () => { await fsp.rm(home, { recursive: true, force: true }) })
 
-for (const twin of ['standalone', 'source'] as const) {
-  describe(`${twin} guarded fs.readBounded ranges`, () => {
+{
+  describe('the daemon\'s guarded fs.readBounded ranges', () => {
     it('probes and reads large files in bounded chunks while legacy whole reads still cap at 2 MB', async () => {
-      const call = handler(twin, home)
+      const call = handler(home)
       const file = path.join(home, 'bytes.mp4')
       // Byte-contract data, not playable encoded media.
       const bytes = Buffer.alloc(3 * 1024 * 1024 + 17)
@@ -66,7 +66,7 @@ for (const twin of ['standalone', 'source'] as const) {
     })
 
     it('rejects invalid offsets/lengths without widening a bridge frame', async () => {
-      const call = handler(twin, home)
+      const call = handler(home)
       const file = path.join(home, 'file.txt')
       await fsp.writeFile(file, 'hello')
       for (const [offset, length] of [[-1, 1], [0, -1], [0, 1024 * 1024 + 1], [0.5, 1], [0, NaN], [Number.MAX_SAFE_INTEGER + 1, 1]]) {
@@ -78,7 +78,7 @@ for (const twin of ['standalone', 'source'] as const) {
     })
 
     it('applies realpath secret denial and regular-file guards even on metadata probes', async () => {
-      const call = handler(twin, home)
+      const call = handler(home)
       await fsp.mkdir(path.join(home, '.ssh'))
       const secret = path.join(home, '.ssh', 'secret.mp4')
       await fsp.writeFile(secret, 'private fixture')
@@ -100,7 +100,7 @@ for (const twin of ['standalone', 'source'] as const) {
     it('refuses consecutive secret-directory segments outside HOME without rejecting similar or separated segments', async () => {
       const fakeHome = path.join(home, 'user-home')
       await fsp.mkdir(fakeHome)
-      const call = handler(twin, fakeHome)
+      const call = handler(fakeHome)
       const denied = path.join(home, 'backup', '.config', 'walnut-secrets', 'bytes.mp4')
       const safe = [
         path.join(home, 'backup', '.config', 'walnut-secrets-copy', 'bytes.mp4'),
@@ -125,7 +125,7 @@ for (const twin of ['standalone', 'source'] as const) {
     it('detects replacement/truncation and a file changing during a chunk', async () => {
       const file = path.join(home, 'bytes.mp4')
       await fsp.writeFile(file, 'before')
-      const call = handler(twin, home)
+      const call = handler(home)
       const probe = await call({ path: file, range: true, offset: 0, length: 0 })
       await fsp.writeFile(file, 'new')
       expect((await call({ path: file, range: true, offset: 0, length: 1, expectedVersion: probe.version })).error).toContain('(ESTALE)')
@@ -137,7 +137,7 @@ for (const twin of ['standalone', 'source'] as const) {
           return result
         } }
       } } } as unknown as typeof fs
-      const mutate = handler(twin, home, fsImpl)
+      const mutate = handler(home, fsImpl)
       expect((await mutate({ path: file, range: true, offset: 0, length: 1 })).error).toContain('(ESTALE)')
     })
 
@@ -149,7 +149,7 @@ for (const twin of ['standalone', 'source'] as const) {
         return { stat: () => fh.stat(), close: () => fh.close(),
           read: (buffer: Buffer, offset: number, length: number, position: number) => fh.read(buffer, offset, Math.min(length, 2), position) }
       } } } as unknown as typeof fs
-      const reply = await handler(twin, home, fsImpl)({ path: file, range: true, offset: 1, length: 6 })
+      const reply = await handler(home, fsImpl)({ path: file, range: true, offset: 1, length: 6 })
       expect(reply.ok).toBe(true)
       expect(Buffer.from(reply.data as string, 'base64').toString()).toBe('bcdefg')
     })

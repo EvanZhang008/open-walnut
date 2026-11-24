@@ -246,8 +246,7 @@ describe('a long transfer waits out a dropped link', () => {
       'src/core/hosts/host-mcp-images.ts': { count: 1, way: 'one picture for a tool\'s answer, its own deadline; no wait' },
       'src/providers/daemon-connection.ts': { count: 1, way: 'joined-host server upload: checked parts with three attempts per part; a dropped link fails the install and the existing manager retries on reconnect' },
       'src/web/terminal/host-shell.ts': { count: 1, way: 'a terminal script over 1 MB (dtach install with a large prebuilt), its own deadline; no wait: a dropped link fails the provision and the next open probes again' },
-      // The receivers: the daemon twins and the core they share.
-      'src/providers/daemon-source.ts': { count: 1, way: 'the receiver' },
+      // The receivers: the daemon and its transfer core.
       'src/providers/daemon-standalone.ts': { count: 1, way: 'the receiver' },
       'src/providers/transfer-core.ts': { count: 1, way: 'the receiver' },
     }

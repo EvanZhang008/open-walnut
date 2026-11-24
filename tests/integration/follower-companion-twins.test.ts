@@ -1,6 +1,6 @@
 /**
  * A session's call this host's Walnut server refuses for want of a leader while the cloud
- * companion leads, on REAL daemon processes, both twins (follower-gateway-core.ts askElsewhere):
+ * companion leads, on a REAL standalone daemon process (follower-gateway-core.ts askElsewhere):
  *
  *   test as the Mac ==trusted WS (no auto pong)==> daemon <==bridge== companion (this process:
  *     leader.configure {backup}, host.slice,            a /bridge server with the REAL backup
@@ -27,7 +27,6 @@ import path from 'node:path'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
 import { createBackupGateway } from '../../src/core/leader/backup-gateway.js'
 import { BUN, cleanupFollowerTwins, cmd, connectWs, gatewayCall, linkFollower, nextFrameId, spawnFollowerTwin, startMockSession, waitFor } from '../helpers/follower-twin-rig.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOME = '/fixture/marina-home'
 const WALNUT = 'wmarinacomp01'
@@ -121,53 +120,51 @@ afterAll(async () => {
   await cleanupFollowerTwins(base, started)
 }, 60_000)
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin === 'source' ? `source twin (${SOURCE_TWIN.runtime})` : 'standalone twin'}: a final refusal of this host's server while the companion leads`, () => {
-    it('goes to the companion: its answer when it takes the call, else the follower\'s refusal at once; never the daemon\'s own away answer', async () => {
-      if (!wss) await startCompanion()
-      const cport = (wss!.address() as net.AddressInfo).port
-      const alias = `${twin.slice(0, 3)}box`
-      const d = await spawnFollowerTwin({ base, name: alias, twin, takeoverMs: T, beatMs: BEAT, started })
-      const mac = await connectWs(d.port, false)
-      let beat: ReturnType<typeof setInterval> | null = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
-      macAwake = true
-      if (!heartbeatTimer) heartbeatTimer = setInterval(() => { if (macAwake) leader.noteHeartbeat({ walnutId: WALNUT, backup: true }) }, 300)
-      try {
-        // A session of this Walnut on the host, and the host's bridge to the companion.
-        const startedSession = await startMockSession({ base, name: alias, d, mac, sid: SID, home: HOME, task: TASK })
-        expect(startedSession.ok, JSON.stringify(startedSession)).toBe(true)
-        expect((await cmd(mac, { cmd: 'bridge.configure', enabled: true, url: `ws://127.0.0.1:${cport}/bridge`, token: 't', hostAlias: alias })).ok).toBe(true)
-        await waitFor(() => conns.has(alias), 20_000, 'the bridge')
-        await cmd(mac, { cmd: 'host.slice', slice: { v: 1, home: HOME, hash: `h-${alias}`, asOf: Date.now(), host: alias, sessions: [{ sid: SID, taskId: TASK, title: 'Ship it' }], tasks: [{ id: TASK, title: 'Ship it', phase: 'IN_PROGRESS', project: 'Acme' }], requests: [], boards: [], boardOf: {} } })
-        expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
-        // The host server this daemon starts; its token makes the second socket the follower.
-        const { follower, hello } = await linkFollower({ base, name: alias, d, mac, home: HOME, walnutId: WALNUT, serverPort: 41_238 })
-        expect(hello.ok, JSON.stringify(hello)).toBe(true)
-        const followerAsked = refusesForTheMac(follower)
+describe.skipIf(!BUN)("standalone daemon: a final refusal of this host's server while the companion leads", () => {
+  it('goes to the companion: its answer when it takes the call, else the follower\'s refusal at once; never the daemon\'s own away answer', async () => {
+    if (!wss) await startCompanion()
+    const cport = (wss!.address() as net.AddressInfo).port
+    const alias = 'stabox'
+    const d = await spawnFollowerTwin({ base, name: alias, takeoverMs: T, beatMs: BEAT, started })
+    const mac = await connectWs(d.port, false)
+    let beat: ReturnType<typeof setInterval> | null = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT / 2)
+    macAwake = true
+    if (!heartbeatTimer) heartbeatTimer = setInterval(() => { if (macAwake) leader.noteHeartbeat({ walnutId: WALNUT, backup: true }) }, 300)
+    try {
+      // A session of this Walnut on the host, and the host's bridge to the companion.
+      const startedSession = await startMockSession({ base, name: alias, d, mac, sid: SID, home: HOME, task: TASK })
+      expect(startedSession.ok, JSON.stringify(startedSession)).toBe(true)
+      expect((await cmd(mac, { cmd: 'bridge.configure', enabled: true, url: `ws://127.0.0.1:${cport}/bridge`, token: 't', hostAlias: alias })).ok).toBe(true)
+      await waitFor(() => conns.has(alias), 20_000, 'the bridge')
+      await cmd(mac, { cmd: 'host.slice', slice: { v: 1, home: HOME, hash: `h-${alias}`, asOf: Date.now(), host: alias, sessions: [{ sid: SID, taskId: TASK, title: 'Ship it' }], tasks: [{ id: TASK, title: 'Ship it', phase: 'IN_PROGRESS', project: 'Acme' }], requests: [], boards: [], boardOf: {} } })
+      expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: true })).ok).toBe(true)
+      // The host server this daemon starts; its token makes the second socket the follower.
+      const { follower, hello } = await linkFollower({ base, name: alias, d, mac, home: HOME, walnutId: WALNUT, serverPort: 41_238 })
+      expect(hello.ok, JSON.stringify(hello)).toBe(true)
+      const followerAsked = refusesForTheMac(follower)
 
-        // The Mac sleeps: its socket goes silent, its heartbeat stops; the companion takes the lead.
-        clearInterval(beat); beat = null
-        macAwake = false
-        await waitFor(() => leader.status().leading.some((l) => l.host === alias), 6 * T, 'the companion to lead the host')
-        companionAsked.length = 0
+      // The Mac sleeps: its socket goes silent, its heartbeat stops; the companion takes the lead.
+      clearInterval(beat); beat = null
+      macAwake = false
+      await waitFor(() => leader.status().leading.some((l) => l.host === alias), 6 * T, 'the companion to lead the host')
+      companionAsked.length = 0
 
-        // One the companion answers: its answer.
-        const read = await gatewayCall(d, SID, 'note_read', { path: 'Acme/plan.md' })
-        expect(read.reply, JSON.stringify(read.reply)).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
-        // One it does not: the follower's refusal, at once (no wait for the Mac, not asked twice).
-        const exec = await gatewayCall(d, SID, 'host_exec', { host: alias, command: 'ls' })
-        expect(exec.reply, JSON.stringify(exec.reply)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: 'host_exec needs your Mac' } })
-        expect(exec.ms).toBeLessThan(5_000)
-        expect(followerAsked).toEqual(['note_read', 'host_exec'])
-        expect(companionAsked).toEqual(['note_read', 'host_exec'])
-        // The daemon's own away answer was never used.
-        const status = await cmd(follower, { cmd: 'follower.status' })
-        expect(status.offlineAnswers?.total ?? 0, JSON.stringify(status.offlineAnswers)).toBe(0)
-        follower.close()
-      } finally {
-        if (beat) clearInterval(beat)
-        mac.close()
-      }
-    }, 180_000)
-  })
-}
+      // One the companion answers: its answer.
+      const read = await gatewayCall(d, SID, 'note_read', { path: 'Acme/plan.md' })
+      expect(read.reply, JSON.stringify(read.reply)).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
+      // One it does not: the follower's refusal, at once (no wait for the Mac, not asked twice).
+      const exec = await gatewayCall(d, SID, 'host_exec', { host: alias, command: 'ls' })
+      expect(exec.reply, JSON.stringify(exec.reply)).toMatchObject({ ok: false, error: { code: 'needs_leader', message: 'host_exec needs your Mac' } })
+      expect(exec.ms).toBeLessThan(5_000)
+      expect(followerAsked).toEqual(['note_read', 'host_exec'])
+      expect(companionAsked).toEqual(['note_read', 'host_exec'])
+      // The daemon's own away answer was never used.
+      const status = await cmd(follower, { cmd: 'follower.status' })
+      expect(status.offlineAnswers?.total ?? 0, JSON.stringify(status.offlineAnswers)).toBe(0)
+      follower.close()
+    } finally {
+      if (beat) clearInterval(beat)
+      mac.close()
+    }
+  }, 180_000)
+})

@@ -35,10 +35,7 @@
  *
  * Refusals never touch the holder: no signal, no FIFO, no adoption of a stranger.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createCliOwner;
- * daemon-source.ts inlines `createCliOwner.toString()` through
- * `__CREATE_CLI_OWNER__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createCliOwner). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 export interface CliOwnerRecord {

@@ -41,10 +41,7 @@
  *  - every git spawn gets a clean environment: an inherited GIT_DIR /
  *    GIT_WORK_TREE / GIT_INDEX_FILE would point git at another repository.
  *
- * How each twin gets it: daemon-standalone.ts imports createWorkspaceCore;
- * daemon-source.ts inlines `createWorkspaceCore.toString()` through
- * `__CREATE_WORKSPACE_CORE__`. So the factory body references NOTHING at module
- * scope: every helper lives inside it and every capability comes from `deps`.
+ * Imported by daemon-standalone.ts (createWorkspaceCore). The factory body references NOTHING at module scope: every helper lives inside it and every capability comes from `deps`.
  */
 
 /** What the daemon needs from its host process (node or bun). */

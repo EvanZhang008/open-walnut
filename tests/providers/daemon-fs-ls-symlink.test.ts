@@ -1,5 +1,5 @@
 /**
- * Daemon `fs.ls` — symlink classification, both twins.
+ * Daemon `fs.ls` — symlink classification.
  *
  * Shipped report (2026-09-14): on dev boxes `/home/<user>` is a symlink to
  * `/local/home/<user>`. `readdir({withFileTypes})` has lstat semantics, so the
@@ -11,7 +11,8 @@
  * Two layers:
  *   1. real binary: spawn dist/daemon-binaries/daemon-darwin-arm64 against an
  *      isolated dir and call fs.ls over a direct WS (skips when not built);
- *   2. source parity: both twins carry the same isSymbolicLink() branch.
+ *   2. source check: the daemon lists through fs-ls-core.ts, whose
+ *      isSymbolicLink() branch follows the link once.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
@@ -107,9 +108,8 @@ d('fs.ls against the real daemon binary — symlinks', () => {
   })
 })
 
-describe('fs.ls symlink handling — twin parity (daemon-standalone vs daemon-source)', () => {
+describe('fs.ls symlink handling — source check (daemon-standalone + fs-ls-core)', () => {
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-  const source = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
 
   const fsLsBody = (src: string) => {
     const start = src.indexOf('function cmdFsLs(')
@@ -119,22 +119,18 @@ describe('fs.ls symlink handling — twin parity (daemon-standalone vs daemon-so
     return src.slice(start, end)
   }
 
-  it('both twins list through the shared lister, which follows symlinks with stat() and tags them symlink:true', () => {
-    // The listing moved to fs-ls-core.ts (per-entry and whole-listing time
-    // budgets); the standalone imports it, the source twin gets it as text.
-    for (const body of [fsLsBody(standalone), fsLsBody(source)]) {
-      expect(body).toContain('fsLs.list(dirPath, cmd.detail === true)')
-    }
+  it('the daemon lists through the shared lister, which follows symlinks with stat() and tags them symlink:true', () => {
+    // The listing lives in fs-ls-core.ts (per-entry and whole-listing time
+    // budgets); the standalone imports it.
+    expect(fsLsBody(standalone)).toContain('fsLs.list(dirPath, cmd.detail === true)')
     expect(standalone).toMatch(/const fsLs = createFsLs\(\{\s*readdir: .*fs\.promises\.readdir\(d, \{ withFileTypes: true \}\)[\s\S]{0,80}stat: .*fs\.promises\.stat\(p\)/)
-    expect(source).toMatch(/const fsLs = \(__CREATE_FS_LS__\)\(\{\s*readdir: .*fs\.promises\.readdir\(d, \{ withFileTypes: true \}\)[\s\S]{0,80}stat: .*fs\.promises\.stat\(p\)/)
     const core = fs.readFileSync(path.join(ROOT, 'src/providers/fs-ls-core.ts'), 'utf-8')
     expect(core).toContain('e.isSymbolicLink()')
     expect(core).toContain('symlink: true')
     expect(core).toContain('var full = base + e.name')
     // A link's stat is grouped by the directory its target lives in (readlink),
-    // so links into one dead mount share one slot; both twins pass readlink.
+    // so links into one dead mount share one slot; the daemon passes readlink.
     expect(core).toContain('statWithin(full, await linkGroup(full, dir, deadline), deadline)')
     expect(standalone).toContain('readlink: (p) => fs.promises.readlink(p)')
-    expect(source).toContain('readlink: function (p) { return fs.promises.readlink(p); }')
   })
 })

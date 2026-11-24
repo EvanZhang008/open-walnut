@@ -1,5 +1,6 @@
 /**
- * Bridge image.save E2E — spawn the REAL daemon-source.ts template, connect a
+ * Bridge image.save E2E — spawn the REAL standalone daemon
+ * (daemon-standalone.ts under bun), connect a
  * fake cloud WS server, and drive the narrow image-save command over the
  * bridge socket exactly the way the cloud companion does for phone image
  * attachments (routes/session-stream-v1.ts saveImagesViaBridge).
@@ -15,8 +16,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'bridge-image-e2e-host'
@@ -27,27 +27,23 @@ const TINY_PNG_BASE64 =
 
 interface DaemonProc { proc: ChildProcess; port: number }
 
-let scriptPath: string
 let daemonDir: string
 let daemon: DaemonProc
 let ctl: WebSocket
 let cloud: FakeCloud
 let bridgeSideWs: WebSocket
 
-function writeDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-image-save-e2e-'))
-  const p = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(p, getDaemonSource(), { mode: 0o755 })
-  return p
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 async function spawnDaemon(): Promise<DaemonProc> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -146,7 +142,6 @@ function bridgeRpc(id: number, cmd: string, params: Record<string, unknown> = {}
 }
 
 beforeAll(async () => {
-  scriptPath = writeDaemonScript()
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-image-save-dir-'))
   cloud = await startFakeCloud()
   daemon = await spawnDaemon()
@@ -167,11 +162,10 @@ afterAll(async () => {
   try { ctl.close() } catch { /* already closed */ }
   await stopDaemon(daemon)
   await cloud.close()
-  fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true })
   fs.rmSync(daemonDir, { recursive: true, force: true })
 })
 
-describe('image.save over the cloud bridge (real source daemon)', () => {
+describe.skipIf(!BUN)('image.save over the cloud bridge (real standalone daemon)', () => {
   it('saves a real PNG into the fixed daemon-owned dir and returns its generated path', async () => {
     const res = await bridgeRpc(801, 'image.save', { data: TINY_PNG_BASE64, mediaType: 'image/png' })
     expect(res.ok).toBe(true)

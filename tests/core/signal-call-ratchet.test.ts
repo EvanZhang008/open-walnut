@@ -34,7 +34,7 @@
  * computed at runtime), and a signal sent by a program the server runs whose
  * own source is not under src/. Review those by hand.
  *
- * The daemon twins are exempt: the daemon owns its CLI processes and checks
+ * The daemon is exempt: it owns its CLI processes and checks
  * their identity before it signals (daemon-standalone.ts stopSessionProcess).
  *
  * Adding a site fails with instructions. Removing one? Lower the number: the
@@ -54,7 +54,6 @@ const repoRoot = path.resolve(__dirname, '../..');
 /** The daemon owns its processes and proves their identity before any signal. */
 const EXEMPT = new Set([
   'src/providers/daemon-standalone.ts',
-  'src/providers/daemon-source.ts',
 ]);
 
 /**

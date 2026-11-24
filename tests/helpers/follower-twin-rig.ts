@@ -1,6 +1,6 @@
 /**
- * REAL daemon processes of both twins with a session and this host's own Walnut server linked
- * as the follower, for the follower gateway suites (tests/integration/follower-*-twins.test.ts):
+ * REAL daemon processes (daemon-standalone.ts under bun) with a session and this host's own Walnut
+ * server linked as the follower, for the follower gateway suites (tests/integration/follower-*.test.ts):
  *
  *   test as the Mac ==trusted WS==> daemon: start (a mock session), host.slice, leader.configure,
  *     server.configure (a fake host server that hands its follower token back)
@@ -16,8 +16,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from './source-twin.js'
 import { testBun } from './bun-runtime.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
@@ -45,7 +43,8 @@ process.on('SIGTERM', () => process.exit(0))
 setInterval(() => {}, 1 << 30)
 `
 
-export type Twin = 'source' | 'standalone'
+/** The one daemon there is; kept as a parameter so a suite can still name it in its labels. */
+export type Twin = 'standalone'
 export interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -67,11 +66,11 @@ function alive(pid: number): boolean {
 }
 
 /**
- * One daemon of `twin` in `base/name`, its journal in `base/name-j`. `takeoverMs` is the
+ * One daemon in `base/name`, its journal in `base/name-j`. `takeoverMs` is the
  * companion's takeover window and the quiet window this daemon calls the Mac away by; `beatMs`
  * its keepalive beat. Its pid is pushed onto `started`.
  */
-export async function spawnFollowerTwin(o: { base: string; name: string; twin: Twin; takeoverMs: number; beatMs: number; started: number[] }): Promise<Daemon> {
+export async function spawnFollowerTwin(o: { base: string; name: string; twin?: Twin; takeoverMs: number; beatMs: number; started: number[] }): Promise<Daemon> {
   const dir = path.join(o.base, o.name)
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
@@ -89,17 +88,11 @@ export async function spawnFollowerTwin(o: { base: string; name: string; twin: T
   delete env.WALNUT_DAEMON_STATE_DIR
   delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
   const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
-  let proc: ChildProcess
-  if (o.twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
-  } else {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', stderr] })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${o.twin}] ` + b.toString()))
+  if (!BUN) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
+  const proc: ChildProcess = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${o.name}] ` + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${o.twin} daemon`)
+  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${o.name} daemon`)
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   o.started.push(pid)
   return { proc, dir, sock, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }

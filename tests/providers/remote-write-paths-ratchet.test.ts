@@ -60,19 +60,17 @@ const CONNECTION: Record<string, Entry> = {
   serviceSetLink: { count: 1, kind: 'not-for-test-server', why: 'service sets: the link is made only for isolation.mode shared, never IS_EPHEMERAL or a read-only remote; it runs the lines service-set-move-link.ts builds' },
   provisionServiceSet: { count: 2, kind: 'not-for-test-server', why: 'service sets: reached only through serviceSetLink (shared hosts only); a status line, then an install of this Walnut\'s own set' },
   reviveRemoteService: { count: 1, kind: 'not-for-test-server', why: 'revives the host\'s OS service; IS_EPHEMERAL returns before anything runs' },
-  prewarmRemoteFolds: { count: 3, kind: 'own-dir', why: 'daemonDir = the chosen dir, env = dirEnv, bun probe with bunScriptOpts' },
+  prewarmRemoteFolds: { count: 1, kind: 'own-dir', why: 'daemonDir = the chosen dir, env = dirEnv, the new daemon file from that dir' },
   acpTurnsOpen: { count: 1, kind: 'read', why: 'reads acp-busy.json in the chosen daemon dir' },
   attachDuringSwap: { count: 1, kind: 'read', why: 'buildLiveDaemonScanScript over the chosen daemon dir: reads its pid, port and instance files during a service swap' },
   updateManagedDaemon: { count: 3, kind: 'not-for-test-server', why: 'only for an OS-service daemon; an isolated one is never managed (detectServiceTakeover)' },
   stopUnmanagedDaemon: { count: 1, kind: 'own-dir', why: 'buildDaemonStopCmd(the chosen daemon dir), which proves the pid is that dir\'s daemon' },
-  probeOrInstallBun: { count: 3, kind: 'own-dir', why: 'bunScriptOpts: the install runs with HOME and BUN_INSTALL under the isolated install home' },
   deployWalnutFile: { count: 5, kind: 'own-dir', why: 'the slot is in the chosen daemon dir; the host server install is not looked at for an isolated daemon' },
   deployWalnutFileDelta: { count: 3, kind: 'own-dir', why: 'the slot and its delta file, in the chosen daemon dir' },
   fetchWalnutFileOnHost: { count: 3, kind: 'own-dir', why: 'the release asset into the gz beside the slot (and its part file), that part\'s size, the slot\'s install: all in the chosen daemon dir; curl writes nothing else, wget keeps no HSTS file' },
   seedHostFileFromDaemon: { count: 1, kind: 'not-for-test-server', why: 'a host server install step (shared host or the replica check only)' },
   deployBinary: { count: 4, kind: 'own-dir', why: 'mkdir, version, unpack: all in the chosen daemon dir' },
   pipeChunked: { count: 9, kind: 'own-dir', why: 'its chunk dir and target, under the chosen daemon dir' },
-  deploySource: { count: 3, kind: 'own-dir', why: 'daemon.cjs and its sidecars, into the chosen daemon dir' },
   startDaemon: { count: 2, kind: 'own-dir', why: 'buildDaemonStartCmd with dirEnv: isolatedDaemonEnv (tests/providers/daemon-isolated-connection.test.ts captures it)' },
   createTunnel: { count: 1, kind: 'transport', why: 'a port forward, no remote command' },
 }
@@ -154,10 +152,8 @@ describe('remote write paths ratchet', () => {
     // Every terminal step's route (terminal-route.ts, re-exported by spawn.ts) applies the test server's isolation.
     expect(fs.readFileSync(path.join(ROOT, 'src/web/terminal/terminal-route.ts'), 'utf-8')).toMatch(/remoteIsolationFor\(/)
     // A test daemon's identity never reaches its sessions (a nested test server's daemon would claim it).
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = fs.readFileSync(path.join(ROOT, twin), 'utf-8')
-      for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR', 'WALNUT_DAEMON_STATE_DIR']) expect(src, `${twin} ${k}`).toContain(`${k}: undefined,`)
-    }
+    const daemon = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME', 'WALNUT_RUNTIME_DIR', 'WALNUT_DAEMON_STATE_DIR']) expect(daemon, k).toContain(`${k}: undefined,`)
     const local = fs.readFileSync(path.join(ROOT, 'src/providers/local-daemon.ts'), 'utf-8')
     for (const k of ['WALNUT_DAEMON_ISOLATED_FOR', 'WALNUT_DAEMON_ORPHAN_EXIT_MS', 'WALNUT_INSTALL_HOME']) expect(local).toContain(`delete env.${k}`)
   })

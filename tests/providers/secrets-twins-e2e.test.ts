@@ -1,6 +1,6 @@
 /**
- * secrets.* (secrets-v1, src/providers/secrets-core.ts) on BOTH daemon twins
- * booted for real: a value lands as a 0600 file in a 0700 dir, a list carries
+ * secrets.* (secrets-v1, src/providers/secrets-core.ts) on the daemon booted
+ * for real: a value lands as a 0600 file in a 0700 dir, a list carries
  * names and versions and never a value, an older version is refused, sync
  * removes what the Mac no longer shares here, and a session started on the
  * host gets WALNUT_SECRETS_DIR plus the env var of each secret the user let
@@ -11,34 +11,18 @@
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-secrets-twins-')))
 afterAll(() => { if (root.includes('walnut-secrets-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds both sidecars next to it, as deployed.
-if (BUN) {
-  for (const name of ['task-dir-core', 'secrets-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -54,7 +38,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> {
+async function boot(dir: string): Promise<string> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -66,8 +50,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     WALNUT_SECRETS_DIR_ROOT: path.join(dir, 'state', 'open-walnut', 'secrets'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -113,10 +96,10 @@ async function waitFile(file: string, ms = 15_000): Promise<string> {
   throw new Error('no file ' + file)
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('keeps the shared secrets 0600, lists no value, syncs revokes, and hands sessions their env', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    await boot(dir)
     const secrets = path.join(dir, 'state', 'open-walnut', 'secrets')
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toContain('secrets-v1')
@@ -164,8 +147,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 90_000)
 
   it("one Walnut's sync never removes another Walnut's secrets; an unnamed sync prunes only unowned ones", async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-scoped')
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone' + '-scoped')
+    await boot(dir)
     const secrets = path.join(dir, 'state', 'open-walnut', 'secrets')
     const A = path.join(dir, 'walnut-a')
     const B = path.join(dir, 'walnut-b')

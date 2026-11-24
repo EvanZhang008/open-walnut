@@ -1,5 +1,5 @@
 /**
- * Which `walnut` a session runs, on the real daemon twins.
+ * Which `walnut` a session runs, on the real session daemon (daemon-standalone.ts under bun).
  *
  * A session reaches its Walnut over HTTP only when that Walnut gave it OPEN_WALNUT_API_URL
  * (self-api-root.ts: local sessions of a server). Every other session reaches it through its
@@ -9,7 +9,7 @@
  *
  * Pinned: with another `walnut` on the daemon's PATH, a session with no OPEN_WALNUT_API_URL
  * resolves `walnut` to this daemon's shim, and one with it still resolves the installed CLI
- * first (the Mac hub, unchanged). And a ratchet: every place either twin puts the shim dir on
+ * first (the Mac hub, unchanged). And a ratchet: every place the daemon puts the shim dir on
  * a session PATH goes through the one rule.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, PATH is built with
@@ -21,23 +21,16 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { twinText } from '../helpers/standalone-twin-text.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
+const command = (): [string, string[]] => [BUN!, [STANDALONE, '--start']]
 
 // Records its PATH and what `walnut` resolves to in it, then idles until told to exit.
 const FAKE_CLI = `
@@ -59,7 +52,7 @@ const daemons: Daemon[] = []
 const spawnedPids = new Set<number>()
 let rpcId = 1
 
-async function boot(twin: Twin, otherBin: string): Promise<Daemon> {
+async function boot(otherBin: string): Promise<Daemon> {
   const daemonDir = path.join(root, 'daemon')
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -75,7 +68,7 @@ async function boot(twin: Twin, otherBin: string): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', '.open-walnut', 'local', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
@@ -123,9 +116,7 @@ const recorded = (out: string): Array<{ pid: number; path: string; walnut: strin
   fs.existsSync(out) ? fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 
 beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-walnut-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-walnut-cli-'))
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -144,14 +135,14 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('session walnut: $name', (twin) => {
+describe.skipIf(!BUN)('session walnut, standalone daemon (bun)', () => {
   it('a session its Walnut reaches only through the daemon runs the shim, not another Walnut on PATH', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-walnut-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
     const otherBin = path.join(root, 'other-walnut', 'bin')
     fs.mkdirSync(otherBin, { recursive: true })
     fs.writeFileSync(path.join(otherBin, 'walnut'), '#!/bin/sh\necho other\n', { mode: 0o755 })
-    const d = await boot(twin, otherBin)
+    const d = await boot(otherBin)
     const shim = path.join(d.dir, 'bin', 'walnut')
     expect(await waitFor(() => fs.existsSync(shim))).toBe(true)
 
@@ -184,7 +175,7 @@ describe.each(TWINS)('session walnut: $name', (twin) => {
   }, 180_000)
 })
 
-describe('every use of the shim dir in a twin is a known one', () => {
+describe('every use of the shim dir in the daemon is a known one', () => {
   // A new spawn path that puts the shim dir on a PATH by itself brings the cross-Walnut misroute
   // back, however it joins the strings. So every line naming GATEWAY_SHIM_DIR must be one of
   // these; a new use fails here until someone decides which rule it follows.
@@ -201,40 +192,30 @@ describe('every use of the shim dir in a twin is a known one', () => {
     // A plugin job is no session: it carries no OPEN_WALNUT_API_URL to judge by.
     [/^env\.PATH = \(process\.env\.PATH \|\| ''\) \+ path\.delimiter \+ GATEWAY_SHIM_DIR;?$/, 'plugin job'],
   ]
-  const twins = [
-    { rel: 'src/providers/daemon-standalone.ts', rule: 1, preamble: 2 },
-    { rel: 'src/providers/daemon-source.ts', rule: 1, preamble: 0 },
-  ]
-  it.each(twins)('$rel', ({ rel, rule, preamble }) => {
-    const lines = twinText(rel, fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')).split('\n')
+  const STANDALONE_TEXT = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
+  it('src/providers/daemon-standalone.ts', () => {
+    const lines = STANDALONE_TEXT.split('\n')
       .map((l) => l.trim())
       .filter((l) => /\bGATEWAY_SHIM_DIR\b/.test(l) && !l.startsWith('//') && !l.startsWith('*'))
     const kinds = lines.map((l) => KNOWN.find(([re]) => re.test(l))?.[1] ?? `unknown: ${l}`)
     expect(kinds.filter((k) => k.startsWith('unknown'))).toEqual([])
-    expect(kinds.filter((k) => k === 'rule')).toHaveLength(rule)
-    expect(kinds.filter((k) => k === 'preamble')).toHaveLength(preamble)
+    expect(kinds.filter((k) => k === 'rule')).toHaveLength(1)
+    expect(kinds.filter((k) => k === 'preamble')).toHaveLength(2)
     expect(kinds.filter((k) => k === 'plugin job')).toHaveLength(1)
   })
-  it('both spawn paths of the standalone twin ask the rule', () => {
-    const text = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
+  it('both spawn paths of the daemon ask the rule', () => {
+    const text = STANDALONE_TEXT
     expect(text).toMatch(/buildSpawnPreamble\(launch\.nodeDir, walnutThroughGateway\(settingsEnvOf\(launch\.args\)\)\)/)
     expect(text).toMatch(/PATH: sessionPathWithShim\(process\.env\.PATH \|\| '', throughGateway\),/)
   })
-  it('every session spawn of both twins takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {
+  it('every session spawn of the daemon takes its OPEN_WALNUT_API_URL from what its Walnut named', () => {
     // The native spawn reads it from the CLI's settings, an ACP worker from its env; a spawn that
     // left it out would hand the session the daemon's own address (or none) again.
-    for (const rel of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const text = fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8')
-      const sets = text.split('\n').map((l) => l.trim()).filter((l) => /^OPEN_WALNUT_API_URL:/.test(l))
-      expect(sets, rel).toEqual([
-        expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(params\.env\) (\?\?|\|\|) '',$/),
-        expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(settingsEnvOf\(launch\.args\)\),$/),
-      ])
-    }
-  })
-  it('both spawn paths of the source twin ask the rule', () => {
-    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-source.ts'), 'utf8')
-    expect(text).toMatch(/sessionPathWithShim\(\(launch\.nodeDir \? .*walnutThroughGateway\(settingsEnvOf\(launch\.args\)\)\),/)
-    expect(text).toMatch(/sessionPathWithShim\(process\.env\.PATH \|\| '', walnutThroughGateway\(params\.env\)\),/)
+    const text = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    const sets = text.split('\n').map((l) => l.trim()).filter((l) => /^OPEN_WALNUT_API_URL:/.test(l))
+    expect(sets).toEqual([
+      expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(params\.env\) (\?\?|\|\|) '',$/),
+      expect.stringMatching(/^OPEN_WALNUT_API_URL: sessionWalnutApiUrl\(settingsEnvOf\(launch\.args\)\),$/),
+    ])
   })
 })

@@ -26,9 +26,9 @@ const probeReply = () => [...remoteServiceProbePaths().map((p) => `absent ${p}`)
 function skewedHost(conn: DaemonConnection): string[] {
   const seen: string[] = []
   // What runs the daemon, as a hello says it: with none known no copy can be kept, and nothing is stopped.
-  ;(conn as unknown as { _runtime: unknown })._runtime = 'node'
+  ;(conn as unknown as { _runtime: unknown })._runtime = 'binary'
   vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
-  vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
+  vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY') })
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
@@ -64,9 +64,10 @@ describe('DaemonConnection upgrade with a remote fold prewarm', () => {
     const order: string[] = []
     vi.spyOn(priv(conn), 'prewarmRemoteFolds').mockImplementation(async () => { order.push(`prewarm@${stops(seen).length}${seen.includes('DEPLOY') ? '+staged' : ''}`) })
     await expect(priv(conn).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
-    expect(order).toEqual(['prewarm@0'])
+    // The prewarm runs the staged daemon file (`<file> --prewarm-folds`), so the new daemon is on
+    // the host first, and the old one is still not stopped.
+    expect(order).toEqual(['prewarm@0+staged'])
     expect(stops(seen)).toHaveLength(1)
-    // Then the new daemon goes onto the host, still before the stop.
     expect(seen.indexOf('DEPLOY')).toBeGreaterThan(-1)
     expect(seen.indexOf('DEPLOY')).toBeLessThan(seen.findIndex((c) => c.includes('walnut-daemon-stop-confirmed')))
   })

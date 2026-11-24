@@ -1,4 +1,4 @@
-// Demo reset fence: close a Demo's own daemon for good and wait for work it accepted, so the reset's list sees all it started; self-contained (daemon-source.ts inlines it).
+// Demo reset fence: close a Demo's own daemon for good and wait for work it accepted, so the reset's list sees all it started; self-contained.
 
 export interface DemoQuiesceChildren {
   runs: number

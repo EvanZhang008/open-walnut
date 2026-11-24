@@ -1,46 +1,31 @@
 /**
- * fs.writePart, transfer.pack, transfer.reach and host.facts on BOTH daemon
- * twins booted for real (the JS source twin on node, the standalone twin on bun
- * when bun is installed): the command reaches its core and the reply, including
- * a refusal's code and extra fields, comes back in the wire shape the server
- * client reads.
+ * fs.writePart, transfer.pack, transfer.reach and host.facts on the daemon
+ * (daemon-standalone.ts under bun) booted for real: the command reaches its core
+ * and the reply, including a refusal's code and extra fields, comes back in the
+ * wire shape the server client reads.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, no
  * command makes a network call (host.facts runs with network:false, reach is
- * refused before ssh runs), and the daemon is SIGKILLed after each twin.
+ * refused before ssh runs), and the daemon is SIGKILLed after each case.
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { bunRuntime } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-transfer-twins-')))
 afterAll(() => { if (root.includes('walnut-transfer-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-const BUN: string | undefined = testBun()
+const BUN = bunRuntime()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds task directories through its sidecar, as deployed next to it.
-if (BUN) {
-  const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, 'task-dir-core.cjs'),
-    path.resolve(__dirname, '../../src/providers/task-dir-core.ts')], { encoding: 'utf8' })
-  if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -56,7 +41,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> {
+async function boot(dir: string): Promise<string> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -67,8 +52,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -100,10 +84,10 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
   })
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe('standalone daemon (bun)', () => {
   it('answers the transfer family and host.facts', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    const home = await boot(twin, dir)
+    const dir = path.join(root, 'transfer')
+    const home = await boot(dir)
 
     const facts = await rpc({ cmd: 'host.facts', network: false })
     expect(facts.ok).toBe(true)
@@ -134,7 +118,7 @@ describe.each(TWINS)('$name', (twin) => {
     expect(packed.meta).toMatchObject({ kind: 'git', branch: 'main', dirty: true, bundle: {} })
     expect(await rpc({ cmd: 'transfer.pack', cwd: repo, outDir: path.join(repo, 'out') })).toMatchObject({ ok: false, code: 'bad_request' })
 
-    // 'host-load-v1' and 'task-move-v1': the move family answers on both twins.
+    // 'host-load-v1' and 'task-move-v1': the move family answers.
     const load = await rpc({ cmd: 'host.load', path: '~' })
     expect(load.ok, String(load.error)).toBe(true)
     expect(load).toMatchObject({ cpus: expect.any(Number), diskPath: home, memTotalBytes: expect.any(Number) })
@@ -173,8 +157,8 @@ describe.each(TWINS)('$name', (twin) => {
   }, 120_000)
 
   it('upload.part files a session upload under its task directory, made by the first chunk only', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-upload')
-    await boot(twin, dir)
+    const dir = path.join(root, 'upload')
+    await boot(dir)
     const body = crypto.randomBytes(3000)
     const sha = crypto.createHash('sha256').update(body).digest('hex')
     const up = 'up-11111111-2222-3333-4444-555555555555'
@@ -183,11 +167,8 @@ describe.each(TWINS)('$name', (twin) => {
       data: body.subarray(offset, end).toString('base64'), sessionId: 'not-a-session-here', taskId: 'task-upl-1', ...extra,
     })
     expect(await part(0, 1000)).toMatchObject({ ok: true, staged: 1000 })
-    // Without bun there is no sidecar, and the source twin has no task directories.
-    const taskDirs = !!BUN
-    const fallback = taskDirs ? path.join(dir, 'state', 'uploads') : path.join(dir, 'daemon', 'uploads')
-    const taskDir = taskDirs ? path.join(dir, 'state', 'tasks', 'task-upl-1') : path.dirname(fallback)
-    const target = taskDirs ? path.join(taskDir, 'uploads', up, 'clip.mov') : path.join(fallback, up, 'clip.mov')
+    const fallback = path.join(dir, 'state', 'uploads')
+    const target = path.join(dir, 'state', 'tasks', 'task-upl-1', 'uploads', up, 'clip.mov')
     expect(await part(1000, 3000, { sha256: sha })).toMatchObject({ ok: true, staged: 3000, done: true, path: target })
     expect(fs.readFileSync(target).equals(body)).toBe(true)
     // A refusal keeps its code; a later chunk for a task with no directory never makes one.

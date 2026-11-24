@@ -1,6 +1,7 @@
 /**
- * Daemon cloud-bridge E2E — spawn the REAL daemon-source.ts template as a
- * child process and point its bridge at a fake cloud WS server.
+ * Daemon cloud-bridge E2E — spawn the REAL standalone daemon
+ * (daemon-standalone.ts under bun) as a child process and point its bridge at
+ * a fake cloud WS server.
  *
  * Covers: bridge.configure → outbound dial + hello, RPC over the bridge
  * (ping/status), bridge.json persistence → self-heal redial on daemon
@@ -14,33 +15,28 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'bridge-e2e-host'
 
 interface DaemonProc { proc: ChildProcess; port: number }
 
-let scriptPath: string
 let daemonDir: string
 /** TCP server that never completes the WS upgrade (wedged-dial test). */
 let blackHole: net.Server | null = null
 
-function writeDaemonScript(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bridge-e2e-'))
-  const p = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(p, getDaemonSource(), { mode: 0o755 })
-  return p
-}
+const BUN = testBun()
+const ROOT = path.resolve(import.meta.dirname, '../..')
 
 async function spawnDaemon(extraEnv: Record<string, string> = {}): Promise<DaemonProc> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], {
+    cwd: ROOT,
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 10_000)
+    const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc.stdout?.on('data', (chunk) => {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
@@ -127,16 +123,14 @@ async function waitFor(pred: () => boolean, timeoutMs = 15_000): Promise<void> {
 }
 
 beforeAll(() => {
-  scriptPath = writeDaemonScript()
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bridge-e2e-dir-'))
 })
 
 afterAll(() => {
-  fs.rmSync(path.dirname(scriptPath), { recursive: true, force: true })
   fs.rmSync(daemonDir, { recursive: true, force: true })
 })
 
-describe('daemon cloud bridge (real source daemon)', () => {
+describe.skipIf(!BUN)('daemon cloud bridge (real standalone daemon)', () => {
   it('bridge.configure → dial + hello; RPC works over the bridge; bridge.json self-heals across restart; disable stops it', async () => {
     const cloud = await startFakeCloud()
     let daemon = await spawnDaemon()

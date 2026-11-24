@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import { demoGatewaySocketPath, GATEWAY_SOCKET_FILENAME } from '../../src/providers/gateway-core.js'
 import { RESTART_MARK_NAME } from '../../src/providers/daemon-restart-mark.js'
 import { demoTerminalDir } from '../../src/lib/demo-terminal-dir.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { twinText } from '../helpers/standalone-twin-text.js'
 
 const ROOT = '/fixture/share/open-walnut-demo'
@@ -119,41 +118,27 @@ describe('demoGatewaySocketPath', () => {
       expect(Buffer.byteLength(sock!)).toBeLessThanOrEqual(103)
     }
   })
-
-  it('built from its own text, as the source twin inlines it, it answers the same', () => {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const inlined = new Function(`"use strict"; return (${demoGatewaySocketPath.toString()})`)() as typeof demoGatewaySocketPath
-    expect(inlined(ROOT, GEN, UID, stubFs(good()), path, crypto)).toBe(`${DIR}/agent-gateway.sock`)
-    expect(inlined(ROOT, GEN, UID, stubFs({}), path, crypto)).toBeNull()
-  })
 })
 
-describe('demo gateway socket wiring in both twins', () => {
+describe('demo gateway socket wiring in the daemon', () => {
   const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
-  const source = getDaemonSource()
 
   it('only a Demo daemon asks for the short path; every other daemon keeps <daemon dir>/agent-gateway.sock', () => {
     expect(standalone).toMatch(/const GATEWAY_SOCK_PATH = \(demoQuiesce\.isDemo\n\s+\? demoGatewaySocketPath\([^\n]*\)\n\s+: null\) \|\| path\.join\(DAEMON_DIR, GATEWAY_SOCKET_FILENAME\)/)
-    expect(source).toMatch(/var GATEWAY_SOCK_PATH = \(demoQuiesce\.isDemo\n\s+\? \(function demoGatewaySocketPath\(/)
-    expect(source).toMatch(/: null\) \|\| path\.join\(DAEMON_DIR, 'agent-gateway\.sock'\);/)
-    expect(source).not.toContain('__DEMO_GATEWAY_SOCKET_PATH__')
-    // One definition each: nothing else picks the socket path.
+    // One definition: nothing else picks the socket path.
     expect([...standalone.matchAll(/GATEWAY_SOCK_PATH =/g)]).toHaveLength(1)
-    expect([...source.matchAll(/GATEWAY_SOCK_PATH =/g)]).toHaveLength(1)
   })
 })
 
-// Execute the twins' path definitions against stub fs, without opening sockets.
-describe('gateway socket, shim dir and restart mark share one dir in both twins', () => {
-  const standalone = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
-  const source = getDaemonSource()
-  const twins = [{ name: 'standalone', text: standalone }, { name: 'source', text: source }]
+// Execute the daemon's path definitions against stub fs, without opening sockets.
+describe('gateway socket, shim dir and restart mark share one dir in the daemon', () => {
+  const text = twinText('daemon-standalone.ts', fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8'))
   const DAEMON = '/fixture/share/open-walnut-demo/d/gen-1'
 
   const sockDef = /^(?:const|var) GATEWAY_SOCK_PATH = [\s\S]*?^(?:const|var) GATEWAY_SHIM_PATH = [^\n]*$/m
   const markDef = /^const RESTART_MARK_FILE = [^\n]*$/m
 
-  /** Runs the twin's definition lines with stub inputs; nothing touches the real fs or a socket. */
+  /** Runs the daemon's definition lines with stub inputs; nothing touches the real fs or a socket. */
   function paths(text: string, opts: { demo: boolean; entries: Record<string, Entry>; daemonDir?: string }) {
     const block = text.match(sockDef)?.[0]
     const mark = text.match(markDef)?.[0]
@@ -167,7 +152,7 @@ describe('gateway socket, shim dir and restart mark share one dir in both twins'
     return run({ isDemo: opts.demo }, demoGatewaySocketPath, fakeProcess, stubFs(opts.entries), path, crypto, opts.daemonDir ?? DAEMON, GATEWAY_SOCKET_FILENAME, RESTART_MARK_NAME)
   }
 
-  it.each(twins)('$name: one definition each, in order (demoQuiesce, socket, shim, restart mark)', ({ text }) => {
+  it('one definition each, in order (demoQuiesce, socket, shim, restart mark)', () => {
     for (const name of ['GATEWAY_SOCK_PATH', 'GATEWAY_SHIM_DIR', 'GATEWAY_SHIM_PATH', 'RESTART_MARK_FILE']) {
       expect([...text.matchAll(new RegExp(`^(?:const|var) ${name} =`, 'gm'))], name).toHaveLength(1)
     }
@@ -188,7 +173,7 @@ describe('gateway socket, shim dir and restart mark share one dir in both twins'
     expect(before).toEqual([])
   })
 
-  it.each(twins)('$name: a Demo daemon puts all three in its short terminal dir', ({ text }) => {
+  it('a Demo daemon puts all three in its short terminal dir', () => {
     const p = paths(text, { demo: true, entries: good() })
     expect(p.sock).toBe(`${DIR}/agent-gateway.sock`)
     expect(p.shimDir).toBe(`${DIR}/bin`)
@@ -199,7 +184,7 @@ describe('gateway socket, shim dir and restart mark share one dir in both twins'
     expect(path.join(path.dirname(p.sock), RESTART_MARK_NAME)).toBe(p.mark)
   })
 
-  it.each(twins)('$name: a Demo whose short dir does not check out, and every ordinary daemon, keep the daemon dir', ({ text }) => {
+  it('a Demo whose short dir does not check out, and every ordinary daemon, keep the daemon dir', () => {
     for (const p of [
       paths(text, { demo: true, entries: {} }),
       paths(text, { demo: false, entries: good() }),
@@ -211,14 +196,12 @@ describe('gateway socket, shim dir and restart mark share one dir in both twins'
   })
 
   it('an ordinary daemon never even looks at the Demo dir', () => {
-    for (const { text } of twins) {
-      const calls: string[] = []
-      const block = text.match(sockDef)![0]
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      const sock = new Function('demoQuiesce', 'demoGatewaySocketPath', 'process', 'fs', 'path', 'crypto', 'DAEMON_DIR', 'GATEWAY_SOCKET_FILENAME',
-        `"use strict"; ${block}\nreturn GATEWAY_SOCK_PATH`)({ isDemo: false }, demoGatewaySocketPath, { env: {}, getuid: () => UID }, stubFs(good(), calls), path, crypto, DAEMON, GATEWAY_SOCKET_FILENAME)
-      expect(sock).toBe(`${DAEMON}/agent-gateway.sock`)
-      expect(calls).toEqual([])
-    }
+    const calls: string[] = []
+    const block = text.match(sockDef)![0]
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const sock = new Function('demoQuiesce', 'demoGatewaySocketPath', 'process', 'fs', 'path', 'crypto', 'DAEMON_DIR', 'GATEWAY_SOCKET_FILENAME',
+      `"use strict"; ${block}\nreturn GATEWAY_SOCK_PATH`)({ isDemo: false }, demoGatewaySocketPath, { env: {}, getuid: () => UID }, stubFs(good(), calls), path, crypto, DAEMON, GATEWAY_SOCKET_FILENAME)
+    expect(sock).toBe(`${DAEMON}/agent-gateway.sock`)
+    expect(calls).toEqual([])
   })
 })

@@ -45,7 +45,6 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-fold.ts',
   // Fold checkpoints: imported by the binary, text-injected into the source twin.
   'src/providers/fold-checkpoint-core.ts',
-  'src/providers/daemon-source.ts',
   // The capability list itself. Both twins report it on `hello` — the standalone
   // one imports it, the source one has it substituted in — so a capability-only
   // edit changes what every host advertises. Without this entry that edit left
@@ -233,7 +232,6 @@ export const DAEMON_SOURCE_FILES = [
   // The fire envelope a host builds for a fire no server claimed, and the sidecar
   // entry that ships it to the source twin: same lockstep rule.
   'src/providers/trigger-envelope-core.ts',
-  'src/providers/trigger-check-sidecar.ts',
   // Clock routines (clock-routine-v1): the rules ride the sidecar, the schedule
   // math is imported by the standalone twin and inlined into the source twin.
   'src/providers/trigger-clock-core.ts',

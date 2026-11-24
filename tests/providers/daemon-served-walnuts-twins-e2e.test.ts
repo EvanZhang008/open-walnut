@@ -1,6 +1,6 @@
 /**
- * Which Walnuts a daemon serves (served-walnuts-core.ts), on BOTH daemon twins booted
- * for real: the daemon writes daemon.serves.json beside daemon.version with its
+ * Which Walnuts a daemon serves (served-walnuts-core.ts), on the real session daemon
+ * (daemon-standalone.ts under bun): the daemon writes daemon.serves.json beside daemon.version with its
  * version and the capabilities its hello says; a server socket's per-Walnut push is
  * noted under its Walnut's key (an older server's unnamed push as "-"); a test server's
  * probe socket is never noted; the hello carries the same record; a restarted daemon
@@ -22,23 +22,15 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, ourDaemonCapabilities } from '../../src/providers/daemon-shared.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-served-twins-')))
 afterAll(() => { if (root.includes('walnut-served-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const TWINS: Array<{ name: string; twin: 'source' | 'binary'; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, twin: 'source', command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', twin: 'binary' as const, command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 const sockets: WebSocket[] = []
@@ -62,7 +54,7 @@ async function stop(): Promise<void> {
   proc = null
 }
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<number> {
+async function boot(dir: string): Promise<number> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -72,8 +64,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<number> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'OPEN_WALNUT_HOME']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -114,24 +105,24 @@ async function until(check: () => boolean, ms = 10_000): Promise<void> {
   throw new Error('condition not met in time')
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('records the Walnuts it serves beside daemon.version, and the server reads the record', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
+    const dir = path.join(root, 'standalone')
     const servesFile = path.join(dir, 'daemon', 'daemon.serves.json')
-    const port = await boot(twin, dir)
+    const port = await boot(dir)
     const a = await open(port)
 
     const hello = await rpc(a, { cmd: 'hello' })
     expect(hello.ok).toBe(true)
     await until(() => fs.existsSync(servesFile))
     const atBoot = JSON.parse(fs.readFileSync(servesFile, 'utf8'))
-    // Whether its runtime can have a pty (pty-stream-v1): the binary always, the source twin under bun only.
-    const pty = twin.twin === 'binary' || SOURCE_TWIN.runtime === 'bun'
-    expect(atBoot).toMatchObject({ v: 1, version: hello.version, twin: twin.twin, pty, walnuts: {} })
+    // Its runtime always has a pty (pty-stream-v1).
+    const pty = true
+    expect(atBoot).toMatchObject({ v: 1, version: hello.version, twin: 'binary', pty, walnuts: {} })
     expect(fs.readFileSync(path.join(dir, 'daemon', 'daemon.version'), 'utf8')).toBe(hello.version)
-    // The binary says all this build's daemon has (the source twin adds the rest as its sidecars load).
-    if (twin.twin === 'binary') for (const c of ourDaemonCapabilities('binary')) expect(hello.capabilities).toContain(c)
-    expect(hello.served).toEqual({ twin: twin.twin, walnuts: {}, pty })
+    // It says all this build's daemon has.
+    for (const c of ourDaemonCapabilities('binary')) expect(hello.capabilities).toContain(c)
+    expect(hello.served).toEqual({ twin: 'binary', walnuts: {}, pty })
 
     // Walnut A names its home; an older server pushes with none; a test server's probe is never noted.
     const HOME_A = path.join(dir, 'walnut-a')
@@ -140,7 +131,7 @@ describe.each(TWINS)('$name', (twin) => {
     // A bridge push naming no home (also a new server whose hello failed) is not another Walnut.
     const unnamedBridge = await open(port)
     await rpc(unnamedBridge, { cmd: 'bridge.configure', enabled: false })
-    expect((await rpc(unnamedBridge, { cmd: 'hello' })).served).toEqual({ twin: twin.twin, walnuts: { [walnutKeyOf(HOME_A)]: expect.any(Number) }, pty })
+    expect((await rpc(unnamedBridge, { cmd: 'hello' })).served).toEqual({ twin: 'binary', walnuts: { [walnutKeyOf(HOME_A)]: expect.any(Number) }, pty })
     // A home written with a trailing slash is the same Walnut.
     await rpc(a, { cmd: 'triggers.configure', home: HOME_A + '/', triggers: [] })
     const older = await open(port)
@@ -156,36 +147,31 @@ describe.each(TWINS)('$name', (twin) => {
     const file = JSON.parse(fs.readFileSync(servesFile, 'utf8'))
     expect(file.capabilities).toEqual(after.capabilities)
 
-    // A third Walnut on another build reads the record the way DaemonConnection does. The binary
-    // has all this build's daemon has: kept. This test loads none of the source twin's sidecars,
-    // so that daemon lacks capabilities a real source deploy has: it would be updated.
+    // A third Walnut on another build reads the record the way DaemonConnection does. The daemon
+    // has all this build's daemon has: kept.
     const rec = parseServes(fs.readFileSync(servesFile, 'utf8'))
     const verdict = (home: string) => sharedDaemonVerdict({ ourKey: walnutKeyOf(home), runningVersion: String(after.version), running: rec, now: Date.now() })
-    if (twin.twin === 'binary') {
-      expect(verdict(path.join(dir, 'walnut-c'))).toMatchObject({ keep: true })
-      // Walnut A is not held by its own record, only by the older server's "-".
-      expect(verdict(HOME_A)).toMatchObject({ keep: true, others: ['-'] })
-    } else {
-      expect(verdict(path.join(dir, 'walnut-c'))).toMatchObject({ keep: false, shared: true })
-    }
+    expect(verdict(path.join(dir, 'walnut-c'))).toMatchObject({ keep: true })
+    // Walnut A is not held by its own record, only by the older server's "-".
+    expect(verdict(HOME_A)).toMatchObject({ keep: true, others: ['-'] })
 
     // A restarted daemon reads the record back.
     for (const s of sockets.splice(0)) s.close()
     await stop()
-    const port2 = await boot(twin, dir)
+    const port2 = await boot(dir)
     const again = await rpc(await open(port2), { cmd: 'hello' })
     expect(Object.keys((again.served as { walnuts: Record<string, number> }).walnuts).sort()).toEqual([walnutKeyOf(HOME_A), '-'].sort())
   }, 90_000)
 
   it('a server it runs for a leader is that leader\'s Walnut: its data dir is never another Walnut sharing it', async () => {
-    const dir = path.join(root, 'f-' + twin.name.replace(/\W+/g, '-'))
+    const dir = path.join(root, 'f-standalone')
     const servesFile = path.join(dir, 'daemon', 'daemon.serves.json')
     const HOME_A = '/fixture/marina-home'
     const WALNUT_A = 'wmarinaserved01'
     // The layout a leader writes for its server on a host: <host root>/walnuts/<walnut id>/data.
     const data = path.join(dir, 'host-root', 'walnuts', WALNUT_A, 'data')
     const walnutsIn = () => Object.keys(JSON.parse(fs.readFileSync(servesFile, 'utf8')).walnuts as Record<string, number>).sort()
-    let port = await boot(twin, dir)
+    let port = await boot(dir)
 
     const leader = await open(port)
     expect((await rpc(leader, { cmd: 'hello' })).ok).toBe(true)
@@ -194,7 +180,7 @@ describe.each(TWINS)('$name', (twin) => {
     const spec = {
       v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
       args: ['-e', `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1 << 30)`],
-      cwd: dir, env: { OPEN_WALNUT_HOME: data }, log: path.join(dir, 'placeholder.log'), port: 41_207 + (twin.twin === 'binary' ? 1 : 0),
+      cwd: dir, env: { OPEN_WALNUT_HOME: data }, log: path.join(dir, 'placeholder.log'), port: 41_208,
       settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
     }
     const configured = await rpc(leader, { cmd: 'server.configure', home: HOME_A, spec })
@@ -224,7 +210,7 @@ describe.each(TWINS)('$name', (twin) => {
     const stale = JSON.parse(fs.readFileSync(servesFile, 'utf8'))
     stale.walnuts[walnutKeyOf(data)] = Date.now()
     fs.writeFileSync(servesFile, JSON.stringify(stale))
-    port = await boot(twin, dir)
+    port = await boot(dir)
     await until(() => { try { return walnutsIn().join() === walnutKeyOf(HOME_A) } catch { return false } })
     const again = await rpc(await open(port), { cmd: 'hello' })
     expect(Object.keys((again.served as { walnuts: Record<string, number> }).walnuts)).toEqual([walnutKeyOf(HOME_A)])

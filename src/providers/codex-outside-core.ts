@@ -65,9 +65,6 @@ export interface CodexOutsideScan {
   scanMs: number;
 }
 
-/** Marker for the source twin: this sidecar has `scanCodexOutside` (codex-outside-v1). */
-export const CODEX_OUTSIDE_SCAN = true;
-
 const DEFAULT_BUDGET_MS = 20_000;
 const MAX_ENTRIES = 400;
 /** `session_meta` carries the whole base prompt (about 22 KB on a current Codex). */

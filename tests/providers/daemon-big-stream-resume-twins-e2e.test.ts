@@ -1,6 +1,6 @@
 /**
- * A resume or an attach of a big stream file, run by both daemon twins booted
- * for real.
+ * A resume or an attach of a big stream file, run by the session daemon
+ * (daemon-standalone.ts) booted for real.
  *
  * Why: on 2026-10-27 a resume of a session whose stream file was 2.5 GB, with
  * no checkpoint the daemon could use (a checkpoint format change had rejected
@@ -20,29 +20,19 @@
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, the
  * "CLI" is /bin/sh, and the daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
-/** The source twin loads its cron reader from a sidecar beside it; built here when bun is on hand. */
-let cronSidecar = false
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 const BIG_MB = parseInt(process.env.WALNUT_TEST_BIG_STREAM_MB || '', 10) || 128
 // One background task every this many turns (1 is the quadratic stress case).
 const TASK_EVERY = parseInt(process.env.WALNUT_TEST_BIG_STREAM_TASK_EVERY || '', 10) || 1
@@ -63,7 +53,7 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon') }
 }
 
-async function boot(twin: Twin, dirs: Dirs, extra: Record<string, string> = {}): Promise<void> {
+async function boot(dirs: Dirs, extra: Record<string, string> = {}): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -78,8 +68,7 @@ async function boot(twin: Twin, dirs: Dirs, extra: Record<string, string> = {}):
     WALNUT_STREAM_COMPACT_SWEEP_MS: '600000000',
     ...extra,
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -215,28 +204,16 @@ function writeBigStream(file: string, mb: number, opts: { cron?: boolean } = {})
   return size
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bigstream-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  if (BUN) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(dir, 'daemon-cron-runtime.cjs'),
-      path.resolve('src/providers/daemon-cron-runtime.ts')], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('cron sidecar build failed: ' + built.stderr)
-    cronSidecar = true
-  }
-})
-
 afterEach(async () => {
   await stop()
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
 
-describe.each(TWINS)('big stream resume: $name', (twin) => {
+describe.skipIf(!BUN)('big stream resume: standalone daemon (bun)', () => {
   it('a resume with no checkpoint folds the whole file while the daemon keeps answering, and leaves a checkpoint', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     fs.mkdirSync(dirs.streams, { recursive: true })
     const jsonl = path.join(dirs.streams, 'big-1.jsonl')
     const size = writeBigStream(jsonl, BIG_MB)
@@ -248,7 +225,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
       args: ['/bin/sh', '-c', 'sleep 30', 'sh'],
     }))
     const resumeMs = Date.now() - t0
-    console.log(`[big-stream] ${twin.name}: ${BIG_MB} MB resume ${resumeMs} ms, ${pings} pings, worst ${worstPingMs} ms`)
+    console.log(`[big-stream] standalone: ${BIG_MB} MB resume ${resumeMs} ms, ${pings} pings, worst ${worstPingMs} ms`)
     expect(resumed.ok).toBe(true)
     // The fold read every complete line: the watcher starts at the end.
     expect(resumed.offset).toBe(size)
@@ -270,7 +247,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     // So the next resume (a restarted daemon, nothing in memory) reads almost nothing.
     await rpc({ cmd: 'stop', sid: 'big-1' })
     await stop()
-    await boot(twin, dirs)
+    await boot(dirs)
     const t1 = Date.now()
     const again = await rpc({
       cmd: 'start', sid: 'big-1', cwd: root, message: '', mode: 'default', resume: true,
@@ -286,12 +263,12 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
 
   it('an attach that discovers a big unknown stream folds it while the daemon keeps answering', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     fs.mkdirSync(dirs.streams, { recursive: true })
     const jsonl = path.join(dirs.streams, 'big-2.jsonl')
     const size = writeBigStream(jsonl, BIG_MB)
     const { result: attached, worstPingMs, pings } = await worstPingDuring(rpc({ cmd: 'attach', sid: 'big-2', fromOffset: 0 }))
-    console.log(`[big-stream] ${twin.name}: ${BIG_MB} MB attach, ${pings} pings, worst ${worstPingMs} ms`)
+    console.log(`[big-stream] standalone: ${BIG_MB} MB attach, ${pings} pings, worst ${worstPingMs} ms`)
     expect(attached.ok).toBe(true)
     expect(attached.alive).toBe(false)
     expect(worstPingMs).toBeLessThan(MAX_PING_MS)
@@ -303,7 +280,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
 
   it('a resume of a file over the rotation cap starts a fresh file when the transcript exists', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
+    await boot(dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
     fs.mkdirSync(dirs.streams, { recursive: true })
     const projects = path.join(dirs.home, '.claude', 'projects', '-work-repo')
     fs.mkdirSync(projects, { recursive: true })
@@ -335,7 +312,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
 
   it('a stop during the fold ends it: the start spawns nothing and the progress is kept', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     fs.mkdirSync(dirs.streams, { recursive: true })
     // A cut fold keeps a checkpoint only past fold-checkpoint-core's 8 MB floor. Where the
     // fold stands when the stop lands depends on the machine (2026-10-28 CI: a stop at
@@ -364,7 +341,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
         // kept. A cut past the floor that kept nothing would be the bug this test is for.
         // (The log's boundary may run one line past the fold's own.)
         expect(folded?.boundary ?? 0, 'a fold cut past the checkpoint floor kept no checkpoint').toBeLessThan(CHECKPOINT_FLOOR + 1024 * 1024)
-        console.log(`[big-stream] ${twin.name}: a stop after ${delayMs} ms came before the fold reached the checkpoint floor (${folded ? folded.boundary : 'not begun'})`)
+        console.log(`[big-stream] standalone: a stop after ${delayMs} ms came before the fold reached the checkpoint floor (${folded ? folded.boundary : 'not begun'})`)
         if (attempt < 4) continue
         throw new Error(`no stop in four tries landed after the fold reached ${CHECKPOINT_FLOOR} bytes`)
       }
@@ -374,14 +351,14 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
       expect(ck.boundary).toBeGreaterThanOrEqual(CHECKPOINT_FLOOR)
       expect(ck.boundary).toBeLessThanOrEqual(folded!.boundary)
       expect(ck.boundary).toBeLessThan(size)
-      console.log(`[big-stream] ${twin.name}: stop answered after ${stopMs} ms, fold stopped at ${ck.boundary} of ${size}`)
+      console.log(`[big-stream] standalone: stop answered after ${stopMs} ms, fold stopped at ${ck.boundary} of ${size}`)
       break
     }
   }, 900_000)
 
   it('a big file whose fold holds an armed cron rotates, and the new file carries the cron and the wakeup', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
+    await boot(dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
     fs.mkdirSync(dirs.streams, { recursive: true })
     const projects = path.join(dirs.home, '.claude', 'projects', '-work-repo')
     fs.mkdirSync(projects, { recursive: true })
@@ -415,14 +392,13 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     // (2026-11-01 prod: "Cron metadata stream was truncated" on every such rotation).
     await new Promise((r) => setTimeout(r, 1500))
     const failed = daemonLog(dirs).split('\n').filter((l) => l.includes('"cron metadata replay failed"'))
-      .filter((l) => cronSidecar || !l.includes('reader unavailable'))
     expect(failed).toEqual([])
     await rpc({ cmd: 'stop', sid: 'cron-1' })
   }, 120_000)
 
   it('a resume of a file a dead CLI cut mid-line replays the cron metadata without calling it truncated', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     fs.mkdirSync(dirs.streams, { recursive: true })
     const jsonl = path.join(dirs.streams, 'cut-1.jsonl')
     // The fold's boundary stops before the cut line; the new process writes after it.
@@ -439,14 +415,13 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     expect(resumed.offset as number).toBeLessThan(size)
     await new Promise((r) => setTimeout(r, 1500))
     const failed = daemonLog(dirs).split('\n').filter((l) => l.includes('"cron metadata replay failed"'))
-      .filter((l) => cronSidecar || !l.includes('reader unavailable'))
     expect(failed).toEqual([])
     await rpc({ cmd: 'stop', sid: 'cut-1' })
   }, 120_000)
 
   it('a big file is kept when its transcript is missing or the cap is not reached', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
+    await boot(dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
     fs.mkdirSync(dirs.streams, { recursive: true })
     // Over the cap, but no transcript: the stream file may be the only copy.
     const a = path.join(dirs.streams, 'keep-1.jsonl')

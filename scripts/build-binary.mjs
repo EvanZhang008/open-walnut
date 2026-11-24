@@ -145,7 +145,7 @@ function buildShippedPlugins() {
   run(process.execPath, ['scripts/ship-store-plugins.mjs'])
 }
 
-/** Daemon sidecars, ACP worker and pi-acp (scripts/build-daemon.sh); returns the daemon version. */
+/** The ACP worker, its adapters and pi-acp (scripts/build-daemon.sh); returns the daemon version. */
 function buildDaemonSidecars(outdir) {
   fs.rmSync(outdir, { recursive: true, force: true })
   run('bash', ['scripts/build-daemon.sh'], {
@@ -366,8 +366,9 @@ function buildOptions({ version, archivePath, id, daemonVersion, sourcemap }) {
     // entry: a compiled file can start a Worker only from an entry of its own, at
     // /$bunfs/root/providers/history-ready-worker.ts here (history-ready-core.ts readyWorkerEntries).
     entrypoints: [path.join(repo, 'src/binary/main.ts'), path.join(repo, 'src/providers/history-ready-worker.ts')],
-    // Whitespace and syntax only: getDaemonSource() ships core functions as their
-    // own text (fn.toString()), and mangled names would break that text.
+    // Whitespace and syntax only, identifiers kept: the file's names (class names, function
+    // names in logs and stack traces) stay those of the source. Mangling them would be its own
+    // change to what a release ships, checked on its own.
     minify: { whitespace: true, syntax: true, identifiers: false },
     sourcemap: sourcemap ? 'inline' : 'none',
     define: {
@@ -391,8 +392,7 @@ async function compile(target, outfile, options, stage) {
       // Bytecode for each module's top-level code, so a start no longer parses the
       // whole ~19 MB bundle (`walnut --version` on Linux x64: ~720 ms before, ~75 ms
       // after, for +5.5 MB raw and +2 MB gzip). Deeper functions compile from source
-      // when first called, as before, and the source stays in the file, so
-      // fn.toString() (getDaemonSource) reads the same text. ESM bytecode needs
+      // when first called, as before, and the source stays in the file. ESM bytecode needs
       // `compile`, and bun picks CommonJS for bytecode unless told, which has no
       // top-level await (main.ts uses it). A bun with another JavaScriptCore ignores
       // the bytecode and parses: `walnut __selftest` reports that as `bytecode`.

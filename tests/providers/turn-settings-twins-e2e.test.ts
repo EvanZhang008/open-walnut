@@ -1,6 +1,6 @@
 /**
- * turns.configure per Walnut (walnut-scope-core.ts) on BOTH daemon twins booted
- * for real: two Walnuts push different turn snapshot settings to one daemon, each
+ * turns.configure per Walnut (walnut-scope-core.ts) on the daemon booted for
+ * real: two Walnuts push different turn snapshot settings to one daemon, each
  * lands in its own file, and a session's turn follows its own Walnut's settings
  * (one off, one on); a push with no home (an older server) is the legacy file,
  * marked, and a session with no Walnut follows it.
@@ -15,22 +15,14 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-turn-settings-twins-')))
 afterAll(() => { if (root.includes('walnut-turn-settings-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 const keyOf = (h: string) => crypto.createHash('sha1').update(h).digest('hex').slice(0, 16)
 
 let proc: ChildProcess | null = null
@@ -49,7 +41,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> {
+async function boot(dir: string): Promise<string> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -59,8 +51,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'WALNUT_TURN_SNAPSHOTS']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -124,10 +115,10 @@ async function until(check: () => boolean, ms = 20_000): Promise<void> {
   throw new Error('condition not met in time')
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it("keeps each Walnut's turn snapshot settings apart and applies them by the session's Walnut", async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    await boot(dir)
     const daemonDir = path.join(dir, 'daemon')
     const A = path.join(dir, 'walnut-a')
     const B = path.join(dir, 'walnut-b')

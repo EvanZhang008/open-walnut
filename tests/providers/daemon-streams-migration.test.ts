@@ -3,8 +3,8 @@
  * (incident 019a7fe5: /tmp wiped on reboot → recreated stream file → stale
  * watermark vetoed every snapshot; streams moved to ~/.open-walnut/tmp/streams).
  *
- * Runs the REAL daemon (getDaemonSource() template via node — the artifact
- * deployed to remote hosts) in fully isolated temp dirs and exercises:
+ * Runs the REAL daemon (daemon-standalone.ts under bun) in fully isolated temp
+ * dirs and exercises:
  *   1. migrateLegacyStreams at startup: dead-session families move, live-pgid
  *      families stay whole, existing dst never overwritten, dead FIFOs dropped.
  *   2. sweepDeadStreams: old dead families reaped, live/registered kept.
@@ -23,12 +23,13 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { bunRuntime } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const PROD_LEGACY_DIR = '/tmp/open-walnut-streams'
+const BUN = bunRuntime()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
@@ -60,10 +61,7 @@ async function spawnDaemon(opts: {
   if (path.resolve(daemonDir) === path.resolve(PROD_DAEMON_DIR)) throw new Error('refusing prod daemon dir')
   if (path.resolve(legacyDir) === path.resolve(PROD_LEGACY_DIR)) throw new Error('refusing prod legacy dir')
 
-  const scriptPath = path.join(daemonDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN, [STANDALONE, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,

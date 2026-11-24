@@ -20,7 +20,7 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | No companion | `src/core/net/net-local.ts`, `net-rows.ts`, `join-ticket.ts` (the Mac) | The Mac keeps the list (`net.joined`) and its walnut-net checks each join (capability `net-join-v1`) |
 | The Mac | `src/core/net/net-mac.ts`, `src/web/routes/hosts-net.ts` | Reads the list, makes each machine a `transport: net` host, hands each daemon its config |
 | The link | `src/core/hosts/net-link.ts`, `DaemonConnection.dialNetHost` | Asks the Mac's walnut-net for a loopback port that reaches the machine's daemon |
-| Hub forwards | `src/providers/hub-forward-core.ts` (both twins), `stream-relay-core.ts` `openOut`, `src/core/hosts/hub-ports.ts` (the Mac), `src/commands/net-hub.ts` | A machine's 127.0.0.1 port that reaches one port on the Mac's own loopback (below) |
+| Hub forwards | `src/providers/hub-forward-core.ts`, `stream-relay-core.ts` `openOut`, `src/core/hosts/hub-ports.ts` (the Mac), `src/commands/net-hub.ts` | A machine's 127.0.0.1 port that reaches one port on the Mac's own loopback (below) |
 | Relay | `scripts/cloud/net-relay.sh` | iroh-relay behind Caddy (`/relay`, `/ping`), and address discovery on UDP 7842 |
 | Join | `src/core/net/net-join-script.ts`, `scripts/join.sh`, `src/commands/net.ts` | The script an invite link serves (and the same script with a ticket, attached to every release), and `walnut net join` |
 | Join on Windows | `src/core/net/net-join-ps1.ts`, `scripts/join.ps1` | The PowerShell twin: readies WSL and its own Linux, then runs the join above inside it (below) |
@@ -59,7 +59,7 @@ foreground process group (read with `ps -o tpgid=`) until the server acks; 16 Mi
 unacked still ends the stream. dtach's probe and install and the terminal's cleanup
 run as scripts over `exec.script`, and a host-network machine gets the same automatic
 compiler and dtach fixes as an SSH host. A daemon without `pty-stream-v1`
-(an older build, or the JS twin on Node) shows no Terminal tab, and its status says
+(an older build, or the source daemon an older leader left under Node) shows no Terminal tab, and its status says
 it needs an update.
 
 ## Reaching a port on the primary (hub forwards)

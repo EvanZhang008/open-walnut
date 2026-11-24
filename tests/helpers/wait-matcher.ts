@@ -1,8 +1,7 @@
 /**
  * The wait_for matcher process (src/providers/host-exec-matcher.ts) as a test starts it: this
- * runtime (bun, which runs the TypeScript source) with -e, the way the source twin starts its
- * own from host-exec-core.cjs. The daemon twins pass their own start (daemon-standalone.ts,
- * daemon-source.ts); a host-exec core given none runs no output wait.
+ * runtime (bun, which runs the TypeScript source) with -e. The daemon passes its own start
+ * (daemon-standalone.ts); a host-exec core given none runs no output wait.
  */
 import { fileURLToPath } from 'node:url'
 import type { MatcherStart } from '../../src/providers/host-exec-matcher.js'

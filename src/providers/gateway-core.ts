@@ -1,9 +1,7 @@
 /**
  * Agent gateway — shared pure protocol logic for the daemon twins.
  *
- * daemon-standalone.ts imports this directly (bundled into the bun binary);
- * daemon-source.ts mirrors the logic by hand (it cannot import). Keep the
- * two in sync when changing anything here.
+ * daemon-standalone.ts imports this directly (bundled into the bun binary).
  *
  * Zero I/O and dependency-free by design so the bun daemon build can bundle
  * it and L1 unit tests can exercise every branch.

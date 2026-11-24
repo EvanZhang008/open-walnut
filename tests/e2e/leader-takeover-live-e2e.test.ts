@@ -4,8 +4,8 @@
  *   primary (real Walnut server, child process) + its own local daemon
  *     │ heartbeat: mobile-event → local daemon → /bridge → companion events-v1
  *     │ trusted WS (direct): host.slice, leader.configure, handover, claim
- *     ├──► devbox daemon (source twin, node)      ── session A (leader task)
- *     └──► oldbox daemon (standalone twin, bun)   ── session B (worker task)
+ *     ├──► devbox daemon (daemon-standalone.ts, bun)  ── session A (leader task)
+ *     └──► oldbox daemon (daemon-standalone.ts, bun)  ── session B (worker task)
  *   companion (real Walnut server, WALNUT_CLOUD_MODE=1, child process)
  *     ◄── /bridge from all three daemons (machine tokens)
  *     backup leader (server.ts startBackupLeader) + gateway (bridge-registry → backup-gateway)
@@ -312,7 +312,7 @@ async function replicaStatus(d: Daemon): Promise<Record<string, { entries: numbe
   return (reply.kinds ?? {}) as Record<string, { entries: number; pending: number }>
 }
 
-describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion takes over (real servers, real daemons)', () => {
+describe.skipIf(!liveWallsAvailable() || !BUN)('the Mac is gone and the cloud companion takes over (real servers, real daemons)', () => {
   let devbox: Daemon
   let oldbox: Daemon
   let requestId = ''
@@ -325,8 +325,8 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     for (const k of Object.keys(tokens) as Array<keyof typeof tokens>) tokens[k] = newToken()
     writeLiveMockCli(base)
     await startCompanion()
-    devbox = await spawnLiveDaemon(daemonCtx(), 'devbox', 'source', DAEMON_ENV)
-    oldbox = await spawnLiveDaemon(daemonCtx(), 'oldbox', BUN ? 'standalone' : 'source', DAEMON_ENV)
+    devbox = await spawnLiveDaemon(daemonCtx(), 'devbox', 'standalone', DAEMON_ENV)
+    oldbox = await spawnLiveDaemon(daemonCtx(), 'oldbox', 'standalone', DAEMON_ENV)
     daemons.push(devbox, oldbox)
     primary.data = path.join(base, 'primary', 'data') // the sessions' origin
     for (const [d, sid] of [[devbox, A], [oldbox, B], [oldbox, C]] as const) clis.push(await startLiveMockSession(daemonCtx(), d, sid, primary.data))
@@ -408,7 +408,7 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     }
   }, 300_000)
 
-  it('the primary can send the same queued line through its companion on both daemon twins without SSH', async () => {
+  it('the primary can send the same queued line through its companion on both daemons without SSH', async () => {
     for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
       const before = await daemonStatus(d, sid)
       const text = `Queued notification for ${d.name}: ${'long-text '.repeat(4000)}${String.fromCodePoint(0x4e2d)}`
@@ -430,7 +430,7 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     }
   }, 90_000)
 
-  it('a primary manager with no native link sends through the companion to both daemon twins without restarting', async () => {
+  it('a primary manager with no native link sends through the companion to both daemons without restarting', async () => {
     for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
       const before = await daemonStatus(d, sid)
       const message = `Primary fallback ${d.name}: ${'dense message '.repeat(3000)}`
@@ -449,7 +449,7 @@ describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion 
     }
   }, 180_000)
 
-  it('the primary sees and answers a tool prompt without its native host link on both twins', async () => {
+  it('the primary sees and answers a tool prompt without its native host link on both daemons', async () => {
     for (const [d, sid] of [[devbox, A], [oldbox, B]] as const) {
       const before = await daemonStatus(d, sid)
       const repliesBefore = respOf(d, sid).length

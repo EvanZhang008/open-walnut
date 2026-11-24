@@ -4,7 +4,7 @@
  * and each read Needs you with "credentials only you can fix").
  *
  * Guards for the class:
- *  - the real texts (names neutral) and their variants are retried by both daemon twins and are
+ *  - the real texts (names neutral) and their variants are retried by the daemon and are
  *    no kind of the user's, so the task waits on its lead;
  *  - every network failure Walnut knows (each wait and drop text of the endpoint corpus, each
  *    network code in the daemon's retry list) wrapped in a credential fetch reads the same way: a
@@ -16,7 +16,6 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { classifyTurnError } from '../../../src/providers/daemon-core.js'
 import { networkCausedAuthError } from '../../../src/providers/network-cause-core.js'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { usersErrorKind } from '../../../src/core/sessions/session-error-owner.js'
 import { ENDPOINT_DROPPED_PATTERNS, ENDPOINT_UNREACHABLE_PATTERNS } from '../../../src/core/sessions/endpoint-unreachable.js'
 
@@ -102,15 +101,5 @@ describe('every network failure Walnut knows, under a credential fetch, is the n
     expect(codes).toContain('ENOTFOUND')
     const missed = codes.map((c) => fetch(`connect ${c} 10.0.0.5:443`)).filter((t) => !networkCausedAuthError(t) || usersErrorKind(t) !== null)
     expect(missed, 'a network code the daemon retries reads as the user\'s under a credential fetch').toEqual([])
-  })
-})
-
-describe('both daemon twins', () => {
-  it('the deployed template carries the same rule and checks it before the credential words', () => {
-    const src = getDaemonSource()
-    expect(src).toContain(networkCausedAuthError.toString())
-    const body = src.slice(src.indexOf('function classifyTurnError'), src.indexOf('function parseTurnErrorLine'))
-    expect(body.indexOf('networkCausedAuthError')).toBeGreaterThan(-1)
-    expect(body.indexOf('networkCausedAuthError')).toBeLessThan(body.indexOf('AUTH_TURN_ERROR_PATTERNS'))
   })
 })

@@ -9,8 +9,7 @@
  * no transcript), four times that day. A new write path that bypasses
  * chainFifoWrite would bring that back: this test fails when one appears.
  *
- * Source scan of both daemon twins (daemon-core.ts for the bun daemon,
- * daemon-source.ts for the embedded JS one).
+ * Source scan of daemon-core.ts, where the session daemon's stdin writes live.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -37,11 +36,8 @@ function callsOf(src: string, name: string): number[] {
   return out
 }
 
-describe.each([
-  ['daemon-core.ts (bun daemon)', 'daemon-core.ts'],
-  ['daemon-source.ts (embedded twin)', 'daemon-source.ts'],
-])('%s: stdin writes that can reap a CLI', (_label, file) => {
-  const src = read(file)
+describe('daemon-core.ts: stdin writes that can reap a CLI', () => {
+  const src = read('daemon-core.ts')
 
   it('the deadline-bound writer is called only from chainFifoWrite', () => {
     const chain = bodyOf(src, 'chainFifoWrite')
@@ -93,10 +89,6 @@ describe('quick writes (no reap, a CLI that is reading)', () => {
     // reads stdin; they never reap. A new caller must be one of those, or use
     // chainFifoWrite: add it here only after checking which.
     const count = (f: string, name: string) => callsOf(read(f), name).length
-    expect({
-      sourceRaw: count('daemon-source.ts', 'writeFifoRaw'),
-      sourceQuick: count('daemon-source.ts', 'writeFifoQuick'),
-      standaloneRaw: count('daemon-standalone.ts', 'writeFifoRaw'),
-    }).toEqual({ sourceRaw: 1, sourceQuick: 1, standaloneRaw: 1 })
+    expect(count('daemon-standalone.ts', 'writeFifoRaw')).toBe(1)
   })
 })

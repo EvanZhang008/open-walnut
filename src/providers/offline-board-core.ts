@@ -9,9 +9,8 @@
  * writer is told.
  *
  * Pure helpers, no state: the offline host holds the copy and the journal.
- * daemon-standalone.ts imports createBoardOffline; daemon-source.ts inlines
- * `createBoardOffline.toString()` through `__CREATE_BOARD_OFFLINE__`, so the
- * body references nothing at module scope.
+ * daemon-standalone.ts imports createBoardOffline; the body references nothing at
+ * module scope.
  */
 
 export interface OfflineBoardMessage { id: string; author: string; text: string; ts: string }

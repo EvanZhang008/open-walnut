@@ -366,7 +366,6 @@ let serviceUpdateRequested = false
 
 // ── Constants ──
 // DAEMON_DIR default is /tmp/open-walnut; tests override via env var.
-// Must mirror daemon-source.ts (the JS fallback) — keep in sync.
 // PROD_DAEMON_DIR is duplicated from local-daemon.ts (the daemon is a standalone
 // binary and cannot import it); any dir OTHER than this one is "isolated" —
 // sandbox, test, ephemeral demo — which decides CLI-reap-on-exit.
@@ -374,7 +373,7 @@ const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = daemonEnv.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 const DAEMON_STATE_DIR = daemonEnv.WALNUT_DAEMON_STATE_DIR
 const SERVICE_MODE = options.mode === 'service'
-// The launcher's heartbeat and ready mark when a launcher runs this service (service-launcher-beat.ts). Keep in sync with daemon-source.ts.
+// The launcher's heartbeat and ready mark when a launcher runs this service (service-launcher-beat.ts).
 let launcherBeat: LauncherBeat | null = null
 /**
  * What the launcher's good version can take as a service, asked of that file once per path
@@ -392,7 +391,7 @@ const launcherFactsNow = () => withGoodRoles(launcherBeat?.facts() ?? options.la
 // An isolated dir whose sessions must outlive this process anyway: the cloud
 // companion's daemon for the paired Mac (providers/cloud-tunnel-daemon.ts). A
 // companion upgrade replaces it the way prod's is replaced, and the successor
-// adopts the CLIs, so exiting must not reap them. Keep in sync with daemon-source.ts.
+// adopts the CLIs, so exiting must not reap them.
 const KEEP_SESSIONS_ON_EXIT = daemonEnv.WALNUT_DAEMON_KEEP_SESSIONS === '1'
 // Home dir used to expand `~/...` paths from the app (e.g. ~/.claude/projects/...).
 // In production this is the real HOME (daemon runs as the same user as walnut, so both
@@ -402,10 +401,9 @@ const KEEP_SESSIONS_ON_EXIT = daemonEnv.WALNUT_DAEMON_KEEP_SESSIONS === '1'
 // the test fixtures. Same env-override pattern as WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR.
 const HOME_DIR = daemonEnv.WALNUT_HOME_OVERRIDE || daemonEnv.HOME || '/root'
 // Each task's durable working directory on this host (src/lib/task-dir.ts).
-// Keep in sync with daemon-source.ts.
 const TASK_DIR_ROOT = taskDirRoot(daemonEnv, HOME_DIR)
 // Every session starts with the page silencer's preload in NODE_OPTIONS, so any Playwright it
-// runs is silent whatever branch it builds (pw-silence-core.ts). Keep in sync with daemon-source.ts.
+// runs is silent whatever branch it builds (pw-silence-core.ts).
 const PW_SILENCE_DIR = pwSilenceDir(TASK_DIR_ROOT)
 /** The preload file for a session start, checked without a synchronous file call (pw-silence-core.ts). */
 function pwSilenceFile(): Promise<string | null> {
@@ -439,7 +437,7 @@ const LEGACY_STREAMS_DIR = daemonEnv.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-wal
 // (read-only, noexec, full: the server's remote-daemon-dir.ts). A daemon there
 // IS the production daemon, relocated: same streams, same user shim, and its
 // sessions outlive it. Only this exact path counts, so a test daemon that
-// inherits the env still reads as isolated. Mirror daemon-source.ts.
+// inherits the env still reads as isolated.
 const FALLBACK_DAEMON_DIR = path.join(daemonEnv.HOME || HOME_DIR, '.cache', 'open-walnut')
 const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)
   || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
@@ -447,13 +445,13 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
 // WALNUT_SERVICE_SET, read only as a service with a state dir. Its runtime is a real install
 // (KEEPS_SESSIONS: sessions outlive it, durable state, no test knobs), but the machine's single
 // copies (the user PATH shim, ~/.open-walnut/tmp/<name>, the legacy streams dir, the desktop app)
-// stay the default set's: a set keeps its own under its install root. Mirror daemon-source.ts.
+// stay the default set's: a set keeps its own under its install root.
 const SET_ID = SERVICE_MODE && !!DAEMON_STATE_DIR && /^[0-9a-f]{16}$/.test(daemonEnv.WALNUT_SERVICE_SET ?? '') ? daemonEnv.WALNUT_SERVICE_SET! : ''
 const KEEPS_SESSIONS = IS_PROD_DAEMON_DIR || SET_ID !== ''
 const STREAMS_DIR = daemonEnv.WALNUT_STREAMS_DIR
   || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'streams') : IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 // demo.quiesce (demo-daemon-quiesce-core.ts): a Demo's own daemon closes for good before
-// its reset and waits for what it accepted. Refused on every other daemon. Mirror daemon-source.ts.
+// its reset and waits for what it accepted. Refused on every other daemon.
 const demoQuiesce = createDemoDaemonQuiesce({
   env: daemonEnv, daemonDir: DAEMON_DIR, isProdDaemonDir: IS_PROD_DAEMON_DIR,
   serviceMode: SERVICE_MODE, keepSessions: KEEP_SESSIONS_ON_EXIT,
@@ -478,7 +476,7 @@ const GATEWAY_SOCK_PATH = (demoQuiesce.isDemo
   : null) || path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
 const GATEWAY_SHIM_DIR = path.join(path.dirname(GATEWAY_SOCK_PATH), 'bin')
 const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'walnut')
-/** The live trigger check runs' gateway tokens (trigger-check-core.ts checkCallers). Mirror daemon-source.ts. */
+/** The live trigger check runs' gateway tokens (trigger-check-core.ts checkCallers). */
 const checkCallers = createCheckCallers()
 // Where Walnut saves a session's pictures on this host (user-line-images-core.ts):
 // the server's images dir (it names this dir to its daemon), an upload from another
@@ -507,7 +505,7 @@ const PICTURE_ROOTS: string[] = (() => {
 // line per session ever started (~200 bytes), which is the record itself, so
 // there is nothing to compact. WALNUT_SPAWN_JOURNAL relocates it: the test
 // harness points it at a temp file so mock spawns stay out of the real one.
-// Keep in sync with daemon-source.ts and readSpawnJournal in
+//readSpawnJournal in
 // external-session-scan-core.ts.
 const SPAWN_JOURNAL = daemonEnv.WALNUT_SPAWN_JOURNAL
   || path.join(daemonEnv.HOME || HOME_DIR, '.open-walnut', 'local', 'spawn-journal.jsonl')
@@ -531,7 +529,7 @@ const journaledWalnuts = new Map<string, string>()
 // Which Walnut a pushed setting belongs to, and where its copy is kept
 // (walnut-scope-core.ts). Its keyOf is the ONE key every core takes for a home: of the
 // Walnut's first home here, so a Walnut whose server declared a move from that home keeps
-// its state (adoptCommandHome). Mirror daemon-source.ts.
+// its state (adoptCommandHome).
 const walnutScope = createWalnutScope({
   path, fs,
   keyOf: (value) => crypto.createHash('sha1').update(value).digest('hex').slice(0, 16),
@@ -592,7 +590,7 @@ function servedWalnutOf(home: string): string | undefined {
  * The data dir of every server this daemon runs for a leader (served-walnuts-core.ts). The host's
  * one Walnut service is among them: hostServers.boot() files its follower spec (server-<key>.json)
  * as the self entry, whose env names the data dir. Its own OPEN_WALNUT_HOME is not asked: the
- * in-process runtime's env has none (local-daemon.ts buildSpawnEnv). Mirror daemon-source.ts.
+ * in-process runtime's env has none (local-daemon.ts buildSpawnEnv).
  */
 function serverDataHomes(): string[] {
   // The supervisor is made further down: none before it is.
@@ -605,7 +603,7 @@ function serverDataHomes(): string[] {
  * for a leader as that leader's Walnut (host-server-core.ts walnutOf). A host's own server
  * starts its sessions naming its data dir, while its follower link, the leader's link and the
  * slices name the Walnut by its leader's home: without this, after a restart of the service
- * the host could not read its own session's stream. Keep in sync with daemon-source.ts.
+ * the host could not read its own session's stream.
  */
 function walnutOfHome(home: string): string {
   return walnutScope.canonical(servedWalnutOf(home) ?? home)
@@ -615,7 +613,7 @@ function walnutOfHome(home: string): string {
  * The session lived on this host: its stream file is here, or the spawn journal
  * names it. Stream retention (src/core/stream-retention.ts) drops a finished
  * session's stream after a few days and journals the sid first, so the journal
- * stays the proof a resume needs. Keep in sync with daemon-source.ts.
+ * stays the proof a resume needs.
  */
 function livedHere(sid: string): boolean {
   if (fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) return true
@@ -708,7 +706,7 @@ const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), RESTART_MAR
 const VERSION_FILE = path.join(DAEMON_DIR, 'daemon.version')
 // Which Walnuts this daemon serves, with its capabilities, beside daemon.version: a
 // server keeps a daemon another Walnut still uses when this build brings nothing it
-// lacks (served-walnuts-core.ts, daemon-shared.ts). Mirror daemon-source.ts.
+// lacks (served-walnuts-core.ts, daemon-shared.ts).
 const SERVES_FILE = path.join(DAEMON_DIR, 'daemon.serves.json')
 const servedWalnuts = createServedWalnuts({
   fs, file: SERVES_FILE,
@@ -743,7 +741,7 @@ const WATCHDOG_PARENT_PID = (() => {
 // key of the test server it serves, said in its hello with its dir so the server can
 // tell it from the host's production daemon. Its parent pid lives on another machine,
 // so it ends itself once no server has been connected for ISOLATED_ORPHAN_EXIT_MS, and
-// takes its root with it. Never on a production dir. Mirror daemon-source.ts.
+// takes its root with it. Never on a production dir.
 const ISOLATED_FOR = (daemonEnv.WALNUT_DAEMON_ISOLATED_FOR || '').trim()
 const ISOLATED_ORPHAN_EXIT_MS = (() => {
   const ms = parseInt(daemonEnv.WALNUT_DAEMON_ORPHAN_EXIT_MS || '', 10)
@@ -798,7 +796,7 @@ function ensureOwnerOnlyStorage(): void {
     try { fs.writeFileSync(path.join(root, OWNER_ONLY_SWEPT), '', { mode: 0o600 }) } catch { /* the next start sweeps again */ }
   }
 }
-/** The mark of a root whose entries were all made owner-only once (ensureOwnerOnlyStorage). Mirror daemon-source.ts. */
+/** The mark of a root whose entries were all made owner-only once (ensureOwnerOnlyStorage). */
 const OWNER_ONLY_SWEPT = '.owner-only-swept'
 
 
@@ -911,7 +909,7 @@ function sweepDeadStreams(): void {
     reaped.add(sid)
   }
   // Argv files nothing names: no session of this daemon, no live process (another
-  // daemon's CLI included; a CLI reads its --settings file again). Mirror daemon-source.ts.
+  // daemon's CLI included; a CLI reads its --settings file again).
   execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
     if (error) return
     const argvRemoved = cliArgvFiles.sweep([...sessions.values()].map((x) => x.args), String(stdout).split('\n'))
@@ -929,7 +927,7 @@ function sweepDeadStreams(): void {
 const DAEMON_START_TS = Date.now()
 // What runs this daemon, for `hello`: the compiled binary (its own executable),
 // or bun running this file. The server shows it in the host status; the pid
-// files alone cannot tell them apart. Keep in sync with daemon-source.ts.
+// files alone cannot tell them apart.
 const DAEMON_RUNTIME: 'bun' | 'binary' = /(^|\/)bun(-debug)?$/.test(process.execPath) ? 'bun' : 'binary'
 const DAEMON_INSTANCE_ID = (() => {
   const seed = `${process.pid}-${DAEMON_START_TS}-${Math.random()}`
@@ -948,13 +946,12 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // (/usr/local/bin, /usr/bin, ...) came BEFORE the user's rc PATH, and that rc
 // PATH was captured in the inherited env, so a node in a system dir or in the
 // server's own shell beat the one the user's rc chose (a Mac session got Node 18
-// while .zshrc picked 22). Keep in sync with daemon-source.ts.
+// while .zshrc picked 22).
 // Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
 // time, and hostRuntime.ensureClaude() gates the spawn.
 // claudeCheck: host.preflight's sign-in and version-floor answer (claude-check-core.ts).
-// spawnPreamble: this twin spawns through `$SHELL -c "<preamble>; exec claude"`, so
+// spawnPreamble: this daemon spawns through `$SHELL -c "<preamble>; exec claude"`, so
 // preflight asks that shell before calling claude missing, as gateClaudeLaunch does.
-// daemon-source.ts passes none: it spawns claude directly on the daemon PATH.
 const hostRuntime = createHostRuntime({
   fs, execFile, execFileSync, env: daemonEnv, platform: process.platform, arch: process.arch,
   claudeCheck: createClaudeCheck({ fs, execFile, env: daemonEnv, platform: process.platform, sha256Hex: (s) => crypto.createHash('sha256').update(s).digest('hex') }),
@@ -963,11 +960,10 @@ const hostRuntime = createHostRuntime({
 const bootPath = hostRuntime.computeDaemonPath()
 daemonEnv.PATH = bootPath.path
 // A test server's isolated daemon installs Claude Code and dtach under its own HOME
-// (host-fix-core.ts): its sessions find them there. Keep in sync with daemon-source.ts.
+// (host-fix-core.ts): its sessions find them there.
 const INSTALL_HOME_BIN = daemonEnv.WALNUT_INSTALL_HOME ? path.join(daemonEnv.WALNUT_INSTALL_HOME, '.local', 'bin') : ''
 if (INSTALL_HOME_BIN) daemonEnv.PATH = daemonEnv.PATH + path.delimiter + INSTALL_HOME_BIN
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
-// Keep in sync with daemon-source.ts.
 const hostFix = createHostFix({
   fs, execFile, env: daemonEnv, runtime: hostRuntime, claudeInstall: createClaudeInstall, claudeDownload: createClaudeDownload, dtachBuild: createDtachBuild,
   os: { platform: () => process.platform, tmpdir: () => os.tmpdir(), uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1) },
@@ -993,7 +989,7 @@ interface TaskState {
 // left. The idle scan counts idleness from the later of the last output and watchedAt, so a
 // leader that restarts or a link that drops for a moment stops no session (2026-11-23: a Mac
 // deploy dropped the leader's link for 10 s and the next scan stopped 17 sessions idle 2 to 4
-// hours that it was about to subscribe to again). Keep in sync with daemon-source.ts.
+// hours that it was about to subscribe to again).
 class Subscribers<T> extends Set<T> {
   watchedAt = Date.now()
   delete(ws: T): boolean { const had = super.delete(ws); if (had && this.size === 0) this.watchedAt = Date.now(); return had }
@@ -1247,8 +1243,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
 ])
 
 /**
- * What the bridge hello tells the companion this daemon does for it. Keep in sync with
- * daemon-source.ts. WALNUT_BRIDGE_HIDE_CAPS (comma list, tests) leaves some out, so a
+ * What the bridge hello tells the companion this daemon does for it. WALNUT_BRIDGE_HIDE_CAPS (comma list, tests) leaves some out, so a
  * companion meets this daemon as an older one and takes its older path; refused for the
  * prod daemon dir, as every test knob that changes what a daemon does (section 10).
  */
@@ -1260,7 +1255,7 @@ const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-li
  * and reads of this host's sessions. Everything that writes state the leader
  * owns (leader.*, host.slice, replica.*, hooks/triggers/bridge/server configure,
  * offline.drain, stop) is refused: two writers of one host's configuration would
- * overwrite each other. Keep in sync with daemon-source.ts.
+ * overwrite each other.
  */
 const FOLLOWER_ALLOWED_COMMANDS = new Set([
   'hello', 'ping', 'follower.hello', 'follower.status', 'follower.report', 'server.status',
@@ -1295,7 +1290,6 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
 ])
 
 // What a lane socket (the leader's second link, for streams) may send ('stream-lane-v1').
-// Keep in sync with daemon-source.ts.
 const LANE_ALLOWED_COMMANDS = new Set([
   'hello', 'ping', 'stream.lane',
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
@@ -1326,7 +1320,7 @@ function wsId(ws: ServerWebSocket<WsData>): number {
 // Every log line includes DAEMON_INSTANCE_ID so `grep <id> daemon-*.log`
 // isolates one daemon's lifetime even when multiple daemons have run.
 // Appended off the thread, one write at a time (log-appender-core.ts); an error line, and the
-// exit paths, write what is queued synchronously. Keep in sync with daemon-source.ts.
+// exit paths, write what is queued synchronously.
 let logAppender: LogAppender | null = null
 // A daemon program exits through process.exit in many places (a CLI action, a crash, a stop):
 // it is handed this flush and writes what is still queued on the way out (runDaemonProcess). A
@@ -1335,7 +1329,6 @@ options.onExitFlush?.(() => { try { logAppender?.flushSync() } catch { /* exitin
 function logMsg(level: string, msg: string, data?: Record<string, unknown>) {
   // debug lines (cmd_recv per status poll ≈ 3/sec) are 60k+ writes/day of pure
   // polling noise. Gate them behind an env opt-in; info/warn/error always land.
-  // Keep in sync with daemon-source.ts.
   if (level === 'debug' && daemonEnv.WALNUT_DAEMON_DEBUG !== '1') return
   const entry = JSON.stringify({
     ts: new Date().toISOString(),
@@ -1359,7 +1352,6 @@ function logMsg(level: string, msg: string, data?: Record<string, unknown>) {
 // death appends one line to daemon-exit-<instanceId>.log in the daemon dir.
 // A crash with NO breadcrumb but a stderr tail (local-daemon.ts now captures
 // it) = a runtime-level death (OOM / native abort) that JS can never see.
-// Keep in sync with daemon-source.ts.
 const EXIT_BREADCRUMB_FILE = path.join(DAEMON_DIR, `daemon-exit-${DAEMON_INSTANCE_ID}.log`)
 function writeExitBreadcrumb(kind: string, err: unknown): void {
   try {
@@ -1487,8 +1479,7 @@ function sleepSync(ms: number) {
  * count: the exit ladder blocks the event loop, so the daemon never reaps its own
  * dead CLIs while it waits, and kill(-pgid, 0) keeps answering for their zombies
  * (every isolated-dir exit used to wait out the whole 7s ladder). One ps per poll;
- * when ps cannot answer, kill(-pgid, 0) decides alone. Keep in sync with
- * daemon-source.ts.
+ * when ps cannot answer, kill(-pgid, 0) decides alone.
  */
 function runningGroupsSync(pids: number[]): number[] {
   const alive = pids.filter(isProcessGroupAlive)
@@ -1500,7 +1491,6 @@ function runningGroupsSync(pids: number[]): number[] {
 /**
  * The process groups with a member that is not a zombie: from /proc on Linux
  * (a slim image has no ps), from one ps elsewhere; null when neither answers.
- * Keep in sync with daemon-source.ts.
  */
 function runningGroupIdsSync(): Set<number> | null {
   const running = new Set<number>()
@@ -1538,7 +1528,7 @@ function runningGroupIdsSync(): Set<number> | null {
  * WALNUT_DAEMON_PARENT_PID. Deriving it means test launchers that spawn the
  * daemon directly (7 of them) get the leak fix without opting in, and a stale
  * inherited PARENT_PID can never trick the PRODUCTION daemon into killing live
- * sessions. Keep in sync with daemon-source.ts.
+ * sessions.
  */
 function shouldReapOnExit(): boolean {
   try {
@@ -1684,7 +1674,7 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
     // /node aren't on the RC PATH at all.
     // GATEWAY_SHIM_DIR is appended at runtime (string concat, not a $HOME
     // template) so `walnut` — the peer-session CLI shim — is on every session's
-    // PATH. Keep in sync with daemon-source.ts.
+    // PATH.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
       + GATEWAY_SHIM_DIR + '"',
     // A test server's isolated daemon installs its tools under its own HOME (remote-isolation.ts).
@@ -1708,7 +1698,7 @@ function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
  * that Walnut only through this daemon: every session on a host other than its server's
  * (self-api-root.ts). A machine that joined with a Walnut of its own has that Walnut's `walnut`
  * on PATH ahead of the appended shim, and it would send the session's calls to the other
- * Walnut's server. Keep in sync with daemon-source.ts.
+ * Walnut's server.
  */
 function walnutThroughGateway(env: Record<string, unknown> | undefined): boolean {
   return sessionWalnutApiUrl(env) === undefined
@@ -1719,7 +1709,7 @@ function walnutThroughGateway(env: Record<string, unknown> | undefined): boolean
  * (its `--settings` env, or an ACP worker's env), else none. Never this daemon's own: a
  * daemon started before its server listened has none, one started later has whichever server
  * started it, so the CLI process saw an address its settings did not name, or none where they
- * named one (a VP of a Walnut on another port, 2026-11-20). Keep in sync with daemon-source.ts.
+ * named one (a VP of a Walnut on another port, 2026-11-20).
  */
 function sessionWalnutApiUrl(env: Record<string, unknown> | undefined): string | undefined {
   const url = env?.OPEN_WALNUT_API_URL
@@ -1798,7 +1788,7 @@ const sessions = new Map<string, SessionData>()
 const wsClients = new Set<ServerWebSocket<WsData>>()
 
 // When each trusted (non-bridge) client was last HEARD from: any frame, ping or
-// pong. Keep in sync with daemon-source.ts. A trusted client is a walnut
+// pong. A trusted client is a walnut
 // server, normally over an SSH port forward. When that forward dies on the far
 // side (a Mac asleep, a network that changed under it), the host's sshd keeps
 // the forwarded socket to this daemon open for many minutes: nothing ever
@@ -1828,8 +1818,7 @@ function heardFrom(ws: ServerWebSocket<WsData>): void {
   }
 }
 
-// Which trusted (non-bridge) client a relay goes to. Keep in sync with
-// daemon-source.ts. A trusted client is a walnut server, normally over an SSH
+// Which trusted (non-bridge) client a relay goes to. A trusted client is a walnut server, normally over an SSH
 // port forward. When that forward dies on the far side (a Mac asleep, a network
 // that changed under it), the host's sshd keeps the forwarded socket to this
 // daemon open for many minutes: nothing ever closes it, nothing ever comes back
@@ -1965,7 +1954,7 @@ const agentSubs = new Map<string, AgentSub>()
 
 // Current byte size of a stream file, 0 if missing. Used as the adopt-time
 // watcher offset so a new daemon generation never replays history it didn't
-// stream itself. Keep in sync with daemon-source.ts (CLAUDE.md).
+// stream itself.
 function statSizeOrZero(p: string): number {
   try { return fs.statSync(p).size } catch { return 0 }
 }
@@ -1977,8 +1966,7 @@ function statSizeOrZero(p: string): number {
 // (so the two never disagree), and serves it on the `getState` RPC. Walnut PULLs it to
 // reconcile a lost-terminal event WITHOUT guessing liveness. `resourceVersion` = the event's
 // byte offset `v` — monotonic, and rebuildable from the jsonl after a daemon restart.
-// MUST stay byte-for-byte equivalent to daemon-source.ts (CLAUDE.md). See
-// docs/plan/daemon-source-of-truth-versioned-events.md.
+// See docs/plan/daemon-source-of-truth-versioned-events.md.
 const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed'])
 const BG_TRANSITION_CAP = 50 // recentTransitions ring buffer bound
 
@@ -2065,12 +2053,12 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
 // attach/resume/adopt — RSS 104MB→789MB in ~30s before a silent Bun death
 // (the 2026-08-13 phone-send data-loss family). Same 1MB-chunk + byte-carry
 // shape as rebuildFoldStateFromJsonl; the '"task_' substring pre-filter means
-// almost no line is ever decoded. Keep in sync with daemon-source.ts.
+// almost no line is ever decoded.
 const TASK_LINE_MARKER = Buffer.from('"task_')
 
 // Fold checkpoints (fold-checkpoint-core.ts): both rebuilds below resume from
 // one, so a restart does not replay a whale stream from byte 0 before the
-// daemon listens. Keep in sync with daemon-source.ts.
+// daemon listens.
 const foldCheckpoint = createFoldCheckpoint({
   fs, createHash: crypto.createHash, pid: process.pid,
   log: (level, msg, meta) => logMsg(level, msg, meta),
@@ -2145,7 +2133,7 @@ function rebuildTaskStateFromJsonl(jsonlPath: string, now: number): TaskState {
 // The daemon folds the stream file line-by-line into an authoritative
 // SessionSnapshot (foldLine/assembleSnapshot from daemon-fold.ts) and pushes
 // {ev:'snapshot'} to subscribers on change. Coexists with taskState L2 —
-// retirement of L2 is C4's call. Keep in sync with daemon-source.ts.
+// retirement of L2 is C4's call.
 const SNAPSHOT_COALESCE_MS = 50
 
 // Upper bound on the tailer's in-memory torn-tail carry (see ensureWatcher).
@@ -2155,7 +2143,6 @@ const TAILER_CARRY_MAX = 32 * 1024 * 1024
 // At most this much is read in one tailer tick. A large gap (a stalled loop, a
 // session that wrote while no tailer ran) is then read over several ticks instead
 // of in one allocation: stream files reach 3 GB, and the whole gap was one Buffer.
-// Keep in sync with daemon-source.ts.
 const TAILER_TICK_READ_MAX = 8 * 1024 * 1024
 
 // Result of a fold rebuild: the folded state PLUS the byte offset of the last
@@ -2185,7 +2172,6 @@ interface FoldRebuild {
 // Carry cap: identical to the tailer's. A single line larger than the cap can't
 // be assembled, so we drop it and realign on the next newline instead of
 // re-concatenating an unbounded buffer (the old loop grew it with O(n²) copying).
-// Keep in sync with daemon-source.ts.
 const FOLD_REBUILD_CHUNK = 1024 * 1024
 function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
   // A valid checkpoint IS the fold of every byte before its boundary, so the
@@ -2244,7 +2230,7 @@ function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
 // saved as `<stream>.jsonl.fold.next`, so the new daemon's adopt folds only what
 // was written since. 2026-10-26: a checkpoint format change made the new daemon
 // fold 8.8 GB before it listened (7 min with no local sessions). Never touches a
-// session, the instance lock or a port. Keep in sync with daemon-source.ts.
+// session, the instance lock or a port.
 //
 // Progress is saved every FOLD_PREWARM_PROGRESS_BYTES and at the deadline the
 // server passes (WALNUT_FOLD_PREWARM_DEADLINE, epoch ms), so a run cut short
@@ -2355,7 +2341,7 @@ function prewarmFoldCheckpoints(): { sessions: number; written: number; cut: num
 // folded as it is written, so the swap re-seats the fold, the task state and a
 // fresh checkpoint for the new file at once, and a later resume reads from the
 // checkpoint instead of folding the file again. One file at a time, smallest
-// first. Env overrides are TEST-ONLY. Keep in sync with daemon-source.ts.
+// first. Env overrides are TEST-ONLY.
 const STREAM_COMPACT_IDLE_MS = parseInt(daemonEnv.WALNUT_STREAM_COMPACT_IDLE_MS || '', 10) || 30 * 60_000
 const STREAM_COMPACT_SWEEP_MS = parseInt(daemonEnv.WALNUT_STREAM_COMPACT_SWEEP_MS || '', 10) || 10 * 60_000
 const streamCompact = createStreamCompact({
@@ -2371,7 +2357,6 @@ let streamCompactRunning = false
 // thread (2026-10-27: a 2.5 GB fold froze this daemon for 214 s), and a resume
 // of a file of STREAM_ROTATE_BYTES or more whose Claude transcript exists starts
 // a fresh file instead of reading it. The env override is TEST-ONLY.
-// Keep in sync with daemon-source.ts.
 const streamRotateEnv = parseInt(daemonEnv.WALNUT_STREAM_ROTATE_BYTES || '', 10)
 const streamFold = createStreamFold<FoldState, TaskState>({
   fs, path, foldLine, initialFoldState, emptyTaskState, applyTaskEvent,
@@ -2496,7 +2481,6 @@ async function compactOneStream(sid: string, jsonlPath: string): Promise<void> {
 // carry died with it, so the torn region is simply re-read) to EOF, folds every
 // COMPLETE line, and re-publishes the boundary. Bounded by the same carry cap.
 // Before the exit event clears subscribers, re-send the complete lines the watcher has not delivered yet.
-// Keep in sync with daemon-source.ts drainSessionFold.
 function drainSessionFold(session: SessionData, sid: string): void {
   const from = session.watcher ? session.watcher.offset : (session.offset || 0)
   let size = 0
@@ -2522,7 +2506,7 @@ function drainSessionFold(session: SessionData, sid: string): void {
 
 // Fold [from, to) into session.foldState, honoring the `v > foldState.v` guard
 // (bytes already folded out-of-band must not fold twice). Returns the new
-// complete-line boundary. Keep in sync with daemon-source.ts.
+// complete-line boundary.
 // The fold may run ahead of delivery, so onLine is not bounded by foldState.v.
 function drainFoldRange(session: SessionData, from: number, to: number, onLine?: (line: string, v: number) => void): number {
   let boundary = from
@@ -2576,7 +2560,6 @@ function drainFoldRange(session: SessionData, from: number, to: number, onLine?:
 // recreated (reboot wiped /tmp, manual delete) — the event that resets v to 0
 // and invalidates every consumer-side watermark. Cached on the session; a
 // failed stat leaves null (walnut treats null as "epoch unknown, no reset").
-// Keep in sync with daemon-source.ts.
 function streamEpochOf(session: SessionData): string | null {
   if (session.streamEpoch) return session.streamEpoch
   try {
@@ -2831,7 +2814,7 @@ const ACP_ARTIFACT_DIR = (() => {
   return fs.existsSync(path.join(dir, ACP_HOST_FILES[ACP_HOST_WORKER] ?? ACP_HOST_WORKER)) ? dir : undefined
 })()
 // The work that outlives this daemon, listed for a launcher's rollback stop (detached-registry.ts:
-// `<state dir>/detached/stop-detached.sh <that dir>`). Twin of daemon-source.ts.
+// `<state dir>/detached/stop-detached.sh <that dir>`).
 const DETACHED_RUNS_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'detached')
 const acp = createAcpDaemon<ServerWebSocket<WsData>>({
   registryDir: DETACHED_RUNS_DIR,
@@ -2911,7 +2894,7 @@ function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
     return sendError(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd)
   }
   // A named bridge link reaches only its own Walnut's sessions (or one whose Walnut
-  // is not recorded, as before). Mirror daemon-source.ts.
+  // is not recorded, as before).
   if (ws.data?.origin === 'bridge' && BRIDGE_SESSION_COMMANDS.has(cmd.cmd as string)
     && typeof cmd.sid === 'string' && !bridgeHearsSession(ws, cmd.sid)) {
     return sendError(ws, id as number, `${cmd.cmd}: a session of another Walnut`, { errorKind: 'not_owner' })
@@ -2934,7 +2917,6 @@ function handleCommandFrame(ws: ServerWebSocket<WsData>, frame: unknown) {
   // an error reply to the caller. Async handlers (fs.*) return promises — a
   // rejection there would otherwise surface as unhandledRejection and trip
   // the fatal guard above, so it is caught here too.
-  // Keep in sync with daemon-source.ts.
   const replyError = (err: unknown) => {
     logMsg('error', 'handleCommand: handler threw — replying with error instead of dying', {
       cmd: cmd.cmd, id, sid,
@@ -3045,7 +3027,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
     // can, so only the trusted walnut socket asks, after the server checked the
-    // user's grant. Keep in sync with daemon-source.ts.
+    // user's grant.
     case 'exec.run': return replyTransfer(ws, id as number, 'exec.run', () => hostExec.run(cmd), false)
     case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
     case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
@@ -3054,17 +3036,17 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'exec.script': return replyTransfer(ws, id as number, 'exec.script', () => hostExec.script(cmd), false)
     // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
     // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
-    // server checked the user's grant. Keep in sync with daemon-source.ts.
+    // server checked the user's grant.
     case 'mcp.list': return replyTransfer(ws, id as number, 'mcp.list', () => hostMcp.list(cmd), false)
     // The host network (net-v1, net-core.ts). NOT in BRIDGE_ALLOWED_COMMANDS or
     // FOLLOWER_ALLOWED_COMMANDS: it decides who may reach this daemon, so only the
-    // trusted walnut socket asks. Keep in sync with daemon-source.ts.
+    // trusted walnut socket asks.
     // The servers a session started (ports-v1, port-scan-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host
-    // processes. Keep in sync with daemon-source.ts.
+    // processes.
     case 'ports.list': return replyTransfer(ws, id as number, 'ports.list', () => daemonPorts.list(cmd), false)
     case 'ports.stop': return replyTransfer(ws, id as number, 'ports.stop', () => daemonPorts.stop(cmd), false)
-    // This machine's hub forwards ('hub-forward-v1', hub-forward-core.ts). Keep in sync with daemon-source.ts.
+    // This machine's hub forwards ('hub-forward-v1', hub-forward-core.ts).
     case 'hub.status': return cmdHubStatus(ws, id as number)
     case 'net.status': return replyTransfer(ws, id as number, 'net.status', () => netSupervisor.status(), false)
     case 'net.identity': return replyTransfer(ws, id as number, 'net.identity', async () => ({ endpointId: await netSupervisor.identity() }), false)
@@ -3079,7 +3061,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'http.request': return replyTransfer(ws, id as number, 'http.request', () => hostHttp.request(cmd), false)
     // The secrets the user shared with this host (secrets-v1, secrets-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
-    // writes or lists them, and no reply ever carries a value. Keep in sync with daemon-source.ts.
+    // writes or lists them, and no reply ever carries a value.
     case 'secrets.list': return replyTransfer(ws, id as number, 'secrets.list', async () => secretStore.list(), false)
     // A write names its Walnut (the owner a sync prunes by); never another's on a bound socket.
     case 'secrets.put': case 'secrets.remove': case 'secrets.sync': {
@@ -3097,7 +3079,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     )
     // 'preflight-v1': read-only look at what this host can run (claude and the
     // node it needs, a C compiler, dtach). Not bridge-reachable: only the
-    // trusted walnut socket asks. Keep in sync with daemon-source.ts.
+    // trusted walnut socket asks.
     case 'host.preflight': return hostRuntime.preflight(cmd).then(
       (r) => sendOk(ws, id as number, r as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'host.preflight failed: ' + (err as Error).message),
@@ -3107,7 +3089,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // bridge-reachable: only the trusted walnut socket asks. Tracked like
     // start/send (run, not just admit): a handover pause then waits for it, and
     // a shutdown drains it, instead of cutting a package install mid-dpkg.
-    // Keep in sync with daemon-source.ts.
     case 'host.fix': {
       // The fix that will run (none runs yet): a handover may skip waiting for it.
       const starts = !hostFix.running
@@ -3135,7 +3116,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'git.ensureExcluded': return cmdGitEnsureExcluded(ws, id as number, cmd)
     // 'git-commit-v1' (git-commit-core.ts): commit / push / PR of one session's
     // hunks. NOT in BRIDGE_ALLOWED_COMMANDS: it writes refs and publishes.
-    // Keep in sync with daemon-source.ts.
     case 'git.commitPlan': return cmdGitCommitPlan(ws, id as number, cmd)
     case 'git.commitStart': return cmdGitCommitStart(ws, id as number, cmd)
     case 'git.commitJob': return sendOk(ws, id as number, { job: gitCommit.job(cmd.jobId) })
@@ -3144,7 +3124,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // host. NOT in BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they
     // write host files, run ssh/scp, or (host.facts) read what this host is,
     // which only the trusted walnut socket asks, like host.preflight.
-    // Keep in sync with daemon-source.ts.
     // A private write ('transfer-private-v1') is authorized by this socket's own
     // binding (leader.configure / leader.claim), never by a field of the command.
     // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
@@ -3171,7 +3150,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token, cmd.force), true)
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they start processes.
-    // Keep in sync with daemon-source.ts.
     case 'oneshot.run': return replyOneShot(ws, id as number, 'oneshot.run', () => oneShot.run(ws, cmd))
     case 'oneshot.prewarm': return replyOneShot(ws, id as number, 'oneshot.prewarm', () => oneShot.prewarm(cmd))
     case 'oneshot.cancel': return replyOneShot(ws, id as number, 'oneshot.cancel', () => oneShot.cancel(cmd))
@@ -3186,11 +3164,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
     // 'history-ready-v1' (history-ready-core.ts): a session's first-paint view, parsed here.
-    // Trusted socket only (not in the bridge or follower allowlists). Keep in sync with daemon-source.ts.
+    // Trusted socket only (not in the bridge or follower allowlists).
     case 'history.readyView': return cmdHistoryReadyView(ws, id as number, cmd)
     case 'history.readyKeys': return cmdHistoryReadyKeys(ws, id as number, cmd)
     // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
-    // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-source.ts.
+    // BRIDGE_ALLOWED_COMMANDS: they read and write host files.
     case 'turns.list':
     case 'turns.diff':
     case 'turns.restore':
@@ -3198,7 +3176,6 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'turns.configure': return cmdTurns(ws, id as number, cmd)
     // 'workspace-v1' (workspace-core.ts): a task's isolated working copy. NOT in
     // BRIDGE_ALLOWED_COMMANDS: it runs providers and removes folders on this host.
-    // Keep in sync with daemon-source.ts.
     case 'workspace.configure':
     case 'workspace.detect':
     case 'workspace.create':
@@ -3262,11 +3239,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
     // Leader book ('leader-epoch-v1'): configure from the trusted primary only;
     // claim / witness from either side, deliver from the bridge only, each
-    // checked in its handler. Keep in sync with daemon-source.ts.
+    // checked in its handler.
     case 'leader.configure': return cmdLeaderConfigure(ws, id as number, cmd)
     // A server on this host that follows the leader ('follower-v1') and the
     // server the daemon keeps running for the leader ('host-server-v1'). NOT in
-    // BRIDGE_ALLOWED_COMMANDS. Keep in sync with daemon-source.ts.
+    // BRIDGE_ALLOWED_COMMANDS.
     case 'follower.hello': return cmdFollowerHello(ws, id as number, cmd)
     case 'follower.status': return cmdFollowerStatus(ws, id as number)
     case 'follower.report': return cmdFollowerReport(ws, cmd)
@@ -3276,17 +3253,17 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.op': return daemonCommands.run(() => cmdFollowerOp(ws, id as number, cmd))
     case 'follower.peer': return daemonCommands.run(() => cmdFollowerPeer(ws, id as number, cmd))
     case 'follower.pending': return cmdFollowerPending(ws, id as number, cmd)
-    // The follower's trigger_list and trigger_test ('follower-triggers-v1'). Keep in sync with daemon-source.ts.
+    // The follower's trigger_list and trigger_test ('follower-triggers-v1').
     case 'follower.triggers': return cmdFollowerTriggers(ws, id as number, cmd)
     case 'follower.trigger.test': return cmdFollowerTriggerTest(ws, id as number, cmd)
-    // Not serialized: a call may wait minutes (its waitMs), as a socket line does. Keep in sync with daemon-source.ts.
+    // Not serialized: a call may wait minutes (its waitMs), as a socket line does.
     case 'follower.gateway': return cmdFollowerGateway(ws, id as number, cmd)
     case 'follower.trigger.deliver': return daemonCommands.run(() => cmdFollowerTriggerDeliver(ws, id as number, cmd))
-    // A new ask while the Mac is away ('replica-start-v1', WP12). Keep in sync with daemon-source.ts.
+    // A new ask while the Mac is away ('replica-start-v1', WP12).
     case 'follower.start': return daemonCommands.run(() => cmdFollowerStart(ws, id as number, cmd))
     case 'leader.spawnTemplate': return cmdLeaderSpawnTemplate(ws, id as number, cmd)
     // Streams between servers through this daemon ('stream-relay-v1',
-    // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
+    // stream-relay-core.ts): frames, never answered by id.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
     case 'stream.lane': return cmdStreamLane(ws, id as number, cmd)
     case 'client.role': return cmdClientRole(ws, id as number, cmd)
@@ -3296,7 +3273,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return streamRelay.frame(ws, (cmd.cmd as string).slice('stream.'.length), cmd)
     case 'server.configure': return cmdServerConfigure(ws, id as number, cmd)
     case 'server.status': return cmdServerStatus(ws, id as number, cmd)
-    // Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts). Keep in sync with daemon-source.ts.
+    // Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts).
     case 'jobs.configure': return cmdJobsConfigure(ws, id as number, cmd)
     case 'jobs.status': return cmdJobsStatus(ws, id as number, cmd)
     case 'jobs.logs': return cmdJobsLogs(ws, id as number, cmd)
@@ -3308,7 +3285,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'leader.control': return daemonCommands.run(() => cmdLeaderControl(ws, id as number, cmd))
     // Offline host ('offline-host-v1', docs/plan/daemon-first-hosts.md). NOT in
     // BRIDGE_ALLOWED_COMMANDS: a Walnut's copy and journal belong to that
-    // Walnut's trusted SSH-tunneled server only. Keep in sync with daemon-source.ts.
+    // Walnut's trusted SSH-tunneled server only.
     case 'host.slice': return cmdHostSlice(ws, id as number, cmd)
     case 'offline.drain': return cmdOfflineDrain(ws, id as number, cmd)
     case 'offline.ack': return cmdOfflineAck(ws, id as number, cmd)
@@ -3393,7 +3370,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       served: { twin: 'binary', walnuts: servedWalnuts.recent(), pty: true },
       cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
-      // A daemon program, or a host's one Walnut service holding the runtime (twin of daemon-source.ts, always 'daemon').
+      // A daemon program, or a host's one Walnut service holding the runtime always 'daemon').
       serves: RUNS_AS,
       // Whose follower the service is: only that Walnut's leader switches it back (one-service-mode.ts).
       ...(RUNS_AS === 'walnut-serve' && options.selfHome ? { serviceHome: options.selfHome } : {}),
@@ -3407,9 +3384,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
       // What this machine calls itself: a URL that names it (a session's dev server) is a service
-      // here, reached on this loopback (session-service-preview.ts). Twin of daemon-source.ts.
+      // here, reached on this loopback (session-service-preview.ts).
       hostname: os.hostname(),
-      // This machine's stable id: the server joins its aliases by it (daemon-twins.ts). Twin of daemon-source.ts.
+      // This machine's stable id: the server joins its aliases by it (daemon-twins.ts).
       ...(DAEMON_MACHINE_ID ? { machineId: DAEMON_MACHINE_ID } : {}),
       taskDirRoot: TASK_DIR_ROOT,
       // Which Walnut this daemon is: its dir, and a test server's key when it is that
@@ -3433,7 +3410,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   }
 }
 
-// The line a resumable host_exec run's log ends with when this daemon stops (stopDaemon; twin of daemon-source.ts).
+// The line a resumable host_exec run's log ends with when this daemon stops (stopDaemon;
 const RESUMABLE_RUN_ENDED = 'the daemon on this host stopped (an update or a restart); this run was marked resumable, so run it again to go on waiting.'
 // The host_exec work a handover waits for: every run but a resumable one (it only waits, and its caller runs it again), and plugin scripts.
 const execHolds = (): number => hostExec.holding() + (hostExec.scripts?.() ?? 0)
@@ -3546,7 +3523,7 @@ async function waitForHandoverReceipt(ws: ServerWebSocket<WsData>): Promise<void
 // one again without a server: a trigger fire no server claimed (resumeForTrigger
 // below), and a bridge resume after this daemon restarted (the registry keeps
 // only RUNNING sessions). Beside the trigger state, so a reboot keeps it.
-// WALNUT_RESUME_RECORD_DIR is for TESTS ONLY. Mirror daemon-source.ts.
+// WALNUT_RESUME_RECORD_DIR is for TESTS ONLY.
 const RESUME_RECORD_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'resume-records')
   : daemonEnv.WALNUT_RESUME_RECORD_DIR || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'resume-records') : path.join(DAEMON_DIR, 'resume-records'))
@@ -3560,7 +3537,6 @@ const hostResume = createHostResume({
 
 // ── The CLI's content arguments ride files, never its argv (cli-argv-files-core.ts) ──
 // A pattern kill matched the hook text in every CLI's command line (2026-10-31).
-// Mirror daemon-source.ts.
 const cliArgvFiles = createCliArgvFiles({
   fs, path, crypto,
   dir: path.join(STREAMS_DIR, 'argv'),
@@ -3571,7 +3547,6 @@ const cliArgvFiles = createCliArgvFiles({
 // Beside the spawn journal, so every daemon that spawns into the same ~/.claude
 // (this one, an ephemeral test server's, a restarted one) reads one set of
 // records, and a test harness that moves the journal moves these with it.
-// Mirror daemon-source.ts.
 const cliOwnerStartTime = createAsyncStartTimeReader({
   fs,
   env: daemonEnv,
@@ -3604,7 +3579,7 @@ const cliOwner = createCliOwner({
  * data) may only touch a transcript it started itself: the spawn journal's first
  * line for the sid names the asking Walnut, or the sid was never journaled and
  * this is a new session. Otherwise it would run its copied clocks and queues as
- * turns of the user's real session (2026-10-25). Keep in sync with daemon-source.ts.
+ * turns of the user's real session (2026-10-25).
  */
 function strictStartRefusal(sid: string, cmd: Record<string, unknown>, home: string | undefined, resume: boolean): Error | null {
   if (cmd.strict !== true) return null
@@ -3861,7 +3836,7 @@ function sessionHomeOf(sid: string): string {
  * host server's after the daemon restarts (the journal keeps the first spawn's home). The
  * companion bridge's gate (bridgeHearsSession, session.permission): a session the host's own
  * server started or took over is operated by that server and its leader's channel only, never by
- * the bridge's direct send, attach, resume or prompt answer. Keep in sync with daemon-source.ts.
+ * the bridge's direct send, attach, resume or prompt answer.
  */
 function sessionStartHomeOf(sid: string): string {
   return walnutScope.canonical(lastSpawnHomeOf(sid) || offlineHost.ownerOf(sid) || '')
@@ -3877,7 +3852,7 @@ function lastSpawnHomeOf(sid: string): string | undefined {
  * A stop asked from a server's own data dir (the host's replica) reaches only a session that
  * server spawned last here: one the Mac started and runs is the Mac's to stop, though the daemon
  * takes the replica for its Walnut everywhere else (walnutOfHome). A session the host took over
- * (its resume spawn named the data dir) is the replica's. Keep in sync with daemon-source.ts.
+ * (its resume spawn named the data dir) is the replica's.
  */
 function servedStopRefusal(sid: string, home: string): { reason: string; detail?: string } | null {
   if (!servedWalnutOf(home)) return null
@@ -3892,7 +3867,6 @@ function servedStopRefusal(sid: string, home: string): { reason: string; detail?
 // one that started it, and its transcript is here. At most two start at once,
 // one per session every 10 minutes (a CLI that dies at once is not started again
 // every minute), none while 20 sessions here are mid-turn.
-// Keep in sync with daemon-source.ts.
 const HOST_RESUME_MAX_STARTING = 2
 const HOST_RESUME_COOLDOWN_MS = 10 * 60_000
 const HOST_RESUME_MAX_BUSY = 20
@@ -3996,7 +3970,7 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // conversation when the cwd matches the original, so a wrong hint just
   // yields a "No conversation found" turn error, not a security problem.
   // The folder it last ran in, unless that is gone and the server names another
-  // (Walnut moved the session out of a deleted folder). Keep in sync with daemon-source.ts.
+  // (Walnut moved the session out of a deleted folder).
   const cwd = spawn && (fs.existsSync(spawn.cwd) || !cwdHint) ? spawn.cwd : cwdHint
   if (!cwd) {
     return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)')
@@ -4156,7 +4130,7 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     sendOk(pending.ws, pending.id, { result })
   } else {
     // Carry errorKind (and a host gate's details: host, headline, hint,
-    // allowOverride) through so the cloud route maps the precise 4xx. Keep in sync with daemon-source.ts.
+    // allowOverride) through so the cloud route maps the precise 4xx.
     sendFrame(pending.ws, {
       id: pending.id, ok: false,
       error: error ?? 'launch failed',
@@ -4172,7 +4146,7 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 // map, same errorKind passthrough) for model/effort/fork/model-options. The
 // daemon executes NOTHING here — the walnut server re-validates and runs the
 // shared session-controls core, answering with a `control-result` command
-// carrying the same relayId. Keep in sync with daemon-source.ts.
+// carrying the same relayId.
 
 const CONTROL_RELAY_TIMEOUT_MS = 45_000
 let controlRelayCounter = 0
@@ -4246,7 +4220,7 @@ function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 // use (sendMessageToSession), so a daemon/CLI death anywhere after the
 // enqueue converts to delayed redelivery instead of loss (the 2026-08-13
 // phone-send data-loss family). messageId (qm-mobile-*) rides through for
-// end-to-end idempotence. Keep in sync with daemon-source.ts.
+// end-to-end idempotence.
 
 const MESSAGE_RELAY_TIMEOUT_MS = 45_000
 let messageRelayCounter = 0
@@ -4271,8 +4245,7 @@ const MESSAGE_RELAY_TARGET_LOST = 'session.message: primary server timed out (it
  * dead forward the daemon had not noticed yet closes the moment a relay is
  * written to it, and each such relay used to wait out its whole 45s timeout
  * (matrix L5, 2026-10-03: three in a row, while the Mac's fresh links sat
- * idle). With no client left it answers at once. Keep in sync with
- * daemon-source.ts.
+ * idle). With no client left it answers at once.
  */
 function rerouteMessageRelays(closed: ServerWebSocket<WsData>): void {
   for (const [relayId, pending] of messageRelayPending) {
@@ -4355,7 +4328,6 @@ function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 // this case is deliberately NOT in BRIDGE_ALLOWED_COMMANDS (a compromised
 // cloud box must not be able to inject fake feed events back at itself, and
 // the direction is walnut → daemon → bridge, never bridge → daemon).
-// Keep in sync with daemon-source.ts.
 
 function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { kind, data } = cmd as { kind?: string; data?: unknown }
@@ -4391,7 +4363,7 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult: relayId + pending map +
 // `gateway-request` event answered by a `gateway-result` command. Shared pure
 // logic (parse/validate/alias resolution) lives in gateway-core.ts.
-// Keep in sync with daemon-source.ts gateway section (hand-inlined there).
+//section (hand-inlined there).
 // GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR and GATEWAY_SHIM_PATH are defined right after demoQuiesce.
 
 // oldSid → newSid, maintained by cmdRename. resolveCallerSid follows the
@@ -4444,7 +4416,6 @@ function gatewayError(code: GatewayErrorCode, message: string, detail?: unknown)
 // (offline-host-core.ts; docs/plan/daemon-first-hosts.md). The server pushes a
 // read copy per home (`host.slice`, which also tags its socket with that home),
 // and drains the journal on reconnect (`offline.drain` / `offline.ack`).
-// Keep in sync with daemon-source.ts.
 
 /** Trusted socket → the Walnut data dir it pushed a copy for. */
 const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
@@ -4453,7 +4424,7 @@ const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
  * run binds them all), and where a session's call may go (gateway-identity-core.ts).
  */
 const gatewayIdentity = createGatewayIdentity()
-/** The op catalogs this host was sent, per Walnut, by hash (held-catalogs-core.ts, tools-list-held-v1). Twin of daemon-source.ts. */
+/** The op catalogs this host was sent, per Walnut, by hash (held-catalogs-core.ts, tools-list-held-v1). */
 const heldCatalogs = createHeldCatalogs()
 function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
   const fresh = gatewayClientHomes.get(ws) !== home
@@ -4477,7 +4448,7 @@ function boundLocationOf(ws: ServerWebSocket<WsData>): string | null {
  * A command that names another Walnut than the one its socket speaks for is refused:
  * one Walnut's server never reads, writes or acks another's copy, journal or lead on a
  * shared host (walnut-scope-core.ts). An unbound socket (the bulk channel, an older
- * server before it binds) may name any. Mirror daemon-source.ts.
+ * server before it binds) may name any.
  */
 function refuseForeignHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, what: string): boolean {
   if (!walnutScope.foreign(cmd, gatewayClientHomes.get(ws))) return false
@@ -4489,7 +4460,7 @@ function refuseForeignHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts),
 // pushed by the primary with replica.sync / replica.put, removed with replica.drop.
 // Kept across reboots (unlike /tmp), in the trigger state's home. WALNUT_REPLICA_DIR
-// is for TESTS ONLY. Mirror daemon-source.ts.
+// is for TESTS ONLY.
 const REPLICA_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'host-replica')
   : daemonEnv.WALNUT_REPLICA_DIR || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-replica') : path.join(DAEMON_DIR, 'host-replica'))
@@ -4503,7 +4474,7 @@ const hostReplica = createHostReplica({
 })
 // Beside it, each Walnut's copy of the pictures and files in its notes ('attachment-copy-v1',
 // attachment-copy-core.ts, the core the cloud companion keeps its copy with):
-// <REPLICA_DIR>/<home key>/attachments/. Mirror daemon-source.ts.
+// <REPLICA_DIR>/<home key>/attachments/.
 const attachmentCopy = createAttachmentCopy({
   fs, path, crypto,
   dirOf: (home) => path.join(REPLICA_DIR, walnutScope.keyOf(home), 'attachments'),
@@ -4519,7 +4490,7 @@ const attachmentCopy = createAttachmentCopy({
 // or rename the real /tmp/open-walnut journal). So no v2 record ever moves between dirs.
 // WALNUT_JOURNAL_DIR is for TESTS ONLY and is refused on the prod dir. Every boot moves the
 // v1 journals an older daemon left (in its DAEMON_DIR, and for the prod dir's daemon also in
-// the home fallback) into v2. Mirror daemon-source.ts.
+// the home fallback) into v2.
 const JOURNAL_PROD_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp')
 const JOURNAL_HOST_DAEMON = IS_PROD_DAEMON_DIR
 const JOURNAL_TEST_DIR = !KEEPS_SESSIONS ? daemonEnv.WALNUT_JOURNAL_DIR : undefined
@@ -4539,7 +4510,7 @@ const HOME_ALIASES_FILE = path.join(LEADER_BOOK_DIR, 'homes.json')
  * is not this user's. An isolated daemon (any other DAEMON_DIR, service mode or not, the
  * test knob or not) reads only its own dir. Read for v1 files, slices and leader records
  * only, each of them this user's own (the core checks), never written but for the
- * `.migrated` rename. Mirror daemon-source.ts.
+ * `.migrated` rename.
  */
 const JOURNAL_ON_PROD_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)
 const JOURNAL_LEGACY_ROOTS = [DAEMON_DIR, ...(JOURNAL_ON_PROD_DIR ? [FALLBACK_DAEMON_DIR] : [])]
@@ -4561,7 +4532,7 @@ function ownsDaemonDir(): boolean {
 
 /**
  * Pending records per Walnut before a write is refused (offline-host-core.ts OFFLINE_MAX_RECORDS).
- * Tests only (never in the real daemon dir) may lower it. Mirror daemon-source.ts.
+ * Tests only (never in the real daemon dir) may lower it.
  */
 const OFFLINE_JOURNAL_MAX = !KEEPS_SESSIONS && /^[1-9][0-9]{0,6}$/.test(daemonEnv.WALNUT_TEST_OFFLINE_MAX_RECORDS ?? '')
   ? Number(daemonEnv.WALNUT_TEST_OFFLINE_MAX_RECORDS) : OFFLINE_MAX_RECORDS
@@ -4569,7 +4540,7 @@ const OFFLINE_JOURNAL_MAX = !KEEPS_SESSIONS && /^[1-9][0-9]{0,6}$/.test(daemonEn
 /**
  * trigger-resume-once: the one line uuid of a message delivered under one id on every try (a
  * trigger fire), whether it goes into a live CLI or starts a stopped one (line-fate-core.ts
- * lineUuidOf). Mirror daemon-source.ts.
+ * lineUuidOf).
  */
 function fireLineUuid(messageId: string): string {
   return lineUuidOf(crypto.createHash('sha256').update('walnut-line:' + messageId).digest('hex'))
@@ -4593,7 +4564,7 @@ function deliverFromOfflineHost(sid: string, text: string, messageId: string, o:
 
 /**
  * The journal store, the offline host on it, the boot migration and the minute sweep
- * (host-journal-core.ts, shared with daemon-source.ts). Building it reads the slices and
+ * (host-journal-core.ts). Building it reads the slices and
  * writes nothing: this module runs for every use of the binary (the walnut CLI, --status,
  * --stop). Only its migrate(), after daemon.pid names this process, copies slices and
  * leader records, imports v1 journals or sweeps.
@@ -4630,7 +4601,7 @@ const hostJournal = createHostJournal({
     letters: createLetterCheck(),
     // A trigger created here gets the label the server would give it.
     labels: createTriggerLabel(),
-    // How a trigger's `watches` reads, the server's own rule. Twin of daemon-source.ts.
+    // How a trigger's `watches` reads, the server's own rule.
     watches: createTriggerWatches(),
     // Which session here takes a trigger fire: the rule the host's own server applies too.
     triggerTarget: pickHostTriggerTarget,
@@ -4694,7 +4665,6 @@ const offlineHost = hostJournal.host
 // with leader.claim (trusted socket). The companion asks with leader.witness /
 // leader.claim and, once it leads, answers what this host cannot answer itself
 // and routes messages with leader.deliver (bridge, fenced by epoch).
-// Keep in sync with daemon-source.ts.
 
 const LEADER_TAKEOVER_MS = envTimerMs(daemonEnv.WALNUT_LEADER_TAKEOVER_MS, 60_000, 500)
 /** At most one leader-lost event per primary socket in this window. */
@@ -4789,7 +4759,7 @@ function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 // A Walnut is named by its instance id; its data dir is only where it is now. A leader whose
 // data dir moved says so (leader.configure's movedFrom, src/core/home-move.ts), and the new
 // home continues the first home's state here: its epoch, trigger memory, journal, copies,
-// jobs and host server. Nothing is inferred. Mirror daemon-source.ts.
+// jobs and host server. Nothing is inferred.
 
 /**
  * The command as the daemon reads it: its `home` names the Walnut's first home here.
@@ -4942,7 +4912,6 @@ function foldBridgeLink(from: string, to: string): void {
 }
 
 // The server this daemon keeps running for a leader (host-server-core.ts).
-// Mirror daemon-source.ts.
 const HOST_SERVER_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'host-server')
   : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-server') : path.join(DAEMON_DIR, 'host-server')
@@ -4951,7 +4920,7 @@ const hostServers = createHostServerSupervisor({
   spawn: (command, args, opts) => spawn(command, args, opts),
   dir: HOST_SERVER_DIR,
   keyOf: walnutScope.keyOf,
-  // The service's own home under any home a declared move made the same Walnut. Mirror daemon-source.ts.
+  // The service's own home under any home a declared move made the same Walnut.
   canonical: (home) => walnutScope.canonical(home),
   now: () => Date.now(),
   setTimer: (fn, ms) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t },
@@ -4967,7 +4936,7 @@ const hostServers = createHostServerSupervisor({
     WALNUT_HOST_DAEMON_DIR: DAEMON_DIR,
   }),
   randomToken: () => crypto.randomBytes(32).toString('hex'),
-  // The stdout log's cap while the server runs (WP14; tests set a small one). Keep in sync with daemon-source.ts.
+  // The stdout log's cap while the server runs (WP14; tests set a small one).
   maxLogBytes: Number(daemonEnv.WALNUT_HOST_SERVER_LOG_MAX_BYTES) || undefined,
   // The host's one Walnut service is the follower of options.selfHome: no child for it, and a spec
   // the leader changes for it restarts the whole service (its launcher starts it again).
@@ -4978,7 +4947,7 @@ const hostServers = createHostServerSupervisor({
   } } } : {}),
   // A leading service: no follower of the Walnut it leads runs here.
   ...(options.leadsWalnut ? { leads: options.leadsWalnut } : {}),
-  // A server's data dir names its Walnut (walnutOf) only by real path, and never a Walnut's own home. Mirror daemon-source.ts.
+  // A server's data dir names its Walnut (walnutOf) only by real path, and never a Walnut's own home.
   realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
   walnutHomes: () => [...leaderBook.homes(), path.join(HOME_DIR, '.open-walnut')],
 })
@@ -4986,7 +4955,7 @@ const hostServers = createHostServerSupervisor({
 // ── logs.tail ('replica-logs-v1', replica-logs-core.ts; WP14) ──
 // The Mac reads what its replica on this host and this daemon's journal logged
 // here. A trusted leader socket whose leader.configure named `home` only:
-// another Walnut's logs are never readable. Keep in sync with daemon-source.ts.
+// another Walnut's logs are never readable.
 const replicaLogs = createReplicaLogs({ fs, path, daemonDir: DAEMON_DIR, logsOf: (home) => hostServers.logsOf(home) })
 function cmdLogsTail(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const origin = ws.data?.origin
@@ -5004,7 +4973,7 @@ const followerSockets = new Map<string, ServerWebSocket<WsData>>()
 const seatSockets = new WeakSet<ServerWebSocket<WsData>>()
 
 // `walnut` calls this host's own Walnut server answers while its leader is away
-// ('follower-gateway-v1', follower-gateway-core.ts). Keep in sync with daemon-source.ts.
+// ('follower-gateway-v1', follower-gateway-core.ts).
 const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   follower: (home) => {
     const ws = followerSockets.get(home)
@@ -5032,7 +5001,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
 
 // Trigger fires no server claimed, delivered by this host's own Walnut server while its
 // leader is away ('follower-trigger-delivery-v1', follower-trigger-delivery-core.ts): it picks
-// the session with its copies, this daemon writes it. Keep in sync with daemon-source.ts.
+// the session with its copies, this daemon writes it.
 const FOLLOWER_TRIGGER_ANSWER_MS = 15_000
 let followerTriggerCounter = 0
 const followerTriggers = createFollowerTriggerDelivery<ServerWebSocket<WsData>>({
@@ -5113,7 +5082,7 @@ function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unkn
 // local calls said its entry socket gets WALNUT_CALL_SOCKET and a token of that run
 // (WALNUT_CALL_TOKEN), and posts its calls there; the follower hands each line back here
 // (`follower.gateway`), checked for that token, and it runs as a socket line does (handleGatewayLine).
-// The socket check, the runs and the env are the core's. Keep in sync with daemon-source.ts.
+// The socket check, the runs and the env are the core's.
 const hostCallTokens = createHostCallTokens({
   fs, path, crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
@@ -5156,7 +5125,6 @@ function cmdFollowerGateway(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 // ── Streams between servers ('stream-relay-v1', stream-relay-core.ts) ──
 // A host server's browser reaches the leader (or the companion) and the leader
 // reaches the host server through this daemon, on the links each already has.
-// Keep in sync with daemon-source.ts.
 // Terminal streams ('pty-stream-v1', pty-stream-core.ts): bun's own pty (the bun this twin
 // is built with has it), so this twin always advertises it.
 const PTY_SPAWN = (argv: string[], opts: PtySpawnOptions): PtyChild => childProcess.bunSpawn(argv, opts as never) as unknown as PtyChild
@@ -5192,7 +5160,7 @@ const streamRelay = createStreamRelay<ServerWebSocket<WsData>>({
   // Port streams ('port-stream-v1'): the relay picks the loopback address.
   connect: (port, host) => net.connect({ port, host, allowHalfOpen: true }),
   // Never a daemon socket on this machine: ours, or a sibling's (the production dirs, the
-  // cloud companion's tunnel daemon). Keep in sync with daemon-source.ts.
+  // cloud companion's tunnel daemon).
   daemonPorts: {
     own: () => listeningPort,
     dirs: [...new Set([DAEMON_DIR, PROD_DAEMON_DIR, FALLBACK_DAEMON_DIR, TUNNEL_DAEMON_BASE])],
@@ -5224,7 +5192,6 @@ function primaryClientFor(home: string): ServerWebSocket<WsData> | null {
  * The primary socket a companion stream goes to ('bridge-stream-v1'): a server
  * socket that named its Walnut here (host.slice, leader.configure), the one heard
  * last, never a quiet one. Its bulk channel names none and drops stream frames.
- * Keep in sync with daemon-source.ts.
  */
 function primaryForBridge(home = ''): ServerWebSocket<WsData> | null {
   let best: { link: ServerWebSocket<WsData>; heardAt: number } | null = null
@@ -5240,7 +5207,6 @@ function primaryForBridge(home = ''): ServerWebSocket<WsData> | null {
  * The primary server sockets here that named their Walnut (host.slice, leader.configure) and
  * were heard lately, in connection order: never the bridge, a follower, a lane or a probe.
  * A companion stream (primaryForBridge) and a hub forward (hubLinks) go to one of them.
- * Keep in sync with daemon-source.ts.
  */
 function freshLeaderLinks(): Array<{ link: ServerWebSocket<WsData>; home: string; heardAt: number }> {
   const now = Date.now()
@@ -5280,7 +5246,7 @@ function streamTarget(ws: ServerWebSocket<WsData>, to: unknown): { link: ServerW
   // The companion ('bridge-stream-v1'): to the primary only, the server its
   // server.http relay reaches. It is the primary socket heard last (primaryForBridge), which can
   // differ from pickTrustedClient's pick while the daemon and the companion disagree on who
-  // leads; a stream whose request is never written is then answered on the companion. Keep in sync with daemon-source.ts.
+  // leads; a stream whose request is never written is then answered on the companion.
   if (ws.data?.origin === 'bridge') {
     if (to !== 'primary') return { why: 'the companion opens streams to the primary only' }
     const link = primaryForBridge(bridgeHomeOf(ws))
@@ -5431,7 +5397,7 @@ function cmdServerStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 // ── Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts) ──
 // The leader says which plugin jobs run on this machine for its Walnut; the daemon
 // runs each as `<this daemon's program> walnut plugin-job <bundle> <job>` and keeps
-// it running. Durable dir (never /tmp), as the host server's. Keep in sync with daemon-source.ts.
+// it running. Durable dir (never /tmp), as the host server's.
 const PLUGIN_JOBS_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'plugin-jobs')
   : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'plugin-jobs') : path.join(DAEMON_DIR, 'plugin-jobs')
@@ -5706,7 +5672,7 @@ function cmdFollowerSessions(ws: ServerWebSocket<WsData>, id: number) {
  * window the host server routes by (host-server/route.ts LEADER_QUIET_MS) and a host
  * replica's presence (replica/presence.ts), so the page and the daemon agree on "away".
  * One window (docs/plan/walnut-replica-servers-impl.md C4), knob WALNUT_LEADER_QUIET_MS
- * for tests; the rules that read it are follower-entry-core.ts's. Keep in sync with daemon-source.ts.
+ * for tests; the rules that read it are follower-entry-core.ts's.
  */
 const LEADER_QUIET_MS = envTimerMs(daemonEnv.WALNUT_LEADER_QUIET_MS, 30_000, 500)
 
@@ -5716,7 +5682,7 @@ async function cmdFollowerSend(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
   sendFollowerAnswer(ws, id, await followerEntry.send(home, cmd))
 }
 
-/** The follower's pick for a trigger fire it was offered (follower-trigger-delivery-core.ts). Keep in sync with daemon-source.ts. */
+/** The follower's pick for a trigger fire it was offered (follower-trigger-delivery-core.ts). */
 async function cmdFollowerTriggerDeliver(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (!followerHomeOf(ws)) return sendError(ws, id, 'follower.trigger.deliver: send follower.hello first')
   sendFollowerAnswer(ws, id, await followerEntry.triggerDeliver(ws, cmd))
@@ -5728,14 +5694,14 @@ async function cmdFollowerPermission(ws: ServerWebSocket<WsData>, id: number, cm
   sendFollowerAnswer(ws, id, await followerEntry.permission(home, cmd))
 }
 
-/** A message between two of this Walnut's sessions here that the follower decided ('follower-peer-v1'). Keep in sync with daemon-source.ts. */
+/** A message between two of this Walnut's sessions here that the follower decided ('follower-peer-v1'). */
 async function cmdFollowerPeer(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.peer: send follower.hello first')
   sendFollowerAnswer(ws, id, await followerEntry.peer(home, cmd))
 }
 
-/** The replica's write while the Mac is away ('replica-ops-v1', journal v2). Keep in sync with daemon-source.ts. */
+/** The replica's write while the Mac is away ('replica-ops-v1', journal v2). */
 async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.op: send follower.hello first')
@@ -5745,7 +5711,7 @@ async function cmdFollowerOp(ws: ServerWebSocket<WsData>, id: number, cmd: Recor
 /**
  * The follower's read of its Walnut's triggers here, and its trigger_test ('follower-triggers-v1'):
  * reads only (a test writes no trigger state), own Walnut only, never in the serial command lane
- * (a check may run for minutes). Keep in sync with daemon-source.ts.
+ * (a check may run for minutes).
  */
 function cmdFollowerTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
@@ -5770,7 +5736,7 @@ function cmdFollowerPending(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 // The Mac pushes its spawn template for its Walnut (leader.spawnTemplate, trusted socket);
 // the replica's follower.start fills only its slots, each value validated. The spawn
 // journal names the follower's Walnut, so a stop from the Mac after it adopted the
-// session is honoured (owner-home-v1). Keep in sync with daemon-source.ts.
+// session is honoured (owner-home-v1).
 const hostStart = createHostStart({
   env: daemonEnv, fs, path,
   dir: OFFLINE_HOST_DIR,
@@ -5823,9 +5789,8 @@ const hostStartSessions = {
 }
 
 /**
- * What this host's own Walnut server asks its daemon (follower-entry-core.ts, shared with
- * daemon-source.ts): the cmdFollower* handlers check the socket speaks for the home and
- * send what it answers. Keep in sync with daemon-source.ts.
+ * What this host's own Walnut server asks its daemon (follower-entry-core.ts): the cmdFollower* handlers check the socket speaks for the home and
+ * send what it answers.
  */
 const followerEntry = createFollowerEntry<ServerWebSocket<WsData>>({
   fs, leaderBook, offline: offlineHost, hostStart,
@@ -5851,7 +5816,7 @@ const followerEntry = createFollowerEntry<ServerWebSocket<WsData>>({
 
 // A claude-code routine's run while the Mac is away ('clock-host-start-v1',
 // clock-host-start-core.ts): the trigger tick hands it a due fire of a clock def with
-// `start` (startUnclaimedRun). Keep in sync with daemon-source.ts.
+// `start` (startUnclaimedRun).
 const clockHostStart = createClockHostStart({
   hostStart,
   offline: {
@@ -5873,7 +5838,7 @@ const clockHostStart = createClockHostStart({
 
 /**
  * The replica's new ask while the Mac is away (follower-entry-core.ts start: every check,
- * then the CLI from the template, then its `session` record). Keep in sync with daemon-source.ts.
+ * then the CLI from the template, then its `session` record).
  */
 async function cmdFollowerStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const home = followerHomeOf(ws)
@@ -5889,7 +5854,6 @@ function gatewayOwnerHome(callerSid: string): string | undefined {
   // (2026-11-03: such calls answered hub_unreachable while the companion led).
   // With two Walnuts on the host nothing says which, so none; a copy nothing refreshed for
   // weeks (a test run's) is not one of them (gateway-identity-core.ts externalOwner).
-  // Twin of daemon-source.ts.
   if (callerSid === EXTERNAL_CALLER_SID) {
     return gatewayIdentity.externalOwner(offlineHost.homes(), offlineHost.freshHomes((h) => servedWalnuts.knows(h)), gatewayCandidates(true))
   }
@@ -6001,7 +5965,6 @@ function cmdAttachments(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // docs/plan/walnut-replica-servers-impl.md WP6). A follower reads its own
 // Walnut's sessions, the files under that Walnut's session cwds and this host's
 // copy of its notes; anything of another Walnut on this host is not_found.
-// Keep in sync with daemon-source.ts.
 const followerReads = createFollowerReads({
   path,
   homeDir: HOME_DIR,
@@ -6141,7 +6104,7 @@ function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; o
 /**
  * No server of `home`'s Walnut takes calls now, but one may in a moment: a socket between
  * its hello and its bind, or one that just opened and has named no run yet (a server
- * starting). Keep in sync with daemon-source.ts.
+ * starting).
  */
 function gatewayServerIdentifying(home: string | undefined): boolean {
   const seen = { identifying: 0 }
@@ -6197,7 +6160,7 @@ function sendGatewayRequest(
   // that named no wait (an older client) still waits a moment while a server socket is here
   // that has not said whose Walnut it is yet (a server starting): GATEWAY_IDENTIFY_WAIT_MS
   // from its arrival, a relay then keeping the whole hub timeout. Never a list, nor a call
-  // whose client chose not to wait (waitMs 0). Keep in sync with daemon-source.ts.
+  // whose client chose not to wait (waitMs 0).
   const again = (p: typeof plan) => () => sendGatewayRequest(capability, callerSid, payload, respond, noted ? { ...p, ownAnswerNoted: true } : p)
   const waitHere = (): boolean => {
     if (plan.waits) return waitForPrimary(deadline, again(plan), respond)
@@ -6311,7 +6274,7 @@ const gatewayWaiting = new Set<{ retry: () => void; respond: (resp: GatewayRespo
  * missed beats (wakeGatewayCalls), or until it must go anyway: a relay still gets
  * GATEWAY_MIN_RELAY_MS of the call's time (or after `atMostMs`, when sooner).
  * False when there is no time to wait. A call whose caller left meanwhile goes
- * nowhere (`saysLeft` logs it). Keep in sync with daemon-source.ts.
+ * nowhere (`saysLeft` logs it).
  */
 function waitForPrimary(
   deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void, atMostMs = Number.POSITIVE_INFINITY,
@@ -6336,7 +6299,6 @@ function waitForPrimary(
  * daemon: an update, a handover, a service restart), so a `walnut` call in the
  * seconds between waits for it (daemon-restart-mark.ts). Never for an isolated
  * daemon, and never once daemon.pid names another daemon: that successor is up.
- * Keep in sync with daemon-source.ts.
  */
 function noteRestarting(): void {
   if (shouldReapOnExit()) return
@@ -6369,7 +6331,6 @@ function releaseGatewayWaiters(): void {
  * the restart mark sends it again to the next daemon. Anything else may have run there:
  * `hub_timeout`, the answer that did not come back, so every client says "do not run it
  * again" (and names a host_exec job to read) and none sends it another way.
- * Keep in sync with daemon-source.ts.
  */
 function releaseGatewayRelays(): void {
   if (gatewayRelayPending.size === 0) return
@@ -6516,7 +6477,7 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   }
   // How Walnut's API answered the op (a server that sends it), for a check run's machine faults.
   const api = gatewayApiAnswerOf(cmd.api)
-  // gateway-result-gz-v1: a big answer's result comes gzipped. Twin of daemon-source.ts.
+  // gateway-result-gz-v1: a big answer's result comes gzipped.
   let result = cmd.result as Record<string, unknown> | undefined
   if (typeof cmd.resultGz === 'string') {
     try {
@@ -6586,7 +6547,7 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   sendOk(ws, id, {})
 }
 
-/** `call` as a NEW relay with nothing sent yet: its Walnut, op, caller and deadline kept. Keep in sync with daemon-source.ts. */
+/** `call` as a NEW relay with nothing sent yet: its Walnut, op, caller and deadline kept. */
 function relayAgainOf(call: GatewayRelayCall, change: Partial<GatewayRelayCall>): GatewayRelayCall {
   return {
     home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline,
@@ -6598,7 +6559,7 @@ function relayAgainOf(call: GatewayRelayCall, change: Partial<GatewayRelayCall>)
  * The server named a catalog this host no longer holds (dropped for a newer one, or this
  * daemon restarted): the same call goes again as a NEW relay without `have`, to its Walnut's
  * server, so that server sends the catalog in full. Once: a call without `have` is never
- * answered by a hash (held-catalogs-core.ts). Keep in sync with daemon-source.ts.
+ * answered by a hash (held-catalogs-core.ts).
  */
 function heldCatalogAskAgain(relayId: number, call: GatewayRelayCall, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void): void {
   const target = gatewayTargetFor(call.home)
@@ -6619,8 +6580,7 @@ function heldCatalogAskAgain(relayId: number, call: GatewayRelayCall, payload: R
  * that wait for a server, so a server's hello sends it at once and a daemon that stops tells it
  * (nothing of it is at a server). With no server when it is due, it waits for one while a relay
  * would still have its whole hub timeout; else the refusal is the answer. A caller that left
- * (its `walnut` was stopped) is not asked for again: nobody would read the run. Keep in sync
- * with daemon-source.ts.
+ * (its `walnut` was stopped) is not asked for again: nobody would read the run.
  */
 function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: GatewayResponse) => void, refusal: GatewayResponse, inMs: number): void {
   const attempt = (call.busyAgain ?? 0) + 1
@@ -6718,7 +6678,7 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
     const caller = pluginJobs.callerOfRun(req.sid)
     if (!caller) return sendPluginJobGatewayRequest(home, req.op, req.args, respond)
     // The run's id names the job; `vouched` says the process on the socket is that run or one of its
-    // descendants (keep in sync with daemon-source.ts, which cannot read a socket's process and so
+    // descendants which cannot read a socket's process and so
     // never vouches). A process outside the run that holds its id still goes, unvouched: a job's own
     // helpers can fall out of its tree (a child whose parent exited is the init process's), and
     // refusing them would break calls that work today; unvouched it is told nothing the anonymous
@@ -6755,7 +6715,7 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   // The line names a session. A host call entry line was proven by its run's token (`fd` null);
   // a socket line is that session's only when the process on the socket runs inside it (or started
   // this daemon): anyone else naming it is the anonymous `external`. Where the process cannot be
-  // read at all, the sid stands, marked unproven (keep in sync with daemon-source.ts, which never
+  // read at all, the sid stands, marked unproven which never
   // reads it).
   if (fd === null) return sendSessionGatewayLine(req, callerSid, respond, plan)
   void gatewayCallerIdentity(socketPeerPid(fd), callerSid, openedAt).then((seen) => {
@@ -6775,7 +6735,7 @@ function sendSessionGatewayLine(req: GatewayRequest, callerSid: string, respond:
   plan: ReturnType<typeof gatewayCallPlan>, socket?: { fd: number | undefined; openedAt: number }) {
   // caller-proof-v1: only this daemon writes callerProof. For an approval it reads the process on
   // the socket now, while the caller still holds it, and tells the server whether it runs inside
-  // the session it names (keep in sync with daemon-source.ts, which sends none).
+  // the session it names which sends none).
   const args = req.args
   if (!isExternalCallerSid(callerSid) && wantsCallerProof(req.op, args)) {
     void gatewayCallerProof(socketPeerPid(socket?.fd), callerSid, socket?.openedAt ?? Date.now()).then((callerProof) =>
@@ -6977,8 +6937,7 @@ function startGatewayListener() {
     // kernel buffer took (~8KB) and end() closes immediately, silently
     // truncating anything larger (a skill_read reply is ~11KB — the walnut client
     // then saw "socket closed without a response"). Buffer the remainder and
-    // finish in drain(); node:net in daemon-source.ts queues internally, so
-    // only this twin needs the dance.
+    // finish in drain().
     const pump = (socket: GwSocket) => {
       const d = socket.data
       if (!d.out) return
@@ -7043,8 +7002,7 @@ function startGatewayListener() {
 }
 
 // The retired `wn` name (fully removed 2026-08-24): shims we previously wrote
-// under it are deleted at startup, recognized by their markers. Keep in sync
-// with daemon-source.ts.
+// under it are deleted at startup, recognized by their markers.
 const LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1']
 
 // `walnut` on the user's PATH (one name everywhere, decision 2026-08-23). On
@@ -7267,7 +7225,6 @@ function copyShimCoreInBackground(dst: string, stampPath: string, tmp: string): 
  *
  * Call only AFTER the shim has been rewritten: nothing names these files then, and
  * unlink does not disturb a process already exec'ing the inode.
- * Keep in sync with daemon-source.ts.
  */
 function reapShimCoreArtifacts(referenced: string[]) {
   try {
@@ -7334,7 +7291,6 @@ function writeWalnutShim() {
  * started before its daemon knew about them; `list` and `remove` are the
  * server's cleanup, which decides WHICH tasks are done and leaves the check for
  * unmerged work to this host. A live session working inside a directory keeps it.
- * Keep in sync with daemon-source.ts.
  */
 function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (refuseForeignHome(ws, id, cmd, 'taskdir.ensure')) return
@@ -7346,7 +7302,6 @@ function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 /**
  * Whether a CLI of a session runs on this host, by the start's own claim rules (cli-holder-v1,
  * cli-owner-core.ts holderOf), and the Walnut the spawn journal says started it. Read only.
- * Keep in sync with daemon-source.ts.
  */
 async function cmdCliHolder(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
@@ -7368,7 +7323,7 @@ async function cmdTaskDirList(ws: ServerWebSocket<WsData>, id: number) {
   sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await listTaskDirs(TASK_DIR_ROOT) })
 }
 
-/** Read only: how much each named task directory takes (task-dir-sizes.ts). Keep in sync with daemon-source.ts. */
+/** Read only: how much each named task directory takes (task-dir-sizes.ts). */
 async function cmdTaskDirSizes(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
   try {
@@ -7382,7 +7337,7 @@ async function cmdTaskDirSizes(ws: ServerWebSocket<WsData>, id: number, cmd: Rec
  * Everything running here now that may work in a task directory: live
  * sessions, running host commands (a task on another host builds and tests
  * here through them: 2026-11-08, a simulator check's app was taken mid-run),
- * ACP workers. Keep in sync with daemon-source.ts.
+ * ACP workers.
  */
 function hostWorkNow(): HostWork[] {
   const work: HostWork[] = []
@@ -7401,7 +7356,6 @@ const taskDirGit = gitRunnerWith(childUse)
  * Claude Code sessions untouched for that long, never one a live CLI holds (this
  * daemon's sessions, and any `claude` process naming it, read from ps once a pass);
  * one pass at a time. `transcript.restore {sessionId}` brings one back plain.
- * Keep in sync with daemon-source.ts.
  */
 let transcriptArchiveBusy = false
 async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -7450,7 +7404,7 @@ async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd
  * through this daemon's server: only it holds the storage's credentials. The restore asks it
  * (capability `history.fetch`) to download what is missing next to the manifest and check each
  * file, then decompresses as for any archive. With no server connected the restore fails with
- * a RemoteHistoryError and nothing is touched. Keep in sync with daemon-source.ts.
+ * a RemoteHistoryError and nothing is touched.
  */
 const HISTORY_FETCH_MS = 180_000
 // A restore's own warnings (a file kept twice, a fetch that failed) go to this daemon's log from the start.
@@ -7462,7 +7416,7 @@ setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
  * (gatewayOwnerHome: the one this host holds a fresh copy of, or every server speaks for), else
  * to an older server's unnamed link: pickTrustedClient('') alone skips every named link, so such a
  * session could never be fetched (2026-11-19). A wrong server can do no harm: each download is
- * checked against the manifest's hashes here. Keep in sync with daemon-source.ts.
+ * checked against the manifest's hashes here.
  */
 function historyFetchTarget(sid: string): { target: ServerWebSocket<WsData> | null; home: string | undefined } {
   const home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || gatewayOwnerHome(EXTERNAL_CALLER_SID) || undefined
@@ -7483,7 +7437,7 @@ function fetchRemoteHistory(dir: string, sid: string): Promise<void> {
 }
 setRemoteFetcher(fetchRemoteHistory)
 
-/** Rebuildable tool caches older than `olderThanMs` (host-cache-prune.ts, host-cache-prune-v1). Keep in sync with daemon-source.ts. */
+/** Rebuildable tool caches older than `olderThanMs` (host-cache-prune.ts, host-cache-prune-v1). */
 async function cmdTaskDirPruneCaches(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const olderThanMs = Number(cmd.olderThanMs)
   if (!Number.isFinite(olderThanMs) || olderThanMs < 3_600_000) return sendError(ws, id, 'taskdir.pruneCaches: olderThanMs must be an hour or more')
@@ -7521,7 +7475,7 @@ async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Re
 /**
  * A finished task's clean clones and build output (task-dir-prune-v1), or with
  * `buildsOnly` the build output alone of an idle task's directory, open or not
- * (`taskdir.pruneBuilds`, task-dir-prune-builds-v1). Keep in sync with daemon-source.ts.
+ * (`taskdir.pruneBuilds`, task-dir-prune-builds-v1).
  */
 async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, buildsOnly = false) {
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
@@ -7660,7 +7614,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   const sid = cmd.sid as string
   if (!sid) return sendError(ws, id, 'start: missing sid')
   // A start's long arguments may come by hash (start-arg-refs-v1, cli-argv-files-core.ts): put
-  // them back from this host's copies, and keep copies of what came in full. Mirror daemon-source.ts.
+  // them back from this host's copies, and keep copies of what came in full.
   if (cmd.argRefs === true && Array.isArray(cmd.args)) {
     const refs = cliArgvFiles.resolveRefs(cmd.args.map(String))
     if (refs.missing.length) {
@@ -7681,7 +7635,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     .catch((error) => {
       if (error?.code === 'SESSION_STOP_SUPERSEDED') return null
       // A host that cannot run claude answers with the reason itself, not an
-      // "internal daemon error". Keep in sync with daemon-source.ts.
+      // "internal daemon error".
       if (error?.code === 'BUDGET_PAUSED') return Object.assign(error as Error, { errorKind: 'budget_paused' })
       if (error?.code === 'BUDGET_CHECKING') return Object.assign(error as Error, { errorKind: 'budget_checking' })
       if (error?.code === 'CLAUDE_RUNTIME') return error as Error & { errorKind?: string }
@@ -7734,13 +7688,13 @@ async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeD
 
 async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () => boolean, canStart?: () => boolean) {
   // A template's hook texts (hook-files-v1) go back into its settings: the registry keeps the inline
-  // form an older daemon re-spawns after a rollback (cli-argv-files-core.ts inlineArgs). Mirror daemon-source.ts.
+  // form an older daemon re-spawns after a rollback (cli-argv-files-core.ts inlineArgs).
   if (Array.isArray(cmd.args)) cmd = { ...cmd, args: cliArgvFiles.inlineArgs(cmd.args.map(String)) }
   const { sid, args, cwd, message, resume, mode, uuid } = cmd as {
     sid: string; args: string[]; cwd: string; message?: string; resume?: boolean
     mode?: string
     /** Optional pre-assigned v4 uuid for the INITIAL message's user line. Absent
-     *  on every older client ⇒ envelope unchanged. Keep in sync with daemon-source.ts. */
+     *  on every older client ⇒ envelope unchanged. */
     uuid?: string
   }
   const initialUuid = typeof uuid === 'string' && uuid ? uuid : undefined
@@ -7832,7 +7786,6 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // npm build with no working node) instead of an exit 127 after the spawn.
   // It runs BEFORE the replaced session is torn down: a refusal must leave a
   // live CLI exactly as it was, never killed and replaced by nothing.
-  // Keep in sync with daemon-source.ts.
   const launch = await gateClaudeLaunch(args)
   await requireBudgetAllowance(sid)
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
@@ -7840,7 +7793,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // One CLI per session id on this host, whichever daemon asks (cli-owner-core.ts):
   // a live CLI of this transcript that is not the one replaced below, or another
   // daemon's spawn in flight, refuses the start. Before the teardown, so a refusal
-  // leaves everything as it was. Keep in sync with daemon-source.ts.
+  // leaves everything as it was.
   const ownedSid = cliOwner.transcriptIdOf(args)
   const replacedPid = existing && existing.state === 'running' && existing.pid ? existing.pid : undefined
   const askingHome = (cmd.origin as { home?: unknown } | undefined)?.home
@@ -7853,7 +7806,6 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // fork reads is its --resume id, not the new transcript it owns (transcript-archive.ts). A fresh
   // start under an id is checked the same way: history of that id archived here and not brought
   // back (remote storage refused) refuses the start, never a new conversation in its place.
-  // Keep in sync with daemon-source.ts.
   const archivedSource = resumeSourceId(args) ?? ownedSid
   if (archivedSource) await restoreForStart(CLAUDE_PROJECTS_DIRS, archivedSource)
   // A start that a stop or a newer supervision request overtook ends here.
@@ -7926,7 +7878,6 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // The task's durable working directory: made here, on the host the session
   // runs on, and handed to the CLI as WALNUT_TASK_DIR. A supervision respawn
   // carries no origin, so the task comes from the resume record.
-  // Keep in sync with daemon-source.ts.
   const resumeRec = spawnInfo.task ? null : hostResume.recall(sid)
   const taskDir = ensureTaskDir(TASK_DIR_ROOT, spawnInfo.task ?? resumeRec?.task, spawnInfo.home ?? resumeRec?.home)
 
@@ -7996,7 +7947,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // OUT of external CLI builds, so we raise the finite retry ceiling instead.
   // Retries past 10 back off ~35s each, so 60 covers roughly a 30-min outage.
   // Precedence: respect an explicit process-env override; else WALNUT_CLI_MAX_RETRIES;
-  // else default '60'. Keep in sync with daemon-source.ts.
+  // else default '60'.
   const cliMaxRetries =
     daemonEnv.CLAUDE_CODE_MAX_RETRIES ?? daemonEnv.WALNUT_CLI_MAX_RETRIES ?? '60'
   const spawnOptions = {
@@ -8012,7 +7963,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // session_state_changed (running/idle/requires_action) stream events. idle is
     // the only reliable turn-over signal; a dynamic-workflow turn emits MANY result
     // events (one per background subagent finishing), so result is NOT a turn
-    // boundary. Keep in sync with daemon-source.ts.
+    // boundary.
     //
     // We intentionally DO NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: background
     // Bash tasks (run_in_background) are a useful capability and there's no reason to
@@ -8029,11 +7980,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // rewinding is not enabled." Backups are hardlinked and capped at 100
     // snapshots per session by the CLI, so the disk cost is bounded.
     // WALNUT_DISABLE_FILE_CHECKPOINTS=1 on the daemon opts a host out.
-    // Keep in sync with daemon-source.ts.
     env: {
       ...daemonEnv,
       // The secrets the user let this host's sessions have (secrets-core.ts), before
-      // every Walnut variable so none of those can be replaced. Keep in sync with daemon-source.ts.
+      // every Walnut variable so none of those can be replaced.
       ...secretsSessionEnv(),
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
@@ -8048,7 +7998,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // Agent gateway (peer sessions): the `walnut` CLI inside this session reads
       // these two to reach the on-host gateway socket. The sid may be a fresh
       // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the
-      // current sid on every request. Keep in sync with daemon-source.ts.
+      // current sid on every request.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
       // host-call-entry-v1: this host's own Walnut server's call entry socket and this run's token,
@@ -8062,23 +8012,22 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // Where the secrets the user shared with this host are, one file each.
       WALNUT_SECRETS_DIR: SECRETS_ROOT,
       // The address its Walnut named in its settings, or none (never this daemon's own):
-      // sessionWalnutApiUrl. Keep in sync with daemon-source.ts.
+      // sessionWalnutApiUrl.
       OPEN_WALNUT_API_URL: sessionWalnutApiUrl(settingsEnvOf(launch.args)),
-      // The page silencer, first in NODE_OPTIONS (pw-silence-core.ts). Keep in sync with daemon-source.ts.
+      // The page silencer, first in NODE_OPTIONS (pw-silence-core.ts).
       ...pwSilenceOptions(daemonEnv.NODE_OPTIONS, daemonEnv.BUN_OPTIONS, await pwSilenceFile()),
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and
       // (with the isolated-dir reap) kill live prod sessions. Same env-carrier
-      // chain as the VITEST_* leak. Keep in sync with daemon-source.ts.
+      // chain as the VITEST_* leak.
       WALNUT_DAEMON_PARENT_PID: undefined,
       // Same for the keep-sessions switch (the cloud tunnel daemon's): it is this
       // daemon's own exit policy, and a CLI that starts a daemon of its own must
-      // not hand it on. Keep in sync with daemon-source.ts.
+      // not hand it on.
       WALNUT_DAEMON_KEEP_SESSIONS: undefined,
       // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
       // and with this var it could reach the service daemon's journals and state.
-      // Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_STATE_DIR: undefined,
       // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
       // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
@@ -8088,7 +8037,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // And the compiled file's runtime dir (src/binary/runtime-tree.ts): it names the
       // SERVING stage's runtime/, which a later deploy deletes. A walnut CLI the session runs
       // would unpack there or, after that deploy, mkdir it back inside a dead stage; without
-      // it a compiled walnut uses its own default tree. Keep in sync with daemon-source.ts.
+      // it a compiled walnut uses its own default tree.
       WALNUT_RUNTIME_DIR: undefined,
     },
   }
@@ -8128,8 +8077,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   }
   // line-answer-v1: where this process's output begins, so a line an earlier process
   // took is never answered by this one's output (line-fate-core.ts lineFateScan). Silent
-  // (no words, no uuid, no session_id). Written before the CLI boots. Keep in sync with
-  // daemon-source.ts. walnutTurn: this process starts on the message below: the fold
+  // (no words, no uuid, no session_id). Written before the CLI boots. walnutTurn: this process starts on the message below: the fold
   // counts the turn as open from here, not from the init the CLI prints once it booted
   // (daemon-fold.ts; 2026-11-05: a 25s boot read as an ended turn). Not for a
   // deferMessage start (its line may never be written; its send's marker anchors),
@@ -8293,7 +8241,7 @@ const CRON_CHECK_THROTTLE_MS = 30_000
 // Back-compat: a server older than this protocol sets WALNUT_ENFORCE_SESSION_CRON=1
 // at spawn instead of pushing; synthesize the equivalent built-in rule set at
 // boot (a later hooks.configure replaces it). WALNUT_ALLOW_DURABLE_CRON=1 wins
-// over everything (emergency off-switch). Keep in sync with daemon-source.ts.
+// over everything (emergency off-switch).
 const HOOKS_DIR = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR
 const HOOKS_FILE = path.join(HOOKS_DIR, 'hooks.json')
 interface ScopedHooks { config: DaemonHooksConfig; persistedHash: string | null | undefined; at: number }
@@ -8444,7 +8392,7 @@ async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd
 // fire no server claimed within the grace whose def names a task with a live
 // session of the same Walnut on this host is written into that session by this
 // daemon (deliverUnclaimedFires), then replayed with `host` set so the server
-// only records it. Keep in sync with daemon-source.ts.
+// only records it.
 //
 // One set per Walnut (walnut-scope-core.ts): a push names its Walnut (`home`) and
 // replaces only that Walnut's set, its fires go only to that Walnut's sockets, and
@@ -8460,7 +8408,7 @@ const TRIGGERS_FILE = path.join(TRIGGERS_BASE_DIR, 'triggers.json')
 // streams (the set itself, triggers.json, is re-pushed by the server at every
 // connect). A service daemon keeps its state dir; an isolated dir (tests,
 // ephemeral servers) keeps it inside itself, so nothing crosses between Walnuts.
-// WALNUT_TRIGGER_STATE_DIR is for TESTS ONLY. Mirror daemon-source.ts.
+// WALNUT_TRIGGER_STATE_DIR is for TESTS ONLY.
 const PROD_TRIGGER_STATE_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'trigger-state')
 const TRIGGER_STATE_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'trigger-state')
@@ -8508,7 +8456,7 @@ const armedTriggers = new Map<string, ArmedTrigger>()
  * runs, but each fire keeps replaying, answers claims and acks, and may still be
  * delivered here, until the server has recorded it: a run the host delivered is
  * the routine's history, one nobody took is the server's to run. triggers.json
- * keeps them, so a restart goes on replaying. Mirror daemon-source.ts.
+ * keeps them, so a restart goes on replaying.
  */
 const drainingTriggers = new Map<string, ArmedTrigger>()
 
@@ -8547,7 +8495,7 @@ const hostDeliveriesInFlight = new Map<string, Set<number>>()
  * The entries whose check process is running right now. Held apart from the maps:
  * a configure that disarms a trigger mid-check deletes its entry from armedTriggers
  * while the script still runs, and triggers.state.snapshot must still see it.
- * runTrigger adds before the spawn and removes in its finally. Mirror daemon-source.ts.
+ * runTrigger adds before the spawn and removes in its finally.
  */
 const triggerChecksRunning = new Set<ArmedTrigger>()
 /**
@@ -8576,7 +8524,7 @@ let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
 const triggersConfigureGate = new DaemonSessionGate()
-// Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0. Mirror daemon-source.ts.
+// Check pids not closed yet (runs in flight: triggerChecksRunning): demo.quiesce alone aborts them and waits for 0.
 const demoTriggerChecks = new AbortController()
 const demoTriggerCheckPids = new Set<number>()
 // Set by cleanup(): a run its abort ended writes no state and sends no event (the successor runs it next).
@@ -8609,8 +8557,7 @@ function newArmedTrigger(home: string, def: TriggerDef, state: TriggerHostState,
 // no script runs; a due slot queues a fire with no items, which goes the way a
 // trigger's does (claims, host delivery into the task's session, acks). The server
 // stopped ticking it before it pushed the def, and takes it back only from this
-// daemon's report that it disarmed it (configure's `released`). Keep in sync with
-// daemon-source.ts.
+// daemon's report that it disarmed it (configure's `released`).
 const clockSchedule = createClockSchedule()
 
 /**
@@ -8948,7 +8895,7 @@ function armedOf(home: string): ArmedTrigger[] {
 /**
  * Whether a server socket speaks for `home`'s triggers: the Walnut it configured
  * them for, else the Walnut it bound. The unnamed scope goes, as it always did, to
- * every server socket that did not configure a named set. Mirror daemon-source.ts.
+ * every server socket that did not configure a named set.
  */
 function triggerClientOf(client: ServerWebSocket<WsData>, home: string): boolean {
   const configured = client.data?.triggerScope
@@ -9189,7 +9136,6 @@ function deliverUnclaimedFires(now: number): void {
  * outcome recorded on whatever holds the trigger's state when the start ends, as a host
  * delivery is. A start that could not be made leaves the fire for the server and is
  * tried again after a minute; one held back because a server answers is not held back.
- * Keep in sync with daemon-source.ts.
  */
 function startUnclaimedRun(entry: ArmedTrigger, fire: PendingFire, now: number): void {
   const id = entry.def.id
@@ -9638,7 +9584,6 @@ function cmdTriggersRun(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
  * that Walnut's own state file and never written (trigger-state-snapshot-core.ts
  * holds every rule). Runs behind any configure in flight. Every refusal is an ok
  * reply `{supported: false, reason}`, so a caller that cannot freeze moves on.
- * Mirror daemon-source.ts.
  */
 function cmdTriggersStateSnapshot(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   return triggersConfigureGate.run('triggers.configure', async () => {
@@ -9686,7 +9631,7 @@ function cmdTriggersStateSnapshot(ws: ServerWebSocket<WsData>, id: number, cmd: 
  * never over a file (trigger-state-seed-core.ts holds every rule), so the next
  * configure arms it with that seen set and cursor. Runs behind any configure in
  * flight. Every refusal but a foreign home is an ok reply `{seeded: false, reason}`.
- * Mirror daemon-source.ts.
+ *
  */
 function cmdTriggersStateSeed(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (refuseForeignHome(ws, id, cmd, 'triggers.state.seed')) return
@@ -9755,7 +9700,7 @@ function cmdTriggersClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
  * Fires of a routine whose run this host started already (clock-host-start-v1) but
  * whose mark a daemon death cut (the records were kept, the state was not): marked
  * now, before a server's claim, so the server records the run instead of starting a
- * second one. Keep in sync with daemon-source.ts.
+ * second one.
  */
 function markStartedRuns(entry: ArmedTrigger, seqs: readonly number[]): boolean {
   const start = entry.def.start
@@ -9811,15 +9756,13 @@ function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // goose, ~/.gemini/skills for gemini. Also migrates earlier layouts: the v1
 // real file in ~/.claude/skills, the v1 fenced ~/.codex/AGENTS.md section,
 // and the short-lived v2.0 canonical inside ~/.open-walnut/skills/ (all three
-// only ever held `walnut`, so they run once, not per entry). Keep in
-// sync with daemon-source.ts cmdSkillsSync.
+// only ever held `walnut`, so they run once, not per entry).
 const SKILL_SYNC_MARKER = 'walnut-managed v1'
 
 /**
  * The skills this process last wrote, by the hash the server named (push-probe-v1): a server
  * that restarted asks `{probe: true, hash}` and sends the skills (about 360 KB) only when they
- * are not held, or a canonical copy is gone from disk. A new process holds none. Keep in sync
- * with daemon-source.ts.
+ * are not held, or a canonical copy is gone from disk. A new process holds none.
  */
 let heldSkills: { hash: string; entries: Array<{ name: string; body: string }> } | null = null
 
@@ -9827,7 +9770,7 @@ let heldSkills: { hash: string; entries: Array<{ name: string; body: string }> }
  * The skills held outlive this process: a daemon update or restart otherwise held nothing, and
  * the server sent the skills (about 360 KB) and both templates again on the session link, which
  * the relay on the SSH path ended (2026-11-13). Kept by the sha256 of each copy, so a copy
- * changed on disk since is not held. Mirror daemon-source.ts.
+ * changed on disk since is not held.
  */
 const HELD_PUSHES_FILE = path.join(OFFLINE_HOST_DIR, 'held-pushes.json')
 let heldPushesLoaded = false
@@ -10613,8 +10556,8 @@ function ensureWatcher(sid: string) {
       for (const ws of s.subscribers) {
         if (ws.readyState === 1) {
           if (isToolUseLine) recipientWsIds.push(wsId(ws))
-          // `v` MUST ride every live line (same as the replay path below and
-          // daemon-source.ts): without it the client falls back to relative
+          // `v` MUST ride every live line (same as the replay path below):
+          // without it the client falls back to relative
           // byte accounting, which drifts on skipped control lines → replay
           // windows + duplicate blocks on reattach.
           try { sendEvent(ws, 'jsonl', { sid, line, v }, parsedFor(ws, parse)) } catch {}
@@ -10788,7 +10731,6 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
         // Prefix match: '"control_request"' misses control_request_progress
         // (heartbeats for in-flight side_question requests, inc-1786165723472)
         // and any future control_* variant — the whole family is plumbing.
-        // Keep in sync with daemon-source.ts addSubscriber (CLAUDE.md).
         if (line.includes('"type":"control_')) continue
         try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
       }
@@ -10803,7 +10745,7 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
 
 // ── Attach to existing session ──
 // An attach for a sid this daemon does not hold: build its session from the
-// stream file another daemon left. Keep in sync with daemon-source.ts.
+// stream file another daemon left.
 async function discoverSessionFromFiles(sid: string, mode: string | undefined): Promise<SessionData> {
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
   const pgidPath = path.join(STREAMS_DIR, sid + '.pgid')
@@ -10933,7 +10875,7 @@ async function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   // `uuid` (optional): the pre-assigned v4 uuid the client wants the CLI to
   // persist this user line under. Older clients never send it and the envelope is
-  // then unchanged. Keep in sync with daemon-source.ts.
+  // then unchanged.
   const { sid, message, uuid } = cmd as { sid: string; message: string; uuid?: string }
   // markers (send-markers-v1): the daemon writes them between the body and the newline; core validates them.
   const markers = (cmd as { markers?: UserMarkerInput[] }).markers
@@ -10957,7 +10899,7 @@ async function cmdSendRaw(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 }
 
 // ── Append turn-start user marker to the stream file ──
-// Logic lives in daemon-core.handleAppendUserMarker. Keep in sync with daemon-source.ts.
+// Logic lives in daemon-core.handleAppendUserMarker.
 function cmdAppendUserMarker(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, message, messageId } = cmd as { sid: string; message: string; messageId: string }
   const result = core.handleAppendUserMarker(sid, message, messageId)
@@ -11073,7 +11015,7 @@ async function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
  * idle reaper still ends the process.
  * A request with no `home` comes from a server older than owner-home-v1 and
  * keeps today's behaviour. stopSessionProcess still checks the registry and the
- * process start time before any signal. Keep in sync with daemon-source.ts.
+ * process start time before any signal.
  */
 function stopOwnerRefusal(sid: string, cmd: Record<string, unknown>): { reason: string; detail?: string } | null {
   const home = cmd.home
@@ -11112,7 +11054,6 @@ function stopOwnerRefusal(sid: string, cmd: Record<string, unknown>): { reason: 
  * synchronous, so no other daemon command (a send included) can land between
  * the check and the signal. Only the CLI itself could start work in between
  * (a cron firing inside it), a window of microseconds.
- * Keep in sync with daemon-source.ts.
  */
 function orphanStopRefusal(sid: string, expectPid: unknown, home: unknown): { reason: string; detail?: string } | null {
   if (typeof expectPid !== 'number' || !Number.isSafeInteger(expectPid) || expectPid <= 1) {
@@ -11150,7 +11091,6 @@ function orphanStopRefusal(sid: string, expectPid: unknown, home: unknown): { re
  * good, adopted that way again by every restart, and every stop of the process
  * was refused: 2026-10-28, one CLI, a refusal every 30 s for over a day. The
  * stop's own check then compares a second reading against this one.
- * Keep in sync with daemon-source.ts.
  */
 function recordMissingStartTime(sid: string, session: SessionData): boolean {
   const pid = session.pid
@@ -11367,7 +11307,7 @@ function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // lost-terminal event: if the daemon (which persisted every event) says a task is terminal that
 // Walnut still has 'running', Walnut adopts the daemon's truth and completes the withheld turn —
 // no liveness guessing. If the session is unknown but its jsonl exists, rebuild from disk so a
-// post-restart PULL still returns truth. Keep in sync with daemon-source.ts (CLAUDE.md).
+// post-restart PULL still returns truth.
 function cronSupervisionStatus(sid: string) {
   const record = cronRuntime?.get(sid)
   if (!record) return null
@@ -11397,7 +11337,7 @@ async function cmdCronSupervision(ws: ServerWebSocket<WsData>, id: number, cmd: 
 // external session scan's pattern), reads at most the newest
 // COLD_STATE_SCAN_MAX_BYTES, and is remembered until the stream file or its
 // checkpoint changes. The adopt/attach/resume rebuilds are separate: they seed
-// a live watcher and must stay exact. Keep in sync with daemon-source.ts.
+// a live watcher and must stay exact.
 const COLD_STATE_SCAN_MAX_BYTES = 32 * 1024 * 1024
 const COLD_STATE_SLICE_MS = 8
 const COLD_STATE_MEMO_MAX = 64
@@ -11573,7 +11513,6 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   // the queued state change would be silently dropped and walnut would only
   // learn about it on the next 30s pull. Flush at the old sid (that is the sid
   // walnut's subscribers know right now) and clear the timer.
-  // Keep in sync with daemon-source.ts cmdRename.
   if (session.snapshotTimer) {
     try { pushSnapshot(oldSid, true) } catch {}
     if (session.snapshotTimer) { clearTimeout(session.snapshotTimer); session.snapshotTimer = null }
@@ -11604,7 +11543,7 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     persistRegistry()
     // Agent gateway: the CLI's WALNUT_SESSION_ID env still carries the OLD sid
     // (env is frozen at spawn). Record the alias so resolveCallerSid can chase
-    // the chain to the current sid. Keep in sync with daemon-source.ts.
+    // the chain to the current sid.
     gatewaySidAliases.set(oldSid, newSid)
 
     ensureWatcher(newSid)
@@ -11652,7 +11591,7 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     // whale sessions (10MB+) must not ride the bridge as one frame when the
     // caller only renders the last ~200 rows. Without tailBytes the reply is
     // still capped at READ_HISTORY_MAX_BYTES, served as the newest window and
-    // flagged `truncated` with the file's `size`. Keep in sync with daemon-source.ts.
+    // flagged `truncated` with the file's `size`.
     let mainContent = ''
     let mainBytes = 0
     let mainSize = 0
@@ -11705,7 +11644,7 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // marker carrying the message id into the session's stream. The search runs
 // here, newest bytes first, so only the ids found cross the bridge
 // (marker-find-core.ts). `ordered`: this daemon writes a send's markers inside
-// the delivery (send-markers-v1). Keep in sync with daemon-source.ts.
+// the delivery (send-markers-v1).
 async function cmdMarkersFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const sid = cmd.sid
   if (typeof sid !== 'string' || !sid || sid.includes('/') || sid.includes('\\') || sid.includes('..')) {
@@ -11863,7 +11802,7 @@ function cmdWriteInbox(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 // until it completes.
 // The reply is one frame built synchronously (base64 + stringify), so a whole
 // file is refused over this size: the server's own DaemonFileReader ceiling,
-// and it reads anything bigger through fs.readRange. Keep in sync with daemon-source.ts.
+// and it reads anything bigger through fs.readRange.
 const FS_READ_MAX_BYTES = 32 * 1024 * 1024
 async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   let filePath = cmd.path as string
@@ -11952,8 +11891,7 @@ async function cmdFsReadImage(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
 // the cloud replica's phone file previews (HTML/text file-content relay).
 // Unlike fs.read (trusted SSH channel only), this is reachable from the
 // public cloud bridge, so THIS handler is the security authority — the
-// replica's own checks are a convenience, not the guarantee. Keep in sync
-// with daemon-source.ts cmdFsReadBounded.
+// replica's own checks are a convenience, not the guarantee.
 const FS_READ_BOUNDED_MAX_BYTES = 2 * 1024 * 1024 // Whole-file reads only
 const FS_READ_BOUNDED_RANGE_BYTES = 1024 * 1024 // One media chunk per bridge frame
 
@@ -12322,7 +12260,7 @@ async function cmdFsMkdir(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
  *  - never '/' and never HOME_DIR itself,
  *  - at least 2 non-empty segments, so '/tmp' and '/usr' are refused and only
  *    something at '/a/b' depth or deeper can be touched.
- * Keep in sync with daemon-source.ts fsMutateFloor and the server-side copy in
+ *and the server-side copy in
  * src/web/routes/file-ops.ts.
  */
 function fsMutateFloor(raw: unknown): string | null {
@@ -12352,7 +12290,7 @@ function fsMutateFloor(raw: unknown): string | null {
  * Segment-wise, never substring: `.ssh` as a path SEGMENT is the credential
  * store, whereas a file merely named `my.ssh.notes` is not.
  *
- * Keep in sync with daemon-source.ts and isProtectedStatePath/isSecretPath in
+ *isProtectedStatePath/isSecretPath in
  * src/web/routes/file-ops.ts.
  */
 function fsMutateDenied(p: string): boolean {
@@ -12495,7 +12433,7 @@ async function cmdFsCopy(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   }
 }
 
-// PARITY: keep in sync with daemon-source.ts cmdFsLs. The listing itself
+// PARITY: The listing itself
 // (per-entry and whole-listing budgets, symlink following, detail stats) is
 // fs-ls-core.ts, shared with the source twin.
 const fsLs = createFsLs({
@@ -12536,7 +12474,6 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // The default root names the CLI's transcripts dir: walk this daemon's own
   // CLAUDE_CONFIG_DIR one too, since every CLI it spawns inherits that env and
   // writes there, while a server knows only ~/.claude. One root per real dir.
-  // Keep in sync with daemon-source.ts.
   const candidates = basePath === '~/.claude/projects' ? CLAUDE_PROJECTS_DIRS : null
   // Expand ~ to home directory
   if (basePath === '~' || basePath.startsWith('~/')) {
@@ -12786,7 +12723,7 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 }
 
 // ── Glanceable git state (host-local, capability 'git-status-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is createGitStatus in
+// PARITY: The logic is createGitStatus in
 // git-diff-core.ts (inlined into the source twin as text).
 const gitStatus = createGitStatus({
   exec: (argv, runCwd) => new Promise((resolve) => {
@@ -12837,7 +12774,6 @@ function gitDiffExec(argv: string[], runCwd: string) {
   })
 }
 
-// PARITY: keep in sync with cmdGitRefs in daemon-source.ts.
 async function cmdGitRefs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   let cwd = cmd.cwd as string
   if (!cwd || typeof cwd !== 'string') return sendError(ws, id, 'git.refs: missing cwd')
@@ -13046,7 +12982,6 @@ const CHANGES_MEMO_MAX_SESSIONS = 64
 // while the transcript keeps its stat; a file click, or a compute after a resume,
 // reads the transcript from the start once. Not at exit: looking at a session's
 // changes and committing them right after it ends is the common case.
-// Keep in sync with daemon-source.ts.
 const CHANGES_RELEASE_AFTER_MS = Number(daemonEnv.WALNUT_CHANGES_RELEASE_AFTER_MS) || 30 * 60_000
 function releaseIdleChangesState(now = Date.now()): void {
   for (const [sid, memo] of changesMemos) {
@@ -13112,8 +13047,7 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
         // DAEMON_VERSION: a deploy keeps them. Keep in sync with the twin.
         reparse: refresh,
         // Files whose ops, stat and HEAD content are unchanged reuse their last
-        // reconstruction; it lives and dies with the cached output. Keep in sync
-        // with daemon-source.ts.
+        // reconstruction; it lives and dies with the cached output.
         // Refresh ("re-read the data") rebuilds every file and asks git again.
         changesMemo: refresh ? undefined : changesCache.get(sid)?.output.changesMemo,
       })
@@ -13195,7 +13129,7 @@ async function cmdUsageCostState(ws: ServerWebSocket<WsData>, id: number, cmd: R
 
 // 'session-cost-v1': one session's per-request usage, folded host-side from the
 // engine's own records (session-cost-core.ts); 'session-cost-day-v1' adds the
-// optional `byDay` split. Keep in sync with daemon-source.ts.
+// optional `byDay` split.
 async function cmdUsageSessionCost(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid')
   try {
@@ -13214,7 +13148,7 @@ async function cmdUsageSessionCost(ws: ServerWebSocket<WsData>, id: number, cmd:
 
 // 'codex-outside-v1': Codex runs no Walnut session started (an agent's `codex exec`, the
 // desktop app), read from Codex's own rollout files, one time-budgeted page per call
-// (codex-outside-core.ts). Read-only. Keep in sync with daemon-source.ts.
+// (codex-outside-core.ts). Read-only.
 async function cmdUsageCodexOutside(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const zone = (cmd.byDay as { timeZone?: unknown } | undefined)?.timeZone
   try {
@@ -13279,12 +13213,12 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
 }
 
 // ── One-shot claude runs (host-local, capability 'oneshot-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is oneshot-core.ts
+// PARITY: The logic is oneshot-core.ts
 // (shared with the source twin and the server's in-process fallback). Not on
 // the command drain: a handover or shutdown kills these runs (their caller
 // sees the link drop) instead of waiting minutes for a model turn.
 const oneShot = createOneShotCore<ServerWebSocket<WsData>>({
-  // A claude run's content arguments ride files too (cli-argv-files-core.ts). Mirror daemon-source.ts.
+  // A claude run's content arguments ride files too (cli-argv-files-core.ts).
   spawn: ((cmd: string, args: string[], opts: Record<string, unknown>) => spawn(cmd, cliArgvFiles.isClaude(cmd, args) ? cliArgvFiles.toFiles(args) : args, opts)) as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
   send: (ws, ev, data) => sendEvent(ws, ev, data),
   env: daemonEnv,
@@ -13300,7 +13234,7 @@ function replyOneShot(ws: ServerWebSocket<WsData>, id: number, name: string, fn:
 }
 
 // ── Session commit (host-local, capability 'git-commit-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is git-commit-core.ts +
+// PARITY: The logic is git-commit-core.ts +
 // git-attribution-core.ts (shared with the source twin); this twin only hands
 // the plan the session's ops from the changes cache and tracks commit jobs on
 // the command drain, so a shutdown waits for a commit instead of cutting it.
@@ -13340,7 +13274,7 @@ function cmdGitCommitStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 
 // ── Workspace transfer + host facts (host-local: 'fs-write-part-v1', 'transfer-v1',
 // 'host-facts-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is transfer-core.ts,
+// PARITY: The logic is transfer-core.ts,
 // transfer-pack-core.ts and host-facts-core.ts (shared with the source twin).
 const transferCore = createTransferCore({
   fs, path, crypto, spawn: spawn as unknown as TransferCoreDeps['spawn'], env: daemonEnv, home: HOME_DIR,
@@ -13359,7 +13293,7 @@ const hostFacts = createHostFacts({
 })
 // The minute ledger lives under HOME beside the streams, so it outlives a reboot
 // (/tmp does not); an isolated daemon keeps it inside its own throwaway dir.
-// PARITY: keep in sync with daemon-source.ts.
+// PARITY:
 const HOST_VITALS_DIR = daemonEnv.WALNUT_HOST_VITALS_DIR
   || (SET_ID ? path.join(DAEMON_STATE_DIR!, 'host-vitals') : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'))
 const hostVitals = createHostVitals({
@@ -13376,7 +13310,7 @@ const hostVitals = createHostVitals({
  * daemon started over ssh), undefined when the name holds anything but a small plain
  * file of ours. Opened without blocking and type-checked on its fd, so a FIFO there
  * never stalls the daemon. transfer-core.ts decides what the text vouches for (only
- * a stamp naming DAEMON_INSTANCE_ID). Keep in sync with daemon-source.ts.
+ * a stamp naming DAEMON_INSTANCE_ID).
  */
 function readDaemonOwnerStamp(): string | null | undefined {
   const C = fs.constants
@@ -13402,10 +13336,9 @@ function readDaemonOwnerStamp(): string | null | undefined {
  * the session for; a bridge caller cannot name another, and only the server's
  * own link may name it for a session this daemon does not know. Without a task,
  * a durable folder beside the task directories (never /tmp, which a reboot
- * empties). The directory is made by an upload's first chunk only. Keep in sync
- * with daemon-source.ts.
+ * empties). The directory is made by an upload's first chunk only.
  */
-/** The uploads folder no task owns (a file sent before its session existed); twin of daemon-source.ts. */
+/** The uploads folder no task owns (a file sent before its session existed); */
 function uploadsOwnerlessRoot(): string {
   return path.join(path.dirname(TASK_DIR_ROOT), 'uploads')
 }
@@ -13438,7 +13371,7 @@ function replyTransfer(ws: ServerWebSocket<WsData>, id: number, name: string, wo
 }
 
 // ── Commands for tasks on other hosts (capability 'host-exec-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is host-exec-core.ts; this
+// PARITY: The logic is host-exec-core.ts; this
 // twin hands it spawn, the group signal, and an env without Walnut's own variables.
 const HOST_EXEC_DIR = SERVICE_MODE && DAEMON_STATE_DIR
   ? path.join(DAEMON_STATE_DIR, 'host-exec')
@@ -13467,7 +13400,7 @@ const hostExec = createHostExec({
   childProcess: childUse,
 })
 // Which kinds of listed detached work this service adopts, for the launcher (detached-registry.ts
-// `adopts`); any other kind is ended now. PARITY: daemon-source.ts.
+// `adopts`); any other kind is ended now.
 // The launcher's ready mark waits for it: a launcher reads a ready service with no `adopts` as one
 // older than this file and ends the work (service-launcher-script.ts).
 const adoptionSettled: Promise<void> = hostExec.settleAdoption({ acp: typeof acp.endForRollback === 'function' }).then(({ wrote, said }) => {
@@ -13475,11 +13408,11 @@ const adoptionSettled: Promise<void> = hostExec.settleAdoption({ acp: typeof acp
   if (said) logMsg('info', 'detached work this service cannot adopt was ended', { said: said.trim().slice(0, 2000) })
 }, () => {})
 // A task on another host calling this host's MCP servers ('host-mcp-v1', host-mcp-core.ts)
-// and its web services ('host-http-v1', host-http-core.ts). PARITY: keep in sync with daemon-source.ts.
+// and its web services ('host-http-v1', host-http-core.ts). PARITY:
 /**
  * The MCP servers of a test server's isolated daemon (WALNUT_INSTALL_HOME) keep the real
  * HOME (their own config and sign-ins live there) but put what `npx -y` / `uvx` fetch
- * under the isolated install home. PARITY: daemon-source.ts reachEnv.
+ * under the isolated install home.
  */
 function hostMcpEnv(): Record<string, string> {
   const env = hostExecEnv()
@@ -13497,7 +13430,7 @@ const hostMcp = createHostMcp({
 const hostHttp = createHostHttp()
 
 // ── The servers a session started (capability 'ports-v1', port-scan-core.ts) ──
-// PARITY: keep in sync with daemon-source.ts. NOT in BRIDGE_ALLOWED_COMMANDS or
+// PARITY: NOT in BRIDGE_ALLOWED_COMMANDS or
 // FOLLOWER_ALLOWED_COMMANDS: ports.stop signals host processes, so only the trusted
 // walnut socket asks. The roots are each running session's CLI and each ACP worker;
 // a WALNUT_SESSION_ID a renamed session's CLI still carries resolves to its new sid.
@@ -13514,14 +13447,14 @@ const daemonPorts = createDaemonPorts({
 })
 
 // ── The host network (capability 'net-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is net-core.ts: this twin hands it
+// PARITY: The logic is net-core.ts: this twin hands it
 // spawn, the net state dir (never under the synced data dir) and where walnut-net lives:
 // $WALNUT_NET_BIN (tests and a hand-built one), beside this executable, beside the daemon,
 // or the release build net-core.ts downloads into the net state.
 // A service set's daemon has a network identity of its own, inside its set (net-config-core.ts).
 const NET_STATE_DIR = netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR, setId: SET_ID })
 // This machine's stable id for hello (machine-id-core.ts), seeded from the data dir's older id;
-// null when it can be neither read nor made. Twin of daemon-source.ts.
+// null when it can be neither read nor made.
 const DAEMON_MACHINE_ID: string | null = (() => {
   try {
     return machineIdOf({ home: HOME_DIR, dataHome: daemonEnv.OPEN_WALNUT_HOME || null, fs, join: path.join, randomHex: () => crypto.randomBytes(16).toString('hex'), log: (level, msg, data) => logMsg(level, msg, data) })
@@ -13536,7 +13469,7 @@ const netSupervisor = createNetSupervisor({
 })
 
 // ── Hub forwards (capability 'hub-forward-v1', hub-forward-core.ts) ──
-// PARITY: keep in sync with daemon-source.ts. This machine's own file (beside its network
+// PARITY: This machine's own file (beside its network
 // key) names the 127.0.0.1 ports whose connections go to one port on the primary's loopback;
 // nothing the primary sends writes it.
 const HUB_FORWARDS_FILE = path.join(NET_STATE_DIR, 'hub-forwards.json')
@@ -13577,7 +13510,7 @@ function cmdHubStatus(ws: ServerWebSocket<WsData>, id: number) {
 }
 
 // ── The secrets the user shared with this host (capability 'secrets-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is secrets-core.ts.
+// PARITY: The logic is secrets-core.ts.
 const SECRETS_ROOT = secretsRoot(daemonEnv, HOME_DIR)
 const secretStore = createSecretStore(SECRETS_ROOT)
 /** A session's share of them; a store that cannot be read gives none, never a failed spawn. */
@@ -13586,7 +13519,7 @@ function secretsSessionEnv(): Record<string, string> {
 }
 
 // ── Task workspaces (host-local, capability 'workspace-v1') ──
-// PARITY: keep in sync with daemon-source.ts. The logic is workspace-core.ts
+// PARITY: The logic is workspace-core.ts
 // (shared with the source twin); this twin only hands it the host's spawn/fs.
 const WORKSPACE_STATE_DIR = SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR
 const workspaceCore = createWorkspaceCore({
@@ -13701,7 +13634,6 @@ async function cmdTranscriptRewindProbe(ws: ServerWebSocket<WsData>, id: number,
 // history-ready-core.ts holds the whole design (bounded parse, rewind dead set, archived tail,
 // readable check). The rewind dead set, read, parse, fit and gzip run in a worker thread
 // (history-ready-worker.ts, compiled in as a second entry), never on this loop; this is the wire.
-// Keep in sync with daemon-source.ts.
 const historyReadyMain = (globalThis as { Bun?: { main?: string } }).Bun?.main ?? ''
 const historyReadyExecutor = createReadyWorkerExecutor(
   readyWorkerEntries(historyReadyMain, import.meta.url)
@@ -13733,7 +13665,7 @@ async function cmdHistoryReadyKeys(ws: ServerWebSocket<WsData>, id: number, cmd:
 }
 
 // ── Per-turn working-tree snapshots + the rewind guard ('turn-snapshot-v1') ──
-// PARITY: keep in sync with daemon-source.ts cmdTurns. The git work lives in
+// PARITY: The git work lives in
 // turn-snapshot-core.ts, the guard's verdict in turn-guard-core.ts; both are
 // shared with the source twin. The tailer calls onTurnEnd at every result line
 // and onTurnStart at spawn; both return at once.
@@ -14273,7 +14205,7 @@ function scanIdleSessions() {
 /**
  * After the startup adoption: every CLI this daemon now runs gets its owner
  * record (a CLI an older daemon spawned has none), then records of CLIs that are
- * gone are removed (cli-owner-core.ts). Keep in sync with daemon-source.ts.
+ * gone are removed (cli-owner-core.ts).
  */
 async function recordAdoptedOwners(): Promise<void> {
   try {
@@ -14295,7 +14227,7 @@ async function recordAdoptedOwners(): Promise<void> {
  *   - Process alive, sid NOT in sessions map → legacy/half-spawned orphan
  *     (daemon was killed between writing .pgid and persisting sessions.json).
  *     Adopt it so the session survives across daemon restarts instead of
- *     being silently killed. Mirrors daemon-source.ts's post-fix behavior.
+ *     being silently killed.'s post-fix behavior.
  *   - Process dead → stale pgid file, remove it.
  *
  * IMPORTANT: sids already present in `sessions` were adopted by
@@ -14445,8 +14377,7 @@ function cleanup(opts: { registrySaved?: boolean } = {}) {
     try { checkpointSessionFold(session, true) } catch {}
     // C1: flush a pending coalesced snapshot BEFORE dropping subscribers — the
     // last state change of this daemon's life still reaches the connected
-    // walnut instead of dying inside a 50ms timer. Keep in sync with
-    // daemon-source.ts cleanup().
+    // walnut instead of dying inside a 50ms timer.
     if (session.snapshotTimer) {
       try { pushSnapshot(sid, true) } catch {}
     }
@@ -14490,8 +14421,7 @@ function cleanup(opts: { registrySaved?: boolean } = {}) {
     try { fs.unlinkSync(SERVICE_FILE) } catch {}
     try { fs.unlinkSync(VERSION_FILE) } catch {}
     // Agent gateway artifacts — a zombie must never delete its successor's
-    // live socket/shim, hence inside the ownsFiles guard. Keep in sync with
-    // daemon-source.ts cleanup().
+    // live socket/shim, hence inside the ownsFiles guard.
     try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
     try { fs.unlinkSync(GATEWAY_SHIM_PATH) } catch {}
     try { fs.unlinkSync(path.join(GATEWAY_SHIM_DIR, 'wn')) } catch {} // retired alias, older daemons wrote it
@@ -14570,7 +14500,7 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
 // Config arrives via the `bridge.configure` RPC (pushed by the Mac after its
 // capability handshake) and persists to bridge.json so a restarted daemon
 // re-dials on its own — cloud reachability must not depend on the Mac being
-// awake. Keep in sync with daemon-source.ts (CLAUDE.md).
+// awake.
 
 const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json')
 
@@ -14584,7 +14514,7 @@ interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias
  * other's (each re-push used to tear the other's link down). Keyed by the Walnut's
  * home (walnutScope); '' is a server older than the split, which keeps the legacy
  * bridge.json. A link's adapter carries its home (`data.bridgeHome`), so what
- * arrives on it acts for that Walnut only. Keep in sync with daemon-source.ts.
+ * arrives on it acts for that Walnut only.
  */
 interface BridgeLink {
   home: string
@@ -14948,14 +14878,14 @@ function scheduleBridgeRedial(link: BridgeLink, gen: number): void {
 // socket, and the only Bun call that resets a TLS flow is terminate() on a
 // Bun.connect({ tls }) socket (node:tls destroy() and resetAndDestroy() under
 // Bun end nothing either), so doing it means owning the TLS transport under
-// the WebSocket, which this twin does not. Keep in sync with daemon-source.ts.
+// the WebSocket, which this twin does not.
 //
 // Bun 1.4.4 rewrote its WebSocket client (oven-sh/bun#45223), and terminate()
 // now ends a ws:// socket with a FIN, after the kernel has sent what it
 // buffered: the drain this call was chosen to avoid. The same release builds
 // its `ws` on native transports and honours createConnection, so from 1.4.4 a
-// ws:// bridge rides a TCP socket this twin opens itself and is reset with
-// resetAndDestroy(), as daemon-source.ts does (measured 2026-10-23: a RST on
+// ws:// bridge rides a TCP socket this daemon opens itself and is reset with
+// resetAndDestroy() (measured 2026-10-23: a RST on
 // 1.4.3 and 1.4.4; Bun's ws ignores createConnection before 1.4.4). Older Bun
 // keeps the global WebSocket, whose terminate() resets; wss:// stays on it too.
 const BRIDGE_OWN_TCP = Bun.semver.satisfies(Bun.version, '>=1.4.4')
@@ -15222,7 +15152,7 @@ function dialBridge(link: BridgeLink, gen: number): void {
 }
 
 // ── Main ──
-/** What a daemon answers a plain HTTP request on its port with, since the first daemon. Keep in sync with daemon-source.ts. */
+/** What a daemon answers a plain HTTP request on its port with, since the first daemon. */
 const DAEMON_HTTP_ANSWER = 'walnut-daemon ok'
 
 /**
@@ -15282,7 +15212,6 @@ function commandLineOf(pid: number): string | null {
  * Whether `pid` is this dir's daemon: the instance lock names it (every daemon
  * since the lock), or, for an older one, its command line runs a daemon file of
  * this dir the way the Mac starts one (the rule buildDaemonStopCmd applies).
- * Keep in sync with daemon-source.ts.
  */
 async function isThisDirsDaemon(pid: number): Promise<boolean> {
   const owner = await readDaemonInstanceOwner({ runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, deadlineMs: 2000 })
@@ -15386,8 +15315,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // daemon.standin) holds the dir: launchd's own daemon waits for the handback instead of
   // exiting. Exiting made KeepAlive start the job again every 5 s, and a job that never stays
   // up reads as inactive, so every later update was refused (2026-11-04 review). The handback
-  // ends the stand-in; this daemon then takes the dir and adopts its sessions. Keep in sync
-  // with daemon-source.ts.
+  // ends the stand-in; this daemon then takes the dir and adopts its sessions.
   // A daemon.standin left by a stand-in that was killed (a SIGKILL, a power loss) may name a pid
   // another daemon of this dir has now: a stand-in runs the service's own program, `--service`
   // in its command line (2026-11-04 review). Where the command line cannot be read, the file decides.
@@ -15432,7 +15360,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     }
     // A live pid is a legacy daemon only when a daemon answers on its port: after a
     // restart (a container's above all) a dead daemon's pid file may name another
-    // process, and yielding to it left the dir with no daemon. Keep in sync with daemon-source.ts.
+    // process, and yielding to it left the dir with no daemon.
     let legacyPort = ''
     try { legacyPort = fs.readFileSync(PORT_FILE, 'utf8').trim() } catch { /* no port file: no daemon to yield to */ }
     if (alive && !(await loopbackDaemonAnswers(Number(legacyPort), 1500))) {
@@ -15554,7 +15482,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     close: (ws) => handleDisconnect(ws),
   }, () => ({} as WsData))
 
-  // Keepalive for trusted clients (twin of daemon-source.ts): every trusted
+  // Keepalive for trusted clients: every trusted
   // client is pinged once a beat and one nothing was heard from (no frame, ping
   // or pong) for CLIENT_KEEPALIVE_MISSED beats in a row is closed. An SSH
   // forward that died on the far side while sshd keeps this end open ACKs every
@@ -15607,7 +15535,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   hostJournal.migrate()
   // Agent gateway: second (unix-socket) listener + on-PATH `walnut` shim. Both
   // additive: failures log a warning and never abort daemon startup. Started after the
-  // migration (as in daemon-source.ts): no session's write is journaled ahead of the
+  // migration: no session's write is journaled ahead of the
   // older v1 records the migration adds.
   startGatewayListener()
   writeWalnutShim()
@@ -15632,7 +15560,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   // that the port file they connect through is written.
   // A host server connects through the port file; a runtime with no door starts none.
   if (DOOR) { try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) } }
-  // Their specs read: the record drops the key an older build filed their data dirs under. Mirror daemon-source.ts.
+  // Their specs read: the record drops the key an older build filed their data dirs under.
   // No socket is served between the write above and this one (one synchronous block): no hello
   // or push sees the record before the specs are read, and a leader that reads the file meanwhile
   // still sees only itself (daemon-shared.ts thisWalnutSharedVerdict).
@@ -15646,7 +15574,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     pid: process.pid,
     startedAt: DAEMON_START_TS,
     // Where the user part of PATH came from: login-shell (clean env), rc
-    // (fallback, inherited env) or none. Keep in sync with daemon-source.ts.
+    // (fallback, inherited env) or none.
     pathSource: bootPath.source,
     // Retry policy is read from the env ONCE at boot, so log it here: this line
     // is the only way to answer "is this daemon actually retrying, and with what
@@ -15658,7 +15586,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   })
 
   // Periodic fold checkpoints, so even a crash hands the successor a recent
-  // fold (checkpointSessionFold). Keep in sync with daemon-source.ts.
+  // fold (checkpointSessionFold).
   setInterval(() => {
     for (const session of sessions.values()) {
       if (session.state !== 'running') continue
@@ -15689,7 +15617,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   setInterval(() => { void compactIdleStreams() }, STREAM_COMPACT_SWEEP_MS)
   setInterval(() => releaseIdleChangesState(), Math.min(10 * 60_000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)))
   // The temp cleanup removes this daemon's own files from its dir while it runs
-  // (keepRuntimeFiles, daemon-core.ts). Keep in sync with daemon-source.ts.
+  // (keepRuntimeFiles, daemon-core.ts).
   runtimeKeepTimer = setInterval(() => {
     const files = [
       ...(DOOR ? [{ file: PORT_FILE, text: String(port) }] : []),
@@ -15744,7 +15672,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     // process — when it's gone we're an orphan burning RAM. 300+ leaked test
     // daemons once starved the whole machine (2026-07-23). Production daemons
     // never get the var (parentWatchdogEnv in local-daemon.ts), so surviving
-    // server restarts is unaffected. Keep in sync with daemon-source.ts.
+    // server restarts is unaffected.
     if (WATCHDOG_PARENT_PID && !SERVICE_MODE) {
       let parentAlive = true
       try { process.kill(WATCHDOG_PARENT_PID, 0) } catch { parentAlive = false }
@@ -15758,7 +15686,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     }
     // A test server's isolated daemon on a remote host: its server is on another
     // machine, so no pid to watch; no server socket for the lease's length ends it,
-    // and its root goes with it (the server's remote-isolation.ts). Keep in sync with daemon-source.ts.
+    // and its root goes with it (the server's remote-isolation.ts).
     if (ISOLATED_ORPHAN_EXIT_MS && !SERVICE_MODE) {
       const now = Date.now()
       for (const client of wsClients) if (client.readyState === 1 && isServerClient(client)) isolatedServerSeenAt = now
@@ -15792,7 +15720,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   let shutdown: Promise<number> | null = null
   const stopDaemon = (): Promise<number> => {
     shutdown ??= (async () => {
-      // The longest it waits for work in flight (twin of daemon-source.ts), below the 60 s a
+      // The longest it waits for work in flight below the 60 s a
       // service stop waits. WALNUT_DAEMON_SHUTDOWN_DRAIN_MS is for TESTS ONLY.
       const SHUTDOWN_DRAIN_MAX_MS = Number(daemonEnv.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) > 0 ? Number(daemonEnv.WALNUT_DAEMON_SHUTDOWN_DRAIN_MS) : 45_000
       // A Claude Code install may run 45 minutes (a slow line): stop it now, or close()
@@ -15839,12 +15767,12 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
       server?.stop(true)
       await daemonInstanceLock?.release()
       // Work still stuck in a file call (a FIFO no one reads) holds a pool thread, and a normal
-      // exit joins those threads: it would never return (twin of daemon-source.ts). Its state is saved; end hard.
+      // exit joins those threads: it would never return Its state is saved; end hard.
       // Under the launcher, the update exit is no crash, the hard end at the drain cap included (service-launcher-beat.ts).
       if (serviceUpdateRequested) launcherBeat?.leaving('prepared for a service update')
       // A process ends hard here (options.hardExit: SIGKILL); a runtime inside another one just returns.
       if (settled === 'cap') options.hardExit?.()
-      // PARITY: daemon-source.ts ends itself hard here (exitDaemon) when a host_exec file look is
+      //itself hard here (exitDaemon) when a host_exec file look is
       // stuck in node's thread pool, whose exit waits for it; bun's exit does not, so this one exits as is.
       return failed || serviceUpdateRequested ? 1 : 0
     })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); return 1 })
@@ -16010,7 +15938,7 @@ return {
 // A working directory deleted under this daemon is never handed to what it
 // starts: it moves to the home directory, at start and once a minute (2026-11-03:
 // a server whose cwd was a deleted build clone could not start the voice model).
-// Keep in sync with daemon-source.ts and healCwd in src/core/login-session.ts.
+//healCwd in src/core/login-session.ts.
 function healDaemonCwd(): void {
   try {
     const here = fs.statSync('.')
@@ -16060,7 +15988,7 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
   // A trial run's hard lifetime (daemon-boot-proof.ts, daemon-trial-cmd.ts): it exits by itself
   // after its proof window, so a trial whose prover died (the CLI, the server, the SSH session)
   // never stays for good; a --service trial has no parent watchdog (2026-11-04 review). Unset:
-  // no limit, as for every real daemon. Mirror daemon-source.ts.
+  // no limit, as for every real daemon.
   const TRIAL_LIFETIME_MS = (() => {
     const seconds = parseInt(process.env.WALNUT_DAEMON_LIFETIME_SECONDS || '', 10)
     return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0

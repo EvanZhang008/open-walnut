@@ -1,7 +1,8 @@
 /**
  * An isolated-dir daemon (a test, a sandbox, an ephemeral server) ends its
  * sessions' process groups when it exits, with the SIGINT → SIGTERM → SIGKILL
- * ladder run synchronously in cleanup(). Both twins, booted for real.
+ * ladder run synchronously in cleanup(). The session daemon
+ * (daemon-standalone.ts), booted for real under bun.
  *
  * What matters: a CLI that exits on SIGINT ends the ladder at once. The ladder
  * blocks the event loop, so the daemon never reaps its own dead children while
@@ -14,31 +15,23 @@
  * are /bin/sleep sessions in their own groups, which the daemon ends itself
  * (afterEach SIGKILLs anything a failed test left).
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 const started: number[] = []
 
-async function boot(twin: Twin): Promise<void> {
+async function boot(): Promise<void> {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exit-reap-'))
   const home = path.join(root, 'home')
   fs.mkdirSync(home)
@@ -51,8 +44,7 @@ async function boot(twin: Twin): Promise<void> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME', 'WALNUT_STREAMS_DIR', 'WALNUT_DAEMON_PARENT_PID']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -132,12 +124,6 @@ async function waitGroupGone(pid: number, ms = 5_000): Promise<boolean> {
   return !groupAlive(pid)
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exit-reap-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
@@ -155,9 +141,9 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('isolated-dir exit reap: $name', (twin) => {
+describe.skipIf(!BUN)('isolated-dir exit reap: standalone daemon (bun)', () => {
   it('a CLI that exits on SIGINT ends the ladder at once', async () => {
-    await boot(twin)
+    await boot()
     const a = await startSession('exit-reap-a', ['/bin/sleep', '60'])
     const b = await startSession('exit-reap-b', ['/bin/sleep', '60'])
     const ms = await stopDaemonTimed()
@@ -168,7 +154,7 @@ describe.each(TWINS)('isolated-dir exit reap: $name', (twin) => {
   }, 60_000)
 
   it('a CLI that ignores SIGINT keeps the full grace, then SIGTERM ends it', async () => {
-    await boot(twin)
+    await boot()
     // An ignored signal stays ignored across exec, so the sleep itself ignores SIGINT.
     const pid = await startSession('exit-reap-stubborn', ['/bin/sh', '-c', 'trap "" INT; exec /bin/sleep 60'])
     // The pid execs its way from the spawn shell to sleep; only then is SIGINT ignored.

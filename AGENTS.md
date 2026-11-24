@@ -243,7 +243,7 @@ truth. Rules every session must know (detail: `docs/reference/session-daemon.md`
 - One CLI per session id on a host, whichever daemon asks (`cli-owner-core.ts`).
 - A session's `walnut` call reaches only its own Walnut's server; a task whose host is gone is never stuck.
 - A session's stdin FIFO is write-only (0200): nothing but its CLI may read it.
-- **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`. The daemon auto-deploys in chunks; **never scp manually**.
+- **One daemon source:** `daemon-standalone.ts` (compiled into the daemon binaries and the walnut file). Build: `bash scripts/build-daemon.sh`. The daemon auto-deploys in chunks; **never scp manually**.
 
 ### CLI scheduled tasks (crons) are DIRECTORY-scoped, not session-scoped
 
@@ -257,7 +257,7 @@ The product is FOUR surfaces sharing one core: the **web console** (Mac,
 :3456), the **iOS app** (`ios-native/`, SwiftUI, talks the frozen `/api/v1`),
 the **cloud companion** (an EC2 instance you deploy: a replica with capabilities, its daemons
 dialing in over the `/bridge` WS), and the
-**session daemon** (bun/node twins deployed to every exec host, Mac local +
+**session daemon** (one compiled daemon deployed to every exec host, Mac local +
 remote dev boxes, owning `claude` CLI processes so they survive tunnel/Mac
 death).
 
@@ -266,7 +266,7 @@ death).
 | Model calls (providers, catalog) | `src/model/` | `sendMessage` + provider adapters |
 | Core (tasks/sessions data) | `src/core/` | skill `walnut-core-internals` + [src/core/AGENTS.md](./src/core/AGENTS.md) |
 | Sessions (local + SSH) | `src/providers/` | [ARCHITECTURE.md](./ARCHITECTURE.md), [session lifecycle](./docs/reference/session-lifecycle.md) |
-| Session daemon (twins) | `src/providers/daemon-standalone.ts` + `daemon-source.ts` | [session daemon](./docs/reference/session-daemon.md) |
+| Session daemon | `src/providers/daemon-standalone.ts` | [session daemon](./docs/reference/session-daemon.md) |
 | Web GUI | `src/web/`, `web/src/` | skill `walnut-web-frontend` + [web/src/AGENTS.md](./web/src/AGENTS.md) |
 | iOS app | `ios-native/` (xcodegen; `project.yml`) | frozen contract [API v1](./docs/reference/api-v1.md) |
 | Cloud companion | `src/web/ws/bridge-registry.ts`, `scripts/cloud/setup.sh` | infra: `infra/` (CDK); deploy = bundle→S3→SSM |

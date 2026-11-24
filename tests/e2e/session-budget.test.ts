@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import { budgetDaemonEnv, fetchWithin } from './fixtures/budget-daemon-env.js';
-import { checkBudgetArtifacts, sameBytes } from './fixtures/budget-artifacts.js';
+import { checkBudgetArtifacts, HOST_DAEMON_BINARY } from './fixtures/budget-artifacts.js';
 import { createCleanupLedger, within, type OwnedProcess } from './fixtures/acp-cleanup-ledger.js';
 import { processGone } from './fixtures/process-identity.js';
 
@@ -20,8 +20,6 @@ import { ensurePriceBook, priceThresholds } from '../../src/core/usage/price-boo
 import { priceSessionScan } from '../../src/core/usage/session-cost.js';
 import { sweepSessionBudgets } from '../../src/core/usage/session-budget.js';
 import * as daemonConnections from '../../src/providers/daemon-connection.js';
-import { getDaemonSource } from '../../src/providers/daemon-source.js';
-import { SOURCE_TWIN } from '../helpers/source-twin.js';
 
 const sid = 'session-budget-example';
 const nonce = randomUUID();
@@ -93,7 +91,6 @@ function startCli() {
 }
 
 beforeAll(async () => {
-  const sidecar = path.join(DAEMON_BINARIES_DIR, 'usage-core.cjs');
   // No conditional skip: the artifacts must be the ones built from these sources (by hash).
   const manifest = checkBudgetArtifacts(DAEMON_BINARIES_DIR);
   await fs.mkdir(path.dirname(transcript), { recursive: true });
@@ -101,17 +98,14 @@ beforeAll(async () => {
   await fs.writeFile(transcript, '');
   await fs.writeFile(proxy, '');
   await fs.writeFile(witness, '');
-  const script = path.join(root, 'daemon.cjs');
-  await fs.copyFile(sidecar, path.join(root, 'usage-core.cjs'));
-  if (!sameBytes(sidecar, path.join(root, 'usage-core.cjs'))) throw new Error('usage-core.cjs copy differs');
-  await fs.writeFile(script, getDaemonSource());
+  const daemonBin = path.join(DAEMON_BINARIES_DIR, HOST_DAEMON_BINARY);
   await fs.mkdir(path.join(root, 'tmp'), { recursive: true });
   const env = budgetDaemonEnv(root, { walnutHome: WALNUT_HOME, extra: {
     BUDGET_FIXTURE_SID: sid, BUDGET_FIXTURE_TRANSCRIPT: transcript, BUDGET_FIXTURE_UPSTREAM_LOG: proxy,
     BUDGET_FIXTURE_WITNESS: witness, BUDGET_FIXTURE_CLEANUP: cleanupFile, BUDGET_FIXTURE_NONCE: nonce } });
-  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  daemon = spawn(daemonBin, ['--start'], { env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
   // Pinned at once: afterAll signals it only while ps still shows this very process.
-  try { daemonRecord = ledger.daemonSpawned(daemon.pid!, script); }
+  try { daemonRecord = ledger.daemonSpawned(daemon.pid!, HOST_DAEMON_BINARY); }
   catch (error) { daemonUnpinned = (error as Error).message; throw error; }
   daemon.stderr?.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-4_096); });
   daemon.on('error', error => { stderr += `\nspawn error: ${error.message}`; });
@@ -294,7 +288,7 @@ describe('session budget through the real server and owning daemon', () => {
     const cost = await priceSessionScan(scanned.result as never, thresholds);
     expect(cost.status).toBe('priced');
     expect(cost.totalUsd).toBeCloseTo(resumed.body.budget.spentUsd, 10);
-    // The real source twin + sidecar honour the day split (session-cost-day-v1): the same
+    // The real daemon binary honours the day split (session-cost-day-v1): the same
     // responses, each bucket dated in the asked zone, and the undivided answer unchanged.
     expect(capabilities.has('session-cost-day-v1')).toBe(true);
     const byDay = await rpc('usage.sessionCost', { sid, engine: 'claude', cwd: home, thresholds, byDay: { timeZone: 'America/Los_Angeles' } });

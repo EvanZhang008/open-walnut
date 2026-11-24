@@ -4,7 +4,7 @@
  * adopt, or signal a pid whose identity it cannot prove.
  *
  * The second half covers the OTHER fence around the same processes: the per-sid
- * start gate in both daemon twins, i.e. which stop may cancel a queued start and
+ * start gate in the session daemon (daemon-standalone.ts), i.e. which stop may cancel a queued start and
  * which stop may kill a supervised CLI.
  *
  * Everything is stubbed — no real process.kill, no child_process, no real fs.
@@ -21,7 +21,6 @@ import {
 } from '../../src/providers/daemon-core.js'
 import { DaemonSessionGate } from '../../src/providers/daemon-cron-controller.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { createHostResume } from '../../src/providers/host-resume-core.js'
 
 interface TestSession extends CoreSessionData {
@@ -662,11 +661,11 @@ describe('persistRegistry bootId', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════
-//  cmdStart / cmdStop — the per-sid gate contract, from each twin's own text
+//  cmdStart / cmdStop — the per-sid gate contract, from the daemon's own text
 // ════════════════════════════════════════════════════════════════════
-// Neither twin is importable (one is a bun entry point with top-level side
-// effects, the other a string template deployed over SSH), so each command is
-// sliced out of its own source and evaluated with every free identifier injected.
+// The daemon is not importable here (a bun entry point with top-level side
+// effects), so each command is sliced out of its source and evaluated with
+// every free identifier injected.
 // No process primitive is reachable: startSessionProcess / stopSessionProcess are
 // stubs and process.kill is spied on and asserted never called.
 
@@ -677,7 +676,7 @@ type GateRunner = { run<T>(sid: string, work: () => Promise<T>): Promise<T> }
 type CommandFn = (ws: unknown, id: number, cmd: Record<string, unknown>) => Promise<unknown>
 interface Reply { id: number; ok: boolean; error?: string; data?: Record<string, unknown> }
 
-interface GateTwin {
+interface GateHarness {
   cmdStart: CommandFn
   cmdStop: CommandFn
   cmdSend: CommandFn
@@ -696,7 +695,7 @@ interface GateTwin {
   replies: Reply[]
 }
 
-/** Slice a top-level `function`/`async function` out of a twin (closing `}` at column 0). */
+/** Slice a top-level `function`/`async function` out of the daemon (closing `}` at column 0). */
 function sliceTopLevelFn(src: string, name: string): string {
   const at = src.search(new RegExp('(?:async )?function ' + name + '\\('))
   expect(at, `${name} not found`).toBeGreaterThan(-1)
@@ -705,16 +704,9 @@ function sliceTopLevelFn(src: string, name: string): string {
   return src.slice(at, end + 2)
 }
 
-/** The template carries its OWN inlined copy of the gate; that copy is what runs here. */
-function sliceTemplateGate(src: string): string {
-  const at = src.indexOf('let sessionStartGate = (function () {')
-  expect(at, 'template gate not found').toBeGreaterThan(-1)
-  const end = src.indexOf('})();', at)
-  expect(end).toBeGreaterThan(at)
-  return src.slice(at, end + 5)
-}
+const STANDALONE_FILE = nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts')
 
-function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
+function buildGateHarness(): GateHarness {
   const stopVersions = new Map<string, number>()
   const supervision = new Map<string, { enabled: boolean; state: string }>()
   const starts: string[] = []
@@ -767,40 +759,33 @@ function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
   const names = Object.keys(injected)
   const args = names.map((n) => injected[n])
 
-  const src = kind === 'standalone'
-    ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    : getDaemonSource()
+  const src = nodeFs.readFileSync(STANDALONE_FILE, 'utf-8')
   // stopOwnerRefusal (owner-home-v1) rides along because cmdStop calls it first; these
   // stops name no Walnut, so it answers "allowed" without reading the journal.
   const commands = ['cmdStart', 'cmdStop', 'stopOwnerRefusal', 'cmdSend', 'spawnRecordOf', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
   const exports = '\nreturn { cmdStart, cmdStop, cmdSend, cmdBridgeResume, fireTurnRetry, checkTurnRetry, gate: sessionStartGate };'
-  const gateCode = kind === 'template' ? sliceTemplateGate(src) : ''
-  const js = ts.transpileModule(gateCode + '\n' + commands + exports, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
-  const built = kind === 'standalone'
-    ? new Function(...names, 'sessionStartGate', js)(...args, new DaemonSessionGate())
-    : new Function(...names, js)(...args)
+  const js = ts.transpileModule(commands + exports, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const built = new Function(...names, 'sessionStartGate', js)(...args, new DaemonSessionGate())
 
   return { ...built, runtimeSessions, stopVersions, stopIds, supervision, starts, sent, stops, disables, replies }
 
 }
 
 /** Hold the sid's gate (a running turn) and return the release. */
-function occupyGate(twin: GateTwin, sid: string): () => void {
+function occupyGate(daemon: GateHarness, sid: string): () => void {
   let release = () => {}
   const blocker = new Promise<void>((resolve) => { release = () => resolve() })
-  void twin.gate.run(sid, () => blocker)
+  void daemon.gate.run(sid, () => blocker)
   return release
 }
 
-const GATE_TWINS: Array<['standalone' | 'template']> = [['standalone'], ['template']]
-
-describe.each(GATE_TWINS)('%s twin: cmdStop / cmdStart gate contract', (kind) => {
-  let twin: GateTwin
+describe('cmdStop / cmdStart gate contract', () => {
+  let daemon: GateHarness
   let killSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
     killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
-    twin = buildGateTwin(kind)
+    daemon = buildGateHarness()
   })
 
   afterEach(() => {
@@ -809,177 +794,177 @@ describe.each(GATE_TWINS)('%s twin: cmdStop / cmdStart gate contract', (kind) =>
   })
 
   it('a user stop cancels a start that is still queued, and nothing is spawned', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const start = twin.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
-    const stop = twin.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
+    const release = occupyGate(daemon, GATE_SID)
+    const start = daemon.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
+    const stop = daemon.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
 
     // Both happen before the stop's first await, i.e. while it is still queued:
     // the version (so the queued start sees it) and the supervision stop intent.
-    expect(twin.stopVersions.get(GATE_SID)).toBe(1)
-    expect(twin.disables).toEqual([GATE_SID])
-    expect(twin.stops).toEqual([])
+    expect(daemon.stopVersions.get(GATE_SID)).toBe(1)
+    expect(daemon.disables).toEqual([GATE_SID])
+    expect(daemon.stops).toEqual([])
 
     const superseded = start.then(() => {
-      expect(twin.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ ok: false, reason: 'session_stopped' }) }))
+      expect(daemon.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ ok: false, reason: 'session_stopped' }) }))
     })
     release()
     await stop
     await superseded
 
-    expect(twin.starts).toEqual([])
-    expect(twin.stops).toEqual([GATE_SID])
+    expect(daemon.starts).toEqual([])
+    expect(daemon.stops).toEqual([GATE_SID])
   })
 
   it('an invalid reason stops nothing and leaves a queued start alone', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const start = twin.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
-    await twin.cmdStop({}, 2, { sid: GATE_SID, reason: 'bogus' })
+    const release = occupyGate(daemon, GATE_SID)
+    const start = daemon.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
+    await daemon.cmdStop({}, 2, { sid: GATE_SID, reason: 'bogus' })
 
-    expect(twin.replies).toEqual([{ id: 2, ok: false, error: 'stop: invalid reason' }])
-    expect(twin.stopVersions.get(GATE_SID) ?? 0).toBe(0)
+    expect(daemon.replies).toEqual([{ id: 2, ok: false, error: 'stop: invalid reason' }])
+    expect(daemon.stopVersions.get(GATE_SID) ?? 0).toBe(0)
 
     release()
     await start
 
-    expect(twin.starts).toEqual([GATE_SID])
-    expect(twin.stops).toEqual([])
-    expect(twin.disables).toEqual([])
+    expect(daemon.starts).toEqual([GATE_SID])
+    expect(daemon.stops).toEqual([])
+    expect(daemon.disables).toEqual([])
   })
 
   it('a refused idle stop leaves a queued start alone', async () => {
-    twin.supervision.set(GATE_SID, { enabled: true, state: 'checking' })
-    const release = occupyGate(twin, GATE_SID)
-    const start = twin.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
-    const stop = twin.cmdStop({}, 2, { sid: GATE_SID, reason: 'idle' })
+    daemon.supervision.set(GATE_SID, { enabled: true, state: 'checking' })
+    const release = occupyGate(daemon, GATE_SID)
+    const start = daemon.cmdStart({}, 1, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
+    const stop = daemon.cmdStop({}, 2, { sid: GATE_SID, reason: 'idle' })
 
     release()
     await start
     await stop
 
-    expect(twin.starts).toEqual([GATE_SID])
-    expect(twin.stops).toEqual([])
-    expect(twin.stopVersions.get(GATE_SID) ?? 0).toBe(0)
-    expect(twin.replies).toContainEqual({ id: 2, ok: true, data: { stopped: false, reason: 'cron_supervised' } })
+    expect(daemon.starts).toEqual([GATE_SID])
+    expect(daemon.stops).toEqual([])
+    expect(daemon.stopVersions.get(GATE_SID) ?? 0).toBe(0)
+    expect(daemon.replies).toContainEqual({ id: 2, ok: true, data: { stopped: false, reason: 'cron_supervised' } })
   })
 
   it('supervision enabled while the idle stop waits for the gate still refuses it', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const stop = twin.cmdStop({}, 1, { sid: GATE_SID, reason: 'idle' })   // unsupervised when it arrived
+    const release = occupyGate(daemon, GATE_SID)
+    const stop = daemon.cmdStop({}, 1, { sid: GATE_SID, reason: 'idle' })   // unsupervised when it arrived
 
-    twin.supervision.set(GATE_SID, { enabled: true, state: 'restarting' }) // cron.supervision enabled meanwhile
+    daemon.supervision.set(GATE_SID, { enabled: true, state: 'restarting' }) // cron.supervision enabled meanwhile
     release()
     await stop
 
-    expect(twin.stops).toEqual([])
-    expect(twin.stopVersions.get(GATE_SID) ?? 0).toBe(0)
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: false, reason: 'cron_supervised' } }])
+    expect(daemon.stops).toEqual([])
+    expect(daemon.stopVersions.get(GATE_SID) ?? 0).toBe(0)
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: false, reason: 'cron_supervised' } }])
   })
 
   it('an accepted idle stop bumps the version and supersedes a start queued behind it', async () => {
-    twin.supervision.set(GATE_SID, { enabled: true, state: 'inactive' })  // supervised but idle-eligible
-    const release = occupyGate(twin, GATE_SID)
-    const stop = twin.cmdStop({}, 1, { sid: GATE_SID, reason: 'idle' })
-    const start = twin.cmdStart({}, 2, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
+    daemon.supervision.set(GATE_SID, { enabled: true, state: 'inactive' })  // supervised but idle-eligible
+    const release = occupyGate(daemon, GATE_SID)
+    const stop = daemon.cmdStop({}, 1, { sid: GATE_SID, reason: 'idle' })
+    const start = daemon.cmdStart({}, 2, { sid: GATE_SID, args: ['claude'], cwd: '/fixture' })
 
     // Not yet: an idle stop may only bump the version once it owns the gate.
-    expect(twin.stopVersions.get(GATE_SID) ?? 0).toBe(0)
+    expect(daemon.stopVersions.get(GATE_SID) ?? 0).toBe(0)
 
     const superseded = start.then(() => {
-      expect(twin.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ ok: false, reason: 'session_stopped' }) }))
+      expect(daemon.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ ok: false, reason: 'session_stopped' }) }))
     })
     release()
     await stop
     await superseded
 
-    expect(twin.stops).toEqual([GATE_SID])
-    expect(twin.starts).toEqual([])
-    expect(twin.stopVersions.get(GATE_SID)).toBe(1)
-    expect(twin.disables).toEqual([])   // an idle stop never disables supervision
+    expect(daemon.stops).toEqual([GATE_SID])
+    expect(daemon.starts).toEqual([])
+    expect(daemon.stopVersions.get(GATE_SID)).toBe(1)
+    expect(daemon.disables).toEqual([])   // an idle stop never disables supervision
   })
 
   it('rejects a delayed start and send on a new connection after stop was already confirmed', async () => {
     const stopId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
-    await twin.cmdStop({}, 1, { sid: GATE_SID, reason: 'user', stopRequestId: stopId })
-    twin.stopVersions.clear()
-    await twin.cmdStart({}, 2, { sid: GATE_SID, stopFence: null })
-    await twin.cmdSend({}, 3, { sid: GATE_SID, stopFence: null, message: 'old' })
-    expect(twin.starts).toEqual([])
-    expect(twin.sent).toEqual([])
-    expect(twin.replies.filter((reply) => reply.data?.reason === 'session_stopped')).toHaveLength(2)
-    await twin.cmdStart({}, 4, { sid: GATE_SID, stopFence: stopId })
-    await twin.cmdSend({}, 5, { sid: GATE_SID, stopFence: stopId, message: 'new' })
-    expect(twin.starts).toEqual([GATE_SID])
-    expect(twin.sent).toEqual([GATE_SID])
+    await daemon.cmdStop({}, 1, { sid: GATE_SID, reason: 'user', stopRequestId: stopId })
+    daemon.stopVersions.clear()
+    await daemon.cmdStart({}, 2, { sid: GATE_SID, stopFence: null })
+    await daemon.cmdSend({}, 3, { sid: GATE_SID, stopFence: null, message: 'old' })
+    expect(daemon.starts).toEqual([])
+    expect(daemon.sent).toEqual([])
+    expect(daemon.replies.filter((reply) => reply.data?.reason === 'session_stopped')).toHaveLength(2)
+    await daemon.cmdStart({}, 4, { sid: GATE_SID, stopFence: stopId })
+    await daemon.cmdSend({}, 5, { sid: GATE_SID, stopFence: stopId, message: 'new' })
+    expect(daemon.starts).toEqual([GATE_SID])
+    expect(daemon.sent).toEqual([GATE_SID])
   })
 
   it('rejects a queued send when a later accepted stop takes priority', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const sending = twin.cmdSend({}, 1, { sid: GATE_SID, message: 'old' })
-    const stopping = twin.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
+    const release = occupyGate(daemon, GATE_SID)
+    const sending = daemon.cmdSend({}, 1, { sid: GATE_SID, message: 'old' })
+    const stopping = daemon.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
     release()
     await Promise.all([sending, stopping])
-    expect(twin.sent).toEqual([])
-    expect(twin.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ reason: 'session_stopped' }) }))
+    expect(daemon.sent).toEqual([])
+    expect(daemon.replies).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ reason: 'session_stopped' }) }))
   })
 
   it.each(['running', 'dead'])('bridge resume forwards the fence for a %s CLI', async (state) => {
-    twin.runtimeSessions.get(GATE_SID)!.state = state
-    twin.stopIds.set(GATE_SID, 'confirmed-stop')
-    await twin.cmdBridgeResume({}, 1, { sid: GATE_SID, message: 'old', stopFence: null })
-    expect(twin.starts).toEqual([])
-    expect(twin.sent).toEqual([])
-    await twin.cmdBridgeResume({}, 2, { sid: GATE_SID, message: 'new', stopFence: 'confirmed-stop' })
-    expect(state === 'running' ? twin.sent : twin.starts).toEqual([GATE_SID])
+    daemon.runtimeSessions.get(GATE_SID)!.state = state
+    daemon.stopIds.set(GATE_SID, 'confirmed-stop')
+    await daemon.cmdBridgeResume({}, 1, { sid: GATE_SID, message: 'old', stopFence: null })
+    expect(daemon.starts).toEqual([])
+    expect(daemon.sent).toEqual([])
+    await daemon.cmdBridgeResume({}, 2, { sid: GATE_SID, message: 'new', stopFence: 'confirmed-stop' })
+    expect(state === 'running' ? daemon.sent : daemon.starts).toEqual([GATE_SID])
   })
 
   it.each(['checking', 'disabled', 'blocked', 'inactive'])('a supervised %s session never gets a synthetic continue', async (state) => {
-    twin.supervision.set(GATE_SID, { enabled: state !== 'disabled', state })
-    twin.checkTurnRetry(GATE_SID, {}, 'error', 1)
-    await twin.fireTurnRetry(GATE_SID, 1, 'timeout')
-    expect(twin.starts).toEqual([])
-    expect(twin.sent).toEqual([])
+    daemon.supervision.set(GATE_SID, { enabled: state !== 'disabled', state })
+    daemon.checkTurnRetry(GATE_SID, {}, 'error', 1)
+    await daemon.fireTurnRetry(GATE_SID, 1, 'timeout')
+    expect(daemon.starts).toEqual([])
+    expect(daemon.sent).toEqual([])
   })
 
   it('an ordinary turn retry queued before stop cannot write to the FIFO afterward', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const retry = twin.fireTurnRetry(GATE_SID, 1, 'timeout')
-    const stopping = twin.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
+    const release = occupyGate(daemon, GATE_SID)
+    const retry = daemon.fireTurnRetry(GATE_SID, 1, 'timeout')
+    const stopping = daemon.cmdStop({}, 2, { sid: GATE_SID, reason: 'user' })
     release()
     await Promise.all([retry, stopping])
-    expect(twin.sent).toEqual([])
-    expect(twin.starts).toEqual([])
+    expect(daemon.sent).toEqual([])
+    expect(daemon.starts).toEqual([])
   })
 
   it('an ordinary retry uses the regular resume-or-adopt path', async () => {
-    await twin.fireTurnRetry(GATE_SID, 1, 'timeout')
-    expect(twin.starts).toEqual([GATE_SID])
+    await daemon.fireTurnRetry(GATE_SID, 1, 'timeout')
+    expect(daemon.starts).toEqual([GATE_SID])
   })
 
   it('a cron registered while retry waits at the gate cancels the synthetic turn', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const retry = twin.fireTurnRetry(GATE_SID, 1, 'timeout')
-    twin.supervision.set(GATE_SID, { enabled: true, state: 'checking' })
+    const release = occupyGate(daemon, GATE_SID)
+    const retry = daemon.fireTurnRetry(GATE_SID, 1, 'timeout')
+    daemon.supervision.set(GATE_SID, { enabled: true, state: 'checking' })
     release()
     await retry
-    expect(twin.sent).toEqual([])
-    expect(twin.starts).toEqual([])
+    expect(daemon.sent).toEqual([])
+    expect(daemon.starts).toEqual([])
   })
 
   it('a maintenance stop bumps the version but leaves supervision untouched', async () => {
-    const release = occupyGate(twin, GATE_SID)
-    const stop = twin.cmdStop({}, 1, { sid: GATE_SID, reason: 'maintenance' })
+    const release = occupyGate(daemon, GATE_SID)
+    const stop = daemon.cmdStop({}, 1, { sid: GATE_SID, reason: 'maintenance' })
 
-    expect(twin.stopVersions.get(GATE_SID)).toBe(1)
-    expect(twin.disables).toEqual([])
+    expect(daemon.stopVersions.get(GATE_SID)).toBe(1)
+    expect(daemon.disables).toEqual([])
 
     release()
     await stop
 
-    expect(twin.stops).toEqual([GATE_SID])
+    expect(daemon.stops).toEqual([GATE_SID])
   })
 })
 
-function buildProcessStopTwin(kind: 'standalone' | 'template') {
+function buildProcessStop() {
   const sessions = new Map<string, Record<string, unknown>>()
   const replies: Reply[] = []
   const liveness = vi.fn((_pid: number, _signal: number) => true)
@@ -1004,9 +989,7 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },
   }
-  const source = kind === 'standalone'
-    ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf8')
-    : getDaemonSource()
+  const source = nodeFs.readFileSync(STANDALONE_FILE, 'utf8')
   const js = ts.transpileModule(sliceTopLevelFn(source, 'leaderGoneWithGroup') + '\n' + sliceTopLevelFn(source, 'stopSessionProcess') + '\nreturn stopSessionProcess;', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText
@@ -1014,135 +997,135 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
   return { sessions, replies, liveness, groupSignal, groupAlive, startTime, saved, reaped, persist, stop: () => stop({}, 1, GATE_SID) }
 }
 
-describe.each(GATE_TWINS)('%s twin: stop waits for confirmed process death', (kind) => {
-  let twin: ReturnType<typeof buildProcessStopTwin>
-  beforeEach(() => { vi.useFakeTimers(); twin = buildProcessStopTwin(kind) })
+describe('stop waits for confirmed process death', () => {
+  let daemon: ReturnType<typeof buildProcessStop>
+  beforeEach(() => { vi.useFakeTimers(); daemon = buildProcessStop() })
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
   it('does not confirm a saved process that is alive but not adopted', async () => {
-    twin.saved.process = { pid: 4242, bootId: BOOT, startTime: '900' }
-    await twin.stop()
-    expect(twin.replies).toEqual([{ id: 1, ok: false, error: expect.stringContaining('not adopted') }])
-    expect(twin.liveness).toHaveBeenCalledExactlyOnceWith(4242, 0)
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.saved.process = { pid: 4242, bootId: BOOT, startTime: '900' }
+    await daemon.stop()
+    expect(daemon.replies).toEqual([{ id: 1, ok: false, error: expect.stringContaining('not adopted') }])
+    expect(daemon.liveness).toHaveBeenCalledExactlyOnceWith(4242, 0)
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it.each(['ESRCH', 'EPERM'])('treats saved-process %s as dead or unknown respectively', async (code) => {
-    twin.saved.process = { pid: 4242, bootId: BOOT, startTime: '900' }
-    twin.liveness.mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
-    await twin.stop()
-    expect(twin.replies[0].ok).toBe(code === 'ESRCH')
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.saved.process = { pid: 4242, bootId: BOOT, startTime: '900' }
+    daemon.liveness.mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
+    await daemon.stop()
+    expect(daemon.replies[0].ok).toBe(code === 'ESRCH')
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it('does not probe a saved PID from another boot', async () => {
-    twin.saved.process = { pid: 4242, bootId: 'old-boot', startTime: '900' }
-    await twin.stop()
-    expect(twin.replies[0]).toMatchObject({ ok: true, data: { stopped: true } })
-    expect(twin.liveness).not.toHaveBeenCalled()
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.saved.process = { pid: 4242, bootId: 'old-boot', startTime: '900' }
+    await daemon.stop()
+    expect(daemon.replies[0]).toMatchObject({ ok: true, data: { stopped: true } })
+    expect(daemon.liveness).not.toHaveBeenCalled()
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it('refuses a reused PID without signalling it', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '800' })
-    await twin.stop()
-    expect(twin.replies[0].ok).toBe(false)
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '800' })
+    await daemon.stop()
+    expect(daemon.replies[0].ok).toBe(false)
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it('does not acknowledge until the whole process group has exited and the registry is persisted', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    twin.persist.mockImplementation(() => {
-      expect(twin.reaped).toHaveBeenCalledExactlyOnceWith(GATE_SID, 0, 'stop-confirmed', true)
-      expect(twin.replies).toEqual([])
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    daemon.persist.mockImplementation(() => {
+      expect(daemon.reaped).toHaveBeenCalledExactlyOnceWith(GATE_SID, 0, 'stop-confirmed', true)
+      expect(daemon.replies).toEqual([])
     })
-    const stopping = twin.stop()
-    expect(twin.replies).toEqual([])
+    const stopping = daemon.stop()
+    expect(daemon.replies).toEqual([])
     await vi.advanceTimersByTimeAsync(200)
-    expect(twin.replies).toEqual([])
-    twin.groupAlive.mockReturnValue(false)
+    expect(daemon.replies).toEqual([])
+    daemon.groupAlive.mockReturnValue(false)
     await vi.advanceTimersByTimeAsync(200)
     await stopping
-    expect(twin.replies[0]).toMatchObject({ ok: true, data: { stopped: true } })
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+    expect(daemon.replies[0]).toMatchObject({ ok: true, data: { stopped: true } })
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
   })
 
   it('retries registry persistence after the process has already exited', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    twin.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
-    twin.groupAlive.mockReturnValue(false)
-    twin.persist.mockImplementationOnce(() => { throw new Error('disk full') })
-    await twin.stop()
-    expect(twin.replies[0].ok).toBe(false)
-    await twin.stop()
-    expect(twin.persist).toHaveBeenCalledTimes(2)
-    expect(twin.replies[1]).toMatchObject({ ok: true, data: { stopped: true } })
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    daemon.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    daemon.groupAlive.mockReturnValue(false)
+    daemon.persist.mockImplementationOnce(() => { throw new Error('disk full') })
+    await daemon.stop()
+    expect(daemon.replies[0].ok).toBe(false)
+    await daemon.stop()
+    expect(daemon.persist).toHaveBeenCalledTimes(2)
+    expect(daemon.replies[1]).toMatchObject({ ok: true, data: { stopped: true } })
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it('a missing leader does not prove that its descendants exited', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    twin.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
-    await twin.stop()
-    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('without its original leader') })
-    expect(twin.reaped).not.toHaveBeenCalled()
-    expect(twin.groupSignal).not.toHaveBeenCalled()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    daemon.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    await daemon.stop()
+    expect(daemon.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('without its original leader') })
+    expect(daemon.reaped).not.toHaveBeenCalled()
+    expect(daemon.groupSignal).not.toHaveBeenCalled()
   })
 
   it('does not confirm death when registry persistence fails', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    twin.persist.mockImplementation(() => { throw new Error('disk full') })
-    const stopping = twin.stop()
-    twin.groupAlive.mockReturnValue(false)
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    daemon.persist.mockImplementation(() => { throw new Error('disk full') })
+    const stopping = daemon.stop()
+    daemon.groupAlive.mockReturnValue(false)
     await vi.advanceTimersByTimeAsync(200)
     await stopping
-    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('registry persistence failed') })
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+    expect(daemon.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('registry persistence failed') })
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
   })
 
   it('leaves an unexited process pending without SIGKILL', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    const stopping = twin.stop()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = daemon.stop()
     await vi.runAllTimersAsync()
     await stopping
-    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('did not exit') })
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT'], [4242, 'SIGTERM']])
+    expect(daemon.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('did not exit') })
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT'], [4242, 'SIGTERM']])
   })
 
   // 2026-11-13 flake of daemon-stop-lingering-child-twins-e2e: on macOS the identity read is a `ps`
   // call, and the group's last member left during it. A group read before it said alive, the one
   // after said empty, and the finished stop answered "identity changed". All stubs: nothing is signalled.
   it('answers stopped when the last group member leaves while the identity is read', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    const stopping = twin.stop()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = daemon.stop()
     // The CLI exited on the SIGINT and was reaped; its child is the group's last member.
-    twin.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
-    twin.startTime.mockImplementation(() => { twin.groupAlive.mockReturnValue(false); return null as unknown as string })
+    daemon.liveness.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }) })
+    daemon.startTime.mockImplementation(() => { daemon.groupAlive.mockReturnValue(false); return null as unknown as string })
     await vi.advanceTimersByTimeAsync(200)
     await stopping
-    expect(twin.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
-    expect(twin.reaped).toHaveBeenCalledExactlyOnceWith(GATE_SID, 0, 'stop-confirmed', true)
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+    expect(daemon.replies).toEqual([{ id: 1, ok: true, data: { stopped: true } }])
+    expect(daemon.reaped).toHaveBeenCalledExactlyOnceWith(GATE_SID, 0, 'stop-confirmed', true)
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
   })
 
   it('still refuses a pid that now runs another live process while the group is alive', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    const stopping = twin.stop()
-    twin.startTime.mockReturnValue('901')
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = daemon.stop()
+    daemon.startTime.mockReturnValue('901')
     await vi.runAllTimersAsync()
     await stopping
-    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('identity changed') })
-    expect(twin.reaped).not.toHaveBeenCalled()
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+    expect(daemon.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('identity changed') })
+    expect(daemon.reaped).not.toHaveBeenCalled()
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
   })
 
   it('does not escalate against a replacement process', async () => {
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
-    const stopping = twin.stop()
-    twin.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '901' })
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '900' })
+    const stopping = daemon.stop()
+    daemon.sessions.set(GATE_SID, { pid: 4242, bootId: BOOT, startTime: '901' })
     await vi.runAllTimersAsync()
     await stopping
-    expect(twin.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('identity changed') })
-    expect(twin.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
+    expect(daemon.replies[0]).toMatchObject({ ok: false, error: expect.stringContaining('identity changed') })
+    expect(daemon.groupSignal.mock.calls).toEqual([[4242, 'SIGINT']])
   })
 })

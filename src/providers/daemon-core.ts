@@ -11,8 +11,7 @@
  * All I/O + clock + process calls flow through the injected `deps` so the
  * functions are unit-testable in vitest without a real FIFO, SIGCHLD, or
  * /proc. The Bun adapter (daemon-standalone.ts) constructs this with real
- * deps; the embedded source template (daemon-source.ts) mirrors the same
- * behaviour for SSH-deployed daemons.
+ * deps.
  */
 
 import { execFileSync as nodeExecFileSync, execSync as nodeExecSync } from 'node:child_process'
@@ -288,12 +287,12 @@ export function lineRecordPath(jsonlPath: string): string {
  * open O_WRONLY. Any other open for reading by a non-root user now fails with
  * EACCES, whatever names the FIFO (a listing, a glob, a recursive search, the
  * full path). A FIFO a previous daemon made (0644) is locked when a daemon
- * adopts its session. Keep in sync with daemon-source.ts.
+ * adopts its session.
  */
 export const LIVE_FIFO_MODE = 0o200
 
 /** send-boot-wait-v1: how long after its spawn a booting CLI may take to start
- *  reading a boot-wait send. Keep in sync with daemon-source.ts. */
+ *  reading a boot-wait send. */
 export const FIFO_BOOT_WRITE_DEADLINE_MS = 120_000
 /**
  * How long after its spawn a CLI that has not shown its init may hold part of a
@@ -318,7 +317,6 @@ export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): bo
  * the server keeps the message queued and sends it again).
  */
 export type BudgetGate = 'ok' | 'budget_paused' | 'budget_checking'
-/** Keep in sync with daemon-source.ts. */
 export const BUDGET_CHECKING_TEXT = 'Not sent yet: the session budget is still being checked. Retry in a moment.'
 
 /** A paused session may still receive stop controls and negative permission answers. */
@@ -470,7 +468,6 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
  * boot fence (supervised mode only: a pid from another boot may belong to someone else, so it is
  * refused before probing), kill(pid, 0), then the start time (pid recycling; in supervised mode
  * the identity must be proven before adoption). Read before the entry's fold.
- * Self-contained: the source twin inlines it by toString() (daemon-source.ts __RECONCILE_VERDICT__).
  */
 export function reconcileVerdict(
   entry: { pid: number; startTime?: string | null; bootId?: string | null },
@@ -511,7 +508,6 @@ export function reconcileVerdict(
  * whose age the server's log pruning reads), and writes back an identity file that is gone, only
  * while the pid file is this daemon's or gone (never over another daemon's). Returns the paths
  * written back.
- * Self-contained: the source twin inlines it by toString() (daemon-source.ts).
  */
 export function keepRuntimeFiles(io: {
   fs: {
@@ -571,7 +567,6 @@ export const RUNTIME_KEEP_MS = 60 * 60_000
  * line the CLI never ran, a compaction since) is said again. A resend (`dedupe`) keeps it, and a
  * host line that went without one tells the host so (`noticeLeftOut`), so it does not record it.
  * The opening is instruction-notice-flight.ts NOTICE_OPENING (tests/providers/daemon-notice-once.test.ts).
- * Self-contained: the source twin inlines it by toString() (daemon-source.ts).
  */
 export function createNoticeOnce() {
   const OPENING = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy"'
@@ -1464,7 +1459,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     let verdict = lineFateVerdict(scan, records, q)
     // line-answer-v1: the stream no longer holds the line's frames (a rotated
     // file, a window passed): the CLI's transcript says whether it took the line
-    // and answered it. Keep in sync with daemon-source.ts lineFateInProcess.
+    // and answered it.
     // A line written into this process with no frame of it (waiting) asks too: one the CLI
     // already ran and answered is skipped as a duplicate, never named again.
     if ((verdict === null || (verdict.fate === 'waiting' && !verdict.state)) && answersSid && q.uuid && deps.transcriptPathFn) {
@@ -1487,7 +1482,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     return verdict
   }
 
-  /** trigger-resume-once (see the interface). Keep in sync with daemon-source.ts lineReachedBefore. */
+  /** trigger-resume-once (see the interface). */
   async function lineReachedBefore(jsonlPath: string, uuid: string, messageIds: string[]): Promise<LineReached | null> {
     const q = { uuid, messageIds, pid: null }
     let scan: LineFateScan | null = null
@@ -1871,8 +1866,7 @@ export function buildControlResponse(requestId: string, request: Record<string, 
 //
 // Pure parse+decide; adapters read the files and act (append a
 // scheduled_task_fire marker to the stream file; inject a provenance warning
-// into the FIFO for foreign fires). Mirrored verbatim in daemon-source.ts —
-// parity test locks the sync.
+// into the FIFO for foreign fires).
 
 /** How far back a lastFiredAt still counts as "this just fired into us".
  *  Generous on purpose: detection runs on a 30s throttle inside the tailer,
@@ -1955,7 +1949,7 @@ export const CRON_TASK_LIVE_MS = 7 * 24 * 60 * 60 * 1000
  *     schedule its own tasks with or without the lock (lab P3).
  *   - 'lock_holder': it holds the scheduler lock while live tasks exist — it
  *     is the one that will execute (or adopt) the next fire.
- * Pure parse+decide; mirrored verbatim in daemon-source.ts (parity-tested).
+ * Pure parse+decide.
  */
 export function hasDiskCronInterest(args: {
   sid: string
@@ -2040,7 +2034,7 @@ export function hasDiskCronInterest(args: {
 //      session's own rows from {cwd}/.claude/scheduled_tasks.json. The model has no
 //      say here, and death is precisely when a durable row becomes adoptable, so
 //      this is the point that actually holds the invariant.
-// Pure predicates here; adapters own the I/O. Mirrored in daemon-source.ts.
+// Pure predicates here; adapters own the I/O.
 
 // ── Daemon hooks: declarative rules pushed from walnut (hooks.configure) ──
 //
@@ -2096,7 +2090,7 @@ function dotGet(obj: unknown, dotPath: string): unknown {
 /**
  * Evaluate the pushed hook rules at one intercept point. Pure; returns the
  * matched actions in hook order (deduped). Malformed entries are skipped —
- * a bad rule must never take the tailer down. Mirrored in daemon-source.ts.
+ * a bad rule must never take the tailer down.
  */
 export function evalDaemonHookRules(
   config: DaemonHooksConfig | null | undefined,
@@ -2315,9 +2309,6 @@ export type BridgeRestartDecision =
  * anti-storm property: a redial within one dial-timeout is left alone, and
  * pushes are minutes apart, so this adds at most a couple of cheap dials per
  * push while a genuinely unreachable cloud stays unreachable.
- *
- * Mirrored verbatim in daemon-source.ts (template can't import) — parity test
- * locks the sync.
  */
 export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecision {
   if (s.changed) return { restart: true, reason: 'configure' }
@@ -2334,9 +2325,8 @@ export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecis
 }
 
 /**
- * The cloud bridge silence watchdog both twins run (daemon-standalone.ts reads
- * it from here; daemon-source.ts can't import and keeps the same literals,
- * which the parity test pins). Checked `checksPerPing` times a ping interval;
+ * The cloud bridge silence watchdog the daemon runs (daemon-standalone.ts reads
+ * it from here). Checked `checksPerPing` times a ping interval;
  * any inbound frame resets the count; a ping goes out on every
  * `checksPerPing`-th silent check, and the link is torn down when the
  * `silentPings`-th ping is due. The bridge monitor's classifier and probe
@@ -2365,8 +2355,6 @@ export function bridgeSilenceTeardownMs(w: { pingIntervalMs: number; checksPerPi
  * -1 meant some 800 bridge pings a second). The value is read as a whole
  * number: parseInt read "1e9" as 1 and "15s" as 15. Nothing above the largest
  * delay a timer takes is used either, since Node runs a longer one after 1 ms.
- * Mirrored verbatim in daemon-source.ts (template can't import); the parity
- * test locks the sync.
  */
 export function envTimerMs(raw: string | undefined, fallbackMs: number, minMs: number): number {
   const v = Math.round(Number(raw))
@@ -2400,9 +2388,6 @@ export interface BridgeRedialState {
  * dial came 34.5 s after it was back. When the window ends the backoff doubles
  * on from `fastMaxMs` (10, 20, 40, 60 s), so a companion that stays down drifts
  * back to one dial a minute with no jump at the window's edge.
- *
- * Mirrored verbatim in daemon-source.ts (template can't import); the parity
- * test locks the sync.
  */
 export function bridgeRedialStep(s: BridgeRedialState): { delayMs: number; nextBackoffMs: number } {
   const fast = s.sinceDropMs != null && s.sinceDropMs < s.fastWindowMs
@@ -2418,9 +2403,6 @@ export function bridgeRedialStep(s: BridgeRedialState): { delayMs: number; nextB
  * soon after it comes up is flapping, not a companion restart, and rearming on
  * every drop kept it in the window for good (gate P2, 2026-10-03: 8.5 to 9.7
  * dials a minute against 2.2 to 4.3 on the plain backoff).
- *
- * Mirrored verbatim in daemon-source.ts (template can't import); the parity
- * test locks the sync.
  */
 export function armsBridgeFastWindow(s: { uptimeMs: number; firstDrop: boolean; armUptimeMs: number }): boolean {
   return s.firstDrop || s.uptimeMs >= s.armUptimeMs
@@ -2825,8 +2807,7 @@ export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number, 
  * shim). This is what proves a session's process when its start time was never
  * recorded: a spawn whose `ps` timed out under load stored none, and every stop
  * of that process was then refused for good (2026-10-28: one CLI, 1500+
- * refusals a day). Self-contained: daemon-source.ts injects it as text
- * (__ARGV_NAMES_SESSION__).
+ * refusals a day). Self-contained.
  */
 export function argvNamesSession(argv: string, sid: string, spawnArgs?: unknown): boolean {
   if (typeof argv !== 'string' || typeof sid !== 'string' || !sid || !argv.includes(sid)) return false
@@ -2922,7 +2903,7 @@ export interface BoundedExecResult {
  * gone, so a `ps` blocked in the kernel held every daemon start for 17 minutes
  * (2026-10-29, load 500+). At the deadline this answers a timeout, SIGKILLs the
  * child and drops its late callback. Settles once, never rejects or throws.
- * Self-contained: daemon-source.ts injects it as text (__BOUNDED_EXEC_FILE__).
+ * Self-contained.
  */
 export function boundedExecFile<O extends { timeout: number }>(
   execFileFn: (file: string, args: string[], options: O, callback: (error: Error | null, stdout: string) => void) => unknown,

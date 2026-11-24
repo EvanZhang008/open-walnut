@@ -5,7 +5,7 @@
  * turned the other's off; and a phone relay on either link went to whichever
  * server socket came first.
  *
- * Real daemon processes (both twins), isolated temp dirs, two fake companions on
+ * Real daemon processes (daemon-standalone.ts), isolated temp dirs, two fake companions on
  * loopback. A "server" is a plain socket that names its Walnut with
  * leader.configure, as a Walnut server does.
  */
@@ -17,8 +17,6 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -49,7 +47,7 @@ afterEach(async () => {
   for (const fn of cleanups.splice(0).reverse()) { try { await fn() } catch { /* best effort */ } }
 })
 
-async function spawnDaemon(twin: 'source' | 'standalone', dir: string): Promise<Daemon> {
+async function spawnDaemon(dir: string): Promise<Daemon> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -58,17 +56,10 @@ async function spawnDaemon(twin: 'source' | 'standalone', dir: string): Promise<
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   for (const f of ['daemon.port', 'daemon.pid']) fs.rmSync(path.join(dir, f), { force: true })
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ${b.toString()}`))
+  const proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[daemon] ${b.toString()}`))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'daemon')
   const d = {
     proc, dir,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
@@ -170,18 +161,16 @@ function scopeKey(home: string): string {
   return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16)
 }
 
-const TWINS = bunPath ? (['source', 'standalone'] as const) : (['source'] as const)
-
-describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
+describe.skipIf(!bunPath)('one bridge link per Walnut (standalone daemon, bun)', () => {
   function tempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `walnut-bridge-scope-${twin}-`))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bridge-scope-'))
     cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }))
     return dir
   }
 
   it('two Walnuts keep two links: a re-push, a new token or enabled:false of one leaves the other alone', async () => {
     const cloudA = await companion(), cloudB = await companion()
-    const d = await spawnDaemon(twin, tempDir())
+    const d = await spawnDaemon(tempDir())
     const a = await server(d.port, HOME_A), b = await server(d.port, HOME_B)
     expect(await configure(a, cloudA.url, HOME_A)).toMatchObject({ ok: true, applied: true })
     expect(await configure(b, cloudB.url, HOME_B)).toMatchObject({ ok: true, applied: true })
@@ -217,7 +206,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
 
   it('a relay on A\'s link reaches only A\'s server, and B cannot answer it', async () => {
     const cloudA = await companion(), cloudB = await companion()
-    const d = await spawnDaemon(twin, tempDir())
+    const d = await spawnDaemon(tempDir())
     // B connects first: the old pick took the first trusted client.
     const b = await server(d.port, HOME_B), a = await server(d.port, HOME_A)
     await configure(a, cloudA.url, HOME_A)
@@ -263,7 +252,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
   it('a push with no home keeps the old single link, and its relays reach any server as before', async () => {
     const cloud = await companion()
     const dir = tempDir()
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const old = await server(d.port, null)
     expect(await configure(old, cloud.url, null)).toMatchObject({ ok: true, applied: true })
     const link = await cloud.link()
@@ -285,7 +274,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const dir = tempDir()
     // What a daemon before the split kept: one global file, no `scoped` marker.
     fs.writeFileSync(path.join(dir, 'bridge.json'), JSON.stringify({ enabled: true, url: cloudA.url, token: 'fixture-only', hostAlias: 'fixture-host' }), { mode: 0o600 })
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloudA.link()
     const a = await server(d.port, HOME_A), b = await server(d.port, HOME_B)
     // B's companion and host alias are other ones: B does not take A's link over.
@@ -306,7 +295,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     // A restart dials both saved links again.
     await stopDaemon(d)
     await waitFor(() => !inherited.open, 10_000, 'old A link closed')
-    await spawnDaemon(twin, dir)
+    await spawnDaemon(dir)
     await cloudA.link(1)
     await cloudB.link(1)
   }, 90_000)
@@ -320,7 +309,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const cloud = await companion()
     const dir = tempDir()
     legacyFile(dir, cloud.url)
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloud.link()
     const a = await server(d.port, HOME_A)
     // Bridge off (or credentials missing): no url, no alias.
@@ -331,7 +320,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     expect(cloud.links).toHaveLength(1)
     // Not after a restart either.
     await stopDaemon(d)
-    await spawnDaemon(twin, dir)
+    await spawnDaemon(dir)
     await sleep(1_500)
     expect(cloud.links).toHaveLength(1)
   }, 60_000)
@@ -340,7 +329,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const cloudA = await companion(), cloudB = await companion()
     const dir = tempDir()
     legacyFile(dir, cloudA.url)
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloudA.link()
     const a = await server(d.port, HOME_A), b = await server(d.port, HOME_B)
     await configure(b, cloudB.url, HOME_B, { hostAlias: 'fixture-host-b' })
@@ -368,7 +357,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const cloudA = await companion(), cloudB = await companion()
     const dir = tempDir()
     legacyFile(dir, cloudB.url, 'fixture-host')
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloudB.link()
     const a = await server(d.port, HOME_A)
     await server(d.port, HOME_B)
@@ -389,7 +378,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     fs.mkdirSync(path.join(dir, 'trigger-state', 'walnuts', scopeKey(HOME_B)), { recursive: true })
     // A's own scope dir does not count.
     fs.mkdirSync(path.join(dir, 'walnuts', scopeKey(HOME_A)), { recursive: true })
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloud.link()
     const a = await server(d.port, HOME_A)
     expect(await a.rpc({ cmd: 'bridge.configure', enabled: false, home: HOME_A })).toMatchObject({ ok: true })
@@ -401,7 +390,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
   for (const order of ['named first', 'unnamed first'] as const) {
     it(`an older server's repeated disabled pushes never touch a new Walnut's link (${order})`, async () => {
       const cloud = await companion()
-      const d = await spawnDaemon(twin, tempDir())
+      const d = await spawnDaemon(tempDir())
       const older = await server(d.port, null)
       const fresh = await server(d.port, HOME_A)
       const off = () => older.rpc({ cmd: 'bridge.configure', enabled: false })
@@ -424,7 +413,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const cloud = await companion()
     const dir = tempDir()
     legacyFile(dir, cloud.url, 'some-other-alias')
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloud.link()
     const older = await server(d.port, null)
     const fresh = await server(d.port, HOME_A)
@@ -444,7 +433,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
     const cloud = await companion()
     const dir = tempDir()
     legacyFile(dir, cloud.url, 'some-other-alias')
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const inherited = await cloud.link()
     const older = await server(d.port, null)
     const fresh = await server(d.port, HOME_A)
@@ -465,7 +454,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
   it('companion A cannot claim B\'s lead, gets only its own witness, and never reaches or hears B\'s session', async () => {
     const cloudA = await companion(), cloudB = await companion()
     const dir = tempDir()
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const a = await server(d.port, HOME_A, true), b = await server(d.port, HOME_B, true)
     await configure(a, cloudA.url, HOME_A)
     await configure(b, cloudB.url, HOME_B, { hostAlias: 'fixture-host-b' })
@@ -513,7 +502,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
   it('companion A cannot resume B\'s finished session that was journaled after the daemon read the journal', async () => {
     const cloudA = await companion(), cloudB = await companion()
     const dir = tempDir()
-    const d = await spawnDaemon(twin, dir)
+    const d = await spawnDaemon(dir)
     const a = await server(d.port, HOME_A, true), b = await server(d.port, HOME_B, true)
     await configure(a, cloudA.url, HOME_A)
     await configure(b, cloudB.url, HOME_B, { hostAlias: 'fixture-host-b' })
@@ -531,7 +520,7 @@ describe.each(TWINS)('one bridge link per Walnut (%s twin)', (twin) => {
 
   it('a relay reaches the server that pushed the link before that socket binds its home', async () => {
     const cloud = await companion()
-    const d = await spawnDaemon(twin, tempDir())
+    const d = await spawnDaemon(tempDir())
     const bystander = await server(d.port, null)
     const pusher = await server(d.port, null)
     await configure(pusher, cloud.url, HOME_A)

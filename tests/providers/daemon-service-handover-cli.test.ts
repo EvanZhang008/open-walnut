@@ -373,7 +373,7 @@ describe('daemon service handover CLI transport', () => {
 
 describe('every refusal a daemon gives a handover is classified', () => {
   // A daemon that refuses before it changed anything may be asked again (busy: true); any other
-  // refusal ends the install. A new refusal in either twin fails here until someone decides
+  // refusal ends the install. A new refusal in the daemon fails here until someone decides
   // which it is (2026-11-02: "has active operations" ended the join's install on a busy daemon).
   const KNOWN: Record<string, boolean> = {
     'service.handover: daemon mode or instance does not match the requested operation': false,
@@ -398,7 +398,6 @@ describe('every refusal a daemon gives a handover is classified', () => {
   const literals = (code: string) => [...code.matchAll(/(?:sendError\(ws, id, |new Error\()'([^']+)'/g)].map((m) => m[1])
   it.each([
     ['src/providers/daemon-standalone.ts', /async function cmdServiceHandover\(/],
-    ['src/providers/daemon-source.ts', /async function cmdServiceHandover\(/],
     ['src/providers/daemon-command-drain.ts', /export function createDaemonCommandDrain\(/],
   ])('%s', (file, start) => {
     const found = literals(body(file, start))

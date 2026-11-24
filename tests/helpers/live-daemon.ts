@@ -1,6 +1,6 @@
 /**
- * The remote host of a live e2e test (tests/e2e/*-live-e2e.test.ts): a real session daemon (the
- * source twin under node, or the Bun standalone twin) started inside the walls under a keeper,
+ * The remote host of a live e2e test (tests/e2e/*-live-e2e.test.ts): a real session daemon
+ * (daemon-standalone.ts under bun) started inside the walls under a keeper,
  * and the mock Claude CLI it runs for a session. Everything a test needs to talk to that daemon
  * and to read what its mock CLI received, and the cleanup that ends every mock CLI through its
  * own daemon's stop (never a signal from the test).
@@ -9,8 +9,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from './source-twin.js'
 import { LIVE_CONNECT_GUARD, LIVE_KEEPER, liveEnv, walled } from './live-isolation.js'
 import { guardLogOf } from './live-run.js'
 import type { LiveProcs, Owned } from './live-procs.js'
@@ -105,11 +103,11 @@ async function waitUntil(fn: () => Promise<boolean> | boolean, ms: number, what:
 }
 
 /**
- * Which daemon runs: the JS twin on node (`source`), the Bun twin from source (`standalone`), or the
- * compiled daemon the repo built (`binary`, dist/daemon-binaries, the one a server spawns as its own
- * local daemon and adopts only when the versions match).
+ * Which daemon runs: daemon-standalone.ts from source under bun (`standalone`), or the compiled
+ * daemon the repo built (`binary`, dist/daemon-binaries, the one a server spawns as its own local
+ * daemon and adopts only when the versions match).
  */
-export type LiveTwin = 'source' | 'standalone' | 'binary'
+export type LiveTwin = 'standalone' | 'binary'
 
 /** The compiled daemon of this platform in dist/daemon-binaries, or null when the repo has not built it. */
 export function builtDaemonBinary(repo: string): string | null {
@@ -120,9 +118,10 @@ export function builtDaemonBinary(repo: string): string | null {
 /**
  * Start a daemon in `<base>/<first two letters of name>` (that dir must be one liveBase checked),
  * with its own HOME and TMPDIR, registered with its proof of ownership. `env`: the daemon's own
- * variables on top of its dirs (timing knobs).
+ * variables on top of its dirs (timing knobs). `twin` names the one daemon there is (kept so a
+ * suite can still say it).
  */
-export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: LiveTwin, env: Record<string, string> = {}): Promise<LiveDaemon> {
+export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: LiveTwin = 'standalone', env: Record<string, string> = {}): Promise<LiveDaemon> {
   const { procs, base, repo } = ctx
   const dir = path.join(base, name.slice(0, 2))
   fs.mkdirSync(dir)
@@ -141,17 +140,13 @@ export async function spawnLiveDaemon(ctx: LiveDaemonCtx, name: string, twin: Li
   // without its env would fall back to the production daemon dir with no connect guard ports.
   const stderr = fs.openSync(path.join(dir, 'daemon-stderr.log'), 'a')
   let daemonArgv: string[]
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemonArgv = [SOURCE_TWIN.file, script, '--start']
-  } else if (twin === 'binary') {
+  if (twin === 'binary') {
     const bin = builtDaemonBinary(repo)
     if (!bin) throw new Error(`${name}: no built daemon in dist/daemon-binaries`)
     // A compiled bun reads neither NODE_OPTIONS nor --preload: no connect guard inside it (as for the daemon a server spawns).
     daemonArgv = [bin, '--start']
   } else {
-    if (!ctx.bun) throw new Error(`${name}: the standalone twin needs bun`)
+    if (!ctx.bun) throw new Error(`${name}: the session daemon runs on bun, and there is none`)
     // Bun does not read NODE_OPTIONS: the connect guard is preloaded by name.
     daemonArgv = [ctx.bun, '--preload', LIVE_CONNECT_GUARD, path.join(repo, 'src/providers/daemon-standalone.ts'), '--start']
   }

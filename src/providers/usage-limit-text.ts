@@ -34,7 +34,7 @@ export function usageLimitSentence(text: string | null | undefined): string | nu
   return at < 0 ? null : text.slice(at, at + 300).trim()
 }
 
-/** Exported for the daemon's terminal list and its twin (daemon-source.ts keeps a copy). */
+/** Exported for the daemon's terminal list. */
 export const USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
   /you(?:'|\u2019)?ve hit your\b(?![^.\u00b7\n]{0,40}\brate[ _-]?limit)[^.\u00b7\n]{0,40}\blimit\b/i,
   /\busage limit reached\b/i,

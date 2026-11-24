@@ -47,7 +47,7 @@ afterEach(async () => {
   open = []
 })
 
-/** The service's net state dir under `home`, as each twin computes it (net-config-core.ts). */
+/** The service's net state dir under `home`, as the daemon computes it (net-config-core.ts). */
 const dirOf = (home: string, setId = '') => netStateDir({ serviceStateDir: '/state', prodDaemon: false, daemonDir: '/rt', home, setId })
 
 describe('a set has its own network identity', () => {
@@ -58,7 +58,7 @@ describe('a set has its own network identity', () => {
     expect(def).toBe(path.join(home, '.local', 'state', 'open-walnut', 'net'))
     expect(netStateDir({ serviceStateDir: null, prodDaemon: true, daemonDir: '/rt', home })).toBe(def)
     expect(set).toBe(path.join(serviceSetBase(home, SET), 'net'))
-    // The source twin inlines the same rule.
+    // netStateDirOf (the path join passed in) keeps the same rule.
     expect(netStateDirOf({ serviceStateDir: '/state', prodDaemon: false, daemonDir: '/rt', home, setId: SET, join: path.join })).toBe(set)
     // Only a service runs in a set; anything else keeps today's rule.
     expect(netStateDir({ serviceStateDir: null, prodDaemon: false, daemonDir: '/rt', home, setId: SET })).toBe('/rt/net')

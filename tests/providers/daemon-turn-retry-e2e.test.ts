@@ -1,8 +1,8 @@
 /**
  * E2E: the daemon auto-retries a turn killed by a transient upstream error.
  *
- * Runs the REAL deployed daemon (getDaemonSource() template under node — the
- * exact artifact that ships to remote hosts, not a mock). The "CLI" is a shell
+ * Runs the REAL daemon (daemon-standalone.ts under bun, the source of every
+ * daemon build, not a mock). The "CLI" is a shell
  * script whose stdout the daemon captures into the stream .jsonl, so this drives
  * the whole production path:
  *
@@ -22,10 +22,11 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import WebSocket from 'ws'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { bunRuntime } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
+const BUN = bunRuntime()
+const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
 
@@ -41,8 +42,6 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
 }> {
   const daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-retry-d-'))
   const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-retry-s-'))
-  const scriptPath = path.join(daemonDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
   // Scrub INHERITED retry vars before applying this test's own. The daemon reads
   // the feature from its env at boot, and a developer whose config enables
@@ -60,7 +59,7 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
     'WALNUT_TURN_RETRY_BACKOFF_MAX_MS',
   ]) delete env[key]
 
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+  const proc = spawn(BUN, [STANDALONE, '--start'], {
     env: {
       ...env,
       WALNUT_DAEMON_DIR: daemonDir,

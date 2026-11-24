@@ -1,7 +1,6 @@
 /**
  * A host's `walnut` calls answered by its own Walnut server while the leader is away
- * ('follower-gateway-v1'). Shared by both daemon twins (daemon-source.ts inlines it by
- * `toString()`): self-contained, no imports at runtime.
+ * ('follower-gateway-v1'). Self-contained, no imports at runtime.
  *
  * When the gateway's rules find no leader to relay a call to, and a follower of that
  * Walnut is linked here that said at `follower.hello` that it answers local calls, the
@@ -72,8 +71,8 @@ export interface FollowerGatewayResponse {
  * descendants (the standalone daemon's process-tree check, daemon-standalone.ts jobCallerVouched).
  * Absent: the job is named for the record only. The run's id is no secret from another process of
  * the same user (it is in the run's environment and its state file), so anything that lets a job do
- * more than an anonymous caller reads `vouched`, never the name alone. The JS fallback twin
- * (daemon-source.ts) cannot read a socket's process, so its callers are never vouched.
+ * more than an anonymous caller reads `vouched`, never the name alone. A daemon that cannot
+ * read a socket's process (an older source daemon) never vouches its callers.
  */
 export type GatewayCaller = { kind: 'plugin-job'; plugin: string; job: string; vouched?: true }
 

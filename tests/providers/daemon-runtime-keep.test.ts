@@ -2,14 +2,13 @@
  * keepRuntimeFiles (daemon-core.ts), on a real temp dir: the temp cleanup (macOS after 3 days,
  * systemd-tmpfiles after 10) removes a running daemon's own files from /tmp/open-walnut, and
  * the next server or join sees no daemon there (2026-11-02: a Mac whose Walnut had run 26 days
- * had lost daemon.pid, daemon.port and sessions.json). Both twins run it every hour.
+ * had lost daemon.pid, daemon.port and sessions.json). The daemon runs it every hour.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { keepRuntimeFiles, RUNTIME_KEEP_MS } from '../../src/providers/daemon-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 let dir = ''
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-keep-')) })
@@ -88,12 +87,8 @@ describe('keepRuntimeFiles', () => {
     expect(fs.existsSync(dir)).toBe(false)
   })
 
-  it('both twins run it, every RUNTIME_KEEP_MS, well inside the shortest cleanup age', () => {
+  it('the daemon runs it, every RUNTIME_KEEP_MS, well inside the shortest cleanup age', () => {
     expect(RUNTIME_KEEP_MS).toBeLessThanOrEqual(6 * 3600_000)
-    const source = getDaemonSource()
-    expect(source).toContain(`: ${RUNTIME_KEEP_MS} /* RUNTIME_KEEP_MS */);\n    runtimeKeepTimer.unref();`)
-    expect(source).toContain('if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer); } catch {} runtimeKeepTimer = null; }')
-    expect(source).toContain('var restored = keepRuntimeFiles({')
     const standalone = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
     expect(standalone).toContain(': RUNTIME_KEEP_MS)\n  runtimeKeepTimer.unref?.()')
     expect(standalone).toContain('if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer) } catch {} runtimeKeepTimer = null }')

@@ -1,5 +1,5 @@
 /**
- * A forced service update against a real busy service daemon, on BOTH twins
+ * A forced service update against a real busy service daemon (daemon-standalone.ts under bun)
  * (daemon-update-behind.ts, daemon-over-busy.ts).
  *
  * 2026-11-05: clouddev's daemon refused every update as busy for hours ("Daemon has active
@@ -8,8 +8,8 @@
  * forced one goes ahead at once and the daemon exits, without waiting for the run, whose log says why it ended.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the command it runs is
- * `sleep`; the only signals are signal 0 to the daemon this file started, and SIGKILL to it after
- * each twin.
+ * `sleep`; the only signals are signal 0 to the daemon this file started, and SIGKILL to it after each
+ * test.
  */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
@@ -17,32 +17,16 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { daemonInstallRoot } from '../../src/providers/daemon-service-config.js'
 import { requestDaemonServiceUpdate } from '../../src/providers/daemon-service-cli.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-update-force-twins-')))
 afterAll(() => { if (root.includes('walnut-update-force-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed: the handover needs the cron runtime.
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core', 'daemon-cron-runtime', 'daemon-instance-lock']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  ...(BUN ? [{ name: `source twin (${SOURCE_TWIN.runtime})`, command: (): [string, string[]] => [SOURCE_TWIN.file, [scriptPath, '--service']] }] : []),
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--service']] }] : []),
-]
 
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
@@ -58,7 +42,7 @@ afterEach(async () => {
   proc = null
 })
 
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ home: string; daemonDir: string; stateDir: string }> {
+async function boot(dir: string): Promise<{ home: string; daemonDir: string; stateDir: string }> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const daemonDir = path.join(dir, 'daemon')
@@ -74,8 +58,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ home: 
     WALNUT_DAEMON_SHUTDOWN_DRAIN_MS: '3000',
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--service'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -110,10 +93,10 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<s
   })
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('a forced update goes over a running request; a plain one is refused', async () => {
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-'))
-    const { daemonDir, stateDir } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone')
+    const { daemonDir, stateDir } = await boot(dir)
     const hello = await rpc({ cmd: 'hello' })
     expect(hello).toMatchObject({ ok: true })
     expect(hello.capabilities).toContain('service-update-v1')
@@ -167,8 +150,8 @@ describe.each(TWINS)('$name', (twin) => {
     // A write into a FIFO no one reads never finishes (2026-11-05 round 2 review): the forced
     // pause drains it for 15 s and gives up, the CLI says 'unprepared', and the service's SIGTERM
     // must still end the daemon instead of leaving it half shut.
-    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-stuck')
-    const { home, daemonDir, stateDir } = await boot(twin, dir)
+    const dir = path.join(root, 'standalone-stuck')
+    const { home, daemonDir, stateDir } = await boot(dir)
     const fifo = path.join(home, 'stuck.fifo')
     expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
     void rpc({ cmd: 'fs.write', path: fifo, data: 'never read' }, 120_000).catch(() => {})

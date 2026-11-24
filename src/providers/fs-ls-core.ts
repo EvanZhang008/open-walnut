@@ -30,9 +30,7 @@
  *     in time is trusted for TRUST_MS (full concurrency). Healthy directories
  *     elsewhere never wait on a dead one.
  *
- * How each twin gets it: daemon-standalone.ts imports createFsLs;
- * daemon-source.ts inlines `createFsLs.toString()` through `__CREATE_FS_LS__`.
- * So the factory body references NOTHING at module scope.
+ * Imported by daemon-standalone.ts (createFsLs). The factory body references NOTHING at module scope.
  */
 
 export interface FsLsDirent {

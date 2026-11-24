@@ -16,7 +16,7 @@
  * asked for) keeps the text the user's, whatever network words ride beside it: a gateway's 503
  * "no account has working credentials ... if the login expired, sign in again" stays his.
  *
- * One self-contained function: daemon-source.ts embeds it by toString (no outside reference), and
+ * One self-contained function: it has no outside reference, and
  * user-status.ts (browser-safe) reads it through sessions/session-error-owner.ts.
  * tests/core/sessions/network-caused-auth.test.ts holds the corpus.
  */

@@ -54,9 +54,9 @@ describe('registryNeedsFoldPrewarm', () => {
 })
 
 describe('prewarmCommand', () => {
-  it('starts the compiled Walnut file as its daemon, a source daemon on this runtime, a daemon binary as itself', () => {
+  it('starts the compiled Walnut file as its daemon, a daemon script on this runtime, a daemon binary as itself', () => {
     expect(prewarmCommand('/opt/walnut', '/opt/walnut', true)).toEqual(['/opt/walnut', ['__daemon', '--prewarm-folds']])
-    expect(prewarmCommand('/d/daemon-source.cjs', '/usr/bin/bun', false)).toEqual(['/usr/bin/bun', ['/d/daemon-source.cjs', '--prewarm-folds']])
+    expect(prewarmCommand('/d/daemon-standalone.ts', '/usr/bin/bun', false)).toEqual(['/usr/bin/bun', ['/d/daemon-standalone.ts', '--prewarm-folds']])
     expect(prewarmCommand('/d/daemon-darwin-arm64', '/usr/bin/bun', false)).toEqual(['/d/daemon-darwin-arm64', ['--prewarm-folds']])
     // A compiled file pointed at another daemon binary runs that binary.
     expect(prewarmCommand('/d/daemon-darwin-arm64', '/opt/walnut', true)).toEqual(['/d/daemon-darwin-arm64', ['--prewarm-folds']])

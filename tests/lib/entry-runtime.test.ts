@@ -15,7 +15,7 @@ import { dropBunBeBun, runtimeRefusal } from '../../src/lib/entry-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 // The real Node, not the `node` shim `bun --bun` puts first on PATH (it is bun).
-// CI's node-side job runs this file with WALNUT_REQUIRE_NODE=1, where a missing Node fails.
+// CI's node-side job runs this file with WALNUT_REQUIRE_NODE=1 (test:source-twin-node-suites, the name the workflow calls), where a missing Node fails.
 const NODE = realNodeOnPath()
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-entry-runtime-'))
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))

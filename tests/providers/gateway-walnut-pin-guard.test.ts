@@ -1,14 +1,14 @@
 /**
  * Guard: every path that sends a session's call (a `gateway-request` frame) to a
  * Walnut server picks that server through the Walnut-pinned rules
- * (gateway-identity-core.ts), in both daemon twins.
+ * (gateway-identity-core.ts), in the daemon.
  *
  * 2026-11-10: `gatewayTargetFor` fell back to "any trusted client that never
  * identified itself", and a link that dropped three times in ten minutes sent one
  * person's sessions' calls to another person's Walnut on the same host. This test
  * lists, from the source, every function that sends the frame and every caller of
  * the send, so a new path (a new resend, a new fallback) fails here until it goes
- * through the pinned pick. The behaviour itself is pinned on the real twins by
+ * through the pinned pick. The behaviour itself is pinned on the real daemon by
  * daemon-gateway-walnut-pin-twins-e2e.test.ts.
  */
 import { describe, it, expect } from 'vitest'
@@ -17,7 +17,7 @@ import path from 'node:path'
 
 const root = path.join(import.meta.dirname, '..', '..')
 const read = (f: string) => fs.readFileSync(path.join(root, f), 'utf-8')
-const twins = { standalone: read('src/providers/daemon-standalone.ts'), source: read('src/providers/daemon-source.ts') }
+const src = read('src/providers/daemon-standalone.ts')
 
 function fnBody(src: string, name: string): string {
   const start = src.search(new RegExp(`\\n(async )?function ${name}\\(`))
@@ -58,72 +58,68 @@ const RELAY_CALLERS: Record<string, string> = {
   fetchRemoteHistory: 'historyFetchTarget: the session\'s own Walnut through gatewayTargetFor',
 }
 
-describe('a session\'s call goes only to a server of its own Walnut, both twins', () => {
-  for (const [name, src] of Object.entries(twins)) {
-    it(`${name}: only the listed functions send a gateway-request frame`, () => {
-      const senders = enclosing(src, /sendEvent\([^,]+, 'gateway-request'/)
-      expect(senders.length).toBeGreaterThan(0)
-      for (const fn of senders) expect(SENDERS, `${fn} sends a gateway-request frame: route its target through gatewayTargetFor`).toHaveProperty(fn)
-    })
+describe('a session\'s call goes only to a server of its own Walnut', () => {
+  it('only the listed functions send a gateway-request frame', () => {
+    const senders = enclosing(src, /sendEvent\([^,]+, 'gateway-request'/)
+    expect(senders.length).toBeGreaterThan(0)
+    for (const fn of senders) expect(SENDERS, `${fn} sends a gateway-request frame: route its target through gatewayTargetFor`).toHaveProperty(fn)
+  })
 
-    it(`${name}: every send and resend takes its target from the pinned pick`, () => {
-      const resends = enclosing(src, /(?<!function )\bsendRelayAttempt\(/).filter((fn) => fn !== 'sendRelayAttempt')
-      for (const fn of resends) expect(RESEND_CALLERS, `${fn} calls sendRelayAttempt`).toHaveProperty(fn)
-      for (const fn of ['wakeGatewayCalls', 'gatewayRelaysSocketGone', 'relayAttemptEnded']) {
-        expect(fnBody(src, fn)).toMatch(/relayResendTarget\((entry\.)?call\)/)
-      }
-      expect(fnBody(src, 'relayResendTarget')).toMatch(/gatewayTargetFor\(call\.home\)/)
-      const busy = fnBody(src, 'busyAskAgain')
-      expect(busy).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
-      // A call asked again as a NEW relay keeps its pin (and its plugin job's name) through one builder.
-      expect(busy).toMatch(/call: relayAgainOf\(call, /)
-      const held = fnBody(src, 'heldCatalogAskAgain')
-      expect(held).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
-      expect(held).toMatch(/call: relayAgainOf\(call, /)
-      expect(fnBody(src, 'relayAgainOf')).toMatch(/pinned: call\.pinned/)
-      expect(fnBody(src, 'relayAgainOf')).toMatch(/call\.caller/)
-      expect(held).toMatch(/sendRelayAttempt\(next, target\)/)
-      expect(fnBody(src, 'historyFetchTarget')).toMatch(/home \? gatewayTargetFor\(home\) : pickTrustedClient\(''\)\.client/)
-      const relays = enclosing(src, /(?<!function )\brelayToPrimary\(/).filter((fn) => fn !== 'relayToPrimary')
-      for (const fn of relays) expect(RELAY_CALLERS, `${fn} calls relayToPrimary`).toHaveProperty(fn)
-      // The send's targets: gatewayTargetFor's pick, the copy of it handed on (primary), or the pick
-      // made again when a same-host send's hand-off ends (leader: the one that answers then).
-      const send = fnBody(src, 'sendGatewayRequest')
-      expect(send).toMatch(/target = gatewayTargetFor\(home, \{ callerSid/)
-      for (const m of send.matchAll(/relayToPrimary\((\w+),/g)) expect(['target', 'primary', 'leader']).toContain(m[1])
-      expect(send).toMatch(/(const|var) primary = target/)
-      for (const m of send.matchAll(/(?:const|var) leader = ([^;\n]+)/g)) expect(m[1]!.trim()).toBe('gatewayTargetFor(home)')
-      expect(send.match(/(?:const|var) leader = /g)?.length ?? 0).toBe(send.match(/relayToPrimary\(leader,/g)?.length ?? 0)
-      // A plugin job's call: a socket bound to its Walnut, nothing else.
-      expect(fnBody(src, 'sendPluginJobGatewayRequest')).toMatch(/if \(gatewayClientHomes\.get\(client\) === home\) target = client/)
-    })
+  it('every send and resend takes its target from the pinned pick', () => {
+    const resends = enclosing(src, /(?<!function )\bsendRelayAttempt\(/).filter((fn) => fn !== 'sendRelayAttempt')
+    for (const fn of resends) expect(RESEND_CALLERS, `${fn} calls sendRelayAttempt`).toHaveProperty(fn)
+    for (const fn of ['wakeGatewayCalls', 'gatewayRelaysSocketGone', 'relayAttemptEnded']) {
+      expect(fnBody(src, fn)).toMatch(/relayResendTarget\((entry\.)?call\)/)
+    }
+    expect(fnBody(src, 'relayResendTarget')).toMatch(/gatewayTargetFor\(call\.home\)/)
+    const busy = fnBody(src, 'busyAskAgain')
+    expect(busy).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
+    // A call asked again as a NEW relay keeps its pin (and its plugin job's name) through one builder.
+    expect(busy).toMatch(/call: relayAgainOf\(call, /)
+    const held = fnBody(src, 'heldCatalogAskAgain')
+    expect(held).toMatch(/(const|var) target = gatewayTargetFor\(call\.home\)/)
+    expect(held).toMatch(/call: relayAgainOf\(call, /)
+    expect(fnBody(src, 'relayAgainOf')).toMatch(/pinned: call\.pinned/)
+    expect(fnBody(src, 'relayAgainOf')).toMatch(/call\.caller/)
+    expect(held).toMatch(/sendRelayAttempt\(next, target\)/)
+    expect(fnBody(src, 'historyFetchTarget')).toMatch(/home \? gatewayTargetFor\(home\) : pickTrustedClient\(''\)\.client/)
+    const relays = enclosing(src, /(?<!function )\brelayToPrimary\(/).filter((fn) => fn !== 'relayToPrimary')
+    for (const fn of relays) expect(RELAY_CALLERS, `${fn} calls relayToPrimary`).toHaveProperty(fn)
+    // The send's targets: gatewayTargetFor's pick, the copy of it handed on (primary), or the pick
+    // made again when a same-host send's hand-off ends (leader: the one that answers then).
+    const send = fnBody(src, 'sendGatewayRequest')
+    expect(send).toMatch(/target = gatewayTargetFor\(home, \{ callerSid/)
+    for (const m of send.matchAll(/relayToPrimary\((\w+),/g)) expect(['target', 'primary', 'leader']).toContain(m[1])
+    expect(send).toMatch(/(const|var) primary = target/)
+    for (const m of send.matchAll(/(?:const|var) leader = ([^;\n]+)/g)) expect(m[1]!.trim()).toBe('gatewayTargetFor(home)')
+    expect(send.match(/(?:const|var) leader = /g)?.length ?? 0).toBe(send.match(/relayToPrimary\(leader,/g)?.length ?? 0)
+    // A plugin job's call: a socket bound to its Walnut, nothing else.
+    expect(fnBody(src, 'sendPluginJobGatewayRequest')).toMatch(/if \(gatewayClientHomes\.get\(client\) === home\) target = client/)
+  })
 
-    it(`${name}: the pick is the Walnut-pinned one, with no fallback to a socket that names no Walnut`, () => {
-      const pick = fnBody(src, 'gatewayTargetFor')
-      expect(pick).toMatch(/gatewayIdentity\.pick\(candidates, home, \{ pinned(: pinned)?, allowUnidentified: !home \|\| !offlineHost\.pendingHandover\(home\) \}\)/)
-      expect(pick).not.toMatch(/untagged/)
-      // The only assignments of target: the pick, or null.
-      for (const m of pick.matchAll(/\btarget = ([^;\n]+)/g)) expect(['picked.target', 'null']).toContain(m[1]!.trim())
-      // Every socket a run of a bound Walnut opened speaks for it (the bulk channel).
-      expect(fnBody(src, 'bindGatewayClientHome')).toMatch(/gatewayIdentity\.noteRun\(ws(\.data\?)?\.serverRun, home\)/)
-      // A session is pinned to the Walnut that asked for it, copy or not.
-      expect(fnBody(src, 'gatewayOwnerHome')).toMatch(/offlineHost\.ownerOf\(callerSid\) \|\| sessionHomeOf\(callerSid\) \|\| undefined/)
-      expect(fnBody(src, 'walnutPinned')).toMatch(/offlineHost\.hasHome\(home\) \|\| servedWalnuts\.knows\(home\) \|\| gatewayIdentity\.knowsHome\(home\)/)
-    })
+  it('the pick is the Walnut-pinned one, with no fallback to a socket that names no Walnut', () => {
+    const pick = fnBody(src, 'gatewayTargetFor')
+    expect(pick).toMatch(/gatewayIdentity\.pick\(candidates, home, \{ pinned(: pinned)?, allowUnidentified: !home \|\| !offlineHost\.pendingHandover\(home\) \}\)/)
+    expect(pick).not.toMatch(/untagged/)
+    // The only assignments of target: the pick, or null.
+    for (const m of pick.matchAll(/\btarget = ([^;\n]+)/g)) expect(['picked.target', 'null']).toContain(m[1]!.trim())
+    // Every socket a run of a bound Walnut opened speaks for it (the bulk channel).
+    expect(fnBody(src, 'bindGatewayClientHome')).toMatch(/gatewayIdentity\.noteRun\(ws(\.data\?)?\.serverRun, home\)/)
+    // A session is pinned to the Walnut that asked for it, copy or not.
+    expect(fnBody(src, 'gatewayOwnerHome')).toMatch(/offlineHost\.ownerOf\(callerSid\) \|\| sessionHomeOf\(callerSid\) \|\| undefined/)
+    expect(fnBody(src, 'walnutPinned')).toMatch(/offlineHost\.hasHome\(home\) \|\| servedWalnuts\.knows\(home\) \|\| gatewayIdentity\.knowsHome\(home\)/)
+  })
 
-    it(`${name}: another Walnut's server cannot settle a call`, () => {
-      const result = fnBody(src, 'cmdGatewayResult')
-      const check = result.indexOf('gatewayIdentity.mayAnswer(')
-      expect(check).toBeGreaterThan(-1)
-      // Before the call is settled.
-      expect(check).toBeLessThan(result.indexOf('gatewayRelayPending.delete('))
-      expect(fnBody(src, 'relayToPrimary')).toMatch(/pinned: walnutPinned\(home\)/)
-    })
-  }
+  it(`another Walnut's server cannot settle a call`, () => {
+    const result = fnBody(src, 'cmdGatewayResult')
+    const check = result.indexOf('gatewayIdentity.mayAnswer(')
+    expect(check).toBeGreaterThan(-1)
+    // Before the call is settled.
+    expect(check).toBeLessThan(result.indexOf('gatewayRelayPending.delete('))
+    expect(fnBody(src, 'relayToPrimary')).toMatch(/pinned: walnutPinned\(home\)/)
+  })
 
-  it('the source twin inlines the same core', () => {
-    expect(twins.source).toMatch(/\['__CREATE_GATEWAY_IDENTITY__', createGatewayIdentity\.toString\(\)\]/)
-    expect(twins.source).toMatch(/var gatewayIdentity = \(__CREATE_GATEWAY_IDENTITY__\)\(\);/)
-    expect(twins.standalone).toMatch(/const gatewayIdentity = createGatewayIdentity\(\)/)
+  it('the daemon runs the shared core', () => {
+    expect(src).toMatch(/const gatewayIdentity = createGatewayIdentity\(\)/)
   })
 })

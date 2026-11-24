@@ -1,6 +1,6 @@
 /**
- * Two host aliases of one daemon, through the REAL server and a REAL daemon (source twin,
- * with its trigger sidecar): one armed set for both, whichever links are up.
+ * Two host aliases of one daemon, through the REAL server and a REAL daemon (the standalone
+ * under bun, its trigger checks built in): one armed set for both, whichever links are up.
  *
  * 2026-11-15: a machine joined the host network as `<name>-net` beside its SSH row. Both links
  * reached the same daemon, which keeps ONE set per Walnut, and the net link's push of its own
@@ -21,14 +21,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { buildSync } from 'esbuild'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-trigger-same-daemon-e2e'))
 // The SSH row is config only: no path of this server may reach a real host over ssh (a boot-start
 // preflight, a session or clock look-up of a host). Every `ssh` the server spawns runs `false`
 // instead, so it fails at once as an unreachable host does; the daemon is reached by its direct
-// links alone. Everything else spawns as it is (the daemon twin itself included).
+// links alone. Everything else spawns as it is (the daemon itself included).
 const sshCalls = vi.hoisted(() => ({ n: 0 }))
 vi.mock('node:child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:child_process')>()
@@ -51,8 +50,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { walnutScopeDir } from '../helpers/walnut-scope-dir.js'
 import { disconnectAllDaemons, getDirectDaemonConnection } from '../../src/providers/daemon-connection.js'
 import { updateConfig } from '../../src/core/config-manager.js'
@@ -61,6 +59,7 @@ import { __setSshResolverForTest, _resetSameDaemonRecordForTest } from '../../sr
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
+const BUN = testBun()
 const SSH = 'studio'
 const NET = 'studio-net'
 
@@ -140,15 +139,10 @@ const routine = (name: string, host: string) => ({
 })
 
 beforeAll(async () => {
+  if (!BUN) return
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-samedaemon-e2e-'))
   itemsFile = path.join(dir, 'items.json')
   fs.writeFileSync(itemsFile, JSON.stringify({ fire: false }) + '\n')
-  const script = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  buildSync({
-    entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
-    bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
-  })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -158,7 +152,7 @@ beforeAll(async () => {
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  daemon = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'] })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   daemonPort = parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10)
@@ -192,7 +186,7 @@ afterAll(async () => {
   if (dir) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-describe('two aliases of one daemon keep one armed set', () => {
+describe.skipIf(!BUN)('two aliases of one daemon keep one armed set', () => {
   it('the net alias connecting to the same daemon keeps the SSH routine armed and checking, and adds its own', async () => {
     await link(SSH)
     const ssh = await api('POST', '/api/routines', routine('SSH watch', SSH))

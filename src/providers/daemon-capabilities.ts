@@ -10,11 +10,10 @@
  * permission prompt for 30 minutes.
  *
  * Hand-maintained (not derived from the daemon's switch statement) because
- * daemon-standalone is a bun-compiled binary and daemon-source is an embedded
- * string template evaluated on the remote host — neither can introspect its
- * own switch at distribution time.
+ * daemon-standalone is a bun-compiled binary that cannot introspect its own
+ * switch at distribution time.
  *
- * When you add a new `case 'foo':` to daemon-standalone.ts / daemon-source.ts,
+ * When you add a new `case 'foo':` to daemon-standalone.ts,
  * add 'foo' here too. Forgetting to add it here only costs you one extra
  * redeploy, not a silent hang.
  */
@@ -47,10 +46,8 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'bridge.configure',
   'bridgeResume',
   'stt',
-  // ACP worker command family (in-process ACP host worker per session). Local
-  // daemons only: the binary, or the source twin with its acp-daemon-core.cjs
-  // sidecar. A daemon without the sidecar (remote source deploys) answers these
-  // with a structured acp_unsupported error.
+  // ACP worker command family (in-process ACP host worker per session). A daemon
+  // that cannot run them answers with a structured acp_unsupported error.
   'acpStart',
   'acpSend',
   'acpCancel',
@@ -131,10 +128,8 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * changes.file). The daemon parses the session's JSONLs + reads file contents
  * ON ITS OWN HOST and returns a light list / one file's diff — the design-
  * principle path (host-local work belongs to the daemon; only small results
- * cross the tunnel). Binary daemons bundle the pipeline; source-deployed
- * daemons require() a sidecar (changes-core.cjs, shipped by deploySource) and
- * advertise this capability only when that load succeeds — otherwise the
- * server uses its reader-based fallback compute (old daemons likewise).
+ * cross the tunnel). Without it (an old
+ * daemon) the server uses its reader-based fallback compute.
  *
  * 'rewind-probe-v1' — host-local transcript rewind probe
  * (transcript.rewindProbe). The daemon streams the session's OWN JSONL and
@@ -144,9 +139,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * it the server shuttles the whole transcript through DaemonFileReader, which
  * REFUSES anything past its byte ceiling — so on a long transcript rewind used
  * to fail with the raw limit error and a rewound session's history rendered
- * unfiltered. Binary daemons bundle the probe; source-deployed daemons require()
- * a sidecar (transcript-rewind-core.cjs) and advertise this only when that load
- * succeeds. Optional: without it the server falls back to the whole-file read
+ * unfiltered. Optional: without it the server falls back to the whole-file read
  * (and says "the host needs the current daemon" when that read is refused).
  *
  * 'external-describe-v1' — sessions.describeExternal: re-read specific
@@ -161,9 +154,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * ~/.claude/projects + ~/.codex/sessions, classifies each transcript by its
  * recorded entrypoint/originator, and returns a SMALL descriptor list — the
  * host has thousands of transcript files, so neither the walk nor the parse
- * may happen server-side. Binary daemons bundle the scanner; source-deployed
- * daemons require() a sidecar (external-scan-core.cjs) and advertise this only
- * when that load succeeds. Optional: a host without it simply contributes no
+ * may happen server-side. Optional: a host without it simply contributes no
  * external sessions (the importer skips it on capability) until the next
  * auto-deploy.
  *
@@ -174,9 +165,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * find. One RPC replaces the server's old ~2-stats-per-ancestor-level walk, which
  * routinely spent its whole time budget on round trips and then handed back a
  * path that did not exist (the "cwd is A/, ref is 1/2/3, file is at A/B/C/1/2/3"
- * failure). Binary daemons bundle the resolver; source-deployed daemons require()
- * a sidecar (path-resolve-core.cjs) and advertise this only when that load
- * succeeds. Optional: without it the server uses its own RPC-based walk.
+ * failure). Optional: without it the server uses its own RPC-based walk.
  *
  * 'fs-mutate-v1' — host-local file MUTATION for the session Files panel
  * (fs.rename / fs.rm / fs.copy, plus the `exclusive` flags on fs.mkdir and
@@ -184,7 +173,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * the disk (absolute path, no '.'/'..' segment, never '/' or HOME, at least two
  * segments) and refuses to clobber an existing target, so a rename can never
  * silently delete a file and a delete can never walk off into a system root.
- * NOT sidecar-gated: both twins implement it inline over fs.promises, so a
+ * Implemented inline over fs.promises, so a
  * current daemon of either flavor can always answer. Deliberately NOT on the
  * bridge allowlist either — a compromised cloud box must never mutate exec-host
  * files. Optional: without it the route answers 501 daemon_needs_upgrade, which
@@ -201,7 +190,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * watcher; the precondition turns a concurrent edit into a refusal
  * ('fs.write refused: file changed since it was read (EMODIFIED)') instead of data
  * loss, and the echoed sha256 lets a caller chain a second conditional write with no
- * re-read. NOT sidecar-gated: both twins implement it inline over fs.promises +
+ * re-read. Implemented inline over fs.promises +
  * crypto, so a current daemon of either flavor can always answer. Deliberately NOT
  * on the bridge allowlist either — fs.write has never been reachable from a
  * compromised cloud box and this does not change that. Optional: without it the
@@ -222,8 +211,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * 'grep-v1' — host-local symbol search (fs.grep), backing "find references" in
  * the Files viewer. The daemon runs `git grep` (or a pruned `grep -r` outside a
  * repo) next to the files and returns only the small match list, never the
- * searched bytes. NOT sidecar-gated: both twins implement it inline over
- * child_process, so a current daemon of either flavor can always answer.
+ * searched bytes. Implemented inline over child_process.
  * Optional: without it the route answers 503 "daemon needs upgrade for
  * reference search" until the next auto-deploy.
  *
@@ -236,10 +224,6 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * crosses the tunnel. Optional: without it the server answers 400 "upgrade the
  * daemon on <host> (it auto-deploys on the next send)" on trigger_create for that
  * host, and every other routine kind keeps working on the server's own timer.
- * Sidecar-gated in the source twin (trigger-check-core.cjs): the parse, dedup and
- * process runner can't be inlined into that template, so a source deploy without
- * the sidecar answers the four commands with "triggers unsupported" and never
- * advertises this.
  *
  * 'trigger-claim-v1' — the daemon arbitrates who delivers each fire. A server
  * claims a fire the moment it receives it (`triggers.claim`); a fire no server
@@ -248,7 +232,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * by the daemon itself and replayed with `host` set, so the server records it and
  * never delivers it again. That keeps triggers working while the Mac sleeps or a
  * socket is dead. Optional: without it the server delivers every fire unclaimed,
- * as before. Sidecar-gated in the source twin like triggers-v1.
+ * as before.
  *
  * 'trigger-host-resume-v1': the same host delivery reaches a STOPPED session
  * too: the daemon starts it again (`--resume`, the command it last ran, kept in
@@ -256,7 +240,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * its first message, and journals a `resume` record so the returning server
  * takes the running CLI back. Only a session this daemon's spawn journal says it
  * started for that Walnut, whose transcript is here. Informational: the server
- * sends nothing new for it. Sidecar-gated in the source twin like triggers-v1.
+ * sends nothing new for it.
  *
  * 'clock-routine-v1': a routine runs where its work runs. The trigger table takes
  * a CLOCK def (no check; the schedule is the fire condition, clock-schedule-core.ts
@@ -264,15 +248,13 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * this host, or starts a session here, fires while the Mac sleeps. The configure
  * reply says where each clock stands (`clocks`) and which it disarmed
  * (`released`), and the server takes a clock back only from that report. Optional:
- * without it every clock routine stays on the server's own timer. Sidecar-gated in
- * the source twin like triggers-v1.
+ * without it every clock routine stays on the server's own timer.
  *
  * 'git-file-history-v1' — host-local git history for ONE file (git.fileLog /
  * git.fileShow), backing the History panel of the Files viewer. Same rule as
  * git.diff: git and the file must live on the same host, so the daemon runs the
  * two invocations and only the small commit list (or one version's text) crosses
- * the tunnel. NOT sidecar-gated: both twins implement it inline over
- * child_process. Deliberately NOT on the bridge allowlist either — it reads
+ * the tunnel. Implemented inline over child_process. Deliberately NOT on the bridge allowlist either — it reads
  * arbitrary host paths. Optional: without it the History panel still shows
  * Walnut's own snapshots and reports git as unavailable
  * (reason 'daemon_needs_upgrade') until the next auto-deploy.
@@ -285,16 +267,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'snapshot-memory-v1',
   'usage-scan-v1',
   // One session's per-request usage (usage.sessionCost, session-cost-core.ts), folded
-  // host-side from the engine's own records; sidecar-gated in the source twin.
+  // host-side from the engine's own records.
   'session-cost-v1',
   // usage.sessionCost honours `byDay: { timeZone }` (buckets split by local day, for
   // the Usage page's Today / 7 days). An older daemon ignores it and answers undivided.
   'session-cost-day-v1',
   // usage.codexOutside (codex-outside-core.ts): the Codex runs no Walnut session started, read
-  // host-side from Codex's own rollout files, in time-budgeted pages. Sidecar-gated in the source twin.
+  // host-side from Codex's own rollout files, in time-budgeted pages.
   'codex-outside-v1',
   // usage.scan with `outside: true` (claude-outside-core.ts): also reads the Claude Code sessions Walnut
-  // has no record of, and says how each one was started. Sidecar-gated in the source twin.
+  // has no record of, and says how each one was started.
   'claude-outside-v1',
   // Session budgets on the owning host (usage-budget-runtime.ts): spend priced from the
   // engine's own usage with the server's pushed price list; paused at the limit or on
@@ -313,15 +295,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `offline.drain` / `offline.ack`. Gateway calls from a Walnut whose server is
   // not connected are answered from the copy (offline-host-core.ts) instead of
   // hub_unreachable, and a connected server of another Walnut never gets them.
-  // Both twins implement it (the core is text-injected into the source twin), so
-  // it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
+  // Not bridge-reachable. Optional: without it the
   // server pushes nothing and the gateway answers as before.
   'offline-host-v1',
   // 'host-slice-probe-v1' (offline-host-core.ts holdsSlice): `host.slice {home, hash}`
   // with no slice asks whether the daemon still holds that exact copy; holding it, the
   // daemon binds the socket as a pushed copy would and answers `have: true`. A reconnect
   // to the same daemon then sends no copy (about 1.5 MB on a busy host, and uploads are
-  // what a relay drops the SSH link on). Both twins. Optional: without it every
+  // what a relay drops the SSH link on). Optional: without it every
   // reconnect pushes the whole copy.
   'host-slice-probe-v1',
   // 'push-probe-v1': `skills.sync {probe: true, hash}` and `leader.spawnTemplate {home, use,
@@ -329,26 +310,25 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the hash the server named when it sent it; answer `{held}`. A server that restarted sends
   // the skills (about 360 KB) and each template (about 200 KB) again only when not held
   // (2026-11-12: each deploy sent them again on the new link, and the relay ended it). A new
-  // process holds nothing. Both twins. Optional: without it each server start sends them.
+  // process holds nothing. Optional: without it each server start sends them.
   'push-probe-v1',
   // 'gateway-result-gz-v1': `gateway-result {relayId, resultGz}` carries a big answer's result
   // gzipped, base64 (2026-11-12: answers to a host's sessions were the top upload on its
-  // session link, 9 MB in 14 minutes, and the relay on the SSH path ended the link). Both
-  // twins. Optional: without it the server sends `result` as before.
+  // session link, 9 MB in 14 minutes, and the relay on the SSH path ended the link). Optional: without it the server sends `result` as before.
   'gateway-result-gz-v1',
   // 'tools-list-held-v1' (held-catalogs-core.ts): the gateway keeps the op catalogs the server
   // answered `tools.list {schemas: true}` with (8 per Walnut, by their `catalogHash`), names
   // them in the next such relay (`have`), and hands the caller the held one when the server
   // answers `{sameAs: hash}`; one it no longer holds is asked for again in full (2026-11-14:
   // about 20 sessions starting at once after an outage sent 2.6 MB of catalogs up one link in
-  // 10 s, and the relay ended it). Both twins. The server needs no gate: an older daemon never
+  // 10 s, and the relay ended it). The server needs no gate: an older daemon never
   // sends `have`, so it always gets the whole catalog.
   'tools-list-held-v1',
   // 'start-arg-refs-v1': a `start`'s long arguments (hook scripts, the session prompt) may come
   // as `@walnut-arg-ref:<sha256-32>` once the host kept a copy of them from an earlier start; a
   // copy it lacks is answered `{code: 'ARG_REFS_MISSING', missingRefs}` and the server sends those
   // in full (2026-11-13: after a wake, resumed sessions' starts sent 3.3 MB on one link in 16
-  // minutes and the relay ended it). Both twins (cli-argv-files-core.ts). Optional: without it
+  // minutes and the relay ended it). Optional: without it
   // every start sends its arguments in full.
   'start-arg-refs-v1',
   // 'triggers-probe-v1': `triggers.configure {probe: true, hash, home}` names the set the server
@@ -356,7 +336,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (kept on disk, so a restart of either side keeps it) configures it again from its copy and
   // answers as a push, with `held: true`; else `{held: false}` and the server sends the set with
   // `pushHash` (2026-11-13: every connection sent the set again, 90 to 350 KB on the session
-  // link). Both twins. Optional: without it every connection sends the set.
+  // link). Optional: without it every connection sends the set.
   'triggers-probe-v1',
   // 'triggers-delta-v1': `triggers.configure {delta: {base, put, drop}, pushHash, home}` sends only
   // the defs new or changed since the set the daemon holds under `base` (triggers-probe-v1's
@@ -364,26 +344,26 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (trigger-check-core.ts applyTriggersDelta) and configures it as a push, `delta: true`; else
   // `{held: false}` and the server sends the whole set (2026-11-20: a change of one of 109
   // triggers sent all of them, about 118 KB, up newdev's SSH link, which a relay ends every few
-  // MB carried up). Both twins. Optional: without it every change sends the whole set.
+  // MB carried up). Optional: without it every change sends the whole set.
   'triggers-delta-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
-  // every session's link with it. Both twins. Optional: without it the copy goes as JSON.
+  // every session's link with it. Optional: without it the copy goes as JSON.
   'host-slice-gz-v1',
   // 'host-slice-unbound-v1': `host.slice {sliceGz, bind: false}` takes the copy without
   // binding the socket it came on (the bulk channel on its own SSH connection). The
   // primary's session socket is bound by the probe or `leader.configure`, and the
   // copy, about 0.9 MB every few minutes, stays off the connection every session on
   // the host shares (2026-11-11: it was the largest upload left there, and a relay on
-  // the path ends a connection every few MB carried up). Both twins. Optional: without
+  // the path ends a connection every few MB carried up). Optional: without
   // it the copy rides the session socket.
   'host-slice-unbound-v1',
   // 'fs-read-range-gz-v1': `fs.readRange {gz: true}` answers a range of 16 KB or more as
   // `dataGz` (gzip level 1, base64) when that is smaller, else `data` as before. A JSONL
   // packs 2 to 4 times smaller (measured 2026-11-20 on 4 MB windows of a 49 MB transcript),
   // and an older page reads up to four of them over the tunnel: 8 agents paging large
-  // transcripts on one host took over 15 s each (41 x 503 in one run). Both twins. Optional:
+  // transcripts on one host took over 15 s each (41 x 503 in one run). Optional:
   // without it the server asks without `gz` and reads `data`.
   'fs-read-range-gz-v1',
   // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
@@ -396,21 +376,20 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // answer itself (`gateway-request` over the bridge, answered by
   // `gateway-result`, which the bridge may send only for those relays), and it
   // routes messages between hosts with `leader.deliver` (current epoch only).
-  // Both twins implement it (the core is text-injected into the source twin),
-  // so it is NOT sidecar-gated. Optional: without it the primary pushes nothing
+  // Optional: without it the primary pushes nothing
   // and the companion never leads that host.
   'leader-epoch-v1',
   // 'walnut-scope-v1' (walnut-scope-core.ts): one daemon keeps a separate copy of every
   // per-Walnut setting for each Walnut that connects (triggers, hooks, the bridge link,
   // turn snapshots, workspace providers), keyed by the `home` each push names, and sends
   // each Walnut only its own events and relays. A push with no home (an older server)
-  // keeps the old single copy. Both twins. Informational: a server sends `home` either way.
+  // keeps the old single copy. Informational: a server sends `home` either way.
   'walnut-scope-v1',
   // 'leader-settings-v1' (live-settings-core.ts): while the companion leads, it
   // changes a live session's model or effort here with `leader.settings`
   // (bridge, current epoch, a session of that Walnut). The daemon writes the
   // CLI's apply_flag_settings line, waits for its answer, and journals the
-  // values for the primary (a `settings` record in offline.drain). Both twins.
+  // values for the primary (a `settings` record in offline.drain).
   // Optional: an older daemon's bridge refuses the command, and the companion
   // says that host's daemon upgrades on its next connect to the primary.
   'leader-settings-v1',
@@ -429,7 +408,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // is with `follower.report`. A follower socket reads only
   // (FOLLOWER_ALLOWED_COMMANDS); it is never taken for the primary (its frames
   // are not the primary heard) and never gets a relay, gateway call, trigger
-  // event or cron note. Both twins, inline. Optional: without it there is no
+  // event or cron note. Optional: without it there is no
   // host server on that host.
   'follower-v1',
   // 'follower-alone-v1' (docs/plan/walnut-servers-everywhere.md, "Host server,
@@ -439,22 +418,21 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // one (`follower.send`, journaled as a `delivery` record) and answer its
   // prompt (`follower.permission`). Each write is refused while the Mac was heard
   // in the last 30 s (the host server's route window). `read-history` from a
-  // follower reads its own Walnut's sessions only. Both twins. Optional:
+  // follower reads its own Walnut's sessions only. Optional:
   // without it the host server's page says the daemon needs an update.
   'follower-alone-v1',
   // 'host-server-v1' (host-server-core.ts): the leader, on the socket its
   // leader.configure tagged, sets what server runs here for its Walnut with
   // `server.configure {home, spec}` (null removes it) and reads it back, with
   // the server's last report, with `server.status`. The daemon keeps it running
-  // across exits and adopts it after its own restart. Both twins (the core is
-  // text-injected into the source twin). Not bridge-reachable. Optional: without
+  // across exits and adopts it after its own restart. Not bridge-reachable. Optional: without
   // it the Mac says the host's daemon needs an update.
   'host-server-v1',
   // 'stream-relay-v1' (stream-relay-core.ts): byte streams between two servers
   // linked to this daemon (`stream.open {sid, to}`, then accept / data / ack /
   // end / close frames, never answered by id). The follower opens to the primary
   // or the companion, the primary to its follower; the bridge only answers. The
-  // daemon passes frames on and holds none. Both twins. Optional: the host
+  // daemon passes frames on and holds none. Optional: the host
   // server needs it.
   'stream-relay-v1',
   // 'stream-lane-v1': the leader may make a second socket its lane with
@@ -463,7 +441,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // connection its sessions share. A lane sends only hello, ping and stream
   // frames, opens streams to its follower only, hears no broadcast, is never
   // taken for the primary, and is the first choice for a follower's stream to
-  // the primary while it answers its beats. Both twins. Optional: without it
+  // the primary while it answers its beats. Optional: without it
   // streams ride the session link.
   'stream-lane-v1',
   // 'port-stream-v1' (stream-relay-core.ts openPort): the primary, on its own
@@ -472,7 +450,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // port on its OWN loopback only (127.0.0.0/8, ::1, localhost) and carries the
   // bytes as a stream, the same window and FINs both ways. A host network
   // machine's service preview and embedded VS Code ride it, where an SSH host
-  // uses `ssh -L`. Both twins. Optional: without it the Mac says the daemon
+  // uses `ssh -L`. Optional: without it the Mac says the daemon
   // there needs an update.
   'port-stream-v1',
   // 'hub-forward-v1' (hub-forward-core.ts, stream-relay-core.ts openOut): a port stream the
@@ -481,7 +459,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // this daemon opens to the primary's server socket, `stream-open {sid, from: 'hub', port}`,
   // which the primary takes only for a port its own config lists for this host
   // (core/hosts/hub-ports.ts) and connects on ITS OWN 127.0.0.1. `hub.status` answers the
-  // forwards and how each is doing (the primary's server socket only). Both twins. Optional:
+  // forwards and how each is doing (the primary's server socket only). Optional:
   // without it the primary never asks, and its host status says the daemon needs an update.
   'hub-forward-v1',
   // 'pty-stream-v1' (pty-stream-core.ts, through stream-relay-core.ts openPty): the
@@ -492,15 +470,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // {sid, cols, rows}` sets its size, and `stream-end {sid, exit: {code, signal}}`
   // follows its last output. A close or a link drop hangs it up (SIGHUP). Every
   // host's terminal rides it where the Mac has no SSH route (the host network, the
-  // cloud box). At most 32 per link. Only where the runtime has a pty: the binary
-  // twin, and the source twin under bun (never under Node), so it is host-dependent
-  // (daemon-shared.ts). Optional: without it the host shows no terminal and the
+  // cloud box). At most 32 per link. Only where the runtime has a pty, so it is
+  // host-dependent (daemon-shared.ts). Optional: without it the host shows no terminal and the
   // Mac says the daemon there needs an update.
   'pty-stream-v1',
   // 'client-role-v1': a test server (an ephemeral one attached read only to a host it
   // shares with the real Walnut) may say `client.role {role: 'probe'}` on each of its
   // sockets. A probe keeps its commands but is never taken for the Walnut's server:
-  // no gateway call, trigger event or phone request is sent to it. Both twins.
+  // no gateway call, trigger event or phone request is sent to it.
   // Optional: on an older daemon the test server refuses those calls itself.
   'client-role-v1',
   // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
@@ -509,9 +486,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it lacks), `replica.put` (those bodies, each checked against its hash) and
   // `replica.drop` (a kind the user stopped keeping here). While the leader
   // cannot answer, note_read / note_search / memory_read / skill_read are read
-  // from it. Trusted socket only, never bridge-reachable. Both twins implement
-  // it (the core is text-injected into the source twin), so it is NOT
-  // sidecar-gated. Optional: without it the primary pushes nothing.
+  // from it. Trusted socket only, never bridge-reachable. Optional: without it the primary pushes nothing.
   'host-replica-v1',
   // 'attachment-copy-v1' (attachment-copy-core.ts, the same core the cloud companion
   // keeps its copy with): this host keeps a copy of the pictures and files in the
@@ -522,7 +497,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `attachments.status {home}`. Trusted socket only, never bridge-reachable. A
   // follower of `home` reads it with `attachments.list {after?}` (sorted paths, 1 MB
   // a page, `next`) and `attachments.read {key, offset}` (one 2 MB slice, base64).
-  // Both twins (the core is text-injected). Optional: without it the primary sends
+  // Optional: without it the primary sends
   // this host no pictures and a replica here shows them only while the Mac answers.
   // The Mac's own daemon is never sent them: it shares the vault's disk.
   'attachment-copy-v1',
@@ -531,8 +506,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the half rule counts, the copy moves each row it holds at oldKey to newKey (only when
   // newKey is not held yet, the manifest names it and no away write holds either key),
   // keeping its body, so a move of most notes (the one tree, notes_unified) is no removal
-  // of most of the copy. The rule itself is unchanged. Both twins (the cores are
-  // text-injected); the companion says it in its `replica.status` features. Optional:
+  // of most of the copy. The rule itself is unchanged. The companion says it in its `replica.status` features. Optional:
   // without it the leader sends no `renamed` and a move goes as removals and additions.
   'host-replica-moves-v1',
   // 'replica-host-v1' (docs/plan/walnut-replica-servers-impl.md, WP2): this daemon
@@ -543,8 +517,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // says the window (`quietMs`). `server.configure` takes a `fallback {args,
   // env}`: after 3 exits within 10 min the daemon runs the fallback (the plain
   // host server) by itself for 1 h or until the next configure, and
-  // `server.status` names the program. Both twins (host-server-core.ts is
-  // text-injected). Optional: without it the Mac installs `host-server`.
+  // `server.status` names the program. Optional: without it the Mac installs `host-server`.
   'replica-host-v1',
   // 'replica-reads-v1' (follower-reads-core.ts, docs/plan/walnut-replica-servers-impl.md
   // WP6): a follower socket reads its own Walnut only. attach, status (never
@@ -554,7 +527,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // git.diff/fileShow/fileLog) inside that Walnut's session cwds, plus this
   // host's copy of its notes, memory and skills (`replica.list {kind}`,
   // `replica.read {kind, key}`, `replica.readMany {kind, keys}`, at most 4 MB
-  // per answer, the rest in `more`). Both twins (the core is text-injected).
+  // per answer, the rest in `more`).
   // Optional: without it a replica reads notes, history and files through the Mac.
   'replica-reads-v1',
   'session.message',
@@ -563,7 +536,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (`@walnut-hook-file:<hash>`) with their texts beside it as `--walnut-hook-file <text>`, one
   // template string each: a start puts them back before it records its args, and every start
   // runs long hooks from `<streams>/argv/hooks/<hash>.sh` (cli-argv-files-core.ts, hook-files.ts).
-  // Both twins (the core is text-injected). Optional: without it the server pushes the inline
+  // Optional: without it the server pushes the inline
   // template.
   'hook-files-v1',
   'changes-v1',
@@ -574,14 +547,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // and answers the rows of its first paint, gzipped (`rowsGz`), or `unchanged` / `pending` /
   // `none`; `history.readyKeys {items}` answers each session's current view key from a stat.
   // Read-only (an archived transcript is read through gunzip, never restored). Trusted socket
-  // only. Sidecar-gated in the source twin (history-ready-core.cjs). Optional: without it the
+  // only. Optional: without it the
   // history route's first paint uses its 128 KiB preview, as before.
   'history-ready-v1',
   // 'history-ready-subagent-v1': `history.readyView` also takes `agentId`, and answers that
   // subagent's view (`<session dir>/subagents/agent-<id>.jsonl`, the same bounded parse, no
   // rewind cuts, `agentId` echoed). The Background tasks reader of a big remote agent asks it
   // instead of shipping the whole file (2026-11-12: a 10 MB agent timed out every open).
-  // Sidecar-gated in the source twin (history-ready-core.cjs READY_SUBAGENT_V1).
   'history-ready-subagent-v1',
   'external-scan-v1',
   'external-scan-filter-v1',
@@ -590,7 +562,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (the CLI's own record: entrypoint and first prompt source), and describe
   // says 'programmatic' for a program's run. The server's provenance audit asks
   // again about imports an older scanner already judged, and a plugin's claimed
-  // sessions are imported through describe. Sidecar-gated in the source twin.
+  // sessions are imported through describe.
   // Optional.
   'external-human-v1',
   'path-resolve-v1',
@@ -602,8 +574,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // session's CLI, their ancestors, a terminal's shell, or a pid the caller names.
   // ports.stop re-scans, then signals the listener's process group (or the listener
   // alone when the group holds anything else). Not on the bridge or follower
-  // allowlists: it signals host processes. Sidecar-gated in the source twin
-  // (port-scan-core.cjs). Optional: without it the session shows no server list.
+  // allowlists: it signals host processes. Optional: without it the session shows no server list.
   'ports-v1',
   // 'task-dir-v1' — each task's durable working directory on this host
   // (src/lib/task-dir.ts): the daemon makes it at spawn from the start's
@@ -611,14 +582,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // env; hello carries `taskDirRoot`; `taskdir.ensure {taskId}` makes one for a
   // session that predates it; `taskdir.list` and `taskdir.remove {taskIds}` are
   // the server's cleanup, the host checking each repo inside for unmerged work
-  // before it deletes anything (task-dir-core.ts). Sidecar-gated in the source
-  // twin (task-dir-core.cjs). Optional: without it a session gets no task
+  // before it deletes anything (task-dir-core.ts). Optional: without it a session gets no task
   // directory and the /tmp git guard stays inert.
   'task-dir-v1',
   // 'task-dir-prune-v1' — `taskdir.prune {taskIds}`: a day after a task completed,
   // the host removes the repos in its directory that hold nothing unique and the
   // build output git does not track, keeping the rest for `taskdir.remove`
-  // (task-dir-core.ts pruneTaskDirs). Sidecar-gated in the source twin. Optional:
+  // (task-dir-core.ts pruneTaskDirs). Optional:
   // without it a finished task's directory keeps its clones until it is removed.
   'task-dir-prune-v1',
   // 'task-dir-prune-builds-v1' — `taskdir.pruneBuilds {taskIds, idleBefore}`: the
@@ -627,13 +597,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // evidence goes, nor a build folder changed after idleBefore (task-dir-core.ts
   // pruneTaskBuilds). A new command, never a flag on taskdir.prune: an older
   // daemon refuses it instead of reading it as a full prune of an open task.
-  // Sidecar-gated in the source twin.
   'task-dir-prune-builds-v1',
   // 'task-dir-sizes-v1' — `taskdir.sizes {taskIds}`: read only, the bytes each task
   // directory takes and its largest top-level folders, walked within a file and a
   // time budget (`partial` when cut short; task-dir-sizes.ts). The server asks it
   // while this machine's disk is low and tells an open task whose own folder is
-  // over the limit (src/core/task-dir-size-notice.ts). Sidecar-gated in the source twin.
+  // over the limit (src/core/task-dir-size-notice.ts).
   'task-dir-sizes-v1',
   // 'cli-holder-v1' — `cli.holder {sid}`: read only, whether a CLI of that session runs on
   // this host by the same rules a start's claim uses (cli-owner-core.ts holderOf: the owner
@@ -649,12 +618,11 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // fs.readRange, fs.readBounded, fs.stat, fs.ls, fs.find) and a resume restore an
   // archived session first, so a reader never sees the difference. The server's
   // sweep asks only a daemon with it (src/core/transcript-archive-sweep.ts).
-  // Sidecar-gated in the source twin.
   'transcript-archive-v1',
   // 'host-cache-prune-v1' — `taskdir.pruneCaches {olderThanMs}`: files of bun's
   // runtime transpiler cache older than that (host-cache-prune.ts), a cache that
   // never evicts. The server asks only its own machine, while its disk is below
-  // the floor (src/core/task-dir-sweep.ts). Sidecar-gated in the source twin.
+  // the floor (src/core/task-dir-sweep.ts).
   'host-cache-prune-v1',
   // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
   // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
@@ -662,7 +630,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // 2 h in the background) and answers its exit code and the tail of its output;
   // `exec.read {jobId, offset, wait}` / `exec.kill` / `exec.list` for the rest. The
   // server checks the user's grant first (src/core/hosts/host-exec.ts); not bridge-
-  // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs).
+  // or follower-reachable.
   'host-exec-v1',
   // 'host-exec-v2' — the same commands, run the way a session's Bash tool runs them:
   // the login shell sets up PATH and the environment, then bash (sh on a host with
@@ -670,7 +638,6 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // gets WALNUT_TASK_DIR (the caller task's directory here, made with its marker,
   // `home` naming its owner); every reply names `shell`, `loginShell` and `taskDir`.
   // Without it the server wraps the line itself (src/core/hosts/host-exec-legacy.ts).
-  // Sidecar-gated in the source twin (host-exec-core.cjs `version` 2).
   'host-exec-v2',
   // 'host-exec-wait-v1': `exec.read {until: {output?, flags?, partial?, port?, file?}, wait,
   // scanFrom?, by?}` answers as soon as a line of the job's output matches `output` (a JavaScript
@@ -685,7 +652,6 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `scanFrom` goes on from an earlier `scanned`. `exec.run {until}` notes what of it holds
   // before the run starts. Without it the server refuses every wait_for
   // (src/core/hosts/host-exec-wait.ts): no pattern runs on the server.
-  // Sidecar-gated in the source twin (host-exec-core.cjs `version` 3).
   'host-exec-wait-v1',
   // 'host-exec-group-v1': `exec.run {endGroup: true}` stops what the run's shell left running in
   // its process group when it exits (`&` children, `nohup`, whatever they do with their output):
@@ -693,8 +659,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // host-exec-group.ts), and `outputCut` says a process that left the group still held the output
   // once the group was empty. The server asks on each run, so a daemon that updates under an older
   // server keeps the older behaviour (only a group still holding the output is stopped). Without
-  // it the server says so in the answer (`groupKept`). Sidecar-gated in the source twin
-  // (host-exec-core.cjs `version` 4).
+  // it the server says so in the answer (`groupKept`).
   'host-exec-group-v1',
   // 'host-script-v1' — a plugin's short script (`walnut.hosts.run`, src/core/hosts/host-script.ts):
   // `exec.script {script, args, timeoutMs, maxOutputBytes, cwd?}` runs `sh -s -- ARGS` with the
@@ -702,7 +667,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // stderr, timedOut, truncated}`: stdout kept up to its cap (a run past it ends), the last 4000
   // characters of stderr, the run's process group stopped at its deadline (10 min at most). No
   // job, log file or audit line is kept (host-script-core.ts). Same reach as exec.*: not bridge-
-  // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs `version` 5).
+  // or follower-reachable.
   'host-script-v1',
   // 'host-exec-detach-v1': `exec.run {detach: true, endGroup: true}` runs the line so it outlives
   // this daemon (detached-run.ts): its output goes straight to its log, a `/bin/sh` wrapper that
@@ -710,12 +675,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // adopt: its deadline, a stop, a wait_for and its end line work on). Such a run holds no daemon
   // update (`holding`, hello `execHolding`); it is listed for a rollback's stop (detached-registry.ts).
   // Asked for by the server only with the experiment `work_survives_restart` on; an older daemon
-  // ignores the field and runs with pipes. Sidecar-gated in the source twin (host-exec-core.cjs `version` 7).
+  // ignores the field and runs with pipes.
   'host-exec-detach-v1',
   // 'host-script-detach-v1': `exec.script {scriptId: 'hs-...', detach: true}` runs the plugin
   // script so it outlives this daemon (host-script-detached.ts); the same scriptId asked again
   // (its answer was lost in a restart) answers that run's result, kept 10 minutes, never a second
-  // run. Such a script holds no update. Sidecar-gated in the source twin (with host-exec-detach-v1).
+  // run. Such a script holds no update.
   'host-script-detach-v1',
   // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
   // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
@@ -723,8 +688,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // every other endpoint is closed before any stream), `net.status`, `net.identity`
   // (this host's id, its key made on first use), `net.forward {to}`
   // (a 127.0.0.1 port whose connections are streams to that member's daemon) and
-  // `net.probe {to}`. Not bridge- or follower-reachable. Sidecar-gated in the source
-  // twin (net-core.cjs).
+  // `net.probe {to}`. Not bridge- or follower-reachable.
   'net-v1',
   // 'net-join-v1' — joining without a companion: `net.invites {invites: [{id, codeHash,
   // expiresAt, name}]}` hands this host's walnut-net the invites it may take a new machine
@@ -738,25 +702,24 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // arguments, timeoutMs}` start the server (one per task, server and folder, 10
   // idle minutes) and answer within `wait` or `{running:true}`; `mcp.result {callId,
   // wait}` reads a kept answer. The server checks the user's grant first
-  // (src/core/hosts/host-mcp.ts); not bridge- or follower-reachable. Sidecar-gated in
-  // the source twin (host-reach-core.cjs).
+  // (src/core/hosts/host-mcp.ts); not bridge- or follower-reachable.
   'host-mcp-v1',
   // 'host-http-v1' — one HTTP request made from this host for a task on another
   // (host-http-core.ts): `http.request {url, method, headers, body | bodyBase64,
   // timeoutMs}` answers the status, headers (Set-Cookie hidden) and up to 256 KB of
-  // the body. Same grant, same reachability, same sidecar as host-mcp-v1.
+  // the body. Same grant and reachability as host-mcp-v1.
   'host-http-v1',
   // 'secrets-v1' — the secrets the user shared with this host (secrets-core.ts),
   // one 0600 file each under $XDG_STATE_HOME/open-walnut/secrets: `secrets.list`
   // (names and versions, never a value), `secrets.put {name, version, value, env,
   // sessions}`, `secrets.remove {name}`, `secrets.sync {keep}`. A session starts
   // with WALNUT_SECRETS_DIR and, for each secret the user let sessions have, its
-  // env var. Not bridge- or follower-reachable. Sidecar-gated in the source twin.
+  // env var. Not bridge- or follower-reachable.
   'secrets-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
   // the daemon installs/starts code-server bound to 127.0.0.1 and returns
   // {port, token}; the server tunnels the port and the web UI iframes it.
-  // Sidecar-gated in the source twin (vscode-server-core.cjs). Optional:
+  // Optional:
   // without it the UI shows an upgrade hint and the vscode:// deep-link
   // button still works.
   'vscode-v1',
@@ -769,14 +732,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (or the server's test run) it ran the check for; it drops any `triggerCaller` a caller wrote.
   // The server reads `triggerCaller` only from a daemon that says this (an older one passes on
   // whatever a caller wrote) and runs host_exec, host_copy, host_http and host_mcp_* for that
-  // trigger's task (src/core/hosts/trigger-caller.ts). Sidecar-gated in the source twin.
+  // trigger's task (src/core/hosts/trigger-caller.ts).
   'trigger-caller-v1',
   // 'offline-triggers-v1': while a Walnut does not answer this host, the host
   // answers its sessions' trigger_list and trigger_test itself (the checks run
   // here), and takes trigger_pause / trigger_resume / trigger_delete at once,
   // journaled for the server like a queued task write; until the server has taken
-  // them, a set it pushes does not undo them. Informational. Sidecar-gated in the
-  // source twin like triggers-v1.
+  // them, a set it pushes does not undo them. Informational.
   'offline-triggers-v1',
   // 'clock-routine-v1': clock defs in the trigger table (see the note above).
   'clock-routine-v1',
@@ -789,7 +751,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (host-start-core.ts planRoutine), journals its `task-create` and `session` records
   // and is replayed with `host.started`, so the Mac records it and starts nothing. Ids
   // are derived from (home, routine, slot): one run per slot. Optional: without it the
-  // Mac pushes neither and the run waits for the Mac. Sidecar-gated in the source twin
+  // Mac pushes neither and the run waits for the Mac.
   // like clock-routine-v1.
   'clock-host-start-v1',
   // 'trigger-state-snapshot-v1': `triggers.state.snapshot {home, triggerId}` reads the
@@ -800,7 +762,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // digest, stateMtimeMs, seenReliableUntil}` or `{supported: false, reason}`, so a
   // server moving a legacy watcher keeps its dedup set and cursor. Informational and
   // fail closed: a daemon without it has no such command, and the server must not
-  // migrate state from it. Sidecar-gated in the source twin like triggers-v1.
+  // migrate state from it.
   'trigger-state-snapshot-v1',
   // 'trigger-state-seed-v1': `triggers.state.seed {home, triggerId, state, digest}` writes
   // a snapshot's state (trigger-state-snapshot-v1, taken on another daemon) as this
@@ -837,27 +799,24 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // worker, core/subagents), and the daemon ends such a worker's whole process group itself past
   // its deadline or once no socket has subscribed to it for the grace. Required: a light ACP run
   // is refused on a daemon without it, which would leave one running after its server died.
-  // The source twin says it only with an ACP sidecar that has the bounds (acp.lightBounds).
   'acp-light-bounds-v1',
   // 'acp-survive-v1': acpStart takes `survive: true` and starts the worker so it outlives this
   // daemon (acp-survive.ts: requests over a named pipe, answers into a file, request ids that never
   // repeat); the next daemon adopts it by pid and start time, its turn goes on, and it holds no
   // update. Optional: a server only asks for it on a daemon that says it, and a worker started
-  // without it runs on pipes as before. Sidecar-gated in the source twin (acp.endForRollback).
+  // without it runs on pipes as before.
   'acp-survive-v1',
-  // 'acp-host-v1' is NOT listed here: only the source twin says it, once the ACP files
-  // a source deploy puts beside daemon.cjs are there (daemonCapabilities() in
-  // daemon-source.ts). acpStart then takes `hostAdapter` instead of the primary's paths,
-  // and `acpHostEngines` says which engines the host can run (acp-host-artifacts.ts).
-  // The binary twin says it only inside the compiled walnut file, whose runtime tree holds
-  // the same files under their dist names (daemon-standalone.ts ACP_ARTIFACT_DIR).
+  // 'acp-host-v1' is NOT listed here: the daemon says it only inside the compiled walnut
+  // file, whose runtime tree holds the ACP files under their dist names
+  // (daemon-standalone.ts ACP_ARTIFACT_DIR). acpStart then takes `hostAdapter` instead of the
+  // primary's paths, and `acpHostEngines` says which engines the host can run
+  // (acp-host-artifacts.ts).
   // 'send-markers-v1': send accepts markers and writes them after the body enters the pipe but before the newline; an old daemon ignores the field and keeps using the appendUserMarker RPC after delivery.
   'send-markers-v1',
   // 'send-dedupe-v1': send accepts `dedupe:true` (a resend of a line that may already
   // be in a CLI) and then writes nothing, answering {ok:true, duplicate:true, fate},
   // when the CLI's lifecycle frames or the daemon's after-newline write record say
-  // what became of it (ran / cancelled / dropped / waiting, line-fate-core.ts). Both
-  // twins run the same inlined function. Optional: without it the server never
+  // what became of it (ran / cancelled / dropped / waiting, line-fate-core.ts). Optional: without it the server never
   // resends an unanswered line and reports it unconfirmed instead.
   'send-dedupe-v1',
   // 'send-lost-line-v1': a dedupe send accepts `lostPid`, the CLI process the
@@ -901,7 +860,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'line-fate-read-v1',
   // 'marker-find-v1': markers.find answers which of a session's phone message
   // ids have a delivery marker in its stream, searched host-side newest first
-  // (marker-find-core.ts; both twins inline, not sidecar-gated). Bridge-
+  // (marker-find-core.ts). Bridge-
   // reachable, read-only, bounded. Optional: the companion falls back to a
   // read-history tail when the command is unknown or not permitted.
   'marker-find-v1',
@@ -911,16 +870,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'agent-commands-v1',
   // 'preflight-v1': host.preflight answers what this host can run (is claude
   // installed, native or npm build, a working node for the npm build, a C
-  // compiler, dtach), computed host-side with short timeouts. Both twins
-  // implement it inline (host-runtime-core.ts, text-injected into the source
-  // twin), so it is NOT sidecar-gated. Not bridge-reachable. Optional: without
+  // compiler, dtach), computed host-side with short timeouts. Not bridge-reachable. Optional: without
   // it the host status simply carries no readiness field and shows no hint.
   'preflight-v1',
   // 'hostfix-v1': host.fix runs ONE named fix the preflight asked for
   // (install-claude-native, install-compiler under `sudo -n`, build-dtach),
-  // idempotent and one at a time, never a free-form command. Both twins
-  // implement it inline (host-fix-core.ts, text-injected into the source twin),
-  // so it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
+  // idempotent and one at a time, never a free-form command. Not bridge-reachable. Optional: without it the
   // server never fixes anything and the readiness lines keep their commands.
   'hostfix-v1',
   // 'bridge-uplink-v1': the cloud bridge socket is paced (at most 1MB the
@@ -928,9 +883,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // bridge-uplink-core.ts), frames over the peer's chunk size are split once
   // the replica opts in with `bridge.peer`, `mobile-event` acks say whether the
   // frame was queued and on which connection (connId), and the trusted
-  // `bridge.status` command answers {connected, connId, queuedBytes}. Both twins
-  // implement it (the core is text-injected into the source twin), so it is NOT
-  // sidecar-gated. Optional: without it the server pushes every self-heal
+  // `bridge.status` command answers {connected, connId, queuedBytes}. Optional: without it the server pushes every self-heal
   // projection as before (no unchanged-content skip).
   'bridge-uplink-v1',
   // 'orphan-stop-v1': `stop` accepts reason 'orphan' plus `expectPid` and
@@ -942,7 +895,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // journal line naming that same Walnut) and finding nothing that keeps the
   // session alive. The reply is {stopped:true} or {stopped:false,
   // reason:'not_owned'|'not_running'|'recent_output'|'protected', detail}.
-  // Both twins implement it inline, so it is NOT sidecar-gated. Optional, and
+  // Optional, and
   // fail-closed: a daemon without it gets no orphan request at all (and would
   // answer 'stop: invalid reason' if it did), so nothing is ended.
   'orphan-stop-v1',
@@ -954,7 +907,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // none, `strict` is refused and an unjournaled sid may only be stopped by a
   // human. Why: an ephemeral server over copied data holds the user's session
   // ids, and with remote hosts on it reaches the SAME shared remote daemon.
-  // Both twins implement it inline. Optional: the production server sends the
+  // Optional: the production server sends the
   // old unlabelled stop to a daemon without it; an ephemeral server sends none
   // at all (fail closed).
   'owner-home-v1',
@@ -962,9 +915,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // repo, the daemon records the working tree under a hidden ref
   // (refs/walnut/turns/<sid>/<n>, turn-snapshot-core.ts), and answers
   // turns.list / turns.diff / turns.restore / turns.configure on them, plus
-  // turns.guard (the rewind guard, turn-guard-core.ts). Both twins implement
-  // it (the cores are text-injected into the source twin), so it is NOT
-  // sidecar-gated. Not bridge-reachable: it reads and writes host files.
+  // turns.guard (the rewind guard, turn-guard-core.ts). Not bridge-reachable: it reads and writes host files.
   // Optional: without it the Changed tab has no Turns view and a rewind
   // restores without the guard, as before.
   'turn-snapshot-v1',
@@ -972,17 +923,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it touched, its own hunks attributed), `git.commitStart` (a commit / push /
   // PR job: a commit is built in a private index, hooks run against it, the
   // branch moves by compare-and-swap; a push never forces) and `git.commitJob`
-  // (poll a job). Both twins implement it (git-commit-core.ts and
-  // git-attribution-core.ts are text-injected into the source twin), so it is
-  // NOT sidecar-gated; without the changes sidecar the plan is unattributed.
+  // (poll a job).
   // Not bridge-reachable: it writes refs and publishes. Optional: without it the
   // Changed tab says the host's daemon needs an update.
   'git-commit-v1',
   // 'git-status-v1': `git.status { dirs }` answers the glanceable state of the
   // repos those directories sit in (branch, changed paths, +/- lines, commits
   // not pushed), one small lock-free read per repo (createGitStatus in
-  // git-diff-core.ts). Both twins implement it (the core is text-injected into
-  // the source twin), so it is NOT sidecar-gated. Not bridge-reachable: it reads
+  // git-diff-core.ts). Not bridge-reachable: it reads
   // host paths. Optional: without it session rows show no git state for that
   // host until the next auto-deploy.
   'git-status-v1',
@@ -990,31 +938,26 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // with a ref, the default branch when none) and the 'commit' base (one
   // commit vs its first parent), and a names-only list (`namesOnly`, each file
   // with its working-tree blob id); `git.refs` lists branches and the newest
-  // commits for the Changed tab's compare picker. Both twins run
-  // git-diff-core.ts (text-injected into the source twin), so it is NOT
-  // sidecar-gated. Not bridge-reachable, like git.diff. Optional: without it
+  // commits for the Changed tab's compare picker. Not bridge-reachable, like git.diff. Optional: without it
   // those comparisons say the host's daemon needs an update.
   'git-compare-v1',
   // 'workspace-v1': a task's isolated working copy (workspace-core.ts).
   // `workspace.detect` / `.create` / `.job` / `.status` / `.repos` / `.remove`
   // run the built-in git-worktree provider natively and plugin providers from an
   // allowlist the server pushes with `workspace.configure` (argv, no shell, JSON
-  // over stdin/stdout). Both twins implement it (the core is text-injected into
-  // the source twin), so it is NOT sidecar-gated. Not bridge-reachable: it runs
+  // over stdin/stdout). Not bridge-reachable: it runs
   // providers and removes folders on this host. Optional: without it a task
   // asking for an isolated workspace is told the host's daemon needs an update.
   'workspace-v1',
   // 'workspace-scripts-v1': project scripts (core/workspaces/scripts.ts, in workspace-core.ts).
   // `workspace.scriptsFile {dir}` reads a repository's walnut.json at the git top
   // of dir; `workspace.runScript` runs a setup or teardown line in the user's login shell, as a
-  // `workspace.job`, only inside a workspace root (the worktrees folder, a plugin region). Both
-  // twins (the core is text-injected), NOT sidecar-gated, not bridge-reachable. Optional:
+  // `workspace.job`, only inside a workspace root (the worktrees folder, a plugin region). Not bridge-reachable. Optional:
   // without it a new workspace skips its setup script and says the daemon needs an update.
   'workspace-scripts-v1',
   // 'workspace-recheck-v1': `workspace.status` and `workspace.remove` take `recheck: true`
   // (workspace-core.ts): fetch the remotes first, and count a commit whose patch `git cherry`
-  // finds on the upstream as merged; the probe echoes `rechecked`. Both twins (the core is
-  // text-injected), NOT sidecar-gated, not bridge-reachable. Optional: without it a workspace
+  // finds on the upstream as merged; the probe echoes `rechecked`. Not bridge-reachable. Optional: without it a workspace
   // kept for unmerged commits is not re-checked (core/workspaces/merge-recheck.ts).
   'workspace-recheck-v1',
   // 'journal-v2' (offline-journal-core.ts, docs/plan/walnut-replica-servers-impl.md section 5):
@@ -1026,13 +969,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // {seqs}` drops exactly those (an `upTo` drops only seqs a drain handed out),
   // `offline.blob {sha, offset}` hands a note body in 2 MB chunks, and `follower.pending
   // {sinceSeq}` / `follower.status {journal}` give the replica its overlay and the away
-  // line. Both twins (the core is text-injected into the source twin), NOT sidecar-gated,
-  // not bridge-reachable. Optional: without it the Mac drains v1 as before.
+  // line. Not bridge-reachable. Optional: without it the Mac drains v1 as before.
   'journal-v2',
   // 'replica-ops-v1': `follower.op {op, args, actor, opId, base}`, the replica's task and
   // Board writes while the Mac is away, journaled as v2 kinds (task-fields, task-create,
   // task-move, board) for a Mac that drains them; a retry with the same opId is answered,
-  // not written again; `needs_leader {why:'mac_too_old'}` for an older Mac. Both twins.
+  // not written again; `needs_leader {why:'mac_too_old'}` for an older Mac.
   // Optional: without it a write away answers needs_leader {why:'daemon_needs_upgrade'}.
   // WP10 grew it without a new name, because each addition degrades to a refusal on a
   // daemon that lacks it: `device_revoke` (a device's own sign-out, a `device-revoke`
@@ -1046,7 +988,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // server.http relay reaches); the Mac plugs it into its companion door
   // (web/v1-forward/stream-door.ts), which gives each call the rights of a paired
   // device. The bridge hello says it (`capabilities`), so the companion forwards on a
-  // stream only to a daemon that has it and uses server.http otherwise. Both twins.
+  // stream only to a daemon that has it and uses server.http otherwise.
   // Optional.
   'bridge-stream-v1',
   // 'note-journal-v1' (docs/plan/walnut-replica-servers-impl.md WP11, section 6): notes
@@ -1057,8 +999,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (`note_read`, `replica.list/read/readMany`) shows the pending write; `replica.sync`
   // keeps a held key (pending, or acked and awaiting a later copy) and answers `held`,
   // and refuses a manifest removing more than half of 200 or more notes
-  // (`manifest_removes_most_rows`) unless `confirm:true` names it. Both twins (the cores
-  // are text-injected into the source twin), not bridge-reachable. Optional: a Mac that
+  // (`manifest_removes_most_rows`) unless `confirm:true` names it. Not bridge-reachable. Optional: a Mac that
   // does not drain `note` records (its leader.configure drains lack 'note') gets today's
   // answer, a note write away needs the Mac.
   'note-journal-v1',
@@ -1070,7 +1011,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // value validated (host-start-core.ts), journals a `session` record (the Mac adopts it on
   // its drain) and starts the CLI with the spawn journal naming the follower's Walnut, so a
   // stop from the Mac after adoption is honoured by owner-home-v1. A person's message to a
-  // stopped session of this host while away resumes it (journaled `resume`). Both twins.
+  // stopped session of this host while away resumes it (journaled `resume`).
   // Optional: without it a new ask away answers needs_leader {why:'daemon_needs_upgrade'}.
   'replica-start-v1',
   // 'replica-logs-v1' (replica-logs-core.ts, docs/plan/walnut-replica-servers-impl.md
@@ -1079,8 +1020,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // log ('stdout'), and this daemon's own journal lines for `home` ('journal'). A
   // trusted leader socket whose leader.configure named `home` only; never a path from
   // the request; at most 2000 lines per source. The supervisor also caps a running
-  // server's stdout log by size (host-server-core.ts capLog). Both twins (the core is
-  // text-injected), not bridge-reachable, not for followers. Optional: without it
+  // server's stdout log by size (host-server-core.ts capLog). Not bridge-reachable, not for followers. Optional: without it
   // `walnut-logs.sh replica --host` shows the Mac's own lines only.
   'replica-logs-v1',
   // 'fs-write-part-v1' (transfer-core.ts): `fs.writePart {path, offset, data, final?, size?,
@@ -1088,7 +1028,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (`<path>.walnut-part`). Offset 0 starts over, a chunk already staged is acknowledged
   // without writing, a chunk past the end answers code `gap` with `have`; the final chunk
   // checks size and sha256 (`size_mismatch` / `checksum_mismatch`, staging left in place),
-  // fsyncs and renames. Both twins, not bridge-reachable, not for followers. Optional:
+  // fsyncs and renames. Not bridge-reachable, not for followers. Optional:
   // without it a workspace move cannot relay files through the server to this host.
   'fs-write-part-v1',
   // 'upload-part-v1' (transfer-core.ts uploadPart): `upload.part {uploadId, name, size,
@@ -1098,7 +1038,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // daemon started that session for; else a folder beside the task dirs): the id and
   // name are checked, never a path from the caller, and a chunk is refused with
   // `no_space` when the disk cannot hold the rest of the file plus 512 MB. The last
-  // chunk answers `path`. Both twins, bridge-reachable (the companion relays a phone's
+  // chunk answers `path`. Bridge-reachable (the companion relays a phone's
   // upload), not for followers. Optional: without it the server answers
   // `files_need_daemon_upgrade` until the next auto-deploy.
   'upload-part-v1',
@@ -1109,7 +1049,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // receiving host and pull from the sending one over this host's own ssh (BatchMode,
   // fixed argv, no agent forwarding, inputs validated, every file verified before its
   // rename); `transfer.realpath {path}` names a directory the way a CLI started there
-  // sees its cwd (where it keeps its transcript). Both twins, not bridge-reachable,
+  // sees its cwd (where it keeps its transcript). Not bridge-reachable,
   // not for followers. Optional: without it a workspace cannot move off or onto this host.
   'transfer-v1',
   // 'transfer-private-v1' (transfer-core.ts): `fs.writePart` with `private: true` and an
@@ -1117,14 +1057,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the root comes from this daemon (its owner stamp and the socket's leader.configure
   // binding), never from the command. The attempt dir is created 0700 and the files 0600
   // on their own fds; writes go through one file handle with the path chain re-checked; the
-  // finished file is named with link() (never replacing one). Both twins, not
+  // finished file is named with link() (never replacing one). Not
   // bridge-reachable, not for followers. Optional: without it a Claude to Claude transfer
   // refuses before reading any transcript byte.
   'transfer-private-v1',
   // 'host-facts-v1' (host-facts-core.ts): `host.facts {network?}` answers what this host is
   // (OS and distro, CPU, memory, free disk, FQDN, which proxy variables are set but never
   // their values, EC2 IMDSv2, whether github.com answers, toolchain versions). Read-only,
-  // every probe bounded (3 s each, 12 s in all), a failed probe is null. Both twins; like
+  // every probe bounded (3 s each, 12 s in all), a failed probe is null. Like
   // host.preflight, not bridge-reachable and not for followers. Optional.
   'host-facts-v1',
   // 'host-caps-v1' (host-facts-core.ts): host.facts also answers what this host can do:
@@ -1138,7 +1078,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // 'host-load-v1' (host-facts-core.ts load): `host.load {path?}` answers how busy this
   // host is now: load average, CPU busy share over two samples 200 ms apart, memory
   // available, free and total disk under `path` (default HOME). Read-only, every probe
-  // bounded (3 s). Placement weighs it (src/core/hosts/placement.ts). Both twins, not
+  // bounded (3 s). Placement weighs it (src/core/hosts/placement.ts). Not
   // bridge-reachable, not for followers. Optional: without it the host's load is unknown
   // and placement never picks it over the default host.
   'host-load-v1',
@@ -1146,7 +1086,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // this host reaches the model endpoint its Claude Code sessions call (the URL Claude Code
   // picks from its settings and environment, or the proxy in front of it): one HEAD of the root,
   // no credential, bounded (3 s). The server's endpoint wait (src/core/sessions/endpoint-wait.ts)
-  // asks it before it continues a turn that ended on a refused connection. Both twins, not
+  // asks it before it continues a turn that ended on a refused connection. Not
   // bridge-reachable, not for followers. Optional: without it the wait retries on a timer.
   'model-endpoint-v1',
   // 'task-move-v1' (transfer-pack-core.ts): `transfer.scan {dir}` lists the git
@@ -1154,28 +1094,27 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (only those files of a shared checkout ride) and `exclude` (a folder pack without
   // its repositories), and measures a clone of a local checkout against that checkout's
   // own remote; `transfer.apply {dest, bundleDir, cloneFrom?, url?}` sets a pack up as a
-  // working checkout here (clone, bundle, check out, patch, untracked files). Both twins,
-  // not bridge-reachable, not for followers. Optional: without it a move packs the
+  // working checkout here (clone, bundle, check out, patch, untracked files). Not bridge-reachable, not for followers. Optional: without it a move packs the
   // session's folder as task_transfer does and the new session sets it up.
   'task-move-v1',
   // 'task-move-clear-v1' (transfer-pack-core.ts): `transfer.clear {root, files,
   // backupFrom, backupTo}` keeps a moved shared checkout's own files (the pack: patch,
   // untracked files) in the task directory and takes each back to HEAD while it still
   // holds what was packed; `transfer.pack` with `paths` records each file's hash for it.
-  // Both twins, not bridge-reachable, not for followers. Optional: without it a move
+  // Not bridge-reachable, not for followers. Optional: without it a move
   // leaves those copies in the shared checkout and its summary says so.
   'task-move-clear-v1',
   // 'task-move-into-v1' (transfer-pack-core.ts): `transfer.apply {dest, bundleDir, into: true}`
   // sets a moved repository up in the existing checkout at dest, the copy the work left when it
   // moved away, only while nothing changed there (clean tree, HEAD an ancestor of the packed
   // commit); else `dest_changed` with nothing changed. A move back then continues in the task's
-  // own folder. Both twins, not bridge-reachable, not for followers. Optional: without it a move
+  // own folder. Not bridge-reachable, not for followers. Optional: without it a move
   // back sets the work up in a new folder beside the old copy.
   'task-move-into-v1',
   // 'task-move-base-v1' (transfer-pack-core.ts): `transfer.recent {roots}` answers the commits each
   // repository here holds near its HEAD, and `transfer.pack` takes `haves` (bundle only what follows
   // the newest of them HEAD builds on) and `noBundle` (never the commits). A move to this host then
-  // ships what it lacks, not every commit since the remote's merge base. Both twins, read only, not
+  // ships what it lacks, not every commit since the remote's merge base. Read only, not
   // bridge-reachable, not for followers. Optional: without it the base comes from the remote.
   'task-move-base-v1',
   // 'host-vitals-v1' (host-vitals-core.ts): `host.vitals {days?, bucketMinutes?}` answers
@@ -1193,7 +1132,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // socket that asked; `oneshot.prewarm` boots a child for a warm key (at most
   // 3, 15 min idle); `oneshot.cancel {runId, signal}`. A run whose socket
   // closes is killed. No session record: these children are hidden. Starts a
-  // process, so not bridge-reachable and not for followers. Both twins.
+  // process, so not bridge-reachable and not for followers.
   // Optional: without it the server runs the same core in-process.
   'oneshot-v1',
   // 'plugin-jobs-v1' (plugin-jobs-core.ts, plugin-job-harness.ts): `jobs.configure {home,
@@ -1203,8 +1142,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // lines of one job's log. Each job is its own process group (`<this daemon's program> walnut
   // plugin-job <bundle> <job>`), restarted with backoff or run every N, adopted by a new
   // daemon, its spec and run times kept in a durable dir. A trusted leader socket whose
-  // leader.configure named `home` only; not bridge-reachable, not for followers. Both twins
-  // (the cores are text-injected). Optional: without it the Mac sends no jobs to that machine.
+  // leader.configure named `home` only; not bridge-reachable, not for followers. Optional: without it the Mac sends no jobs to that machine.
   'plugin-jobs-v1',
   // 'plugin-jobs-serve-v1' (plugin-jobs-core.ts http, plugin-job-door.ts): a long-running job whose
   // spec says `serves` gets a unix socket of its own run (0600, its dir 0700; a short per-run path
@@ -1213,14 +1151,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // LIVE run of that plugin's serving job for that home and answers `{status, headers, size, data}`:
   // bodies at most 2 MB, headers 64 KB, 12 s, 8 at once per run; a refusal's `errorKind` says why
   // (not_serving, not_running, not_ready, busy, timeout, too_large, ...). The same trusted leader
-  // socket as 'plugin-jobs-v1'. Both twins (the door is text-injected). Optional: without it the Mac
+  // socket as 'plugin-jobs-v1'. Optional: without it the Mac
   // sends no serving job to that machine and answers the plugin's job routes 503.
   'plugin-jobs-serve-v1',
   // 'walnut-mcp-v1' (walnut-mcp-stdio.ts): this daemon's `walnut` serves `walnut mcp-server`,
   // Walnut's ops as an MCP stdio server relayed through this gateway socket, and the server
   // mounts it into a new Claude Code session on this host (core/sessions/walnut-mcp-mount.ts).
-  // The binary twin only: the source twin's `walnut` has no MCP server, so it is never
-  // advertised there. Optional: without it a session has the `walnut` CLI alone.
+  // Optional: without it a session has the `walnut` CLI alone.
   'walnut-mcp-v1',
   'implicit-mode-v1',
   // 'follower-gateway-v1' (follower-gateway-core.ts): while no leader takes a `walnut` call of a
@@ -1230,7 +1167,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (`needs_leader`) gets this daemon's own away answer as before. `follower.op` takes a
   // `plugin-job` actor for a Mac that drains `plugin-job-actor`, and `follower.start` takes
   // `run: 'task'` (host-start-core.ts planTask, the routine template) for a Mac that drains
-  // `task-start`. Both twins. Optional: the Mac pushes the routine template to it, and the host
+  // `task-start`. Optional: the Mac pushes the routine template to it, and the host
   // server manager turns on the replica's `host-local-calls` capability only with it.
   'follower-gateway-v1',
   // 'host-call-entry-v1' (host-call-token-core.ts, replica/host-call-entry.ts): a follower that
@@ -1240,7 +1177,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // WALNUT_CALL_TOKEN (HMAC-SHA256 of its caller sid and a nonce of that run, under a key in the
   // daemon dir) beside WALNUT_AGENT_SOCKET, and posts its request lines there. The follower hands
   // each back with `follower.gateway {request, token, openedAt}`: the token is checked against the
-  // sid's current run, then the line runs as a socket line does (handleGatewayLine). Both twins.
+  // sid's current run, then the line runs as a socket line does (handleGatewayLine).
   // Optional: the follower answers `entry_unavailable` without it, and the caller uses the socket.
   'host-call-entry-v1',
   // 'follower-peer-v1' (offline-host-core.ts handleFollowerPeer, replica/away-sends.ts): a message
@@ -1250,27 +1187,26 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `row`/`settle`/`delivery` as its own offline answer does; a retry under the same op id is
   // written once. `online` (the leader answers): a follower that said `answersOnline: true` at
   // follower.hello gets the same-host sends handleLocal would take, and what it leaves is relayed
-  // to the leader. Both twins. Optional: without it the follower hands a reply-asking send back.
+  // to the leader. Optional: without it the follower hands a reply-asking send back.
   'follower-peer-v1',
   // 'follower-trigger-delivery-v1' (follower-trigger-delivery-core.ts): while no leader claims a
   // trigger fire, a follower that said `deliversTriggers: true` at follower.hello gets a
   // `trigger-delivery` event, picks the session with its copies, and answers
   // `follower.trigger.deliver {deliveryId, sid, resume}`; the daemon writes it (the FIFO, or a
   // resume journaled `resume`) and marks the fire host-delivered as before. A follower that
-  // keeps failing gets the daemon's own delivery. Both twins. Optional: a follower that never
+  // keeps failing gets the daemon's own delivery. Optional: a follower that never
   // said it is never offered one, and a daemon without it delivers on its own as before.
   'follower-trigger-delivery-v1',
   // 'follower-triggers-v1' (offline-host-core.ts followerTriggers / followerTriggerTest,
   // replica/away-triggers.ts): `follower.triggers {id?}` lists that Walnut's triggers here (armed,
   // paused or deleted here, each with its def) for the follower's trigger_list and the read before a
-  // pause, and `follower.trigger.test {args, actor}` runs a check once, writing no state. Both twins.
+  // pause, and `follower.trigger.test {args, actor}` runs a check once, writing no state.
   // Optional: without it the follower reads its routines copy alone and hands trigger_test back.
   'follower-triggers-v1',
   // 'follower-create-inherited-v1' (offline-host-core.ts handleFollower, replica/away-create-placement.ts):
   // `follower.op` task_create takes `inherited_project`, the project a session's create took from its
   // caller, into the record's `placement.inheritedProject`, which this host's readers show and every
-  // drain ignores (the leader files the task under its caller where the caller is then). Shared code,
-  // so both twins. Optional: without it the follower journals no inherited project, as before.
+  // drain ignores (the leader files the task under its caller where the caller is then). Optional: without it the follower journals no inherited project, as before.
   'follower-create-inherited-v1',
 ] as const
 

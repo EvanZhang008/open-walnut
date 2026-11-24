@@ -1,6 +1,6 @@
 /**
  * The host's session daemon restarts (SIGKILL, as a crash or a forced replace does) while
- * work it was doing for the server is in flight, on BOTH daemon twins booted for real:
+ * work it was doing for the server is in flight, on the daemon booted for real:
  *
  * - a one-shot model call ('oneshot-v1', oneshot-client.ts over a real DaemonConnection)
  *   ends with an error naming the dropped link within a few seconds of the kill, never at
@@ -16,7 +16,7 @@
  * both run by node directly; signals go only to the daemons and children this file started.
  */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -42,14 +42,12 @@ vi.mock('../../src/core/hosts/exec-grants.js', async (orig) => ({
   noteRun: async () => {},
 }))
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { _setOneShotDaemonForTest, _resetLocalOneShotForTest, startOneShot, type OneShotConn, type OneShotExit } from '../../src/providers/oneshot-client.js'
 import { hostMcpCall, hostMcpResult, resetHostMcpForTest, MAX_CALLS_PER_TASK } from '../../src/core/hosts/host-mcp.js'
 import { HostExecError } from '../../src/core/hosts/host-exec.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const FAKE_CLI = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
@@ -59,22 +57,8 @@ const SETTLE_MS = 3_000
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-oneshot-mcp-restart-')))
 afterAll(() => { if (root.includes('walnut-oneshot-mcp-restart-')) fs.rmSync(root, { recursive: true, force: true }) })
-const scriptPath = path.join(root, 'daemon.cjs')
-fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-// The source twin finds its sidecars next to it, as deployed (host-mcp-v1 rides host-reach-core).
-if (BUN) {
-  for (const name of ['task-dir-core', 'host-exec-core', 'host-reach-core']) {
-    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, `${name}.cjs`),
-      path.resolve(__dirname, `../../src/providers/${name}.ts`)], { encoding: 'utf8' })
-    if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
-  }
-}
-const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 const procs: ChildProcess[] = []
 const conns: DaemonConnection[] = []
@@ -113,7 +97,7 @@ async function kill(p: ChildProcess): Promise<void> {
 }
 
 /** Start a daemon on `dir` (the same dir twice is a restart) and open a fresh link to it. */
-async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ proc: ChildProcess; conn: DaemonConnection; home: string }> {
+async function boot(dir: string): Promise<{ proc: ChildProcess; conn: DaemonConnection; home: string }> {
   const home = path.join(dir, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -123,8 +107,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<{ proc: 
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'), WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   procs.push(proc)
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -148,10 +131,10 @@ async function killAndTime<T>(proc: ChildProcess, settled: Promise<T>): Promise<
   return { ms: Date.now() - t0, outcome }
 }
 
-describe.each(TWINS)('$name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun)', () => {
   it('a one-shot run in flight when the daemon dies ends at once with the dropped link; the next one runs on the new daemon', async () => {
-    const dir = path.join(root, `oneshot-${twin.name.replace(/\W+/g, '-')}`)
-    const a = await boot(twin, dir)
+    const dir = path.join(root, 'oneshot-standalone')
+    const a = await boot(dir)
     expect(a.conn.hasCapability('oneshot-v1')).toBe(true)
     let link: DaemonConnection = a.conn
     _setOneShotDaemonForTest(() => link as unknown as OneShotConn)
@@ -165,7 +148,7 @@ describe.each(TWINS)('$name', (twin) => {
     if (hung.pid) childPids.push(hung.pid)
 
     const { ms, outcome } = await killAndTime(a.proc, exitedA)
-    console.log(`[oneshot-restart] ${twin.name}: run settled ${ms} ms after the daemon's SIGKILL`)
+    console.log(`[oneshot-restart] standalone: run settled ${ms} ms after the daemon's SIGKILL`)
     expect(outcome.status).toBe('fulfilled')
     const exit = (outcome as PromiseFulfilledResult<OneShotExit>).value
     expect(exit).toMatchObject({ code: null, signal: null })
@@ -174,7 +157,7 @@ describe.each(TWINS)('$name', (twin) => {
     a.conn.disconnect()
 
     // A new daemon on the same dirs, a fresh link: the next run is the new daemon's child.
-    const b = await boot(twin, dir)
+    const b = await boot(dir)
     link = b.conn
     const lines: string[] = []
     let exitB!: (e: OneShotExit) => void
@@ -189,11 +172,11 @@ describe.each(TWINS)('$name', (twin) => {
   }, 120_000)
 
   it('a host MCP call in flight when the daemon dies fails at once; the next call starts the server again', async () => {
-    const dir = path.join(root, `mcp-${twin.name.replace(/\W+/g, '-')}`)
+    const dir = path.join(root, 'mcp-standalone')
     const home = path.join(dir, 'home')
     fs.mkdirSync(home, { recursive: true })
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { fake: { command: process.execPath, args: [FAKE_MCP] } } }))
-    const a = await boot(twin, dir)
+    const a = await boot(dir)
     expect(a.conn.hasCapability('host-mcp-v1')).toBe(true)
     currentConn = a.conn
     const pidOf = (text: unknown) => Number(/\(pid (\d+),/.exec(String(text))?.[1])
@@ -209,7 +192,7 @@ describe.each(TWINS)('$name', (twin) => {
       hostMcpCall({ host: 'devbox', server: 'fake', tool: 'slow', arguments: { ms: 60_000 } }, 'sid-restart'))
     await new Promise((r) => setTimeout(r, 500)) // the calls reached the daemon and the server
     const { ms, outcome } = await killAndTime(a.proc, Promise.all(inFlight.map((p) => p.then(() => null, (e: unknown) => e))))
-    console.log(`[mcp-restart] ${twin.name}: ${MAX_CALLS_PER_TASK} calls settled ${ms} ms after the daemon's SIGKILL`)
+    console.log(`[mcp-restart] standalone: ${MAX_CALLS_PER_TASK} calls settled ${ms} ms after the daemon's SIGKILL`)
     expect(outcome.status).toBe('fulfilled')
     const errors = (outcome as PromiseFulfilledResult<unknown[]>).value
     expect(ms).toBeLessThan(SETTLE_MS)
@@ -226,7 +209,7 @@ describe.each(TWINS)('$name', (twin) => {
     await waitFor(() => !isAlive(serverA), 10_000)
     a.conn.disconnect()
 
-    const b = await boot(twin, dir)
+    const b = await boot(dir)
     currentConn = b.conn
     // The lost calls still count until read: the task was told to read them first.
     await expect(hostMcpCall({ host: 'devbox', server: 'fake', tool: 'echo', arguments: { text: 'too soon' } }, 'sid-restart'))

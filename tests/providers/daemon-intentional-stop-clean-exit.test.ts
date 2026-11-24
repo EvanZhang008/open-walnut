@@ -22,18 +22,16 @@
  *
  * The fix records the INTENT on the session before the first signal
  * (`intentionalStopAt`) and normalizes the code in reapSession. Covered here:
- *   1. daemon-core behavior (the bun binary reaps through it) — intentional vs.
+ *   1. daemon-core behavior (the daemon reaps through it) — intentional vs.
  *      not, with the real non-result tail.
- *   2. the SOURCE TEMPLATE's own reapSession text, evaluated (the JS fallback
- *      can't import daemon-core, so its copy is hand-synced).
- *   3. the end-to-end MEANING: exitCode → assembleSnapshot →
+ *   2. the end-to-end MEANING: exitCode → assembleSnapshot →
  *      projectProcessStatus is 'stopped', not 'error'.
- *   4. byte-level parity of BOTH intent stamps across all three twins.
+ *   3. source checks: reapSession reads the intent, and the daemon stamps it at
+ *      exactly its three sites (idle scan, explicit stop, budget pause).
  *
  * MACHINE SAFETY: this file signals NOTHING. Every kill primitive is a spy
- * (`killProcessGroupFn` in the injected deps for daemon-core; a `killProcessGroup`
- * stub in the template harness), `process.kill` is spied on and asserted NEVER
- * called, no child process is spawned, no timer callback is allowed to run, and
+ * (`killProcessGroupFn` in the injected deps for daemon-core), `process.kill` is
+ * spied on and asserted NEVER called, no child process is spawned, no timer callback is allowed to run, and
  * all files live under a per-test tmp dir.
  */
 
@@ -42,7 +40,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { buildDeps, makeTestSession, createDaemonCore, type TestSession } from '../helpers/daemon-core-fixtures.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { assembleSnapshot, initialFoldState } from '../../src/providers/daemon-fold.js'
 import { projectProcessStatus } from '../../src/core/session-snapshot-apply.js'
 
@@ -179,206 +176,15 @@ describe('daemon-core: an intentional stop normalizes the exit code', () => {
   })
 })
 
-// ── The JS-fallback twin runs its OWN copy of reapSession ──
-// daemon-source.ts can't import daemon-core, so its reapSession is hand-synced.
-// Byte checks alone would pass on a copy that kept the comment and dropped the
-// branch, so the template's own function text is EVALUATED here against fakes.
-describe('daemon-source template: reapSession honors the intentional-stop intent', () => {
-  const deployed = getDaemonSource()
-
-  /** Slice a top-level function out of the deployed source (closing `}` is at column 0). */
-  function extractFn(src: string, name: string): string {
-    const at = src.indexOf('function ' + name + '(')
-    expect(at, `${name} not found in the deployed daemon source`).toBeGreaterThan(-1)
-    const end = src.indexOf('\n}', at)
-    expect(end).toBeGreaterThan(at)
-    return src.slice(at, end + 2)
-  }
-
-  interface Harness {
-    reapSession: (sid: string, code: number, reason: string) => void
-    sessions: Map<string, Record<string, unknown>>
-    killProcessGroup: ReturnType<typeof vi.fn>
-    logMsg: ReturnType<typeof vi.fn>
-    broadcastSessionState: ReturnType<typeof vi.fn>
-  }
-
-  /**
-   * Build the template's reapSession with every free identifier injected. The
-   * only signal-capable dependency (killProcessGroup) is a spy, and the injected
-   * setTimeout never invokes its callback, so the SIGKILL escalation cannot run.
-   */
-  function buildHarness(mutate: (body: string) => string = (b) => b): Harness {
-    const sessions = new Map<string, Record<string, unknown>>()
-    const killProcessGroup = vi.fn(() => true)
-    const logMsg = vi.fn()
-    const broadcastSessionState = vi.fn()
-    const env = {
-      fs,
-      path,
-      sessions,
-      daemonBootId: undefined,
-      readStartTime: vi.fn(() => null),
-      logMsg,
-      logStateTransition: vi.fn(),
-      hookActions: () => [] as string[],
-      stripDurableTasksForSession: () => ({ changed: false, text: null, removed: [] }),
-      killProcessGroup,
-      setTimeout: vi.fn(),          // never fires — no escalation, no real timer
-      clearInterval: vi.fn(),
-      persistRegistry: vi.fn(),
-      drainSessionFold: vi.fn(),
-      pushSnapshot: vi.fn(),
-      stopSessionWatcher: vi.fn(),
-      broadcastSessionState,
-    }
-    const body = mutate(extractFn(deployed, 'isTurnCompleteExit') + '\n' + extractFn(deployed, 'reapSession'))
-    const factory = new Function('env', [
-      '"use strict";',
-      'const fs = env.fs, path = env.path, sessions = env.sessions;',
-      'const daemonBootId = env.daemonBootId, readStartTime = env.readStartTime;',
-      'const logMsg = env.logMsg, logStateTransition = env.logStateTransition;',
-      'const hookActions = env.hookActions, stripDurableTasksForSession = env.stripDurableTasksForSession;',
-      'const killProcessGroup = env.killProcessGroup, setTimeout = env.setTimeout, clearInterval = env.clearInterval;',
-      'const persistRegistry = env.persistRegistry, drainSessionFold = env.drainSessionFold;',
-      'const pushSnapshot = env.pushSnapshot, stopSessionWatcher = env.stopSessionWatcher;',
-      'const broadcastSessionState = env.broadcastSessionState;',
-      body,
-      'return reapSession;',
-    ].join('\n')) as (e: typeof env) => Harness['reapSession']
-    return { reapSession: factory(env), sessions, killProcessGroup, logMsg, broadcastSessionState }
-  }
-
-  let tmpDir: string
-  let killSpy: ReturnType<typeof vi.spyOn>
-
-  beforeEach(() => {
-    killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-intentional-stop-'))
-  })
-
-  afterEach(() => {
-    expect(killSpy, 'the template harness must never signal a real process').not.toHaveBeenCalled()
-    vi.restoreAllMocks()
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-  })
-
-  function makeSession(name: string, tail: string, intentionalStopAt: number | null) {
-    const jsonlPath = path.join(tmpDir, `jsonl-${name}`)
-    fs.writeFileSync(jsonlPath, '{"type":"system","subtype":"init"}\n' + tail)
-    return {
-      pipePath: path.join(tmpDir, `pipe-${name}`),
-      jsonlPath,
-      pgidPath: path.join(tmpDir, `pgid-${name}`),
-      pid: 4242,
-      state: 'running',
-      exitCode: null,
-      exitReason: null,
-      exitedAt: null,
-      cwd: tmpDir,
-      orphanPollTimer: null,
-      subscribers: new Set(),
-      intentionalStopAt,
-    }
-  }
-
-  it('normalizes to code 0 on an intentional reclaim with a control_response tail', () => {
-    const h = buildHarness()
-    const session = makeSession('intent', CONTROL_RESPONSE_TAIL, 1_700_000_000_000)
-    h.sessions.set('sid-intent', session)
-
-    h.reapSession('sid-intent', -1, 'orphan-poll-dead')
-
-    expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+intentional-stop')
-    // The kill ladder ran against the spy only, with the arguments we expect.
-    expect(h.killProcessGroup).toHaveBeenCalledWith(4242, 'SIGTERM')
-    expect(h.broadcastSessionState).toHaveBeenCalledWith('sid-intent', 'dead', expect.objectContaining({ exitCode: 0 }))
-  })
-
-  it('keeps a non-zero code for the same tail without the intent stamp', () => {
-    const h = buildHarness()
-    const session = makeSession('crash', CONTROL_RESPONSE_TAIL, null)
-    h.sessions.set('sid-crash', session)
-
-    h.reapSession('sid-crash', -1, 'orphan-poll-dead')
-
-    expect(session.exitCode).toBe(-1)
-    expect(session.exitReason).toBe('orphan-poll-dead')
-  })
-
-  it('the intent branch is what does it — cutting it out of the text restores the old -1', () => {
-    // Proves this file can FAIL. Same harness, same input, but the extracted
-    // text has the intent test forced false: the pre-fix behavior comes back.
-    const h = buildHarness((body) => {
-      const cut = body.replace('session.intentionalStopAt != null', 'false')
-      expect(cut, 'the intent test is no longer in the deployed text').not.toBe(body)
-      return cut
-    })
-    const session = makeSession('mutant', CONTROL_RESPONSE_TAIL, 1_700_000_000_000)
-    h.sessions.set('sid-mutant', session)
-
-    h.reapSession('sid-mutant', -1, 'orphan-poll-dead')
-
-    expect(session.exitCode).toBe(-1)
-  })
-
-  it('still normalizes a genuine result tail via isTurnCompleteExit', () => {
-    const h = buildHarness()
-    const session = makeSession('turnend', RESULT_TAIL, null)
-    h.sessions.set('sid-turnend', session)
-
-    h.reapSession('sid-turnend', -1, 'orphan-poll-dead')
-
-    expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+turn-complete')
-  })
-
-  // 2026-10-30: Claude Code 2.1.314 exits 1 with its message whenever startup fails
-  // (before, 0 and no output). A resume appends to the previous process's stream, whose
-  // last line is that process's turn result; read whole, the failure became a clean 0.
-  // The JS twin; tests/providers/daemon-startup-failure-exit.test.ts covers the core.
-  it('a resumed CLI that fails at startup keeps its exit 1 and reports only its own stderr', () => {
-    const h = buildHarness()
-    const session = makeSession('resume-fail', RESULT_TAIL, null)
-    const errPath = session.jsonlPath + '.err'
-    fs.writeFileSync(errPath, 'an advisory the previous process printed\n')
-    Object.assign(session, { outputStartOffset: fs.statSync(session.jsonlPath).size, stderrStartOffset: fs.statSync(errPath).size })
-    fs.appendFileSync(errPath, 'Error: Invalid MCP configuration\n')
-    h.sessions.set('sid-resume-fail', session)
-
-    h.reapSession('sid-resume-fail', 1, 'proc-exit')
-
-    expect(session.exitCode).toBe(1)
-    expect(session.exitReason).toBe('proc-exit')
-    expect(h.broadcastSessionState).toHaveBeenCalledWith('sid-resume-fail', 'dead',
-      expect.objectContaining({ exitCode: 1, stderr: 'Error: Invalid MCP configuration' }))
-  })
-
-  it('a resumed CLI whose own turn ended still reads as a clean end', () => {
-    const h = buildHarness()
-    const session = makeSession('resume-ok', RESULT_TAIL, null)
-    Object.assign(session, { outputStartOffset: fs.statSync(session.jsonlPath).size, stderrStartOffset: 0 })
-    fs.appendFileSync(session.jsonlPath, '{"type":"system","subtype":"init"}\n' + RESULT_TAIL)
-    h.sessions.set('sid-resume-ok', session)
-
-    h.reapSession('sid-resume-ok', -1, 'orphan-poll-dead')
-
-    expect(session.exitCode).toBe(0)
-    expect(session.exitReason).toBe('orphan-poll-dead+turn-complete')
-  })
-})
-
-// ── Parity: the intent stamp must exist in all three twins, once, at the scan ──
-describe('intentional-stop intent parity across the three daemon twins', () => {
+// ── Source checks: the intent is read once in the reap and stamped at exactly three sites ──
+describe('intentional-stop intent in the daemon source', () => {
   const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf-8')
   const coreSrc = read('src/providers/daemon-core.ts')
   const standaloneSrc = read('src/providers/daemon-standalone.ts')
-  const templateSrc = read('src/providers/daemon-source.ts')
 
   /**
    * Slice ONE function body by brace matching, skipping string literals and
-   * line comments (both twins carry `{…}` inside comments, and daemon-core's
+   * line comments (the sources carry `{…}` inside comments, and daemon-core's
    * functions are NESTED inside createDaemonCore — so neither a naive `\n}`
    * anchor nor a raw brace count works).
    */
@@ -405,75 +211,66 @@ describe('intentional-stop intent parity across the three daemon twins', () => {
     throw new Error(`${label}: unbalanced braces in ${name}`)
   }
 
-  it('both reapSession twins check the intent BEFORE the turn-complete branch', () => {
-    for (const [name, src] of [['daemon-core', coreSrc], ['daemon-source', templateSrc]] as const) {
-      const body = fnBody(src, 'reapSession', name)
-      const intentIdx = body.indexOf('session.intentionalStopAt != null')
-      const suffixIdx = body.indexOf("'+intentional-stop'")
-      const turnCompleteIdx = body.indexOf("'+turn-complete'")
-      expect(intentIdx, `${name}: reapSession does not read the intent flag`).toBeGreaterThan(-1)
-      expect(suffixIdx, `${name}: reapSession does not record the intentional reason`).toBeGreaterThan(-1)
-      expect(turnCompleteIdx, `${name}: the turn-complete normalization is gone`).toBeGreaterThan(-1)
-      expect(suffixIdx, `${name}: the intent branch must be evaluated before the JSONL-tail branch`)
-        .toBeLessThan(turnCompleteIdx)
-    }
+  it('daemon-core reapSession checks the intent BEFORE the turn-complete branch', () => {
+    const body = fnBody(coreSrc, 'reapSession', 'daemon-core')
+    const intentIdx = body.indexOf('session.intentionalStopAt != null')
+    const suffixIdx = body.indexOf("'+intentional-stop'")
+    const turnCompleteIdx = body.indexOf("'+turn-complete'")
+    expect(intentIdx, 'reapSession does not read the intent flag').toBeGreaterThan(-1)
+    expect(suffixIdx, 'reapSession does not record the intentional reason').toBeGreaterThan(-1)
+    expect(turnCompleteIdx, 'the turn-complete normalization is gone').toBeGreaterThan(-1)
+    expect(suffixIdx, 'the intent branch must be evaluated before the JSONL-tail branch')
+      .toBeLessThan(turnCompleteIdx)
   })
 
   it('isTurnCompleteExit itself is untouched — still result-lines only', () => {
-    for (const [name, src] of [['daemon-core', coreSrc], ['daemon-source', templateSrc]] as const) {
-      const body = fnBody(src, 'isTurnCompleteExit', name)
-      expect(body, `${name}: the clean-exit detector must still require a type:result tail`)
-        .toMatch(/parsed\.type !== 'result'\) return false/)
-      expect(body, `${name}: widening the tail detector would reclassify real crashes`)
-        .not.toContain('control_response')
-      expect(body).not.toContain('intentionalStopAt')
-    }
+    const body = fnBody(coreSrc, 'isTurnCompleteExit', 'daemon-core')
+    expect(body, 'the clean-exit detector must still require a type:result tail')
+      .toMatch(/parsed\.type !== 'result'\) return false/)
+    expect(body, 'widening the tail detector would reclassify real crashes')
+      .not.toContain('control_response')
+    expect(body).not.toContain('intentionalStopAt')
   })
 
-  it('each twin stamps the intent in the idle scan, immediately before the kill', () => {
-    for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      const at = src.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
-      expect(at, `${name}: the idle-scan kill log is gone`).toBeGreaterThan(-1)
-      const block = src.slice(at, at + 1200)
-      const stampIdx = block.search(/session\.intentionalStopAt = now/)
-      const killIdx = block.indexOf('killSessionProcessGroup(pid, sid)')
-      expect(stampIdx, `${name}: the idle scan does not record the reclaim intent`).toBeGreaterThan(-1)
-      expect(killIdx, `${name}: the idle-scan kill call is gone`).toBeGreaterThan(-1)
-      expect(stampIdx, `${name}: the intent must be stamped BEFORE the signal — the reap is async`)
-        .toBeLessThan(killIdx)
-    }
+  it('the idle scan stamps the intent immediately before the kill', () => {
+    const at = standaloneSrc.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
+    expect(at, 'the idle-scan kill log is gone').toBeGreaterThan(-1)
+    const block = standaloneSrc.slice(at, at + 1200)
+    const stampIdx = block.search(/session\.intentionalStopAt = now/)
+    const killIdx = block.indexOf('killSessionProcessGroup(pid, sid)')
+    expect(stampIdx, 'the idle scan does not record the reclaim intent').toBeGreaterThan(-1)
+    expect(killIdx, 'the idle-scan kill call is gone').toBeGreaterThan(-1)
+    expect(stampIdx, 'the intent must be stamped BEFORE the signal — the reap is async')
+      .toBeLessThan(killIdx)
   })
 
-  it('each stop RPC delegates to the process stop that stamps intent before the signal', () => {
-    for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      expect(fnBody(src, 'cmdStop', name)).toContain('stopSessionProcess(ws, id, sid)')
-      const body = fnBody(src, 'stopSessionProcess', name)
-      const stampIdx = body.search(/session\.intentionalStopAt = Date\.now\(\)/)
-      const killIdx = body.indexOf("killProcessGroup(pid, 'SIGINT')")
-      expect(stampIdx, `${name}: cmdStop does not record the stop intent`).toBeGreaterThan(-1)
-      expect(killIdx, `${name}: the cmdStop SIGINT is gone`).toBeGreaterThan(-1)
-      expect(stampIdx, `${name}: the intent must be stamped BEFORE the signal — the reap is async`)
-        .toBeLessThan(killIdx)
-    }
+  it('the stop RPC delegates to the process stop that stamps intent before the signal', () => {
+    expect(fnBody(standaloneSrc, 'cmdStop', 'daemon-standalone')).toContain('stopSessionProcess(ws, id, sid)')
+    const body = fnBody(standaloneSrc, 'stopSessionProcess', 'daemon-standalone')
+    const stampIdx = body.search(/session\.intentionalStopAt = Date\.now\(\)/)
+    const killIdx = body.indexOf("killProcessGroup(pid, 'SIGINT')")
+    expect(stampIdx, 'cmdStop does not record the stop intent').toBeGreaterThan(-1)
+    expect(killIdx, 'the cmdStop SIGINT is gone').toBeGreaterThan(-1)
+    expect(stampIdx, 'the intent must be stamped BEFORE the signal — the reap is async')
+      .toBeLessThan(killIdx)
   })
 
   it('only idle scan, explicit stop and an owned budget pause mark a death as intentional', () => {
     // Exact sites, not a relaxed count: crashes, ENXIO and pid recycling must remain errors.
-    for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      const stop = fnBody(src, 'stopSessionProcess', name)
-      const budget = fnBody(src, 'pauseBudgetSession', name)
-      const count = (text: string) => (text.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length
-      expect(count(stop), `${name}: explicit process stop has one intent stamp`).toBe(1)
-      expect(count(budget), `${name}: actual budget pause has one intent stamp`).toBe(1)
-      expect(budget.indexOf('persistBudgetStops()')).toBeLessThan(budget.indexOf('session.intentionalStopAt = Date.now()'))
-      expect(budget.indexOf('session.intentionalStopAt = Date.now()')).toBeLessThan(budget.indexOf("subtype: 'stop_task'"))
-      const remaining = src.replace(stop, '').replace(budget, '')
-      expect(count(remaining), `${name}: the only remaining stamp belongs to the idle scan`).toBe(1)
-      const idle = remaining.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
-      expect(idle).toBeGreaterThan(-1)
-      expect(count(remaining.slice(idle, idle + 1200))).toBe(1)
-      expect(count(src), `${name}: exactly three intentional stop sites`).toBe(3)
-    }
+    const src = standaloneSrc
+    const stop = fnBody(src, 'stopSessionProcess', 'daemon-standalone')
+    const budget = fnBody(src, 'pauseBudgetSession', 'daemon-standalone')
+    const count = (text: string) => (text.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length
+    expect(count(stop), 'explicit process stop has one intent stamp').toBe(1)
+    expect(count(budget), 'actual budget pause has one intent stamp').toBe(1)
+    expect(budget.indexOf('persistBudgetStops()')).toBeLessThan(budget.indexOf('session.intentionalStopAt = Date.now()'))
+    expect(budget.indexOf('session.intentionalStopAt = Date.now()')).toBeLessThan(budget.indexOf("subtype: 'stop_task'"))
+    const remaining = src.replace(stop, '').replace(budget, '')
+    expect(count(remaining), 'the only remaining stamp belongs to the idle scan').toBe(1)
+    const idle = remaining.indexOf("'idle scan: killing idle session (no subscribers, no output)'")
+    expect(idle).toBeGreaterThan(-1)
+    expect(count(remaining.slice(idle, idle + 1200))).toBe(1)
+    expect(count(src), 'exactly three intentional stop sites').toBe(3)
     expect((coreSrc.match(/intentionalStopAt\s*=(?!=)/g) ?? []).length).toBe(0)
   })
 

@@ -8,8 +8,8 @@
  *
  * Pinned, from the source so a new member fails here:
  *  - a drain refusal means the command ran not at all: only the drain's own check says those
- *    words, and every place a twin hands work to the drain does it before any await;
- *  - every command either daemon twin handles is sent again after a drain refusal, unless it is
+ *    words, and every place the daemon hands work to the drain does it before any await;
+ *  - every command the daemon handles is sent again after a drain refusal, unless it is
  *    exempt with a reason, and the loop answers the next daemon's reply for it;
  *  - every command listed as safe to send again after a lost reply is one the daemon handles;
  *  - every file that writes a command frame to a daemon is listed: it goes through the resend
@@ -35,10 +35,10 @@ function dispatched(rel: string): string[] {
   return [...src.slice(start, end).matchAll(/case '([^']+)'/g)].map((m) => m[1])
 }
 
-const COMMANDS = [...new Set([...dispatched('src/providers/daemon-standalone.ts'), ...dispatched('src/providers/daemon-source.ts')])].sort()
-const TWINS = ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']
+const DAEMON = 'src/providers/daemon-standalone.ts'
+const COMMANDS = [...new Set(dispatched(DAEMON))].sort()
 
-/** Places a twin hands work to the drain after an await, each with why that is no client's command. */
+/** Places the daemon hands work to the drain after an await, each with why that is no client's command. */
 const RUN_AFTER_AWAIT: Record<string, string> = {
   fireTurnRetry: "the daemon's own retry timer: it checks the drain is open first and answers no client",
 }
@@ -54,8 +54,8 @@ describe('a drain refusal means the command ran not at all', () => {
     expect(sayers.sort()).toEqual(['src/providers/daemon-command-drain.ts', 'src/providers/daemon-drain-resend.ts'])
   })
 
-  it.each(TWINS)('%s: work reaches the drain before any await, so a refusal comes before any of it ran', (rel) => {
-    const src = read(rel)
+  it('work reaches the drain before any await, so a refusal comes before any of it ran', () => {
+    const src = read(DAEMON)
     const starts = [...src.matchAll(/^(?:async\s+)?function\s+(\w+)\s*\(/gm)].map((m) => ({ name: m[1], at: m.index! }))
     const late: string[] = []
     starts.forEach((fn, i) => {
@@ -74,7 +74,7 @@ describe('a drain refusal means the command ran not at all', () => {
 })
 
 describe('every daemon command goes on through a swap', () => {
-  it('the twins handle a sane number of commands (the parse found the switch)', () => {
+  it('the daemon handles a sane number of commands (the parse found the switch)', () => {
     expect(COMMANDS.length).toBeGreaterThan(150)
     expect(COMMANDS).toContain('upload.part')
   })
@@ -138,7 +138,6 @@ const CLIENTS: Record<string, Client> = {
 const FRAME_G = /\{(?:[^{}]*?,)?\s*id\b(?:\s*:\s*[\w.]+)?\s*,\s*(?:cmd\b|\.\.\.frame\b)[^{}]*\}|JSON\.stringify\(\{[^{}]*\bcmd\b[^{}]*\bid\b|\{"id":\$\{[^}]+\},"cmd"|(?<!function )\bpreflightFrame\(/g
 const FRAME = new RegExp(FRAME_G.source)
 const code = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/.*$/gm, '$1')
-const DAEMON_SIDE = new Set(['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts'])
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const entry of fs.readdirSync(path.join(REPO, dir), { withFileTypes: true })) {
@@ -150,7 +149,7 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 describe('every client of a daemon is listed', () => {
-  const found = sources('src').filter((rel) => !DAEMON_SIDE.has(rel) && FRAME.test(code(rel))).sort()
+  const found = sources('src').filter((rel) => rel !== DAEMON && FRAME.test(code(rel))).sort()
 
   it('the scan finds the known clients', () => {
     expect(found).toContain('src/providers/daemon-connection.ts')

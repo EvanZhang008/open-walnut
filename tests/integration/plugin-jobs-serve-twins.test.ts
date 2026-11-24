@@ -1,5 +1,5 @@
 /**
- * A plugin job that serves its plugin's routes, on REAL daemon processes, both twins
+ * A plugin job that serves its plugin's routes, on a REAL daemon process (the standalone)
  * (plugin-jobs-core.ts http, plugin-job-door.ts, plugin-job-harness.ts): the leader
  * sends a serving job, the daemon runs it as its own `walnut plugin-job` process on a
  * socket of its run (0600, in a 0700 dir), and `jobs.http` carries a request to the job's
@@ -20,8 +20,6 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -74,7 +72,7 @@ let base = ''
 /** Each daemon's pid with the start time read when it came up: a reused pid has another. */
 const started: Array<{ pid: number; lstart: string | null }> = []
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone', out: string): Promise<Daemon> {
+async function spawnDaemon(dir: string, out: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -84,17 +82,10 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone', out: stri
     JOB_OUT: out,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc: ChildProcess = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   started.push({ pid, lstart: psOf(pid, 'lstart') })
   return { proc, dir, port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
@@ -154,90 +145,88 @@ afterAll(() => {
   if (base) { try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ } }
 })
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a plugin job serves routes`, () => {
-    it('jobs.http reaches the serving job of the leader\'s Walnut only, and says why while it is not running', async () => {
-      const dir = path.join(base, twin.slice(0, 2))
-      const out = path.join(base, `${twin}.jsonl`)
-      const d = await spawnDaemon(dir, twin, out)
-      const leader = await connectWs(d.port)
-      const other = await connectWs(d.port)
-      const beat = setInterval(() => {
-        for (const ws of [leader, other]) { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }
-      }, 500)
-      try {
-        const sha256 = crypto.createHash('sha256').update(BUNDLE).digest('hex')
-        const file = path.join(dir, 'plugin-jobs', 'bundles', `${sha256}.mjs`)
-        fs.mkdirSync(path.dirname(file), { recursive: true })
-        fs.writeFileSync(file, BUNDLE)
-        const jobs = [
-          { plugin: 'acme-door', version: '1.0.0', job: 'worker', kind: 'long-running', serves: true, bundle: { sha256, file }, config: {}, host: 'devbox' },
-          { plugin: 'acme-door', version: '1.0.0', job: 'quiet', kind: 'long-running', bundle: { sha256, file }, config: {}, host: 'devbox' },
-        ]
-        // Nobody who has not said which Walnut it leads asks a job anything.
-        expect((await http(leader, HOME, 'GET', '/queue')).error).toMatch(/send leader\.configure for this Walnut first/)
-        expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
-        expect((await cmd(other, { cmd: 'leader.configure', home: OTHER_HOME, walnutId: OTHER, backup: false })).ok).toBe(true)
-        const configured = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })
-        expect(configured.ok).toBe(true)
-        expect(configured.jobs.find((j: any) => j.job === 'worker')).toMatchObject({ serves: true, state: 'running' })
+describe.skipIf(!BUN)('standalone daemon: a plugin job serves routes', () => {
+  it('jobs.http reaches the serving job of the leader\'s Walnut only, and says why while it is not running', async () => {
+    const dir = path.join(base, 'd')
+    const out = path.join(base, 'jobs.jsonl')
+    const d = await spawnDaemon(dir, out)
+    const leader = await connectWs(d.port)
+    const other = await connectWs(d.port)
+    const beat = setInterval(() => {
+      for (const ws of [leader, other]) { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }
+    }, 500)
+    try {
+      const sha256 = crypto.createHash('sha256').update(BUNDLE).digest('hex')
+      const file = path.join(dir, 'plugin-jobs', 'bundles', `${sha256}.mjs`)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, BUNDLE)
+      const jobs = [
+        { plugin: 'acme-door', version: '1.0.0', job: 'worker', kind: 'long-running', serves: true, bundle: { sha256, file }, config: {}, host: 'devbox' },
+        { plugin: 'acme-door', version: '1.0.0', job: 'quiet', kind: 'long-running', bundle: { sha256, file }, config: {}, host: 'devbox' },
+      ]
+      // Nobody who has not said which Walnut it leads asks a job anything.
+      expect((await http(leader, HOME, 'GET', '/queue')).error).toMatch(/send leader\.configure for this Walnut first/)
+      expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
+      expect((await cmd(other, { cmd: 'leader.configure', home: OTHER_HOME, walnutId: OTHER, backup: false })).ok).toBe(true)
+      const configured = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })
+      expect(configured.ok).toBe(true)
+      expect(configured.jobs.find((j: any) => j.job === 'worker')).toMatchObject({ serves: true, state: 'running' })
 
-        await waitFor(async () => (await http(leader, HOME, 'GET', '/queue')).ok === true, 30_000, 'the job to serve')
-        const sock = events(out).find((e) => e.ev === 'worker-start')!.sock as string
-        expect(fs.statSync(sock).mode & 0o777).toBe(0o600)
-        expect(fs.statSync(path.dirname(sock)).mode & 0o777).toBe(0o700)
-        // The job that does not serve was told so when it tried.
-        await waitFor(() => events(out).some((e) => e.ev === 'quiet-refused'), 15_000, 'the quiet job to try')
-        expect(events(out).find((e) => e.ev === 'quiet-refused')!.message).toMatch(/does not serve routes/)
+      await waitFor(async () => (await http(leader, HOME, 'GET', '/queue')).ok === true, 30_000, 'the job to serve')
+      const sock = events(out).find((e) => e.ev === 'worker-start')!.sock as string
+      expect(fs.statSync(sock).mode & 0o777).toBe(0o600)
+      expect(fs.statSync(path.dirname(sock)).mode & 0o777).toBe(0o700)
+      // The job that does not serve was told so when it tried.
+      await waitFor(() => events(out).some((e) => e.ev === 'quiet-refused'), 15_000, 'the quiet job to try')
+      expect(events(out).find((e) => e.ev === 'quiet-refused')!.message).toMatch(/does not serve routes/)
 
-        const posted = await http(leader, HOME, 'POST', '/queue', JSON.stringify({ item: 'a' }), { 'content-type': 'application/json' })
-        expect(posted).toMatchObject({ ok: true, status: 201 })
-        expect(json(posted)).toEqual({ length: 1 })
-        const got = await http(leader, HOME, 'GET', '/queue?limit=5', '', { 'x-walnut-origin': 'remote-http' })
-        expect(got).toMatchObject({ ok: true, status: 200 })
-        expect(got.headers['content-type']).toBe('application/json; charset=utf-8')
-        const first = json(got)
-        expect(first).toMatchObject({ length: 1, path: '/api/plugins/acme-door/queue?limit=5', query: { limit: '5' }, origin: 'remote-http', auth: null })
-        expect((await http(leader, HOME, 'GET', '/nope')).status).toBe(404)
+      const posted = await http(leader, HOME, 'POST', '/queue', JSON.stringify({ item: 'a' }), { 'content-type': 'application/json' })
+      expect(posted).toMatchObject({ ok: true, status: 201 })
+      expect(json(posted)).toEqual({ length: 1 })
+      const got = await http(leader, HOME, 'GET', '/queue?limit=5', '', { 'x-walnut-origin': 'remote-http' })
+      expect(got).toMatchObject({ ok: true, status: 200 })
+      expect(got.headers['content-type']).toBe('application/json; charset=utf-8')
+      const first = json(got)
+      expect(first).toMatchObject({ length: 1, path: '/api/plugins/acme-door/queue?limit=5', query: { limit: '5' }, origin: 'remote-http', auth: null })
+      expect((await http(leader, HOME, 'GET', '/nope')).status).toBe(404)
 
-        // Another Walnut's leader on the same daemon reaches no job of this one.
-        const foreign = await http(other, OTHER_HOME, 'GET', '/queue')
-        expect(foreign).toMatchObject({ ok: false, errorKind: 'not_serving' })
-        // Nor by naming this Walnut's home on its own socket.
-        expect((await http(other, HOME, 'GET', '/queue')).error).toMatch(/send leader\.configure for this Walnut first/)
+      // Another Walnut's leader on the same daemon reaches no job of this one.
+      const foreign = await http(other, OTHER_HOME, 'GET', '/queue')
+      expect(foreign).toMatchObject({ ok: false, errorKind: 'not_serving' })
+      // Nor by naming this Walnut's home on its own socket.
+      expect((await http(other, HOME, 'GET', '/queue')).error).toMatch(/send leader\.configure for this Walnut first/)
 
-        // A request body past 256 KB (an upload to this machine) never reaches the job.
-        const big = Buffer.alloc(256 * 1024 + 1)
-        expect(await cmd(leader, { cmd: 'jobs.http', home: HOME, plugin: 'acme-door', method: 'POST', path: '/queue', headers: {}, size: big.byteLength, data: big.toString('base64') })).toMatchObject({ ok: false, errorKind: 'request_too_large' })
+      // A request body past 256 KB (an upload to this machine) never reaches the job.
+      const big = Buffer.alloc(256 * 1024 + 1)
+      expect(await cmd(leader, { cmd: 'jobs.http', home: HOME, plugin: 'acme-door', method: 'POST', path: '/queue', headers: {}, size: big.byteLength, data: big.toString('base64') })).toMatchObject({ ok: false, errorKind: 'request_too_large' })
 
-        // The job crashes: until its restart (5 s on) the leader hears why, then it serves again.
-        const logBefore = daemonLog(dir).length
-        expect((await http(leader, HOME, 'POST', '/crash')).status).toBe(202)
-        await waitFor(() => !alive(first.pid), 10_000, 'the job to exit')
-        const down = await http(leader, HOME, 'GET', '/queue')
-        expect(down).toMatchObject({ ok: false })
-        expect(['not_running', 'not_ready', 'no_answer']).toContain(down.errorKind)
-        // A page polling it every 100 ms until it is back.
-        await waitFor(async () => (await http(leader, HOME, 'GET', '/queue')).ok === true, 30_000, 'the restarted job to serve')
-        const during = daemonLog(dir).slice(logBefore)
-        expect(during.filter((l) => l.level === 'error')).toEqual([])
-        expect(during.filter((l) => l.msg === 'command refused').map((l) => l.level)).toContain('info')
-        const again = json(await http(leader, HOME, 'GET', '/queue'))
-        expect(again.pid).not.toBe(first.pid)
-        expect(again.length).toBe(0)
+      // The job crashes: until its restart (5 s on) the leader hears why, then it serves again.
+      const logBefore = daemonLog(dir).length
+      expect((await http(leader, HOME, 'POST', '/crash')).status).toBe(202)
+      await waitFor(() => !alive(first.pid), 10_000, 'the job to exit')
+      const down = await http(leader, HOME, 'GET', '/queue')
+      expect(down).toMatchObject({ ok: false })
+      expect(['not_running', 'not_ready', 'no_answer']).toContain(down.errorKind)
+      // A page polling it every 100 ms until it is back.
+      await waitFor(async () => (await http(leader, HOME, 'GET', '/queue')).ok === true, 30_000, 'the restarted job to serve')
+      const during = daemonLog(dir).slice(logBefore)
+      expect(during.filter((l) => l.level === 'error')).toEqual([])
+      expect(during.filter((l) => l.msg === 'command refused').map((l) => l.level)).toContain('info')
+      const again = json(await http(leader, HOME, 'GET', '/queue'))
+      expect(again.pid).not.toBe(first.pid)
+      expect(again.length).toBe(0)
 
-        // Left out of the set: stopped, and its socket is gone.
-        const none = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs: [] } })
-        expect(none.jobs).toEqual([])
-        await waitFor(() => !alive(again.pid), 20_000, 'the job to stop')
-        await waitFor(() => !fs.existsSync(sock), 10_000, 'its socket to go')
-        expect(await http(leader, HOME, 'GET', '/queue')).toMatchObject({ ok: false, errorKind: 'not_serving' })
-      } finally {
-        clearInterval(beat)
-        leader.close(); other.close()
-        try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
-        await waitFor(() => !alive(d.pid), 20_000, 'daemon exit')
-      }
-    }, 150_000)
-  })
-}
+      // Left out of the set: stopped, and its socket is gone.
+      const none = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs: [] } })
+      expect(none.jobs).toEqual([])
+      await waitFor(() => !alive(again.pid), 20_000, 'the job to stop')
+      await waitFor(() => !fs.existsSync(sock), 10_000, 'its socket to go')
+      expect(await http(leader, HOME, 'GET', '/queue')).toMatchObject({ ok: false, errorKind: 'not_serving' })
+    } finally {
+      clearInterval(beat)
+      leader.close(); other.close()
+      try { process.kill(d.pid, 'SIGTERM') } catch { /* gone */ }
+      await waitFor(() => !alive(d.pid), 20_000, 'daemon exit')
+    }
+  }, 150_000)
+})

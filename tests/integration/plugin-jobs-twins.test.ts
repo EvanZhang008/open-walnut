@@ -1,5 +1,5 @@
 /**
- * Plugin jobs on REAL daemon processes, both twins (plugin-jobs-core.ts,
+ * Plugin jobs on a REAL standalone daemon process (plugin-jobs-core.ts,
  * plugin-job-harness.ts): the leader sends the set, the daemon runs each job as
  * its own `walnut plugin-job` process, restarts a crash, runs an every job on its
  * period, carries a job's `walnut.ops.call` through its agent gateway to the
@@ -7,7 +7,7 @@
  * running across its own restart (adoption), starts a changed job only after its
  * old run has exited, and stops what the leader leaves out.
  *
- *   test (leader WS) ══jobs.configure══► daemon (source twin, standalone on bun)
+ *   test (leader WS) ══jobs.configure══► daemon (standalone, on bun)
  *                    ◄═gateway-request══   │ spawns <its program> walnut plugin-job <bundle> <job>
  *   test (stranger)  never asked           ▼
  *                                    job process ══agent gateway socket══► daemon
@@ -23,8 +23,6 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -70,7 +68,7 @@ function alive(pid: number): boolean {
 let base = ''
 const started: number[] = []
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone', out: string): Promise<Daemon> {
+async function spawnDaemon(dir: string, out: string): Promise<Daemon> {
   fs.mkdirSync(dir, { recursive: true })
   for (const f of ['daemon.port', 'daemon.pid']) { try { fs.unlinkSync(path.join(dir, f)) } catch { /* none */ } }
   const env: NodeJS.ProcessEnv = {
@@ -82,17 +80,10 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone', out: stri
     JOB_OUT: out,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   started.push(pid)
   return { proc, dir, port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
@@ -167,137 +158,135 @@ afterAll(() => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 })
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: plugin jobs`, () => {
-    it('runs, restarts a crash, runs every N, relays ops, adopts across a daemon restart, stops on removal', async () => {
-      const dir = path.join(base, twin.slice(0, 2))
-      const out = path.join(base, `${twin}.jsonl`)
-      let d = await spawnDaemon(dir, twin, out)
-      let leader = await connectWs(d.port)
-      hubAnswers(leader, 'leader')
-      // A server client that never names a Walnut (an older server, a test one): never a job's hub.
-      const stranger = await connectWs(d.port)
-      const strangerAsked = hubAnswers(stranger, 'stranger')
-      const beat = setInterval(() => {
-        for (const ws of [leader, stranger]) { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }
-      }, 500)
+describe.skipIf(!BUN)('standalone daemon: plugin jobs', () => {
+  it('runs, restarts a crash, runs every N, relays ops, adopts across a daemon restart, stops on removal', async () => {
+    const dir = path.join(base, 'st')
+    const out = path.join(base, 'standalone.jsonl')
+    let d = await spawnDaemon(dir, out)
+    let leader = await connectWs(d.port)
+    hubAnswers(leader, 'leader')
+    // A server client that never names a Walnut (an older server, a test one): never a job's hub.
+    const stranger = await connectWs(d.port)
+    const strangerAsked = hubAnswers(stranger, 'stranger')
+    const beat = setInterval(() => {
+      for (const ws of [leader, stranger]) { try { ws.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }
+    }, 500)
 
-      // The bundle where the leader puts it: <daemon's jobs dir>/bundles/<sha>.mjs.
-      const sha256 = crypto.createHash('sha256').update(BUNDLE).digest('hex')
-      const file = path.join(dir, 'plugin-jobs', 'bundles', `${sha256}.mjs`)
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(file, BUNDLE)
-      const jobs = [
-        { plugin: 'acme-jobs', version: '1.2.0', job: 'worker', kind: 'long-running', bundle: { sha256, file }, config: { queue: 'q1' }, host: 'devbox' },
-        { plugin: 'acme-jobs', version: '1.2.0', job: 'poll', kind: 'every', everyMs: 3000, bundle: { sha256, file }, config: {}, host: 'devbox' },
-      ]
-      const spec = { v: 1, home: HOME, walnutId: WALNUT, jobs }
+    // The bundle where the leader puts it: <daemon's jobs dir>/bundles/<sha>.mjs.
+    const sha256 = crypto.createHash('sha256').update(BUNDLE).digest('hex')
+    const file = path.join(dir, 'plugin-jobs', 'bundles', `${sha256}.mjs`)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, BUNDLE)
+    const jobs = [
+      { plugin: 'acme-jobs', version: '1.2.0', job: 'worker', kind: 'long-running', bundle: { sha256, file }, config: { queue: 'q1' }, host: 'devbox' },
+      { plugin: 'acme-jobs', version: '1.2.0', job: 'poll', kind: 'every', everyMs: 3000, bundle: { sha256, file }, config: {}, host: 'devbox' },
+    ]
+    const spec = { v: 1, home: HOME, walnutId: WALNUT, jobs }
 
-      // Only the leader of this Walnut may say what runs.
-      expect((await cmd(stranger, { cmd: 'jobs.configure', home: HOME, spec })).error).toMatch(/send leader\.configure for this Walnut first/)
-      expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
-      expect((await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, walnutId: 'wsomeoneelse' } })).error).toMatch(/another Walnut/)
-      const status0 = await cmd(leader, { cmd: 'jobs.status', home: HOME })
-      expect(status0.bundles).toBe(path.join(dir, 'plugin-jobs', 'bundles'))
-      const first = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec })
-      expect(first.ok).toBe(true)
-      expect(first.jobs.map((j: any) => `${j.job}:${j.state}`).sort()).toEqual(['poll:idle', 'worker:running'])
+    // Only the leader of this Walnut may say what runs.
+    expect((await cmd(stranger, { cmd: 'jobs.configure', home: HOME, spec })).error).toMatch(/send leader\.configure for this Walnut first/)
+    expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
+    expect((await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, walnutId: 'wsomeoneelse' } })).error).toMatch(/another Walnut/)
+    const status0 = await cmd(leader, { cmd: 'jobs.status', home: HOME })
+    expect(status0.bundles).toBe(path.join(dir, 'plugin-jobs', 'bundles'))
+    const first = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec })
+    expect(first.ok).toBe(true)
+    expect(first.jobs.map((j: any) => `${j.job}:${j.state}`).sort()).toEqual(['poll:idle', 'worker:running'])
 
-      // The first run crashes; the daemon starts it again after 5 s.
-      await waitFor(() => events(out).filter((e) => e.ev === 'worker-start').length >= 2, 30_000, 'the worker to start again')
-      const ev = events(out)
-      const starts = ev.filter((e) => e.ev === 'worker-start')
-      expect(starts[1]!.t - starts[0]!.t).toBeGreaterThanOrEqual(4_500)
-      expect(starts[0]).toMatchObject({ config: { queue: 'q1' }, host: 'devbox', plugin: { id: 'acme-jobs', version: '1.2.0' }, job: { name: 'worker', kind: 'long-running' }, leaked: [] })
-      expect(starts[0]!.sid).toMatch(/^plugin-job:[0-9a-f]{64}$/)
-      expect(starts[1]!.sid).not.toBe(starts[0]!.sid)
-      // walnut.ops.call went through the gateway to this Walnut's server, as an external caller,
-      // and never to the client that names no Walnut.
-      const op = ev.find((e) => e.ev === 'op')
-      expect(op?.r).toEqual({ echo: 'task_list', args: { limit: 1 }, callerSid: 'external', who: 'leader' })
-      expect(strangerAsked).toEqual([])
-      // An id no run holds is refused on this machine, and so is a run's id once that run is over.
-      const sock = starts[0]!.sock as string
-      expect((await gatewayCall(sock, 'plugin-job:' + 'f'.repeat(64), 'task_list')).error?.code).toBe('unknown_caller')
-      expect((await gatewayCall(sock, starts[0]!.sid, 'task_list')).error?.code).toBe('unknown_caller')
-      expect((await gatewayCall(sock, starts[1]!.sid, 'task_list')).result).toMatchObject({ who: 'leader' })
-      // The daemon says it looks after the run.
-      const supervised = Number(fs.readFileSync(path.join(starts[0]!.cwd, 'supervised'), 'utf8'))
-      expect(Date.now() - supervised).toBeLessThan(90_000)
+    // The first run crashes; the daemon starts it again after 5 s.
+    await waitFor(() => events(out).filter((e) => e.ev === 'worker-start').length >= 2, 30_000, 'the worker to start again')
+    const ev = events(out)
+    const starts = ev.filter((e) => e.ev === 'worker-start')
+    expect(starts[1]!.t - starts[0]!.t).toBeGreaterThanOrEqual(4_500)
+    expect(starts[0]).toMatchObject({ config: { queue: 'q1' }, host: 'devbox', plugin: { id: 'acme-jobs', version: '1.2.0' }, job: { name: 'worker', kind: 'long-running' }, leaked: [] })
+    expect(starts[0]!.sid).toMatch(/^plugin-job:[0-9a-f]{64}$/)
+    expect(starts[1]!.sid).not.toBe(starts[0]!.sid)
+    // walnut.ops.call went through the gateway to this Walnut's server, as an external caller,
+    // and never to the client that names no Walnut.
+    const op = ev.find((e) => e.ev === 'op')
+    expect(op?.r).toEqual({ echo: 'task_list', args: { limit: 1 }, callerSid: 'external', who: 'leader' })
+    expect(strangerAsked).toEqual([])
+    // An id no run holds is refused on this machine, and so is a run's id once that run is over.
+    const sock = starts[0]!.sock as string
+    expect((await gatewayCall(sock, 'plugin-job:' + 'f'.repeat(64), 'task_list')).error?.code).toBe('unknown_caller')
+    expect((await gatewayCall(sock, starts[0]!.sid, 'task_list')).error?.code).toBe('unknown_caller')
+    expect((await gatewayCall(sock, starts[1]!.sid, 'task_list')).result).toMatchObject({ who: 'leader' })
+    // The daemon says it looks after the run.
+    const supervised = Number(fs.readFileSync(path.join(starts[0]!.cwd, 'supervised'), 'utf8'))
+    expect(Date.now() - supervised).toBeLessThan(90_000)
 
-      // The every job: soon after it is added, then every 3 s, never two at once (each run logs
-      // after its process has started, which takes a varying few hundred ms).
-      // Four logged: the third run has exited (a run is counted at its exit), since runs never overlap.
-      await waitFor(() => events(out).filter((e) => e.ev === 'poll').length >= 4, 30_000, 'four polls')
-      const polls = events(out).filter((e) => e.ev === 'poll')
-      expect(polls[0]!.every).toBe(3000)
-      for (let i = 1; i < polls.length; i++) expect(polls[i]!.t - polls[i - 1]!.t).toBeGreaterThanOrEqual(2_500)
+    // The every job: soon after it is added, then every 3 s, never two at once (each run logs
+    // after its process has started, which takes a varying few hundred ms).
+    // Four logged: the third run has exited (a run is counted at its exit), since runs never overlap.
+    await waitFor(() => events(out).filter((e) => e.ev === 'poll').length >= 4, 30_000, 'four polls')
+    const polls = events(out).filter((e) => e.ev === 'poll')
+    expect(polls[0]!.every).toBe(3000)
+    for (let i = 1; i < polls.length; i++) expect(polls[i]!.t - polls[i - 1]!.t).toBeGreaterThanOrEqual(2_500)
 
-      const st = await cmd(leader, { cmd: 'jobs.status', home: HOME })
-      const worker = st.jobs.find((j: any) => j.job === 'worker')
-      const poll = st.jobs.find((j: any) => j.job === 'poll')
-      expect(worker).toMatchObject({ state: 'running', restarts: 1, failures: 1 })
-      expect(worker.metrics.starts).toBeGreaterThanOrEqual(1)
-      expect(poll.runs).toBeGreaterThanOrEqual(3)
-      expect(poll.failures).toBe(0)
-      const logs = await cmd(leader, { cmd: 'jobs.logs', home: HOME, plugin: 'acme-jobs', job: 'worker', lines: 50 })
-      expect(logs.ok).toBe(true)
-      const text = (logs.lines as string[]).join('\n')
-      expect(text).toContain('run started')
-      expect(text).toContain('worker up')
-      expect(text).toContain('the first run crashes')
-      const workerPid = worker.pid as number
-      expect(alive(workerPid)).toBe(true)
+    const st = await cmd(leader, { cmd: 'jobs.status', home: HOME })
+    const worker = st.jobs.find((j: any) => j.job === 'worker')
+    const poll = st.jobs.find((j: any) => j.job === 'poll')
+    expect(worker).toMatchObject({ state: 'running', restarts: 1, failures: 1 })
+    expect(worker.metrics.starts).toBeGreaterThanOrEqual(1)
+    expect(poll.runs).toBeGreaterThanOrEqual(3)
+    expect(poll.failures).toBe(0)
+    const logs = await cmd(leader, { cmd: 'jobs.logs', home: HOME, plugin: 'acme-jobs', job: 'worker', lines: 50 })
+    expect(logs.ok).toBe(true)
+    const text = (logs.lines as string[]).join('\n')
+    expect(text).toContain('run started')
+    expect(text).toContain('worker up')
+    expect(text).toContain('the first run crashes')
+    const workerPid = worker.pid as number
+    expect(alive(workerPid)).toBe(true)
 
-      // A new daemon (an upgrade): the running worker is adopted, not started twice, and keeps its id.
-      clearInterval(beat)
-      leader.close(); stranger.close()
-      await stopDaemon(d)
-      expect(alive(workerPid)).toBe(true)
-      const startsBefore = events(out).filter((e) => e.ev === 'worker-start').length
-      d = await spawnDaemon(dir, twin, out)
-      leader = await connectWs(d.port)
-      hubAnswers(leader, 'leader')
-      const beat2 = setInterval(() => { try { leader.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500)
-      expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
-      const after = await cmd(leader, { cmd: 'jobs.status', home: HOME })
-      const adopted = after.jobs.find((j: any) => j.job === 'worker')
-      expect(adopted).toMatchObject({ state: 'running', pid: workerPid })
-      await sleep(1_500)
-      expect(events(out).filter((e) => e.ev === 'worker-start').length).toBe(startsBefore)
-      expect((await gatewayCall(sock, starts[1]!.sid, 'task_list')).result).toMatchObject({ who: 'leader' })
+    // A new daemon (an upgrade): the running worker is adopted, not started twice, and keeps its id.
+    clearInterval(beat)
+    leader.close(); stranger.close()
+    await stopDaemon(d)
+    expect(alive(workerPid)).toBe(true)
+    const startsBefore = events(out).filter((e) => e.ev === 'worker-start').length
+    d = await spawnDaemon(dir, out)
+    leader = await connectWs(d.port)
+    hubAnswers(leader, 'leader')
+    const beat2 = setInterval(() => { try { leader.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, 500)
+    expect((await cmd(leader, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
+    const after = await cmd(leader, { cmd: 'jobs.status', home: HOME })
+    const adopted = after.jobs.find((j: any) => j.job === 'worker')
+    expect(adopted).toMatchObject({ state: 'running', pid: workerPid })
+    await sleep(1_500)
+    expect(events(out).filter((e) => e.ev === 'worker-start').length).toBe(startsBefore)
+    expect((await gatewayCall(sock, starts[1]!.sid, 'task_list')).result).toMatchObject({ who: 'leader' })
 
-      // New settings for the adopted worker: the old run stops first, then the new one starts.
-      const changed = jobs.map((j) => (j.job === 'worker' ? { ...j, config: { queue: 'q2' } } : j))
-      expect((await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: changed } })).ok).toBe(true)
-      await waitFor(() => events(out).some((e) => e.ev === 'worker-start' && e.config?.queue === 'q2'), 30_000, 'the changed worker')
-      const ordered = events(out)
-      const abortedAt = ordered.findIndex((e) => e.ev === 'worker-aborted' && e.pid === workerPid)
-      const q2At = ordered.findIndex((e) => e.ev === 'worker-start' && e.config?.queue === 'q2')
-      expect(abortedAt).toBeGreaterThan(-1)
-      expect(q2At).toBeGreaterThan(abortedAt)
-      expect(alive(workerPid)).toBe(false)
-      const q2Pid = ordered[q2At]!.pid as number
+    // New settings for the adopted worker: the old run stops first, then the new one starts.
+    const changed = jobs.map((j) => (j.job === 'worker' ? { ...j, config: { queue: 'q2' } } : j))
+    expect((await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: changed } })).ok).toBe(true)
+    await waitFor(() => events(out).some((e) => e.ev === 'worker-start' && e.config?.queue === 'q2'), 30_000, 'the changed worker')
+    const ordered = events(out)
+    const abortedAt = ordered.findIndex((e) => e.ev === 'worker-aborted' && e.pid === workerPid)
+    const q2At = ordered.findIndex((e) => e.ev === 'worker-start' && e.config?.queue === 'q2')
+    expect(abortedAt).toBeGreaterThan(-1)
+    expect(q2At).toBeGreaterThan(abortedAt)
+    expect(alive(workerPid)).toBe(false)
+    const q2Pid = ordered[q2At]!.pid as number
 
-      // The leader leaves the worker out: it is told to stop and does.
-      const removed = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: jobs.filter((j) => j.job !== 'worker') } })
-      expect(removed.jobs.map((j: any) => j.job)).toEqual(['poll'])
-      await waitFor(() => events(out).some((e) => e.ev === 'worker-aborted' && e.pid === q2Pid), 15_000, 'the worker to stop')
-      await waitFor(() => !alive(q2Pid), 15_000, 'the worker process to exit')
+    // The leader leaves the worker out: it is told to stop and does.
+    const removed = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: jobs.filter((j) => j.job !== 'worker') } })
+    expect(removed.jobs.map((j: any) => j.job)).toEqual(['poll'])
+    await waitFor(() => events(out).some((e) => e.ev === 'worker-aborted' && e.pid === q2Pid), 15_000, 'the worker to stop')
+    await waitFor(() => !alive(q2Pid), 15_000, 'the worker process to exit')
 
-      // A bundle that is not the one named never runs.
-      const bad = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: [{ ...jobs[0], bundle: { sha256: 'b'.repeat(64), file: path.join(dir, 'plugin-jobs', 'bundles', `${'b'.repeat(64)}.mjs`) } }] } })
-      expect(bad.jobs[0]).toMatchObject({ state: 'refused' })
+    // A bundle that is not the one named never runs.
+    const bad = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: [{ ...jobs[0], bundle: { sha256: 'b'.repeat(64), file: path.join(dir, 'plugin-jobs', 'bundles', `${'b'.repeat(64)}.mjs`) } }] } })
+    expect(bad.jobs[0]).toMatchObject({ state: 'refused' })
 
-      // The empty set: nothing runs for this Walnut any more.
-      const none = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: [] } })
-      expect(none.jobs).toEqual([])
-      const pollsNow = events(out).filter((e) => e.ev === 'poll').length
-      await sleep(4_000)
-      expect(events(out).filter((e) => e.ev === 'poll').length).toBe(pollsNow)
-      clearInterval(beat2)
-      leader.close()
-      await stopDaemon(d)
-    }, 150_000)
-  })
-}
+    // The empty set: nothing runs for this Walnut any more.
+    const none = await cmd(leader, { cmd: 'jobs.configure', home: HOME, spec: { ...spec, jobs: [] } })
+    expect(none.jobs).toEqual([])
+    const pollsNow = events(out).filter((e) => e.ev === 'poll').length
+    await sleep(4_000)
+    expect(events(out).filter((e) => e.ev === 'poll').length).toBe(pollsNow)
+    clearInterval(beat2)
+    leader.close()
+    await stopDaemon(d)
+  }, 150_000)
+})

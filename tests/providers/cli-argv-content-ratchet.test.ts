@@ -36,7 +36,7 @@ const CONTENT_FLAG = /['"]--(settings|mcp-config|append-system-prompt|system-pro
 /**
  * Every file that puts a content flag into a claude argv, and how that argv
  * reaches a process. 'session' = the daemon's session start (startSessionProcess
- * in both twins); 'oneshot' = a one-shot run (oneshot-core.ts, through the
+ * in daemon-standalone.ts); 'oneshot' = a one-shot run (oneshot-core.ts, through the
  * daemon or the in-process fallback in oneshot-client.ts).
  */
 const PRODUCERS: Record<string, 'session' | 'oneshot'> = {
@@ -52,7 +52,6 @@ const READERS: Record<string, string> = {
   'src/providers/cli-argv-files-core.ts': 'the rewrite itself',
   'src/providers/daemon-cron-supervision.ts': 'lists flags to keep in a cron resume; the start rewrites them',
   'src/core/sessions/spawn-prefix.ts': 'reads the inline prompt back from the registry args',
-  'src/providers/daemon-source.ts': 'the smoke check of the rewrite it inlines',
   'src/providers/daemon-standalone.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
   'src/providers/hook-files.ts': 'moves long hook commands out of the --settings value a start sends (hook-files-v1); the daemon writes them to files',
   'src/core/sessions/request-tag.ts': "adds the tag to a one-shot's inline --settings env inside startOneShot; that argv's spawn (oneshot-core) rewrites it to a file",
@@ -75,27 +74,19 @@ describe('every content flag in an argv reaches the CLI as a file', () => {
     }
   })
 
-  it('every spawn point that runs a claude rewrites its argv first, in both twins and the in-process fallback', () => {
+  it('every spawn point that runs a claude rewrites its argv first, in the daemon and the in-process fallback', () => {
     const bun = read('src/providers/daemon-standalone.ts')
-    const js = read('src/providers/daemon-source.ts')
     const client = read('src/providers/oneshot-client.ts')
-    // The session start: what the shell execs, and what the JS twin spawns.
+    // The session start: what the shell execs.
     expect(bun).toMatch(/const escapedArgs = cliArgvFiles\.toFiles\(launch\.args\)/)
-    expect(js).toMatch(/const spawnArgs = cliArgvFiles\.toFiles\(launch\.args\);/)
-    expect(js).toMatch(/spawnBehindRegistry\(launch\.command, spawnArgs, spawnOptions\)/)
-    expect(js).toMatch(/spawn\(launch\.command, spawnArgs, spawnOptions\)/)
-    expect(js).not.toMatch(/spawn\(launch\.command, launch\.args/)
     // The one-shot core gets a spawn that rewrites a claude's argv.
     expect(bun).toMatch(/const oneShot = createOneShotCore<[^\n]*\(\{\s*\n\s*\/\/[^\n]*\n\s*spawn: \(\(cmd[^\n]*cliArgvFiles\.toFiles\(args\)/)
-    expect(js).toMatch(/__CREATE_ONESHOT__\)\(\{\s*\n\s*\/\/[^\n]*\n\s*spawn: function \(cmd, args, opts\) \{ return spawn\(cmd, cliArgvFiles\.isClaude\(cmd, args\) \? cliArgvFiles\.toFiles\(args\)/)
     expect(client).toMatch(/spawn: \(cmd, args, opts\) => spawn\(cmd, argvFiles\.isClaude\(cmd, args\) \? argvFiles\.toFiles\(args\)/)
-    // The JS twin builds the factory from its text, and both hash lists ship it.
-    expect(js).toContain("['__CREATE_CLI_ARGV_FILES__', createCliArgvFiles.toString()]")
+    // Both hash lists ship the rewrite, so a change to it is a new daemon version.
     expect(read('scripts/build-daemon.sh')).toContain('  src/providers/cli-argv-files-core.ts\n')
     expect(read('src/providers/daemon-version-check.ts')).toContain("'src/providers/cli-argv-files-core.ts'")
-    // No other place in the twins spawns the session CLI (the barrier and the plain spawn above).
+    // No other place in the daemon spawns the session CLI (the shell exec above).
     expect(bun.match(/spawn\(userShell, \['-c', shellCmd\]/g)?.length).toBe(1)
-    expect(js.match(/spawn\(launch\.command,/g)?.length).toBe(1)
   })
 
   it('the session settings and every hook script fit a host spawn template string, with room to grow', () => {

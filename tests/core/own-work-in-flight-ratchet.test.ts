@@ -14,7 +14,7 @@
  *  2. the facts that feed it carry the job's lastCheck.idle;
  *  3. every other call of triggerWatchesOwnWork (the kind of a watch, whatever its work does now)
  *     is listed below with why it may ignore the idle mark;
- *  4. both daemon twins put the idle mark on the quiet trigger.checked event (checkIdleOf, which
+ *  4. the daemon puts the idle mark on the quiet trigger.checked event (checkIdleOf, which
  *     also waits for every earlier fire's ack);
  *  5. every ownWorkInFlight / ownWorkWakes call passes when the task's sessions last worked: an idle
  *     mark from a check before that may predate a request the turn queued.
@@ -73,10 +73,8 @@ describe('an own-work watch is work going on only while that work is in flight',
     expect(callers).toEqual(Object.keys(KIND_ONLY_CALLERS).sort())
   })
 
-  it('both daemon twins send the idle mark on a quiet check, from the shared rule', () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const text = files.find((f) => f.rel === twin)!.text
-      expect(text, twin).toMatch(/checkIdleOf\(output, decision, entry\.state\)/)
-    }
+  it('the daemon sends the idle mark on a quiet check, from the shared rule', () => {
+    const text = files.find((f) => f.rel === 'src/providers/daemon-standalone.ts')!.text
+    expect(text).toMatch(/checkIdleOf\(output, decision, entry\.state\)/)
   })
 })

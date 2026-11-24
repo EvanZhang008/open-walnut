@@ -3,12 +3,10 @@
  * ('fs-write-atomic-v1'): `~` expansion, the `atomic` rename, the
  * `expectSha256` precondition, and the `sha256` echo.
  *
- * The code under test is the SOURCE twin (`daemon-source.ts`), which is an
- * embedded JS template evaluated on a remote host — it can't be imported, so we
- * extract each function's text out of the template and rebuild it with
- * `new Function`, exactly like tests/providers/daemon-fs-mutate.test.ts. The
- * bun-compiled twin has no behavioral harness; its guard is the byte-level
- * parity test (daemon-standalone-vs-source-parity).
+ * The code under test is the session daemon (`daemon-standalone.ts`). These
+ * functions live inside its runtime closure and are not exported, so we slice
+ * each function's text out of the file, transpile it, and rebuild it with
+ * `new Function`, exactly like tests/providers/daemon-fs-mutate.test.ts.
  *
  * Everything runs inside ONE mkdtemp directory, and HOME_DIR is injected as a
  * subdirectory of it — the `~` expansion must be exercised without the real home
@@ -21,37 +19,31 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import ts from 'typescript'
 
 const ROOT = path.resolve(__dirname, '../..')
 
 type Reply = { ok?: boolean; error?: string; written?: boolean; size?: number; sha256?: string }
 type Cmd = Record<string, unknown>
 
-/** Pull cmdFsWrite (plus the floor helpers it calls) out of DAEMON_SOURCE. */
-function extractWriteTwin(homeDir: string): (cmd: Cmd) => Promise<Reply> {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
-  const start = src.indexOf('const DAEMON_SOURCE = `')
-  expect(start).toBeGreaterThan(-1)
-  const body = src.slice(src.indexOf('`', start) + 1, src.lastIndexOf('`'))
-  // eslint-disable-next-line no-eval
-  const twin = eval('`' + body + '`') as string
+/** Pull cmdFsWrite (plus the floor helpers it calls) out of daemon-standalone.ts. */
+function extractWrite(homeDir: string): (cmd: Cmd) => Promise<Reply> {
+  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
   const grab = (header: string): string => {
-    const i = twin.indexOf(header)
-    expect(i, `${header} not found in the daemon template`).toBeGreaterThan(-1)
-    const end = twin.indexOf('\n}', i)
+    const i = src.indexOf('\n' + header)
+    expect(i, `${header} not found in the daemon`).toBeGreaterThan(-1)
+    const end = src.indexOf('\n}', i + 1)
     expect(end).toBeGreaterThan(i)
-    return twin.slice(i, end + 2)
+    return src.slice(i + 1, end + 2)
   }
   const grabLine = (prefix: string): string => {
-    const i = twin.indexOf(prefix)
-    expect(i, `${prefix} not found in the daemon template`).toBeGreaterThan(-1)
-    return twin.slice(i, twin.indexOf('\n', i) + 1)
+    const i = src.indexOf('\n' + prefix)
+    expect(i, `${prefix} not found in the daemon`).toBeGreaterThan(-1)
+    return src.slice(i + 1, src.indexOf('\n', i + 1) + 1)
   }
-  // The `async ` prefix is part of the header on purpose: a body containing
-  // `await` rebuilt as a plain function is a syntax error.
-  const parts = [
-    // Read by fsMutateDenied; taken verbatim from the twin (see daemon-fs-mutate.test.ts).
+  const code = [
+    // Read by fsMutateDenied; taken verbatim from the daemon (see daemon-fs-mutate.test.ts).
     grabLine('const FALLBACK_DAEMON_DIR ='),
     grabLine('const FS_WRITE_PRECONDITION_MAX_BYTES ='),
     grabLine('const FS_WRITE_TEMP_STALE_MS ='),
@@ -60,20 +52,20 @@ function extractWriteTwin(homeDir: string): (cmd: Cmd) => Promise<Reply> {
     grab('async function fsMutateResolve('),
     grab('async function sweepStaleWriteTemps('),
     grab('async function cmdFsWrite('),
-    'return { cmdFsWrite };',
-  ]
+  ].join('\n')
+  const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 
   let reply: Reply = {}
   const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
   const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
 
-  // The denylist reads the daemon's dir overrides from `process.env`; hand it an
+  // The denylist reads the daemon's dir overrides from its env; hand it an
   // EMPTY env so the real machine's WALNUT_* settings can't leak into the pins.
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const factory = new Function(
-    'path', 'fs', 'crypto', 'HOME_DIR', 'process', 'sendOk', 'sendError', parts.join('\n'),
+    'path', 'fs', 'crypto', 'HOME_DIR', 'daemonEnv', 'sendOk', 'sendError', js + '\nreturn { cmdFsWrite };',
   ) as (...a: unknown[]) => Record<string, (...a: unknown[]) => Promise<void>>
-  const fns = factory(path, fs, crypto, homeDir, { env: {} }, sendOk, sendError)
+  const fns = factory(path, fs, crypto, homeDir, {}, sendOk, sendError)
 
   return async (cmd: Cmd): Promise<Reply> => {
     reply = {}
@@ -97,7 +89,7 @@ beforeEach(() => {
   work = path.join(tmp, 'work')
   fs.mkdirSync(home, { recursive: true })
   fs.mkdirSync(work, { recursive: true })
-  write = extractWriteTwin(home)
+  write = extractWrite(home)
 })
 
 afterAll(() => {

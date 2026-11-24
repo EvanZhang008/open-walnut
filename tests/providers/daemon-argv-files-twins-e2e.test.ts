@@ -1,11 +1,11 @@
 /**
- * The CLI's content arguments ride files on the real daemon twins
+ * The CLI's content arguments ride files on the real session daemon (daemon-standalone.ts)
  * (src/providers/cli-argv-files-core.ts).
  *
  * 2026-10-31: `pkill -f "clone.*playwright"` SIGTERMed every Claude Code CLI on
  * the Mac, because each carried its `--settings` hook scripts (which name git
  * clone and playwright-report) and its session prompt in its command line. A
- * session start and a one-shot run go through each twin here with the real
+ * session start and a one-shot run go through the daemon here with the real
  * session settings; the stand-in CLI records the argv it was given, and the
  * test reads the live process's command line from the process table, as
  * pgrep does.
@@ -25,25 +25,17 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { compactHookArgs, HOOK_FILE_FLAG, HOOK_FILES_CAPABILITY } from '../../src/providers/hook-files.js'
 import { sendStartWithRefs, START_ARG_REFS_CAPABILITY, ARG_REF_TOKEN, _resetStartArgRefsForTesting } from '../../src/providers/start-arg-refs.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { testBun } from '../helpers/bun-runtime.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 // Records its argv, then reads stdin until told to exit. As a one-shot, answers one result line.
 const FAKE_CLI = `
@@ -66,7 +58,7 @@ const daemons: Daemon[] = []
 const spawnedPids = new Set<number>()
 let rpcId = 1
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   const daemonDir = path.join(root, 'daemon')
   const streams = path.join(root, 'streams')
   const env: Record<string, string | undefined> = {
@@ -80,8 +72,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', '.open-walnut', 'local', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc.stdout?.on('data', (chunk) => {
@@ -154,8 +145,6 @@ const MCP = JSON.stringify({ mcpServers: { walnut: { command: 'walnut', args: ['
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -174,11 +163,11 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('cli argv files: $name', (twin) => {
+describe.skipIf(!BUN)('cli argv files: standalone daemon (bun)', () => {
   it('a session start and its resume pass file paths; the files hold the inline values', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
-    const d = await boot(twin)
+    const d = await boot()
     const sid = 'bbbbbbbb-0000-4000-8000-00000000000b'
     const out = path.join(root, 'argv.jsonl')
     const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(out)} "$@"`
@@ -237,7 +226,7 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
   it('a template start (hook-files-v1 texts beside the settings) runs the hooks from files and records the inline args', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
-    const d = await boot(twin)
+    const d = await boot()
     expect((await rpc(d, { cmd: 'hello' })).capabilities as string[]).toContain(HOOK_FILES_CAPABILITY)
     const sid = 'cccccccc-0000-4000-8000-00000000000c'
     const out = path.join(root, 'argv.jsonl')
@@ -279,7 +268,7 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
     _resetStartArgRefsForTesting()
-    const d = await boot(twin)
+    const d = await boot()
     expect((await rpc(d, { cmd: 'hello' })).capabilities as string[]).toContain(START_ARG_REFS_CAPABILITY)
     const out = path.join(root, 'argv.jsonl')
     const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(out)} "$@"`
@@ -335,7 +324,7 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
   it('a one-shot claude run passes file paths too', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
-    const d = await boot(twin)
+    const d = await boot()
     const out = path.join(root, 'argv.jsonl')
     const reply = await rpc(d, {
       cmd: 'oneshot.run', runId: 'o1', command: process.execPath,

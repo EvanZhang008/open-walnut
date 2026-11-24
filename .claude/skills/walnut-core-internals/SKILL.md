@@ -161,7 +161,7 @@ How each path ends a process now:
 - **Every `stop` names the asking Walnut** (`stopProvenance`, capability `owner-home-v1`): `home` (its
   data dir), `initiator` (`'automatic'` for a reaper or sweep deciding from records, `'human'` for a
   person or for the server driving a live session it holds), and `strict` from an ephemeral server.
-  The daemon (`stopOwnerRefusal`, both twins, pinned identical) reads the spawn journal's FIRST line
+  The daemon (`stopOwnerRefusal`) reads the spawn journal's FIRST line
   for the sid. When it names a Walnut, only that one may stop the session, for any reason. When it
   names none, `strict` is refused, a backfilled line keeps today's behaviour, and an unjournaled sid may
   only be stopped by a human. A session one Walnut started stays that Walnut's after another resumes
@@ -178,7 +178,7 @@ How each path ends a process now:
   `idle_eviction`, with a usable pid, past a 2-minute grace, no pending user stop. An observation
   (`normal_completion`, `liveness_check_failed`, no reason) is a claim a live process refutes: the
   recovery loop relabels those rows and the daemon's idle reaper ends a CLI that really is idle.
-- **The daemon's orphan proof** (`orphanStopRefusal` in both twins): the sid is in ITS registry with
+- **The daemon's orphan proof** (`orphanStopRefusal`): the sid is in ITS registry with
   exactly `expectPid`, the `.pgid` file in its streams dir names the same group, the spawn journal's
   first line for the sid names the asking Walnut (`home`, its data dir: a remote host's daemon is shared
   by every Walnut that reaches it), and it is not a previous boot's process; then no output in 5
@@ -193,7 +193,7 @@ How each path ends a process now:
   that fails or if their data dir is the production one (`sessions/ephemeral-guard.ts`). The launcher's
   `*.sqlite` skip is not enough on its own: the incident's store was copied by hand around the launcher.
   A fixture that needs a live pid on a row sets it AFTER `startServer` (`tests/e2e/browser/test-server.ts`).
-- **Ratchet**: `tests/core/signal-call-ratchet.test.ts` (AST, outside the daemon twins). A raw signal
+- **Ratchet**: `tests/core/signal-call-ratchet.test.ts` (AST, outside the daemon). A raw signal
   (`process.kill` with a non-zero signal, a bare `kill(`, the process-group helpers) may only appear in
   the files that signal a process they spawned themselves, within a per-file budget; session-store code
   (`session-*.ts`, `sessions/`, the runner, the session manager, the sessions routes) has a budget for
@@ -206,7 +206,7 @@ How each path ends a process now:
   `tests/core/ephemeral-pid-scrub.test.ts`, `tests/e2e/ephemeral-inherited-pids.test.ts` and the health
   monitor's orphan cases. All stub `process.kill`; none sends a real signal. The one real-process
   proof, `tests/providers/daemon-orphan-stop-real-e2e.test.ts`, only runs with
-  `WALNUT_REAL_SIGNAL_TEST=1`: a source-twin daemon ends a dummy it spawned, and a look-alike dummy it
+  `WALNUT_REAL_SIGNAL_TEST=1`: a daemon ends a dummy it spawned, and a look-alike dummy it
   never spawned survives.
 
 ## Session Start Steps
@@ -263,7 +263,7 @@ Each session has two JSONL files:
 
 **Known remaining bypasses (local-only fast paths, migrate when touched):** `team-reader.ts`, `subagent-poller.ts`, and `claude-code-session.ts:_areTeammatesStillActive()` still hit the fs directly. They use *partial* reads — `readFileHead` (first N bytes) and byte-offset tailing — which the daemon has no command for yet. Routing them to the daemon requires adding an `fs.readRange`/`fs.head` command first (else every poll full-reads a large JSONL — a perf regression). Until then they are the documented exception, not a template to copy.
 
-**Daemon socket writes (the OTHER one rule):** every daemon→client WebSocket write in `daemon-standalone.ts` MUST go through `safeSend` (never raw `ws.send`). Bun's `ServerWebSocket.send()` returns `0` and **silently drops the message forever** when the socket's backpressure buffer is saturated — one ~28MB `fs.read` response is enough, and everything sent while saturated (concurrent RPC replies, other sessions' `jsonl` stream events on the shared per-host connection) vanishes. `safeSend` queues dropped payloads per-socket and flushes them on Bun's `drain` callback, preserving FIFO order. The plain-Node `daemon-source.ts` does NOT need this (the `ws` package buffers internally and never drops) — see the PARITY NOTE there. Regression: `tests/providers/daemon-ws-backpressure.test.ts` (real binary, 6 concurrent large reads).
+**Daemon socket writes (the OTHER one rule):** every daemon→client WebSocket write in `daemon-standalone.ts` MUST go through `safeSend` (never raw `ws.send`). Bun's `ServerWebSocket.send()` returns `0` and **silently drops the message forever** when the socket's backpressure buffer is saturated — one ~28MB `fs.read` response is enough, and everything sent while saturated (concurrent RPC replies, other sessions' `jsonl` stream events on the shared per-host connection) vanishes. `safeSend` queues dropped payloads per-socket and flushes them on Bun's `drain` callback, preserving FIFO order. Regression: `tests/providers/daemon-ws-backpressure.test.ts` (real binary, 6 concurrent large reads).
 
 **Parser dedup edge case (mid-turn sends):** `parseSessionMessages` skips an `enqueue` when a real `type:"user"` twin with identical text follows within 50 lines (Pattern A). The twin's `content` is USUALLY a string but ~0.3% of the time an **array** of blocks (image refs / long text) — the matcher must extract the first `text` block for the array case, or those enqueues render twice. Content-matching (not enqueue/dequeue/remove counting) is the true invariant: counts don't balance across `--resume`/compact boundaries. Validated on a 2517-enqueue real corpus. Tests: `tests/core/session-parser-dedup.test.ts` (unit), `tests/e2e/mid-stream-message-position.test.ts` (e2e through the real server with a mocked daemon transport).
 

@@ -13,10 +13,7 @@
  *
  * Like git-diff-core.ts, this module must stay dependency-lean (node builtins
  * + bash-file-ops only) so bun can bundle it into the daemon binary. No
- * logging imports — callers log around it. daemon-source.ts (the embedded-
- * string twin) does not copy this pipeline: it require()s the bundled sidecar
- * `changes-core.cjs` (scripts/build-daemon.sh) and advertises 'changes-v1' only
- * when that loads, so both twins run this exact code.
+ * logging imports — callers log around it.
  */
 
 import fs from 'node:fs';

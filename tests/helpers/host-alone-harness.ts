@@ -1,7 +1,7 @@
 /**
  * A host server that answers alone, for real (docs/plan/walnut-servers-everywhere.md,
- * "Host server, leader away"): a real daemon (the source twin as a node process,
- * or the standalone twin under bun), the real host server program in this
+ * "Host server, leader away"): a real daemon (daemon-standalone.ts under bun),
+ * the real host server program in this
  * process, a mock Claude CLI the daemon runs as a session, and a stand-in for
  * the Mac that links to the daemon the way the real one does (leader.configure,
  * host.slice, server.configure, start) and sends the host server its device
@@ -19,7 +19,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from '#ws'
 import { testBun } from './bun-runtime.js'
-import { SOURCE_TWIN } from './source-twin.js'
 
 export const HOME = '/fixture/mac-home'
 export const WALNUT = 'whostalone01'
@@ -82,7 +81,8 @@ export interface MacDoor { server: http.Server; seen: string[] }
 export interface HostAloneHarness {
   base: string
   daemonDir: string
-  twin: 'source' | 'standalone'
+  /** The one daemon there is (daemon-standalone.ts), kept so a suite can name it. */
+  twin: 'standalone'
   publicPort: number
   /** The Mac links to the daemon (and the host server routes to its door); returns once linked. */
   linkMac(): Promise<void>
@@ -124,10 +124,9 @@ export function freePort(): Promise<number> {
 
 export const tokenHash = (token: string) => crypto.createHash('sha256').update(token, 'utf-8').digest('hex')
 
-export async function startHostAloneHarness(opts: { twin?: 'source' | 'standalone'; publicPort?: number } = {}): Promise<HostAloneHarness> {
-  const twin = opts.twin ?? 'source'
-  const [{ getDaemonSource }, { createStreamEndpoint, spliceStream }, { startHostServer }] = await Promise.all([
-    import('../../src/providers/daemon-source.js'),
+export async function startHostAloneHarness(opts: { twin?: 'standalone'; publicPort?: number } = {}): Promise<HostAloneHarness> {
+  const twin = 'standalone' as const
+  const [{ createStreamEndpoint, spliceStream }, { startHostServer }] = await Promise.all([
     import('../../src/lib/link-stream.js'),
     import('../../src/host-server/main.js'),
   ])
@@ -151,15 +150,8 @@ export async function startHostAloneHarness(opts: { twin?: 'source' | 'standalon
     WALNUT_SPAWN_JOURNAL: path.join(daemonDir, 'spawn-journal.jsonl'),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let daemon: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(daemonDir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    if (!BUN) throw new Error('the standalone twin needs bun')
-    daemon = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
+  if (!BUN) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
+  const daemon: ChildProcess = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   procs.push(daemon)
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')) && fs.existsSync(path.join(daemonDir, 'daemon.pid')), 60_000, 'daemon')

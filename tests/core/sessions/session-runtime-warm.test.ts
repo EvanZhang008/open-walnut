@@ -23,10 +23,9 @@ const read = (rel: string) => fs.readFileSync(path.join(repo, rel), 'utf8')
 
 /** Where the source proves a session-side run of the file has no such key. */
 const DROPPED_FOR_SESSIONS: Record<(typeof RUNTIME_PLACE_ENV)[number], Array<{ file: string; proof: RegExp }>> = {
-  // Every CLI the daemon starts (both twins) gets no runtime dir.
+  // Every CLI the daemon starts gets no runtime dir.
   WALNUT_RUNTIME_DIR: [
     { file: 'src/providers/daemon-standalone.ts', proof: /WALNUT_RUNTIME_DIR: undefined/ },
-    { file: 'src/providers/daemon-source.ts', proof: /WALNUT_RUNTIME_DIR: undefined/ },
   ],
   // The local daemon starts with no data home of the server's, so neither do its CLIs.
   OPEN_WALNUT_HOME: [

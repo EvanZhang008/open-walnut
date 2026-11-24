@@ -61,7 +61,6 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'core/session-hooks/builtins.ts': 'reads', // a comment about titles
   'core/sessions/transcript-from-jsonl.ts': 'reads', // a comment
   'providers/user-line-images-core.ts': 'reads', // the daemon turns the header's paths into image blocks
-  'providers/daemon-source.ts': 'reads', // the daemon's self-test of that parser
   'providers/outbound-uploads.ts': 'reads', // a comment: it copies a file header's paths to the session's host
   // Outside src/ (paths from the repo root).
   '../web/src/hooks/useSessionSend.ts': 'reads', // splitAttachmentHeaders for the waiting bubble

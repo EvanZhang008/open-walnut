@@ -5,7 +5,7 @@
  * takeExecGuardHits(), so the guard's afterEach sees none; anywhere else a hit
  * fails the test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -16,9 +16,8 @@ import {
   EXEC_GUARD_HOME_PREFIX, EXEC_GUARD_LOG, EXEC_GUARD_OFFSET_FILE, EXEC_GUARD_RUN_FILE, EXEC_GUARD_TOOLS, parseHit,
   unattributedHitsSince, unreadHitsOfRun,
 } from './exec-guard-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { assertNotProductionPath } from '../../src/constants.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const THIS_FILE = 'tests/setup/exec-guard.test.ts'
@@ -191,28 +190,15 @@ describe('escapes found by the 2026-10-03 gate land on the guard', () => {
 })
 
 // The daemon half (the PATH rule itself: host-runtime-core.test.ts), for real:
-// a booted twin whose session spawn names a bare
+// a booted daemon (daemon-standalone.ts under bun) whose session spawn names a bare
 // `claude` (cmdBridgeResume after a lost record, or createSessionManager with a
 // test daemon URL, which keeps `claude`) lands on the guard.
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN = testBun()
 const STANDALONE = path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: (script: string) => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: (script) => [SOURCE_TWIN.file, [script, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
-let script = ''
 let root = ''
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
-
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exec-guard-src-'))
-  script = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-})
 
 afterEach(async () => {
   try { ws?.close() } catch { /* closed */ }
@@ -230,8 +216,8 @@ afterEach(async () => {
   root = ''
 })
 
-async function boot(twin: Twin): Promise<{ runDir: string; cwd: string }> {
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exec-guard-twin-')))
+async function boot(): Promise<{ runDir: string; cwd: string }> {
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-exec-guard-daemon-')))
   const home = path.join(root, 'home')
   const cwd = path.join(root, 'work')
   const runDir = path.join(root, 'run')
@@ -248,8 +234,7 @@ async function boot(twin: Twin): Promise<{ runDir: string; cwd: string }> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'), WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME', 'WALNUT_STREAMS_DIR']) delete env[k]
-  const [cmd, args] = twin.command(script)
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'ignore'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -279,9 +264,9 @@ function rpc(frame: Record<string, unknown>): Promise<Record<string, unknown>> {
   })
 }
 
-describe.each(TWINS)('daemon twin: $name', (twin) => {
+describe.skipIf(!BUN)('the session daemon', () => {
   it('bridgeResume with a lost record respawns a bare `claude`, which lands on the guard', async () => {
-    const { runDir, cwd } = await boot(twin)
+    const { runDir, cwd } = await boot()
     const sid = 'guard-resume-0001'
     fs.mkdirSync(`${runDir}-streams`, { recursive: true })
     fs.writeFileSync(path.join(`${runDir}-streams`, `${sid}.jsonl`), '')
@@ -296,7 +281,7 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
   // 2026-11-09: stream retention drops a finished session's stream file after two days and journals
   // its sid first; the spawn journal is then the proof a resume needs, and an unknown sid stays refused.
   it('bridgeResume: the spawn journal proves residence once the stream file is gone; an unknown sid is refused', async () => {
-    const { cwd } = await boot(twin)
+    const { cwd } = await boot()
     const refused = await rpc({ id: 3, cmd: 'bridgeResume', sid: 'guard-unknown-0001', message: 'hello', cwd })
     expect(JSON.stringify(refused)).toContain('session not found')
     const sid = 'guard-journaled-0001'
@@ -310,7 +295,7 @@ describe.each(TWINS)('daemon twin: $name', (twin) => {
   }, 60_000)
 
   it('a start whose argv names `claude` (a test daemon URL keeps it) lands on the guard', async () => {
-    const { cwd } = await boot(twin)
+    const { cwd } = await boot()
     const sid = 'guard-start-0001'
     await rpc({ id: 2, cmd: 'start', sid, cwd, args: ['claude', '-p', '--output-format', 'stream-json', '--input-format', 'stream-json'] })
     const hits = await waitForHits((h) => h.tool === 'claude')

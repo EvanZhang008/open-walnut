@@ -23,10 +23,7 @@
  *
  * Layout per home (dirOf): index.json, b/<sha256> (the bytes), p/<sha256>.part.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createAttachmentCopy;
- * daemon-source.ts inlines `createAttachmentCopy.toString()` through
- * `__CREATE_ATTACHMENT_COPY__`. So the factory body references NOTHING at module
- * scope; every side effect arrives through deps.
+ * Imported by daemon-standalone.ts (createAttachmentCopy). The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 import type fsType from 'node:fs'

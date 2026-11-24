@@ -6,9 +6,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { helpText, parseWalnutCliArgs } from '../../../src/providers/wn-cli.js'
-import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 import { guardedPath } from '../../setup/exec-guard.js'
 
 const REPO = path.resolve(__dirname, '../../..')
@@ -27,13 +25,12 @@ const RESULT = { results: [{ type: 'task', title: 'Controller' }] }
 const ESC = '\u001b'
 const RUN_DEADLINE_MS = 20_000
 
-type Entry = 'hub' | 'full' | 'minimal'
+type Entry = 'hub' | 'full'
 interface Run { code: number | null; out: string; err: string }
 
 let root = ''
 let hubRunner = ''
 let fullRunner = ''
-let twinFile = ''
 let api: http.Server
 let apiUrl = ''
 // Every request the hub entry's API saw, and every line a fake gateway was sent: a local answer sends none.
@@ -47,8 +44,6 @@ beforeAll(async () => {
   fullRunner = path.join(root, 'full.ts')
   fs.writeFileSync(fullRunner, `import { runWalnutCli } from ${JSON.stringify(path.join(REPO, 'src/providers/wn-cli.ts'))}\n`
     + 'process.exit(await runWalnutCli(process.argv.slice(2)))\n')
-  twinFile = path.join(root, 'daemon.cjs')
-  fs.writeFileSync(twinFile, getDaemonSource())
   api = http.createServer((req, res) => { apiHits.push(`${req.method} ${req.url}`); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(RESULT)) })
   await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', () => resolve()))
   apiUrl = `http://127.0.0.1:${(api.address() as net.AddressInfo).port}`
@@ -81,8 +76,7 @@ async function gateway(answer: unknown): Promise<{ dir: string; sock: string; re
 
 function command(entry: Entry): string[] {
   if (entry === 'hub') return [process.execPath, hubRunner]
-  if (entry === 'full') return [process.execPath, fullRunner, 'tools']
-  return [SOURCE_TWIN.file, twinFile, 'wn', 'tools']
+  return [process.execPath, fullRunner, 'tools']
 }
 
 const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`
@@ -137,7 +131,7 @@ function plainJson(text: string, label: string): Parsed {
   return JSON.parse(text) as Parsed
 }
 
-describe.each(['hub', 'full', 'minimal'] as const)('the %s entry with FORCE_COLOR=1 and piped output', (entry) => {
+describe.each(['hub', 'full'] as const)('the %s entry with FORCE_COLOR=1 and piped output', (entry) => {
   const usageExit = entry === 'hub' ? 1 : 2
 
   it('a local refusal is one plain JSON object: stderr by default, stdout with --json', async () => {
@@ -212,7 +206,7 @@ const RECIPES: Record<string, () => Recipe> = { skill: skillRecipe, help: () => 
 async function runRecipe(entry: Entry, recipe: Recipe, payload: string | null, answer: unknown): Promise<Run> {
   const { env, close } = await entryEnv(entry, answer)
   const bin = fs.mkdtempSync(path.join(root, 'b'))
-  const [file, ...pre] = entry === 'hub' ? [process.execPath, hubRunner] : entry === 'full' ? [process.execPath, fullRunner] : [SOURCE_TWIN.file, twinFile, 'wn']
+  const [file, ...pre] = entry === 'hub' ? [process.execPath, hubRunner] : [process.execPath, fullRunner]
   const shift = entry === 'hub' ? '[ "$1" = tools ] && shift\n' : ''
   fs.writeFileSync(path.join(bin, 'walnut'), `#!/bin/sh\n${shift}exec ${[file, ...pre].map(quote).join(' ')} "$@"\n`, { mode: 0o755 })
   const capture = payload === null ? recipe.capture : recipe.capture.replace(recipe.payload, '"$PROBE_PAYLOAD"')
@@ -222,7 +216,7 @@ async function runRecipe(entry: Entry, recipe: Recipe, payload: string | null, a
   return r
 }
 
-describe.each(['hub', 'full', 'minimal'] as const)('the capture recipe through the %s entry with FORCE_COLOR=1', (entry) => {
+describe.each(['hub', 'full'] as const)('the capture recipe through the %s entry with FORCE_COLOR=1', (entry) => {
   it.each(Object.keys(RECIPES))('%s: a refusal keeps exit 1 and its hint on stderr, and the parser never runs', async (name) => {
     const r = await runRecipe(entry, RECIPES[name](), REPRO, REFUSAL)
     expect(r.code, r.err).toBe(1)
@@ -243,7 +237,6 @@ describe.each(['hub', 'full', 'minimal'] as const)('the capture recipe through t
 // Why: `tools call --help` took --help for the op name and read an open, non-tty stdin to its end, so it never returned (2026-11-07).
 // These runs hold the child's stdin open until it exits; an answer that waits on stdin fails on the deadline, never on a closed pipe.
 const HELD_DEADLINE_MS = 8_000
-const MINIMAL_USAGE = 'walnut tools call <op> [json|@file|-|--help]'
 const CATALOG = {
   ok: true,
   result: { ops: [{ name: 'search', title: 'Search', readonly: true, description: 'Probe catalog row', params: [{ name: 'q', type: 'string', required: true, description: 'probe query' }] }] },
@@ -302,7 +295,7 @@ const USAGE_FORMS = [
 
 const NAMED_HELP = [['call', 'search', '--help'], ['call', 'search', '-', '--help']].map((argv) => ({ argv, label: argv.join(' ') }))
 
-describe.each(['hub', 'full', 'minimal'] as const)('a tools call with no op name through the %s entry, stdin held open', (entry) => {
+describe.each(['hub', 'full'] as const)('a tools call with no op name through the %s entry, stdin held open', (entry) => {
   const usageExit = entry === 'hub' ? 1 : 2
 
   it.each(HELP_FORMS)('`$label` prints the tools help at once, plain, and asks no one', async ({ argv }) => {
@@ -310,12 +303,7 @@ describe.each(['hub', 'full', 'minimal'] as const)('a tools call with no op name
     expect(r.code, r.err).toBe(0)
     expect(r.err).toBe('')
     expect(r.out.includes(ESC), `ANSI in ${JSON.stringify(r.out)}`).toBe(false)
-    if (entry === 'minimal') {
-      expect(r.out).toContain(MINIMAL_USAGE)
-      expect(r.out).toContain('skill_read')
-    } else {
-      expect(r.out.trim()).toBe(helpText('tools').trim())
-    }
+    expect(r.out.trim()).toBe(helpText('tools').trim())
     expect(r.requests).toEqual([])
   }, 30_000)
 

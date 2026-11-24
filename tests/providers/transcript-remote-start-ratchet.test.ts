@@ -36,18 +36,15 @@ describe('remote history fetches and starts', () => {
     expect(before).toMatch(/recentRemoteFailure\(/)
   })
 
-  it('every start of a CLI in both daemons restores through restoreForStart', () => {
-    for (const rel of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const text = files.find((f) => f.rel === rel)!.text
-      expect(text, rel).toMatch(/await (?:taskDirCore\.)?restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)/)
-    }
+  it('every start of a CLI in the daemon restores through restoreForStart', () => {
+    const text = files.find((f) => f.rel === 'src/providers/daemon-standalone.ts')!.text
+    expect(text).toMatch(/await restoreForStart\(CLAUDE_PROJECTS_DIRS, archivedSource\)/)
   })
 
   it('restoreSessionAnywhere, which swallows a failed restore, is called only where no CLI starts', () => {
     const allowed: Record<string, string> = {
       // transcript.restore answers a path or none; it starts nothing.
       'src/providers/daemon-standalone.ts': 'cmdTranscriptRestore',
-      'src/providers/daemon-source.ts': 'transcript.restore and the fallback for a sidecar without restoreForStart',
     }
     const callers = [...new Set(callsOf(/\brestoreSessionAnywhere\(/g))].filter((rel) => rel !== 'src/providers/transcript-archive.ts').sort()
     expect(callers).toEqual(Object.keys(allowed).sort())

@@ -56,23 +56,23 @@ export const SLOW_TEST_FILES = [
   'tests/providers/session-background-workflow.test.ts', // 0.3s (was 5s — afterEach sleep was 90% of it)
   'tests/providers/daemon-transport-unit.test.ts', // 3s
   'tests/providers/daemon-triggers.test.ts', // ~35s: real daemon + real check processes on a 5s clock
-  'tests/integration/trigger-checked-replay-twins.test.ts', // ~260s measured: both real twins, offline checks, reboots and failure recovery
-  'tests/integration/trigger-host-delivery-daemon.test.ts', // ~60s: both daemon twins, real sessions, waits out the host grace and the 5s tick
+  'tests/integration/trigger-checked-replay-twins.test.ts', // ~260s measured: the real daemon, offline checks, reboots and failure recovery
+  'tests/integration/trigger-host-delivery-daemon.test.ts', // ~60s: the daemon, real sessions, waits out the host grace and the 5s tick
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
-  'tests/integration/host-server-twins.test.ts', // ~40s: both daemon twins as processes, a 5s restart backoff, a daemon restart each
-  'tests/integration/plugin-jobs-twins.test.ts', // ~30s: both daemon twins as processes run plugin jobs, a 5s restart backoff, a 3s every job, a daemon restart each
-  'tests/integration/bridge-stream-twins.test.ts', // ~20s: both daemon twins as processes dial a /bridge, streams to the primary (WP13)
-  'tests/integration/replica-front-twins.test.ts', // ~4 min: both daemon twins supervise a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
-  'tests/integration/clock-routine-twins.test.ts', // ~7 min: both daemon twins as processes, clock slots, daemon restarts, replays until acked, routine runs the host starts
-  'tests/integration/journal-v2-twins.test.ts', // ~3 min: both daemon twins as processes, SIGKILL and reboot, a 1fe1fd194 daemon, 1,000 appends, a 30s quiet window
-  'tests/integration/replica-local-routes-twins.test.ts', // both daemon twins as processes, the real startServer as their host replica, a 13 MB copy
-  'tests/integration/note-journal-twins.test.ts', // both daemon twins as processes, a follower and a session saving one note, 120 autosaves, a drain (WP11)
+  'tests/integration/host-server-twins.test.ts', // ~40s: the daemon as a process, a 5s restart backoff, a daemon restart each
+  'tests/integration/plugin-jobs-twins.test.ts', // ~30s: the daemon as a process runs plugin jobs, a 5s restart backoff, a 3s every job, a daemon restart each
+  'tests/integration/bridge-stream-twins.test.ts', // ~20s: the daemon as a process dials a /bridge, streams to the primary (WP13)
+  'tests/integration/replica-front-twins.test.ts', // ~4 min: the daemon supervises a real `web --replica` (tsx), a 6s quiet window, a crash loop to the fallback
+  'tests/integration/clock-routine-twins.test.ts', // ~7 min: the daemon as a process, clock slots, daemon restarts, replays until acked, routine runs the host starts
+  'tests/integration/journal-v2-twins.test.ts', // ~3 min: the daemon as a process, SIGKILL and reboot, a 1fe1fd194 daemon, 1,000 appends, a 30s quiet window
+  'tests/integration/replica-local-routes-twins.test.ts', // the daemon as a process, the real startServer as its host replica, a 13 MB copy
+  'tests/integration/note-journal-twins.test.ts', // the daemon as a process, a follower and a session saving one note, 120 autosaves, a drain (WP11)
   'tests/core/offline-merge/notes-property.test.ts', // ~90s: 1,000 seeded runs, three drain orders each, every one in a fresh temp vault (WP11)
   'tests/core/leader/permit/model-check.test.ts', // ~6 min: about 1,300 seeded 15-minute schedules of the write permission (op sends, two processes a machine), safe and with each safety part removed
   'tests/core/leader/permit/instance.test.ts', // ~11s: the instance lock between real processes (a crash, SIGSTOP past the stale time)
   'tests/core/leader/permit/net-slow-witness.test.ts', // ~3s: 10-minute simulated leaders with one slow witness, through the real network transport
-  'tests/core/leader/switch/promote-daemon-runtime.test.ts', // a real daemon (the standalone twin on bun) writing in a home promoted twice around it
+  'tests/core/leader/switch/promote-daemon-runtime.test.ts', // a real daemon (on bun) writing in a home promoted twice around it
   'tests/core/leader/switch/witness-route.test.ts', // real leader doors on loopback sockets, witness records on disk
   'tests/core/leader/switch/witness-twin.test.ts', // a real host daemon runtime in a bun process relaying the leader's stream to a real leader door
   'tests/core/leader/switch/witness-setup.test.ts', // real witness doors on loopback sockets, three machines' records on disk
@@ -83,8 +83,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/leader/switch/witness-ways.test.ts', // three witness machines on loopback sockets: way a and way c on one record
   'tests/core/leader/permit/change-repair.test.ts', // ~4s: 35 ten-minute schedules of candidates racing for the permission (back-off)
   'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)
-  'tests/integration/replica-ask-twins.test.ts', // both daemon twins as processes, mock CLIs spawned from the spawn template, a resume, ten asks an hour
-  'tests/providers/follower-owner-scope-twins.test.ts', // both daemon twins as processes, two Walnuts and mock CLIs (WP6 owner scope)
+  'tests/integration/replica-ask-twins.test.ts', // the daemon as a process, mock CLIs spawned from the spawn template, a resume, ten asks an hour
+  'tests/providers/follower-owner-scope-twins.test.ts', // the daemon as a process, two Walnuts and mock CLIs (WP6 owner scope)
   'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
   'tests/providers/daemon-connection-upload-fake-ssh.test.ts', // ~5s idle, ~20s at load 27: a stand-in ssh process per chunk, ~90 of them
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
@@ -110,9 +110,8 @@ export const SLOW_TEST_FILES = [
   'tests/providers/turn-snapshot-core.test.ts', // ~24s: 32 tests, each on its own temp repo with real snapshot refs
   'tests/providers/workspace-core.test.ts', // 10-19s: real git worktrees and provider processes in temp dirs
   'tests/providers/workspace-core-recheck.test.ts', // ~8s: real worktrees, bare remotes, fetches and the provider process
-  'tests/providers/daemon-workspace-twins-e2e.test.ts', // 6-15s: boots both daemon twins and makes real worktrees
-  'tests/providers/daemon-standalone-no-bash.test.ts', // ~2.5s: boots the standalone daemon twin twice and starts a shim CLI under it
-  'tests/providers/daemon-source-fallback-loaders-e2e.test.ts', // ~7s: three loaders (two esbuild bundles, tsx) each write and boot the source-fallback daemon
+  'tests/providers/daemon-workspace-twins-e2e.test.ts', // 6-15s: boots the daemon and makes real worktrees
+  'tests/providers/daemon-standalone-no-bash.test.ts', // ~2.5s: boots the daemon twice and starts a shim CLI under it
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
   'tests/scripts/devprod-render-check.test.ts', // ~25s — launches a headless Chromium per verdict
@@ -126,8 +125,8 @@ export const SLOW_TEST_FILES = [
   'tests/scripts/test-baseline-shard-cut.test.ts', // ~5-15s: three real nested vitest runs, checking the gate's --shard cut
   'tests/lib/hybrid-search-embed-worker-process.test.ts', // ~5-15s: real node hosts and workers through tsx
   'tests/core/components/features.test.ts', // ~5-10s: packs the real component archives (gzip -9 of ~55 MB) and installs them
-  'tests/providers/daemon-isolated-exit-reap-twins.test.ts', // ~15s: both daemon twins exit with live sessions; one case waits out the 5s SIGINT grace
-  'tests/providers/daemon-link-liveness-twins-e2e.test.ts', // ~35s: both daemon twins, the bridge silence watchdog and the trusted-client keepalive on sub-second clocks
+  'tests/providers/daemon-isolated-exit-reap-twins.test.ts', // ~15s: the daemon exits with live sessions; one case waits out the 5s SIGINT grace
+  'tests/providers/daemon-link-liveness-twins-e2e.test.ts', // ~35s: the daemon, the bridge silence watchdog and the trusted-client keepalive on sub-second clocks
   'tests/providers/daemon-bridge-slow-link-twins-e2e.test.ts', // ~55s: three daemon runtimes, a 1 MB read across a rate-limited bridge link, and a dead link's teardown
   'tests/providers/daemon-bridge-wss-twins-e2e.test.ts', // ~15s: three daemon runtimes dialing wss://localhost with a certificate made by openssl at runtime
   'tests/providers/history-ready-twins-e2e.test.ts', // not measured yet: compiles the daemon binary (two entries) and boots three daemon runtimes
@@ -171,7 +170,7 @@ export const SLOW_TEST_FILES = [
   'tests/core/replication/sessions-scale.test.ts',
   // A real `sleep` child whose pid the copied rows name (it must survive every process path).
   'tests/core/sessions/replica-process-guard.test.ts',
-  // WP14: logs.tail and the running log cap on both daemon twins as processes (~30s).
+  // WP14: logs.tail and the running log cap on the daemon as a process (~30s).
   'tests/integration/replica-logs-twins.test.ts',
   // The companion's build door on a real tree: the host install script with real npm, real smoke boots.
   'tests/core/companion-build-box.test.ts',

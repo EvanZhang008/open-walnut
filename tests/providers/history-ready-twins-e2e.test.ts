@@ -1,7 +1,6 @@
 /**
- * history.readyView answered by real daemons, all three ways a host runs one: the source twin
- * (daemon.cjs + its history-ready-core.cjs sidecar, the sidecar also being the worker), the
- * standalone twin run from source by bun, and the standalone twin compiled the way
+ * history.readyView answered by real daemons, both ways a host runs one: daemon-standalone.ts
+ * run from source by bun, and the daemon compiled the way
  * scripts/build-daemon.sh compiles it (two entries: the daemon and history-ready-worker.ts, so
  * the worker sits at /$bunfs/root/history-ready-worker.ts). Each must answer `ready` from its
  * worker thread, never `none no-worker`, with this build's parser version, and a rewound
@@ -20,11 +19,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import zlib from 'node:zlib'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { encodeProjectPathCore } from '../../src/providers/session-changes-core.js'
 import { HISTORY_PARSER_VERSION } from '../../src/core/history-parser-version.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { transcript, cutHere } from '../helpers/transcript-fixtures.js'
@@ -33,14 +30,12 @@ const BUN: string | undefined = testBun()
 const REPO = path.resolve(__dirname, '../..')
 const STANDALONE = path.join(REPO, 'src/providers/daemon-standalone.ts')
 const WORKER = path.join(REPO, 'src/providers/history-ready-worker.ts')
-const CORE = path.join(REPO, 'src/providers/history-ready-core.ts')
 let buildDir = ''
 
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = BUN ? [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [path.join(buildDir, 'daemon.cjs'), '--start']] },
-  { name: 'standalone twin (bun, from source)', command: () => [BUN, [STANDALONE, '--start']] },
-  { name: 'standalone twin (compiled, two entries)', command: () => [path.join(buildDir, 'daemon-compiled'), ['--start']] },
+type Build = { name: string; command: () => [string, string[]] }
+const BUILDS: Build[] = BUN ? [
+  { name: 'standalone daemon (bun, from source)', command: () => [BUN, [STANDALONE, '--start']] },
+  { name: 'standalone daemon (compiled, two entries)', command: () => [path.join(buildDir, 'daemon-compiled'), ['--start']] },
 ] : []
 
 let root = ''
@@ -51,10 +46,6 @@ let rpcId = 1
 beforeAll(() => {
   if (!BUN) return
   buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ready-twins-build-'))
-  fs.writeFileSync(path.join(buildDir, 'daemon.cjs'), getDaemonSource())
-  // The sidecar the source twin requires, and starts as its worker, as build-daemon.sh makes it.
-  const sidecar = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(buildDir, 'history-ready-core.cjs'), CORE], { encoding: 'utf8' })
-  if (sidecar.status !== 0) throw new Error('sidecar build failed: ' + sidecar.stderr)
   // The binary, compiled with its worker entry beside it (build-daemon.sh's compile line).
   const compiled = spawnSync(BUN, ['build', '--compile', '--outfile', path.join(buildDir, 'daemon-compiled'), STANDALONE, WORKER], { encoding: 'utf8', cwd: REPO })
   if (compiled.status !== 0) throw new Error('daemon compile failed: ' + compiled.stderr)
@@ -81,7 +72,7 @@ afterEach(async () => {
   if (root.includes('walnut-ready-twins-')) fs.rmSync(root, { recursive: true, force: true })
 })
 
-async function boot(twin: Twin, home: string, daemonDir: string): Promise<void> {
+async function boot(build: Build, home: string, daemonDir: string): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -93,7 +84,7 @@ async function boot(twin: Twin, home: string, daemonDir: string): Promise<void> 
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = build.command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -128,9 +119,9 @@ function rpc(cmd: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<s
 const rowsOf = (answer: Record<string, unknown>): string[] =>
   (JSON.parse(zlib.gunzipSync(Buffer.from(answer.rowsGz as string, 'base64')).toString('utf8')) as Array<{ text: string }>).map((r) => r.text)
 
-describe.skipIf(TWINS.length === 0)('history.readyView from real daemons (all three builds)', () => {
-  for (const twin of TWINS) {
-    it(`${twin.name}: answers ready from its worker, rewound sessions filtered`, async () => {
+describe.skipIf(BUILDS.length === 0)('history.readyView from real daemons (both builds)', () => {
+  for (const build of BUILDS) {
+    it(`${build.name}: answers ready from its worker, rewound sessions filtered`, async () => {
       root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ready-twins-')))
       const home = path.join(root, 'home')
       const daemonDir = path.join(root, 'daemon')
@@ -150,7 +141,7 @@ describe.skipIf(TWINS.length === 0)('history.readyView from real daemons (all th
       fs.writeFileSync(path.join(projectDir, 'ready-plain', 'subagents', 'agent-a1b2.jsonl'),
         transcript().user('s1', 'review the diff').assistant('s2', 'Reviewed: two findings.', { effort: 'xhigh' }).text())
 
-      await boot(twin, home, daemonDir)
+      await boot(build, home, daemonDir)
       const hello = await rpc({ cmd: 'hello' }).catch(() => ({} as Record<string, unknown>))
       if (Array.isArray(hello.capabilities)) expect(hello.capabilities).toEqual(expect.arrayContaining(['history-ready-v1', 'history-ready-subagent-v1']))
 

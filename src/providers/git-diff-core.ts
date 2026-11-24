@@ -2,7 +2,7 @@
  * git-diff-core — the host-side git comparison algorithm, shared verbatim by:
  *   - the LOCAL path (run in-process by the Walnut server for `__local__` sessions)
  *   - the REMOTE daemon (`git.diff` / `git.refs` RPC handlers in
- *     daemon-standalone.ts / daemon-source.ts), which runs ON the remote host
+ *     daemon-standalone.ts), which runs ON the remote host
  *     where the repo lives.
  *
  * The whole point of running this on the host (in-process or in the daemon) is
@@ -15,10 +15,7 @@
  *   - exec(argv, cwd)   → run a command, capture {stdout,stderr,code}
  *   - readText(absPath) → read a working-tree file as UTF-8 ('' if unreadable)
  *
- * How each twin gets it: the server and daemon-standalone.ts import
- * computeGitDiff / listGitRefs (thin typed wrappers below); daemon-source.ts
- * inlines `createGitDiffCore.toString()` through `__CREATE_GIT_DIFF__`. So the
- * factory body references NOTHING at module scope: every helper lives inside
+ * Imported by daemon-standalone.ts (computeGitDiff / listGitRefs (thin typed wrappers below)). The factory body references NOTHING at module scope: every helper lives inside
  * it, and it carries no backticks.
  *
  * Bases (what `before` is read from):
@@ -644,8 +641,7 @@ export async function listGitRefs(cwd: string, exec: ExecFn): Promise<GitRefsRes
 // Read-only and lock-free: every git call passes --no-optional-locks, so a
 // glance never takes index.lock under an agent's own `git commit`.
 //
-// Self-contained factory: daemon-source.ts inlines `createGitStatus.toString()`
-// through `__CREATE_GIT_STATUS__`, so nothing at module scope is referenced and
+// Self-contained factory: nothing at module scope is referenced and
 // the body carries no backticks.
 
 export interface GitRepoStatus {

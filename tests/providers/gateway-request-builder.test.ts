@@ -43,14 +43,11 @@ const LINE_LITERAL = /\bv\s*:\s*1\s*,\s*op\b|\bop\s*:\s*['"]tools\.(?:call|list)
 const LITERAL_ALLOWED: Record<string, string> = {
   // Parses a line the daemon received; builds none.
   'src/providers/gateway-core.ts': 'parseGatewayLine, the receiving side',
-  // The source twin parses lines too, and carries its own minimal `walnut` CLI as text: its
-  // lines are checked below (each names a wait).
-  'src/providers/daemon-source.ts': 'the source twin: its parse, and its inlined CLI (checked below)',
-  // A plugin job's process: its source is inlined into the source daemon, so it imports
-  // nothing, and the daemon answers a plugin job's call on its own path, which keeps its own
-  // deadline and wait (sendPluginJobGatewayRequest, followerGateway.routeJob) and reads no
-  // waitMs. Checked below: the day that path reads one, the harness should name it.
-  'src/providers/plugin-job-harness.ts': 'inlined into the source daemon; its daemon path reads no waitMs',
+  // A plugin job's process writes its own line, and the daemon answers a plugin job's call on
+  // its own path, which keeps its own deadline and wait (sendPluginJobGatewayRequest,
+  // followerGateway.routeJob) and reads no waitMs. Checked below: the day that path reads one,
+  // the harness should name it.
+  'src/providers/plugin-job-harness.ts': 'a plugin job writes its own line; its daemon path reads no waitMs',
 }
 
 /** The calls that do not wait for a server, on purpose: file -> enclosing function -> why. */
@@ -138,20 +135,10 @@ describe('every gateway line comes from the shared builder', () => {
     expect(noWait).toEqual(expected)
   })
 
-  it("the source twin's inlined CLI names a wait on each line it writes", () => {
-    const src = read('src/providers/daemon-source.ts')
-    const writes = src.split('\n').filter((l) => /JSON\.stringify\([^\n]*\bv: 1, op: op\b/.test(l))
-    expect(writes.length).toBeGreaterThanOrEqual(2)
-    for (const l of writes) expect(l, l.trim()).toMatch(/waitMs:/)
-  })
-
   it("the plugin job harness's reason still holds: the daemon's plugin job path reads no waitMs", () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(twin)
-      const calls = [...src.matchAll(/sendPluginJobGatewayRequest\(\w+, req\.op, req\.args, [^\n]*/g)].map((m) => m[0])
-      expect(calls.length, twin).toBeGreaterThanOrEqual(1)
-      for (const c of calls) expect(c, `${twin}: a plugin job call now has a plan; give plugin-job-harness.ts a wait`).not.toMatch(/gatewayCallPlan|waitMs/)
-    }
+    const calls = [...read('src/providers/daemon-standalone.ts').matchAll(/sendPluginJobGatewayRequest\(\w+, req\.op, req\.args, [^\n]*/g)].map((m) => m[0])
+    expect(calls.length).toBeGreaterThanOrEqual(1)
+    for (const c of calls) expect(c, 'a plugin job call now has a plan; give plugin-job-harness.ts a wait').not.toMatch(/gatewayCallPlan|waitMs/)
     expect(read('src/providers/plugin-job-harness.ts')).not.toMatch(/waitMs/)
   })
 })

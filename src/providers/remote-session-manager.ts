@@ -773,7 +773,7 @@ export class RemoteSessionManager implements SessionManager {
   //
   // When the SSH tunnel / daemon WebSocket drops, the daemon's close handler
   // calls stopWatching() for every session this connection was watching (see
-  // daemon-source.ts:1438). After reconnect, the daemon has no watcher for
+  // the daemon's close handler). After reconnect, the daemon has no watcher for
   // this session's JSONL file, so newly-produced events never reach walnut —
   // `_lastEventAt` stops advancing, and SessionHealthMonitor eventually kills
   // the session even though the CLI is still producing output remotely.

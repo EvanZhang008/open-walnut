@@ -116,7 +116,7 @@ describe('ratchet: readers of the heavy prompt fields are audited', () => {
         if (e.isDirectory()) { walk(p); continue; }
         if (!/\.tsx?$/.test(e.name) || /\.test\./.test(e.name)) continue;
         const rel = path.relative(root, p).split(path.sep).join('/');
-        if (rel === 'src/providers/daemon-source.ts' || rel === 'src/providers/daemon-standalone.ts') continue;
+        if (rel === 'src/providers/daemon-standalone.ts') continue;
         if (/appliedAppendSystemPrompt|profile\??\.systemPrompt/.test(fs.readFileSync(p, 'utf8'))) found.push(rel);
       }
     };

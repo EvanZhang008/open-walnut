@@ -3,10 +3,7 @@
  * daemon twins. createHostRuntime's preflight calls `check()` once it knows
  * which claude a session would start and its version.
  *
- * How each twin gets it: daemon-standalone.ts imports it; daemon-source.ts
- * inlines `createClaudeCheck.toString()` through the `__CREATE_CLAUDE_CHECK__`
- * placeholder, like createHostRuntime. So the factory body references NOTHING
- * at module scope (the type import below is erased; node:crypto serves only
+ * Imported by daemon-standalone.ts. The factory body references NOTHING at module scope (the type import below is erased; node:crypto serves only
  * sha256Hex, for callers that import this module), and constructing it has
  * no side effects.
  *

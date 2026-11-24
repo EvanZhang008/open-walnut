@@ -35,8 +35,7 @@
  * `consistent` when its last op matches the current content: that is the
  * session to name. No consistent writer = "edited outside this session".
  *
- * Self-contained factory (daemon-source.ts inlines `createTurnGuard.toString()`
- * through `__CREATE_TURN_GUARD__`): nothing at module scope is referenced.
+ * Self-contained factory: nothing at module scope is referenced.
  */
 
 export interface TurnGuardOp {

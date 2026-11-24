@@ -6,25 +6,12 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { createRequire } from 'node:module'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { childExecGuardEnv, guardedPath } from '../setup/exec-guard.js'
 import { bunRuntime } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const STANDALONE = path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts')
-const WS_PACKAGE = path.dirname(createRequire(import.meta.url).resolve('ws/package.json'))
 const BUN = bunRuntime()
-type Twin = { name: string; executable: string; standalone: boolean; withWs: boolean; wsClient?: 'builtin' | 'ws' }
-const TWINS: Twin[] = [
-  { name: 'source twin (bun)', executable: BUN, standalone: false, withWs: false },
-  ...(SOURCE_TWIN.runtime === 'node' ? [
-    { name: 'source twin (node), builtin WebSocket', executable: SOURCE_TWIN.file, standalone: false, withWs: false, wsClient: 'builtin' as const },
-    { name: 'source twin (node), installed ws', executable: SOURCE_TWIN.file, standalone: false, withWs: true, wsClient: 'ws' as const },
-  ] : []),
-  { name: 'standalone twin (bun)', executable: BUN, standalone: true, withWs: false },
-]
 
 type Frame = Record<string, unknown>
 let root = ''
@@ -115,21 +102,9 @@ afterEach(async () => {
   root = ''
 }, 30_000)
 
-async function boot(twin: Twin, companionPort: number): Promise<{ caller: Peer; port: number }> {
-  const dirs = ['home', 'data', 'daemon', 'daemon-state', 'streams', 'tmp', 'task-dirs', 'source']
+async function boot(companionPort: number): Promise<{ caller: Peer; port: number }> {
+  const dirs = ['home', 'data', 'daemon', 'daemon-state', 'streams', 'tmp', 'task-dirs']
   for (const dir of dirs) fs.mkdirSync(path.join(root, dir), { recursive: true })
-  const script = path.join(root, 'source', 'daemon.cjs')
-  const entry = twin.standalone ? STANDALONE : script
-  if (!twin.standalone) {
-    const source = getDaemonSource()
-    const legacyCryptoSource = twin.wsClient
-      ? source.replace(/^(#![^\n]*\n)/, "$1Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });\n") : source
-    fs.writeFileSync(script, legacyCryptoSource, { mode: 0o700 })
-    if (twin.withWs) {
-      fs.mkdirSync(path.join(root, 'source', 'node_modules'))
-      fs.symlinkSync(WS_PACKAGE, path.join(root, 'source', 'node_modules', 'ws'))
-    }
-  }
   // Do not inherit a bridge URL, credential, HOME override, sidecar path or real
   // API root from the calling session. Preserve only the test exec guard hooks.
   const env: NodeJS.ProcessEnv = {
@@ -146,7 +121,7 @@ async function boot(twin: Twin, companionPort: number): Promise<{ caller: Peer; 
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
     WALNUT_TASK_DIR_ROOT: path.join(root, 'task-dirs'), WALNUT_DAEMON_KEEP_SESSIONS: '0',
   }
-  const child = spawn(twin.executable, [entry, '--start'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(BUN, [STANDALONE, '--start'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
   children.add(child) // Register before awaiting startup, including partial startup failure.
   let stdout = '', stderr = '', failed: Error | undefined
   child.stdout!.on('data', (chunk) => { stdout += String(chunk) })
@@ -156,7 +131,7 @@ async function boot(twin: Twin, companionPort: number): Promise<{ caller: Peer; 
     if (failed) throw failed
     if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Daemon exited during startup: ${stderr}`)
     return /^\d+$/m.test(stdout)
-  }, `daemon port (${twin.name}); stderr: ${stderr}`, 60_000)
+  }, `daemon port; stderr: ${stderr}`, 60_000)
   const port = Number(stdout.match(/^\d+$/m)![0])
   expect(Number.isSafeInteger(port) && port > 0 && port <= 65535).toBe(true)
   return { caller: await connect(port), port }
@@ -196,17 +171,11 @@ async function configure(caller: Peer, port: number, hostAlias = '__local__'): P
     .toMatchObject({ ok: true, applied: true })
 }
 
-async function rig(twin: Twin, hostAlias = '__local__') {
+async function rig(hostAlias = '__local__') {
   const cloud = await companion()
-  const { caller, port } = await boot(twin, cloud.port)
+  const { caller, port } = await boot(cloud.port)
   await configure(caller, cloud.port, hostAlias)
   const bridge = await cloud.peer()
-  if (twin.wsClient) {
-    // The daemon's log is appended off its thread (log-appender-core.ts): the line may land after the hello.
-    const opened = () => daemonLogs().filter((f) => f.msg === 'bridge-conn-open').map((f) => f.wsClient)
-    await until(() => opened().length > 0, 'the bridge-conn-open log line')
-    expect(opened()).toEqual([twin.wsClient])
-  }
   return { cloud, caller, port, bridge }
 }
 
@@ -234,9 +203,9 @@ function localDisconnects(): number {
   return daemonLogs().filter((f) => f.msg === 'client disconnected').length
 }
 
-describe.each(TWINS)('feature relay on $name', (twin) => {
+describe('feature relay on the standalone daemon (bun)', () => {
   it('advertises the optional capability on the real local and bridge hellos', async () => {
-    const { caller, bridge } = await rig(twin)
+    const { caller, bridge } = await rig()
     const hello = await caller.rpc({ cmd: 'hello' })
     expect(hello.ok).toBe(true)
     expect(hello.capabilities).toContain('feature-relay-v1')
@@ -246,7 +215,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('forwards exact list/read frames and settles only the actual ACK, out of order', async () => {
-    const { caller, bridge } = await rig(twin)
+    const { caller, bridge } = await rig()
     const unicode = String.fromCodePoint(0x8bfb, 0x53d6)
     const read = JSON.stringify({ nodeId: 'fixture-node', feature: 'reader', operation: 'list',
       input: { query: unicode, text: 'line\n'.repeat(2_000) } })
@@ -272,7 +241,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('refuses a forged result from another local socket or the caller, and rejects duplicate ACKs', async () => {
-    const { caller, port, bridge } = await rig(twin)
+    const { caller, port, bridge } = await rig()
     const imposter = await connect(port)
     const id = caller.send({ cmd: 'feature.request', frame: 'fixture-read' })
     const request = await bridge.request()
@@ -288,7 +257,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('refuses bridge-origin feature.request without relaying or allocating a pending request', async () => {
-    const { caller, bridge } = await rig(twin)
+    const { caller, bridge } = await rig()
     expect(await bridge.rpc({ cmd: 'feature.request', frame: null })).toMatchObject({
       ok: false, error: 'command not permitted over bridge: feature.request',
     })
@@ -300,7 +269,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('refuses a trusted local request when the configured host alias is nonlocal', async () => {
-    const { caller, bridge } = await rig(twin, 'fixture-host')
+    const { caller, bridge } = await rig('fixture-host')
     for (const frame of [null, 'fixture-read']) {
       expect(await caller.rpc({ cmd: 'feature.request', frame }))
         .toMatchObject({ ok: false, error: 'Feature request refused' })
@@ -310,7 +279,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('refuses unbound callers and other Walnut homes without forwarding', async () => {
-    const { caller, port, bridge } = await rig(twin)
+    const { caller, port, bridge } = await rig()
     const other = await connect(port)
     expect(await other.rpc({ cmd: 'feature.request', frame: null }))
       .toMatchObject({ ok: false, error: 'Feature request refused' })
@@ -327,7 +296,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   // A socket speaks for one Walnut: a bind to another home is refused (walnut-scope-core.ts),
   // so an in-flight read is never handed to a socket that now speaks for someone else.
   it.each(['leader.configure', 'leader.claim', 'host.slice'])('refuses a %s that would move the socket to another Walnut; its read goes on', async (command) => {
-    const { caller, bridge, port } = await rig(twin)
+    const { caller, bridge, port } = await rig()
     const other = path.join(root, 'other-data')
     if (command === 'leader.claim') {
       const registration = await connect(port)
@@ -350,7 +319,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
 
   it('an older bridge configuration with no owner remains usable but cannot serve features', async () => {
     const cloud = await companion()
-    const { caller } = await boot(twin, cloud.port)
+    const { caller } = await boot(cloud.port)
     expect(await caller.rpc({ cmd: 'leader.configure', home: path.join(root, 'data'), walnutId: 'fixture-primary', backup: false }))
       .toMatchObject({ ok: true })
     // A server older than the per-Walnut split names no home: its link is the unnamed one,
@@ -366,7 +335,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('rejects object and oversized envelopes before forwarding, then permits a valid read', async () => {
-    const { caller, bridge } = await rig(twin)
+    const { caller, bridge } = await rig()
     for (const frame of [{ cmd: 'start' }, 'x'.repeat(65_537)]) {
       expect(await caller.rpc({ cmd: 'feature.request', frame }))
         .toMatchObject({ ok: false, error: 'Invalid feature relay request' })
@@ -379,7 +348,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('drains pending requests offline on a real bridge disconnect and recovers on redial', async () => {
-    const { cloud, caller, bridge } = await rig(twin)
+    const { cloud, caller, bridge } = await rig()
     const ids = [null, 'one', 'two'].map((frame) => caller.send({ cmd: 'feature.request', frame }))
     await bridge.request(2)
     await closePeer(bridge)
@@ -392,7 +361,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
   }, 90_000)
 
   it('reclaims all 64 pending slots when the trusted caller disconnects', async () => {
-    const { caller, port, bridge } = await rig(twin)
+    const { caller, port, bridge } = await rig()
     for (let i = 0; i < 64; i++) caller.send({ cmd: 'feature.request', frame: null })
     await bridge.request(63)
     expect(await caller.rpc({ cmd: 'feature.request', frame: null }))
@@ -418,7 +387,7 @@ describe.each(TWINS)('feature relay on $name', (twin) => {
 
   it('a delayed old ACK cannot finish a new request after bridge replacement', async () => {
     const firstCloud = await companion(), secondCloud = await companion()
-    const { caller } = await boot(twin, firstCloud.port)
+    const { caller } = await boot(firstCloud.port)
     await configure(caller, firstCloud.port)
     const old = await firstCloud.peer()
     const id = 30_000

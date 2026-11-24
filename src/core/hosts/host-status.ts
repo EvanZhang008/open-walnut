@@ -10,7 +10,7 @@ import { twinMachineLabelOf } from './daemon-twins.js'
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
 import { ptyStreamMissingSentence } from './terminal-link.js'
 import { daemonUpdateHowSentence, type DaemonLinkKind } from '../../providers/daemon-update-paths.js'
-import type { RemoteRuntime } from '../../providers/remote-runtime.js'
+import type { SeenRuntime } from '../../providers/remote-runtime.js'
 import { MIN_DAEMON_FREE_MB, daemonDirWarning, displayDaemonDir } from '../../providers/remote-daemon-dir.js'
 import type { Config } from '../types.js'
 import type { HostWarmupState } from './host-warmup.js'
@@ -127,8 +127,8 @@ export interface HostStatus {
    * only from a daemon with 'preflight-v1'; `problems` is empty when all is well.
    */
   readiness?: HostReadiness
-  /** Which runtime the daemon ended up on after any fallback (bun, the prebuilt binary, or node). */
-  runtime?: RemoteRuntime | 'unknown'
+  /** What the host's daemon runs on: the compiled daemon, or (until its next update) the source daemon an older leader left under bun or node. */
+  runtime?: SeenRuntime | 'unknown'
   /**
    * Where the daemon keeps its files on the host. `fallback` = it moved to
    * ~/.cache/open-walnut because /tmp could not take it (`reason` says why).

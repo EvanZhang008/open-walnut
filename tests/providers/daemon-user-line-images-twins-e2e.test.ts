@@ -1,8 +1,7 @@
 /**
  * The pictures of a user line reach the CLI as image blocks, on the real daemon
- * twins (the JS source twin under node, and the standalone twin under bun when bun
- * is installed), with a stand-in CLI that records every stdin line it receives
- * (user-line-images-core.ts). Pins, per twin: a listed png goes as an image block
+ * (daemon-standalone.ts under bun), with a stand-in CLI that records every stdin
+ * line it receives (user-line-images-core.ts). Pins: a listed png goes as an image block
  * in front of ONE text block holding the server's text and the images hint; the
  * delivery marker in the stream file keeps the text alone, never the bytes; a
  * picture over the cap stays a path to Read; a line with no pictures, or a file
@@ -20,24 +19,16 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { withImagePaths } from '../../src/core/sessions/cloud-images.js'
 import { withFilePaths } from '../../src/core/sessions/session-uploads.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -102,7 +93,7 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon'), received: path.join(root, 'received.jsonl') }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+async function boot(dirs: Dirs): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -113,8 +104,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -191,8 +181,6 @@ const send = (sid: string, message: string, uuid: string, ids: string[], dedupe 
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-line-images-twins-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-cli.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -221,10 +209,10 @@ type Got = { content?: unknown }
 const blocks = (r: Got): Array<{ type: string; text?: string; source?: { media_type: string; data: string } }> =>
   (Array.isArray(r.content) ? r.content : [])
 
-describe.each(TWINS)('user line pictures: $name', (twin) => {
+describe.skipIf(!BUN)('user line pictures: standalone daemon (bun)', () => {
   it('a listed picture goes as an image block; the marker keeps the text only', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'img-one', false)
     const pic = writePicture('shot.png')
     const message = withImagePaths('what is on this screen?', [pic])
@@ -244,7 +232,7 @@ describe.each(TWINS)('user line pictures: $name', (twin) => {
 
   it('a retry of a picture line the process already holds is not written again; one proved read past is written again whole', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'img-retry', false)
     const message = withImagePaths('again?', [writePicture('retry.png')])
     const uuid = 'aaaaaaaa-0000-4000-8000-0000000000d1'
@@ -261,7 +249,7 @@ describe.each(TWINS)('user line pictures: $name', (twin) => {
 
   it('a picture over the cap or outside Walnut\'s folders stays a path; plain text and file attachments are written as they were', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     await start(dirs, 'img-fallback', false)
     const big = writePicture('big.png', 5 * 1024 * 1024 + 1)
     const tooBig = withImagePaths('too big', [big])

@@ -208,54 +208,42 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
   })
 })
 
-describe('one rule in every reader: the TS CLI, the JS twin CLI and both user shims', () => {
+describe('one rule in every reader: the TS CLI, the daemon and its user shim', () => {
   const ROOT = path.resolve(__dirname, '../..')
-  const source = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
-  it('the JS twin names the same file, the same freshness and the same notice', () => {
+  it('the daemon names the same file the CLI reads', () => {
     expect(RESTART_MARK_NAME).toBe('restarting')
-    expect(source).toContain(`const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), '${RESTART_MARK_NAME}');`)
-    expect(source).toContain(`path.join(path.dirname(sockPath), '${RESTART_MARK_NAME}')`)
-    expect(source).toContain(`age >= -5 && age < ${RESTART_MARK_FRESH_SECS};`)
-    expect(source).toContain(`var wnRideUntil = Date.now() + ${RESTART_RIDE_MAX_MS};`)
-    expect(source).toContain(`errOut('${RESTART_WAIT_LINE}')`)
+    expect(standalone).toContain("import { RESTART_MARK_NAME, restartMarkText } from './daemon-restart-mark.js'")
+    expect(standalone).toContain('const RESTART_MARK_FILE = path.join(path.dirname(GATEWAY_SOCK_PATH), RESTART_MARK_NAME)')
   })
 
-  it('both shims read the same file and age, say the same notice, and cap at the same time', () => {
-    for (const twin of [source, standalone]) {
-      expect(twin).toContain(`[ -f "$1/${RESTART_MARK_NAME}" ] && [ ! -h "$1/${RESTART_MARK_NAME}" ] || return 1`)
-      expect(twin).toContain(`m=$(dd if="$1/${RESTART_MARK_NAME}" bs=16 count=1 2>/dev/null)`)
-      expect(twin).toContain('case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac')
-      expect(twin).toContain(`[ "$a" -ge -5 ] && [ "$a" -lt ${RESTART_MARK_FRESH_SECS} ] && [ $i -lt ${RESTART_RIDE_MAX_MS / RESTART_POLL_MS} ] || return 1`)
-      expect(twin).toContain(`echo "${RESTART_WAIT_LINE}" >&2`)
-    }
+  it('the shim reads the same file and age, says the same notice, and caps at the same time', () => {
+    expect(standalone).toContain(`[ -f "$1/${RESTART_MARK_NAME}" ] && [ ! -h "$1/${RESTART_MARK_NAME}" ] || return 1`)
+    expect(standalone).toContain(`m=$(dd if="$1/${RESTART_MARK_NAME}" bs=16 count=1 2>/dev/null)`)
+    expect(standalone).toContain('case $m in ""|0*|*[!0-9]*|?????????????*) return 1 ;; esac')
+    expect(standalone).toContain(`[ "$a" -ge -5 ] && [ "$a" -lt ${RESTART_MARK_FRESH_SECS} ] && [ $i -lt ${RESTART_RIDE_MAX_MS / RESTART_POLL_MS} ] || return 1`)
+    expect(standalone).toContain(`echo "${RESTART_WAIT_LINE}" >&2`)
   })
 
-  it('both daemons write the mark first on a stop, answer `stopping` while closing, and remove it once listening', () => {
-    for (const twin of [source, standalone]) {
-      expect(twin).toMatch(/noteRestarting\(\);?\n\s+releaseGatewayWaiters\(\)/)
-      expect(twin).toMatch(/'daemon is shutting down; retry after reconnecting', \{ stopping: true \}\)/)
-      expect(twin).toMatch(/'the daemon is restarting; nothing was sent, try again', \{ stopping: true \}\)/)
-      expect(twin).toMatch(/startGatewayListener\(\);?\n\s+writeWalnutShim\(\);?\n(\s+\/\/[^\n]*\n)?\s+try \{ fs\.unlinkSync\(RESTART_MARK_FILE\);? \} catch \{\}/)
-      // A service update or handover pauses the gateway (it then answers `stopping`) up to
-      // 15 s before stopDaemon: the mark goes down with the pause, and comes off when it resumes.
-      expect(twin).toMatch(/const pause = daemonCommands\.pause\([^\n]*\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
-      expect(twin.match(/pause\.resume\(\);?\s*\n?\s*clearRestartMark\(\)/g)?.length).toBe(2)
-      // Relays the server still has are answered after the drain (its answers still come), before the exit.
-      // The bun twin (which can run inside the server's process) then reaps an isolated dir's CLIs
-      // without blocking; the JS twin is always its own process and reaps them in cleanup().
-      expect(twin).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n((\s+\/\/[^\n]*\n)+\s+if \(shouldReapOnExit\(\) && ownsDaemonDir\(\)\) \{\n\s+await core\.holdRegistryForExit\(\)\n\s+await reapAllSessionGroups\(\)\n\s+\}\n)?(\s+\/\/[^\n]*\n)*\s+let registrySaved = true;?\n(\s+if \(ownsDaemonDir\(\)\) \{\n)?\s+try \{\n\s+if \(settled === 'cap'\) persistRegistryNow\(\);?\n\s+else await persistRegistryDurable\(\)/)
-      // ...with the mark fresh again when there is one to answer, and only then (a handover has none).
-      expect(twin).toMatch(/function releaseGatewayRelays\(\)[^{]*\{\n\s+if \(gatewayRelayPending\.size === 0\) return;?\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
-      // A relay's answer, and a read of a resumable host_exec run, are taken while it drains,
-      // never refused as new work.
-      expect(twin).toMatch(/const free = cmd\.cmd === 'gateway-result' \|\| \(cmd\.cmd === 'exec\.read' && [^\n]*hostExec\.resumableJob\(cmd\.jobId\)\)/)
-      expect(twin).toMatch(/\(?free \? work\(\) : daemonCommands\.admit\(work\)\)?/)
-    }
-  })
-
-  it('the JS twin CLI rides a call the exiting daemon never read, on Linux, before any answer, as wn-cli.ts does', () => {
-    expect(source).toContain(`if (process.platform === 'linux' && (e.code === 'ECONNRESET' || e.code === 'EPIPE') && !buf && wnRide()) return;`)
+  it('the daemon writes the mark first on a stop, answers `stopping` while closing, and removes it once listening', () => {
+    expect(standalone).toMatch(/noteRestarting\(\);?\n\s+releaseGatewayWaiters\(\)/)
+    expect(standalone).toMatch(/'daemon is shutting down; retry after reconnecting', \{ stopping: true \}\)/)
+    expect(standalone).toMatch(/'the daemon is restarting; nothing was sent, try again', \{ stopping: true \}\)/)
+    expect(standalone).toMatch(/startGatewayListener\(\);?\n\s+writeWalnutShim\(\);?\n(\s+\/\/[^\n]*\n)?\s+try \{ fs\.unlinkSync\(RESTART_MARK_FILE\);? \} catch \{\}/)
+    // A service update or handover pauses the gateway (it then answers `stopping`) up to
+    // 15 s before stopDaemon: the mark goes down with the pause, and comes off when it resumes.
+    expect(standalone).toMatch(/const pause = daemonCommands\.pause\([^\n]*\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
+    expect(standalone.match(/pause\.resume\(\);?\s*\n?\s*clearRestartMark\(\)/g)?.length).toBe(2)
+    // Relays the server still has are answered after the drain (its answers still come), before the exit.
+    // The daemon (which can run inside the server's process) then reaps an isolated dir's CLIs
+    // without blocking.
+    expect(standalone).toMatch(/drain failed[^\n]*\n\s+\/\/[^\n]*\n\s+releaseGatewayRelays\(\);?\n(\s+\/\/[^\n]*\n)+\s+if \(shouldReapOnExit\(\) && ownsDaemonDir\(\)\) \{\n\s+await core\.holdRegistryForExit\(\)\n\s+await reapAllSessionGroups\(\)\n\s+\}\n(\s+\/\/[^\n]*\n)*\s+let registrySaved = true;?\n(\s+if \(ownsDaemonDir\(\)\) \{\n)?\s+try \{\n\s+if \(settled === 'cap'\) persistRegistryNow\(\);?\n\s+else await persistRegistryDurable\(\)/)
+    // ...with the mark fresh again when there is one to answer, and only then (a handover has none).
+    expect(standalone).toMatch(/function releaseGatewayRelays\(\)[^{]*\{\n\s+if \(gatewayRelayPending\.size === 0\) return;?\n\s+\/\/[^\n]*\n\s+noteRestarting\(\)/)
+    // A relay's answer, and a read of a resumable host_exec run, are taken while it drains,
+    // never refused as new work.
+    expect(standalone).toMatch(/const free = cmd\.cmd === 'gateway-result' \|\| \(cmd\.cmd === 'exec\.read' && [^\n]*hostExec\.resumableJob\(cmd\.jobId\)\)/)
+    expect(standalone).toMatch(/\(?free \? work\(\) : daemonCommands\.admit\(work\)\)?/)
   })
 })

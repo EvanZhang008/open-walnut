@@ -7,7 +7,7 @@
  * arguments for the shapes a lost `$N` leaves and refuses with the way to quote it.
  *
  * Two layers, both driven through a real shell here. zsh leaves "$14.99" as ".99", a shape
- * the CLI can see in what it parsed (wn-cli.ts, the JS twin, the hub CLI); sh and bash read
+ * the CLI can see in what it parsed (wn-cli.ts, the hub CLI); sh and bash read
  * "$14" as "$1" then "4" and leave "4.99", which no check of the parsed text can tell from a
  * real price. So every Claude Code session also carries a Bash PreToolUse hook that reads
  * the command as typed and refuses a `$` and a digit the shell would expand in a walnut call
@@ -19,11 +19,9 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { STRIPPED_AMOUNT, PROSE_FIELDS, strippedShellText, strippedShellTextMessage } from '../../../src/providers/tool-args-source.js';
-import { getDaemonSource } from '../../../src/providers/daemon-source.js';
+import { strippedShellText, strippedShellTextMessage } from '../../../src/providers/tool-args-source.js';
 import { SHELL_DOLLAR_GUARD_COMMAND } from '../../../src/providers/shell-dollar-guard-hook.js';
 import { sessionSettingsHooks } from '../../../src/providers/session-settings-hooks.js';
-import { SOURCE_TWIN } from '../../helpers/source-twin.js';
 
 const REPO = path.resolve(__dirname, '../../..');
 
@@ -60,14 +58,10 @@ describe('strippedShellText', () => {
   });
 
   it('every CLI face runs the check before it sends', () => {
-    // Three implementations of `walnut tools call` (wn-cli.ts, the hub CLI, the JS twin).
+    // Two implementations of `walnut tools call` (wn-cli.ts, the hub CLI).
     const read = (f: string) => fs.readFileSync(path.join(REPO, f), 'utf8');
     expect(read('src/providers/wn-cli.ts')).toMatch(/strippedShellText\(callArgs\)/);
     expect(read('src/commands/tools.ts')).toMatch(/strippedShellText\(parsed\)/);
-    expect(getDaemonSource()).toMatch(/wnStrippedText\(parsedCall\.args, '', 0\)/);
-    // The JS twin's hand copy reads the same shapes in the same fields.
-    expect(getDaemonSource()).toContain(`var WN_STRIPPED_AMOUNT = /${STRIPPED_AMOUNT.source}/u;`);
-    expect(getDaemonSource()).toContain(JSON.stringify(PROSE_FIELDS).replace(/"/g, "'").replace(/,/g, ', '));
   });
 });
 
@@ -153,22 +147,16 @@ function run(shell: string, script: string, env: NodeJS.ProcessEnv): Promise<{ c
   });
 }
 
-describe.each(['wn-cli', 'twin'] as const)('the CLI (%s) refuses a text zsh already cut', (face) => {
+describe('the CLI (wn-cli.ts) refuses a text zsh already cut', () => {
   let dir = '';
   let cmd = '';
   const env = () => ({ ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_SESSION_ID: 'probe-sid', WALNUT_TEXT_CHECK: '' });
   beforeAll(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-dollar-'));
-    if (face === 'twin') {
-      const twin = path.join(dir, 'daemon.cjs');
-      fs.writeFileSync(twin, getDaemonSource());
-      cmd = `"${SOURCE_TWIN.file}" "${twin}" wn`;
-    } else {
-      const runner = path.join(dir, 'runner.ts');
-      fs.writeFileSync(runner, `import { runWalnutCli } from ${JSON.stringify(path.join(REPO, 'src/providers/wn-cli.ts'))}\n`
-        + 'process.exit(await runWalnutCli(process.argv.slice(2)))\n');
-      cmd = `"${process.execPath}" "${runner}"`;
-    }
+    const runner = path.join(dir, 'runner.ts');
+    fs.writeFileSync(runner, `import { runWalnutCli } from ${JSON.stringify(path.join(REPO, 'src/providers/wn-cli.ts'))}\n`
+      + 'process.exit(await runWalnutCli(process.argv.slice(2)))\n');
+    cmd = `"${process.execPath}" "${runner}"`;
   });
   afterAll(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 

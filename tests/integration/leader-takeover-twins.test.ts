@@ -2,12 +2,12 @@
  * The Mac is gone and the cloud companion takes over, on REAL daemon processes
  * (docs/plan/walnut-control-plane.md).
  *
- *   fake primary (child process) ══trusted WS══► devbox daemon (source twin, node)  ── session A
- *        │  heartbeat                  ╚═══════► oldbox daemon (standalone twin, bun) ── session B
+ *   fake primary (child process) ══trusted WS══► devbox daemon (standalone, bun) ── session A
+ *        │  heartbeat                  ╚═══════► oldbox daemon (standalone, bun) ── session B
  *        ▼                                            │ bridge (each daemon dials it)
  *   companion (this process): a /bridge server + the REAL backup leader and gateway
  *
- * What's real: both daemon twins as processes, their leader books on disk, the
+ * What's real: two standalone daemons as processes, their leader books on disk, the
  * agent-gateway unix socket as the `walnut` CLI speaks it, the bridge protocol
  * (hello, ping markers, commands, events), the offline host, and the
  * companion's decision loop (backup-leader.ts) and gateway (backup-gateway.ts).
@@ -28,8 +28,6 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
@@ -165,7 +163,7 @@ for (const h of cfg.hosts) connect(h)
 setInterval(() => {}, 1 << 30)
 `
 
-interface Daemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; dir: string; port: number; sock: string; pid: number }
+interface Daemon { name: string; proc: ChildProcess; dir: string; port: number; sock: string; pid: number }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
@@ -234,7 +232,7 @@ async function startCompanion(): Promise<number> {
   return (wss.address() as net.AddressInfo).port
 }
 
-async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise<Daemon> {
+async function spawnDaemon(name: string): Promise<Daemon> {
   // Short: the gateway's unix socket path must fit in 104 bytes on macOS.
   const dir = path.join(base, name.slice(0, 2))
   fs.mkdirSync(dir)
@@ -255,20 +253,13 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
-  if (twin === 'source') {
-    const script = path.join(dir, 'daemon.cjs')
-    fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
-  } else {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  }
+  const proc: ChildProcess = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${name}] ` + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
   const sock = path.join(dir, 'agent-gateway.sock')
   await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${name} daemon`)
   return {
-    name, twin, proc, dir, sock,
+    name, proc, dir, sock,
     port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
     pid: parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10),
   }
@@ -361,7 +352,7 @@ function slice(host: string, sessions: HostSlice['sessions']): HostSlice {
 
 const leadingHosts = () => leader.status().leading.map((l) => `${l.host}@${l.epoch}`).sort()
 
-describe('the Mac is gone and the cloud companion takes over (real daemon twins)', () => {
+describe.skipIf(!BUN)('the Mac is gone and the cloud companion takes over (real standalone daemons)', () => {
   let devbox: Daemon
   let oldbox: Daemon
   let requestId = ''
@@ -369,8 +360,8 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
   beforeAll(async () => {
     base = fs.mkdtempSync(path.join(os.tmpdir(), 'wlt-'))
     const cport = await startCompanion()
-    devbox = await spawnDaemon('devbox', 'source')
-    oldbox = await spawnDaemon('oldbox', BUN ? 'standalone' : 'source')
+    devbox = await spawnDaemon('devbox')
+    oldbox = await spawnDaemon('oldbox')
     daemons.push(devbox, oldbox)
     const mock = path.join(base, 'mock-cli.cjs')
     fs.writeFileSync(mock, MOCK_CLI)
@@ -414,18 +405,13 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     if (base && !process.env.KEEP_LEADER_TWINS) fs.rmSync(base, { recursive: true, force: true })
   }, 60_000)
 
-  it('runs one twin of each kind', () => {
-    expect(devbox.twin).toBe('source')
-    if (BUN) expect(oldbox.twin).toBe('standalone')
-  })
-
   it('while the Mac is up, the companion leads nothing and a call between hosts goes to the Mac', async () => {
     await sleep(2 * T)
     expect(leader.isLeading()).toBe(false)
     const r = await gatewayCall(devbox, A, 'task_send', { to: TASK_B, text: 'status?' })
     expect(r).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
     expect(inboxOf(oldbox, B).filter((m) => m.includes('status?'))).toHaveLength(0)
-    // A walnut run outside any session (sid 'external') goes to the Mac on both twins, never answered
+    // A walnut run outside any session (sid 'external') goes to the Mac on both hosts, never answered
     // here, with an old test run's copy beside the real one.
     for (const d of [devbox, oldbox]) {
       expect(await gatewayCall(d, EXTERNAL, 'task_get', { id: TASK_A })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
@@ -487,9 +473,9 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
   it('a call from outside any session reads from the host\'s copy and goes to the companion for the rest', async () => {
     for (const d of [devbox, oldbox]) {
       const read = await gatewayCall(d, EXTERNAL, 'task_get', { id: TASK_A })
-      expect(read, `${d.twin}: ${JSON.stringify(read)}`).toMatchObject({ ok: true, result: { offline: true, task: { id: TASK_A } } })
+      expect(read, `${d.name}: ${JSON.stringify(read)}`).toMatchObject({ ok: true, result: { offline: true, task: { id: TASK_A } } })
       const far = await gatewayCall(d, EXTERNAL, 'note_read', { path: 'plans/release.md' })
-      expect(far, `${d.twin}: ${JSON.stringify(far)}`).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
+      expect(far, `${d.name}: ${JSON.stringify(far)}`).toMatchObject({ ok: true, result: { name: 'note_read', viaLeader: true } })
     }
     // A message from the user's terminal reaches the session through the companion,
     // asking no reply (nobody could take it), as on the server.

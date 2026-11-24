@@ -1,5 +1,5 @@
 /**
- * The two daemon twins, booted for real, against a pid file a dead daemon left.
+ * The session daemon (daemon-standalone.ts under bun), booted for real, against a pid file a dead daemon left.
  * A daemon predating the kernel instance lock holds no lock, so a starting
  * daemon still yields to the pid in daemon.pid; but after a restart (a
  * container's above all) that pid may name another live process. The daemon
@@ -26,33 +26,20 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
-let sourceText = ''
 let root = ''
 let killStub = ''
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-/** How a twin runs `action` for `daemonDir` (the source twin from its deployed place, `<dir>/daemon.cjs`), with `preload` first when given. */
-type Twin = { name: string; command: (action: string, daemonDir: string, preload?: string) => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: (action, daemonDir, preload) => [SOURCE_TWIN.file, [...(preload ? [SOURCE_TWIN.runtime === 'node' ? '--require' : '--preload', preload] : []), deployedSource(daemonDir), action]] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (action: string, _dir: string, preload?: string): [string, string[]] => [BUN, [...(preload ? ['--preload', preload] : []), STANDALONE, action]] }] : []),
-]
+/** How the daemon runs `action`, with `preload` first when given. */
+const command = (action: string, preload?: string): [string, string[]] => [BUN!, [...(preload ? ['--preload', preload] : []), STANDALONE, action]]
 const children: ChildProcess[] = []
 const servers: http.Server[] = []
 const execFileAsync = promisify(execFile)
 
-function deployedSource(daemonDir: string): string {
-  const p = path.join(daemonDir, 'daemon.cjs')
-  if (!fs.existsSync(p)) fs.writeFileSync(p, sourceText, { mode: 0o755 })
-  return p
-}
-
-function twinEnv(daemonDir: string): Record<string, string | undefined> {
+function daemonEnv(daemonDir: string): Record<string, string | undefined> {
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
   const env: Record<string, string | undefined> = {
@@ -63,11 +50,11 @@ function twinEnv(daemonDir: string): Record<string, string | undefined> {
   return env
 }
 
-/** Runs a one-shot twin command (`--status`, `--stop` with process.kill stubbed); its stdout and the kill calls it made. */
-async function oneShot(twin: Twin, action: '--status' | '--stop', daemonDir: string): Promise<{ stdout: string; kills: Array<[unknown, unknown]> }> {
+/** Runs a one-shot daemon command (`--status`, `--stop` with process.kill stubbed); its stdout and the kill calls it made. */
+async function oneShot(action: '--status' | '--stop', daemonDir: string): Promise<{ stdout: string; kills: Array<[unknown, unknown]> }> {
   const log = path.join(root, `kills-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`)
-  const [cmd, args] = twin.command(action, daemonDir, action === '--stop' ? killStub : undefined)
-  const { stdout } = await execFileAsync(cmd, args, { env: { ...twinEnv(daemonDir), WALNUT_TEST_KILL_LOG: log }, timeout: 30_000, encoding: 'utf-8' })
+  const [cmd, args] = command(action, action === '--stop' ? killStub : undefined)
+  const { stdout } = await execFileAsync(cmd, args, { env: { ...daemonEnv(daemonDir), WALNUT_TEST_KILL_LOG: log }, timeout: 30_000, encoding: 'utf-8' })
   const kills = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as [unknown, unknown]) : []
   return { stdout, kills }
 }
@@ -88,10 +75,10 @@ function freshDaemonDir(): string {
   return daemonDir
 }
 
-/** Boots the twin in `daemonDir`; resolves with the port it printed and how it ended (null: still running). */
-async function boot(twin: Twin, daemonDir: string): Promise<{ port: number; exit: Promise<number | null>; proc: ChildProcess }> {
-  const [cmd, args] = twin.command('--start', daemonDir)
-  const proc = spawn(cmd, args, { env: twinEnv(daemonDir), stdio: ['ignore', 'pipe', 'pipe'] })
+/** Boots the daemon in `daemonDir`; resolves with the port it printed and how it ended (null: still running). */
+async function boot(daemonDir: string): Promise<{ port: number; exit: Promise<number | null>; proc: ChildProcess }> {
+  const [cmd, args] = command('--start')
+  const proc = spawn(cmd, args, { env: daemonEnv(daemonDir), stdio: ['ignore', 'pipe', 'pipe'] })
   children.push(proc)
   const exit = new Promise<number | null>((resolve) => proc.once('exit', (code) => resolve(code)))
   const port = await new Promise<number>((resolve, reject) => {
@@ -127,7 +114,6 @@ function closedPort(): Promise<number> {
 }
 
 beforeAll(() => {
-  sourceText = getDaemonSource()
   // process.kill, stubbed for --stop: every call is recorded, and only the
   // existence probe (signal 0, to a pid above 1) reaches the real kill.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-kill-stub-'))
@@ -155,7 +141,7 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('daemon twin at --start: $name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun) at --start', () => {
   it('a pid file naming a live process that is no daemon (nothing on its port): it starts, and leaves that process alone', async () => {
     const daemonDir = freshDaemonDir()
     const other = spawn('sleep', ['60'], { stdio: 'ignore' })
@@ -164,7 +150,7 @@ describe.each(TWINS)('daemon twin at --start: $name', (twin) => {
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(other.pid))
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(stale))
 
-    const { port, proc } = await boot(twin, daemonDir)
+    const { port, proc } = await boot(daemonDir)
     expect(port).not.toBe(stale)
     expect((await hello(port)).ok).toBe(true)
     expect(proc.exitCode).toBeNull()
@@ -182,7 +168,7 @@ describe.each(TWINS)('daemon twin at --start: $name', (twin) => {
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(legacy.pid))
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(legacyPort))
 
-    const { port, exit } = await boot(twin, daemonDir)
+    const { port, exit } = await boot(daemonDir)
     expect(port).toBe(legacyPort)
     expect(await exit).toBe(0)
     expect(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf8').trim()).toBe(String(legacy.pid))
@@ -195,7 +181,7 @@ describe.each(TWINS)('daemon twin at --start: $name', (twin) => {
     const foreignPort = await listener('hello from another program')
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(other.pid))
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(foreignPort))
-    const { port, proc } = await boot(twin, daemonDir)
+    const { port, proc } = await boot(daemonDir)
     expect(port).not.toBe(foreignPort)
     expect((await hello(port)).ok).toBe(true)
     expect(proc.exitCode).toBeNull()
@@ -203,31 +189,31 @@ describe.each(TWINS)('daemon twin at --start: $name', (twin) => {
   }, 60_000)
 })
 
-describe.each(TWINS)('daemon twin at --status: $name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun) at --status', () => {
   it('a dead daemon\'s files whose pid names another live process, whatever listens on the port: not running', async () => {
     const daemonDir = freshDaemonDir()
     const other = spawn('sleep', ['60'], { stdio: 'ignore' })
     children.push(other)
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(other.pid))
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(await closedPort()))
-    expect(JSON.parse((await oneShot(twin, '--status', daemonDir)).stdout)).toEqual({ running: false })
+    expect(JSON.parse((await oneShot('--status', daemonDir)).stdout)).toEqual({ running: false })
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(await listener('hello from another program')))
-    expect(JSON.parse((await oneShot(twin, '--status', daemonDir)).stdout)).toEqual({ running: false })
+    expect(JSON.parse((await oneShot('--status', daemonDir)).stdout)).toEqual({ running: false })
   }, 60_000)
 
   it('a running daemon: running, with its pid and port', async () => {
     const daemonDir = freshDaemonDir()
-    const { port, proc } = await boot(twin, daemonDir)
-    expect(JSON.parse((await oneShot(twin, '--status', daemonDir)).stdout)).toMatchObject({ running: true, pid: proc.pid, port })
+    const { port, proc } = await boot(daemonDir)
+    expect(JSON.parse((await oneShot('--status', daemonDir)).stdout)).toMatchObject({ running: true, pid: proc.pid, port })
   }, 60_000)
 })
 
-describe.each(TWINS)('daemon twin at --stop: $name', (twin) => {
+describe.skipIf(!BUN)('standalone daemon (bun) at --stop', () => {
   it.each(['-1', '0', '1', '', 'abc', '12x', '-4242', '1e3'])('daemon.pid holding %j: no signal at all', async (pidText) => {
     const daemonDir = freshDaemonDir()
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), pidText)
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), '41000')
-    const { stdout, kills } = await oneShot(twin, '--stop', daemonDir)
+    const { stdout, kills } = await oneShot('--stop', daemonDir)
     expect(stdout).toContain('daemon not running')
     expect(kills).toEqual([])
   }, 60_000)
@@ -238,7 +224,7 @@ describe.each(TWINS)('daemon twin at --stop: $name', (twin) => {
     children.push(other)
     fs.writeFileSync(path.join(daemonDir, 'daemon.pid'), String(other.pid))
     fs.writeFileSync(path.join(daemonDir, 'daemon.port'), String(await listener('walnut-daemon ok')))
-    const { stdout, kills } = await oneShot(twin, '--stop', daemonDir)
+    const { stdout, kills } = await oneShot('--stop', daemonDir)
     expect(stdout).toContain('which is not this daemon')
     expect(kills.filter(([, sig]) => sig !== 0)).toEqual([])
     expect(kills.every(([pid]) => pid === other.pid)).toBe(true)
@@ -247,8 +233,8 @@ describe.each(TWINS)('daemon twin at --stop: $name', (twin) => {
 
   it('this dir\'s running daemon: one SIGTERM, to its pid', async () => {
     const daemonDir = freshDaemonDir()
-    const { proc } = await boot(twin, daemonDir)
-    const { stdout, kills } = await oneShot(twin, '--stop', daemonDir)
+    const { proc } = await boot(daemonDir)
+    const { stdout, kills } = await oneShot('--stop', daemonDir)
     expect(stdout).toContain(`daemon stopped (pid=${proc.pid})`)
     expect(kills.filter(([, sig]) => sig !== 0)).toEqual([[proc.pid, 'SIGTERM']])
   }, 60_000)
@@ -257,7 +243,7 @@ describe.each(TWINS)('daemon twin at --stop: $name', (twin) => {
 // S7-R2-L1 / L2 (2026-11-22 review): what a dead or replaced daemon leaves of the session registry.
 // Temp names carry the writer's pid, so each crash mid-write left one for good; and a zombie's stop
 // wrote its inventory over its successor's registry (only cleanup()'s write checked daemon.pid).
-describe.each(TWINS)("daemon twin and a dead daemon's registry files: $name", (twin) => {
+describe.skipIf(!BUN)("standalone daemon (bun) and a dead daemon's registry files", () => {
   const registryOf = (daemonDir: string) => path.join(daemonDir, 'sessions.json')
   const until = async (check: () => boolean, ms = 10_000) => {
     const end = Date.now() + ms
@@ -273,7 +259,7 @@ describe.each(TWINS)("daemon twin and a dead daemon's registry files: $name", (t
     for (const f of [...old, fresh, unrelated]) fs.writeFileSync(f, '{}')
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
     for (const f of [...old, unrelated]) fs.utimesSync(f, twoHoursAgo, twoHoursAgo)
-    const { port } = await boot(twin, daemonDir)
+    const { port } = await boot(daemonDir)
     expect((await hello(port)).ok).toBe(true)
     await until(() => old.every((f) => !fs.existsSync(f)))
     expect(old.filter((f) => fs.existsSync(f))).toEqual([])
@@ -283,7 +269,7 @@ describe.each(TWINS)("daemon twin and a dead daemon's registry files: $name", (t
 
   it("a stop while daemon.pid names its successor never writes its inventory over the successor's registry", async () => {
     const daemonDir = freshDaemonDir()
-    const { port, proc, exit } = await boot(twin, daemonDir)
+    const { port, proc, exit } = await boot(daemonDir)
     expect((await hello(port)).ok).toBe(true)
     const successor = spawn('sleep', ['60'], { stdio: 'ignore' })
     children.push(successor)

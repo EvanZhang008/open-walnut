@@ -1,6 +1,6 @@
 /**
  * A session's Walnut call made while the server is starting waits for it, on the real
- * daemon twins (the JS source twin, and the standalone twin under bun when bun is installed).
+ * session daemon (daemon-standalone.ts under bun, when bun is installed).
  *
  * 2026-11-23 00:07:04: a session's task_create through `walnut mcp-server` failed with
  * hub_unreachable 13 s after a deploy restarted the Walnut server. The daemon logged "no server
@@ -28,12 +28,10 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { GATEWAY_IDENTIFY_WAIT_MS } from '../../src/providers/gateway-core.js'
 import { createWalnutMcpHandler } from '../../src/providers/walnut-mcp-stdio.js'
 import { formatErrorLines, mcpGatewayRequest } from '../../src/providers/wn-cli.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
@@ -42,13 +40,7 @@ for (const k of ['WALNUT_CALL_SOCKET', 'WALNUT_CALL_TOKEN', 'WALNUT_AGENT_SOCKET
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-let scriptPath = ''
 let cliPath = ''
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 /** One relay attempt's time (the daemon's hub timeout); a relay after an identify wait keeps all of it. */
 const HUB_MS = 11_000
@@ -101,7 +93,7 @@ function rpc(ws: WebSocket, cmd: Record<string, unknown>, timeoutMs = 20_000): P
   })
 }
 
-async function boot(twin: Twin): Promise<number> {
+async function boot(): Promise<number> {
   root = fs.realpathSync(fs.mkdtempSync('/tmp/wgi-'))
   daemonDir = path.join(root, 'd')
   const env: Record<string, string | undefined> = {
@@ -117,8 +109,7 @@ async function boot(twin: Twin): Promise<number> {
     WALNUT_GATEWAY_TIMEOUT_MS: String(HUB_MS),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -224,8 +215,6 @@ async function sessionWithServerGone(port: number): Promise<string> {
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-identify-wait-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -243,122 +232,120 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`a call while the server is starting waits for it, ${twin.name}`, () => {
-    it('an MCP call made while the server socket is unidentified succeeds once it identifies', async () => {
-      const port = await boot(twin)
-      const sid = await sessionWithServerGone(port)
-      // The restarted server's socket: hello said, leader.configure not yet.
-      const next = await open(port, 'mainA-2', { run: 'run-a-2' })
-      const progress: Array<Record<string, unknown>> = []
-      const handle = createWalnutMcpHandler({
-        request: mcpGatewayRequest(gatewaySock(), sid, undefined, { WALNUT_MCP_WAIT_MS: '20000' }),
-        formatError: formatErrorLines,
-        callWaitMs: 20_000,
-        waitNoticeMs: 500,
-        progress: (p) => { progress.push(p) },
-      })
-      const t0 = Date.now()
-      const reply = handle({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'task_create', arguments: { title: 'from mcp' }, _meta: { progressToken: 'p-7' } } })
-      // Past the moment a call that names no wait would be given (IDENTIFY_WINDOW_MS): only the
-      // MCP server's own wait keeps this call alive now.
-      await sleep(IDENTIFY_WINDOW_MS + 1_500)
-      // Nothing went to a socket that has not said whose it is.
-      expect(next.requests).toEqual([])
-      // The client was told the call waits, out of band.
-      expect(progress).toEqual([{ progressToken: 'p-7', progress: 0, message: 'Walnut: no answer yet; this call waits up to 20s' }])
-      await bind(next, HOME_A)
-      expect(await waitFor(() => next.requests.length === 1)).toBe(true)
-      const relay = next.requests[0]!
-      expect(relay.callerSid).toBe(sid)
-      expect(relay.payload?.name).toBe('task_create')
-      expect(relay.payload?.args).toEqual({ title: 'from mcp' })
-      expect((await rpc(next.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { task: { id: 't-1', title: 'from mcp' } } })).ok).toBe(true)
-      const r = (await reply) as { id: number; result: { isError?: boolean; content: Array<{ text: string }> } }
-      expect(r.id).toBe(7)
-      expect(r.result.isError).toBeUndefined()
-      expect(JSON.parse(r.result.content[0]!.text)).toEqual({ task: { id: 't-1', title: 'from mcp' } })
-      expect(Date.now() - t0).toBeGreaterThanOrEqual(IDENTIFY_WINDOW_MS + 1_500)
-      // Sent once.
-      await sleep(300)
-      expect(next.requests).toHaveLength(1)
-    }, 90_000)
+describe.skipIf(!BUN)('a call while the server is starting waits for it, standalone daemon (bun)', () => {
+  it('an MCP call made while the server socket is unidentified succeeds once it identifies', async () => {
+    const port = await boot()
+    const sid = await sessionWithServerGone(port)
+    // The restarted server's socket: hello said, leader.configure not yet.
+    const next = await open(port, 'mainA-2', { run: 'run-a-2' })
+    const progress: Array<Record<string, unknown>> = []
+    const handle = createWalnutMcpHandler({
+      request: mcpGatewayRequest(gatewaySock(), sid, undefined, { WALNUT_MCP_WAIT_MS: '20000' }),
+      formatError: formatErrorLines,
+      callWaitMs: 20_000,
+      waitNoticeMs: 500,
+      progress: (p) => { progress.push(p) },
+    })
+    const t0 = Date.now()
+    const reply = handle({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'task_create', arguments: { title: 'from mcp' }, _meta: { progressToken: 'p-7' } } })
+    // Past the moment a call that names no wait would be given (IDENTIFY_WINDOW_MS): only the
+    // MCP server's own wait keeps this call alive now.
+    await sleep(IDENTIFY_WINDOW_MS + 1_500)
+    // Nothing went to a socket that has not said whose it is.
+    expect(next.requests).toEqual([])
+    // The client was told the call waits, out of band.
+    expect(progress).toEqual([{ progressToken: 'p-7', progress: 0, message: 'Walnut: no answer yet; this call waits up to 20s' }])
+    await bind(next, HOME_A)
+    expect(await waitFor(() => next.requests.length === 1)).toBe(true)
+    const relay = next.requests[0]!
+    expect(relay.callerSid).toBe(sid)
+    expect(relay.payload?.name).toBe('task_create')
+    expect(relay.payload?.args).toEqual({ title: 'from mcp' })
+    expect((await rpc(next.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { task: { id: 't-1', title: 'from mcp' } } })).ok).toBe(true)
+    const r = (await reply) as { id: number; result: { isError?: boolean; content: Array<{ text: string }> } }
+    expect(r.id).toBe(7)
+    expect(r.result.isError).toBeUndefined()
+    expect(JSON.parse(r.result.content[0]!.text)).toEqual({ task: { id: 't-1', title: 'from mcp' } })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(IDENTIFY_WINDOW_MS + 1_500)
+    // Sent once.
+    await sleep(300)
+    expect(next.requests).toHaveLength(1)
+  }, 90_000)
 
-    it('a call that names no wait (an older client) waits a moment for an identifying socket, and only for one', async () => {
-      const port = await boot(twin)
-      const sid = await sessionWithServerGone(port)
+  it('a call that names no wait (an older client) waits a moment for an identifying socket, and only for one', async () => {
+    const port = await boot()
+    const sid = await sessionWithServerGone(port)
 
-      // No server socket at all: the old answer, at once.
-      const none = await rawCall(sid)
-      expect(none.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-      expect(none.ms).toBeLessThan(1_500)
+    // No server socket at all: the old answer, at once.
+    const none = await rawCall(sid)
+    expect(none.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    expect(none.ms).toBeLessThan(1_500)
 
-      // Between its hello and its bind: a line that chose not to wait (waitMs 0, the Mac's own CLI,
-      // a display record) is answered at once, as before; nothing is sent.
-      const pending = await open(port, 'pending', { run: 'run-a-2' })
-      const chose = await rawCall(sid, 0)
-      expect(chose.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-      expect(chose.ms).toBeLessThan(1_500)
-      expect(pending.requests).toEqual([])
+    // Between its hello and its bind: a line that chose not to wait (waitMs 0, the Mac's own CLI,
+    // a display record) is answered at once, as before; nothing is sent.
+    const pending = await open(port, 'pending', { run: 'run-a-2' })
+    const chose = await rawCall(sid, 0)
+    expect(chose.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    expect(chose.ms).toBeLessThan(1_500)
+    expect(pending.requests).toEqual([])
 
-      // One that names no wait waits, and goes once it binds.
-      const call1 = rawCall(sid)
-      await sleep(800)
-      expect(pending.requests).toEqual([])
-      await bind(pending, HOME_A)
-      expect(await waitFor(() => pending.requests.length === 1)).toBe(true)
-      expect((await rpc(pending.ws, { cmd: 'gateway-result', relayId: pending.requests[0]!.relayId, result: { created: 1 } })).ok).toBe(true)
-      expect((await call1).resp).toEqual({ ok: true, result: { created: 1 } })
-      await cut(pending)
+    // One that names no wait waits, and goes once it binds.
+    const call1 = rawCall(sid)
+    await sleep(800)
+    expect(pending.requests).toEqual([])
+    await bind(pending, HOME_A)
+    expect(await waitFor(() => pending.requests.length === 1)).toBe(true)
+    expect((await rpc(pending.ws, { cmd: 'gateway-result', relayId: pending.requests[0]!.relayId, result: { created: 1 } })).ok).toBe(true)
+    expect((await call1).resp).toEqual({ ok: true, result: { created: 1 } })
+    await cut(pending)
 
-      // Opened and not said hello yet: the same. It names its Walnut late in the moment, and the
-      // server answers after most of a hub timeout: the relay keeps the whole hub timeout.
-      const fresh = await open(port, 'fresh', null)
-      const call2 = rawCall(sid)
-      await sleep(IDENTIFY_WINDOW_MS - 1_500)
-      expect(fresh.requests).toEqual([])
-      await sayHello(fresh, 'run-a-3')
-      await bind(fresh, HOME_A)
-      expect(await waitFor(() => fresh.requests.length === 1)).toBe(true)
-      await sleep(HUB_MS - 3_000)
-      expect((await rpc(fresh.ws, { cmd: 'gateway-result', relayId: fresh.requests[0]!.relayId, result: { created: 2 } })).ok).toBe(true)
-      const second = await call2
-      expect(second.resp).toEqual({ ok: true, result: { created: 2 } })
-      // Past the call's first hub timeout: the wait moved its end, as it should.
-      expect(second.ms).toBeGreaterThan(HUB_MS)
-      await cut(fresh)
+    // Opened and not said hello yet: the same. It names its Walnut late in the moment, and the
+    // server answers after most of a hub timeout: the relay keeps the whole hub timeout.
+    const fresh = await open(port, 'fresh', null)
+    const call2 = rawCall(sid)
+    await sleep(IDENTIFY_WINDOW_MS - 1_500)
+    expect(fresh.requests).toEqual([])
+    await sayHello(fresh, 'run-a-3')
+    await bind(fresh, HOME_A)
+    expect(await waitFor(() => fresh.requests.length === 1)).toBe(true)
+    await sleep(HUB_MS - 3_000)
+    expect((await rpc(fresh.ws, { cmd: 'gateway-result', relayId: fresh.requests[0]!.relayId, result: { created: 2 } })).ok).toBe(true)
+    const second = await call2
+    expect(second.resp).toEqual({ ok: true, result: { created: 2 } })
+    // Past the call's first hub timeout: the wait moved its end, as it should.
+    expect(second.ms).toBeGreaterThan(HUB_MS)
+    await cut(fresh)
 
-      // One that never binds: the old answer, after the moment the call's own time allows, and
-      // nothing was sent to it.
-      const silent = await open(port, 'silent', { run: 'run-a-4' })
-      const call3 = await rawCall(sid)
-      expect(call3.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
-      expect(call3.ms).toBeGreaterThanOrEqual(IDENTIFY_WINDOW_MS - 500)
-      expect(call3.ms).toBeLessThan(IDENTIFY_WINDOW_MS + 2_500)
-      // Inside an older client's 30 s socket time, whatever the moment: the window and one hub timeout at most.
-      expect(IDENTIFY_WINDOW_MS + HUB_MS).toBeLessThan(30_000)
-      expect(silent.requests).toEqual([])
-    }, 120_000)
+    // One that never binds: the old answer, after the moment the call's own time allows, and
+    // nothing was sent to it.
+    const silent = await open(port, 'silent', { run: 'run-a-4' })
+    const call3 = await rawCall(sid)
+    expect(call3.resp).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    expect(call3.ms).toBeGreaterThanOrEqual(IDENTIFY_WINDOW_MS - 500)
+    expect(call3.ms).toBeLessThan(IDENTIFY_WINDOW_MS + 2_500)
+    // Inside an older client's 30 s socket time, whatever the moment: the window and one hub timeout at most.
+    expect(IDENTIFY_WINDOW_MS + HUB_MS).toBeLessThan(30_000)
+    expect(silent.requests).toEqual([])
+  }, 120_000)
 
-    it('a waiting call whose caller hung up is never sent', async () => {
-      const port = await boot(twin)
-      const sid = await sessionWithServerGone(port)
-      const next = await open(port, 'mainA-2', { run: 'run-a-2' })
-      const call = rawCallOpen(sid, 20_000)
-      // It waits for the server (this daemon's first call), then its caller hangs up.
-      expect(await waitFor(() => daemonLogHas('gateway: no server connected, waiting for one'), 15_000)).toBe(true)
-      call.hangUp()
-      expect((await call.answer).resp).toBeNull()
-      await sleep(300)
-      await bind(next, HOME_A)
-      await sleep(1_500)
-      expect(next.requests).toEqual([])
-      expect(daemonLogHas('gateway: a waiting call ends, its caller left; nothing was sent')).toBe(true)
-      // The next call of the session goes as usual.
-      const after = rawCall(sid, 20_000)
-      expect(await waitFor(() => next.requests.length === 1)).toBe(true)
-      expect((await rpc(next.ws, { cmd: 'gateway-result', relayId: next.requests[0]!.relayId, result: { ok: 1 } })).ok).toBe(true)
-      expect((await after).resp).toEqual({ ok: true, result: { ok: 1 } })
-    }, 90_000)
-  })
-}
+  it('a waiting call whose caller hung up is never sent', async () => {
+    const port = await boot()
+    const sid = await sessionWithServerGone(port)
+    const next = await open(port, 'mainA-2', { run: 'run-a-2' })
+    const call = rawCallOpen(sid, 20_000)
+    // It waits for the server (this daemon's first call), then its caller hangs up.
+    expect(await waitFor(() => daemonLogHas('gateway: no server connected, waiting for one'), 15_000)).toBe(true)
+    call.hangUp()
+    expect((await call.answer).resp).toBeNull()
+    await sleep(300)
+    await bind(next, HOME_A)
+    await sleep(1_500)
+    expect(next.requests).toEqual([])
+    expect(daemonLogHas('gateway: a waiting call ends, its caller left; nothing was sent')).toBe(true)
+    // The next call of the session goes as usual.
+    const after = rawCall(sid, 20_000)
+    expect(await waitFor(() => next.requests.length === 1)).toBe(true)
+    expect((await rpc(next.ws, { cmd: 'gateway-result', relayId: next.requests[0]!.relayId, result: { ok: 1 } })).ok).toBe(true)
+    expect((await after).resp).toEqual({ ok: true, result: { ok: 1 } })
+  }, 90_000)
+})

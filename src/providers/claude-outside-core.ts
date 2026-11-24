@@ -14,9 +14,6 @@ import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { gunzipChunks, isArchivedLog } from './usage-scan-core.js';
 
-/** Marker for the source twin: this sidecar can list outside Claude sessions (claude-outside-v1). */
-export const CLAUDE_OUTSIDE = true;
-
 /** Entrypoints of Walnut's own helper calls: counted from Walnut's call records, never as outside work. */
 export const WALNUT_ENTRYPOINTS: ReadonlySet<string> = new Set(['walnut-utility']);
 

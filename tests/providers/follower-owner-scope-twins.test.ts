@@ -1,9 +1,9 @@
 /**
  * Owner scope on a follower socket (docs/plan/walnut-replica-servers-impl.md WP6,
- * scenario R18 "another Walnut on the host"), on REAL daemon processes, both twins.
+ * scenario R18 "another Walnut on the host"), on a REAL daemon process (bun).
  *
  *   leader A (marina) ==trusted WS==>+
- *   leader B (acme)   ==trusted WS==>+-- daemon (source twin on node, standalone on bun)
+ *   leader B (acme)   ==trusted WS==>+-- daemon (daemon-standalone.ts on bun)
  *   follower of A     ==follower WS=>+    runs one mock session for each Walnut
  *
  * Two Walnuts share one host. The follower of A (the replica server A's daemon
@@ -24,8 +24,6 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -93,7 +91,7 @@ function cmd(ws: WebSocket, body: Record<string, unknown>): Promise<Record<strin
   })
 }
 
-async function spawnDaemon(dir: string, twin: 'source' | 'standalone', extraEnv: Record<string, string> = {}): Promise<{ port: number; pid: number }> {
+async function spawnDaemon(dir: string, extraEnv: Record<string, string> = {}): Promise<{ port: number; pid: number }> {
   fs.mkdirSync(path.join(dir, 'home'), { recursive: true })
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -106,12 +104,10 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone', extraEnv:
     ...extraEnv,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  const args = twin === 'source' ? [path.join(dir, 'daemon.cjs'), '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
-  if (twin === 'source') fs.writeFileSync(args[0]!, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(twin === 'source' ? SOURCE_TWIN.file : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
+  const proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
-  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
+  await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'daemon')
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
   pids.add(pid)
   return { port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
@@ -195,221 +191,219 @@ function filesUnder(dir: string): string[] {
   return out
 }
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a follower reads its own Walnut only`, () => {
-    it('answers A\'s follower for A and not_found for every session, file and copy entry of B; the leaders see what they saw', async () => {
-      const dir = path.join(base, twin.slice(0, 2))
-      const cwdA = path.join(base, `${twin}-marina`)
-      const cwdB = path.join(base, `${twin}-acme`)
-      for (const d of [cwdA, cwdB]) fs.mkdirSync(path.join(d, 'src'), { recursive: true })
-      fs.writeFileSync(path.join(cwdA, 'src', 'own.txt'), 'marina file\n')
-      fs.writeFileSync(path.join(cwdB, 'src', 'secret.txt'), 'acme secret\n')
-      // A link inside A's tree that points into B's: following it is still B's.
-      fs.symlinkSync(cwdB, path.join(cwdA, 'escape'))
-      const mock = path.join(base, 'mock-cli.cjs')
-      fs.writeFileSync(mock, MOCK_CLI)
-      const d = await spawnDaemon(dir, twin)
+describe.skipIf(!BUN)('standalone daemon: a follower reads its own Walnut only', () => {
+  it('answers A\'s follower for A and not_found for every session, file and copy entry of B; the leaders see what they saw', async () => {
+    const dir = path.join(base, 'st')
+    const cwdA = path.join(base, 'standalone-marina')
+    const cwdB = path.join(base, 'standalone-acme')
+    for (const d of [cwdA, cwdB]) fs.mkdirSync(path.join(d, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(cwdA, 'src', 'own.txt'), 'marina file\n')
+    fs.writeFileSync(path.join(cwdB, 'src', 'secret.txt'), 'acme secret\n')
+    // A link inside A's tree that points into B's: following it is still B's.
+    fs.symlinkSync(cwdB, path.join(cwdA, 'escape'))
+    const mock = path.join(base, 'mock-cli.cjs')
+    fs.writeFileSync(mock, MOCK_CLI)
+    const d = await spawnDaemon(dir)
 
-      // A's picture is over one 2 MB chunk: it crosses the daemon link as two frames of base64.
-      const scanA = crypto.randomBytes(2 * 1024 * 1024 + 99)
-      const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: cwdA, mock, notes: { 'Alpha.md': '# Alpha\n\nsee [[Beta]]\n', [UNI_KEY]: UNI_BODY }, pictures: { 'Alpha/_attachment/scan.png': scanA } })
-      const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' }, pictures: { 'Secret/_attachment/plan.png': Buffer.from('acme plan') } })
-      for (const sid of [SA, SB]) {
-        await waitFor(() => { try { return fs.readFileSync(path.join(dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
-        const st = await cmd(leaderA, { cmd: 'status', sid })
-        if (typeof st.pid === 'number') pids.add(st.pid)
-      }
+    // A's picture is over one 2 MB chunk: it crosses the daemon link as two frames of base64.
+    const scanA = crypto.randomBytes(2 * 1024 * 1024 + 99)
+    const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: cwdA, mock, notes: { 'Alpha.md': '# Alpha\n\nsee [[Beta]]\n', [UNI_KEY]: UNI_BODY }, pictures: { 'Alpha/_attachment/scan.png': scanA } })
+    const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' }, pictures: { 'Secret/_attachment/plan.png': Buffer.from('acme plan') } })
+    for (const sid of [SA, SB]) {
+      await waitFor(() => { try { return fs.readFileSync(path.join(dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
+      const st = await cmd(leaderA, { cmd: 'status', sid })
+      if (typeof st.pid === 'number') pids.add(st.pid)
+    }
 
-      // The server A's daemon runs for it hands over its token; this test speaks as that follower.
-      const tokenFile = path.join(base, `${twin}-token`)
-      const spec = {
-        v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
-        args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
-        cwd: base, env: {}, log: path.join(base, `${twin}-placeholder.log`), port: 41_000 + (twin === 'source' ? 7 : 8),
-        settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
-      }
-      expect((await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec })).ok).toBe(true)
-      const [token, placeholder] = (await waitFor(() => { try { return fs.readFileSync(tokenFile, 'utf8') } catch { return '' } }, 20_000, 'the token')).split(' ')
-      pids.add(Number(placeholder))
-      const follower = await connect(d.port)
-      const heard: Array<Record<string, any>> = []
-      follower.on('message', (data) => { try { const m = JSON.parse(String(data)); if (m.ev) heard.push(m) } catch { /* not json */ } })
-      const hello = await cmd(follower, { cmd: 'hello' })
-      const hi = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT_A, home: HOME_A, token })
-      expect(hi.ok, JSON.stringify(hi)).toBe(true)
+    // The server A's daemon runs for it hands over its token; this test speaks as that follower.
+    const tokenFile = path.join(base, 'standalone-token')
+    const spec = {
+      v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
+      args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
+      cwd: base, env: {}, log: path.join(base, 'standalone-placeholder.log'), port: 41_008,
+      settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
+    }
+    expect((await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec })).ok).toBe(true)
+    const [token, placeholder] = (await waitFor(() => { try { return fs.readFileSync(tokenFile, 'utf8') } catch { return '' } }, 20_000, 'the token')).split(' ')
+    pids.add(Number(placeholder))
+    const follower = await connect(d.port)
+    const heard: Array<Record<string, any>> = []
+    follower.on('message', (data) => { try { const m = JSON.parse(String(data)); if (m.ev) heard.push(m) } catch { /* not json */ } })
+    const hello = await cmd(follower, { cmd: 'hello' })
+    const hi = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT_A, home: HOME_A, token })
+    expect(hi.ok, JSON.stringify(hi)).toBe(true)
 
-      // The hole WP6 closes: B's session, read through A's follower.
-      expect(await cmd(follower, { cmd: 'status', sid: SB })).toMatchObject({ ok: false, errorKind: 'not_found' })
-      const rows = (await cmd(follower, { cmd: 'list' })).sessions as Array<{ sid: string }>
-      expect(rows.map((r) => r.sid)).toContain(SA)
-      expect(rows.map((r) => r.sid)).not.toContain(SB)
-      for (const c of [
-        { cmd: 'attach', sid: SB },
-        { cmd: 'markers.find', sid: SB, ids: ['m-1'] },
-        { cmd: 'read-history', sid: SB },
-        { cmd: 'changes.compute', sid: SB },
-        { cmd: 'changes.file', sid: SB, path: path.join(cwdB, 'src', 'secret.txt') },
-      ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
-      // Its own session: status without the argv a leader may ask for, attach, markers, history.
-      const own = await cmd(follower, { cmd: 'status', sid: SA, includeArgs: true })
-      expect(own).toMatchObject({ ok: true, exists: true })
-      expect(own.args).toBeUndefined()
-      expect((await cmd(follower, { cmd: 'attach', sid: SA, fromOffset: 0 })).ok).toBe(true)
-      expect((await cmd(follower, { cmd: 'markers.find', sid: SA, ids: ['m-1'] })).ok).toBe(true)
-      expect((await cmd(follower, { cmd: 'read-history', sid: SA })).ok).toBe(true)
+    // The hole WP6 closes: B's session, read through A's follower.
+    expect(await cmd(follower, { cmd: 'status', sid: SB })).toMatchObject({ ok: false, errorKind: 'not_found' })
+    const rows = (await cmd(follower, { cmd: 'list' })).sessions as Array<{ sid: string }>
+    expect(rows.map((r) => r.sid)).toContain(SA)
+    expect(rows.map((r) => r.sid)).not.toContain(SB)
+    for (const c of [
+      { cmd: 'attach', sid: SB },
+      { cmd: 'markers.find', sid: SB, ids: ['m-1'] },
+      { cmd: 'read-history', sid: SB },
+      { cmd: 'changes.compute', sid: SB },
+      { cmd: 'changes.file', sid: SB, path: path.join(cwdB, 'src', 'secret.txt') },
+    ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
+    // Its own session: status without the argv a leader may ask for, attach, markers, history.
+    const own = await cmd(follower, { cmd: 'status', sid: SA, includeArgs: true })
+    expect(own).toMatchObject({ ok: true, exists: true })
+    expect(own.args).toBeUndefined()
+    expect((await cmd(follower, { cmd: 'attach', sid: SA, fromOffset: 0 })).ok).toBe(true)
+    expect((await cmd(follower, { cmd: 'markers.find', sid: SA, ids: ['m-1'] })).ok).toBe(true)
+    expect((await cmd(follower, { cmd: 'read-history', sid: SA })).ok).toBe(true)
 
-      // Files: inside A's session cwds only (a `..` or a link out of it is B's).
-      const secret = path.join(cwdB, 'src', 'secret.txt')
-      for (const c of [
-        { cmd: 'fs.read', path: secret },
-        { cmd: 'fs.read', path: path.join(cwdA, '..', path.basename(cwdB), 'src', 'secret.txt') },
-        { cmd: 'fs.read', path: path.join(cwdA, 'escape', 'src', 'secret.txt') },
-        { cmd: 'fs.readRange', path: secret, start: 0, length: 10 },
-        { cmd: 'fs.ls', path: cwdB },
-        { cmd: 'fs.ls', path: '/' },
-        { cmd: 'fs.read', path: '~/walnut-fixture-not-there.txt' },
-        { cmd: 'fs.resolvePath', ref: 'src/secret.txt', cwd: cwdB },
-        { cmd: 'fs.grep', file: secret, symbol: 'acme' },
-        { cmd: 'git.fileLog', cwd: cwdB, path: secret },
-        { cmd: 'git.fileShow', cwd: cwdA, path: secret, sha: 'a'.repeat(40) },
-      ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
-      // A stat out of scope is the daemon's answer for a missing file; a diff, its answer for no repository.
-      expect(await cmd(follower, { cmd: 'fs.stat', path: secret })).toMatchObject({ ok: true, exists: false })
-      expect(await cmd(follower, { cmd: 'git.diff', cwd: cwdB, base: 'uncommitted' })).toEqual(expect.objectContaining({ ok: true, repoRoot: null, files: [] }))
-      const read = await cmd(follower, { cmd: 'fs.read', path: path.join(cwdA, 'src', 'own.txt') })
-      expect(read.ok, JSON.stringify(read)).toBe(true)
-      expect(read.encoding === 'base64' ? Buffer.from(read.data, 'base64').toString() : read.data).toBe('marina file\n')
-      expect((await cmd(follower, { cmd: 'fs.ls', path: path.join(cwdA, 'src') })).ok).toBe(true)
-      expect((await cmd(follower, { cmd: 'fs.stat', path: path.join(cwdA, 'src', 'own.txt') })).ok).toBe(true)
-      expect((await cmd(follower, { cmd: 'git.diff', cwd: cwdA, base: 'uncommitted' })).errorKind).not.toBe('not_found')
-      // Writes stay the leader's.
-      for (const c of ['fs.write', 'fs.mkdir', 'git.commitStart', 'start', 'send']) {
-        expect((await cmd(follower, { cmd: c, path: path.join(cwdA, 'x'), sid: SA })).errorKind).toBe('follower_refused')
-      }
+    // Files: inside A's session cwds only (a `..` or a link out of it is B's).
+    const secret = path.join(cwdB, 'src', 'secret.txt')
+    for (const c of [
+      { cmd: 'fs.read', path: secret },
+      { cmd: 'fs.read', path: path.join(cwdA, '..', path.basename(cwdB), 'src', 'secret.txt') },
+      { cmd: 'fs.read', path: path.join(cwdA, 'escape', 'src', 'secret.txt') },
+      { cmd: 'fs.readRange', path: secret, start: 0, length: 10 },
+      { cmd: 'fs.ls', path: cwdB },
+      { cmd: 'fs.ls', path: '/' },
+      { cmd: 'fs.read', path: '~/walnut-fixture-not-there.txt' },
+      { cmd: 'fs.resolvePath', ref: 'src/secret.txt', cwd: cwdB },
+      { cmd: 'fs.grep', file: secret, symbol: 'acme' },
+      { cmd: 'git.fileLog', cwd: cwdB, path: secret },
+      { cmd: 'git.fileShow', cwd: cwdA, path: secret, sha: 'a'.repeat(40) },
+    ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
+    // A stat out of scope is the daemon's answer for a missing file; a diff, its answer for no repository.
+    expect(await cmd(follower, { cmd: 'fs.stat', path: secret })).toMatchObject({ ok: true, exists: false })
+    expect(await cmd(follower, { cmd: 'git.diff', cwd: cwdB, base: 'uncommitted' })).toEqual(expect.objectContaining({ ok: true, repoRoot: null, files: [] }))
+    const read = await cmd(follower, { cmd: 'fs.read', path: path.join(cwdA, 'src', 'own.txt') })
+    expect(read.ok, JSON.stringify(read)).toBe(true)
+    expect(read.encoding === 'base64' ? Buffer.from(read.data, 'base64').toString() : read.data).toBe('marina file\n')
+    expect((await cmd(follower, { cmd: 'fs.ls', path: path.join(cwdA, 'src') })).ok).toBe(true)
+    expect((await cmd(follower, { cmd: 'fs.stat', path: path.join(cwdA, 'src', 'own.txt') })).ok).toBe(true)
+    expect((await cmd(follower, { cmd: 'git.diff', cwd: cwdA, base: 'uncommitted' })).errorKind).not.toBe('not_found')
+    // Writes stay the leader's.
+    for (const c of ['fs.write', 'fs.mkdir', 'git.commitStart', 'start', 'send']) {
+      expect((await cmd(follower, { cmd: c, path: path.join(cwdA, 'x'), sid: SA })).errorKind).toBe('follower_refused')
+    }
 
-      // The host copy: A's notes, whatever home the follower names.
-      const list = await cmd(follower, { cmd: 'replica.list', kind: 'notes', home: HOME_B })
-      expect(list.ok, JSON.stringify(list)).toBe(true)
-      expect((list.entries as Array<{ k: string }>).map((e) => e.k).sort()).toEqual(['Alpha.md', UNI_KEY].sort())
-      expect(list.manifestHash).toMatch(/^[0-9a-f]{12,}$/)
-      expect(notFound(await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: 'Secret.md' }))).toBe(true)
-      expect(notFound(await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: 'Secret.md', home: HOME_B }))).toBe(true)
-      const uni = await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: UNI_KEY })
-      expect(uni).toMatchObject({ ok: true, k: UNI_KEY, body: UNI_BODY, h: sha12(UNI_BODY) })
-      const many = await cmd(follower, { cmd: 'replica.readMany', kind: 'notes', keys: ['Alpha.md', 'Secret.md', UNI_KEY] })
-      expect((many.files as Array<{ k: string }>).map((f) => f.k).sort()).toEqual(['Alpha.md', UNI_KEY].sort())
-      expect(many.missing).toEqual(['Secret.md'])
-      expect((await cmd(follower, { cmd: 'replica.list', kind: 'secrets' })).ok).toBe(false)
+    // The host copy: A's notes, whatever home the follower names.
+    const list = await cmd(follower, { cmd: 'replica.list', kind: 'notes', home: HOME_B })
+    expect(list.ok, JSON.stringify(list)).toBe(true)
+    expect((list.entries as Array<{ k: string }>).map((e) => e.k).sort()).toEqual(['Alpha.md', UNI_KEY].sort())
+    expect(list.manifestHash).toMatch(/^[0-9a-f]{12,}$/)
+    expect(notFound(await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: 'Secret.md' }))).toBe(true)
+    expect(notFound(await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: 'Secret.md', home: HOME_B }))).toBe(true)
+    const uni = await cmd(follower, { cmd: 'replica.read', kind: 'notes', key: UNI_KEY })
+    expect(uni).toMatchObject({ ok: true, k: UNI_KEY, body: UNI_BODY, h: sha12(UNI_BODY) })
+    const many = await cmd(follower, { cmd: 'replica.readMany', kind: 'notes', keys: ['Alpha.md', 'Secret.md', UNI_KEY] })
+    expect((many.files as Array<{ k: string }>).map((f) => f.k).sort()).toEqual(['Alpha.md', UNI_KEY].sort())
+    expect(many.missing).toEqual(['Secret.md'])
+    expect((await cmd(follower, { cmd: 'replica.list', kind: 'secrets' })).ok).toBe(false)
 
-      // The copy of the pictures: A's, whatever home the follower names; B's is not_found.
-      const pics = await cmd(follower, { cmd: 'attachments.list', home: HOME_B })
-      expect(pics, JSON.stringify(pics)).toMatchObject({ ok: true, keys: ['Alpha/_attachment/scan.png'], next: null })
-      expect(pics.asOf).toMatch(/^20\d\d-/)
-      const slices: Buffer[] = []
-      for (let off = 0; off < scanA.length;) {
-        const r = await cmd(follower, { cmd: 'attachments.read', key: 'Alpha/_attachment/scan.png', offset: off })
-        expect(r.ok, JSON.stringify(r).slice(0, 300)).toBe(true)
-        const data = Buffer.from(String(r.data), 'base64')
-        expect(data.length).toBeLessThanOrEqual(2 * 1024 * 1024)
-        slices.push(data)
-        off += data.length
-      }
-      expect(Buffer.concat(slices).equals(scanA)).toBe(true)
-      expect(notFound(await cmd(follower, { cmd: 'attachments.read', key: 'Secret/_attachment/plan.png', offset: 0, home: HOME_B }))).toBe(true)
-      // Only a leader fills or removes it.
-      for (const c of ['attachments.sync', 'attachments.put', 'attachments.drop', 'attachments.status']) {
-        expect((await cmd(follower, { cmd: c, home: HOME_A, entries: [] })).errorKind).toBe('follower_refused')
-      }
-      expect(await cmd(leaderB, { cmd: 'attachments.status', home: HOME_B })).toMatchObject({ ok: true, entries: 1, pending: 0 })
-      expect(hello.capabilities).toContain('attachment-copy-v1')
+    // The copy of the pictures: A's, whatever home the follower names; B's is not_found.
+    const pics = await cmd(follower, { cmd: 'attachments.list', home: HOME_B })
+    expect(pics, JSON.stringify(pics)).toMatchObject({ ok: true, keys: ['Alpha/_attachment/scan.png'], next: null })
+    expect(pics.asOf).toMatch(/^20\d\d-/)
+    const slices: Buffer[] = []
+    for (let off = 0; off < scanA.length;) {
+      const r = await cmd(follower, { cmd: 'attachments.read', key: 'Alpha/_attachment/scan.png', offset: off })
+      expect(r.ok, JSON.stringify(r).slice(0, 300)).toBe(true)
+      const data = Buffer.from(String(r.data), 'base64')
+      expect(data.length).toBeLessThanOrEqual(2 * 1024 * 1024)
+      slices.push(data)
+      off += data.length
+    }
+    expect(Buffer.concat(slices).equals(scanA)).toBe(true)
+    expect(notFound(await cmd(follower, { cmd: 'attachments.read', key: 'Secret/_attachment/plan.png', offset: 0, home: HOME_B }))).toBe(true)
+    // Only a leader fills or removes it.
+    for (const c of ['attachments.sync', 'attachments.put', 'attachments.drop', 'attachments.status']) {
+      expect((await cmd(follower, { cmd: c, home: HOME_A, entries: [] })).errorKind).toBe('follower_refused')
+    }
+    expect(await cmd(leaderB, { cmd: 'attachments.status', home: HOME_B })).toMatchObject({ ok: true, entries: 1, pending: 0 })
+    expect(hello.capabilities).toContain('attachment-copy-v1')
 
-      // The leaders: unchanged answers (status keeps the argv a fork asks for, list keeps every row).
-      const leaderStatus = await cmd(leaderB, { cmd: 'status', sid: SB, includeArgs: true })
-      expect(leaderStatus).toMatchObject({ ok: true, exists: true })
-      expect(Array.isArray(leaderStatus.args)).toBe(true)
-      const all = ((await cmd(leaderA, { cmd: 'list' })).sessions as Array<{ sid: string }>).map((r) => r.sid)
-      expect(all).toEqual(expect.arrayContaining([SA, SB]))
-      expect((await cmd(leaderA, { cmd: 'fs.read', path: secret })).ok).toBe(true)
-      // replica.* reads are the follower's: a leader names its home with replica.status, as before.
-      expect((await cmd(leaderA, { cmd: 'replica.status', home: HOME_A })).kinds.notes.entries).toBe(2)
-      expect(hello.capabilities).toContain('replica-reads-v1')
+    // The leaders: unchanged answers (status keeps the argv a fork asks for, list keeps every row).
+    const leaderStatus = await cmd(leaderB, { cmd: 'status', sid: SB, includeArgs: true })
+    expect(leaderStatus).toMatchObject({ ok: true, exists: true })
+    expect(Array.isArray(leaderStatus.args)).toBe(true)
+    const all = ((await cmd(leaderA, { cmd: 'list' })).sessions as Array<{ sid: string }>).map((r) => r.sid)
+    expect(all).toEqual(expect.arrayContaining([SA, SB]))
+    expect((await cmd(leaderA, { cmd: 'fs.read', path: secret })).ok).toBe(true)
+    // replica.* reads are the follower's: a leader names its home with replica.status, as before.
+    expect((await cmd(leaderA, { cmd: 'replica.status', home: HOME_A })).kinds.notes.entries).toBe(2)
+    expect(hello.capabilities).toContain('replica-reads-v1')
 
-      for (const sid of [SA, SB]) await cmd(sid === SA ? leaderA : leaderB, { cmd: 'stop', sid, reason: 'user', home: sid === SA ? HOME_A : HOME_B })
-      // Session broadcasts: the follower hears its own Walnut's session end, never the other's.
-      await waitFor(() => heard.some((e) => e.ev === 'session_state' && e.sid === SA), 15_000, 'A\'s session_state')
-      await sleep(500)
-      expect(heard.filter((e) => e.sid === SB)).toEqual([])
-      await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec: null })
-    }, 180_000)
+    for (const sid of [SA, SB]) await cmd(sid === SA ? leaderA : leaderB, { cmd: 'stop', sid, reason: 'user', home: sid === SA ? HOME_A : HOME_B })
+    // Session broadcasts: the follower hears its own Walnut's session end, never the other's.
+    await waitFor(() => heard.some((e) => e.ev === 'session_state' && e.sid === SA), 15_000, 'A\'s session_state')
+    await sleep(500)
+    expect(heard.filter((e) => e.sid === SB)).toEqual([])
+    await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec: null })
+  }, 180_000)
 
-    it('a session of A in the home dir, B deeper in the same repository: B\'s files, transcript, the CLI history and the daemon\'s copies stay B\'s', async () => {
-      // The daemon's `~` is a temp home, and its own dir lives inside it (as ~/.cache would).
-      const fakeHome = path.join(base, `${twin}-home2`)
-      const dir = path.join(fakeHome, '.cache', 'wd')
-      const repo = path.join(fakeHome, 'code', 'repo')
-      const cwdB = path.join(repo, 'acme')
-      const projects = path.join(fakeHome, '.claude', 'projects', '-code-repo')
-      for (const d of [cwdB, projects]) fs.mkdirSync(d, { recursive: true })
-      fs.writeFileSync(path.join(repo, 'marina.txt'), 'marina v1 shared_symbol\n')
-      fs.writeFileSync(path.join(cwdB, 'secret.txt'), 'acme v1 shared_symbol\n')
-      git(repo, 'init', '-q')
-      git(repo, 'add', '-A')
-      git(repo, 'commit', '-q', '-m', 'one')
-      const sha = git(repo, 'rev-parse', 'HEAD').trim()
-      fs.writeFileSync(path.join(repo, 'marina.txt'), 'marina v2 shared_symbol\n')
-      fs.writeFileSync(path.join(cwdB, 'secret.txt'), 'acme v2 shared_symbol\n')
-      fs.writeFileSync(path.join(projects, `${SA}.jsonl`), '{"type":"user","marina":1}\n')
-      fs.writeFileSync(path.join(projects, `${SB}.jsonl`), '{"type":"user","acme":1}\n')
-      fs.writeFileSync(path.join(fakeHome, '.claude', 'history.jsonl'), '{"display":"acme prompt"}\n')
-      const mock = path.join(base, 'mock-cli.cjs')
-      fs.writeFileSync(mock, MOCK_CLI)
-      const d = await spawnDaemon(dir, twin, { WALNUT_HOME_OVERRIDE: fakeHome })
-      const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: fakeHome, mock, notes: { 'Alpha.md': '# Alpha\n' } })
-      const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' } })
-      for (const sid of [SA, SB]) {
-        await waitFor(() => { try { return fs.readFileSync(path.join(dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
-        const st = await cmd(leaderA, { cmd: 'status', sid })
-        if (typeof st.pid === 'number') pids.add(st.pid)
-      }
-      const follower = await followerOfA(d.port, leaderA, `${twin}-2`, 41_100 + (twin === 'source' ? 7 : 8))
-      const text = (r: Record<string, any>) => (r.encoding === 'base64' ? Buffer.from(r.data, 'base64').toString() : r.data)
+  it('a session of A in the home dir, B deeper in the same repository: B\'s files, transcript, the CLI history and the daemon\'s copies stay B\'s', async () => {
+    // The daemon's `~` is a temp home, and its own dir lives inside it (as ~/.cache would).
+    const fakeHome = path.join(base, 'standalone-home2')
+    const dir = path.join(fakeHome, '.cache', 'wd')
+    const repo = path.join(fakeHome, 'code', 'repo')
+    const cwdB = path.join(repo, 'acme')
+    const projects = path.join(fakeHome, '.claude', 'projects', '-code-repo')
+    for (const d of [cwdB, projects]) fs.mkdirSync(d, { recursive: true })
+    fs.writeFileSync(path.join(repo, 'marina.txt'), 'marina v1 shared_symbol\n')
+    fs.writeFileSync(path.join(cwdB, 'secret.txt'), 'acme v1 shared_symbol\n')
+    git(repo, 'init', '-q')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'one')
+    const sha = git(repo, 'rev-parse', 'HEAD').trim()
+    fs.writeFileSync(path.join(repo, 'marina.txt'), 'marina v2 shared_symbol\n')
+    fs.writeFileSync(path.join(cwdB, 'secret.txt'), 'acme v2 shared_symbol\n')
+    fs.writeFileSync(path.join(projects, `${SA}.jsonl`), '{"type":"user","marina":1}\n')
+    fs.writeFileSync(path.join(projects, `${SB}.jsonl`), '{"type":"user","acme":1}\n')
+    fs.writeFileSync(path.join(fakeHome, '.claude', 'history.jsonl'), '{"display":"acme prompt"}\n')
+    const mock = path.join(base, 'mock-cli.cjs')
+    fs.writeFileSync(mock, MOCK_CLI)
+    const d = await spawnDaemon(dir, { WALNUT_HOME_OVERRIDE: fakeHome })
+    const leaderA = await linkLeader(d.port, { home: HOME_A, walnut: WALNUT_A, sid: SA, cwd: fakeHome, mock, notes: { 'Alpha.md': '# Alpha\n' } })
+    const leaderB = await linkLeader(d.port, { home: HOME_B, walnut: WALNUT_B, sid: SB, cwd: cwdB, mock, notes: { 'Secret.md': '# Secret of acme\n' } })
+    for (const sid of [SA, SB]) {
+      await waitFor(() => { try { return fs.readFileSync(path.join(dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
+      const st = await cmd(leaderA, { cmd: 'status', sid })
+      if (typeof st.pid === 'number') pids.add(st.pid)
+    }
+    const follower = await followerOfA(d.port, leaderA, 'standalone-2', 41_108)
+    const text = (r: Record<string, any>) => (r.encoding === 'base64' ? Buffer.from(r.data, 'base64').toString() : r.data)
 
-      // Under A's home-dir cwd, ordinary files are A's; A's own transcript too.
-      expect(text(await cmd(follower, { cmd: 'fs.read', path: path.join(repo, 'marina.txt') }))).toBe('marina v2 shared_symbol\n')
-      expect((await cmd(follower, { cmd: 'fs.read', path: path.join(projects, `${SA}.jsonl`) })).ok).toBe(true)
-      // B's transcript, the CLI's prompt history, and every file of the daemon's own dir (B's notes copy among them) are not.
-      const daemonFiles = filesUnder(dir).filter((f) => !f.endsWith('.pipe'))
-      expect(daemonFiles.some((f) => f.includes('host-replica'))).toBe(true)
-      for (const f of [path.join(projects, `${SB}.jsonl`), path.join(fakeHome, '.claude', 'history.jsonl'), path.join(cwdB, 'secret.txt'), ...daemonFiles.filter((f) => !f.endsWith(`${SA}.jsonl`) && !f.endsWith(`${SA}.meta.json`))]) {
-        expect(notFound(await cmd(follower, { cmd: 'fs.read', path: f })), f).toBe(true)
-      }
-      // A's own transcript is found with no cwd (fs.find), B's never.
-      const found = await cmd(follower, { cmd: 'fs.find', path: '~/.claude/projects', name: `${SA}.jsonl`, maxDepth: 3 })
-      expect(found.files).toEqual([path.join(projects, `${SA}.jsonl`)])
-      expect(notFound(await cmd(follower, { cmd: 'fs.find', path: '~/.claude/projects', name: `${SB}.jsonl` }))).toBe(true)
+    // Under A's home-dir cwd, ordinary files are A's; A's own transcript too.
+    expect(text(await cmd(follower, { cmd: 'fs.read', path: path.join(repo, 'marina.txt') }))).toBe('marina v2 shared_symbol\n')
+    expect((await cmd(follower, { cmd: 'fs.read', path: path.join(projects, `${SA}.jsonl`) })).ok).toBe(true)
+    // B's transcript, the CLI's prompt history, and every file of the daemon's own dir (B's notes copy among them) are not.
+    const daemonFiles = filesUnder(dir).filter((f) => !f.endsWith('.pipe'))
+    expect(daemonFiles.some((f) => f.includes('host-replica'))).toBe(true)
+    for (const f of [path.join(projects, `${SB}.jsonl`), path.join(fakeHome, '.claude', 'history.jsonl'), path.join(cwdB, 'secret.txt'), ...daemonFiles.filter((f) => !f.endsWith(`${SA}.jsonl`) && !f.endsWith(`${SA}.meta.json`))]) {
+      expect(notFound(await cmd(follower, { cmd: 'fs.read', path: f })), f).toBe(true)
+    }
+    // A's own transcript is found with no cwd (fs.find), B's never.
+    const found = await cmd(follower, { cmd: 'fs.find', path: '~/.claude/projects', name: `${SA}.jsonl`, maxDepth: 3 })
+    expect(found.files).toEqual([path.join(projects, `${SA}.jsonl`)])
+    expect(notFound(await cmd(follower, { cmd: 'fs.find', path: '~/.claude/projects', name: `${SB}.jsonl` }))).toBe(true)
 
-      // The whole repository's answers lose B's files and matches; the leader's keep them.
-      const diff = await cmd(follower, { cmd: 'git.diff', cwd: repo, base: 'uncommitted' })
-      expect(diff.ok, JSON.stringify(diff).slice(0, 300)).toBe(true)
-      expect((diff.files as Array<{ relPath: string }>).map((f) => f.relPath)).toEqual(['marina.txt'])
-      expect(JSON.stringify(diff)).not.toContain('acme v')
-      const grep = await cmd(follower, { cmd: 'fs.grep', file: path.join(repo, 'marina.txt'), symbol: 'shared_symbol' })
-      expect((grep.matches as Array<{ file: string }>).map((m) => m.file)).toEqual([path.join(repo, 'marina.txt')])
-      const leaderDiff = await cmd(leaderA, { cmd: 'git.diff', cwd: repo, base: 'uncommitted' })
-      expect((leaderDiff.files as Array<{ relPath: string }>).map((f) => f.relPath).sort()).toEqual(['acme/secret.txt', 'marina.txt'])
+    // The whole repository's answers lose B's files and matches; the leader's keep them.
+    const diff = await cmd(follower, { cmd: 'git.diff', cwd: repo, base: 'uncommitted' })
+    expect(diff.ok, JSON.stringify(diff).slice(0, 300)).toBe(true)
+    expect((diff.files as Array<{ relPath: string }>).map((f) => f.relPath)).toEqual(['marina.txt'])
+    expect(JSON.stringify(diff)).not.toContain('acme v')
+    const grep = await cmd(follower, { cmd: 'fs.grep', file: path.join(repo, 'marina.txt'), symbol: 'shared_symbol' })
+    expect((grep.matches as Array<{ file: string }>).map((m) => m.file)).toEqual([path.join(repo, 'marina.txt')])
+    const leaderDiff = await cmd(leaderA, { cmd: 'git.diff', cwd: repo, base: 'uncommitted' })
+    expect((leaderDiff.files as Array<{ relPath: string }>).map((f) => f.relPath).sort()).toEqual(['acme/secret.txt', 'marina.txt'])
 
-      // git file history: a relative path is refused (the handler would resolve it
-      // against the daemon's own cwd); the absolute path of A's file answers.
-      for (const c of [
-        { cmd: 'git.fileShow', cwd: repo, path: 'acme/secret.txt', sha },
-        { cmd: 'git.fileShow', cwd: repo, path: 'marina.txt', sha },
-        { cmd: 'git.fileLog', cwd: repo, path: 'acme/secret.txt' },
-        { cmd: 'git.fileShow', cwd: repo, path: path.join(cwdB, 'secret.txt'), sha },
-      ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
-      expect(await cmd(follower, { cmd: 'git.fileShow', cwd: repo, path: path.join(repo, 'marina.txt'), sha })).toMatchObject({ ok: true, content: 'marina v1 shared_symbol\n' })
+    // git file history: a relative path is refused (the handler would resolve it
+    // against the daemon's own cwd); the absolute path of A's file answers.
+    for (const c of [
+      { cmd: 'git.fileShow', cwd: repo, path: 'acme/secret.txt', sha },
+      { cmd: 'git.fileShow', cwd: repo, path: 'marina.txt', sha },
+      { cmd: 'git.fileLog', cwd: repo, path: 'acme/secret.txt' },
+      { cmd: 'git.fileShow', cwd: repo, path: path.join(cwdB, 'secret.txt'), sha },
+    ]) expect(notFound(await cmd(follower, c)), JSON.stringify(c)).toBe(true)
+    expect(await cmd(follower, { cmd: 'git.fileShow', cwd: repo, path: path.join(repo, 'marina.txt'), sha })).toMatchObject({ ok: true, content: 'marina v1 shared_symbol\n' })
 
-      for (const sid of [SA, SB]) await cmd(sid === SA ? leaderA : leaderB, { cmd: 'stop', sid, reason: 'user', home: sid === SA ? HOME_A : HOME_B })
-      await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec: null })
-    }, 180_000)
-  })
-}
+    for (const sid of [SA, SB]) await cmd(sid === SA ? leaderA : leaderB, { cmd: 'stop', sid, reason: 'user', home: sid === SA ? HOME_A : HOME_B })
+    await cmd(leaderA, { cmd: 'server.configure', home: HOME_A, spec: null })
+  }, 180_000)
+})

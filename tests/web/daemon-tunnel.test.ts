@@ -149,15 +149,15 @@ describe('the tunnel daemon spawn env', () => {
     }
   })
 
-  it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s strips WALNUT_DAEMON_STATE_DIR from every CLI it spawns', (file) => {
-    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8')
+  it('the daemon strips WALNUT_DAEMON_STATE_DIR from every CLI it spawns', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'daemon-standalone.ts'), 'utf-8')
     expect(src).toMatch(/WALNUT_DAEMON_KEEP_SESSIONS: undefined,\s*(\/\/[^\n]*\n\s*)*WALNUT_DAEMON_STATE_DIR: undefined,/)
   })
 
   // The daemon's own switch must stop at the daemon: a CLI that inherited it
   // would hand it to any daemon it starts (a `walnut` run inside a session).
-  it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s strips WALNUT_DAEMON_KEEP_SESSIONS from every CLI it spawns', (file) => {
-    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8')
+  it('the daemon strips WALNUT_DAEMON_KEEP_SESSIONS from every CLI it spawns', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'daemon-standalone.ts'), 'utf-8')
     expect(src).toMatch(/WALNUT_DAEMON_PARENT_PID: undefined,\s*(\/\/[^\n]*\n\s*)*WALNUT_DAEMON_KEEP_SESSIONS: undefined,/)
   })
 })
@@ -171,10 +171,10 @@ describe('the tunnel daemon keeps the Mac sessions when it is replaced', () => {
     })
   })
 
-  // Both twins: the bun binary a box runs, and the source daemon a box without
-  // a binary falls back to. Either one reaping its CLIs on exit would end the
-  // Mac's sessions on every companion deploy.
-  it.each(['daemon-standalone.ts', 'daemon-source.ts'])('%s never reaps its CLIs on exit when told to keep them', (file) => {
+  // A daemon reaping its CLIs on exit would end the Mac's sessions on every
+  // companion deploy.
+  it('the daemon never reaps its CLIs on exit when told to keep them', () => {
+    const file = 'daemon-standalone.ts'
     const src = twinText(file, fs.readFileSync(path.join(process.cwd(), 'src', 'providers', file), 'utf-8'))
     expect(src).toMatch(/const KEEP_SESSIONS_ON_EXIT = process\.env\.WALNUT_DAEMON_KEEP_SESSIONS === '1'/)
     expect(src).toMatch(/function shouldReapOnExit\(\)[^{]*\{[\s\S]{0,400}&& !KEEP_SESSIONS_ON_EXIT/)

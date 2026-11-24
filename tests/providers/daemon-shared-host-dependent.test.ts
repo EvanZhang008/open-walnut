@@ -1,8 +1,8 @@
 /**
- * Every capability a daemon twin adds in its hello beyond ADVERTISED_DAEMON_CAPABILITIES is
+ * Every capability the daemon adds in its hello beyond ADVERTISED_DAEMON_CAPABILITIES is
  * host-dependent for the shared-daemon rule (daemon-shared.ts). Otherwise a running daemon
  * that says it reads as having something this build "lacks", and a host another Walnut shares
- * keeps that daemon for good (2026-11-12: caller-proof-v1, said by the bun twin where its FFI
+ * keeps that daemon for good (2026-11-12: caller-proof-v1, said by the bun daemon where its FFI
  * loads, kept a dev host's daemon from every update that day).
  */
 import { describe, it, expect } from 'vitest'
@@ -35,13 +35,11 @@ function added(src: string): string[] {
   return [...out]
 }
 
-describe('capabilities a twin adds by its host are host-dependent', () => {
-  it('each one either twin adds beyond the advertised list is in HOST_DEPENDENT_CAPABILITIES', () => {
+describe('capabilities the daemon adds by its host are host-dependent', () => {
+  it('each one the daemon adds beyond the advertised list is in HOST_DEPENDENT_CAPABILITIES', () => {
     const advertised = new Set<string>(ADVERTISED_DAEMON_CAPABILITIES)
-    const runtime = [
-      ...added(body('src/providers/daemon-standalone.ts', 'function helloCapabilities(): string[] {')),
-      ...added(body('src/providers/daemon-source.ts', 'function daemonCapabilities() {')),
-    ].filter((c) => !advertised.has(c))
+    const runtime = added(body('src/providers/daemon-standalone.ts', 'function helloCapabilities(): string[] {'))
+      .filter((c) => !advertised.has(c))
     expect(runtime).toContain('caller-proof-v1')
     expect(runtime.filter((c) => !HOST_DEPENDENT_CAPABILITIES.has(c))).toEqual([])
   })

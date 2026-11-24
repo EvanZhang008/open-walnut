@@ -13,11 +13,7 @@
  * group, a deadline, stopped when the daemon stops), so this file starts and
  * signals nothing by itself.
  *
- * How each twin gets it: daemon-standalone.ts imports it; daemon-source.ts
- * inlines `createClaudeInstall.toString()` through the `__CREATE_CLAUDE_INSTALL__`
- * placeholder, like createHostFix, which receives it as `deps.claudeInstall`
- * (and hands it the download half as `deps.download`, claude-download-core.ts).
- * So the factory body references NOTHING at module scope (the type imports
+ * Imported by daemon-standalone.ts. The factory body references NOTHING at module scope (the type imports
  * below are erased), and constructing it has no side effects.
  */
 

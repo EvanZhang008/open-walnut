@@ -28,10 +28,8 @@
  * What the job runs on is described by WALNUT_PLUGIN_JOB (JSON), which only
  * the daemon sets: started any other way it refuses (exit 2).
  *
- * How the daemon twins get it: wn-cli.ts (the walnut file and the bun daemon)
- * imports createPluginJobHarness; daemon-source.ts inlines its `toString()`
- * through `__CREATE_PLUGIN_JOB_HARNESS__`. So the factory body references
- * NOTHING at module scope; every side effect arrives through deps.
+ * wn-cli.ts (the walnut file and the bun daemon) imports createPluginJobHarness.
+ * The factory body references NOTHING at module scope; every side effect arrives through deps.
  */
 
 import type { HostCallClient } from './host-call-client-core.js'

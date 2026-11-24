@@ -17,7 +17,13 @@ import path from 'node:path'
 import { DaemonConnection, setPooledConnectionForTest } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
-import { EXPECTED, OLD, TARGET, priv, state, probe, stub, type Routes } from '../helpers/daemon-connection-update-stubs.js'
+import { EXPECTED, OLD, TARGET, priv, state, probe, stub as baseStub, type Routes } from '../helpers/daemon-connection-update-stubs.js'
+
+/** The shared stub, for a host whose daemon is the compiled one (what this leader deploys and starts). */
+const stub: typeof baseStub = (c, routes) => {
+  if ((c as unknown as { _runtime?: unknown })._runtime == null) (c as unknown as { _runtime: unknown })._runtime = 'binary'
+  return baseStub(c, routes)
+}
 
 let conns: DaemonConnection[] = []
 function make(): DaemonConnection {
@@ -42,7 +48,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
     vi.spyOn(log.session, 'error').mockImplementation(() => {})
     vi.spyOn(priv(c), 'holdUpgradeForFoldPrewarm').mockResolvedValue(false)
     const lost = vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { priv(c).setConnected(false) })
-    state(c)._runtime = 'node'
+    state(c)._runtime = 'binary'
     state(c)._connected = true
     state(c)._daemonVersion = OLD
     return { seen, lost }
@@ -78,7 +84,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       const seen = stub(c, { probe: probe(), version: OLD })
       vi.spyOn(log.session, 'error').mockImplementation(() => {})
       restoreAnswers(c, seen, o.restores)
-      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
       state(c)._replacing = { expected: EXPECTED, dir: state(c)._remoteDir, at: Date.now() }
       const fresh = vi.spyOn(priv(c), 'deployAndStartNew').mockRejectedValue(new Error('Daemon failed to start: no port file'))
       const start = vi.spyOn(priv(c), 'startDaemon')
@@ -87,7 +93,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       await expect(priv(c).deployAndStart()).rejects.toThrow()
       expect(state(c)._replacing).toMatchObject({ expected: EXPECTED, back: true })
       await updateStoresSettled()
-      expect(Object.values(JSON.parse(fs.readFileSync(pending.file, 'utf8')))).toEqual([expect.objectContaining({ expected: EXPECTED, back: true, previous: { runtime: 'node', bunPath: null } })])
+      expect(Object.values(JSON.parse(fs.readFileSync(pending.file, 'utf8')))).toEqual([expect.objectContaining({ expected: EXPECTED, back: true, previous: { runtime: 'binary', bunPath: null } })])
       // A server restarted now reads the mark: back to the old one, no deploy.
       const restarted = make()
       const again = stub(restarted, { probe: probe(), version: OLD })
@@ -99,9 +105,9 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       // The same connection's next connect too (its record in memory).
       await expect(priv(c).deployAndStart()).resolves.toBe(32300)
       expect(fresh).toHaveBeenCalledTimes(1)
-      expect(start).toHaveBeenLastCalledWith('node')
+      expect(start).toHaveBeenLastCalledWith()
       expect(state(c)._replacing).toBeNull()
-      expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, reason: 'Daemon failed to start: no port file', previous: { runtime: 'node', bunPath: null } })
+      expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, reason: 'Daemon failed to start: no port file', previous: { runtime: 'binary', bunPath: null } })
       await updateStoresSettled()
       expect(JSON.parse(fs.readFileSync(pending.file, 'utf8'))).toEqual({})
     } finally { pending.done() }
@@ -114,7 +120,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       const seen = stub(c, { probe: probe(), version: OLD })
       vi.spyOn(log.session, 'error').mockImplementation(() => {})
       restoreAnswers(c, seen, [''])
-      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
       state(c)._replacing = { expected: EXPECTED, dir: state(c)._remoteDir, at: Date.now(), back: true }
       state(c)._realDirFail = { expected: EXPECTED, at: Date.now(), reason: 'it did not start' }
       vi.spyOn(priv(c), 'getExpectedDaemonVersion').mockReturnValue('walnut-daemon-newer0000')
@@ -138,7 +144,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       vi.spyOn(log.session, 'error').mockImplementation(() => {})
       vi.spyOn(log.session, 'warn').mockImplementation(() => {})
       restoreAnswers(c, seen, [...restores])
-      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+      state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
       state(c)._replacing = { expected: EXPECTED, dir: state(c)._remoteDir, at: Date.now(), back: true }
       state(c)._realDirFail = { expected: EXPECTED, at: Date.now(), reason: 'it did not start' }
       const fresh = vi.spyOn(priv(c), 'deployAndStartNew').mockResolvedValue(32400)
@@ -203,7 +209,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
       // It was gone within its window: the next connect, no daemon there, starts the old one.
       await expect(priv(c).deployAndStart()).resolves.toBe(32300)
       expect(fresh).toHaveBeenCalledTimes(1)
-      expect(start).toHaveBeenLastCalledWith('binary')
+      expect(start).toHaveBeenLastCalledWith()
       expect(state(c)._realDirFail).toMatchObject({ expected: EXPECTED, previous: { runtime: 'binary', bunPath: null } })
       expect(state(c)._replacing).toBeNull()
       expect(state(c)._updateFailure).toMatchObject({ expected: EXPECTED, message: expect.stringContaining('so the one that ran before was started again') })
@@ -240,7 +246,7 @@ describe('the SSH way back holds until the old daemon runs again', () => {
     stub(c, { probe: probe(), version: EXPECTED })
     vi.spyOn(log.session, 'warn').mockImplementation(() => {})
     vi.spyOn(priv(c), 'scheduleStayCheck').mockImplementation(() => {})
-    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+    state(c)._previous = { dir: state(c)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
     state(c)._replacing = { expected: EXPECTED, dir: state(c)._remoteDir, at: Date.now(), back: true }
     state(c)._realDirFail = { expected: EXPECTED, at: Date.now(), reason: 'it did not come to serve' }
     await priv(c).settleStartedOnLive(4242)
@@ -251,12 +257,12 @@ describe('the SSH way back holds until the old daemon runs again', () => {
     const old = make()
     stub(old, { probe: probe(), version: OLD })
     vi.spyOn(log.session, 'info').mockImplementation(() => {})
-    state(old)._previous = { dir: state(old)._remoteDir, runtime: 'node', bunPath: null, at: Date.now(), stopped: true }
+    state(old)._previous = { dir: state(old)._remoteDir, runtime: 'binary', bunPath: null, at: Date.now(), stopped: true }
     state(old)._replacing = { expected: EXPECTED, dir: state(old)._remoteDir, at: Date.now(), back: true }
     state(old)._realDirFail = { expected: EXPECTED, at: Date.now(), reason: 'it did not come to serve' }
     await priv(old).settleStartedOnLive(4343)
     expect(state(old)._replacing).toBeNull()
-    expect(state(old)._realDirFail).toMatchObject({ expected: EXPECTED, previous: { runtime: 'node', bunPath: null } })
+    expect(state(old)._realDirFail).toMatchObject({ expected: EXPECTED, previous: { runtime: 'binary', bunPath: null } })
   })
 
   // 2026-11-04 review 4: a stop's record had no age at all, so one a host that never came back

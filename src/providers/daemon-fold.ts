@@ -9,17 +9,15 @@
  * tests/core/session-reconcile.test.ts define the behavior. Do not "improve"
  * the rules here without changing them there first.
  *
- * TWIN-SAFE CONSTRAINTS (load-bearing — do not break):
- * - ZERO imports. ZERO module-scope values captured by the exported functions.
- *   getDaemonSource() injects foldLine/initialFoldState/assembleSnapshot/
- *   snapshotDiffers TEXTUALLY into the daemon source template via
- *   fn.toString() (same mechanism as __DAEMON_VERSION__), so each must survive
- *   a `new Function('return ' + fn.toString())()` round-trip.
+ * SELF-CONTAINED CONSTRAINTS (kept from when the functions were injected as text
+ * into the daemon's source twin; a guard test still pins them):
+ * - ZERO imports. ZERO module-scope values captured by the exported functions,
+ *   so each survives a `new Function('return ' + fn.toString())()` round-trip.
  * - All helpers are declared INSIDE the function bodies (avoids bundler
  *   `__name`/`__publicField` helper injection); types are local interfaces
  *   (erased at compile time).
  * - Exception: foldLines is a TEST-ONLY convenience and deliberately calls the
- *   sibling exports; it is never injected into the daemon template.
+ *   sibling exports; it is not part of the daemon.
  */
 
 export interface SessionSnapshot {
@@ -586,10 +584,8 @@ export function assembleSnapshot(input: {
  * Field compare ignoring bare `v` advance — a snapshot whose ONLY difference is
  * a bigger v carries no new state and must not be pushed (every streamed line
  * advances v; pushing on each would be a self-inflicted event storm across the
- * tunnel). Pure + zero-dep, so it lives here and is injected into the source
- * template like the fold trio — it used to be hand-duplicated in both twins,
- * where a one-sided edit (dropping a field from the compare = a silently
- * suppressed push) had no byte-level guard.
+ * tunnel). Pure + zero-dep, so it lives here with the fold trio, the one copy
+ * of the compare (a dropped field = a silently suppressed push).
  */
 export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean {
   if (a.cliState !== b.cliState || a.turnActive !== b.turnActive
@@ -616,7 +612,7 @@ export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean
 export const WAKEUP_FIRE_GRACE_MS = 60_000
 
 /**
- * SERVER-SIDE helper (like foldLines, NOT injected into the daemon twins —
+ * SERVER-SIDE helper (like foldLines, not used by the daemon —
  * the daemon only carries the field): true while a confirmed ScheduleWakeup
  * is still pending, i.e. the model deliberately ended its turn to be
  * re-invoked by the timer. Time is the only clearing mechanism — see
@@ -629,7 +625,7 @@ export function isWakeupArmed(wakeupAt: number | null | undefined, nowMs?: numbe
 
 /**
  * TEST-ONLY convenience: split complete lines and reduce with foldLine.
- * NOT injected into the daemon template (it references the sibling exports —
+ * Not used by the daemon (it references the sibling exports —
  * the daemon tailer feeds foldLine directly, one complete line at a time).
  * A trailing empty segment (content ending in '\n') is skipped; a final
  * unterminated segment (a torn tail) is folded as if complete but WITHOUT the

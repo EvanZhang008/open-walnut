@@ -1,26 +1,21 @@
 /**
- * Session commit ('git-commit-v1') is wired the same way in both daemon twins:
- * the bun binary imports git-commit-core.ts + git-attribution-core.ts, the JS
- * source twin inlines their factories as text. This pins the wiring (commands,
- * capability, bridge exclusion, version/build lists) and runs the INLINED text
- * against a real temp repo, so a factory that grew a module-scope reference
- * fails here instead of on a remote host.
+ * Session commit ('git-commit-v1') in the daemon: daemon-standalone.ts imports
+ * git-commit-core.ts + git-attribution-core.ts. This pins the wiring (commands,
+ * capability, bridge exclusion, version/build lists) and runs the core against a
+ * real temp repo.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn, execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import * as vm from 'node:vm'
 import { createGitAttribution } from '../../src/providers/git-attribution-core.js'
 import { createGitCommitCore, type GitCommitDeps } from '../../src/providers/git-commit-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const standalone = read('src/providers/daemon-standalone.ts')
-const source = read('src/providers/daemon-source.ts')
 const COMMANDS = ['git.commitPlan', 'git.commitStart', 'git.commitJob']
 
 function bridgeAllowlist(src: string): string {
@@ -31,20 +26,16 @@ function bridgeAllowlist(src: string): string {
   return src.slice(start, end)
 }
 
-describe('git-commit-v1 twin wiring', () => {
-  it('both twins dispatch the three commands', () => {
-    for (const src of [standalone, source]) {
-      for (const cmd of COMMANDS) expect(src).toContain(`case '${cmd}':`)
-    }
+describe('git-commit-v1 daemon wiring', () => {
+  it('the daemon dispatches the three commands', () => {
+    for (const cmd of COMMANDS) expect(standalone).toContain(`case '${cmd}':`)
   })
 
   it('the capability is advertised, not required, and no command is reachable over the bridge', () => {
     expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('git-commit-v1')
     expect(REQUIRED_DAEMON_CAPABILITIES as readonly string[]).not.toContain('git-commit-v1')
-    for (const src of [standalone, source]) {
-      const allow = bridgeAllowlist(src)
-      for (const cmd of COMMANDS) expect(allow).not.toContain(cmd)
-    }
+    const allow = bridgeAllowlist(standalone)
+    for (const cmd of COMMANDS) expect(allow).not.toContain(cmd)
   })
 
   it('the core files are in the version hash list and the binary build list, in the same order', () => {
@@ -58,23 +49,9 @@ describe('git-commit-v1 twin wiring', () => {
     expect(versionList.indexOf(files[0])).toBeLessThan(versionList.indexOf(files[1]))
     expect(build.indexOf(files[0])).toBeLessThan(build.indexOf(files[1]))
   })
-
-  it('the source twin inlines both factories exactly once and still parses', () => {
-    // The template uses each placeholder once (getDaemonSource throws otherwise);
-    // the injection table and the deploy-time smoke name them too.
-    expect(source).toContain("['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()]")
-    expect(source).toContain("['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()]")
-    expect(source).toContain('const gitCommit = (__CREATE_GIT_COMMIT__)({')
-    expect(source).toContain('attribution: (__CREATE_GIT_ATTRIBUTION__)(),')
-    const out = getDaemonSource()
-    expect(out).not.toContain('__CREATE_GIT_COMMIT__')
-    expect(out).not.toContain('__CREATE_GIT_ATTRIBUTION__')
-    expect(out).toContain('git.commitPlan')
-    expect(() => new vm.Script(out, { filename: 'daemon-source.js' })).not.toThrow()
-  })
 })
 
-describe('the inlined factories commit like the imported ones', () => {
+describe('the commit core commits the selected hunks', () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-git-commit-twin-')))
   afterAll(() => { if (tmp.includes('walnut-git-commit-twin-')) fs.rmSync(tmp, { recursive: true, force: true }) })
   const gitconfig = path.join(tmp, 'gitconfig')
@@ -117,12 +94,8 @@ describe('the inlined factories commit like the imported ones', () => {
     return { owners: hunks.map((h) => h.owner), blob: execFileSync('git', ['show', 'HEAD:f.txt'], { cwd: dir, env, encoding: 'utf8' }) }
   }
 
-  it('produces the same hunks and the same committed blob', async () => {
-    const strict = (fn: { toString(): string }) => new Function('"use strict"; return (' + fn.toString() + ')')()
-    const inlined = { attr: strict(createGitAttribution), commit: strict(createGitCommitCore) }
-    const imported = await commitWith({ attr: createGitAttribution, commit: createGitCommitCore }, makeRepo('imported'))
-    const fromText = await commitWith(inlined, makeRepo('inlined'))
-    expect(imported).toEqual({ owners: ['mine', 'other'], blob: 'A\nb\nc\nd\ne\nf\ng\nh\n' })
-    expect(fromText).toEqual(imported)
+  it('commits only the hunks marked mine', async () => {
+    const committed = await commitWith({ attr: createGitAttribution, commit: createGitCommitCore }, makeRepo('imported'))
+    expect(committed).toEqual({ owners: ['mine', 'other'], blob: 'A\nb\nc\nd\ne\nf\ng\nh\n' })
   }, 60_000)
 })

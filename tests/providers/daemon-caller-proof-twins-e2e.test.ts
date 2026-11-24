@@ -1,15 +1,14 @@
 /**
- * caller-proof-v1 on the real daemon twins (gateway-core.ts, socket-peer-pid.ts): an approval
+ * caller-proof-v1 on the real session daemon, daemon-standalone.ts (gateway-core.ts, socket-peer-pid.ts): an approval
  * asked through a host daemon's gateway socket carries the daemon's own word on the asking process.
  *
  *   test (server WS) ◄═gateway-request{payload.callerProof}═ daemon ◄═gateway socket═ asker
  *                                                               │ spawns
  *                                                               ▼ stand-in CLI ─► its child (the asker)
  *
- * - the standalone twin (bun) reads the process on its socket and says verified for a child of the
- *   session's own CLI, and not verified for a process outside it that names the same session;
- * - both twins drop a callerProof the caller wrote itself, and the JS twin (which cannot read its
- *   socket's peer) sends none and does not advertise the capability;
+ * - the daemon reads the process on its socket and says verified for a child of the session's own
+ *   CLI, and not verified for a process outside it that names the same session;
+ * - it drops a callerProof the caller wrote itself;
  * - an op that is not an approval relays with no proof and no process lookup.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths under /tmp (a unix socket
@@ -24,23 +23,15 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { CALLER_PROOF_CAPABILITY } from '../../src/providers/gateway-core.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-let scriptPath = ''
 let cliPath = ''
 let root = ''
-type Twin = { name: string; reads: boolean; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, reads: false, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', reads: true, command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 // The stand-in CLI: on the message "ask <socket>", its CHILD (as a session's Python script would)
 // sends an approval_request through the gateway, with a callerProof of its own that must not count.
@@ -94,7 +85,7 @@ async function waitFor(check: () => boolean, ms = 20_000): Promise<boolean> {
   return check()
 }
 
-async function boot(twin: Twin): Promise<Daemon> {
+async function boot(): Promise<Daemon> {
   root = fs.realpathSync(fs.mkdtempSync('/tmp/wcp-'))
   const daemonDir = path.join(root, 'd')
   const env: Record<string, string | undefined> = {
@@ -108,8 +99,7 @@ async function boot(twin: Twin): Promise<Daemon> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)
     proc.stdout?.on('data', (chunk) => {
@@ -145,8 +135,6 @@ function callFromOutside(d: Daemon, sid: string, name: string, extra: Record<str
 
 beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-caller-proof-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
   cliPath = path.join(dir, 'fake-claude.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -167,52 +155,42 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`caller-proof-v1, ${twin.name}`, () => {
-    it(twin.reads ? 'says verified for the session CLI\'s child, not for an outside process naming it, and never passes the caller\'s own proof'
-      : 'sends no proof and drops the caller\'s own', async () => {
-      const d = await boot(twin)
-      expect((d.hello.capabilities as string[]).includes(CALLER_PROOF_CAPABILITY)).toBe(twin.reads)
-      const sid = crypto.randomUUID()
-      const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} "$@"`
-      const started = await rpc(d, { cmd: 'start', sid, cwd: root, message: '', resume: true, mode: 'default', args: ['/bin/sh', '-c', sh, 'sh', '--resume', sid] })
-      expect(started.ok, JSON.stringify(started)).toBe(true);
-      (d as Daemon & { sid?: string }).sid = sid
-      // The session's own process, through its child.
-      await rpc(d, { cmd: 'send', sid, message: `ask ${path.join(d.daemonDir, 'agent-gateway.sock')}` })
-      expect(await waitFor(() => d.requests.length >= 1)).toBe(true)
-      const inside = d.requests[0]!.payload as Record<string, any>
-      // A process outside the session naming its id.
-      callFromOutside(d, sid, 'approval_request', { callerProof: { v: 1, verified: true } })
-      expect(await waitFor(() => d.requests.length >= 2)).toBe(true)
-      const outside = d.requests[1]!.payload as Record<string, any>
-      if (twin.reads) {
-        expect(inside.callerProof).toMatchObject({ v: 1, verified: true })
-        expect(inside.callerProof.ranBy).not.toBe('forged')
-        expect(typeof inside.callerProof.pid).toBe('number')
-        expect(outside.callerProof).toMatchObject({ v: 1, verified: false })
-        expect(outside.callerProof.pid).toBe(process.pid)
-      } else {
-        expect(inside.callerProof).toBeUndefined()
-        expect(outside.callerProof).toBeUndefined()
-      }
-      // caller.check: the server asks the same of a process it found on its own HTTP connection.
-      if (twin.reads) {
-        const asker = inside.callerProof.pid as number
-        const check = (pid: number, at: number, asSid = sid) => rpc(d, { cmd: 'caller.check', sid: asSid, pid, at })
-        expect((await check(asker, Date.now())).proof).toMatchObject({ v: 1, verified: true, pid: asker })
-        expect((await check(process.pid, Date.now())).proof).toMatchObject({ verified: false, pid: process.pid })
-        expect((await check(process.pid, Date.now())).proof.unchecked).toBeUndefined()
-        // A process that started after the moment asked about is not the one seen then (its pid was given out again).
-        expect((await check(asker, Date.now() - 3_600_000)).proof).toMatchObject({ verified: false, unchecked: true })
-        // A session this daemon does not run has no process to be inside.
-        expect((await check(asker, Date.now(), crypto.randomUUID())).proof).toMatchObject({ verified: false, unchecked: true })
-        expect((await rpc(d, { cmd: 'caller.check', sid, pid: 1, at: Date.now() })).ok).toBe(false)
-      }
-      // Not an approval: no proof at all, whatever the caller wrote.
-      callFromOutside(d, sid, 'task_list', { callerProof: { v: 1, verified: true } })
-      expect(await waitFor(() => d.requests.length >= 3)).toBe(true)
-      expect((d.requests[2]!.payload as Record<string, any>).callerProof).toBeUndefined()
-    }, 120_000)
-  })
-}
+describe.skipIf(!BUN)('caller-proof-v1, standalone daemon (bun)', () => {
+  it('says verified for the session CLI\'s child, not for an outside process naming it, and never passes the caller\'s own proof', async () => {
+    const d = await boot()
+    expect((d.hello.capabilities as string[]).includes(CALLER_PROOF_CAPABILITY)).toBe(true)
+    const sid = crypto.randomUUID()
+    const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} "$@"`
+    const started = await rpc(d, { cmd: 'start', sid, cwd: root, message: '', resume: true, mode: 'default', args: ['/bin/sh', '-c', sh, 'sh', '--resume', sid] })
+    expect(started.ok, JSON.stringify(started)).toBe(true);
+    (d as Daemon & { sid?: string }).sid = sid
+    // The session's own process, through its child.
+    await rpc(d, { cmd: 'send', sid, message: `ask ${path.join(d.daemonDir, 'agent-gateway.sock')}` })
+    expect(await waitFor(() => d.requests.length >= 1)).toBe(true)
+    const inside = d.requests[0]!.payload as Record<string, any>
+    // A process outside the session naming its id.
+    callFromOutside(d, sid, 'approval_request', { callerProof: { v: 1, verified: true } })
+    expect(await waitFor(() => d.requests.length >= 2)).toBe(true)
+    const outside = d.requests[1]!.payload as Record<string, any>
+    expect(inside.callerProof).toMatchObject({ v: 1, verified: true })
+    expect(inside.callerProof.ranBy).not.toBe('forged')
+    expect(typeof inside.callerProof.pid).toBe('number')
+    expect(outside.callerProof).toMatchObject({ v: 1, verified: false })
+    expect(outside.callerProof.pid).toBe(process.pid)
+    // caller.check: the server asks the same of a process it found on its own HTTP connection.
+    const asker = inside.callerProof.pid as number
+    const check = (pid: number, at: number, asSid = sid) => rpc(d, { cmd: 'caller.check', sid: asSid, pid, at })
+    expect((await check(asker, Date.now())).proof).toMatchObject({ v: 1, verified: true, pid: asker })
+    expect((await check(process.pid, Date.now())).proof).toMatchObject({ verified: false, pid: process.pid })
+    expect((await check(process.pid, Date.now())).proof.unchecked).toBeUndefined()
+    // A process that started after the moment asked about is not the one seen then (its pid was given out again).
+    expect((await check(asker, Date.now() - 3_600_000)).proof).toMatchObject({ verified: false, unchecked: true })
+    // A session this daemon does not run has no process to be inside.
+    expect((await check(asker, Date.now(), crypto.randomUUID())).proof).toMatchObject({ verified: false, unchecked: true })
+    expect((await rpc(d, { cmd: 'caller.check', sid, pid: 1, at: Date.now() })).ok).toBe(false)
+    // Not an approval: no proof at all, whatever the caller wrote.
+    callFromOutside(d, sid, 'task_list', { callerProof: { v: 1, verified: true } })
+    expect(await waitFor(() => d.requests.length >= 3)).toBe(true)
+    expect((d.requests[2]!.payload as Record<string, any>).callerProof).toBeUndefined()
+  }, 120_000)
+})

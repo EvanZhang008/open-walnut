@@ -1,7 +1,6 @@
 /**
- * send-dedupe-v1 on the real daemon twins, booted for real (the JS source twin
- * under node, and the standalone twin under bun when bun is installed), with a
- * stand-in CLI that records every stdin line it receives.
+ * send-dedupe-v1 on the real session daemon (daemon-standalone.ts under bun),
+ * booted for real, with a stand-in CLI that records every stdin line it receives.
  *
  * Pins what the regex parity checks never could (gate mutants M7 and M10 of
  * round 1 survived them): a resend with `dedupe` into the process that already
@@ -27,22 +26,15 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
+const command = (): [string, string[]] => [BUN!, [STANDALONE, '--start']]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -127,7 +119,7 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon'), received: path.join(root, 'received.jsonl') }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+async function boot(dirs: Dirs): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -140,7 +132,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     // line-answer-v1: set where the daemon runs; its CLIs must not inherit it (they would answer a taken line twice).
     CLAUDE_CODE_RESUME_INTERRUPTED_TURN: '1',
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -243,9 +235,7 @@ const modeOf = (file: string) => fs.statSync(file).mode & 0o777
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
 
 beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-dedupe-twins-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-dedupe-cli-'))
   cliPath = path.join(dir, 'fake-cli.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -259,10 +249,10 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
+describe.skipIf(!BUN)('send-dedupe-v1, standalone daemon (bun)', () => {
   it('line.fate queries cancelled, pending, completed and unknown lines without writing stdin or the registry', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     expect((await rpc({ cmd: 'hello' })).capabilities).toContain('line-fate-read-v1')
     const cli = await start(dirs, 'fate-read', ['--fate-query-fixture'])
     const rows = [
@@ -296,7 +286,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('line.fate reads a dead CLI and transcript fallback without starting another process', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const uuid = 'aaaaaaaa-0000-4000-8000-0000000000d1'
     const cli = await start(dirs, 'fate-dead', ['--start-then-die'])
     expect(body(await send('fate-dead', 'die quiet', uuid, ['qm-dead']))).toEqual({ ok: true })
@@ -322,7 +312,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('a resend into the process that has the whole line is not written again (M10)', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'dd-same', false)
     expect(body(await send('dd-same', 'hello', 'aaaaaaaa-0000-4000-8000-000000000001', ['qm-1']))).toMatchObject({ ok: true })
     expect(await waitFor(() => received(dirs).length === 1)).toBe(true)
@@ -339,7 +329,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     // createNoticeOnce leaves a notice out of one path's line only when the OTHER path (this host's
     // own delivery) just wrote it. The server's second line keeps it: its first may never have run.
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     await start(dirs, 'dd-notice', false)
     const notice = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy" note="x">\nRule one.\n</walnut-message>'
     expect(body(await send('dd-notice', `${notice}\n\nFirst`, 'aaaaaaaa-0000-4000-8000-0000000000a1', ['qm-a1']))).toEqual({ ok: true })
@@ -350,7 +340,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('a marker with no write record (cut short) or with no pid (older daemon) is no proof: written (M7)', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'dd-torn', false)
     // A write the previous daemon cut short: its marker landed, the newline never did.
     const torn = { type: 'user', subtype: 'walnut-injected', message: { role: 'user', content: 'torn' }, walnutMessageId: 'qm-torn', walnutDelivery: 'ordered', walnutPid: cli.pid }
@@ -364,7 +354,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('r3-torn: a write cut short with its body still in the pipe is ended first; the copy never merges with it', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'dd-cut', false)
     const uuid = 'aaaaaaaa-0000-4000-8000-000000000006'
     // The previous daemon wrote the whole body and its marker, then died before the newline.
@@ -385,7 +375,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('r5 F1: a write that stopped inside its body (begin noted, no record) is answered cut, never a plain ok', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'dd-begun', false)
     const uuid = 'aaaaaaaa-0000-4000-8000-000000000009'
     // What a daemon that went away inside its write leaves: the begin it noted before
@@ -407,12 +397,12 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     expect(notes.slice(1)).toMatchObject([{ pid: cli.pid, uuid, begin: ['qm-begun'] }, { pid: cli.pid, uuid, ids: ['qm-begun'] }])
   }, 60_000)
 
-  // The r5 gate's N4 (mutant mv07: the JS twin wrote `begin` where it should write
+  // The r5 gate's N4 (mutant mv07: a daemon wrote `begin` where it should write
   // `unbegun`, and every test passed). A write that put not one byte in must take its
-  // begin back in both twins, or the resend is told of a cut that never happened.
+  // begin back, or the resend is told of a cut that never happened.
   it('r5 N4: a write that put not one byte in (EAGAIN) takes its begin back; the resend is plain, never cut', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const go = path.join(root, 'cli-may-read')
     const cli = await start(dirs, 'dd-eagain', [`--read-after=${go}`])
     const uuid = 'aaaaaaaa-0000-4000-8000-00000000000e'
@@ -441,7 +431,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
   // on that answer and could deliver the message twice.
   it('a write that stalls with a prefix in the pipe answers session_dead with written prefix', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     // The CLI never reads before this test ends, so the line's first 64 KB fill the pipe and the rest waits.
     await start(dirs, 'dd-prefix', [`--read-after=${path.join(root, 'never')}`])
     const big = 'x'.repeat(200 * 1024)
@@ -452,7 +442,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('the CLI\'s lifecycle word and the write record settle a resend, also after a daemon restart', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const word = await start(dirs, 'dd-word', true)
     await start(dirs, 'dd-rec', false)
     const wordUuid = 'aaaaaaaa-0000-4000-8000-000000000004'
@@ -464,7 +454,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
     // A deploy restarts the daemon; the CLIs live on and the new daemon adopts them.
     await killDaemon()
-    await boot(twin, dirs)
+    await boot(dirs)
     const resend = async (sid: string, message: string, uuid: string, id: string) => {
       let reply: Record<string, unknown> = {}
       const until = Date.now() + 15_000
@@ -490,7 +480,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
   // uuid), and one that answered before it died is still ran.
   it('a line a dead CLI took and never answered is unanswered; one it answered is ran (line-answer-v1)', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const quiet = 'aaaaaaaa-0000-4000-8000-0000000000a1'
     const spoke = 'aaaaaaaa-0000-4000-8000-0000000000a2'
     for (const [sid, uuid, text] of [['dd-quiet', quiet, 'die quiet'], ['dd-spoke', spoke, 'die after an answer']] as const) {
@@ -532,7 +522,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
   // only the newline) is ended on its own instead of glued onto the rewrite.
   it('a line the CLI read past is written again once, never glued onto a fragment it holds (send-lost-line-v1)', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const cli = await start(dirs, 'dd-lost', ['--lose-first', '--dedupe-uuid'])
     const lostUuid = 'aaaaaaaa-0000-4000-8000-000000000006'
     expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6']))).toMatchObject({ ok: true })
@@ -559,7 +549,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
   // Told apart by what the CLI reads: exactly one line, the whole message.
   it('a first line into a CLI is read as one whole line, with nothing ahead of it (r3-torn, narrowed)', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const resend = await start(dirs, 'dd-first', ['--count-blank'])
     const lost = await start(dirs, 'dd-first-lost', ['--count-blank'])
     const a = 'aaaaaaaa-0000-4000-8000-000000000008'
@@ -580,7 +570,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
   // line; grep opened the live FIFOs and read the lines meant for three CLIs.
   it('the stdin FIFO is write-only: a reader handed the streams listing cannot open it, the CLI still gets its lines', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     await start(dirs, 'ff-locked', false)
     const fifo = fifoOf(dirs, 'ff-locked')
     expect(fs.lstatSync(fifo).isFIFO()).toBe(true)
@@ -601,13 +591,13 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
 
   it('a session whose FIFO an older daemon left readable is locked when a new daemon adopts it, and keeps working', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     await start(dirs, 'ff-adopt', false)
     await killDaemon()
     // What an older daemon left: the FIFO as mkfifo made it.
     const fifo = fifoOf(dirs, 'ff-adopt')
     fs.chmodSync(fifo, 0o644)
-    await boot(twin, dirs)
+    await boot(dirs)
     expect(await sendAfterRestart('ff-adopt', 'after restart', 'aaaaaaaa-0000-4000-8000-000000000009', ['qm-9'])).toMatchObject({ ok: true })
     expect(modeOf(fifo)).toBe(0o200)
     expect(await waitFor(() => received(dirs).some((r) => r.content === 'after restart'))).toBe(true)

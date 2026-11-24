@@ -68,7 +68,7 @@ describe('answersOnline follows the host_call_entry experiment', () => {
     }
   })
 
-  it('the front wires the switch, says it again in each report, and both twins read it there', () => {
+  it('the front wires the switch, says it again in each report, and the daemon reads it there', () => {
     const front = read('src/replica/front.ts')
     expect(front).toContain('answersOnline: () => callEntryOn,')
     expect(front).toContain('{ answersOnline: callEntryOn }')
@@ -76,7 +76,6 @@ describe('answersOnline follows the host_call_entry experiment', () => {
     // Trigger delivery is no experiment: said whenever this server answers local calls.
     expect(front).toContain('deliversTriggers: true,')
     expect(read('src/providers/daemon-standalone.ts')).toContain('ws.data.answersOnline = said.answersOnline === true')
-    expect(read('src/providers/daemon-source.ts')).toContain('ws.answersOnline = cmd.report.answersOnline === true')
   })
 
   it('a follower that did not say it is never handed a same-host send: the daemon\'s handleLocal takes it, as before', () => {
@@ -88,12 +87,11 @@ describe('answersOnline follows the host_call_entry experiment', () => {
     })
     expect(g.answersOnline('/h')).toBe(false)
     expect(g.handOff({ home: '/h', capability: 'tools.call', callerSid: 's', payload: {}, deadline: 1_000, online: true, fallback: () => {} }, () => {})).toBe(false)
-    // The twins: no answersOnline, straight to handleLocal (the online branch is skipped).
-    for (const src of [read('src/providers/daemon-standalone.ts'), read('src/providers/daemon-source.ts')]) {
-      const at = src.indexOf('followerGateway.answersOnline(home) && offlineHost.localCandidate(')
-      expect(at).toBeGreaterThan(0)
-      expect(src.indexOf('offlineHost.handleLocal(home, callerSid, capability, payload)', at)).toBeGreaterThan(at)
-    }
+    // The daemon: no answersOnline, straight to handleLocal (the online branch is skipped).
+    const src = read('src/providers/daemon-standalone.ts')
+    const at = src.indexOf('followerGateway.answersOnline(home) && offlineHost.localCandidate(')
+    expect(at).toBeGreaterThan(0)
+    expect(src.indexOf('offlineHost.handleLocal(home, callerSid, capability, payload)', at)).toBeGreaterThan(at)
     sock.said = true
     expect(g.answersOnline('/h')).toBe(true)
   })

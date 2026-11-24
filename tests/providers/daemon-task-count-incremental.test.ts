@@ -10,14 +10,13 @@
  * by the new one would disagree (the checkpoint format was deliberately NOT
  * bumped: bumping rejects every checkpoint, which is how the incident began).
  *
- * Runs the real function text of both twins: the source template as emitted,
- * the standalone twin transpiled with esbuild.
+ * Runs the real function text of the daemon (daemon-standalone.ts),
+ * transpiled with esbuild.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as esbuild from 'esbuild'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 function extractFn(src: string, name: string): string {
   const at = src.indexOf(`function ${name}(`)
@@ -73,10 +72,9 @@ function randomEvent(r: () => number): Record<string, unknown> {
   return ev
 }
 
-describe.each([
-  ['source twin', () => build(getDaemonSource())],
-  ['standalone twin', () => build(standaloneSource())],
-] as const)('incremental task count: %s', (_name, make) => {
+describe('incremental task count', () => {
+  const make = () => build(standaloneSource())
+
   it('equals a full recount after every event of random sequences', () => {
     const fns = make()
     for (let seed = 1; seed <= 25; seed++) {

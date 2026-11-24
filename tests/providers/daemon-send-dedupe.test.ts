@@ -509,59 +509,33 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
   })
 })
 
-describe('send-dedupe-v1 twins', () => {
-  const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
+describe('send-dedupe-v1 wiring', () => {
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+  const core = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')
 
-  it('both daemons pass the dedupe flag, lostPid, bootWait and answers from the wire into the send', () => {
+  it('the daemon passes the dedupe flag, lostPid, bootWait and answers from the wire into the send', () => {
     const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true, answers: cmd\.answers === true \}\)/
     expect(standalone).toMatch(wire)
-    expect(template).toMatch(wire)
   })
 
-  it('the JS twin runs the very same scan and verdict text (behavior: daemon-send-dedupe-twins-e2e.test.ts)', async () => {
-    const { getDaemonSource } = await import('../../src/providers/daemon-source.js')
-    const { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, transcriptLineScan, transcriptLineVerdict } = await import('../../src/providers/line-fate-core.js')
-    const src = getDaemonSource()
-    expect(src).not.toContain('__LINE_FATE_')
-    expect(src).not.toContain('__LINE_TORN_END__')
-    expect(src).not.toContain('__LINE_WRITE_')
-    expect(src).toContain(`const lineFateScan = (${lineFateScan.toString()});`)
-    expect(src).toContain(`const lineFateVerdict = (${lineFateVerdict.toString()});`)
-    expect(src).toContain(`const lineTornEnd = (${lineTornEnd.toString()});`)
-    expect(src).toContain(`const lineWriteBegun = (${lineWriteBegun.toString()});`)
-    expect(src).toContain(`const lineWriteCut = (${lineWriteCut.toString()});`)
-    expect(src).not.toContain('__TRANSCRIPT_LINE_')
-    expect(src).toContain(`const transcriptLineScan = (${transcriptLineScan.toString()});`)
-    expect(src).toContain(`const transcriptLineVerdict = (${transcriptLineVerdict.toString()});`)
+  it('daemon-core asks piece by piece and awaits the answer inside the write chain', () => {
+    expect(core).toContain('await line.fate()')
+    expect(core).toContain('DEDUPE_SCAN_CHUNK_BYTES')
+    expect(core).toContain('await fs.promises.open(filePath, \'r\')')
   })
 
-  it('both twins ask piece by piece and await the answer inside the write chain', () => {
-    for (const src of [template, fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')]) {
-      expect(src).toContain('await line.fate()')
-      expect(src).toContain('DEDUPE_SCAN_CHUNK_BYTES')
-      expect(src).toContain('await fs.promises.open(filePath, \'r\')')
-    }
-  })
-
-  it('both twins end a torn line before its copy, by the same rule (r3-torn; behavior: the twins e2e)', () => {
-    for (const src of [template, fs.readFileSync(path.join(ROOT, 'src/providers/daemon-core.ts'), 'utf-8')]) {
-      expect(src).toMatch(/const begunAt = lineWriteBegun\(records, q\)/)
-      expect(src).toMatch(/torn\.end = lineTornEnd\(verdict, q, scan, begunAt\)/)
-      // r5 F1: a begin is noted before the first byte, and a cut copy is said so in the answer.
-      expect(src).toMatch(/torn\.cut = lineWriteCut\(verdict, q, scan, begunAt\)/)
-      expect(src).toMatch(/line(\?\.begin\?\.\(true\)| && line\.begin\) line\.begin\(true\);)\s*\n\s*const written = await writeFifoFullyAsync\(session\.pipePath, out,/)
-      expect(src).toMatch(/return \{ ok: true, cut: true \}/)
-      expect(src).toMatch(/else if \(written === 'EAGAIN'( && line && line\.begin\) line\.begin\(false\);|\) line\?\.begin\?\.\(false\))/)
-      expect(src).toMatch(/const out = tornEnd \? Buffer\.concat\(\[Buffer\.from\('\\{1,2}n'\), buf\]\) : buf/)
-      expect(src).toMatch(/writeFifoFullyAsync\(session\.pipePath, out, deadline/)
-      // A send-lost-line-v1 rewrite already starts with its newline: never a second one.
-      expect(src).toMatch(/tornEnd: (\(\) => |function \(\) \{ return )torn\.end && !rewrite/)
-    }
-  })
-
-  it('the JS twin records a line only when its write put the whole line in the pipe (MU11, as in daemon-core)', () => {
-    expect(template).toContain("if (written === 'ok' && line && line.written) line.written();")
+  it('daemon-core ends a torn line before its copy (r3-torn)', () => {
+    expect(core).toMatch(/const begunAt = lineWriteBegun\(records, q\)/)
+    expect(core).toMatch(/torn\.end = lineTornEnd\(verdict, q, scan, begunAt\)/)
+    // r5 F1: a begin is noted before the first byte, and a cut copy is said so in the answer.
+    expect(core).toMatch(/torn\.cut = lineWriteCut\(verdict, q, scan, begunAt\)/)
+    expect(core).toMatch(/line\?\.begin\?\.\(true\)\s*\n\s*const written = await writeFifoFullyAsync\(session\.pipePath, out,/)
+    expect(core).toMatch(/return \{ ok: true, cut: true \}/)
+    expect(core).toMatch(/else if \(written === 'EAGAIN'\) line\?\.begin\?\.\(false\)/)
+    expect(core).toMatch(/const out = tornEnd \? Buffer\.concat\(\[Buffer\.from\('\\{1,2}n'\), buf\]\) : buf/)
+    expect(core).toMatch(/writeFifoFullyAsync\(session\.pipePath, out, deadline/)
+    // A send-lost-line-v1 rewrite already starts with its newline: never a second one.
+    expect(core).toMatch(/tornEnd: \(\) => torn\.end && !rewrite/)
   })
 
   it('the daemon advertises the capability', async () => {

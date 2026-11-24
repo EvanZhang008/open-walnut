@@ -1,12 +1,12 @@
 /**
- * 'port-stream-v1' on the real daemon twins, booted for real (the JS source twin
- * under node, and the standalone twin under bun when bun is installed): the
+ * 'port-stream-v1' on the real session daemon (daemon-standalone.ts), booted for
+ * real under bun when bun is installed: the
  * server's own link endpoint (src/lib/link-stream.ts) over a real WebSocket to the
  * daemon, which connects to a TCP port on its own loopback (servers this test
  * owns). What a host network machine's service preview and embedded VS Code ride
  * where an SSH host has `ssh -L`.
  *
- * The last case per twin is the whole Mac side too: a host network machine's
+ * The last case is the whole Mac side too: a host network machine's
  * DaemonConnection, with every `ssh` refused (an expired certificate), forwards a
  * real HTTP service through ensurePortForward, its 127.0.0.1 listener, the real
  * daemon and back, and the same local port answers again after the link drops.
@@ -16,7 +16,7 @@
  * first so it cleans up, SIGKILL only if it is still there after a deadline.
  * Every service is a server this test listens on; refused hosts are never dialled.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import http from 'node:http'
@@ -38,30 +38,21 @@ vi.mock('node:child_process', async (importOriginal) => {
   }
 })
 
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createStreamEndpoint, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
-let scriptDir = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 const sockets: WebSocket[] = []
 const servers: net.Server[] = []
 let rpcId = 1
 
-async function boot(twin: Twin): Promise<number> {
+async function boot(): Promise<number> {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.platform() === 'win32' ? os.tmpdir() : '/tmp', 'wps-')))
   const home = path.join(root, 'home')
   fs.mkdirSync(home, { recursive: true })
@@ -76,8 +67,7 @@ async function boot(twin: Twin): Promise<number> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -152,17 +142,6 @@ async function waitFor(check: () => boolean, ms = 8_000): Promise<boolean> {
   return check()
 }
 
-beforeAll(() => {
-  scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-port-stream-twins-src-'))
-  scriptPath = path.join(scriptDir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
-afterAll(() => {
-  if (scriptDir) fs.rmSync(scriptDir, { recursive: true, force: true })
-  scriptDir = ''
-})
-
 /** End the daemon this test spawned (its own handle only): TERM, then KILL after a deadline. */
 async function stopOwnDaemon(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -187,117 +166,115 @@ afterEach(async () => {
   root = ''
 })
 
-for (const twin of TWINS) {
-  describe(`port streams, ${twin.name}`, () => {
-    it('advertises port-stream-v1 and carries binary both ways with a half close', async () => {
-      const port = await boot(twin)
-      const { ep, hello } = await link(port)
-      expect((hello.capabilities ?? (hello.result as { capabilities?: string[] } | undefined)?.capabilities) as string[]).toContain('port-stream-v1')
-      // What the machine calls itself: a preview URL naming it is a service on this loopback (session-service-preview.ts).
-      expect(hello.hostname ?? (hello.result as { hostname?: string } | undefined)?.hostname).toBe(os.hostname())
-      // The service answers once the request is in (its FIN), on a half-open socket.
-      const svc = await listen((c) => {
-        const parts: Buffer[] = []
-        c.on('data', (b) => parts.push(b))
-        c.on('end', () => c.end(Buffer.concat(parts).reverse()))
-      })
-      const big = Buffer.alloc(1024 * 1024 + 11)
-      for (let i = 0; i < big.length; i++) big[i] = (i * 13) & 0xff
-      const s = await ep.openPort(svc, 'localhost')
+describe.skipIf(!BUN)('port streams, standalone daemon (bun)', () => {
+  it('advertises port-stream-v1 and carries binary both ways with a half close', async () => {
+    const port = await boot()
+    const { ep, hello } = await link(port)
+    expect((hello.capabilities ?? (hello.result as { capabilities?: string[] } | undefined)?.capabilities) as string[]).toContain('port-stream-v1')
+    // What the machine calls itself: a preview URL naming it is a service on this loopback (session-service-preview.ts).
+    expect(hello.hostname ?? (hello.result as { hostname?: string } | undefined)?.hostname).toBe(os.hostname())
+    // The service answers once the request is in (its FIN), on a half-open socket.
+    const svc = await listen((c) => {
+      const parts: Buffer[] = []
+      c.on('data', (b) => parts.push(b))
+      c.on('end', () => c.end(Buffer.concat(parts).reverse()))
+    })
+    const big = Buffer.alloc(1024 * 1024 + 11)
+    for (let i = 0; i < big.length; i++) big[i] = (i * 13) & 0xff
+    const s = await ep.openPort(svc, 'localhost')
+    const got = readAll(s)
+    s.end(big)
+    expect((await got).equals(Buffer.from(big).reverse())).toBe(true)
+    expect(await waitFor(() => ep.size() === 0)).toBe(true)
+  }, 90_000)
+
+  it('carries several streams at once', async () => {
+    const port = await boot()
+    const { ep } = await link(port)
+    const svc = await listen((c) => c.pipe(c))
+    const answers = await Promise.all(Array.from({ length: 10 }, async (_, i) => {
+      const s = await ep.openPort(svc, '127.0.0.1')
       const got = readAll(s)
-      s.end(big)
-      expect((await got).equals(Buffer.from(big).reverse())).toBe(true)
-      expect(await waitFor(() => ep.size() === 0)).toBe(true)
-    }, 90_000)
+      s.end(`n${i}`)
+      return (await got).toString()
+    }))
+    expect(answers).toEqual(Array.from({ length: 10 }, (_, i) => `n${i}`))
+  }, 90_000)
 
-    it('carries several streams at once', async () => {
-      const port = await boot(twin)
-      const { ep } = await link(port)
-      const svc = await listen((c) => c.pipe(c))
-      const answers = await Promise.all(Array.from({ length: 10 }, async (_, i) => {
-        const s = await ep.openPort(svc, '127.0.0.1')
-        const got = readAll(s)
-        s.end(`n${i}`)
-        return (await got).toString()
-      }))
-      expect(answers).toEqual(Array.from({ length: 10 }, (_, i) => `n${i}`))
-    }, 90_000)
+  it('refuses an invalid port, a host that is not its loopback, and a port nothing listens on', async () => {
+    const port = await boot()
+    const { ep } = await link(port)
+    let dialled = 0
+    const svc = await listen(() => { dialled++ })
+    await expect(ep.openPort(0, '127.0.0.1')).rejects.toThrow(/not a TCP port/)
+    await expect(ep.openPort(70_000, '127.0.0.1')).rejects.toThrow(/not a TCP port/)
+    await expect(ep.openPort(svc, '0.0.0.0')).rejects.toThrow(/only this host's own loopback/)
+    await expect(ep.openPort(svc, 'example.test')).rejects.toThrow(/only this host's own loopback/)
+    await expect(ep.openPort(svc, '169.254.169.254')).rejects.toThrow(/only this host's own loopback/)
+    const gone = await listen(() => {})
+    // Wait for the listener itself to close, not a clock.
+    await new Promise<void>((r) => servers.pop()!.close(() => r()))
+    await expect(ep.openPort(gone, '127.0.0.1')).rejects.toThrow(/nothing is listening on port/)
+    expect(dialled).toBe(0)
+  }, 90_000)
 
-    it('refuses an invalid port, a host that is not its loopback, and a port nothing listens on', async () => {
-      const port = await boot(twin)
-      const { ep } = await link(port)
-      let dialled = 0
-      const svc = await listen(() => { dialled++ })
-      await expect(ep.openPort(0, '127.0.0.1')).rejects.toThrow(/not a TCP port/)
-      await expect(ep.openPort(70_000, '127.0.0.1')).rejects.toThrow(/not a TCP port/)
-      await expect(ep.openPort(svc, '0.0.0.0')).rejects.toThrow(/only this host's own loopback/)
-      await expect(ep.openPort(svc, 'example.test')).rejects.toThrow(/only this host's own loopback/)
-      await expect(ep.openPort(svc, '169.254.169.254')).rejects.toThrow(/only this host's own loopback/)
-      const gone = await listen(() => {})
-      // Wait for the listener itself to close, not a clock.
-      await new Promise<void>((r) => servers.pop()!.close(() => r()))
-      await expect(ep.openPort(gone, '127.0.0.1')).rejects.toThrow(/nothing is listening on port/)
-      expect(dialled).toBe(0)
-    }, 90_000)
+  it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file (another Walnut\'s service too)', async () => {
+    const port = await boot()
+    // Siblings: the cloud companion's tunnel daemon (unkeyed and keyed per device) and the
+    // home fallback dir, under this test's HOME. Each "daemon" is a server this test owns.
+    // Their port files are written before the first port stream: the relay believes the files
+    // it read for 2 s (stream-relay-core.ts DAEMON_PORTS_TTL_MS), so its first read sees them.
+    let dialled = 0
+    const home = path.join(root, 'home')
+    const tunnel = path.join(home, '.local', 'state', 'open-walnut', 'primary-daemon')
+    // Another Walnut's service on this machine (service-set.ts: ~/.open-walnut-host/walnuts/<id16>/rt).
+    const otherSet = path.join(home, '.open-walnut-host', 'walnuts', '0123456789abcdef', 'rt')
+    const siblings = [tunnel, path.join(`${tunnel}.by-device`, 'device-1', 'daemon'), path.join(home, '.cache', 'open-walnut'), otherSet]
+    const ports: number[] = []
+    for (const dir of siblings) {
+      const sib = await listen(() => { dialled++ })
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'daemon.port'), String(sib))
+      ports.push(sib)
+    }
+    const { ep } = await link(port)
+    // Its own WebSocket port, which takes no token: refused with a sentence, never dialled.
+    await expect(ep.openPort(port, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${port} is a Walnut session daemon's own socket on this host`))
+    await expect(ep.openPort(port, 'localhost')).rejects.toThrow(/session daemon's own socket/)
+    for (const sib of ports) {
+      await expect(ep.openPort(sib, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${sib} is a Walnut session daemon's own socket`))
+    }
+    // Any other port on the loopback still opens.
+    const svc = await listen((c) => { c.end() })
+    const s = await ep.openPort(svc, '127.0.0.1')
+    s.destroy()
+    expect(dialled).toBe(0)
+  }, 90_000)
 
-    it('never reaches a daemon socket on this machine: its own port, or a sibling daemon\'s from its port file (another Walnut\'s service too)', async () => {
-      const port = await boot(twin)
-      // Siblings: the cloud companion's tunnel daemon (unkeyed and keyed per device) and the
-      // home fallback dir, under this test's HOME. Each "daemon" is a server this test owns.
-      // Their port files are written before the first port stream: the relay believes the files
-      // it read for 2 s (stream-relay-core.ts DAEMON_PORTS_TTL_MS), so its first read sees them.
-      let dialled = 0
-      const home = path.join(root, 'home')
-      const tunnel = path.join(home, '.local', 'state', 'open-walnut', 'primary-daemon')
-      // Another Walnut's service on this machine (service-set.ts: ~/.open-walnut-host/walnuts/<id16>/rt).
-      const otherSet = path.join(home, '.open-walnut-host', 'walnuts', '0123456789abcdef', 'rt')
-      const siblings = [tunnel, path.join(`${tunnel}.by-device`, 'device-1', 'daemon'), path.join(home, '.cache', 'open-walnut'), otherSet]
-      const ports: number[] = []
-      for (const dir of siblings) {
-        const sib = await listen(() => { dialled++ })
-        fs.mkdirSync(dir, { recursive: true })
-        fs.writeFileSync(path.join(dir, 'daemon.port'), String(sib))
-        ports.push(sib)
-      }
-      const { ep } = await link(port)
-      // Its own WebSocket port, which takes no token: refused with a sentence, never dialled.
-      await expect(ep.openPort(port, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${port} is a Walnut session daemon's own socket on this host`))
-      await expect(ep.openPort(port, 'localhost')).rejects.toThrow(/session daemon's own socket/)
-      for (const sib of ports) {
-        await expect(ep.openPort(sib, '127.0.0.1')).rejects.toThrow(new RegExp(`port ${sib} is a Walnut session daemon's own socket`))
-      }
-      // Any other port on the loopback still opens.
-      const svc = await listen((c) => { c.end() })
-      const s = await ep.openPort(svc, '127.0.0.1')
-      s.destroy()
-      expect(dialled).toBe(0)
-    }, 90_000)
+  it('a socket that said it is a probe opens no port stream', async () => {
+    const port = await boot()
+    const { ws, ep } = await link(port)
+    expect((await rpc(ws, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
+    let dialled = 0
+    const svc = await listen(() => { dialled++ })
+    await expect(ep.openPort(svc, '127.0.0.1')).rejects.toThrow(/only the Walnut server linked here opens a port stream/)
+    expect(dialled).toBe(0)
+  }, 90_000)
 
-    it('a socket that said it is a probe opens no port stream', async () => {
-      const port = await boot(twin)
-      const { ws, ep } = await link(port)
-      expect((await rpc(ws, { cmd: 'client.role', role: 'probe' })).ok).toBe(true)
-      let dialled = 0
-      const svc = await listen(() => { dialled++ })
-      await expect(ep.openPort(svc, '127.0.0.1')).rejects.toThrow(/only the Walnut server linked here opens a port stream/)
-      expect(dialled).toBe(0)
-    }, 90_000)
-
-    it('the link closing resets its TCP connections on the host, even a half-open one', async () => {
-      const port = await boot(twin)
-      const { ws, ep } = await link(port)
-      let closed = false
-      let opened = false
-      const svc = await listen((c) => { opened = true; c.resume(); c.on('close', () => { closed = true }) })
-      const s = await ep.openPort(svc, '127.0.0.1')
-      s.on('error', () => {})
-      s.write('hello')
-      expect(await waitFor(() => opened)).toBe(true)
-      ws.close()
-      expect(await waitFor(() => closed)).toBe(true)
-    }, 90_000)
-  })
-}
+  it('the link closing resets its TCP connections on the host, even a half-open one', async () => {
+    const port = await boot()
+    const { ws, ep } = await link(port)
+    let closed = false
+    let opened = false
+    const svc = await listen((c) => { opened = true; c.resume(); c.on('close', () => { closed = true }) })
+    const s = await ep.openPort(svc, '127.0.0.1')
+    s.on('error', () => {})
+    s.write('hello')
+    expect(await waitFor(() => opened)).toBe(true)
+    ws.close()
+    expect(await waitFor(() => closed)).toBe(true)
+  }, 90_000)
+})
 
 /** A raw socket to the daemon, said hello. */
 async function rawLink(port: number): Promise<{ ws: WebSocket; caps: string[] }> {
@@ -331,75 +308,69 @@ type ConnInternals = {
   sshExec: (...args: unknown[]) => Promise<string>
 }
 
-for (const twin of TWINS) {
-  describe(`a host network machine's port forward end to end, ${twin.name}`, () => {
-    it('forwards a real HTTP service with SSH refused, and answers again on the same port after a link drop', async () => {
-      const port = await boot(twin)
-      const conn = new DaemonConnection('joined-box', { hostname: 'joined-box.walnut-net.invalid', via: 'net', endpoint: '60d53783dcf0c6e95fe6c2ff390fd3131d42a167eecee7eac15e57e69ed36f5b' })
-      conns.push(conn)
-      const inner = conn as unknown as ConnInternals
-      const sshExec = vi.spyOn(inner, 'sshExec').mockRejectedValue(new Error('SSH certificate expired'))
-      /** Make a real socket to the daemon this connection's session link (what connect() leaves behind). */
-      const attach = async () => {
-        const { ws, caps } = await rawLink(port)
-        vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => caps.includes(cap))
-        ws.on('message', (data: Buffer) => {
-          try { inner.streamEndpoint().handle(JSON.parse(data.toString()) as Record<string, unknown>) } catch { /* not a frame */ }
-        })
-        ws.on('close', () => inner.streams?.closeAll('the link to joined-box closed'))
-        inner.ws = ws
-        return ws
-      }
-      const first = await attach()
-
-      const body = Buffer.alloc(1024 * 1024 + 9)
-      for (let i = 0; i < body.length; i++) body[i] = (i * 29) & 0xff
-      let held: http.ServerResponse | null = null
-      const svc = http.createServer((req, res) => {
-        if (req.url === '/bin') res.end(body)
-        else if (req.url === '/hold') { held = res; res.write('part') }
-        else res.end(`ok ${req.url}`)
+describe.skipIf(!BUN)('a host network machine\'s port forward end to end, standalone daemon (bun)', () => {
+  it('forwards a real HTTP service with SSH refused, and answers again on the same port after a link drop', async () => {
+    const port = await boot()
+    const conn = new DaemonConnection('joined-box', { hostname: 'joined-box.walnut-net.invalid', via: 'net', endpoint: 'ab'.repeat(32) })
+    conns.push(conn)
+    const inner = conn as unknown as ConnInternals
+    const sshExec = vi.spyOn(inner, 'sshExec').mockRejectedValue(new Error('SSH certificate expired'))
+    /** Make a real socket to the daemon this connection's session link (what connect() leaves behind). */
+    const attach = async () => {
+      const { ws, caps } = await rawLink(port)
+      vi.spyOn(conn, 'hasCapability').mockImplementation((cap) => caps.includes(cap))
+      ws.on('message', (data: Buffer) => {
+        try { inner.streamEndpoint().handle(JSON.parse(data.toString()) as Record<string, unknown>) } catch { /* not a frame */ }
       })
-      servers.push(svc as unknown as net.Server)
-      await new Promise<void>((r) => svc.listen(0, '127.0.0.1', () => r()))
-      const svcPort = (svc.address() as net.AddressInfo).port
-
-      const local = await conn.ensurePortForward(svcPort, 'localhost', { evictable: true })
-      expect((await httpGet(local, '/a?b=1')).body.toString()).toBe('ok /a?b=1')
-      expect((await httpGet(local, '/bin')).body.equals(body)).toBe(true)
-      const parallel = await Promise.all(Array.from({ length: 6 }, (_, i) => httpGet(local, `/p${i}`)))
-      expect(parallel.map((r) => r.body.toString())).toEqual(Array.from({ length: 6 }, (_, i) => `ok /p${i}`))
-      await expect(conn.ensurePortForward(svcPort, 'joined-box.example.test', { evictable: true })).rejects.toThrow(/only its own loopback/)
-
-      // The link drops mid-answer: the browser's connection is cut, the listener stays.
-      const cut = httpGet(local, '/hold')
-      expect(await waitFor(() => held !== null)).toBe(true)
-      first.close()
-      await expect(cut).rejects.toThrow()
-      await attach()
-      expect(await conn.ensurePortForward(svcPort, 'localhost', { evictable: true })).toBe(local)
-      expect((await httpGet(local, '/again')).body.toString()).toBe('ok /again')
-
-      expect(sshSpawns).toEqual([])
-      expect(sshExec).not.toHaveBeenCalled()
-    }, 90_000)
-  })
-}
-
-describe('port-stream-v1 wiring in both twins', () => {
-  const read = (p: string) => fs.readFileSync(path.resolve(__dirname, '../..', p), 'utf8')
-  const twins = { standalone: read('src/providers/daemon-standalone.ts'), source: read('src/providers/daemon-source.ts') }
-
-  it('each twin opens a port stream only for its own server socket, and gives the relay a loopback connect', () => {
-    for (const src of Object.values(twins)) {
-      const at = src.indexOf("if (cmd.to === 'port')")
-      expect(at).toBeGreaterThan(-1)
-      const branch = src.slice(at, at + 400)
-      // The role check comes first, then the relay's own port and host checks.
-      expect(branch.indexOf('isServerClient(ws)')).toBeGreaterThan(-1)
-      expect(branch.indexOf('isServerClient(ws)')).toBeLessThan(branch.indexOf('streamRelay.openPort('))
-      expect(src.match(/streamRelay\.openPort\(/g)).toHaveLength(1)
-      expect(src).toMatch(/connect: [^\n]*net\.connect\(\{ port[^\n]*allowHalfOpen: true/)
+      ws.on('close', () => inner.streams?.closeAll('the link to joined-box closed'))
+      inner.ws = ws
+      return ws
     }
+    const first = await attach()
+
+    const body = Buffer.alloc(1024 * 1024 + 9)
+    for (let i = 0; i < body.length; i++) body[i] = (i * 29) & 0xff
+    let held: http.ServerResponse | null = null
+    const svc = http.createServer((req, res) => {
+      if (req.url === '/bin') res.end(body)
+      else if (req.url === '/hold') { held = res; res.write('part') }
+      else res.end(`ok ${req.url}`)
+    })
+    servers.push(svc as unknown as net.Server)
+    await new Promise<void>((r) => svc.listen(0, '127.0.0.1', () => r()))
+    const svcPort = (svc.address() as net.AddressInfo).port
+
+    const local = await conn.ensurePortForward(svcPort, 'localhost', { evictable: true })
+    expect((await httpGet(local, '/a?b=1')).body.toString()).toBe('ok /a?b=1')
+    expect((await httpGet(local, '/bin')).body.equals(body)).toBe(true)
+    const parallel = await Promise.all(Array.from({ length: 6 }, (_, i) => httpGet(local, `/p${i}`)))
+    expect(parallel.map((r) => r.body.toString())).toEqual(Array.from({ length: 6 }, (_, i) => `ok /p${i}`))
+    await expect(conn.ensurePortForward(svcPort, 'joined-box.example.test', { evictable: true })).rejects.toThrow(/only its own loopback/)
+
+    // The link drops mid-answer: the browser's connection is cut, the listener stays.
+    const cut = httpGet(local, '/hold')
+    expect(await waitFor(() => held !== null)).toBe(true)
+    first.close()
+    await expect(cut).rejects.toThrow()
+    await attach()
+    expect(await conn.ensurePortForward(svcPort, 'localhost', { evictable: true })).toBe(local)
+    expect((await httpGet(local, '/again')).body.toString()).toBe('ok /again')
+
+    expect(sshSpawns).toEqual([])
+    expect(sshExec).not.toHaveBeenCalled()
+  }, 90_000)
+})
+
+describe('port-stream-v1 wiring in the session daemon', () => {
+  it('opens a port stream only for its own server socket, and gives the relay a loopback connect', () => {
+    const src = fs.readFileSync(STANDALONE, 'utf8')
+    const at = src.indexOf("if (cmd.to === 'port')")
+    expect(at).toBeGreaterThan(-1)
+    const branch = src.slice(at, at + 400)
+    // The role check comes first, then the relay's own port and host checks.
+    expect(branch.indexOf('isServerClient(ws)')).toBeGreaterThan(-1)
+    expect(branch.indexOf('isServerClient(ws)')).toBeLessThan(branch.indexOf('streamRelay.openPort('))
+    expect(src.match(/streamRelay\.openPort\(/g)).toHaveLength(1)
+    expect(src).toMatch(/connect: [^\n]*net\.connect\(\{ port[^\n]*allowHalfOpen: true/)
   })
 })

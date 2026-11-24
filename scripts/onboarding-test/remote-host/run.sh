@@ -67,8 +67,8 @@ done
 # The test tiers run on bun (`bun --bun vitest`); vitest refuses Node.
 command -v bun >/dev/null 2>&1 || die "bun is not installed; the test runs on it (https://bun.sh)"
 [ -x "$REPO/node_modules/.bin/vitest" ] || die "vitest is missing; run 'bun install' in $REPO first"
-if [ ! -f "$REPO/dist/daemon-binaries/changes-core.cjs" ]; then
-  echo "remote-host: warning: dist/daemon-binaries has no sidecars; run 'bun run build:daemon' for full daemon parity" >&2
+if ! ls "$REPO"/dist/daemon-binaries/daemon-linux-* >/dev/null 2>&1; then
+  echo "remote-host: warning: dist/daemon-binaries has no daemon-linux-* binary, the daemon a host gets; run 'bun run build:daemon'" >&2
 fi
 
 # Short path on purpose: ssh ControlMaster sockets live under here and a unix

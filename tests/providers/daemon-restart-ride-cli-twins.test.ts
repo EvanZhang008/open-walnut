@@ -1,5 +1,5 @@
 /**
- * Both twins' own `walnut` CLIs against a scripted gateway socket: the answers a
+ * The daemon's own `walnut` CLI (daemon-standalone.ts) against a scripted gateway socket: the answers a
  * stopping daemon gives, a long `walnut wait`, an env-less lookup, and a mark no
  * call may trust (daemon-restart-mark.ts).
  *
@@ -10,26 +10,19 @@
  * MACHINE SAFETY: HOME, the daemon dir and the socket are temp paths; the only
  * processes are the CLIs this file starts, each ended when its test ends.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; full: boolean; command: (...args: string[]) => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, full: false, command: (...args) => [SOURCE_TWIN.file, [scriptPath, ...args]] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', full: true, command: (...args: string[]): [string, string[]] => [BUN, [STANDALONE, ...args]] }] : []),
-]
+const command = (...args: string[]): [string, string[]] => [BUN!, [STANDALONE, ...args]]
 const WAIT_LINE = 'walnut: the Walnut daemon on this host is restarting; waiting for the next one (up to 45s)'
 const STOPPING = { ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down; retry after reconnecting', detail: { stopping: true } } }
 const procs: ChildProcess[] = []
@@ -61,8 +54,8 @@ async function gateway(answers: Array<Record<string, unknown>>, delayMs = 0): Pr
   return seen
 }
 
-function cli(twin: Twin, args: string[], extra: Record<string, string> = {}, injected = true): Promise<{ out: string; err: string; code: number | null; ms: number }> {
-  const [cmd, argv] = twin.command('walnut', ...args)
+function cli(args: string[], extra: Record<string, string> = {}, injected = true): Promise<{ out: string; err: string; code: number | null; ms: number }> {
+  const [cmd, argv] = command('walnut', ...args)
   return runIn(cmd, argv, { ...(injected ? { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' } : {}), ...extra })
 }
 
@@ -88,12 +81,6 @@ function runIn(cmd: string, argv: string[], extra: Record<string, string>): Prom
   return new Promise((resolve) => child.on('close', (code) => resolve({ out, err, code, ms: Date.now() - t0 })))
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ride-cli-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   for (const p of procs.splice(0)) { if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL') }
   for (const s of servers.splice(0)) await new Promise<void>((resolve) => s.close(() => resolve()))
@@ -108,92 +95,88 @@ function newRoot(): void {
 
 const CALL = ['tools', 'call', 'task_send', '{}']
 
-for (const twin of TWINS) {
-  describe(`a walnut CLI and a daemon restarting, ${twin.name}`, () => {
-    it('the stopping daemon\'s answers, then the next one\'s: it waits and prints that answer', async () => {
+describe.skipIf(!BUN)('a walnut CLI and a daemon restarting, standalone daemon (bun)', () => {
+  it('the stopping daemon\'s answers, then the next one\'s: it waits and prints that answer', async () => {
+    newRoot()
+    freshMark()
+    const seen = await gateway([STOPPING, STOPPING, { ok: true, result: { sent: true } }])
+    const r = await cli(CALL)
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ sent: true })
+    expect(seen).toHaveLength(3)
+    // stderr is a pipe here, as for an agent: no notice in what it reads back.
+    expect(r.err).not.toContain(WAIT_LINE)
+  }, 60_000)
+
+  it('a stopping answer with no mark is the answer, at once, and its detail is not printed as a result', async () => {
+    newRoot()
+    const seen = await gateway([STOPPING, { ok: true, result: { sent: true } }])
+    const r = await cli(CALL)
+    expect(r.code).toBe(5)
+    expect(seen).toHaveLength(1)
+    expect(r.out).not.toContain('stopping')
+    expect(r.err).toContain('hub_unreachable')
+    expect(r.err).not.toContain('restarting; waiting')
+  }, 60_000)
+
+  it('a mark that is a FIFO, a link or too big holds no call: no socket fails at once', async () => {
+    for (const plant of ['fifo', 'link', 'big'] as const) {
       newRoot()
-      freshMark()
-      const seen = await gateway([STOPPING, STOPPING, { ok: true, result: { sent: true } }])
-      const r = await cli(twin, CALL)
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toEqual({ sent: true })
-      expect(seen).toHaveLength(3)
-      // stderr is a pipe here, as for an agent: no notice in what it reads back.
-      expect(r.err).not.toContain(WAIT_LINE)
-    }, 60_000)
-
-    it('a stopping answer with no mark is the answer, at once, and its detail is not printed as a result', async () => {
-      newRoot()
-      const seen = await gateway([STOPPING, { ok: true, result: { sent: true } }])
-      const r = await cli(twin, CALL)
-      expect(r.code).toBe(5)
-      expect(seen).toHaveLength(1)
-      expect(r.out).not.toContain('stopping')
-      expect(r.err).toContain('hub_unreachable')
-      expect(r.err).not.toContain('restarting; waiting')
-    }, 60_000)
-
-    it('a mark that is a FIFO, a link or too big holds no call: no socket fails at once', async () => {
-      for (const plant of ['fifo', 'link', 'big'] as const) {
-        newRoot()
-        if (plant === 'fifo') { const mk = spawn('mkfifo', [markPath()]); await new Promise((r) => mk.on('close', r)) }
-        if (plant === 'link') { const real = path.join(root, 'real-mark'); fs.writeFileSync(real, String(Math.floor(Date.now() / 1000))); fs.symlinkSync(real, markPath()) }
-        if (plant === 'big') fs.writeFileSync(markPath(), String(Math.floor(Date.now() / 1000)) + ' '.repeat(64))
-        const r = await cli(twin, CALL)
-        expect(r.code, plant).toBe(6)
-        expect(r.err, plant).not.toContain('restarting; waiting')
-        expect(r.ms, plant).toBeLessThan(10_000)
-        fs.rmSync(root, { recursive: true, force: true })
-      }
-    }, 90_000)
-
-    it('`walnut wait` polls on through a stopping daemon and a server away, and ends on the answer', async () => {
-      newRoot()
-      const task = { ok: true, result: { task: { id: 't-1', title: 'x', phase: 'NEED_ACTION' } } }
-      const seen = await gateway([STOPPING, { ok: false, error: { code: 'hub_unreachable', message: 'no server' } }, task])
-      const r = await cli(twin, ['wait', 't-1', '--timeout', '40'])
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toMatchObject({ done: true, phase: 'NEED_ACTION' })
-      expect(seen).toHaveLength(3)
-    }, 90_000)
-
-    it('a call answered after more than 10 s prints only its answer when its output is captured', async () => {
-      // 2026-11-03: the 10 s notice went to stderr, and a script reading `2>&1` parsed it as JSON.
-      newRoot()
-      await gateway([{ ok: true, result: { sent: true } }], 10_800)
-      const r = await cli(twin, CALL)
-      expect(r.code).toBe(0)
-      expect(JSON.parse(r.out)).toEqual({ sent: true })
-      expect(r.err).toBe('')
-    }, 60_000)
-
-    it.runIf(process.platform === 'linux')('on a terminal it says once that it waits for the next daemon', async () => {
-      newRoot()
-      freshMark()
-      await gateway([STOPPING, STOPPING, { ok: true, result: { sent: true } }])
-      // util-linux `script` gives the CLI a terminal; its stdout and stderr both land in `out`.
-      const [cmd, argv] = twin.command('walnut', ...CALL)
-      const line = [cmd, ...argv].map((a) => `'${a}'`).join(' ')
-      const r = await runIn('script', ['-qec', line, '/dev/null'], { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' })
-      expect(r.code).toBe(0)
-      expect(r.out.replace(/\r/g, '').split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
-      expect(r.out).toContain('"sent": true')
-    }, 60_000)
-
-    if (twin.full) {
-      it('env-less, with no socket yet: it waits for the next daemon\'s socket, still checked owner-only', async () => {
-        newRoot()
-        freshMark()
-        const run = cli(twin, CALL, {}, false)
-        await new Promise((r) => setTimeout(r, 1_500))
-        const seen = await gateway([{ ok: true, result: { sent: true } }])
-        const r = await run
-        expect(r.code).toBe(0)
-        expect(JSON.parse(r.out)).toEqual({ sent: true })
-        expect(seen[0]).toMatchObject({ sid: 'external' })
-        expect(r.err).not.toContain(WAIT_LINE)
-        expect(r.ms).toBeGreaterThanOrEqual(1_400)
-      }, 60_000)
+      if (plant === 'fifo') { const mk = spawn('mkfifo', [markPath()]); await new Promise((r) => mk.on('close', r)) }
+      if (plant === 'link') { const real = path.join(root, 'real-mark'); fs.writeFileSync(real, String(Math.floor(Date.now() / 1000))); fs.symlinkSync(real, markPath()) }
+      if (plant === 'big') fs.writeFileSync(markPath(), String(Math.floor(Date.now() / 1000)) + ' '.repeat(64))
+      const r = await cli(CALL)
+      expect(r.code, plant).toBe(6)
+      expect(r.err, plant).not.toContain('restarting; waiting')
+      expect(r.ms, plant).toBeLessThan(10_000)
+      fs.rmSync(root, { recursive: true, force: true })
     }
-  })
-}
+  }, 90_000)
+
+  it('`walnut wait` polls on through a stopping daemon and a server away, and ends on the answer', async () => {
+    newRoot()
+    const task = { ok: true, result: { task: { id: 't-1', title: 'x', phase: 'NEED_ACTION' } } }
+    const seen = await gateway([STOPPING, { ok: false, error: { code: 'hub_unreachable', message: 'no server' } }, task])
+    const r = await cli(['wait', 't-1', '--timeout', '40'])
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toMatchObject({ done: true, phase: 'NEED_ACTION' })
+    expect(seen).toHaveLength(3)
+  }, 90_000)
+
+  it('a call answered after more than 10 s prints only its answer when its output is captured', async () => {
+    // 2026-11-03: the 10 s notice went to stderr, and a script reading `2>&1` parsed it as JSON.
+    newRoot()
+    await gateway([{ ok: true, result: { sent: true } }], 10_800)
+    const r = await cli(CALL)
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ sent: true })
+    expect(r.err).toBe('')
+  }, 60_000)
+
+  it.runIf(process.platform === 'linux')('on a terminal it says once that it waits for the next daemon', async () => {
+    newRoot()
+    freshMark()
+    await gateway([STOPPING, STOPPING, { ok: true, result: { sent: true } }])
+    // util-linux `script` gives the CLI a terminal; its stdout and stderr both land in `out`.
+    const [cmd, argv] = command('walnut', ...CALL)
+    const line = [cmd, ...argv].map((a) => `'${a}'`).join(' ')
+    const r = await runIn('script', ['-qec', line, '/dev/null'], { WALNUT_AGENT_SOCKET: sockPath(), WALNUT_SESSION_ID: 'external' })
+    expect(r.code).toBe(0)
+    expect(r.out.replace(/\r/g, '').split('\n').filter((l) => l === WAIT_LINE)).toHaveLength(1)
+    expect(r.out).toContain('"sent": true')
+  }, 60_000)
+
+  it('env-less, with no socket yet: it waits for the next daemon\'s socket, still checked owner-only', async () => {
+    newRoot()
+    freshMark()
+    const run = cli(CALL, {}, false)
+    await new Promise((r) => setTimeout(r, 1_500))
+    const seen = await gateway([{ ok: true, result: { sent: true } }])
+    const r = await run
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ sent: true })
+    expect(seen[0]).toMatchObject({ sid: 'external' })
+    expect(r.err).not.toContain(WAIT_LINE)
+    expect(r.ms).toBeGreaterThanOrEqual(1_400)
+  }, 60_000)
+})

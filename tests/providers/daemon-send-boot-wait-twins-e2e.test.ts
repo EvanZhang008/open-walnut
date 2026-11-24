@@ -1,6 +1,6 @@
 /**
- * send-boot-wait-v1 on the real daemon twins, booted for real (the JS source twin,
- * and the standalone twin under bun when bun is installed), with the daemon's real
+ * send-boot-wait-v1 on the real session daemon (daemon-standalone.ts under bun),
+ * booted for real, with the daemon's real
  * 20s write deadline and a stand-in CLI that boots for 23s before it reads stdin.
  *
  * The 2026-10-30 incident: `claude --resume` of a 136MB transcript took 18 to 22s
@@ -9,7 +9,7 @@
  * reaped the healthy booting CLI ('send-partial-write'), twice in a row; the server
  * showed "Session started, but the queued message was not delivered".
  *
- * Pins, in one run per twin (the sessions boot side by side):
+ * Pins, in one run (the sessions boot side by side):
  *   - a boot-wait send waits for the booting CLI and the line arrives whole;
  *   - write-boot-wait-v1: the same send without `bootWait` waits too, and so does a
  *     raw line (2026-11-05: a 7KB status question written into a CLI still booting
@@ -29,22 +29,15 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
-let scriptPath = ''
 let cliPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
+const command = (): [string, string[]] => [BUN!, [STANDALONE, '--start']]
 let proc: ChildProcess | null = null
 let ws: WebSocket | null = null
 let rpcId = 1
@@ -95,7 +88,7 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon'), received: path.join(root, 'received.jsonl') }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+async function boot(dirs: Dirs): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -106,7 +99,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
+  const [cmd, args] = command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
@@ -169,9 +162,7 @@ const cliArgs = (dirs: Dirs) => {
 const bigLine = (tag: string) => tag.padEnd(16, '-') + 'x'.repeat(300 * 1024)
 
 beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-boot-wait-twins-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-boot-wait-cli-'))
   cliPath = path.join(dir, 'fake-cli.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -184,10 +175,10 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('send-boot-wait-v1: $name', (twin) => {
+describe.skipIf(!BUN)('send-boot-wait-v1, standalone daemon (bun)', () => {
   it('every write into a CLI booting past 20s waits for it, and the line arrives whole', async () => {
     const dirs = makeDirs()
-    await boot(twin, dirs)
+    await boot(dirs)
     const caps = (await rpc({ cmd: 'hello' })).capabilities
     expect(caps).toContain('send-boot-wait-v1')
     expect(caps).toContain('write-boot-wait-v1')

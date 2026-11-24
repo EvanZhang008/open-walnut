@@ -21,8 +21,7 @@
  * is repaired and swept at the next start, as before.
  *
  * Dependency-injected (like daemon-core.ts) so the bun-compiled standalone
- * daemon wires in its Bun-specific ws/send helpers; daemon-source.ts loads it as
- * the acp-daemon-core.cjs sidecar.
+ * daemon wires in its Bun-specific ws/send helpers.
  */
 
 import fs from 'node:fs'

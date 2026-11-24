@@ -28,10 +28,7 @@
  *     request row the Mac acked is remembered, never imported again, and while a file is
  *     left part way the home's new writes are refused (`migrating`) so none lands ahead.
  *
- * How the daemon twins get it: daemon-standalone.ts imports createOfflineJournal;
- * daemon-source.ts inlines `createOfflineJournal.toString()` through
- * `__CREATE_OFFLINE_JOURNAL__`. So the factory body references NOTHING at module
- * scope (globals such as JSON, Buffer, Atomics are fine).
+ * Imported by daemon-standalone.ts (createOfflineJournal). The factory body references NOTHING at module scope (globals such as JSON, Buffer, Atomics are fine).
  */
 
 export type JournalActor =
@@ -1899,8 +1896,7 @@ export interface JournalMigrationDeps {
 }
 
 /**
- * The boot migration of the daemon twins (plan WP8, section 5 Location and Migration),
- * shared so both twins run the same rule (daemon-source.ts inlines it by toString). `boot()`
+ * The boot migration of the daemon (plan WP8, section 5 Location and Migration). `boot()`
  * runs once daemon.pid names this process, never at module load: slices and leader records
  * from the legacy dirs, every v1 journal into v2, then the orphan body sweep. There is ONE
  * journal root per host in every mode, so no v2 record ever moves between dirs.

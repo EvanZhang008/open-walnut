@@ -82,7 +82,6 @@ const UPGRADE_LISTENERS: Record<string, string> = {
   'src/web/v1-forward/stream-door.ts': 'refuses every upgrade the companion forwards',
   'src/host-server/main.ts': "the host server's own loopback port (not the Walnut server)",
   'src/host-server/proxy.ts': 'the answer to an upgrade it sent on (a client event)',
-  'src/providers/daemon-source.ts': "the daemon's own socket server and its client",
   'src/commands/demo-server.ts': 'the local demo server',
   'src/core/leader/switch/handed-over.ts': 'the standby of a handed-over home: answers every upgrade 409 handed_over and closes the connection',
   'src/replica/leader-door.ts': "a host replica's leader door: a server on no port, fed only by streams its daemon accepted from the leader's own link (the door is the credential); upgrades only the session channel of a host that runs its sessions",
@@ -308,9 +307,9 @@ describe('capability manifests', () => {
     const listening = files.filter((f) => /\.on\(\s*['"]upgrade['"]/.test(code(f))).sort()
     expect(listening).toEqual(Object.keys(UPGRADE_LISTENERS).sort())
     // A WebSocketServer given an http server attaches its own upgrade listener: only the
-    // daemon and the separate session server may, never the Walnut server.
+    // separate session server may, never the Walnut server.
     const own = files.filter((f) => /new WebSocketServer\(\{\s*server:/.test(code(f))).sort()
-    expect(own).toEqual(['src/providers/daemon-source.ts', 'src/session-server/server.ts'])
+    expect(own).toEqual(['src/session-server/server.ts'])
   })
 
   it('every path the auth middleware lets in without a token is a declared route or named here', () => {

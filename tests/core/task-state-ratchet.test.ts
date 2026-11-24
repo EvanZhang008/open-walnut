@@ -144,7 +144,6 @@ const PHASE_READERS: Record<string, number> = {
   // the deriver's own fact: a subtask in progress or parked on its own wait is one its parent waits on (workersAtWork)
   'src/core/user-status-sync.ts': 1,
   'src/ops/tasks.ts': 2,
-  'src/providers/daemon-source.ts': 1,
   // + one: a person's NEED_ACTION write is marked as their ask (core/sessions/person-needs.ts)
   'src/web/routes/api-v1.ts': 6,
   'src/web/routes/tasks.ts': 2,

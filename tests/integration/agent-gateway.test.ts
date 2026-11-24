@@ -3,7 +3,7 @@
  * process + REAL unix-socket round-trips + a fake "Mac hub" WS client.
  *
  * What's real:
- *   - Actual daemon process (DAEMON_SOURCE template run via `node`) in an
+ *   - Actual daemon process (daemon-standalone.ts run under bun) in an
  *     ISOLATED WALNUT_DAEMON_DIR (never touches the production daemon)
  *   - Real agent-gateway unix socket + NDJSON protocol
  *   - Real gateway-request / gateway-result reverse-RPC over a real WS
@@ -18,7 +18,7 @@
  * ALWAYS kills it — leaked isolated daemons have starved this machine before.
  * The isolated dir also makes the daemon reap its children on exit.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -26,8 +26,7 @@ import fsp from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { testBun } from '../helpers/bun-runtime.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import { pullArgsFile } from '../../src/core/peers/gateway-args-file.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../src/core/human-inbox/types.js'
@@ -43,15 +42,13 @@ interface DaemonProc {
   sockPath: string
 }
 
-async function writeDaemonScript(): Promise<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-gw-script-'))
-  const scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-  return scriptPath
-}
+const ROOT = path.resolve(import.meta.dirname, '../..')
+const BUN: string | undefined = testBun()
+const DAEMON_SCRIPT = path.join(ROOT, 'src/providers/daemon-standalone.ts')
 
-async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<DaemonProc> {
-  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
+async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
+  const proc = spawn(BUN!, [DAEMON_SCRIPT, '--start'], {
+    cwd: ROOT,
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,
@@ -178,27 +175,18 @@ async function startTrackedSession(ws: WebSocket, sid: string): Promise<void> {
 
 // ════════════════════════════════════════════════════════════════════════
 
-describe('agent gateway — real daemon + unix socket + fake Mac hub client', () => {
-  let scriptPath: string
+describe.skipIf(!BUN)('agent gateway — real daemon + unix socket + fake Mac hub client', () => {
   let daemonDir: string
   let daemon: DaemonProc | null = null
 
-  beforeAll(async () => {
-    scriptPath = await writeDaemonScript()
-  })
-
   beforeEach(async () => {
     daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-gw-'))
-    daemon = await spawnDaemon(scriptPath, daemonDir)
+    daemon = await spawnDaemon(daemonDir)
   })
 
   afterEach(async () => {
     if (daemon) { await stopDaemon(daemon); daemon = null }
     try { await fsp.rm(daemonDir, { recursive: true, force: true }) } catch {}
-  })
-
-  afterAll(async () => {
-    try { await fsp.rm(path.dirname(scriptPath), { recursive: true, force: true }) } catch {}
   })
 
   // ─── ① full round-trip: socket → gateway-request frame → gateway-result → socket ───
@@ -419,8 +407,8 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
   // ─── ⑦ big payloads: the request carries a PATH, the hub pulls it in batches ───
   /**
    * The joint the unit layer cannot reach. Three pieces each have their own test
-   * (the CLI emits `argsFile`, `pullArgsFile` reassembles bounded slices, the twin
-   * matches the binary), but the thing that actually had to work is the SEAM: the
+   * (the CLI emits `argsFile`, `pullArgsFile` reassembles bounded slices, the daemon
+   * relays the frame), but the thing that actually had to work is the SEAM: the
    * real CLI writes a path, the real daemon relays it untouched, and the hub reads
    * the bytes back through that same daemon's `fs.readRange`.
    *
@@ -446,9 +434,10 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
     const fileBytes = Buffer.byteLength(payloadJson)
     expect(fileBytes).toBeGreaterThan(3 * HUMAN_INBOX_CHUNK_BYTES)
 
-    // The REAL wn CLI shipped inside the twin, pointed at the REAL gateway socket.
+    // The REAL wn CLI shipped inside the daemon, pointed at the REAL gateway socket.
     const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request', 20_000)
-    const cli = spawn(SOURCE_TWIN.file, [scriptPath, 'wn', 'tools', 'call', 'human_inbox_send', `@${payloadFile}`], {
+    const cli = spawn(BUN!, [DAEMON_SCRIPT, 'wn', 'tools', 'call', 'human_inbox_send', `@${payloadFile}`], {
+      cwd: ROOT,
       env: {
         ...process.env,
         WALNUT_DAEMON_DIR: daemonDir,

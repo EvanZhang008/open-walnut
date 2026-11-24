@@ -30,7 +30,7 @@ interface Allowed { file: string; match: string; reason: string }
 
 const ALLOWED: Allowed[] = [
   { file: 'src/lib/id-ref.ts', match: 'id.startsWith(ref)', reason: 'the helper itself' },
-  { file: 'src/providers/offline-host-core.ts', match: 'id.startsWith(ref)', reason: 'inlined copy of the helper (daemon-source.ts inlines the factory text)' },
+  { file: 'src/providers/offline-host-core.ts', match: 'id.startsWith(ref)', reason: 'inlined copy of the helper (kept from when the daemon\'s JS twin inlined this factory\'s text)' },
   { file: 'src/providers/offline-host-core.ts', match: 't.id.startsWith(q)', reason: 'task_list search filter over titles and ids, lists every hit' },
   { file: 'src/lib/send-targets.ts', match: 'o.startsWith(ref) || ref.startsWith(o)', reason: 'dedupes refs printed by one send (often cut short); no id list here, readers resolve each ref with matchIdRef' },
   { file: 'src/core/sessions/thread-ai-stub.ts', match: 'sessionId.startsWith(prefix)', reason: 'test stub switch: an env var names a session id prefix to serve' },

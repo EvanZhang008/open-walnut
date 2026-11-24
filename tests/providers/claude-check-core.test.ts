@@ -5,8 +5,6 @@
  * Only the fs, env and exec layer is faked. The scripted `claude auth status
  * --json` answers are the exact shapes the 2.1.240 / 2.1.258 / 2.1.280 binaries
  * print (captured with an empty CLAUDE_CONFIG_DIR, one variable at a time).
- * The factory is also re-materialized from its toString(), because that text is
- * what the source-deployed daemon twin runs.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -14,8 +12,6 @@ import os from 'node:os'
 import childProcess from 'node:child_process'
 import { describe, it, expect } from 'vitest'
 import { createClaudeCheck, sha256Hex, type ClaudeCheckDeps, type ClaudeCheckInput } from '../../src/providers/claude-check-core.js'
-import { getDaemonSource, validateFoldInjection } from '../../src/providers/daemon-source.js'
-import { foldLine, initialFoldState, assembleSnapshot } from '../../src/providers/daemon-fold.js'
 
 const HOME = '/home/dev'
 const NATIVE = `${HOME}/.local/bin/claude`
@@ -431,14 +427,6 @@ describe('sign-in on macOS: the keychain is asked whether an item exists, never 
     expect(calls[0].args).toEqual(['find-generic-password', '-s', 'Claude Code-credentials'])
   })
 
-  it('the re-materialized copy the source daemon twin runs applies the same rule', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const copy = new Function('"use strict"; return ' + createClaudeCheck.toString())() as typeof createClaudeCheck
-    const { deps, calls } = mac({ items: ['Claude Code-credentials'] })
-    expect(await copy(deps).check(input())).toMatchObject({ auth: 'ok', authDetail: 'a Claude account' })
-    expect(ranCli(calls)).toBe(false)
-  })
-
   it('class guard: no Walnut code reads a keychain secret except the vault\'s one gated reader, and only this gated check runs `claude auth status`', () => {
     const root = path.resolve(__dirname, '../..')
     const files: string[] = []
@@ -491,46 +479,13 @@ describe('install method', () => {
   })
 })
 
-describe('injection into the source daemon twin', () => {
-  it('a serialized checker uses the running host platform, never the build platform', async () => {
-    const source = createClaudeCheck.toString();
-    expect(source).not.toContain('process.platform');
-    const copy = new Function('return ' + source)() as typeof createClaudeCheck;
+describe('platform wiring', () => {
+  it('the checker uses the platform it is given, never the one it was built on', async () => {
+    expect(createClaudeCheck.toString()).not.toContain('process.platform');
     const { deps, calls } = fake({ platform: 'linux' });
-    expect(await copy(deps).check(input())).toMatchObject({ auth: 'not-logged-in' });
+    expect(await createClaudeCheck(deps).check(input())).toMatchObject({ auth: 'not-logged-in' });
     expect(calls.map(c => c.file)).toEqual([NATIVE]);
     const root = path.resolve(import.meta.dirname, '../../src/providers');
     expect(fs.readFileSync(path.join(root, 'daemon-standalone.ts'), 'utf8')).toMatch(/claudeCheck: createClaudeCheck\(\{[^}]*platform: process\.platform/);
-    expect(fs.readFileSync(path.join(root, 'daemon-source.ts'), 'utf8')).toMatch(/claudeCheck: \(__CREATE_CLAUDE_CHECK__\)\(\{[^}]*platform: process\.platform/);
   });
-
-  it('toString() carries no module-scope or bundler identifiers, and a re-materialized copy answers the same', async () => {
-    const src = createClaudeCheck.toString()
-    for (const re of [/\b__name\b/, /\b__spreadValues\b/, /\brequire\s*\(/, /\bimport\s*\(/, /\bexports\./]) expect(src).not.toMatch(re)
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const copy = new Function('"use strict"; return ' + src)() as typeof createClaudeCheck
-    const run = async (factory: typeof createClaudeCheck) => {
-      const { deps } = fake({ files: { '/bin/zsh': '' }, env: { SHELL: '/bin/zsh' } })
-      return factory(deps).check(input({ version: '2.1.258', minVersion: '2.1.280' }))
-    }
-    expect(await run(copy)).toEqual(await run(createClaudeCheck))
-  })
-
-  it('the template carries no residue, and the deploy-time smoke refuses a corrupted version gate', () => {
-    expect(getDaemonSource()).not.toContain('__CREATE_CLAUDE_CHECK__')
-    const fold: Array<[string, string]> = [
-      ['__FOLD_LINE__', foldLine.toString()],
-      ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
-      ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
-    ]
-    const good = createClaudeCheck.toString()
-    expect(() => validateFoldInjection(fold.concat([['__CREATE_CLAUDE_CHECK__', good]]))).not.toThrow()
-    for (const name of ['platform', 'arch']) {
-      expect(() => validateFoldInjection(fold.concat([['__NEW_FACTORY__', `function probe() { return process.${name} }`]]))).toThrow(/reads the build platform/)
-    }
-    const GATE = /return a\[i\] > b\[i\]/
-    expect(good).toMatch(GATE)
-    const broken = good.replace(GATE, 'return a[i] < b[i]')
-    expect(() => validateFoldInjection(fold.concat([['__CREATE_CLAUDE_CHECK__', broken]]))).toThrow(/compared versions wrongly/)
-  })
-})
+});

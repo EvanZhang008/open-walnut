@@ -15,9 +15,8 @@
 # result. The runtime copies it into place and verifies it before trusting it
 # (src/web/terminal/dtach-prebuilt.ts); compiling on the target stays the fallback.
 #
-# The sidecar is deliberately NOT named `.version`: daemon-version-check.ts and
-# daemon-source.ts read EVERY `*.version` in dist/daemon-binaries as the daemon's
-# own version, so a dtach hash there would read as a stale daemon build.
+# The sidecar is deliberately NOT named `.version`: daemon-version-check.ts reads
+# EVERY `*.version` in dist/daemon-binaries as the daemon's own version, so a dtach hash there would read as a stale daemon build.
 #
 # Never fails the build: no compiler, an unsupported platform or a failed compile
 # prints one info line and exits 0. scripts/check-publish.mjs is the gate that

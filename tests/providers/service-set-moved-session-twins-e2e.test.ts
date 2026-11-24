@@ -1,7 +1,7 @@
 /**
  * A session moved between two Walnuts' daemons on one machine resumes, takes
- * messages and answers on the real daemon twins (the JS source twin under node,
- * the standalone twin under bun when bun is installed).
+ * messages and answers on the real session daemon (daemon-standalone.ts, under
+ * bun when bun is installed).
  *
  * Two daemons share one HOME (so the CLI's ~/.claude transcripts are shared, as
  * on one machine and OS account) but each has its own daemon dir, streams dir,
@@ -25,21 +25,13 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-let scriptPath = ''
 let cliPath = ''
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 
 /**
  * A stand-in CLI: records each user line with its pid, argv and the transcript it
@@ -81,7 +73,7 @@ let rpcId = 1
 const daemons: Daemon[] = []
 const cliPids = new Set<number>()
 
-async function boot(twin: Twin, name: 'A' | 'B'): Promise<Daemon> {
+async function boot(name: 'A' | 'B'): Promise<Daemon> {
   const daemonDir = path.join(root, name, 'daemon')
   const streams = path.join(root, name, 'streams')
   const env: Record<string, string | undefined> = {
@@ -98,8 +90,7 @@ async function boot(twin: Twin, name: 'A' | 'B'): Promise<Daemon> {
     // (one CLI per session on a host, whichever service asks): never one per set.
     WALNUT_SPAWN_JOURNAL: path.join(root, 'home', '.open-walnut', 'local', 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  const proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`daemon ${name} spawn timeout`)), 30_000)
     proc.stdout?.on('data', (chunk) => {
@@ -190,9 +181,7 @@ async function liveOn(d: Daemon, sid: string): Promise<{ status: boolean; listed
 }
 
 beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-moved-session-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-moved-session-cli-'))
   cliPath = path.join(dir, 'fake-cli.cjs')
   fs.writeFileSync(cliPath, FAKE_CLI)
 })
@@ -209,12 +198,12 @@ afterEach(async () => {
   root = ''
 })
 
-describe.each(TWINS)('a moved session between two daemons on one HOME: $name', (twin) => {
+describe.skipIf(!BUN)('a moved session between two daemons on one HOME: standalone daemon (bun)', () => {
   it('stops on A, resumes on B with its own CLI, answers there, and A never takes it back', async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-moved-session-')))
     fs.mkdirSync(path.join(root, 'home'), { recursive: true })
-    let a = await boot(twin, 'A')
-    const b = await boot(twin, 'B')
+    let a = await boot('A')
+    const b = await boot('B')
     expect(a.daemonDir).not.toBe(b.daemonDir)
     expect(a.streams).not.toBe(b.streams)
 
@@ -255,7 +244,7 @@ describe.each(TWINS)('a moved session between two daemons on one HOME: $name', (
 
     // 6. A restarted on its own dirs does not adopt it; B still sends to the same CLI.
     await killDaemon(a)
-    a = await boot(twin, 'A')
+    a = await boot('A')
     expect(await liveOn(a, SID)).toMatchObject({ status: false, listed: false })
     const third = await sendAndAnswer(b, SID, 'third', onB.outputFile)
     expect(third.pid).toBe(onB.pid)

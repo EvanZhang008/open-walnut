@@ -70,12 +70,12 @@ if (first === '__selftest') {
   const { runWaitMatcher } = await import('../providers/host-exec-matcher.js')
   await runWaitMatcher()
   process.exit(0)
-} else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--status' || first === '--service') {
-  // The daemon reads its own argv (`--start`, `--stop`, `--status`, `--service`, `--version`).
+} else if (first === '__daemon' || first === '--start' || first === '--stop' || first === '--status' || first === '--service' || first === '--prewarm-folds') {
+  // The daemon reads its own argv (`--start`, `--stop`, `--status`, `--service`, `--prewarm-folds`, `--version`).
   // Its lifecycle flags also work bare (no CLI meaning as a first word), so the file stands in
   // for a daemon binary wherever one is started and checked that way: the daemon service
   // install, and a remote host's daemon slot (`<dir>/daemon-linux-<arch> --start`, then
-  // `--status`), which a compiled Mac fills with the host's own walnut file. `--version`
+  // `--status`, and a remote update's `--prewarm-folds`), which a compiled Mac fills with the host's own walnut file. `--version`
   // stays the CLI's; the daemon's own is `walnut __daemon --version`.
   if (first === '__daemon') process.argv.splice(2, 1)
   // The launcher's `--service`: the host's one Walnut service, as the follower or the leader, when

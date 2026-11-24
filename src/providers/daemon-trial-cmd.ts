@@ -4,7 +4,7 @@
  * to. 2026-11-04 review: this path stopped the old daemon for the staged build with no check
  * that the build could start, so one that did not left the host with no daemon at all.
  *
- *   keep     the daemon files in the dir (daemon.cjs, its sidecars and ACP files, the binary)
+ *   keep     the daemon files in the dir (the binary or the walnut file in its slot)
  *            are copied aside before the new ones are staged over them, stamped with the build
  *            that runs (.version), into a dir that survives a reboot (daemon-previous-key.ts:
  *            ${XDG_STATE_HOME:-~/.local/state}/open-walnut/daemon-previous/<key of the dir>).
@@ -43,12 +43,9 @@ export const TRIAL_ALIVE_SECONDS = 3
 const BINARY_NAMES = ['daemon-linux-x64', 'daemon-linux-arm64']
 
 export interface DaemonTrialOpts {
-  runtime: 'bun' | 'binary' | 'node'
-  /** bun's path ('bun'), the daemon binary's ('binary'). */
-  execPath?: string
+  /** The compiled daemon's path on the host (a daemon binary, or the walnut file in its slot). */
+  execPath: string
   dir: string
-  /** The node PATH discovery ('node'), as the start runs it. */
-  preamble?: string
   waitSeconds?: number
   aliveSeconds?: number
   /**
@@ -60,14 +57,6 @@ export interface DaemonTrialOpts {
 
 function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-/** The daemon's program words, as buildDaemonStartCmd runs them. */
-function program(o: DaemonTrialOpts): string {
-  const script = shq(`${o.dir}/daemon.cjs`)
-  if (o.runtime === 'node') return `node ${script}`
-  if (!o.execPath) throw new Error(`runtime '${o.runtime}' requires execPath`)
-  return o.runtime === 'bun' ? `${shq(o.execPath)} ${script}` : shq(o.execPath)
 }
 
 export function buildDaemonTrialCmd(o: DaemonTrialOpts): string {
@@ -83,7 +72,6 @@ export function buildDaemonTrialCmd(o: DaemonTrialOpts): string {
   ].join(' ')
   const parent = o.isolated ? o.isolated.root : '/tmp'
   return [
-    o.runtime === 'node' && o.preamble ? o.preamble : ':',
     // The compiled walnut file in the daemon slot unpacks its runtime tree first: where the
     // account's daemon keeps it, read with the real HOME, never under the trial's (2026-11-04
     // review 4: the whole runtime went into the throwaway HOME on every update).
@@ -98,7 +86,7 @@ export function buildDaemonTrialCmd(o: DaemonTrialOpts): string {
     `t=$(umask 077; mktemp -d ${shq(parent)}/walnut-proof.XXXXXXXXXX 2>/dev/null) || { echo "${TRIAL_FAILED} no throwaway dir could be made in ${parent}"; exit 0; }`,
     'mkdir -p "$t/h" "$t/tmp"',
     // The subshell execs env, which execs the daemon: $! is the daemon itself.
-    `(cd "$t/h" && exec env -i ${env} ${program(o)} --start) </dev/null >"$t/out.log" 2>&1 &`,
+    `(cd "$t/h" && exec env -i ${env} ${shq(o.execPath)} --start) </dev/null >"$t/out.log" 2>&1 &`,
     'p=$!',
     // A zombie still answers kill -0. Its state: /proc/<pid>/stat (the word after the last ")"),
     // else ps. 2026-11-04 review: on busybox (ps has no -p) a build that listened and exited read
@@ -153,12 +141,12 @@ export const PREVIOUS_NOT_RUNNING = 'walnut-previous-not-running'
  * Copy the daemon files there now into the kept dir, whole or not at all, stamped with
  * `running` (the build the daemon answers with). A kept copy already stamped with it stays (one
  * an older build kept in <dir>/previous is moved over as it is); files on disk whose program does
- * not carry that build (its version is a literal in daemon.cjs and in the binary) are not kept.
+ * not carry that build (its version is a literal in the binary) are not kept.
  */
-export function buildKeepPreviousCmd(dir: string, running: string, runtime: 'binary' | 'script', durable = true): string {
+export function buildKeepPreviousCmd(dir: string, running: string, durable = true): string {
   const d = shq(dir)
   if (!/^[A-Za-z0-9._-]+$/.test(running)) throw new Error('the running build must be a plain version word')
-  const programs = runtime === 'binary' ? BINARY_NAMES.map((n) => `"$d/${n}"`).join(' ') : '"$d/daemon.cjs"'
+  const programs = BINARY_NAMES.map((n) => `"$d/${n}"`).join(' ')
   return [
     `d=${d}; v=${shq(running)}`,
     ...keepDirLines(dir, durable),
@@ -170,7 +158,7 @@ export function buildKeepPreviousCmd(dir: string, running: string, runtime: 'bin
     'fi',
     // The copy into $1, whole or not at all.
     't_keep() { rm -rf "$1.tmp" && mkdir -m 700 "$1.tmp" || return 1',
-    `  for f in "$src"/*.cjs "$src"/*.mjs ${BINARY_NAMES.map((n) => `"$src/${n}"`).join(' ')}; do`,
+    `  for f in ${BINARY_NAMES.map((n) => `"$src/${n}"`).join(' ')}; do`,
     '    [ -f "$f" ] || continue',
     '    cp -p "$f" "$1.tmp/" || { rm -rf "$1.tmp"; return 1; }',
     '  done',
@@ -235,24 +223,23 @@ export async function trialStagedDaemon(exec: HostExec, o: DaemonTrialOpts): Pro
 export type KeptPrevious = 'kept' | 'not-running' | 'failed'
 
 /** `durable`: a production daemon dir, whose copy goes where a reboot leaves it (else beside its files). */
-export async function keepPreviousDaemon(exec: HostExec, dir: string, running: string, runtime: 'binary' | 'script', durable = true): Promise<KeptPrevious> {
+export async function keepPreviousDaemon(exec: HostExec, dir: string, running: string, durable = true): Promise<KeptPrevious> {
   if (!running) return 'not-running'
   if (!/^[A-Za-z0-9._-]+$/.test(running)) return 'failed'
-  const said = (await exec(buildKeepPreviousCmd(dir, running, runtime, durable), 120_000).catch(() => '')).split('\n').map((l) => l.trim())
+  const said = (await exec(buildKeepPreviousCmd(dir, running, durable), 120_000).catch(() => '')).split('\n').map((l) => l.trim())
   return said.includes(PREVIOUS_KEPT) ? 'kept' : said.includes(PREVIOUS_NOT_RUNNING) ? 'not-running' : 'failed'
 }
 
 export const CARRIES_BUILD = 'walnut-files-carry-build'
 
 /**
- * Whether the daemon files in `dir` carry `build` (its version is a literal in daemon.cjs and in
- * the binary): a start "of the one that ran before" from files that are the held build's would
+ * Whether the daemon files in `dir` carry `build` (its version is a literal in the binary): a start "of the one that ran before" from files that are the held build's would
  * start the held build, unwatched. No answer is false.
  */
-export async function filesCarryBuild(exec: HostExec, dir: string, build: string, runtime: 'binary' | 'script'): Promise<boolean> {
+export async function filesCarryBuild(exec: HostExec, dir: string, build: string): Promise<boolean> {
   if (!/^[A-Za-z0-9._-]+$/.test(build)) return false
   const d = shq(dir)
-  const programs = runtime === 'binary' ? BINARY_NAMES.map((n) => `${d}/${n}`).join(' ') : `${d}/daemon.cjs`
+  const programs = BINARY_NAMES.map((n) => `${d}/${n}`).join(' ')
   const cmd = `for f in ${programs}; do [ -f "$f" ] && grep -qF ${shq(build)} "$f" 2>/dev/null && { echo ${CARRIES_BUILD}; break; }; done; :`
   return (await exec(cmd, 30_000).catch(() => '')).split('\n').some((l) => l.trim() === CARRIES_BUILD)
 }

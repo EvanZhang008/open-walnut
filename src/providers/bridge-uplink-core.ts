@@ -1,7 +1,6 @@
 /**
  * Paced uplink for the daemon's cloud bridge socket. Pure factories, shared by
- * both daemon twins: daemon-standalone.ts imports them, daemon-source.ts inlines
- * their text (fn.toString()), so NOTHING here may reference module scope,
+ * the daemon: daemon-standalone.ts imports them, and NOTHING here references module scope,
  * imports, or helpers. Globals (Buffer, Math, JSON, Date) are fine.
  *
  * Why (Mac uplink, 2026-09-25/26): bridge flaps clustered within a second of the

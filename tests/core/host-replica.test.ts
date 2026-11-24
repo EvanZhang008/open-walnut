@@ -418,10 +418,9 @@ describe('a changed manifest goes as its changes since the one the host took', (
     expect(retro.m?.updatedAt).toBe(later.toISOString())
   })
 
-  it('every way into a copy hands the changes on (both daemon twins, the companion)', () => {
+  it('every way into a copy hands the changes on (the daemon, the companion)', () => {
     const src = (f: string) => fs.readFileSync(path.join(__dirname, '../../src', f), 'utf8')
     expect(src('providers/daemon-standalone.ts')).toContain('{ confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd))')
-    expect(src('providers/daemon-source.ts')).toContain('{ confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd));')
     expect(src('core/companion-host-replica.ts')).toContain('{ confirm: params.confirm, confirmFor: params.confirmFor }, params)')
   })
 

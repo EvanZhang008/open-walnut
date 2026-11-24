@@ -1,6 +1,6 @@
 /**
- * The daemon's cloud bridge redial schedule (daemon-core.ts; mirrored inline in
- * daemon-source.ts): bridgeRedialStep, armsBridgeFastWindow and envTimerMs.
+ * The daemon's cloud bridge redial schedule (daemon-core.ts): bridgeRedialStep,
+ * armsBridgeFastWindow and envTimerMs.
  *
  * Context:
  *  - matrix R1 (2026-10-02): the companion was down 32 s and came back, but the

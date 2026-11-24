@@ -9,7 +9,7 @@
  * Guards for the class:
  *  - a retry of the same call (its call id) is answered from the first record, never held twice;
  *  - a Mac that does not drain `held-op` is never handed one (the caller hears the error, as before);
- *  - both daemon twins ask holdWrite where their offline answer ends in hub_unreachable, and the
+ *  - the daemon asks holdWrite where its offline answer ends in hub_unreachable, and the
  *    host's held list and the Mac's replay list are the same ops.
  */
 import { describe, it, expect, afterEach } from 'vitest'
@@ -119,13 +119,11 @@ describe('the held write path stays wired end to end', () => {
     expect(MAC_DRAINS).toContain('held-op')
   })
 
-  it('both daemon twins hold a write where their offline answer ends in hub_unreachable', () => {
-    for (const twin of ['src/providers/daemon-standalone.ts', 'src/providers/daemon-source.ts']) {
-      const src = read(twin)
-      expect(src, twin).toMatch(/offlineHost\.holdWrite\(home, callerSid, capability, payload\)/)
-      // Its last answer and the companion's both go through it.
-      expect(src, twin).toMatch(/heldOr\(r( as GatewayResponse)?\)/)
-      expect(src, twin).toMatch(/forwardToBackup\(home, capability, callerSid, payload, (\(b\) =>|function \(b\)) \{ if \(unreachable\(b\) && waitHere\(\)\) return;? heldOr\(b\)/)
-    }
+  it('the daemon holds a write where its offline answer ends in hub_unreachable', () => {
+    const src = read('src/providers/daemon-standalone.ts')
+    expect(src).toMatch(/offlineHost\.holdWrite\(home, callerSid, capability, payload\)/)
+    // Its last answer and the companion's both go through it.
+    expect(src).toMatch(/heldOr\(r as GatewayResponse\)/)
+    expect(src).toMatch(/forwardToBackup\(home, capability, callerSid, payload, \(b\) => \{ if \(unreachable\(b\) && waitHere\(\)\) return; heldOr\(b\)/)
   })
 })

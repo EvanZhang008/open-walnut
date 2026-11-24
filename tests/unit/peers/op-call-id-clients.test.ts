@@ -5,12 +5,10 @@
  * 2026-11-04: task_send came back `walnut: hub_timeout: primary server timed out` while the
  * message had been delivered and answered; nothing told the caller whether it went or how to
  * check, so it could resend (two copies) or take a delivered message for lost. The faces: the
- * in-session CLI (wn-cli.ts), the template CLI in the daemon's source twin (daemon-source.ts),
- * the MCP server on a host (walnut-mcp-stdio.ts) and the Mac's own CLI (src/commands/tools.ts).
+ * in-session CLI (wn-cli.ts), the MCP server on a host (walnut-mcp-stdio.ts) and the Mac's own CLI (src/commands/tools.ts).
  * The server half (one run per id, op_result) is tests/mcp/op-call-dedup.test.ts.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { spawn } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -19,9 +17,7 @@ import path from 'node:path'
 import { runWalnutCli } from '../../../src/providers/wn-cli.js'
 import { createWalnutMcpHandler } from '../../../src/providers/walnut-mcp-stdio.js'
 import { runTools } from '../../../src/commands/tools.js'
-import { getDaemonSource } from '../../../src/providers/daemon-source.js'
 import { CALL_ID_RE, writeOpId } from '../../../src/lib/op-call-id.js'
-import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 
 const HUB_TIMEOUT = { ok: false, error: { code: 'hub_timeout', message: 'primary server timed out' } }
 const SENT = { ok: true, result: { delivery: 'queued', messageId: 'qm-1' } }
@@ -146,45 +142,6 @@ describe('arguments too large to inline (a file the server pulls)', () => {
     expect(gw.requests[0].args).toMatchObject({ name: 'task_send', argsFile: file, callId: 'oc-fromthefile0001' })
     expect(err).toContain('(call oc-fromthefile0001)')
   })
-})
-
-describe('the template CLI (daemon-source.ts)', () => {
-  function run(sock: string, payload: string): Promise<{ code: number | null; err: string; out: string }> {
-    const twin = path.join(dir, 'daemon.cjs')
-    if (!fs.existsSync(twin)) fs.writeFileSync(twin, getDaemonSource())
-    return new Promise((resolve) => {
-      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', 'tools', 'call', 'task_send', payload], {
-        env: { ...process.env, WALNUT_DAEMON_DIR: dir, WALNUT_AGENT_SOCKET: sock, WALNUT_SESSION_ID: 'probe-sid' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      let err = ''
-      let out = ''
-      child.stderr.on('data', (d) => { err += d })
-      child.stdout.on('data', (d) => { out += d })
-      child.on('close', (code) => resolve({ code, err, out }))
-    })
-  }
-
-  it('sends a call id, names it when no answer comes, and keeps a caller-given one', async () => {
-    const lost = await gateway(dir, () => HUB_TIMEOUT)
-    const r = await run(lost.sock, JSON.stringify(SEND))
-    lost.close()
-    expect(r.code).toBe(5)
-    const callId = lost.requests[0].args.callId!
-    expect(callId).toMatch(CALL_ID_RE)
-    const failure = JSON.parse(r.err) as { error: { code: string; message: string; detail?: unknown } }
-    expect(failure.error.code).toBe('hub_timeout')
-    expect(failure.error.message).toContain(`no answer came back for task_send (call ${callId})`)
-    expect(failure.error.message).toContain(`walnut tools call op_result '{"call_id":"${callId}"}'`)
-    expect(failure.error.detail).toMatchObject({ call_id: callId, state: 'unknown' })
-    expect(r.out).toBe('')
-
-    const again = await gateway(dir, () => SENT)
-    const r2 = await run(again.sock, JSON.stringify({ ...SEND, _call_id: callId }))
-    again.close()
-    expect(r2.code).toBe(0)
-    expect(again.requests[0].args).toMatchObject({ callId, args: SEND })
-  }, 60_000)
 })
 
 describe('the MCP server on a host (walnut-mcp-stdio.ts)', () => {

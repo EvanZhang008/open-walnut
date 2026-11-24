@@ -1,5 +1,5 @@
 /**
- * Bounded reads, on both daemon twins booted for real.
+ * Bounded reads, on the session daemon (daemon-standalone.ts) booted for real.
  *
  * Found on a live daemon (2026-09-29): a 1.79 GB stream and several over 100 MB,
  * cold sids pulled every 5 minutes for a day, and four commands that read as
@@ -20,27 +20,19 @@
  * "CLI" is /bin/sh cat-ing a prepared file, big files are sparse, and the
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
-import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const MB = 1024 * 1024
-let scriptPath = ''
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
-type Twin = { name: string; command: () => [string, string[]] }
-const TWINS: Twin[] = [
-  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
-  ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
-]
 let proc: ChildProcess | null = null
 let port = 0
 const sockets: WebSocket[] = []
@@ -57,7 +49,7 @@ function makeDirs(): Dirs {
   return { home, streams, daemon: path.join(root, 'daemon') }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+async function boot(dirs: Dirs): Promise<void> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
@@ -68,8 +60,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
-  const [cmd, args] = twin.command()
-  proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc = spawn(BUN!, [STANDALONE, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => {
@@ -186,25 +177,19 @@ function sparseWithLines(file: string, zeros: number, lines: string[]): void {
   fs.appendFileSync(file, lines.join(''))
 }
 
-beforeAll(() => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bounded-src-'))
-  scriptPath = path.join(dir, 'daemon.cjs')
-  fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
-})
-
 afterEach(async () => {
   await stop()
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
 
-describe.each(TWINS)('bounded reads: $name', (twin) => {
+describe.skipIf(!BUN)('bounded reads: standalone daemon (bun)', () => {
   it('a catch-up replay over 8 MB sends replay_truncated, then only the newest lines', async () => {
     const dirs = makeDirs()
     const source = path.join(root, 'stream-source.jsonl')
     fs.writeFileSync(source, streamOf(10 * MB))
     const size = fs.statSync(source).size
-    await boot(twin, dirs)
+    await boot(dirs)
     const starter = await connect()
     const started = await rpc(starter.ws, {
       cmd: 'start', sid: 'br-replay', cwd: root, message: '', mode: 'default',
@@ -263,7 +248,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     const source = path.join(root, 'burst-source.jsonl')
     fs.writeFileSync(source, streamOf(20 * MB))
     const size = fs.statSync(source).size
-    await boot(twin, dirs)
+    await boot(dirs)
     const starter = await connect()
     // The burst lands after the subscriber is in, so one tick sees the whole gap.
     const started = await rpc(starter.ws, {
@@ -305,7 +290,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
         L({ type: 'result', subtype: 'success', is_error: false, num_turns: 1 }),
       ],
     ))
-    await boot(twin, dirs)
+    await boot(dirs)
     const client = await connect()
 
     // A ping sent right behind the getState is answered while the scan runs:
@@ -367,7 +352,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     const withSub = path.join(dirs.streams, 'br-hist-sub.jsonl')
     fs.writeFileSync(withSub, lines.slice(0, 2).join(''))
     sparseWithLines(path.join(dirs.streams, 'br-hist-sub', 'subagents', 'agent-a.jsonl'), 40 * MB, lines)
-    await boot(twin, dirs)
+    await boot(dirs)
     const client = await connect()
 
     const capped = await rpc(client.ws, { cmd: 'read-history', sid: 'br-hist' })
@@ -399,7 +384,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     fs.truncateSync(big, 33 * MB)
     const small = path.join(root, 'small.txt')
     fs.writeFileSync(small, 'hello\n')
-    await boot(twin, dirs)
+    await boot(dirs)
     const client = await connect()
 
     const refused = await rpc(client.ws, { cmd: 'fs.read', path: big, encoding: 'base64' })

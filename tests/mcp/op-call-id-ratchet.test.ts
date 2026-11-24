@@ -34,7 +34,7 @@ const SRC = walk('src')
  * statement, or name only reads (a read runs again freely; nothing to dedup). A line built by
  * the shared builder (src/providers/gateway-request.ts) counts at its caller, which hands it the args.
  */
-const CALL_SITE = /op:\s*'tools\.call'|op = 'tools\.call'|request\('tools\.call'|gateway\(socketPath, sid, 'tools\.call'|\btoolsCallLine(?:Within)?\(/g
+const CALL_SITE = /op:\s*'tools\.call'|request\('tools\.call'|gateway\(socketPath, sid, 'tools\.call'|\btoolsCallLine(?:Within)?\(/g
 /** Builds the line from its caller's args (and their call id); its callers are the sites. */
 const LINE_BUILDER = 'src/providers/gateway-request.ts'
 
@@ -43,8 +43,6 @@ const READ_SITES: Array<{ file: string; marker: string; why: string }> = [
   { file: 'src/providers/wn-cli.ts', marker: 'trigger_template_check', why: 'a trigger check reads a template\'s answer' },
   { file: 'src/providers/wn-cli.ts', marker: "name: opName, args: { id: parsed.id }", why: 'walnut wait polls request_get / task_get' },
   { file: 'src/providers/wn-cli.ts', marker: "'request_get' : 'task_get'", why: 'walnut wait polls request_get / task_get' },
-  { file: 'src/providers/daemon-source.ts', marker: "name: 'skill_read'", why: 'walnut guide reads the manual' },
-  { file: 'src/providers/daemon-source.ts', marker: "'request_get' : 'task_get'", why: 'walnut wait polls request_get / task_get' },
 ]
 
 /**
@@ -71,16 +69,8 @@ describe('every client sends a call id with tools.call', () => {
       const text = read(file)
       for (const m of text.matchAll(CALL_SITE)) {
         sites += 1
-        let statement: string
-        if (m[0].startsWith('op = ')) {
-          // The source twin sets `op` and then `args` in the same branch: up to the branch's end.
-          const window = text.slice(m.index!, m.index! + 1500)
-          const end = window.search(/\}\s*else\b/)
-          statement = end === -1 ? window : window.slice(0, end)
-        } else {
-          const window = text.slice(m.index!, m.index! + 700)
-          statement = window.slice(0, Math.max(window.indexOf(';\n'), window.indexOf('\n\n'), 200))
-        }
+        const window = text.slice(m.index!, m.index! + 700)
+        const statement = window.slice(0, Math.max(window.indexOf(';\n'), window.indexOf('\n\n'), 200))
         if (/callId/.test(statement)) continue
         if (READ_SITES.some((r) => r.file === file && statement.includes(r.marker))) continue
         if (RELAYS_CALLER_ARGS.some((r) => r.file === file && statement.includes(r.marker))) continue

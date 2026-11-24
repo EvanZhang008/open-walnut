@@ -3,8 +3,7 @@
  * unix sockets:
  * the entry's answer is the answer; anything that proves nothing ran (no listener, a server that
  * is not the entry, a refused token, the entry unavailable) hands the line back for the socket;
- * a line that left with no answer is lost (may have run), never sent again. Run as imported and
- * as the text the source twin inlines for its plugin job runs.
+ * a line that left with no answer is lost (may have run), never sent again.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
@@ -12,7 +11,6 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { HOST_CALL_ANSWER_HEADER, HOST_CALL_PATH, createHostCallClient } from '../../src/providers/host-call-client-core.js'
-import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const TOKEN = 'f'.repeat(64)
 const LINE = { v: 1, op: 'tools.call', sid: 'sid-1', args: { name: 'task_get', args: { id: 't1' }, callId: 'oc-abcdefgh12' } }
@@ -56,20 +54,15 @@ function answer(res: http.ServerResponse, status: number, body: unknown, entry =
   res.end(JSON.stringify(body))
 }
 
-// eslint-disable-next-line @typescript-eslint/no-implied-eval
-const inlined = new Function(`"use strict"; return (${createHostCallClient.toString()})`)() as typeof createHostCallClient
-
-describe('the inlined client reads the same header the entry writes', () => {
-  it('the factory names HOST_CALL_ANSWER_HEADER, and the source twin carries it with no placeholder left', () => {
+describe('the client reads the same header the entry writes', () => {
+  it('the factory names HOST_CALL_ANSWER_HEADER', () => {
     // The loader may fold the constant into its uses, in either quote style: the name is there.
     expect(createHostCallClient.toString()).toContain(HOST_CALL_ANSWER_HEADER)
-    const generated = getDaemonSource()
-    expect(generated).not.toContain('__CREATE_HOST_CALL_CLIENT__')
-    expect(generated).toContain(`hostCall: (${createHostCallClient.toString()})({ http: http, env: process.env })`)
   })
 })
 
-describe.each([['imported', createHostCallClient], ['inlined', inlined]] as const)('host call client (%s)', (_label, make) => {
+describe('host call client', () => {
+  const make = createHostCallClient
   const client = (sock: string, token = TOKEN) => make({ http, env: { WALNUT_CALL_SOCKET: sock, WALNUT_CALL_TOKEN: token } })
 
   it('posts the line with its token to the entry\'s path on the socket and takes the entry\'s answer as the call\'s', async () => {
