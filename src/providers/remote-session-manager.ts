@@ -34,7 +34,7 @@ import { getConnectedDaemonConnection, getDirectDaemonConnection, readDaemonLine
 import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, cliStoppedBeforeFirstLine, cliStoppedSentence, startFailureSentence, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { HostRevokedError, revokedAs } from '../core/session-channel/revoked-hosts.js'
-import { asPersonCall } from '../core/session-channel/person-call.js'
+import { asPersonCall, outsidePersonCall } from '../core/session-channel/person-call.js'
 import { linkFailureKind, markLinkFailure } from './link-failure.js'
 import type { LineFate } from './line-fate-core.js'
 import { CloudSessionLink } from './cloud-session-link.js'
@@ -300,7 +300,8 @@ export class RemoteSessionManager implements SessionManager {
       this.cloudLink = link
     }
     const generation = this.cloudGeneration
-    const reply = await link.connect()
+    // The cloud link serves every later line of this session: it and its retries carry no person mark.
+    const reply = await outsidePersonCall(() => link.connect())
     if (generation !== this.cloudGeneration || this.cloudLink !== link || this._sid !== sid) {
       throw new SendHeldError('Not sent yet: the cloud session connection was cancelled')
     }

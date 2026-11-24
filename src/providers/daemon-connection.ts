@@ -54,7 +54,7 @@ import { DAEMON_BINARIES_DIR, IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../cons
 import { isHomeMoveHeld, settledHomeMove } from '../core/home-move.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { BACK_TRIES_MAX, pendingReplaces, serviceModeAsks } from './daemon-update-store.js'
-import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
+import { assertPersonOnlyReach, gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { assertSessionCommandReachesDaemon, hostJudgedSessionOfRuntime, sessionCommandTarget } from '../core/sessions/session-command-gate.js'
 import { sshAliasOptions, sshDestination } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
@@ -4193,6 +4193,8 @@ export class DaemonConnection {
    * preview then tries its next address), and so is a daemon without 'port-stream-v1'.
    */
   ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
+    // A forward is shared by every later caller of the port: its connections carry no person mark.
+    if (inPersonCall()) return outsidePersonCall(() => this.ensurePortForward(remotePort, target, opts))
     let linkHost: string | null = null
     if (this.noSsh) {
       const host = this.linkForwardHost(remotePort, target)
@@ -4323,6 +4325,8 @@ export class DaemonConnection {
   }
 
   private ensureLane(): void {
+    // The lane is a link of its own, kept for every later stream: it carries no person mark.
+    if (inPersonCall()) return outsidePersonCall(() => this.ensureLane())
     if (!this.laneWanted || this.lane || !this._connected || this._destroyed) return
     if (!this.hasCapability('stream-lane-v1')) return
     const testForward = laneForwardForTesting()
@@ -4355,6 +4359,7 @@ export class DaemonConnection {
     if (!this.streams) {
       this.streams = createStreamEndpoint({
         send: (frame) => {
+          assertPersonOnlyReach(this.hostKey, String(frame.cmd), frame)
           const ws = this.ws
           if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(`not connected to ${this.hostKey}`)
           if (isInProcessDaemonSocket(ws)) { ws.sendFrame(frame as Record<string, unknown>); return }
@@ -9036,7 +9041,8 @@ export class DaemonConnection {
     }
 
     this.reconnectTimerAt = Date.now() + delayMs
-    this.reconnectTimer = setTimeout(() => {
+    // Every reconnect (a wake's, a lost link's) re-dials outside any person mark, as connect() does.
+    this.reconnectTimer = outsidePersonCall(() => setTimeout(() => {
       this.reconnectTimer = null
       if (this._destroyed || this._connected || daemonDialsClosed()) return
       // A connect() owns this instance right now: reconnect() would stop the
@@ -9046,7 +9052,7 @@ export class DaemonConnection {
         return
       }
       this.runReconnectAttempt(chainDelayMs).catch(() => { /* the failure already rescheduled the loop */ })
-    }, delayMs)
+    }, delayMs))
   }
 
   /** One reconnect attempt (the timer's or reconnectNow's). Rejects with the attempt's error after rescheduling. */

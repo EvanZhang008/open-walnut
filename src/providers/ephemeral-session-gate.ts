@@ -91,6 +91,18 @@ export const REVOKED_PERSON_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 /** A raw line that allows a tool call (a permission answer written as sendRaw). */
 const allowsTool = (cmd: string, params: Record<string, unknown>) => cmd === 'sendRaw' && typeof params.raw === 'string' && /"behavior"\s*:\s*"allow"/.test(params.raw)
 
+/**
+ * On a revoked host, a command that runs a process there or hands it data, and a tool allowed there,
+ * go only for a person's own call that still runs (person-call.ts): thrown before anything is sent.
+ * The one check for every way a frame leaves for a host: the command gate below, and the stream
+ * endpoints whose frames never pass it (a port forward's, a terminal's or a follower stream's
+ * opening: DaemonConnection.streamEndpoint, stream-lane.ts).
+ */
+export function assertPersonOnlyReach(host: string | undefined | null, cmd: string, params: Record<string, unknown>): void {
+  if (!REVOKED_PERSON_ONLY_COMMANDS.has(cmd) && !allowsTool(cmd, params)) return
+  if (!inPersonCall()) assertHostNotRevoked(host, `${cmd} refused: there only a person's own call runs it, nothing ran`)
+}
+
 const k = (...parts: string[]) => parts.join('\u0000')
 /** A thread one of this server's own ACP runs answered with on `host`, under any adapter. */
 function ownsThread(host: string, thread: string): boolean {
@@ -171,8 +183,7 @@ export function gateSessionCommand(scope: GateScope, cmd: string, params: Record
   // one-shot run are refused here, every source and path alike (session-channel/revoked-reach.ts `cmd:` rows).
   const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS.has(canonicalCommand)
   if (spawns) assertHostNotRevoked(scope.host, `${canonicalCommand} refused, nothing ran`)
-  const personOnly = !!canonicalCommand && (REVOKED_PERSON_ONLY_COMMANDS.has(canonicalCommand) || allowsTool(canonicalCommand, params))
-  if (personOnly && !inPersonCall()) assertHostNotRevoked(scope.host, `${canonicalCommand} refused: there only a person's own call runs it, nothing ran`)
+  if (canonicalCommand) assertPersonOnlyReach(scope.host, canonicalCommand, params)
   if (canonicalCommand && (INPUT_COMMANDS.has(canonicalCommand)
     || ['start', 'acpStart', 'acpNewSession', 'oneshot.run', 'oneshot.prewarm', 'exec.run', 'exec.script'].includes(canonicalCommand))) assertDemoAdmission()
   if (skipped(scope, enabled)) return undefined

@@ -21,6 +21,7 @@ import type { Duplex } from 'node:stream'
 import { WebSocket } from '#ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
+import { assertPersonOnlyReach } from './ephemeral-session-gate.js'
 import type { UploadPacer } from '../lib/upload-pacer.js'
 import { PACED_STREAM_PURPOSES } from './ssh-upload-budget.js'
 import { fixedPace, uploadPaceFor, type PaceSource } from './upload-pace.js'
@@ -208,6 +209,7 @@ export class StreamLane {
       const sentByPurpose = this.sentByPurpose
       const endpoint = createStreamEndpoint({
         send: (frame) => {
+          assertPersonOnlyReach(this.opts.hostKey, String(frame.cmd), frame)
           if (ws.readyState !== WebSocket.OPEN) throw new Error(`the stream lane to ${this.opts.hostKey} is down`)
           ws.send(JSON.stringify(frame))
         },

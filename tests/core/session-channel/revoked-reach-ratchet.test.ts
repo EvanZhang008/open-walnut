@@ -169,7 +169,11 @@ describe('every way a host reaches this leader is classified for a revoke', () =
     expect(bodyOf(read('src/providers/claude-code-session.ts'), 'private async assertStartRouting(')).toMatch(/\{\s*\/\/[^\n]*\n\s*assertHostNotRevoked\(data\.host,/)
     expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/const canonicalCommand = canonical\(cmd, params\)\n(\s*\/\/[^\n]*\n)*\s*const spawns = !!canonicalCommand && REVOKED_REFUSES_COMMANDS\.has\(canonicalCommand\)\n\s*if \(spawns\) assertHostNotRevoked\(scope\.host,/)
     // A person-only command: right after, in the same gate; the server marks a person's request; an ACP allow before its link.
-    expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/if \(spawns\)[^\n]*\n\s*const personOnly = [^\n]*\n\s*if \(personOnly && !inPersonCall\(\)\) assertHostNotRevoked\(scope\.host,/)
+    expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function gateSessionCommand(')).toMatch(/if \(spawns\)[^\n]*\n\s*if \(canonicalCommand\) assertPersonOnlyReach\(scope\.host, canonicalCommand, params\)\n/)
+    expect(bodyOf(read('src/providers/ephemeral-session-gate.ts'), 'export function assertPersonOnlyReach(')).toMatch(/if \(!REVOKED_PERSON_ONLY_COMMANDS\.has\(cmd\) && !allowsTool\(cmd, params\)\) return\n\s*if \(!inPersonCall\(\)\) assertHostNotRevoked\(host,/)
+    // A stream's opening never passes the command gate: both stream endpoints to a host check each frame the same way.
+    expect(bodyOf(daemon, 'private streamEndpoint(')).toMatch(/send: \(frame\) => \{\n\s*assertPersonOnlyReach\(this\.hostKey, String\(frame\.cmd\), frame\)/)
+    expect(bodyOf(read('src/providers/stream-lane.ts'), 'private connect(')).toMatch(/send: \(frame\) => \{\n\s*assertPersonOnlyReach\(this\.opts\.hostKey, String\(frame\.cmd\), frame\)/)
     expect(read('src/web/server.ts')).toMatch(/app\.use\('\/api', \(req, res, next\) => \{ if \(isPersonCaller\(req\)\) markPersonRequest\(res, next\); else next\(\) \}\)/)
     // A daemon link is dialed outside any person mark, on both paths (R3-S1).
     expect(bodyOf(daemon, 'async connect(')).toMatch(/\{\s*(\/\/[^\n]*\n\s*)*if \(inPersonCall\(\)\) return outsidePersonCall\(\(\) => this\.connect\(\)\)/)

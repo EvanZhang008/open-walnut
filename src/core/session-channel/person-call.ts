@@ -9,8 +9,11 @@
  * The mark lives only as long as its call (R3-S1 of the C7 review): an AsyncLocalStorage store
  * follows every socket, child process and timer made inside it, so the store is an object whose
  * `live` goes false when the request's response ends (markPersonRequest) or the wrapped work settles
- * (asPersonCall). What outlives the call reads "not a person". A daemon link is dialed outside any
- * mark (outsidePersonCall in DaemonConnection.connect), so its events never carry one.
+ * (asPersonCall). What outlives the call reads "not a person". A link or loop that serves later callers
+ * too (a daemon link and its reconnects, the stream lane, a shared port forward) is made outside any
+ * mark (outsidePersonCall), so its events never carry one, not even while the request still runs.
+ * Every creator of such a thing in the modules that send what only a person may is classified in
+ * tests/core/session-channel/person-mark-long-lived-ratchet.test.ts.
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 
