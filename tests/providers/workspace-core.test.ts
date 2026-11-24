@@ -291,6 +291,47 @@ describe('git-worktree', () => {
       expect((p2.problems as string[]).join(' ')).toContain(`${nested}: a repository Walnut was not told about`)
     })
 
+    it('an ignored node_modules with thousands of packages is not looked through, and a repository in another ignored folder still keeps it (2026-11-24)', async () => {
+      // 10 of 12 completed tasks' worktrees on the Mac were kept for good: their node_modules used up
+      // the 1000-folder budget of the ignored-folder scan.
+      const w = await made('deps')
+      fs.mkdirSync(path.join(w.repo, '.git', 'info'), { recursive: true })
+      fs.appendFileSync(path.join(w.repo, '.git', 'info', 'exclude'), 'node_modules/\nvendor/\n')
+      fs.mkdirSync(path.join(w.root, 'web'), { recursive: true })
+      fs.writeFileSync(path.join(w.root, 'web', 'package.json'), '{}\n')
+      sh(['add', 'web/package.json'], w.root)
+      sh(['commit', '-qm', 'web'], w.root)
+      for (const top of ['node_modules', path.join('web', 'node_modules')]) {
+        for (let i = 0; i < 1100; i++) fs.mkdirSync(path.join(w.root, top, `pkg-${i}`, 'lib'), { recursive: true })
+        fs.writeFileSync(path.join(w.root, top, 'pkg-0', 'index.js'), '\n')
+      }
+      const p = await statusOf(w)
+      expect((p.repos as Array<Record<string, unknown>>)[0].ignored).toEqual(expect.arrayContaining(['node_modules/', 'web/node_modules/']))
+      expect((p.problems as string[]).join(' ')).not.toMatch(/could not look through every ignored folder/)
+      expect(p).toMatchObject({ clean: true })
+      const nested = inTemp(path.join(w.root, 'vendor', 'lib'))
+      fs.mkdirSync(nested, { recursive: true })
+      sh(['init', '-q'], nested)
+      const p2 = await statusOf(w)
+      expect(p2.clean).toBe(false)
+      expect(p2.unlisted).toEqual([nested])
+    })
+
+    it('an ignored folder whose name has a space or a non-ASCII letter is looked through too', async () => {
+      // Without -z git quotes such a path ("sp ace/"), and the scan passed over it.
+      const w = await made('quoted')
+      fs.mkdirSync(path.join(w.repo, '.git', 'info'), { recursive: true })
+      fs.appendFileSync(path.join(w.repo, '.git', 'info', 'exclude'), 'sp ace/\n\u00e9t\u00e9/\n')
+      for (const dir of ['sp ace', '\u00e9t\u00e9']) {
+        const nested = inTemp(path.join(w.root, dir, 'lib'))
+        fs.mkdirSync(nested, { recursive: true })
+        sh(['init', '-q'], nested)
+        const p = await statusOf(w)
+        expect(p.clean).toBe(false)
+        expect(p.unlisted).toEqual(expect.arrayContaining([nested]))
+      }
+    })
+
     it('never removes a root outside the worktrees folder, or one holding the task folder', async () => {
       const repo = makeRepo()
       const jobId = jid()

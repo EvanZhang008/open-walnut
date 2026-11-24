@@ -924,9 +924,17 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     var p = P.resolve(repo.path)
     var base = { path: p, ...(repo.name ? { name: repo.name } : {}) }
     if (!(await isDir(p))) return Object.assign(base, { exists: false, dirty: false, changes: 0, unreadable: false, merged: null })
-    var st = await git(['status', '--porcelain=v1', '--ignored'], p)
+    // -z: a path with a space, a quote or a non-ASCII letter comes as it is, never quoted ("sp ace/"),
+    // so an ignored folder named so is looked through like any other; a rename's second path is skipped.
+    var st = await git(['status', '--porcelain=v1', '-z', '--ignored'], p)
     if (!st.ok) return Object.assign(base, { exists: true, dirty: false, changes: 0, unreadable: true, error: gitErr(st), merged: null })
-    var lines = st.out ? st.out.split('\n').filter(Boolean) : []
+    var parts = st.out ? st.out.split('\0') : []
+    var lines: string[] = []
+    for (var z = 0; z < parts.length; z++) {
+      if (!parts[z]) continue
+      lines.push(parts[z])
+      if (/^[RC]/.test(parts[z])) z++
+    }
     var ignored = lines.filter((l) => l.indexOf('!! ') === 0).map((l) => l.slice(3))
     var changes = lines.length - ignored.length
     var out: WorkspaceRepoProbe = Object.assign(base, { exists: true, dirty: changes > 0, changes: changes, unreadable: false, merged: null as boolean | null })
@@ -1185,9 +1193,14 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       var ignoredAll: string[] = []
       out.repos.push(await probeRepo({ path: root, ...(named ? { name: named } : {}) }, 'git', async () => bm.merged, ignoredAll))
       // `git worktree remove` deletes ignored folders: one that holds a repository holds work git cannot see.
+      // An installed dependency folder (node_modules, web/node_modules) is not looked through: it is
+      // made again by an install, and its thousands of package folders used up the budget of every
+      // JS workspace, which was then kept forever (2026-11-24: 10 of 12 completed tasks' worktrees
+      // on the Mac, about 1.6 GB each).
       var budget = { left: 1000 }
       for (var g = 0; g < ignoredAll.length && out.rootExists; g++) {
         if (!/\/$/.test(ignoredAll[g])) continue
+        if (/(^|\/)node_modules\//.test(ignoredAll[g])) continue
         var inIgnored = await findRepos(P.join(root, ignoredAll[g]), 2, budget)
         unlisted = unlisted.concat(inIgnored.found)
         if (inIgnored.truncated) blocked = true
