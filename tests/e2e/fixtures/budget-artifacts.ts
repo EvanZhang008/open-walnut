@@ -13,7 +13,8 @@ import { computeExpectedDaemonVersion } from '../../../src/providers/daemon-vers
 
 /** The daemon binary build-daemon.sh makes for this machine (the budget E2E runs on a Mac and on Linux hosts). */
 export const HOST_DAEMON_BINARY = `daemon-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
-export const BUDGET_ARTIFACTS = ['usage-core.cjs', 'acp-daemon-core.cjs', 'acp-worker.js', HOST_DAEMON_BINARY] as const;
+/** What the budget E2Es run: the compiled daemon (usage and ACP code are inside it) and the ACP worker bundle. */
+export const BUDGET_ARTIFACTS = ['acp-worker.js', HOST_DAEMON_BINARY] as const;
 const MANIFEST = 'budget-e2e-manifest.json';
 
 const sha = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');

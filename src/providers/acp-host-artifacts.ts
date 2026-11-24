@@ -13,8 +13,7 @@
  * `probeHostEngines` answers the same question for the picker: which engines this
  * host can run, and why not.
  *
- * Compiled into acp-daemon.ts, so both daemon twins carry it through the
- * acp-daemon-core.cjs sidecar; node builtins only.
+ * Compiled into the daemon through acp-daemon.ts; node builtins only.
  */
 import fs from 'node:fs'
 import os from 'node:os'
