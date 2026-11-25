@@ -60,7 +60,7 @@ export function createModelCopy(deps: ModelCopyDeps) {
 
   function catalogOf(projection: SessionProjection, row: ProjectedSession): SessionModelCatalogEntry[] {
     // An engine that lists its own models: the copy holds no catalog of it, so its own model only (acp-model-rows.ts).
-    if (listsOwnModels(row.engine)) return recordModelRows({ model: row.cli_model ?? row.model ?? undefined })
+    if (listsOwnModels(row.engine)) return recordModelRows({ acpModel: row.acp_model, acpModelName: row.acp_model_name, model: row.cli_model ?? row.model ?? undefined })
     const models = projection.host_model_catalogs?.[aliasOf(row.host)]?.models
     return models && models.length > 0 ? models : sessionModelsAsCatalog()
   }
@@ -72,7 +72,7 @@ export function createModelCopy(deps: ModelCopyDeps) {
     if (mine && pushedAt > mine.at) appliedHere.delete(row.id)
     const fresh = mine && pushedAt <= mine.at ? mine : undefined
     return {
-      model: fresh?.cliModel ?? row.cli_model ?? row.model ?? null,
+      model: fresh?.cliModel ?? row.acp_model ?? row.cli_model ?? row.model ?? null,
       effort: fresh?.effort ?? row.effort ?? null,
     }
   }

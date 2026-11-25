@@ -108,7 +108,8 @@ describe('a session\'s call goes only to a server of its own Walnut', () => {
     // A session is pinned to the Walnut that asked for it, copy or not.
     expect(fnBody(src, 'gatewayOwnerHome')).toMatch(/return sessionOwnerHome\(callerSid\)/)
     // An ACP session's calls carry its worker's runtime id: its Walnut is found by it too (2026-11-25).
-    expect(fnBody(src, 'sessionOwnerHome')).toMatch(/offlineHost\.ownerOf\(sid\) \|\| sessionHomeOf\(sid\) \|\| offlineHost\.runtimeOwnerOf\(sid\) \|\| acpRuntimeOwner\(sid\) \|\| undefined/)
+    expect(fnBody(src, 'sessionOwnerHome')).toMatch(/offlineHost\.ownerOf\(sid\) \|\| sessionHomeOf\(sid\) \|\| acpRuntimeHome\(sid\) \|\| undefined/)
+    expect(fnBody(src, 'acpRuntimeHome')).toMatch(/offlineHost\.runtimeOwnerOf\(runtimeId\) \?\? acpRuntimeOwner\(runtimeId\)/)
     expect(fnBody(src, 'walnutPinned')).toMatch(/offlineHost\.hasHome\(home\) \|\| servedWalnuts\.knows\(home\) \|\| gatewayIdentity\.knowsHome\(home\)/)
   })
 
@@ -117,7 +118,7 @@ describe('a session\'s call goes only to a server of its own Walnut', () => {
     // each needs its own lookup in sessionOwnerHome, or its calls go to a link that names no Walnut
     // (2026-11-25: an ACP worker's runtime id found none, and its task_send never reached the Mac).
     const needs: Record<string, RegExp[]> = {
-      'acp.hasWorker': [/offlineHost\.runtimeOwnerOf\(sid\)/, /acpRuntimeOwner\(sid\)/],
+      'acp.hasWorker': [/acpRuntimeHome\(sid\)/],
     }
     const kinds = [...src.matchAll(/resolveGatewayCallerSid\([^)]*\)\s*\?\?\s*\(([\w.]+)\(/g)].map((m) => m[1]!)
     expect(kinds.length).toBeGreaterThan(0)

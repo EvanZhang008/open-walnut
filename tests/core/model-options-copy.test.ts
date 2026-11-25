@@ -77,6 +77,13 @@ describe('the picker from the copy', () => {
     expect(r!.models).toEqual([{ id: 'gemini-4-neon[high]', label: 'gemini-4-neon[high]', supportsEffort: false }])
   })
 
+  it('an ACP session switched since it started shows the model it switched to', async () => {
+    const acp = { id: B, host: 'devbox', process_status: 'idle', started_at: '', last_active_at: '', message_count: 2, engine: 'antigravity', model: 'gemini-4-hydrogen[high]', acp_model: 'gemini-4-neon[high]', acp_model_name: 'Gemini 4 Neon' }
+    const r = await harness({ projection: () => projection({ sessions: [acp] as SessionProjection['sessions'] }) }).copy.modelOptions(B)
+    expect(r).toMatchObject({ current: 'gemini-4-neon[high]' })
+    expect(r!.models).toEqual([{ id: 'gemini-4-neon[high]', label: 'Gemini 4 Neon', supportsEffort: false }])
+  })
+
   it('a session the copy does not list: null, the route asks the Mac as before', async () => {
     expect(await harness().copy.modelOptions('dddddddd-4444-4444-8444-444444444444')).toBeNull()
     expect(await harness({ projection: () => null }).copy.modelOptions(B)).toBeNull()

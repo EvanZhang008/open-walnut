@@ -181,6 +181,9 @@ export interface ProjectedSession {
   model?: string
   /** The CLI --model the session runs with (additive): the companion's model picker reads it while the Mac is away. */
   cli_model?: string
+  /** An ACP session's own model id and its display name (additive). */
+  acp_model?: string
+  acp_model_name?: string
   /** The reasoning effort in effect (additive, same reader). */
   effort?: string
   mode?: string
@@ -253,6 +256,9 @@ export function projectSession(
     ...(s.judge === 'host' ? { judge: 'host' as const } : {}),
     ...(s.model ? { model: s.model } : {}),
     ...(s.cliModel ? { cli_model: s.cliModel } : {}),
+    // An ACP session's model after a switch (AcpSession.setModel writes only these): the companion's menu shows it.
+    ...(s.acpModel ? { acp_model: s.acpModel } : {}),
+    ...(s.acpModelName ? { acp_model_name: s.acpModelName } : {}),
     ...(s.effectiveEffort || s.effort ? { effort: s.effectiveEffort || s.effort } : {}),
     ...(s.mode ? { mode: s.mode } : {}),
     ...(normalizeEngine(s.engine) ? { engine: normalizeEngine(s.engine) } : {}),

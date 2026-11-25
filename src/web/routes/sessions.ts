@@ -2665,10 +2665,11 @@ sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, nex
       return
     }
     // An engine that lists its own models answers with them, never Claude Code's (acp-model-rows.ts).
-    const { listsOwnModels, acpMenu } = await import('../../core/sessions/acp-model-rows.js')
+    const { listsOwnModels } = await import('../../core/sessions/acp-model-rows.js')
     if (listsOwnModels(record.engine)) {
-      const acp = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
-      res.json({ source: acp ? 'acp' : 'record', live: !!acp, models: acpMenu(acp?.modelCatalog, record).rows })
+      const { acpMenuFor } = await import('../../core/sessions/session-controls.js')
+      const menu = await acpMenuFor(sessionId, record)
+      res.json({ source: menu.live ? 'acp' : 'record', live: menu.live, models: menu.rows, ...(menu.hostNote ? { hostNote: menu.hostNote } : {}) })
       return
     }
     // Same-shape degradation: prefer the host's last-known CLI catalog over the

@@ -506,28 +506,50 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
 }
 
 /**
- * The menu of a session whose engine lists its own models (acp-model-rows.ts): its live ACP
- * catalog, read through its host like every control read here, else the record's own model;
- * never Claude Code's host catalog.
+ * The menu of a session whose engine lists its own models (acp-model-rows.ts), never Claude Code's
+ * host catalog. A session whose record says no CLI runs answers from what this server already holds
+ * (its ACP object here, else its record): a menu read never starts a worker. A live one is read
+ * within the control caps, on this machine too, so a slow read answers the record's model rather
+ * than holding the request (the phone's relay has 30 s). Shared by the phone's sheet and
+ * GET /api/sessions/:id/models.
  */
-async function acpModelOptions(sessionId: string, record: SessionRecord): Promise<ModelOptionsResult> {
+export async function acpMenuFor(sessionId: string, record: SessionRecord): Promise<{ rows: SessionModelCatalogEntry[]; current: string | null; live: boolean; hostNote?: string }> {
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   const bound = await import('../hosts/remote-read-bound.js');
   let hostNote: string | undefined;
   let catalog: AcpModelCatalog | null = null;
   const remote = bound.isRemoteHost(record.host);
-  if (remote && !(await import('../../providers/daemon-connection.js')).isDaemonConnected(record.host!)) {
-    if (recordSaysLive(record)) hostNote = (await hostUnreachableError(record.host!)).message;
+  if (!recordSaysLive(record)) {
+    catalog = sessionRunner.findAcpSession(sessionId)?.modelCatalog ?? null;
+  } else if (remote && !(await import('../../providers/daemon-connection.js')).isDaemonConnected(record.host!)) {
+    hostNote = (await hostUnreachableError(record.host!)).message;
   } else {
     const read = async () => (await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined))?.modelCatalog ?? null;
-    catalog = await cappedControlRead(record.host, read, recordSaysLive(record) ? CONTROL_READ_CAP_MS : STOPPED_CHECK_CAP_MS)
-      .catch((err: unknown) => {
-        if (!(err instanceof bound.HostReconnectingError)) throw err;
-        hostNote = err.message;
-        return null;
-      });
+    catalog = remote
+      ? await cappedControlRead(record.host, read).catch((err: unknown) => {
+          if (!(err instanceof bound.HostReconnectingError)) throw err;
+          hostNote = err.message;
+          return null;
+        })
+      : await readWithin(read, CONTROL_READ_CAP_MS);
   }
   const { rows, current } = acpMenu(catalog, record);
+  return { rows, current, live: !!catalog && catalog.availableModels.length > 0, ...(hostNote ? { hostNote } : {}) };
+}
+
+/** `read`'s value, or null once `ms` pass first (the read goes on; nothing waits for it). */
+async function readWithin<T>(read: () => Promise<T | null>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); timer.unref?.(); });
+  try {
+    return await Promise.race([read().catch(() => null), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function acpModelOptions(sessionId: string, record: SessionRecord): Promise<ModelOptionsResult> {
+  const { rows, current, hostNote } = await acpMenuFor(sessionId, record);
   const options = modelOptionsFromCatalog(rows, current, null);
   return hostNote ? { ...options, hostNote } : options;
 }

@@ -3792,7 +3792,12 @@ function gatewayOwnerHome(callerSid: string): string | undefined {
  * none (this host's own replica) and its needs_leader came back instead of reaching the Mac.
  */
 function sessionOwnerHome(sid: string): string | undefined {
-  return offlineHost.ownerOf(sid) || sessionHomeOf(sid) || offlineHost.runtimeOwnerOf(sid) || acpRuntimeOwner(sid) || undefined
+  return offlineHost.ownerOf(sid) || sessionHomeOf(sid) || acpRuntimeHome(sid) || undefined
+}
+
+/** The Walnut whose ACP worker `runtimeId` is: the Mac's copy first, else the record of who started it here. */
+function acpRuntimeHome(runtimeId: string): string | undefined {
+  return offlineHost.runtimeOwnerOf(runtimeId) ?? acpRuntimeOwner(runtimeId)
 }
 
 function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3907,7 +3912,7 @@ const followerReads = createFollowerReads({
   realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
   sliceOwner: (sid) => offlineHost.ownerOf(sid),
   // The Mac's copy first (as sliceOwner), else the record of who started the worker here.
-  runtimeOwner: (runtimeId) => offlineHost.runtimeOwnerOf(runtimeId) ?? acpRuntimeOwner(runtimeId),
+  runtimeOwner: (runtimeId) => acpRuntimeHome(runtimeId),
   journalOwner: (sid) => journaledHome(sid),
   liveSessions: () => [...sessions].map(([sid, s]) => ({ sid, cwd: s.cwd })),
   journalSize: () => { try { return fs.statSync(SPAWN_JOURNAL).size } catch { return -1 } },

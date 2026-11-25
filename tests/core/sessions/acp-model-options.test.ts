@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   record: null as Record<string, unknown> | null,
   acp: undefined as { modelCatalog: { currentModelId?: string; availableModels: Array<{ modelId: string; name: string; description?: string }> } } | undefined,
   hostCatalogReads: 0,
+  attaches: 0,
+  here: undefined as { modelCatalog: { currentModelId?: string; availableModels: Array<{ modelId: string; name: string }> } } | undefined,
 }))
 
 vi.mock('../../../src/core/session-tracker.js', () => ({
@@ -23,7 +25,8 @@ vi.mock('../../../src/core/host-model-catalog.js', () => ({
 }))
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
-    findOrAttachAcpSession: async () => state.acp,
+    findOrAttachAcpSession: async () => { state.attaches++; return state.acp },
+    findAcpSession: () => state.here,
     getOrAttachLiveSession: async () => undefined,
   },
 }))
@@ -44,6 +47,8 @@ beforeEach(() => {
   state.record = record()
   state.acp = undefined
   state.hostCatalogReads = 0
+  state.attaches = 0
+  state.here = undefined
 })
 
 describe('model options of a session whose engine lists its own models', () => {
@@ -59,12 +64,38 @@ describe('model options of a session whose engine lists its own models', () => {
     expect(state.hostCatalogReads).toBe(0)
   })
 
-  it('no live session: the record\'s own model as the one row', async () => {
+  it('a stopped session: the record\'s own model as the one row, and no worker is started for the menu', async () => {
     state.record = record({ process_status: 'stopped', acpModel: NEON.modelId, acpModelName: NEON.name } as Partial<SessionRecord>)
+    state.acp = { modelCatalog: { availableModels: [HYDROGEN, NEON] } }
     const r = await computeModelOptions(SID)
     expect(r.models).toEqual([{ id: NEON.modelId, label: NEON.name, supportsEffort: false }])
     expect(r.current).toBe(NEON.modelId)
+    expect(state.attaches).toBe(0)
     expect(state.hostCatalogReads).toBe(0)
+  })
+
+  it('a stopped session whose ACP object this server still holds lists its catalog, still without an attach', async () => {
+    state.record = record({ process_status: 'stopped' })
+    state.here = { modelCatalog: { currentModelId: NEON.modelId, availableModels: [HYDROGEN, NEON] } }
+    const r = await computeModelOptions(SID)
+    expect(r.models.map((m) => m.id)).toEqual([HYDROGEN.modelId, NEON.modelId])
+    expect(r.current).toBe(NEON.modelId)
+    expect(state.attaches).toBe(0)
+  })
+
+  it('a live read that hangs answers the record\'s model within the control cap', async () => {
+    vi.useFakeTimers()
+    try {
+      state.record = record({ acpModel: HYDROGEN.modelId } as Partial<SessionRecord>)
+      state.acp = new Promise(() => {}) as never
+      const pending = computeModelOptions(SID)
+      await vi.advanceTimersByTimeAsync(21_000)
+      const r = await pending
+      expect(r.models.map((m) => m.id)).toEqual([HYDROGEN.modelId])
+      expect(state.hostCatalogReads).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('every ACP engine of the registry answers from its own catalog', async () => {
