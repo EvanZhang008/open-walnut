@@ -15,7 +15,7 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import type { CallModel, Finding } from './judge.js';
 import { renderTurns, turnsSince, type ReadTranscript } from './context.js';
-import { checkStepOf, stepWords, type GatedStep, type StepCheck } from './step-gate.js';
+import { checkCached, checkStepOf, stepWords, verdictOf, type GatedStep, type StepCheck } from './step-gate.js';
 import { appendDayNote, markHeld, nearlySame } from './records.js';
 import { sessionNowOf } from './candidates.js';
 import { giveBackChatSend, localDate, readReflectionState, takeChatSend, updateReflectionState, type HeldCorrection } from './state.js';
@@ -160,19 +160,30 @@ export async function sendHeld(
       await settle(node, nodeName, taskId, gone, 'heldDropped', (n) => `Held corrections dropped: ${n} for ${titleOf(taskId)} (${taskId}), not sent (${String(check)}).`, nowMs);
       continue;
     }
+    // Checked on a snapshot before any is taken out (a restart while the checks run loses nothing):
+    // each text passes the step check (one kept before it existed included); one the check cannot
+    // judge now waits; the ones the session took up since are settled, not sent.
+    const snapshot = ((await readReflectionState(node.id, nowMs)).held ?? []).filter((h) => h.taskId === taskId);
+    const checked: HeldCorrection[] = [];
+    let unjudged = false;
+    for (const h of snapshot) {
+      if (h.checked) { checked.push(h); continue; }
+      const g = await checkCached(node.id, h.text, checkStepOf(deps), nowMs).catch(() => ({ steps: [], why: '', by: 'failed' as const }));
+      if (verdictOf(g) === 'failed') { unjudged = true; break; }
+      checked.push({ ...h, checked: true, ...(g.steps.length ? { text: gatedPoint(g.steps) } : {}) });
+    }
+    if (unjudged || !checked.length) continue;
+    const { keep, done } = await stillNeeded(checked, await sessionNowOf(task!, deps).catch(() => ''), deps, node.id).catch(() => ({ keep: checked, done: [] as HeldCorrection[] }));
+    const same = (a: HeldCorrection, b: HeldCorrection) => a.taskId === b.taskId && a.entryAt === b.entryAt && a.at === b.at;
+    if (done.length) {
+      const gone = await takeOut(node.id, (h) => done.some((d) => same(d, h)), nowMs);
+      await settle(node, nodeName, taskId, gone, 'heldDropped', (n) => `Held corrections dropped: ${n} for ${task!.title} (${taskId}), the session took ${n === 1 ? 'it' : 'them'} up since.`, nowMs);
+    }
+    if (!keep.length) continue;
     if (isChat(task!) && !(await takeChatSend(task!.id, nowMs))) continue;
-    const taken = await takeOut(node.id, (h) => h.taskId === taskId, nowMs);
-    if (!taken.length) continue;
-    // Each held text passes the step check (one kept before it existed included), then the ones the
-    // session took up since are settled, not sent.
-    const stepCheck = checkStepOf(deps);
-    const checked = await Promise.all(taken.map(async (h) => {
-      if (h.checked) return h;
-      const g = await stepCheck(h.text, node.id);
-      return { ...h, checked: true as const, ...(g.steps.length ? { text: gatedPoint(g.steps) } : {}) };
-    }));
-    const { keep: items, done } = await stillNeeded(checked, await sessionNowOf(task!, deps).catch(() => ''), deps, node.id);
-    if (done.length) await settle(node, nodeName, taskId, done, 'heldDropped', (n) => `Held corrections dropped: ${n} for ${task!.title} (${taskId}), the session took ${n === 1 ? 'it' : 'them'} up since.`, nowMs);
+    // Taken out only now, with the checked texts: only those snapshot items still held.
+    const out = await takeOut(node.id, (h) => keep.some((k) => same(k, h)), nowMs);
+    const items = keep.filter((k) => out.some((h) => same(k, h)));
     if (!items.length) {
       if (isChat(task!)) await giveBackChatSend(task!.id, nowMs);
       continue;

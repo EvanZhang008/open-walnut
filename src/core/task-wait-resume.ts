@@ -91,12 +91,13 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'topic',         // topics/topic-delivery.ts: a group chat the task is in woke it
   'idle-compact',  // sessions/idle-compaction.ts: a quiet turn, which moves no phase anyway
   'context-compact', // sessions/context-full-recovery.ts: the same quiet /compact, for a full context
+  'org-reflection', // org/reflection: a correction, a held correction, a tidy or align note (2026-11-25: one ended a parked lead's wait)
 ]);
 
 /** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice), or to hand over held notes: the wait they
  *  interrupt comes back at the turn end whatever held it, its clock included, because nothing the
  *  task waited for came (2026-10-31: a look at a parked lead lost the clock it had set). */
-const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'thread-audit', 'idle-compact', 'context-compact', 'held-notes']);
+const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'thread-audit', 'idle-compact', 'context-compact', 'held-notes', 'org-reflection']);
 
 /**
  * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.

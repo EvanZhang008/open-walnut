@@ -11,7 +11,10 @@
  * short model call that reads the text in any language. A call that fails, or an answer that cannot
  * be read, holds the text: a correction too few is the lesser harm.
  */
+import crypto from 'node:crypto';
 import type { CallModel, Finding } from './judge.js';
+import { normalizeForQuote } from './judge.js';
+import { readReflectionState, updateReflectionState } from './state.js';
 
 export const GATED_STEPS = ['user_browser', 'user_account', 'in_his_name', 'production_write', 'cloud_account_write'] as const;
 export type GatedStep = typeof GATED_STEPS[number];
@@ -61,12 +64,16 @@ export function readGateAnswer(raw: string): GateResult | null {
   try { a = JSON.parse(body); } catch { return null; }
   if (!a || typeof a !== 'object' || !Array.isArray((a as { steps?: unknown }).steps)) return null;
   const named = ((a as { steps: unknown[] }).steps).filter((s): s is GatedStep => typeof s === 'string' && ALL.has(s));
-  // A name it made up is not a pass: it said something is a step, and the list does not know it.
-  if (named.length !== (a as { steps: unknown[] }).steps.length) return { steps: named.length ? named : ['user_account'], why: 'the check named a step it does not know', by: 'model' };
+  // A name it made up is no verdict: the text is checked again later, never passed and never called a step it is not.
+  if (named.length !== (a as { steps: unknown[] }).steps.length) return null;
   return { steps: named, why: String((a as { why?: unknown }).why ?? '').slice(0, 300), by: 'model' };
 }
 
-/** The whole check on some text the reflection would send or write. No steps: it may go as written. */
+/**
+ * The whole check on some text the reflection would send or write. No steps: it may go as written.
+ * `by: 'failed'` is no verdict (the call failed, or its answer could not be read): the caller sends and
+ * writes nothing of the text now and checks it again later; it never says a step the text may not hold.
+ */
 export async function gateText(text: string, callModel: CallModel, nodeId?: string): Promise<GateResult> {
   if (!text.trim()) return { steps: [], why: '', by: 'words' };
   const fixed = gatedByWords(text);
@@ -75,26 +82,60 @@ export async function gateText(text: string, callModel: CallModel, nodeId?: stri
   try {
     raw = await callModel(GATE_SYSTEM, `INSTRUCTION:\n${text}`, nodeId);
   } catch (err) {
-    return { steps: ['user_account'], why: `the check could not run (${err instanceof Error ? err.message : String(err)}), so it is held`, by: 'failed' };
+    return { steps: [], why: `the check could not run (${err instanceof Error ? err.message : String(err)})`, by: 'failed' };
   }
-  return readGateAnswer(raw) ?? { steps: ['user_account'], why: 'the check\'s answer could not be read, so it is held', by: 'failed' };
+  return readGateAnswer(raw) ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+}
+
+/** The rule text of a lesson the check could not judge: the backfill takes it up again (guidance-merge.ts). */
+export const STEP_CHECK_FAILED = 'step_check_failed';
+
+/** A verdict: the text may go (`pass`), holds a step (`held`), or was not judged now (`failed`). */
+export const verdictOf = (g: GateResult): 'pass' | 'held' | 'failed' => (g.by === 'failed' ? 'failed' : g.steps.length ? 'held' : 'pass');
+
+const keyOf = (text: string) => crypto.createHash('sha256').update(normalizeForQuote(text)).digest('hex').slice(0, 16);
+/** Verdicts kept per node (state.ts stepChecked), newest last. */
+export const STEP_CHECKS_KEPT = 2000;
+
+/**
+ * The check with its verdict kept on the node's state: the same text is never asked twice (2026-11-25
+ * review: the backfill asked about the same waiting lesson every pass). A failed check is not kept.
+ */
+export async function checkCached(nodeId: string, text: string, check: StepCheck, nowMs: number): Promise<GateResult> {
+  const key = keyOf(text);
+  const kept = (await readReflectionState(nodeId, nowMs)).stepChecked?.[key];
+  if (kept) return { steps: kept.steps as GatedStep[], why: kept.why, by: 'model' };
+  const g = await check(text, nodeId);
+  if (g.by !== 'failed') {
+    await updateReflectionState(nodeId, (s) => {
+      const all = { ...(s.stepChecked ?? {}), [key]: { steps: [...g.steps], why: g.why.slice(0, 200) } };
+      const keys = Object.keys(all);
+      s.stepChecked = keys.length > STEP_CHECKS_KEPT ? Object.fromEntries(keys.slice(-STEP_CHECKS_KEPT).map((k) => [k, all[k]!])) : all;
+    }, nowMs);
+  }
+  return g;
 }
 
 export type StepCheck = (text: string, nodeId: string) => Promise<GateResult>;
 
-/** The check a pass uses: the one its deps name, or the fixed words alone (a test's deps). */
+/** The check a pass uses: the fixed words first, always, then the model layer its deps name (none in a test's deps). */
 export const checkStepOf = (deps: { checkStep?: StepCheck }): StepCheck =>
-  deps.checkStep ?? (async (text) => gatedByWords(text) ?? { steps: [], why: '', by: 'words' });
+  async (text, nodeId) => gatedByWords(text) ?? (deps.checkStep ? deps.checkStep(text, nodeId) : { steps: [], why: '', by: 'words' });
 
-/** What a finding would tell the session: the parts the check reads. */
-export const findingInstruction = (f: Pick<Finding, 'correction' | 'correct_action'>) => [f.correct_action, f.correction].filter(Boolean).join('\n\n');
+/** What a finding would tell the session: every part of it that is sent (what went wrong carries steps too). */
+export const findingInstruction = (f: Pick<Finding, 'correction' | 'correct_action' | 'what_went_wrong'>) => [f.what_went_wrong, f.correct_action, f.correction].filter(Boolean).join('\n\n');
 
-/** The note a held finding becomes: never its instruction, only that a step is not to be taken on its word. Pure. */
-export function gatedNote(nodeName: string, steps: readonly GatedStep[], sessionQuote: string): string {
+/**
+ * The note a held finding becomes: never its instruction, only that a step is not to be taken on its word.
+ * `saw` is what went wrong, when that alone passed the check. Pure.
+ */
+export function gatedNote(nodeName: string, steps: readonly GatedStep[], sessionQuote: string, saw = ''): string {
   const what = steps.map((s) => STEP_WORDS[s]).join('; ');
   return [
     `${nodeName}'s reflection looked at your turn and held its correction back: the fix it saw would have you ${what}.`,
-    'The reflection never tells a session to take such a step. This note is not a reason to take it: if the step is still needed, ask the person your rules name for it (the user, or whoever his rules say), with what the step is and what you recommend, and take it only on their word.',
+    ...(saw ? ['', `What it saw: ${saw}`] : []),
+    '',
+    'The reflection never tells a session to take such a step, and this note is not a reason to take it. Where your rules or the user already settled that step for this kind of work, follow them; otherwise ask the person your rules name for it (the user, or whoever his rules say), with what the step is and what you recommend, and take it only on their word.',
     ...(sessionQuote ? ['', `Your turn it looked at: "${sessionQuote}"`] : []),
   ].join('\n');
 }

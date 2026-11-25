@@ -18,6 +18,8 @@ import type { ReflectionThread } from '../../../src/core/org/reflection/candidat
 import { readDayEntries } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { gateText, gatedByWords, readGateAnswer, GATE_SYSTEM, type StepCheck } from '../../../src/core/org/reflection/step-gate.js'
+import { tellHeldLines } from '../../../src/core/org/reflection/guidance-tidy.js'
+import { guidanceFileOf, renderGuidance, readGuidance } from '../../../src/core/org/reflection/records.js'
 import { sendHeld, stillNeeded } from '../../../src/core/org/reflection/held-corrections.js'
 import { backfillDropped, droppedLessons, BACKFILL_DAYS } from '../../../src/core/org/reflection/guidance-merge.js'
 import { reflectionDayJsonOf } from '../../../src/core/org/reflection/records.js'
@@ -83,9 +85,12 @@ describe('the model layer', () => {
     expect((await gateText(COMMENT_ZH, says('{"steps":["user_browser","in_his_name"],"why":"edits his comment"}'))).steps).toEqual(['user_browser', 'in_his_name'])
     expect(asked[0]).toContain(COMMENT_ZH)
     expect((await gateText('Rewrite the card.', says('{"steps":[],"why":"a card edit"}'))).steps).toEqual([])
-    expect((await gateText('Rewrite the card.', says('no json here'))).by).toBe('failed')
-    expect((await gateText('Rewrite the card.', async () => { throw new Error('throttled') })).steps.length).toBeGreaterThan(0)
-    expect(readGateAnswer('{"steps":["something_else"]}')?.steps.length).toBeGreaterThan(0)
+    // No verdict is never a step it does not hold: the caller sends nothing now and checks again later.
+    for (const g of [await gateText('Rewrite the card.', says('no json here')), await gateText('Rewrite the card.', async () => { throw new Error('throttled') })]) {
+      expect(g.by).toBe('failed')
+      expect(g.steps).toEqual([])
+    }
+    expect(readGateAnswer('{"steps":["something_else"]}')).toBeNull()
   })
 
   it('never calls the model for a text the fixed words hold, or an empty one', async () => {
@@ -141,6 +146,60 @@ describe('a correction that tells a session to use his browser', () => {
   })
 })
 
+describe('a check that cannot judge', () => {
+  it('sends nothing of the correction and writes no lesson; the next pass with a working check sends it', async () => {
+    const ok = answer({ correct_action: 'Rewrite the card.', correction: 'Rewrite the card: recommendation first.', guidance: 'Put the recommendation first.' })
+    const down = deps({ answerText: ok, checkStep: async () => ({ steps: [], why: 'throttled', by: 'failed' }) })
+    await reflectForNode(vp, 'Marina VP', [vp], down.d)
+    expect(down.sent).toEqual([])
+    const e = (await readDayEntries(vp.id, localDate(NOW)))![0]
+    expect(e.held).toBe('check_failed')
+    expect(e.rule.text).toContain('step_check_failed')
+    expect((await readReflectionState(vp.id, NOW)).held![0].checked).toBeUndefined()
+    const up = deps({ answerText: ok, checkStep: async () => ({ steps: [], why: '', by: 'model' }) })
+    await reflectForNode(vp, 'Marina VP', [vp], { ...up.d, nowMs: () => NOW + 10 * 60_000 })
+    expect(up.sent).toHaveLength(1)
+    expect(up.sent[0].text).toContain('Rewrite the card: recommendation first.')
+  })
+
+  it('asks about the same text once: a kept verdict needs no call', async () => {
+    let calls = 0
+    const check: StepCheck = async () => { calls++; return { steps: [], why: '', by: 'model' } }
+    const { checkCached } = await import('../../../src/core/org/reflection/step-gate.js')
+    await checkCached(vp.id, 'Rewrite the card.', check, NOW)
+    await checkCached(vp.id, 'Rewrite  the card.', check, NOW)
+    expect(calls).toBe(1)
+  })
+})
+
+describe('a skill on a listed line', () => {
+  it('is checked even when its guidance line is listed already', async () => {
+    const skill = { name: 'sign-in-steps', description: 'Sign in for him', text: '1. Open walnut browser and fill-login.' }
+    const { d } = deps({ answerText: answer({ correct_action: 'Rewrite the card.', correction: 'Rewrite the card.', guidance: '', same_as: 1, skill }), checkStep: async () => ({ steps: [], why: '', by: 'model' }) })
+    await fs.mkdir(path.dirname(guidanceFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(guidanceFileOf(vp.id), renderGuidance('Marina VP', [{ text: 'Rewrite cards so they read alone.', from: 'x', date: '2026-11-20' }]))
+    await reflectForNode(vp, 'Marina VP', [vp], d)
+    const e = (await readDayEntries(vp.id, localDate(NOW)))![0]
+    expect(e.rule.kind).toBe('none')
+    expect(e.rule.text).toContain('the step check held it')
+  })
+})
+
+describe('lines already in the guidance', () => {
+  it('that the check holds are named to the node once, never deleted', async () => {
+    await fs.mkdir(path.dirname(guidanceFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(guidanceFileOf(vp.id), renderGuidance('Marina VP', [{ text: 'Sign in for him with walnut browser.', from: 'x', date: '2026-11-20' }, { text: 'Rewrite cards so they read alone.', from: 'x', date: '2026-11-20' }]))
+    const sent: string[] = []
+    const d = { send: async (_t: Task, text: string) => { sent.push(text); return true }, checkStep: async () => ({ steps: [], why: '', by: 'model' as const }) }
+    expect(await tellHeldLines(vp, 'Marina VP', d, NOW)).toBe(true)
+    expect(sent[0]).toContain('line 1')
+    expect(sent[0]).not.toContain('line 2')
+    expect(sent[0]).toContain('do not report it to the user')
+    expect(await tellHeldLines(vp, 'Marina VP', d, NOW)).toBe(false)
+    expect((await readGuidance(vp.id))).toHaveLength(2)
+  })
+})
+
 describe('held corrections kept before the check existed', () => {
   it('pass it at their send', async () => {
     await updateReflectionState(vp.id, (s) => { s.held = [{ taskId: worker.id, at: iso(30), date: localDate(NOW), entryAt: iso(30), text: `Do it yourself: ${BROWSER_ZH}` }] }, NOW)
@@ -167,15 +226,15 @@ describe('the same card', () => {
     const first = deps({ readThreads: async (id) => (id === vp.id ? card([]) : []) })
     await reflectForNode(vp, 'Marina VP', [vp], { ...first.d, checkStep: async () => ({ steps: [], why: '', by: 'model' }), callModel: async () => answer({ correct_action: 'Add the draft.', correction: 'Add the draft to the card.', guidance: '', user_quote: '', session_quote: 'Send it?' }) })
     expect(first.sent).toHaveLength(1)
-    const again = { replyAt: iso(20) }
+    const again = { replyAt: new Date(NOW + 2 * 3600_000).toISOString() }
     const second = deps({ readThreads: async (id) => (id === vp.id ? [{ ...card([])[0], ...again, reply: 'Send it? (rewritten)' }] : []) })
-    await reflectForNode(vp, 'Marina VP', [vp], { ...second.d, nowMs: () => NOW + 30 * 60_000, checkStep: async () => ({ steps: [], why: '', by: 'model' }), callModel: async () => answer({ correct_action: 'Add the draft.', correction: 'Add the draft to the card.', guidance: '', user_quote: '', session_quote: 'Send it?' }) })
+    await reflectForNode(vp, 'Marina VP', [vp], { ...second.d, nowMs: () => NOW + 3 * 3600_000, checkStep: async () => ({ steps: [], why: '', by: 'model' }), callModel: async () => answer({ correct_action: 'Add the draft.', correction: 'Add the draft to the card.', guidance: '', user_quote: '', session_quote: 'Send it?' }) })
     expect(second.sent).toEqual([])
     expect((await readDayEntries(vp.id, localDate(NOW)))!.some((e) => e.notSent === 'card_corrected')).toBe(true)
     // He wrote about it since: corrected again (past the chat's hour).
-    const his = [{ id: 'tm-card10', at: new Date(NOW + 35 * 60_000).toISOString(), text: 'where is the draft' }]
-    const third = deps({ readThreads: async (id) => (id === vp.id ? [{ ...card(his)[0], replyAt: new Date(NOW + 36 * 60_000).toISOString(), reply: 'Send it? (again)' }] : []) })
-    await reflectForNode(vp, 'Marina VP', [vp], { ...third.d, nowMs: () => NOW + 70 * 60_000, checkStep: async () => ({ steps: [], why: '', by: 'model' }), callModel: async () => answer({ correct_action: 'Add the draft.', correction: 'Add the draft to the card.', guidance: '', user_quote: '', session_quote: 'Send it?' }) })
+    const his = [{ id: 'tm-card10', at: new Date(NOW + 3.2 * 3600_000).toISOString(), text: 'where is the draft' }]
+    const third = deps({ readThreads: async (id) => (id === vp.id ? [{ ...card(his)[0], replyAt: new Date(NOW + 3.3 * 3600_000).toISOString(), reply: 'Send it? (again)' }] : []) })
+    await reflectForNode(vp, 'Marina VP', [vp], { ...third.d, nowMs: () => NOW + 4 * 3600_000, checkStep: async () => ({ steps: [], why: '', by: 'model' }), callModel: async () => answer({ correct_action: 'Add the draft.', correction: 'Add the draft to the card.', guidance: '', user_quote: '', session_quote: 'Send it?' }) })
     expect(third.sent).toHaveLength(1)
   })
 })

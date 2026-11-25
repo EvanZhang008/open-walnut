@@ -67,6 +67,8 @@ export interface Candidate {
   sessionId: string;
   /** Why its correction is recorded but never sent (an ask whose asking session is unknown). */
   hold?: 'no_asking_session' | 'no_session';
+  /** needs_ask: which card or decision it is (a thread card's ask id, an ask's decision id or words): one correction a while per card. */
+  cardId?: string;
   /** His messages it is about (oldest first); none for an ask he has not answered. */
   messages: SpokenMessage[];
   from: string;
@@ -289,7 +291,7 @@ async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
     if (!j || has(p, j.key)) continue;
     const sessionId = th.replySid ?? '';
     p.out.push({
-      key: j.key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: j.at, to: j.at,
+      key: j.key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: j.at, to: j.at, cardId: th.askId ?? 'card',
       thread: { id: th.id, title: th.title }, context: threadTurns([...th.messages].sort((a, b) => a.at.localeCompare(b.at)), th.messages.length - 1, 4),
       ask: { text: cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options) }, evidence: j.evidence, why: 'needs_ask (a thread card waiting on him)',
     });
@@ -338,7 +340,7 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   const sessionId = r.askSessionId ?? '';
   const at = askAt ?? new Date(p.now).toISOString();
   return {
-    key, signal: 'needs_ask', task, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' }), messages: [], from: at, to: at,
+    key, signal: 'needs_ask', task, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' }), messages: [], from: at, to: at, cardId: decisionId ?? sha12(words),
     ask: { text, ...(decisionId ? { decisionId } : {}) }, evidence, why: `needs_ask${decisionId ? ` (decision ${decisionId})` : ''}`,
   };
 }

@@ -10,7 +10,7 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { normalizeForQuote } from './judge.js';
 import { droppedLessons } from './guidance-merge.js';
-import { gatedByWords } from './step-gate.js';
+import { checkCached, checkStepOf, stepWords, verdictOf, type StepCheck } from './step-gate.js';
 import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, nearlySame, readGuidance } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
@@ -30,6 +30,8 @@ export interface TidyDeps {
   callModel?: CallModel;
   userRules?: () => Promise<string>;
   orgSkills?: (nodeId: string) => Promise<Array<{ name: string; description: string }>>;
+  /** The step check's model layer (step-gate.ts); without it only its fixed words judge. */
+  checkStep?: StepCheck;
 }
 
 /** Waiting lessons one call reads; at most two calls a day. */
@@ -110,6 +112,8 @@ export function tidyNote(file: string, roomLeft: number, waiting: readonly strin
 export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowMs: number): Promise<boolean> {
   const date = localDate(nowMs);
   const state = await readReflectionState(node.id, nowMs);
+  // Asked today and the day's queue settled already: nothing to read (it would read 30 days of records every pass).
+  if (state.tidyAsked === date && state.coveredChecked === date) return false;
   const lines = await readGuidance(node.id);
   const texts = lines.map((l) => l.text);
   const room = guidanceRoomLeft(nodeName, texts);
@@ -121,7 +125,15 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const done = new Set([...(state.backfilled ?? []).filter((k) => !gaveUp.has(k)), ...state.removed, ...merged, ...(state.covered ?? [])]);
   // Counted once each: a lesson a line already says, or one said again in other words, is not waiting
   // (2026-11-24 audit: "80 wait" counted the same lesson from several tasks and days).
-  const queued = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !gatedByWords(l.text)).map((l) => l.text), texts);
+  const held = new Set(state.stepHeld ?? []);
+  const lessons = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !held.has(normalizeForQuote(l.text))).map((l) => l.text), texts);
+  // Listed only when the step check passed it (each asked about once): the node may write a listed one.
+  const queued: string[] = [];
+  for (const l of lessons) {
+    const g = await checkCached(node.id, l, checkStepOf(deps), nowMs).catch(() => null);
+    if (g && verdictOf(g) === 'pass') queued.push(l);
+    else if (g && verdictOf(g) === 'held') await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), normalizeForQuote(l)])].slice(-1000); }, nowMs);
+  }
   // Once a day, the ones a line, his rules or an org skill already says leave the queue first.
   const settled = new Set((await settleCovered(node, queued, texts, deps, nowMs).catch(() => [])).map(normalizeForQuote));
   const waiting = queued.filter((w) => !settled.has(normalizeForQuote(w)));
@@ -136,5 +148,33 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   await updateReflectionState(node.id, (s) => { s.tidyAsked = date; }, nowMs);
   const ok = await deps.send(node, tidyNote(guidanceFileOf(node.id), room, waiting, twinLines(texts)), `Team guidance is full: ${waiting.length} lesson(s) wait for room`).catch(() => false);
   if (ok) log.task.info('reflection: the node was asked to make room in its guidance', { nodeId: node.id, waiting: waiting.length, room });
+  return ok;
+}
+
+/**
+ * The guidance lines already in the file that the step check holds are named to the node once each
+ * (2026-11-25 review: a line written before the check told every session to sign in with the user's
+ * saved browser login). Never deleted here: the node rewrites the line so the step is asked for, or
+ * deletes it. Each line is asked about once (checkCached). True when the node was told.
+ */
+export async function tellHeldLines(node: Task, nodeName: string, deps: TidyDeps, nowMs: number): Promise<boolean> {
+  const lines = (await readGuidance(node.id)).map((l) => l.text);
+  const told = new Set((await readReflectionState(node.id, nowMs)).linesHeldTold ?? []);
+  const held: Array<{ line: number; text: string; steps: string }> = [];
+  for (const [i, text] of lines.entries()) {
+    if (told.has(normalizeForQuote(text))) continue;
+    const g = await checkCached(node.id, text, checkStepOf(deps), nowMs).catch(() => null);
+    if (g && verdictOf(g) === 'held') held.push({ line: i + 1, text, steps: stepWords(g.steps) });
+  }
+  if (!held.length) return false;
+  const sessionId = await sessionNowOf(node, deps);
+  if (deps.confirmSend && !['ok', 'session_changed', true].includes(await deps.confirmSend(node, node, sessionId).catch(() => false))) return false;
+  const note = [
+    `${held.length} line${held.length === 1 ? '' : 's'} of your team guidance would have sessions take a step that is not an agent's on a reviewer's word:`,
+    ...held.map((h) => `- line ${h.line} (it would have them ${h.steps}): ${h.text}`),
+    `Rewrite each so the step is asked of the person the rules name, or delete it, in ${guidanceFileOf(node.id)} (on the machine Walnut's server runs on). This is your team's routine upkeep: do it yourself, and do not report it to the user. No reply is needed.`,
+  ].join('\n');
+  const ok = await deps.send(node, note, `Team guidance: ${held.length} line(s) to rewrite`).catch(() => false);
+  if (ok) await updateReflectionState(node.id, (s) => { s.linesHeldTold = [...new Set([...(s.linesHeldTold ?? []), ...held.map((h) => normalizeForQuote(h.text))])].slice(-500); }, nowMs);
   return ok;
 }

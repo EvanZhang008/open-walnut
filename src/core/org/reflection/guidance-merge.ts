@@ -23,7 +23,7 @@ import { screenSkillWrite } from '../../memory-safety.js';
 import { addGuidance, appendDayNote, dayNoteSaid, readDayEntries, readGuidance, reflectionDayFileOf, replaceGuidanceLine, type GuidanceLine } from './records.js';
 import { localDate, readReflectionState, updateReflectionState, type ReflectionState } from './state.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
-import { checkStepOf, type StepCheck } from './step-gate.js';
+import { checkCached, checkStepOf, verdictOf, type StepCheck } from './step-gate.js';
 
 /** Merge calls a node may spend a day (apart from the judge's budget), and the backfill's share of them. */
 export const MERGE_CALLS_PER_DAY_MAX = 12;
@@ -197,7 +197,7 @@ export async function mergeGuidance(
   return r;
 }
 
-const DROPPED_TEXT_RE = /^not added \((?:day_full|file_full)\b/;
+const DROPPED_TEXT_RE = /^not added \((?:day_full|file_full|step_check_failed)\b/;
 const DROPPED_MD_RE = /^- Rule: none \(not added \((?:day_full|file_full)(?:; not merged: .*?)?\): (.+)\)\s*$/;
 
 /**
@@ -243,7 +243,7 @@ async function noteLeaving(node: Task, nodeName: string, todo: ReadonlyArray<{ t
   const leaving = todo.filter((l) => l.date === (l.own ? edge(BACKFILL_OWN_WORDS_DAYS) : edge(BACKFILL_DAYS)));
   if (!leaving.length || await dayNoteSaid(node.id, date, 'Lessons leaving the backlog')) return;
   const own = leaving.filter((l) => l.own).length;
-  await appendDayNote(node.id, nodeName, date, `Lessons leaving the backlog tomorrow unplaced: ${leaving.length}${own ? ` (${own} with the user's own words)` : ''}; the guidance has no room for them: ${leaving.map((l) => l.text.slice(0, 80)).join(' | ')}`, nowMs).catch(() => {});
+  await appendDayNote(node.id, nodeName, date, `Lessons leaving the backlog tomorrow unplaced: ${leaving.length}${own ? ` (${own} with the user's own words)` : ''}; the guidance has no room for them (the day records hold their words).`, nowMs).catch(() => {});
 }
 
 /**
@@ -254,7 +254,7 @@ async function noteLeaving(node: Task, nodeName: string, todo: ReadonlyArray<{ t
 export async function backfillDropped(node: Task, nodeName: string, deps: MergeDeps, nowMs: number): Promise<number> {
   const state = await readReflectionState(node.id, nowMs);
   const done = new Set(state.backfilled ?? []);
-  const covered = new Set(state.covered ?? []);
+  const covered = new Set([...(state.covered ?? []), ...(state.stepHeld ?? [])]);
   const todo = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !state.removed.includes(normalizeForQuote(l.text)) && !covered.has(normalizeForQuote(l.text)));
   const date = localDate(nowMs);
   await noteLeaving(node, nodeName, todo, nowMs);
@@ -263,11 +263,13 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
   for (const l of todo.slice(0, BACKFILL_PER_PASS)) {
     const key = normalizeForQuote(l.text);
     // A lesson that would have sessions use his browser, accounts or name, or write in production or a
-    // cloud account, is never written: settled as given up, said in the day's record.
-    const g = await check(l.text, node.id);
+    // cloud account, is never written: kept as held by the step check, said in the day's record. One the
+    // check cannot judge now waits for a later pass. Each lesson is asked about once (checkCached).
+    const g = await checkCached(node.id, l.text, check, nowMs);
+    if (verdictOf(g) === 'failed') continue;
     if (g.steps.length) {
-      await updateReflectionState(node.id, (s) => { s.backfilled = [...(s.backfilled ?? []), key].slice(-500); }, nowMs);
-      await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')}): ${l.text.slice(0, 200)}`, nowMs).catch(() => {});
+      await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
+      await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')}).`, nowMs).catch(() => {});
       continue;
     }
     const addedToday = (await readGuidance(node.id)).filter((x) => x.date === date).length;

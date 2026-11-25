@@ -17,6 +17,20 @@ import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 import { isPersonSendSource, REOPENING_SEND_SOURCES } from '../../src/core/phase.js'
 
 describe('waitExitCause', () => {
+  // 2026-11-25: a reflection correction ended a parked lead's wait. Every source the org's own code
+  // sends with (an org node is often WAITING) only interrupts: a new one must be listed.
+  it('every source the org code sends with only interrupts a wait', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('node:fs')
+    const path = await import('node:path')
+    const walk = (d: string): string[] => readdirSync(d).flatMap((f) => { const p = path.join(d, f); return statSync(p).isDirectory() ? walk(p) : p.endsWith('.ts') ? [p] : [] })
+    const sources = new Set<string>()
+    for (const f of walk(path.join(process.cwd(), 'src/core/org'))) {
+      for (const m of readFileSync(f, 'utf-8').matchAll(/performSessionSend\(\{[^}]*?\bsource:\s*'([^']+)'/g)) sources.add(m[1]!)
+    }
+    expect(sources.has('org-reflection')).toBe(true)
+    for (const s of sources) expect(waitExitCause('session:input', s), s).toBe('message')
+  })
+
   it('a peer, a status notice or a nudge only interrupts', () => {
     for (const source of ['peer', 'program-run', 'walnut-notify', 'auto-continue', 'auto-recover']) {
       expect(waitExitCause('session:input', source), source).toBe('message')
@@ -250,7 +264,7 @@ describe('a wait interrupted only to ask for words', () => {
   it('comes back at the turn end with its clock, with no trigger to hold it', async () => {
     const { resumableWait } = await import('../../src/core/task-wait-resume.js')
     const leftAt = '2026-10-31T10:00:00.000Z'
-    for (const source of ['brief-refresh', 'choice-recheck']) {
+    for (const source of ['brief-refresh', 'choice-recheck', 'org-reflection']) {
       resetInterruptedWaitsForTest()
       expect(waitExitCause('session:input', source), source).toBe('message')
       noteInterruptedWait('lead1', { waitUntil: '2026-10-31T15:00:00.000Z', leftAt, sessionId: 's1', cause: 'message', source })

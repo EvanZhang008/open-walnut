@@ -60,6 +60,12 @@ export interface ReflectionState {
   held?: HeldCorrection[];
   /** On a Main or lead task's own state: when a reflection's correction last went to its chat. */
   lastChatSendAt?: string;
+  /** The step check's verdicts by text hash (step-gate.ts checkCached): a text is asked about once. */
+  stepChecked?: Record<string, { steps: string[]; why: string }>;
+  /** Waiting lessons the step check held (normalized): never written, listed or taken up again. */
+  stepHeld?: string[];
+  /** Guidance lines the step check held that the node was told about (normalized), once each. */
+  linesHeldTold?: string[];
   /** Waiting lessons a guidance line, his rules or an org skill already says (guidance-tidy.ts settleCovered), normalized: never waiting again. */
   covered?: string[];
   /** The local date settleCovered last ran: once a day. */
@@ -147,6 +153,9 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
     ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
+    ...(r.stepChecked && typeof r.stepChecked === 'object' ? { stepChecked: r.stepChecked } : {}),
+    ...(Array.isArray(r.stepHeld) ? { stepHeld: r.stepHeld.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
+    ...(Array.isArray(r.linesHeldTold) ? { linesHeldTold: r.linesHeldTold.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(Array.isArray(r.covered) ? { covered: r.covered.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
     ...(typeof r.coveredChecked === 'string' ? { coveredChecked: r.coveredChecked } : {}),
     ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),

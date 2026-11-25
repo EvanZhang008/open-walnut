@@ -165,7 +165,7 @@ export interface DayEntry {
   /** `held`: a real correction kept from the session (`held` says why), in the record and the nightly note only. */
   corrected: 'sent' | 'already_fixed' | 'failed' | 'off' | 'held';
   /** own_cap: past a Main or lead chat's spacing; one_per_pass: its session got one this pass (both wait for a later send, held-corrections.ts); no_asking_session / no_session: no known session to send to. */
-  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session';
+  held?: 'own_cap' | 'one_per_pass' | 'no_asking_session' | 'no_session' | 'check_failed';
   /** A held correction sent later, with others held for the same task (held-corrections.ts): when. */
   sentLater?: string;
   /** A held correction never sent (it waited too long, or more waited for its task): when it was dropped. */
