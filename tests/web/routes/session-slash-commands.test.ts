@@ -264,7 +264,7 @@ describe('buildSessionSlashCommandItems: a slow host never holds the request', (
 
     // The scan lands after its request was answered: it still fills the cache.
     scan.resolve([{ dirName: 'deploy', description: 'Ship it', plugin: '__flat__' }])
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(async () => expect((await buildSessionSlashCommandItems({ sessionId: 'r1' })).degraded).toBeUndefined())
     const second = await timed(buildSessionSlashCommandItems({ sessionId: 'r1' }))
     expect(second.ms).toBeLessThan(200)
     expect(second.value.degraded).toBeUndefined()
