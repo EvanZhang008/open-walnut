@@ -773,14 +773,22 @@ past the 3 hour bound; a capability a feature refuses or degrades without (`need
 `src/providers/daemon-capability-need.ts`; a plain `hasCapability` is only a read) or a required one the
 handshake misses, which this build's daemon has and the running one lacks (decided again at once, once per
 running build); and an update someone asked for, which stays asked for its build until it runs there (an ask whose grant
-is revoked before the swap is dropped).
+is revoked before the swap is dropped). That state (the ask, the held-since clock, a capability needed) lives in one place
+per host for the server's life (`hostUpdateGap`), never on a connection object: 2026-11-25, an ask refused as busy was lost
+when the link came back on a new connection, and the gap held the asked build again
+(`tests/providers/daemon-update-gap-place.test.ts`).
 
 To have it now (a task that just fixed host-side code): `host_daemon_update <host>` (POST
 `/api/v1/hosts/:host/daemon-update`), for an SSH host and a host network machine alike. It goes past the
 gap, a shared daemon kept, the busy clock, the cooldown after a try and a build's day off, never past
-writes in flight, host_exec runs, open ACP turns, an update still running there, its probation or another
-host name of the same daemon updating it. Its answer names `running` (the build there now), `expected`
-(this server's build), and while it waits `message` and `until`. This Mac's own daemon is replaced when
+an update still running there, its probation or another host name of the same daemon updating it. It
+waits for the host's work (writes in flight, host_exec runs, open ACP turns, the daemon's own requests
+and relays), and a busy refusal's answer names what the daemon counted open (`busyOpenWords`, said by
+the daemon since 2026-11-25; an older one's refusal as it said it). With `over_busy: true` the asked
+build goes over that work by the overdue update's own path below (`--over-busy`), on that try and the
+next ones of that build; a later plain ask, and any other build, wait again (2026-11-25: a host with
+about 95 CLIs and constant gateway relays refused every asked update as busy). Its answer names
+`running` (the build there now), `expected` (this server's build), and while it waits `message` and `until`. This Mac's own daemon is replaced when
 Walnut restarts, and the cloud box's by the companion's own build (`daemonUpdateHowSentence`);
 `tests/providers/daemon-update-paths-ratchet.test.ts` fails for a new kind of link that neither waits out
 the gap with a request path nor says why not. `WALNUT_DAEMON_UPDATE_MIN_GAP_MS` sets the gap (0 turns it off).

@@ -79,7 +79,7 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
     batch: {
       gap: [
         { file: 'src/providers/daemon-connection.ts', symbol: 'shouldUpgradeDaemon' },
-        { file: 'src/providers/daemon-connection.ts', symbol: 'UpdateGapHold' },
+        { file: 'src/providers/daemon-connection.ts', symbol: 'hostUpdateGap' },
       ],
       request: [
         { file: 'src/providers/daemon-connection.ts', symbol: 'requestDaemonUpdate' },
@@ -99,7 +99,7 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
     batch: {
       gap: [
         { file: 'src/providers/daemon-net-update-decide.ts', symbol: 'decideNetUpdate' },
-        { file: 'src/providers/daemon-net-update.ts', symbol: 'UpdateGapHold' },
+        { file: 'src/providers/daemon-net-update.ts', symbol: 'hostUpdateGap' },
       ],
       request: [
         { file: 'src/providers/daemon-connection.ts', symbol: 'requestDaemonUpdate' },

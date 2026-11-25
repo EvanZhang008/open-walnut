@@ -86,6 +86,7 @@ import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { endUpdateWait, noteUpdateWait, type DaemonUpdateWait } from './daemon-update-wait.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { daemonBusyWhy } from './daemon-busy-words.js'
 import { busyRetryLeftMs, busyRetryWhy, endBusyRefusals, noteBusyRefusal } from './daemon-busy-retry.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { setDaemonFileFence } from './daemon-file-fence.js'
@@ -166,7 +167,7 @@ import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplica, isHostReplicaProgram, serviceRuntime } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
-import { capabilityNeedWhy, DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateMinGapMs, parseEtimeMs, UpdateGapHold } from './daemon-update-gap.js'
+import { capabilityNeedWhy, DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateMinGapMs, hostUpdateGap, parseEtimeMs, type UpdateAsk } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 import { acceptHubStream } from '../core/hosts/hub-ports.js'
@@ -1626,8 +1627,6 @@ export class DaemonConnection {
         return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
       },
       cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
-      // One gap state per connection: its capability checks decide a held update again (hasCapability).
-      gap: this._gap,
       fence: () => this.fenceFileChanges(),
       sameDaemon: () => this.daemonNamesOrOwn(),
       // The host's mode rides this update as it rides the SSH one (one-service-mode.ts): one decision for every link.
@@ -1651,10 +1650,11 @@ export class DaemonConnection {
 
   /**
    * Update this host's daemon to this build now (host_daemon_update); null when this kind of host
-   * updates another way. `gate` throws once the asker may no longer have it run (the task's grant).
+   * updates another way. `gate` throws once the asker may no longer have it run (the task's grant);
+   * `said.overBusy`: go over the work in progress there (the forced path, forceable).
    */
-  requestDaemonUpdate(gate?: () => void): Promise<NetUpdateState> | null {
-    if (this.netUpdater) return this.netUpdater.request(undefined, gate)
+  requestDaemonUpdate(gate?: () => void, said: UpdateAsk = {}): Promise<NetUpdateState> | null {
+    if (this.netUpdater) return this.netUpdater.request(undefined, gate, said)
     if (this.linkKind !== 'ssh' || this.isReadOnlyRemote) return null
     this._requested ??= new RequestedUpdate({
       host: this.hostKey,
@@ -1662,11 +1662,12 @@ export class DaemonConnection {
       running: () => this._daemonVersion,
       expected: () => this.getExpectedDaemonVersion(),
       // The ask stays with its build (UpdateGapHold.ask): a safety hold that puts it off now does not hand it to the gap after.
-      run: (expected, g) => { this._gap.ask(expected); return this.recheckPostponedUpgrade({ expected, gate: g }) },
+      ask: (expected, s) => this._gap.ask(expected, s),
+      run: (expected, g) => this.recheckPostponedUpgrade({ expected, gate: g }),
       replacedAt: () => this._replacedAt,
       wait: () => this._updateWait,
     })
-    return this._requested.request(undefined, gate)
+    return this._requested.request(undefined, gate, said)
   }
   private _requested: RequestedUpdate | null = null
   /** When a decision here last replaced the host's daemon (ms epoch; 0 never): a requested update's answer reads it. */
@@ -5672,6 +5673,7 @@ export class DaemonConnection {
     if (this.isReadOnlyRemote) return false
     this._sharedReplacing = false
     this._overdueMs = 0
+    this._overBusyAsked = false
     let expected: string | null = null
     let remoteVersion = ''
     try {
@@ -5718,6 +5720,9 @@ export class DaemonConnection {
       if (remoteVersion && remoteVersion !== expected && !isAsked && await this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
       // The bound on the whole update (daemon-update-behind.ts): behind this long, every hold below gives way.
       this.noteOverdue(expected, remoteVersion, daemonUpdateOverdue(this.hostKey, remoteVersion, !!remoteVersion && remoteVersion !== expected))
+      // Asked with over_busy (host_daemon_update): this build goes over the host's work, as an overdue one does.
+      this._overBusyAsked = remoteVersion !== expected && this._gap.overBusy(expected)
+      if (this._overBusyAsked) log.session.info('DaemonConnection: daemon update asked over busy; it goes over the work in progress there', { host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)' })
       // One replacement per host per gap: the update is decided again when it ends,
       // with the build of then (daemon-update-gap.ts). A host with no daemon is a start.
       // An asked build goes past it on every decision until it runs there (UpdateGapHold.ask).
@@ -5997,7 +6002,7 @@ export class DaemonConnection {
       // The wait has an end: turns open this long get the upgrade anyway (acp-upgrade-hold.ts).
       const { busySids, holds, heldMs } = acpTurnsHold(this.hostKey, busyRaw)
       const open = busySids.length > 0
-      if (open && (!holds || this._overdueMs)) {
+      if (open && (!holds || this.forceable())) {
         log.session.warn('DaemonConnection: daemon upgrade goes ahead over ACP turns open too long', {
           host: this.hostKey, expected, busySids, heldMs,
         })
@@ -6019,8 +6024,8 @@ export class DaemonConnection {
   private async execRunsOpen(expected: string, remoteVersion: string): Promise<boolean> {
     const why = await execRunsHold(this, this.hostKey)
     if (!why) { this._holdNews.forget(/host_exec/); return false }
-    // Overdue: the swap goes over them (daemon-update-behind.ts); noteOverdue said so.
-    if (this._overdueMs) return false
+    // Overdue or asked over busy: the swap goes over them (daemon-update-behind.ts; noteOverdue said so).
+    if (this.forceable()) return false
     // Asked again every minute while a run lasts (up to 2 h): a warning only when it is news.
     holdLog(this._holdNews, expected, why, 'DaemonConnection: daemon upgrade DEFERRED (host_exec runs)', {
       host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', why,
@@ -6037,7 +6042,7 @@ export class DaemonConnection {
   private async holdUpgrade(gate: (() => UpgradeHold) | undefined, expected: string, remoteVersion: string): Promise<boolean> {
     let hold = gate?.() ?? null
     if (hold === null) return false
-    if (hold !== UPGRADE_STALE && this._overdueMs) {
+    if (hold !== UPGRADE_STALE && this.forceable()) {
       const until = Date.now() + DaemonConnection.OVERDUE_GATE_WAIT_MS
       while (hold !== null && hold !== UPGRADE_STALE && Date.now() < until) {
         await new Promise<void>((resolve) => setTimeout(resolve, DaemonConnection.OVERDUE_GATE_POLL_MS))
@@ -6045,7 +6050,8 @@ export class DaemonConnection {
       }
       if (hold === null) return false
       if (hold !== UPGRADE_STALE) {
-        log.session.warn('DaemonConnection: overdue daemon update goes ahead over commands in flight', {
+        log.session.warn(this._overdueMs ? 'DaemonConnection: overdue daemon update goes ahead over commands in flight'
+          : 'DaemonConnection: daemon update asked over busy goes ahead over commands in flight', {
           host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', hold, behindMs: this._overdueMs,
         })
         return false
@@ -6083,10 +6089,12 @@ export class DaemonConnection {
     this._forcedTries = this._forcedTries.n > 1 ? { expected, n: this._forcedTries.n - 1 } : null
   }
 
-  /** Overdue: the update goes over the daemon's own work (`--over-busy`). */
+  /** Overdue, or asked over busy (host_daemon_update over_busy): the update goes over the daemon's own work (`--over-busy`). */
   private forceable(): boolean {
-    return this._overdueMs > 0
+    return this._overdueMs > 0 || this._overBusyAsked
   }
+  /** This decision's build was asked for with over_busy (UpdateGapHold.overBusy). Set by each decision. */
+  private _overBusyAsked = false
 
   /** How long the host has run another build (noteOverdue), for the busy clock's waits. */
   private _behindMs = 0
@@ -6129,8 +6137,8 @@ export class DaemonConnection {
     })
   }
 
-  /** The update gap on this connection, for both paths (daemon-update-gap.ts; the net updater gets the same one). */
-  private readonly _gap = new UpdateGapHold()
+  /** The host's update gap state, for both paths: its one place, never this connection's (hostUpdateGap). */
+  private get _gap() { return hostUpdateGap(this.hostKey) }
   /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
   private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
   private _upgradeRecheckAttempt = 0
@@ -6648,7 +6656,7 @@ export class DaemonConnection {
         // Asked again on the busy clock (daemon-busy-retry.ts): on disk, so a deploy does not start it
         // over, and longer the longer the daemon stays busy. Overdue (the over-busy update refused, its
         // restart not confirmed), within a few minutes.
-        this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion,
+        this.postponeUpgrade(daemonBusyWhy(error, { host: this.hostKey, forced: this.forceable() }), expected, remoteVersion,
           { delayMs: noteBusyRefusal(this.hostKey, remoteVersion, { overdue: this.forceable(), behindMs: this._behindMs }) })
         return 'held'
       }

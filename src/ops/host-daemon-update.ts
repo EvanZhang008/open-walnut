@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { sinceTime } from '../providers/daemon-update-wait.js';
+import { OVER_BUSY_GOES_OVER } from '../providers/daemon-over-busy.js';
 
 const NEXT: Record<string, string> = {
   running: 'Call host_daemon_update again in a few minutes to see how it went; the host reconnects on the new build by itself.',
@@ -20,8 +21,11 @@ defineOp({
     'Update the Walnut session daemon on another host to this server\'s build, now: a host reached over SSH or one that joined '
     + 'over the host network. Walnut does this by itself after a deploy, but replaces a host\'s daemon at most once every 2 hours, '
     + 'so a fix to host-side code can wait that long; this op puts it there now (past that gap, a shared daemon kept, the busy '
-    + 'clock, the cooldown after a try and a build\'s day off; never past writes in flight, host_exec runs, open ACP turns, an '
-    + 'update still running there or another host name of the same daemon updating it). It is also the only way for a host whose '
+    + 'clock, the cooldown after a try and a build\'s day off; never past an update still running there or another host name of the '
+    + 'same daemon updating it). By default it still waits for the work in progress there (writes in flight, host_exec runs, open '
+    + 'ACP turns, relays and requests the daemon serves), and a busy host can hold it a long time; the answer then names what is '
+    + `open. With \`over_busy: true\` it goes over that work, as an update hours overdue does: ${OVER_BUSY_GOES_OVER}. `
+    + 'Use over_busy only when the user agreed, or the build must land on a host that is never quiet. It is also the only way for a host whose '
     + 'config says `autofix: false`. Use it when the user wants it now, or when your task changed host-side code and needs it on '
     + 'that host. Running sessions there keep running; the host reconnects on the new build within a minute or two. Same grant as '
     + 'host_exec: the first call for this task on a host asks the user by letter (403 exec_grant_required). Answers once the update '
@@ -30,6 +34,7 @@ defineOp({
     + 'Mac and the cloud box update another way (409 updates_itself).',
   input: {
     host: z.string().min(1).describe('Host alias (host_list names them)'),
+    over_busy: z.boolean().optional().describe('Go over the work in progress on the host now (requests, relays, ACP workers, host_exec runs; CLI sessions keep running) instead of waiting for it. Default false'),
   },
   bind: { method: 'POST', path: '/hosts/:host/daemon-update' },
   // The route dials the host (8 s at most) and waits up to 8 s for the decision.

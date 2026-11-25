@@ -60,7 +60,7 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
       }
       // The gap is the one rule (daemon-update-gap.ts), never a copy of it.
       const gapFiles = [...new Set(batch.gap.map((c) => c.file))]
-      expect(gapFiles.some((f) => /\b(daemonUpdateGapHold|UpdateGapHold)\b/.test(read(f))), `${kind}: ${gapFiles.join(', ')} use the gap rule`).toBe(true)
+      expect(gapFiles.some((f) => /\b(daemonUpdateGapHold|UpdateGapHold|hostUpdateGap)\b/.test(read(f))), `${kind}: ${gapFiles.join(', ')} use the gap rule`).toBe(true)
       expect(batch.request.length, `${kind} names its request path`).toBeGreaterThan(0)
     }
     expect(named.length).toBeGreaterThan(0)
@@ -68,7 +68,7 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
 
   it('host_daemon_update is refused only for a kind with no request path, in that kind\'s own words', () => {
     const src = read('src/providers/daemon-connection.ts')
-    const body = /requestDaemonUpdate\(gate\?: \(\) => void\)[^{]*\{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
+    const body = /requestDaemonUpdate\(gate\?: \(\) => void[^)]*\)[^{]*\{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
     // The kinds it answers null for: every one but those whose batch has a request path.
     const requestable = DAEMON_LINK_KINDS.filter((k) => { const e = DAEMON_UPDATE_PATHS[k]; return 'path' in e && 'request' in e.batch })
     expect(requestable.sort()).toEqual(['net', 'ssh'])

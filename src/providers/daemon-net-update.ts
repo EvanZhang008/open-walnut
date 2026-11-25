@@ -38,7 +38,8 @@ import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { busyRetryLeftMs, busyRetryWhy, noteBusyRefusal } from './daemon-busy-retry.js'
 import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
-import { DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateGapHold, daemonUpdateMinGapMs, UpdateGapHold } from './daemon-update-gap.js'
+import { DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateGapHold, daemonUpdateMinGapMs, hostUpdateGap, type UpdateAsk } from './daemon-update-gap.js'
+import { daemonBusyWhy } from './daemon-busy-words.js'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
@@ -125,8 +126,6 @@ export interface NetUpdaterDeps {
   sameDaemon?: () => Promise<string[]>
   /** The gap between automatic replacements (daemon-update-gap.ts); default from the env. */
   minGapMs?: number
-  /** The connection's gap state, shared with its SSH path and its capability checks (DaemonConnection); its own by default. */
-  gap?: UpdateGapHold
   autofixOff?: () => Promise<string | null>
   /** The host's target, read with host-target.ts's probe over exec.run (as the SSH path reads it). */
   target?: (run: (command: string, timeoutMs?: number) => Promise<string>) => Promise<HostFileTarget | null>
@@ -204,8 +203,8 @@ export class NetDaemonUpdater {
   private notServing: BuildBackoffEntry | null | undefined = undefined
   private skipNoted: string | null = null
   private overdueNoted: string | null = null
-  /** The update gap (daemon-update-gap.ts): since when a build has been held, and whether it holds it now. */
-  private readonly gap: UpdateGapHold
+  /** The host's update gap state (daemon-update-gap.ts), its one place: since when a build has been held, whether it holds it now, the ask. */
+  private get gap() { return hostUpdateGap(this.d.conn.host) }
   private stopped = false
   private waiters: Array<() => void> = []
   /** The update this server started there, until its record is read (daemon-net-update-record.ts), and the read's timer. */
@@ -217,7 +216,6 @@ export class NetDaemonUpdater {
 
   constructor(private readonly d: NetUpdaterDeps) {
     this.state = { phase: 'idle', host: d.conn.host, running: null, expected: null, message: '', at: 0 }
-    this.gap = d.gap ?? new UpdateGapHold()
     this.launched = new LaunchedNetUpdate(d.conn.host, () => (d.now ?? Date.now)(), (expected, reason) => this.buildDidNotStay(expected, reason))
   }
 
@@ -270,26 +268,31 @@ export class NetDaemonUpdater {
    * Run it now (host_daemon_update): past the host setting's hold and the cooldown. Answers once it
    * is decided or started. `gate` (the asking task's grant) is read right before the run starts, before
    * the upload and before the handover: it throws once the asker may no longer have it run, and a
-   * refusal there changes nothing on the host.
+   * refusal there changes nothing on the host. `said.overBusy`: this build goes over the host's work
+   * (daemon-over-busy.ts), on this try and the ones after it.
    */
-  async request(waitMs = 8_000, gate?: () => void): Promise<NetUpdateState> {
+  async request(waitMs = 8_000, gate?: () => void, said: UpdateAsk = {}): Promise<NetUpdateState> {
     const now = this.d.now ?? Date.now
     const until = now() + waitMs
+    const expected = this.d.expectedVersion()
     if (this.inFlight) {
+      // An update under way: the asker's words count for the tries after it (an over_busy one included).
+      if (this.state.phase !== 'checking') { if (expected) { gate?.(); this.gap.ask(expected, said) } return this.state }
       // An automatic check still deciding: wait for it, then ask past what held it.
-      if (this.state.phase !== 'checking') return this.state
       await this.within(this.inFlight, waitMs)
       // Read again: the wait may have ended it.
       if (this.busy() || ['running', 'updated', 'failed'].includes(this.state.phase)) return this.state
     }
     gate?.()
     // The ask stays with its build: a hold that puts it off now does not hand it to the gap after.
-    const expected = this.d.expectedVersion()
-    if (expected) this.gap.ask(expected)
+    if (expected) this.gap.ask(expected, said)
+    // What held the last try (a busy daemon, say), while this one is still checking: the asker reads it in this answer.
+    const before = this.wait
     const run = this.check('request', gate)
     const started = new Promise<void>((r) => { this.waiters.push(r) })
     await this.within(Promise.race([run, started]), Math.max(0, until - now()))
-    return this.state
+    return this.state.phase === 'checking' && before && before.expected === expected
+      ? { ...this.state, message: `${this.state.message}; the last try: ${before.why}` } : this.state
   }
 
   private busy(): boolean {
@@ -454,8 +457,9 @@ export class NetDaemonUpdater {
         host: c.host, running: c.daemonVersion, expected, behindMs: behind.behindMs,
       })
     }
-    // Overdue: the CLI goes over the daemon's own work, in at most a minute (daemon-over-busy.ts).
-    const goesOver = behind.overdue
+    // Overdue, or asked with over_busy (host_daemon_update): the CLI goes over the daemon's own work, in at most a minute (daemon-over-busy.ts).
+    const goesOver = behind.overdue || this.gap.overBusy(expected)
+    if (goesOver && !behind.overdue) log.session.info('DaemonConnection: host network daemon update asked over busy; it goes over the work in progress there', { host: c.host, running: c.daemonVersion, expected })
     // The last try was refused as busy (daemon-busy-retry.ts): none before its wait ends, a new server's
     // first included. Someone's own request (host_daemon_update) asks now.
     const busyLeft = trigger === 'auto' ? busyRetryLeftMs(c.host, c.daemonVersion ?? '', { overdue: goesOver, behindMs: behind.behindMs }, (this.d.now ?? Date.now)()) : 0
@@ -570,7 +574,7 @@ export class NetDaemonUpdater {
         this.lastAttempt = null
         this.launched.outcome(expected, null)
         const wait = noteBusyRefusal(c.host, from ?? '', { overdue: goesOver, behindMs: behind.behindMs }, (this.d.now ?? Date.now)())
-        return this.postpone(`the host's daemon is busy (${msg.split('\n')[0].slice(0, 200)})`,
+        return this.postpone(daemonBusyWhy(err, { host: c.host, forced: goesOver }),
           goesOver ? wait : Math.max(this.d.cooldownMs, wait))
       }
       // The link dropped while the new daemon was put on the host (a cut upload, a command lost

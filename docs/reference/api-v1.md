@@ -2449,12 +2449,19 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   `409 task_dir_unset` on a host with no task directory for the task, `409 may_prompt` with
   `keptDir` when the line would show a dialog from the kept directory, each before anything runs.
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
-- `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
+- `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`), body optional
+  `{ over_busy?: boolean }` → updates the Walnut
   daemon on a host Walnut reaches over SSH or one that joined over the host network to this
   server's build, now: `{ host, kind, phase: "running" | "updated" | "skipped" | "failed" |
   "postponed" | "held" | "checking", running, expected, message, skip?, until? }`, answered once
   it is decided or started (ask again for how it went); `until` (ms epoch) while a wait with a
-  known end holds it. Walnut does this by itself after a deploy, at most once every 2 hours per
+  known end holds it. Without `over_busy` (or with no body, as older clients send) the update
+  waits for the work in progress there; refused as busy, `message` names what the daemon counted
+  open (a daemon from before 2026-11-25 says only its refusal) and what `over_busy` does. With
+  `over_busy: true` the asked build goes over that work, as an update hours overdue does: it goes
+  over the requests, relays, ACP workers and host_exec runs open there; CLI sessions keep running
+  and the next daemon adopts them. `400 bad_request` for an `over_busy` that is not a boolean.
+  Walnut does this by itself after a deploy, at most once every 2 hours per
   host, and a host whose config says `autofix: false` only this way (the rule:
   `docs/reference/session-daemon.md`). A session needs the same grant as `host_exec`; without a
   session id only the person at this computer may ask (`403 human_only`). `409 updates_itself`

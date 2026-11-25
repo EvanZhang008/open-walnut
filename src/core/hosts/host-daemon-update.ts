@@ -11,23 +11,26 @@
  * closed refuses); the person at this machine needs none.
  *
  * The answer comes as soon as the update is decided or started (the upload and the
- * handover take minutes); asking again tells how it went.
+ * handover take minutes); asking again tells how it went. `over_busy` (UpdateAsk.overBusy): the
+ * asked build goes over the work in progress there, by the forced path an overdue update takes
+ * (daemon-over-busy.ts); without it the update waits for that work.
  */
 import { HostExecError, callerOf, hostName, targetHost } from './host-exec.js'
 import { assertStillGranted, grantFor, grantRefusal } from './host-exec-grant.js'
+import type { UpdateAsk } from '../../providers/daemon-update-gap.js'
 
 const LOCAL = '__local__'
 /** A session on another host reaches this through its gateway, which gives up at 20 s: dial plus decision stay under it. */
 const DIAL_MS = 8_000
 
 
-export async function requestHostDaemonUpdate(raw: string, callerSid: string | undefined): Promise<Record<string, unknown>> {
+export async function requestHostDaemonUpdate(raw: string, callerSid: string | undefined, said: UpdateAsk = {}): Promise<Record<string, unknown>> {
   let host: string
   let granted: { taskId: string; grantId: string } | null = null
   if (callerSid) {
     const caller = await callerOf(callerSid)
     host = await targetHost(raw, caller, 'ask from a session on another host, or the user asks from the Mac')
-    granted = { taskId: caller.taskId, grantId: await grantFor(caller, host, `walnut daemon update (to this server's build) on ${host}`) }
+    granted = { taskId: caller.taskId, grantId: await grantFor(caller, host, `walnut daemon update (to this server's build${said.overBusy ? ', over the work in progress there' : ''}) on ${host}`) }
   } else {
     host = raw.trim() === 'local' ? LOCAL : raw.trim()
     if (host !== LOCAL) {
@@ -54,7 +57,7 @@ export async function requestHostDaemonUpdate(raw: string, callerSid: string | u
     const { taskId, grantId } = granted
     gate = () => { const no = grantRefusal(grants, taskId, host, grantId, false, name); if (no) throw no }
   }
-  const run = conn.requestDaemonUpdate(gate)
+  const run = conn.requestDaemonUpdate(gate, said)
   if (!run) {
     // Why a host of this kind is not updated this way: the one wording of its update path.
     const { daemonUpdateHowSentence } = await import('../../providers/daemon-update-paths.js')

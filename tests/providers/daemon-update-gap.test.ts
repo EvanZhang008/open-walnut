@@ -349,6 +349,26 @@ describe('an SSH host\'s daemon asked for now', () => {
     expect(stops(seen)).toHaveLength(1)
   })
 
+  // 2026-11-25: an ask refused as busy, then the link dropped and came back on a new connection
+  // object, whose next automatic decision held the asked build for the gap again: the ask was lost.
+  it('the ask survives a reconnect that makes a new connection to the host', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const first = make()
+    host(first, OLD, '00:30')
+    live(first)
+    vi.spyOn(priv(first), 'acpTurnsOpen').mockImplementation(async (...a: unknown[]) => {
+      priv(first).postponeUpgrade('ACP turns are open', a[0], a[1], { steady: true })
+      return true
+    })
+    expect(await first.requestDaemonUpdate()).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open' })
+    first.disconnect()
+    const next = make()
+    const seen = host(next, OLD, '00:30')
+    // The automatic decision of the new connection: no ask passed, the gap gives way all the same.
+    await expect(priv(next).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
+    expect(stops(seen)).toHaveLength(1)
+  })
+
   it('the ask is its build\'s: a newer build expected after it waits for the gap again', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     const c = make()

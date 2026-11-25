@@ -193,6 +193,7 @@ import { askOwnPort, daemonServesCheck, startLauncherBeat, type LauncherBeat } f
 import { createServiceRolesReader, programServiceRoles, SERVICE_ROLES_FLAG, withGoodRoles } from './service-roles.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
+import { busyOpenWords } from './daemon-busy-words.js'
 import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
 import { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
 import { RESTART_MARK_NAME, restartMarkText } from './daemon-restart-mark.js'
@@ -2060,7 +2061,8 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   // restart does. Session commands and file writes are drained either way; live CLI sessions
   // are handed over.
   const force = updating && cmd.force === true
-  const relaying = [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].some((pending) => pending.size)
+  const relays = [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending, gatewayWaiting].reduce((n, pending) => n + pending.size, 0)
+  const relaying = relays > 0
   const busyWith = [
     acp.workers.size ? `${acp.workers.size} ACP worker(s)` : '',
     relaying ? 'relay requests' : '',
@@ -2069,11 +2071,12 @@ async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: 
   ].filter(Boolean)
   if (force && busyWith.length) logMsg('warn', 'service.update: forced, going over its own work', { busyWith })
   // A surviving ACP worker (acp-survive-v1) outlives this daemon: only one on pipes holds the swap.
+  // Each refusal says what it counted open (busyOpenWords): the asker's answer names it (daemonBusyWhy).
   if (!force && (acp.holdingWorkers() || relaying)) {
-    return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
+    return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first' + busyOpenWords([[acp.holdingWorkers(), 'ACP worker'], [relays, 'relay request']]))
   }
   // A host_exec run shares this daemon's pipes and ends with it (each ends by its own deadline).
-  if (!force && execHolds()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first')
+  if (!force && execHolds()) return sendError(ws, id, 'service.handover: running host_exec jobs must finish first' + busyOpenWords([[hostExec.holding(), 'host_exec run'], [hostExec.scripts?.() ?? 0, 'plugin script']]))
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
   // Pause before the first await so the handover RPC does not count itself in the wait set.
   // A Claude Code install in flight (up to 45 minutes) is not waited for: the shutdown

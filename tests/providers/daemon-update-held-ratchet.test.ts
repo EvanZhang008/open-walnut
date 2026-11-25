@@ -60,7 +60,7 @@ const SITES: Site[] = [
       // Host: launchd starts no jobs now.
       "'update deferred: '": 'held',
       // Host: the daemon refused, busy.
-      "the host's daemon is busy": 'held',
+      'daemonBusyWhy(error': 'held',
     },
   },
   {

@@ -172,9 +172,10 @@ hostExecV1Router.post('/hosts/:host/exec/:jobId/stop', (req: Request, res: Respo
 })
 
 /**
- * POST /api/v1/hosts/:host/daemon-update → the host's daemon updated to this build now
- * (core/hosts/host-daemon-update.ts): a session under the host_exec grant, else only
- * the person at this computer.
+ * POST /api/v1/hosts/:host/daemon-update { over_busy? } → the host's daemon updated to this build
+ * now (core/hosts/host-daemon-update.ts): a session under the host_exec grant, else only the person
+ * at this computer. The body is optional (an older client sends none); `over_busy: true` goes over
+ * the work in progress there.
  */
 hostExecV1Router.post('/hosts/:host/daemon-update', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
@@ -183,7 +184,12 @@ hostExecV1Router.post('/hosts/:host/daemon-update', (req: Request, res: Response
     res.status(403).json({ error: 'A task\'s session or the user at this computer asks for a daemon update', code: 'human_only' })
     return
   }
-  void answer(req, res, next, async () => (await import('../../core/hosts/host-daemon-update.js')).requestHostDaemonUpdate(param(req.params.host), sid))
+  const overBusy = (req.body as { over_busy?: unknown } | undefined)?.over_busy
+  if (overBusy !== undefined && typeof overBusy !== 'boolean') {
+    res.status(400).json({ error: 'over_busy is true or false', code: 'bad_request' })
+    return
+  }
+  void answer(req, res, next, async () => (await import('../../core/hosts/host-daemon-update.js')).requestHostDaemonUpdate(param(req.params.host), sid, { overBusy: overBusy === true }))
 })
 
 hostExecV1Router.get('/host-exec/grants', async (req: Request, res: Response, next: NextFunction) => {

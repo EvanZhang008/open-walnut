@@ -21,6 +21,11 @@
  * One build is held one gap at most in all: a daemon that keeps restarting (a crash loop)
  * always looks young, and the build that would fix it must still go out.
  * WALNUT_DAEMON_UPDATE_MIN_GAP_MS sets the gap; 0 turns the hold off.
+ *
+ * The gap's state of a host (its held-since clock, the ask, a capability needed) lives in one
+ * place per host for the server's life (hostUpdateGap), never on a connection object: a
+ * reconnect that made a new connection lost the ask with the old one, and the next automatic
+ * decision held the asked build for the gap again (2026-11-25, a busy host).
  */
 import { HOST_DEPENDENT_CAPABILITIES } from './daemon-shared.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
@@ -111,18 +116,27 @@ export function daemonUpdateGapHold(f: GapFacts): { waitMs: number; until: numbe
   return { waitMs, until: now + waitMs, why: daemonUpdateGapWhy(f.ageMs!, waitMs, { host: f.host, gapMs: f.gapMs, now }) }
 }
 
+/** What the asker of an update said (host_daemon_update). */
+export interface UpdateAsk {
+  /**
+   * Go over the work in progress there now: the update takes the forced path an overdue one takes
+   * (daemon-over-busy.ts), for the asked build only. Absent: it waits for that work, as before.
+   */
+  overBusy?: boolean
+}
+
 /**
- * The gap's state on one connection, for both paths (DaemonConnection owns one and hands it to
- * its NetDaemonUpdater): since when a build has been held (one gap at most in all, kept for that
- * build once it passed), whether the gap holds it now, the build someone asked for (it goes past
- * the gap until it runs there or another build is expected), and a capability a feature needs
- * that the running daemon lacks (noted once per running build).
+ * The gap's state of one host, for both paths (hostUpdateGap gives the SSH path of DaemonConnection
+ * and its NetDaemonUpdater the same one): since when a build has been held (one gap at most in all,
+ * kept for that build once it passed), whether the gap holds it now, the build someone asked for (it
+ * goes past the gap until it runs there or another build is expected) with what the asker said, and
+ * a capability a feature needs that the running daemon lacks (noted once per running build).
  */
 export class UpdateGapHold {
   private build: { expected: string; since: number } | null = null
   private holding: { expected: string; until: number } | null = null
   private needed: { running: string; cap: string } | null = null
-  private askedFor: string | null = null
+  private askedFor: { expected: string; overBusy: boolean } | null = null
 
   /** Decide the gap for `expected`, with this build's held time, its ask, and the running build's need. */
   decide(expected: string, f: Omit<GapFacts, 'heldForMs' | 'needs' | 'asked'> & { running: string | null }): { waitMs: number; until: number; why: string } | null {
@@ -155,12 +169,17 @@ export class UpdateGapHold {
 
   /**
    * Someone asked for `expected` (host_daemon_update): every later decision of that build goes past
-   * the gap, so an ask a safety hold put off (an open ACP turn) is not then held for up to 2 h.
+   * the gap, so an ask a safety hold put off (an open ACP turn) is not then held for up to 2 h. The
+   * latest ask's words count: an ask without `overBusy` after one with it waits for the work again.
    */
-  ask(expected: string): void { this.askedFor = expected }
+  ask(expected: string, said: UpdateAsk = {}): void { this.askedFor = { expected, overBusy: said.overBusy === true } }
   /** The asker may no longer have it run (its grant was revoked): the ask is gone, the gap holds as before. */
-  unask(expected: string): void { if (this.askedFor === expected) this.askedFor = null }
-  asked(expected: string): boolean { return this.askedFor === expected }
+  unask(expected: string): void { if (this.askedFor?.expected === expected) this.askedFor = null }
+  asked(expected: string): boolean { return this.askedFor?.expected === expected }
+  /** The asker of `expected` said to go over the work in progress (UpdateAsk.overBusy). */
+  overBusy(expected: string | null | undefined): boolean {
+    return !!expected && this.askedFor?.expected === expected && this.askedFor.overBusy
+  }
 
   /** The capability noted while `running` runs there, if any. */
   needs(running: string | null | undefined): string | null {
@@ -176,6 +195,21 @@ export class UpdateGapHold {
     this.needed = { running, cap }
     return true
   }
+}
+
+/**
+ * The one place a host's gap state lives: one per host key, for the server's life, read by every
+ * connection to that host on either path (tests/providers/daemon-update-gap-place.test.ts fails on
+ * any other place that builds one). On globalThis so a test setup can clear it without importing the app
+ * (tests/setup/outage-repeat-reset.ts).
+ */
+const HOST_GAPS = Symbol.for('open-walnut.hostUpdateGaps')
+export function hostUpdateGap(host: string): UpdateGapHold {
+  const g = globalThis as unknown as Record<symbol, Map<string, UpdateGapHold> | undefined>
+  const all = (g[HOST_GAPS] ??= new Map())
+  let gap = all.get(host)
+  if (!gap) all.set(host, gap = new UpdateGapHold())
+  return gap
 }
 
 /** `ps -o etime=` ([[DD-]HH:]MM:SS) in ms, or null. */

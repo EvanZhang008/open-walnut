@@ -19,6 +19,8 @@ const gate = vi.hoisted(() => ({
   requests: 0,
   /** The gate the update was handed, and what the grant reads like when the updater asks it later. */
   handed: null as null | (() => void),
+  /** What the asker said, as the connection was handed it. */
+  said: null as null | { overBusy?: boolean },
   later: null as null | { status: number; code: string },
 }))
 
@@ -52,10 +54,11 @@ vi.mock('../../../src/core/hosts/link.js', () => ({
     gate.dialed.push(host)
     return {
       linkKind: gate.kind,
-      requestDaemonUpdate: (g?: () => void) => {
+      requestDaemonUpdate: (g?: () => void, said?: { overBusy?: boolean }) => {
         if (gate.kind !== 'net' && gate.kind !== 'ssh') return null
         gate.requests += 1
         gate.handed = g ?? null
+        gate.said = said ?? null
         return Promise.resolve({ phase: 'running', host, running: 'walnut-daemon-a', expected: 'walnut-daemon-b', message: 'uploading', at: 1 })
       },
     }
@@ -73,6 +76,7 @@ beforeEach(() => {
   gate.kind = 'net'
   gate.requests = 0
   gate.handed = null
+  gate.said = null
   gate.later = null
 })
 
@@ -121,6 +125,19 @@ describe('host_daemon_update', () => {
     expect(await requestHostDaemonUpdate('devbox', 's1')).toMatchObject({ host: 'devbox', kind: 'ssh', phase: 'running', running: 'walnut-daemon-a', expected: 'walnut-daemon-b' })
     expect(gate.requests).toBe(1)
     expect(gate.handed).toBeTypeOf('function')
+  })
+
+  it('over_busy reaches the connection on either path, and the grant\'s letter says it goes over the work', async () => {
+    for (const kind of ['net', 'ssh']) {
+      gate.kind = kind
+      gate.asked = []
+      await requestHostDaemonUpdate('devbox', 's1', { overBusy: true })
+      expect(gate.said, kind).toEqual({ overBusy: true })
+      expect(gate.asked[0]?.preview, kind).toContain('over the work in progress there')
+      await requestHostDaemonUpdate('devbox', 's1')
+      expect(gate.said, kind).toEqual({})
+      expect(gate.asked[1]?.preview, kind).not.toContain('over the work')
+    }
   })
 
   it('a host that updates another way says so', async () => {

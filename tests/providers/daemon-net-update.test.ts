@@ -16,7 +16,8 @@ import {
   LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus, setWordsDue,
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
-import { UpdateGapHold } from '../../src/providers/daemon-update-gap.js'
+import { hostUpdateGap } from '../../src/providers/daemon-update-gap.js'
+import { OVER_BUSY_GOES_OVER } from '../../src/providers/daemon-over-busy.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { ACP_UPGRADE_HOLD_MAX_MS, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
@@ -209,9 +210,10 @@ describe('NetDaemonUpdater', () => {
   // The update gap (daemon-update-gap.ts): 2 h at most, decided again every 15 min so the 3 h bound stays seen.
   it('a young daemon waits out the gap with its end said, asked again within 15 min; a capability needed lets it go', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
-    const gap = new UpdateGapHold()
     const conn = link({ daemonStartedAt: Date.now() - 10 * 60_000 })
-    const { u, update } = updater({ minGapMs: 2 * 3600_000, gap }, conn)
+    // The host's one gap state (hostUpdateGap), which the updater reads.
+    const gap = hostUpdateGap(conn.host)
+    const { u, update } = updater({ minGapMs: 2 * 3600_000 }, conn)
     u.schedule(0)
     await vi.advanceTimersByTimeAsync(10)
     expect(u.state).toMatchObject({ phase: 'skipped', skip: 'recent' })
@@ -245,6 +247,23 @@ describe('NetDaemonUpdater', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(await answer).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open' })
     busy = null
+    await vi.advanceTimersByTimeAsync(60)
+    expect(u.state.phase).toBe('updated')
+    expect(update).toHaveBeenCalledTimes(1)
+    u.stop()
+  })
+
+  // 2026-11-25: the ask lived on the connection object, and a reconnect that made a new one lost it.
+  it('asked and put off, the ask holds for a new updater of the host (a new connection): its automatic try goes past the gap', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const conn = link({ daemonStartedAt: Date.now() - 10 * 60_000 })
+    const first = updater({ minGapMs: 2 * 3600_000, busy: async () => 'ACP turns are open' }, conn)
+    const answer = first.u.request(1_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await answer).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open' })
+    first.u.stop()
+    const { u, update } = updater({ minGapMs: 2 * 3600_000 }, link({ daemonStartedAt: Date.now() - 10 * 60_000 }))
+    u.schedule(0)
     await vi.advanceTimersByTimeAsync(60)
     expect(u.state.phase).toBe('updated')
     expect(update).toHaveBeenCalledTimes(1)
@@ -568,6 +587,64 @@ describe('NetDaemonUpdater', () => {
         expect(calls).toBe(2)
         u.stop()
       }
+    } finally {
+      vi.useRealTimers()
+      resetBusyRetryForTest()
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // host_daemon_update over_busy (2026-11-25: a host this busy refused every asked update, so the build never landed).
+  it('asked with over_busy, the asked build goes over the host\'s work on this try and the next; a plain ask or another build waits for it', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-over-busy-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    vi.useFakeTimers()
+    try {
+      resetBusyRetryForTest()
+      const BUSY = 'Managed daemon update failed: service.handover: active ACP workers or relay requests must finish first (open: 2 ACP workers, 14 relay requests)'
+      const over: unknown[] = []
+      let refusals = 1
+      let expected = NEW
+      let execRun = true
+      const { u } = updater({
+        cooldownMs: 40,
+        expectedVersion: () => expected,
+        // A host_exec run the plain ask waits for (exec-runs-hold.ts).
+        busy: async () => (execRun ? '1 host_exec run is running on the host' : null),
+        update: vi.fn(async (...a: unknown[]) => {
+          over.push((a[4] as { overBusy?: boolean }).overBusy)
+          if (refusals > 0) { refusals -= 1; throw new Error(BUSY) }
+        }),
+      })
+      // Plain: held by the host_exec run, nothing sent.
+      void u.request()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(u.state).toMatchObject({ phase: 'postponed', message: 'waiting: 1 host_exec run is running on the host' })
+      expect(over).toEqual([])
+      // Plain again, the run ended: refused as busy, and the answer names what is open and what over_busy does.
+      execRun = false
+      void u.request()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(over).toEqual([false])
+      expect(u.state.message).toBe(`waiting: the host's daemon is busy (open there: 2 ACP workers, 14 relay requests); host_daemon_update studio-mac with over_busy goes ahead now: ${OVER_BUSY_GOES_OVER}`)
+      // With over_busy: past the run, the CLI goes over the daemon's work; refused once, the next automatic try goes over it too.
+      execRun = true
+      refusals = 1
+      void u.request(undefined, undefined, { overBusy: true })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(over).toEqual([false, true])
+      expect(u.state.message).toBe('waiting: the host\'s daemon is busy (open there: 2 ACP workers, 14 relay requests)')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(over).toEqual([false, true, true])
+      expect(u.state.phase).toBe('updated')
+      // Another build expected now, never asked for: it waits for the run again.
+      expected = 'walnut-daemon-newer00000'
+      u.schedule(0)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(u.state).toMatchObject({ phase: 'postponed', message: 'waiting: 1 host_exec run is running on the host' })
+      expect(over).toEqual([false, true, true])
+      u.stop()
     } finally {
       vi.useRealTimers()
       resetBusyRetryForTest()

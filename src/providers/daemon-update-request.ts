@@ -6,12 +6,16 @@
  * The run is the SSH path's own decision (DaemonConnection.recheckPostponedUpgrade with the
  * asked build): past the soft holds the host network request skips too (the update gap, a
  * shared daemon kept, the busy clock, the cooldown after a try, a build's day off), never past
- * the safety holds (writes in flight, host_exec runs, open ACP turns, the previous update still
- * running there, its probation, another host name of the daemon updating it, the asker's grant).
+ * the previous update still running there, its probation, another host name of the daemon
+ * updating it or the asker's grant. The host's work (writes in flight, host_exec runs, open ACP
+ * turns, the daemon's own requests and relays) holds it too, unless the asker said `overBusy`:
+ * then the asked build goes over that work, on this try and the ones after it, by the path an
+ * overdue update takes (daemon-update-gap.ts UpdateAsk, daemon-over-busy.ts).
  * The answer comes once it is decided, or after `waitMs` while it still runs (an upload takes
- * minutes); asking again while it runs tells where it is.
+ * minutes); asking again while it runs tells where it is, and what held the last try.
  */
 import type { NetUpdatePhase, NetUpdateSkip, NetUpdateState } from './daemon-net-update.js'
+import type { UpdateAsk } from './daemon-update-gap.js'
 import type { DaemonUpdateWait } from './daemon-update-wait.js'
 
 export interface RequestedUpdateDeps {
@@ -21,6 +25,8 @@ export interface RequestedUpdateDeps {
   running(): string | null
   /** The build this server would put there; null when it names none. */
   expected(): string | null
+  /** Note the ask with what the asker said (the host's gap state, UpdateGapHold.ask): every later decision of `expected` reads it. */
+  ask(expected: string, said: UpdateAsk): void
   /** Decide the update of `expected` now, past the soft holds; true: it went ahead (the link reconnects on the new build). */
   run(expected: string, gate?: () => void): Promise<boolean>
   /** What the update waits for after the decision (its postpone), if anything. */
@@ -38,14 +44,22 @@ export class RequestedUpdate {
     this.state = { phase: 'idle', host: d.host, running: null, expected: null, message: '', at: 0 }
   }
 
-  async request(waitMs = 8_000, gate?: () => void): Promise<NetUpdateState> {
-    if (this.inFlight) { await within(this.inFlight, waitMs); return this.state }
+  async request(waitMs = 8_000, gate?: () => void, said: UpdateAsk = {}): Promise<NetUpdateState> {
     const expected = this.d.expected()
+    if (this.inFlight) {
+      // Asked again while one runs: the asker's words count for the tries after it (an over_busy one included).
+      if (expected) { gate?.(); this.d.ask(expected, said) }
+      await within(this.inFlight, waitMs)
+      return this.state
+    }
     if (!expected) return this.set('skipped', 'this server runs from source and names no daemon build', { skip: 'no-build-version' })
     if (!this.d.connected()) return this.set('skipped', 'the host is not connected')
     // Refused before anything runs: the route answers the refusal itself.
     gate?.()
-    this.set('checking', 'checking the host\'s daemon')
+    this.d.ask(expected, said)
+    // What held the last try (a busy daemon, say), until this one is decided: the asker reads it in this answer.
+    const before = this.d.wait()
+    this.set('checking', before?.expected === expected ? `checking the host's daemon; the last try: ${before.why}` : 'checking the host\'s daemon')
     const startedAt = (this.d.now ?? Date.now)()
     const run = this.d.run(expected, gate)
       .then((went) => this.settle(went, expected, startedAt), (err) => this.set('failed', err instanceof Error ? err.message : String(err)))

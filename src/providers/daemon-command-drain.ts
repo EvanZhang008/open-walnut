@@ -1,3 +1,5 @@
+import { busyOpenWords } from './daemon-busy-words.js'
+
 export function createDaemonCommandDrain() {
   let closed = false
   let paused = false
@@ -28,7 +30,8 @@ export function createDaemonCommandDrain() {
      */
     pause(except?: unknown, opts: { force?: boolean } = {}) {
       check()
-      if (!opts.force && [...admitted].some((work) => !pending.has(work))) throw new Error('Daemon has active operations; retry after they finish')
+      // The refusal counts the requests still open (busyOpenWords), for the asker's answer.
+      if (!opts.force && [...admitted].some((work) => !pending.has(work))) throw new Error('Daemon has active operations; retry after they finish' + busyOpenWords([[[...admitted].filter((work) => !pending.has(work)).length, 'request']]))
       paused = true
       return {
         drained: Promise.allSettled([...pending].filter((work) => work !== except)).then(() => {}),

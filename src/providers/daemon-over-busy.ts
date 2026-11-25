@@ -17,3 +17,5 @@
 export const OVER_BUSY_FLAG = '--over-busy'
 export const OVER_BUSY_WAIT_MS = 60_000
 export const OVER_BUSY_PLAIN_MS = 30_000
+/** What going over the daemon's work does, in the words every answer about it uses (host_daemon_update over_busy). */
+export const OVER_BUSY_GOES_OVER = 'it goes over the requests, relays, ACP workers and host_exec runs open there; CLI sessions keep running and the next daemon adopts them'

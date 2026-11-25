@@ -34,7 +34,7 @@ const DISPATCH: Record<string, Array<{ after: string; check: string; send: strin
   'core/hosts/host-http.ts': [{ after: 'dial(', check: 'assertStillGranted(', send: "'http.request'" }],
   // The update waits again inside the updater: it gets the gate, read before each of its steps
   // (tests/providers/daemon-net-update.test.ts proves the updater reads it).
-  'core/hosts/host-daemon-update.ts': [{ after: 'link(host)', check: 'assertStillGranted(', send: 'requestDaemonUpdate(gate)' }],
+  'core/hosts/host-daemon-update.ts': [{ after: 'link(host)', check: 'assertStillGranted(', send: 'requestDaemonUpdate(gate, said)' }],
   // The copy checks once before the relay, then the relay asks its gate before every part.
   'core/hosts/host-copy.ts': [{ after: 'planTarget(', check: 'gate()', send: 'relayFile(job.fromHost' }],
   // subagent_run with host: read again after the slot and the engine check, before the runner; the
