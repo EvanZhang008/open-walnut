@@ -144,7 +144,7 @@ final class ChatPlaceGuardTests: XCTestCase {
             "eraseLocalState": "disconnect forgets everything, the keys included",
         ]
         let agentWriters: [String: String] = [
-            "initialize": "the launch reads ChatPlace.agentKey",
+            "adoptCache": "the launch reads ChatPlace.agentKey",
             "switchAgent": "writes ChatPlace.agentKey",
             "eraseLocalState": "disconnect forgets everything",
         ]

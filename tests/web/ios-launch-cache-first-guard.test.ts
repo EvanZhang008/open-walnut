@@ -8,16 +8,17 @@
  *
  * The members are read from source: every store under ios-native/Walnut/Stores whose launch reads
  * `DiskCache` does it in `adoptCache()`, never in `initialize()`, and `hydrateStores`
- * (WalnutApp.swift) awaits each store's `adoptCache()` before its first other await.
+ * (WalnutApp.swift) awaits each store's `adoptCache()` (each store once, by its type) before its first
+ * other await. Since the copy is adopted before the status probe, an app sent to the background
+ * during the probe skips the store's server part (`refreshAfterLaunch` reads nothing while the store
+ * is inactive), so each store's foreground resume reads the server again.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { code } from './ios-timed-hide-scan'
 
 const APP = path.resolve(import.meta.dirname, '../../ios-native/Walnut')
-
-const code = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/"(?:\\.|[^"\\\n])*"/g, '""')
 
 /** The body of the first `func <name>(...)` in `src`, braces matched; null when there is none. */
 export function body(src: string, name: string): string | null {
@@ -69,8 +70,24 @@ describe('iOS: a launch reads every store\'s own copy before any request', () =>
     const order = awaits(hydrate!)
     const firstOther = order.findIndex((a) => !a.endsWith('.adoptCache'))
     const adopted = order.slice(0, firstOther < 0 ? order.length : firstOther)
-    expect(adopted.length, `adoptCache calls before the first request: ${adopted.join(', ')}`).toBe(stores.length)
+    // Each receiver by its declared type: one store adopted twice never stands in for one left out.
+    const app = code(fs.readFileSync(path.join(APP, 'App/WalnutApp.swift'), 'utf8'))
+    const typeOf = new Map([...app.matchAll(/\b(\w+)\s*:\s*(\w+Store)\b/g)].map((m) => [m[1], m[2]]))
+    const adoptedTypes = adopted.map((a) => typeOf.get(a.split('.')[0]) ?? a).sort()
+    expect(adoptedTypes, 'adoptCache calls before the first request').toEqual(stores.map((s) => s.file.replace(/\.swift$/, '')).sort())
     expect(order.slice(adopted.length).filter((a) => a.endsWith('.adoptCache'))).toEqual([])
+  })
+
+  it('a store whose launch was sent to the background reads the server when it is back', () => {
+    const offenders = stores.flatMap((s) => {
+      const resume = body(s.src, 'resumeForForeground') ?? ''
+      // What resume runs, one call deep (ChatStore resumes through resumeStream).
+      const called = [...resume.matchAll(/\b(\w+)\s*\(/g)].map((m) => body(s.src, m[1]) ?? '').join('\n')
+      return /refreshAfterLaunch\(|\brefresh\w*\(|connectFeed\(/.test(resume + called)
+        ? []
+        : [`${s.file}: resumeForForeground() reads nothing from the server; a launch that went to the background skipped it`]
+    })
+    expect(offenders).toEqual([])
   })
 
   it('reads bodies and awaits as Swift writes them', () => {

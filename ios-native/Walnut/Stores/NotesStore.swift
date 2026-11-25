@@ -57,12 +57,19 @@ final class NotesStore {
         }
     }
 
-    /// After `adoptCache`: the server.
+    /// After `adoptCache`: the server. When the app went to the background before (or while) it ran,
+    /// its answers were not taken, and the next foreground runs it again.
     func refreshAfterLaunch() async {
+        guard isActive else { launchRefreshOwed = true; return }
+        launchRefreshOwed = false
         async let treeRefresh: Void = refreshTree()
         async let pinRefresh: Void = refreshPinned()
         _ = await (treeRefresh, pinRefresh)
+        if !isActive { launchRefreshOwed = true }
     }
+
+    /// The launch's server part did not run to its end in the foreground (`refreshAfterLaunch`).
+    @ObservationIgnored private var launchRefreshOwed = false
 
     func refreshTree() async {
         guard isActive else { return }
@@ -317,5 +324,8 @@ extension NotesStore: LifecycleSuspendable {
     /// purely "stop mutating observed state" (see `isActive`). In-flight
     /// requests settle and their completions become no-ops.
     func suspendForBackground() { isActive = false }
-    func resumeForForeground() { isActive = true }
+    func resumeForForeground() {
+        isActive = true
+        if launchRefreshOwed { Task { await refreshAfterLaunch() } }
+    }
 }

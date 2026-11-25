@@ -478,7 +478,10 @@ final class ChatStore {
         cacheRead = true
     }
 
-    /// `adoptCache` ran to its end (it stops early when a disconnect closed the store meanwhile).
+    /// `adoptCache` ran to its end (it stops early when a disconnect closed the store meanwhile),
+    /// and the launch's server part has not run yet. Still true when the app went to the background
+    /// before that part could run (the status probe waits out its timeout offline):
+    /// `resumeStream` runs it when the app is back.
     @ObservationIgnored private var cacheRead = false
 
     /// After `adoptCache` (and the launch's status probe): the chat the user left, then the
@@ -2791,7 +2794,11 @@ final class ChatStore {
         guard !isActive else { return }
         isActive = true
         connectStream()
-        if let id = activeID {
+        if cacheRead {
+            // The launch went to the background before its server part ran: it opens the chat the
+            // user left and reads the lists now.
+            trackTask { [weak self] in await self?.refreshAfterLaunch() }
+        } else if let id = activeID {
             trackTask { [weak self] in await self?.loadMessages(id) }
         }
         resumeLaneFollow()
