@@ -396,6 +396,10 @@ test('provider reasoning controls live in the model picker, refresh after model 
   await openPicker()
   await expect(checked()).toHaveText('High')
   await page.setViewportSize({ width: 1280, height: 800 })
+  // The resize moves the open picker under a pointer that stayed where the small window's pill
+  // was: resting on the engine rail, it opens the rail over the model column (2026-11-25, once the
+  // rail grew a row). A person's pointer goes to the row it clicks, so take it off the rail first.
+  await page.mouse.move(5, 5)
   await picker.getByRole('option', { name: /Mock GPT Best/ }).click()
   await openPicker()
   await expect(effortColumn).toHaveCount(0)
