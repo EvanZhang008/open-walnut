@@ -327,7 +327,7 @@ export interface WorkCardDeps {
 }
 
 async function defaultDeps(): Promise<WorkCardDeps> {
-  const { listTasks } = await import('../task-manager.js')
+  const { taskStoreSnapshot } = await import('../task-manager.js')
   const { isTestRunTask } = await import('../test-run.js')
   const { getConfig } = await import('../config-manager.js')
   const { sendApns, apnsStatus } = await import('./apns.js')
@@ -336,7 +336,7 @@ async function defaultDeps(): Promise<WorkCardDeps> {
   return {
     // Never a test run's tasks, whatever context a tick was scheduled from (orgTasks keeps them
     // for a test run's own request, and a timer set inside one runs in it).
-    tasks: async () => (await listTasks()).filter((t) => !isTestRunTask(t)),
+    tasks: async () => (await taskStoreSnapshot()).filter((t) => !isTestRunTask(t)),
     // A row whose device was revoked is never sent, as deliver.ts does for letters.
     rows: async () => (await partitionByPairing(((await getConfig()).push_tokens ?? []).filter((r) => r.work_card))).live,
     send: (targets, payload, priority, expiration) => sendApns(targets, payload, { pushType: 'liveactivity', priority, expiration }),
@@ -632,8 +632,8 @@ export async function workCardNow(): Promise<WorkCardView> {
   // it gets the numbers alone, and the clock and the pushes stay the user's.
   const { ambientTestRun } = await import('../test-run.js')
   if (service && ambientTestRun() === undefined) return await service.tick()
-  const { orgTasks } = await import('../org/org-store.js')
+  const { orgTaskView } = await import('../org/org-store.js')
   const now = Date.now()
-  const snap = workCardSnapshot(await orgTasks(), now, now)
+  const snap = workCardSnapshot(await orgTaskView(), now, now)
   return { ...snap, active: false, stretch: null, pushes: false }
 }

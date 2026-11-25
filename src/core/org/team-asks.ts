@@ -209,8 +209,8 @@ export async function noteTeamAsk(
     const record = await getSessionByClaudeId(sessionId);
     const taskId = record?.taskId;
     if (!taskId) return;
-    const { listTasks } = await import('../task-manager.js');
-    const tasks = await listTasks();
+    const { taskStoreSnapshot } = await import('../task-manager.js');
+    const tasks = await taskStoreSnapshot();
     const task = tasks.find((t) => t.id === taskId);
     // A plugin's own task (Task.plugin_only) is no team's work: what the user says there stays there.
     if (!task || task.org_role === 'lead' || task.org_role === 'main' || task.plugin_only || task.phase === 'COMPLETE') return;

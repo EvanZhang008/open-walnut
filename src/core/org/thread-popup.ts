@@ -78,7 +78,7 @@ export async function threadTreeOf(taskId: string, among?: ReadonlySet<string>):
 }
 
 async function context(all?: readonly Task[]): Promise<{ all: readonly Task[]; byId: Map<string, Task>; places: OrgPlaces | null }> {
-  const tasks = all ?? await (await import('./org-store.js')).orgTasks();
+  const tasks = all ?? await (await import('./org-store.js')).orgTaskView();
   const { isOrgEnabled } = await import('./org-enabled.js');
   return { all: tasks, byId: new Map(tasks.map((t) => [t.id, t] as const)), places: (await isOrgEnabled()) ? orgPlaces(tasks) : null };
 }

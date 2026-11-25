@@ -296,8 +296,8 @@ const KNOWN_RETRY_MS = 30_000;
 export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<number> {
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return 0;
-  const { orgTasks } = await import('./org-store.js');
-  const p = orgPlaces(await orgTasks());
+  const { orgTaskView } = await import('./org-store.js');
+  const p = orgPlaces(await orgTaskView());
   const nodes = await readAllNodes(p);
   // Known threads (thread-known.ts): their tasks are watched too; the node hears once when their
   // waits end, and Walnut settles the ones it left.
@@ -308,8 +308,8 @@ export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<
   for (const move of planThreadFollows(nodes, p)) if (await runMove(move, 'agent', { tellFrom: true }, 'work')) n++;
   knownDueAt = undefined;
   // Judged against every task, as at his ack (orgTasks leaves test-run tasks out, which would read as done).
-  const { listTasks } = await import('../task-manager.js');
-  await ack.settleKnown(acked, ack.openTasksOf(await listTasks()), opts.now)
+  const { taskStoreSnapshot } = await import('../task-manager.js');
+  await ack.settleKnown(acked, ack.openTasksOf(await taskStoreSnapshot()), opts.now)
     .then((r) => { knownDueAt = r.nextAt; })
     .catch((err) => log.task.warn('org threads: known threads not settled', { error: err instanceof Error ? err.message : String(err) }));
   return n;

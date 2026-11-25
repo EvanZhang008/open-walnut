@@ -317,14 +317,15 @@ export async function buildSessionProjection(from: {
 } = {}): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
   // session registry / task store at module load.
-  const { listSessions, isListableSession } = await import('./session-tracker.js')
-  const { listTasks, listFolderLabels } = await import('./task-manager.js')
+  const { sessionStoreView, isListableSession } = await import('./session-tracker.js')
+  const { taskStoreSnapshot, listFolderLabels } = await import('./task-manager.js')
 
   // listFolderLabels is a one-table SELECT, deliberately not listGroups(): this
   // runs inline on routes the phone polls and a second whole-store read to learn
   // a handful of folder names would be the most expensive field on the row.
   const [allSessions, allTasks, folderLabels, hostLabels] = await Promise.all([
-    from.sessions ?? listSessions(), listTasks(), listFolderLabels(), from.hostLabels ?? configuredHostLabels(),
+    // The stores' own rows, read only: projectSession builds new rows from them.
+    from.sessions ?? sessionStoreView(), taskStoreSnapshot(), listFolderLabels(), from.hostLabels ?? configuredHostLabels(),
   ])
   const taskById = new Map(allTasks.map((t) => [t.id, t]))
   const cutoff = Date.now() - STOPPED_RETENTION_DAYS * 24 * 60 * 60 * 1000

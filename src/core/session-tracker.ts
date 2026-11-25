@@ -778,6 +778,18 @@ export async function listSessions(): Promise<SessionRecord[]> {
 }
 
 /**
+ * Every session, as the store holds it (with a host replica's sessions started alone), for a
+ * reader that builds its own rows from them: never edit or keep a record, and go over it in one
+ * synchronous pass (a write may patch the list while the reader awaits). 2026-11-24 on the Mac: the session
+ * projection export copied all ~9.4k records every 10 s through listSessions, about 1M copies in
+ * the ten minutes after a restart.
+ */
+export async function sessionStoreView(): Promise<readonly SessionRecord[]> {
+  const view = await readStoreView();
+  return awaySessionRows ? withAway(view as SessionRecord[]) : view;
+}
+
+/**
  * Copies of the sessions linked to one of `taskIds` through their taskId, plus
  * any session named in `sessionIds`, in store order. This is everything a task
  * list's session enrichment reads, so it never pays for the rest of the store.

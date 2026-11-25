@@ -60,6 +60,23 @@ export async function orgTasks(): Promise<Task[]> {
   return ambientTestRun() !== undefined ? tasks.map(unmarkForTestViewer) : tasks.filter((t) => !isTestRunTask(t));
 }
 
+/**
+ * orgTasks for a reader that never edits or keeps a row: the store's own rows, the same list until
+ * the store changes (taskStoreSnapshot), so a memo keyed by the list (same-ask-tree's tree index)
+ * holds across calls. 2026-11-24 on the Mac: the threads and status passes copied the whole board
+ * (6.5k rows) about once a second through orgTasks. A test run's own request gets orgTasks' copies.
+ */
+const orgViews = new WeakMap<readonly Task[], readonly Task[]>();
+export async function orgTaskView(): Promise<readonly Task[]> {
+  const { ambientTestRun, isTestRunTask } = await import('../test-run.js');
+  if (ambientTestRun() !== undefined) return orgTasks();
+  const { taskStoreSnapshot } = await import('../task-manager.js');
+  const all = await taskStoreSnapshot();
+  let view = orgViews.get(all);
+  if (!view) orgViews.set(all, view = Object.freeze(all.filter((t) => !isTestRunTask(t))));
+  return view;
+}
+
 export async function getOrgTree(): Promise<OrgTree> {
   return buildOrgTree(await orgTasks());
 }
