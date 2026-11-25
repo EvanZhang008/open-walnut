@@ -354,7 +354,10 @@ esac
     const f = fixture()
     fs.mkdirSync(f.queue, { recursive: true })
     fs.writeFileSync(path.join(f.queue, 'disk'), '4.0 GiB free\n')
-    const r = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1' }).done
+    // A runner killed outright leaves its next-at too; a new runner's gap rewrites next-at.
+    fs.writeFileSync(path.join(f.queue, 'next-at'), String(Math.floor(Date.now() / 1000) + 60))
+    stampNow(f)
+    const r = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '3' }).done
     expect(r.code, r.stderr).toBe(0)
     expect(r.stdout).not.toMatch(/nearly full/)
     await runnerGone(f)

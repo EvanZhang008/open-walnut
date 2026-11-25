@@ -105,11 +105,11 @@ dq_busy_mem() {
 # A nearly full data disk holds the deploy, at most WALNUT_DEPLOY_DISK_HOLD_SECS (1800). A deploy writes
 # 4 to 5 GB on the volume it builds on while it runs (2026-11-24 on the Mac: the clean clone 1.6 GB, the
 # stage 1.9 GB, the previous build 0.8 GB), and Walnut refuses every write once its data disk has 5 GiB
-# or less free (src/core/disk-watermark.ts, CRITICAL_MIN_AVAIL_BYTES, left at 5.5 GiB). 2026-11-24 08:16
+# or less free (src/core/disk-watermark.ts: CRITICAL_MIN_AVAIL_BYTES with 90% used, left 0.5 GiB above). 2026-11-24 08:16
 # to 08:34Z: with swap steady, the Mac's free space fell from 12.7 to 5.1 GB around a deploy (3.6 GB in
 # its build's minute) and every Walnut write answered 507. So while the build's volume IS the data
 # disk's (production's data home) and has under WALNUT_DEPLOY_MIN_FREE_GB GiB (11: the build's 5 above
-# the 6 the data disk keeps) free, the deploy waits. A build on another volume (a Linux /tmp on tmpfs)
+# the 5.5 at which writes resume, rounded up) free, the deploy waits. A build on another volume (a Linux /tmp on tmpfs)
 # cannot fill the data disk and holds nothing. The bound keeps a disk that stays low from stopping
 # deploys for good (a fix that frees room ships too); the disk alarm's clean-up runs meanwhile. A forced
 # deploy (WALNUT_DEVPROD_FORCE=1) skips the queue and this hold.
@@ -297,6 +297,16 @@ dq_runner_pid() {
   return 0
 }
 
+# The disk note ("<runner pid> <reading>") of the runner that runs now, else nothing: a note an
+# earlier runner left (killed outright, or read before the new one cleared it) is no reading of now.
+dq_disk_note() {
+  local q="$1" pid note
+  note="$(cat "$q/disk" 2>/dev/null || true)"
+  pid="${note%% *}"
+  [[ -n "$pid" && "$pid" == "$(dq_runner_pid "$q")" ]] || return 0
+  printf '%s' "${note#* }"
+}
+
 # Writes a file whole (a reader never sees it half written): a temp name, then mv.
 dq_put() {
   local f="$1" t; shift
@@ -364,6 +374,8 @@ dq_runner() {
   mkdir -p "$q/requests" "$q/results" "$q/logs"
   cd "$SERVE_ROOT"
   dq_lock "$q" || return 0
+  # A disk note a runner killed outright (SIGKILL, power loss) left behind is no reading of now.
+  rm -f "$q/disk"
   trap 'dq_unlock "'"$q"'"' EXIT
   dq_log "runner $$ started (gap ${DQ_GAP}s)"
   local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving lim low poll hold_since="" disk_since=""
@@ -471,12 +483,12 @@ dq_runner() {
       now="$(date +%s)"
       [[ -n "$disk_since" ]] || { disk_since=$now; dq_log "the data disk is nearly full ($low, under $DQ_MIN_FREE_GB GiB): the deploy waits for room, since its build would pause every Walnut write, until $(dq_clock "$(( now + DQ_DISK_HOLD ))") at the latest"; }
       if (( now < disk_since + DQ_DISK_HOLD )); then
-        dq_put "$q/disk" "$low"; dq_put "$q/next-at" "$(( disk_since + DQ_DISK_HOLD ))"
+        dq_put "$q/disk" "$$ $low"; dq_put "$q/next-at" "$(( disk_since + DQ_DISK_HOLD ))"
         poll="${WALNUT_DEPLOY_DISK_POLL_SECS:-30}"; [[ "$poll" =~ ^[0-9]+$ ]] && (( 10#$poll > 0 )) && poll=$(( 10#$poll )) || poll=30
         sleep "$poll"
         continue
       fi
-      dq_log "the data disk is still nearly full ($low) at the end of its ${DQ_DISK_HOLD}s hold: the deploy goes"
+      dq_log "the data disk is still nearly full ($low) at the end of its ${DQ_DISK_HOLD}s hold: the deploy goes, and Walnut may pause writes while it builds"
     elif [[ -n "$disk_since" ]]; then
       dq_log "the data disk has room again: the deploy goes"
     fi
@@ -559,7 +571,7 @@ dq_answer() {
 # 1 its deploy failed or was refused, 3 still waiting at the cap (the runner goes on), 4 held
 # past the deploy ceiling (walnut.deployCeiling).
 dq_request() {
-  local sha="$1" q id served served_sha said="" line now deadline target log next rc knobs
+  local sha="$1" q id served served_sha said="" line now deadline target log next rc knobs disk
   q="$(dq_dir)"
   mkdir -p "$q/requests" "$q/results" "$q/logs"
   knobs="$(dq_caller_knobs | tr '\n' ' ')"
@@ -598,15 +610,15 @@ dq_request() {
       else
         line="Deploying ${target:0:12}; your commit ${sha:0:12} goes with the next one."
       fi
-    elif [[ -f "$q/next-at" && -f "$q/disk" ]]; then
-      next="$(dq_num "$q/next-at")"
-      line="Deploy queued: the data disk is nearly full ($(cat "$q/disk" 2>/dev/null), under $DQ_MIN_FREE_GB GiB) and a build would pause every Walnut write; the next deploy goes once there is room, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" && -f "$q/moving" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: production runs a move ($(cat "$q/moving" 2>/dev/null)); the next deploy goes once it ends, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" && -f "$q/busy" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: this Mac is busy ($(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
+    elif [[ -f "$q/next-at" ]] && disk="$(dq_disk_note "$q")" && [[ -n "$disk" ]]; then
+      next="$(dq_num "$q/next-at")"
+      line="Deploy queued: the data disk is nearly full ($disk, under $DQ_MIN_FREE_GB GiB) and a build would pause every Walnut write; the next deploy goes once there is room, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: production restarted recently, and restarts at most once per $(( DQ_GAP / 60 )) min; the next deploy builds from $(dq_clock "$next") with the newest commit then, which includes ${sha:0:12}, and goes live once that gap is over."
