@@ -86,7 +86,7 @@ function treeOf(root: number): number[] {
   return out
 }
 
-function call(f: Fixture, env: Record<string, string> = {}, args: string[] = []): { pid: number; done: Promise<Run> } {
+function call(f: Fixture, env: Record<string, string> = {}, args: string[] = []): { pid: number; out: () => string; done: Promise<Run> } {
   const child = spawn('bash', [path.join(f.repo, 'scripts', 'deploy-committed.sh'), ...args], {
     cwd: f.repo,
     env: {
@@ -102,7 +102,7 @@ function call(f: Fixture, env: Record<string, string> = {}, args: string[] = [])
   let stderr = ''
   child.stdout.on('data', (b) => { stdout += b })
   child.stderr.on('data', (b) => { stderr += b })
-  return { pid: child.pid!, done: new Promise((resolve) => child.on('close', (code) => resolve({ code, stdout, stderr }))) }
+  return { pid: child.pid!, out: () => stdout, done: new Promise((resolve) => child.on('close', (code) => resolve({ code, stdout, stderr }))) }
 }
 
 const deploys = (f: Fixture) => (fs.existsSync(f.deploys) ? fs.readFileSync(f.deploys, 'utf8').trim().split('\n').filter(Boolean) : [])
@@ -324,14 +324,15 @@ esac
     const t0 = Math.floor(Date.now() / 1000)
     const held = call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_FREE_GB_TEST: free, WALNUT_DEPLOY_DISK_POLL_SECS: '1', WALNUT_DEPLOY_DISK_HOLD_SECS: '600' })
     await until(() => fs.existsSync(path.join(f.queue, 'disk')), 20_000, 'the disk hold')
-    await sleep(6_000)
-    expect(deploys(f).filter((d) => d.kind === 'start')).toHaveLength(0)
+    // Room comes back only once the caller has said why it waits: the build starts after that.
+    await until(() => held.out().includes('the data disk is nearly full'), 20_000, 'the caller told why it waits')
+    const roomAt = Math.floor(Date.now() / 1000)
     fs.writeFileSync(free, '40\n')
     const r = await held.done
     expect(r.code, r.stderr).toBe(0)
     const starts = deploys(f).filter((d) => d.kind === 'start')
     expect(starts).toHaveLength(1)
-    expect(starts[0].at).toBeGreaterThanOrEqual(t0 + 6)
+    expect(starts[0].at).toBeGreaterThanOrEqual(Math.max(roomAt, t0))
     const log = fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')
     expect(log).toMatch(/the data disk is nearly full \(7\.0 GiB free, under 11 GiB\): the deploy waits for room, .* until .* at the latest/)
     expect(log.match(/the data disk is nearly full/g)).toHaveLength(1)
