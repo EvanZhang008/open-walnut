@@ -2,8 +2,10 @@
  * The Directors under a VP (org-leaders.ts), drawn the same way under a VP's row in the Org list and in
  * its card on the Org chart: one quiet line, "▸ 6 directors", folded until it is clicked (2026-11-20,
  * the user: "by default it should be collapsed ... super customer friendly"). Opened, each of the
- * VP's projects that has Directors gives its name, then its Directors, one level only: a state dot, the
- * avatar, the title (a click opens the task beside the page), the eye when he watches it, and "leads N".
+ * VP's projects that has Directors gives its name, then its Directors, one level only. In the list each is
+ * the list's own row (DirectorListRow: avatar, title, a red dot when it needs him; 2026-11-25, the user on
+ * a busier row: "too ugly lol"), and a VP with one project names none; in a chart card a row is a state
+ * dot, the avatar, the title, the eye when he watches it, and "leads N". A click opens the task beside the page.
  * Each fold is kept (usePageViewOf), per surface. The list's VP row itself stays the one plain row
  * (2026-11-22, the user: "We need to be super simple"); the fold is its own line under it, since the
  * user wants his Directors there (2026-11-25: "Where is my Director?"). With the "sections" layout they
@@ -32,6 +34,7 @@ import { TAB_DOT } from './org-task-tabs';
 import { directorsLabel, foldGroups, leaderTotal, leadersMatch, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
+import { DirectorListRow } from './OrgDirectorSection';
 import '@/styles/org-leaders.css';
 import { NodeAvatar } from './OrgAvatar';
 
@@ -66,18 +69,16 @@ function foldKeys(open: boolean, set: (v: boolean) => void) {
   };
 }
 
+/** A Director in a chart card (the list draws DirectorListRow). */
 interface RowProps {
   leader: LeaderNode;
-  inList: boolean;
-  /** Its task is open beside the page: the row wears a light tint. */
-  isOpen: boolean;
   onOpen: (taskId: string) => void;
   onMenu: (e: MouseEvent, leader: LeaderNode) => void;
 }
 
 /** One Director: one level only, the first leaders under the VP (2026-11-24, the user: "only the first
  *  layer of leaders, the second layer is not needed"; `directorsOf` in src/core/org/org-directors.ts). */
-function LeaderRow({ leader: l, inList, isOpen, onOpen, onMenu }: RowProps) {
+function LeaderRow({ leader: l, onOpen, onMenu }: RowProps) {
   const state = USER_STATE_LABELS[l.state];
   return (
     <div
@@ -86,15 +87,12 @@ function LeaderRow({ leader: l, inList, isOpen, onOpen, onMenu }: RowProps) {
       data-testid="org-leader"
       data-task-id={l.id}
       data-state={l.state}
-      data-open={isOpen || undefined}
       onContextMenu={(e) => onMenu(e, l)}
     >
       <button
         type="button"
         className="org-leader-open"
         data-testid="org-leader-open"
-        {...asOption(inList, false)}
-        aria-current={isOpen || undefined}
         aria-label={`${l.title}: ${state}, leads ${l.leads}${l.watched ? ', watched' : ''}`}
         title={`${l.title}: ${state}`}
         onClick={() => onOpen(l.id)}
@@ -205,8 +203,12 @@ export function OrgLeaders({ groups, surface = 'chart', vpKey, vpName, projects,
         <div id={listId} className="org-leaders-list" data-testid="org-leaders-list">
           {shownGroups.map((g) => (
             <div key={g.key} className="org-leaders-group" data-testid="org-leaders-group" data-project={g.project} {...group(g.name || `Directors under ${vpName}`)}>
-              {g.name && <div className="org-leaders-project wn-title" data-testid="org-leaders-project" aria-hidden={inList || undefined}>{g.name}</div>}
-              {g.leaders.map((l) => <LeaderRow key={l.id} leader={l} inList={inList} isOpen={!!openTaskIds?.has(l.id)} onOpen={onOpen} onMenu={onMenu} />)}
+              {/* The list names a project only when the VP has Directors in more than one. */}
+              {g.name && (!inList || shownGroups.length > 1) && <div className="org-leaders-project wn-title" data-testid="org-leaders-project" aria-hidden={inList || undefined}>{g.name}</div>}
+              {g.leaders.map((l) => (inList
+                // In the list a Director is the list's own row, as in the DIRECTORS section.
+                ? <DirectorListRow key={l.id} director={l} vpName={vpName} avatarName={vpName} isOpen={!!openTaskIds?.has(l.id)} onOpen={onOpen} onMenu={onMenu} />
+                : <LeaderRow key={l.id} leader={l} onOpen={onOpen} onMenu={onMenu} />))}
             </div>
           ))}
           {newRow}

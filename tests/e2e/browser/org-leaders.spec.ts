@@ -71,6 +71,7 @@ async function openOrg(page: Page): Promise<void> {
 const listFolds = (page: Page) => page.locator('.org-list [data-testid="org-leaders"]')
 const card = (page: Page) => page.locator(`[data-testid="org-chart-vp"][data-project="${PROJECT}"]`)
 const chartLeaders = (page: Page) => card(page).getByTestId('org-leaders')
+const listRow = (scope: ReturnType<typeof chartLeaders>, id: string) => scope.locator(`[data-testid="org-director-row"][data-task-id="${id}"]`)
 const leaderRow = (scope: ReturnType<typeof chartLeaders>, id: string) => scope.locator(`[data-testid="org-leader"][data-task-id="${id}"]`)
 
 async function openChart(page: Page): Promise<void> {
@@ -126,22 +127,29 @@ test('on: the list\'s VP row is plain, its Directors one folded line under it th
   await expect(listToggle).toHaveText(/1 director$/)
   await expect(listToggle).toHaveAttribute('data-open', 'false')
   await expect(listFold.getByTestId('org-leaders-list')).toHaveCount(0)
-  // Under the row, starting no further left than its name.
+  // Under the row, its chevron just left of the VP's name, so its words start where the name does.
   const [rowBox, foldBox, nameBox] = await Promise.all([vp.boundingBox(), listToggle.boundingBox(), vp.locator('.org-channel-name').boundingBox()])
   expect(foldBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height - 6)
-  expect(foldBox!.x).toBeGreaterThan(nameBox!.x - 12)
+  expect(foldBox!.x).toBeGreaterThan(nameBox!.x - 28)
+  expect(foldBox!.x).toBeLessThan(nameBox!.x)
   await listToggle.click()
   await expect(listToggle).toHaveAttribute('data-open', 'true')
-  const listed = leaderRow(listFold, ids.team)
-  await expect(listed.getByTestId('org-leader-leads')).toHaveText('leads 2')
-  await expect(leaderRow(listFold, ids.sub)).toHaveCount(0)
-  await expect(listed.locator('.org-leader-avatar img')).toBeVisible()
+  // Each Director is the list's own row (2026-11-25, the user on dots, counts and wrapped titles: "too
+  // ugly lol"): its avatar and its title on one line, nothing else; how many it leads is in its label.
+  const listed = listRow(listFold, ids.team)
+  await expect(listed).toHaveAttribute('aria-label', /leads 2/)
+  await expect(listed.locator('.org-channel-name')).toHaveText((await taskOf(request, ids.team)).title)
+  await expect(listed.locator('.org-avatar img')).toBeVisible()
+  await expect(listFold.locator('.org-leader-leads, .org-leader-open > i, [data-testid="org-leaders-project"]')).toHaveCount(0)
+  const [vpName, rowName] = await Promise.all([vp.locator('.org-channel-name').boundingBox(), listed.locator('.org-channel-name').boundingBox()])
+  expect(rowName!.height).toBeLessThanOrEqual(vpName!.height + 1)
+  await expect(listRow(listFold, ids.sub)).toHaveCount(0)
   await page.locator('.org-list').screenshot({ path: `${SHOTS}/web-list-fold.png` })
   // Kept across a reload.
   await page.reload()
   await page.getByTestId('org-search').fill(PROJECT)
   await expect(page.locator(`.org-list [data-testid="org-leaders"][data-key="${NODE}"]`).getByTestId('org-leaders-toggle')).toHaveAttribute('data-open', 'true')
-  await leaderRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team).getByTestId('org-leader-open').click()
+  await listRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team).click()
   await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
   // Folded again for the chart's checks below.
   await page.locator(`.org-list [data-testid="org-leaders"][data-key="${NODE}"]`).getByTestId('org-leaders-toggle').click()
@@ -201,7 +209,7 @@ test('a search for a Director shows its VP\'s row in the list and opens its fold
   await page.getByTestId('org-search').fill(`Beds team ${STAMP}`)
   const vp = page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)
   await expect(vp).toBeVisible()
-  await expect(leaderRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team)).toBeVisible()
+  await expect(listRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team)).toBeVisible()
 })
 
 test('the chart card\'s folded line: a leader there opens beside the page', async ({ page, request }) => {

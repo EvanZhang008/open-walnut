@@ -30,6 +30,42 @@ interface Props {
   openTaskIds?: ReadonlySet<string> | undefined;
 }
 
+/** One Director as the list's one plain row (OrgListRow), the same in this section and in a VP's fold
+ *  (OrgLeaders): a smaller round avatar, its title cut to one line (whole in its hover), and the list's
+ *  red dot when it needs the user; its state, its VP and how many it leads are in its hover and label. */
+export function DirectorListRow({ director: d, vpName, avatarName, isOpen, onOpen, onMenu, ...rest }: {
+  director: LeaderNode;
+  vpName: string;
+  /** The name its avatar's letter tile is drawn from while the picture loads (its VP's). */
+  avatarName: string;
+  isOpen: boolean;
+  onOpen: (taskId: string) => void;
+  onMenu: (e: MouseEvent, d: LeaderNode) => void;
+  [data: `data-${string}`]: string | undefined;
+}) {
+  const state = d.stateText;
+  return (
+    <div className="org-channel-wrap" role="presentation">
+      <OrgListRow
+        avatar={<NodeAvatar taskId={d.id} name={avatarName} size={26} className="is-director" />}
+        name={d.title}
+        // A Director that needs the user wears the list's one red dot.
+        dot={d.state === 'needs' ? state : null}
+        aria-current={isOpen || undefined}
+        className={`is-director${isOpen ? ' is-open' : ''}`}
+        data-testid="org-director-row"
+        data-task-id={d.id}
+        data-state={d.state}
+        aria-label={`${d.title}: Director under ${vpName}, ${state}, leads ${d.leads}${d.watched ? ', watched' : ''}`}
+        title={`${d.title}: ${state} · ${vpName}`}
+        onClick={() => onOpen(d.id)}
+        onContextMenu={(e) => onMenu(e, d)}
+        {...rest}
+      />
+    </div>
+  );
+}
+
 export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskIds }: Props) {
   const actions = useDirectorActions();
   const menu = useContextMenu<LeaderNode>({ ignorePressSelection: true });
@@ -48,29 +84,7 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
     <div className="org-directors" role="group" aria-label={DIRECTORS_SECTION_LABEL} data-testid="org-directors" data-count={rows.length}>
       <div className="org-list-section" role="presentation" data-testid="org-directors-head">{DIRECTORS_SECTION_LABEL} · {rows.length}</div>
       {rows.map(({ director: d, vp }) => {
-        const vpName = shownName(vp);
-        const state = d.stateText;
-        const open = openTaskIds?.has(d.id);
-        return (
-          <div key={d.id} className="org-channel-wrap" role="presentation">
-            <OrgListRow
-              avatar={<NodeAvatar taskId={d.id} name={vp.name} size={26} className="is-director" />}
-              name={d.title}
-              // A Director that needs the user wears the list's one red dot.
-              dot={d.state === 'needs' ? state : null}
-              aria-current={open || undefined}
-              className={`is-director${open ? ' is-open' : ''}`}
-              data-testid="org-director-row"
-              data-task-id={d.id}
-              data-vp={vp.key}
-              data-state={d.state}
-              aria-label={`${d.title}: Director under ${vpName}, ${state}, leads ${d.leads}${d.watched ? ', watched' : ''}`}
-              title={`${d.title}: ${state} · ${vpName}`}
-              onClick={() => actions.openTask(d.id)}
-              onContextMenu={(e) => onMenu(e, d)}
-            />
-          </div>
-        );
+        return <DirectorListRow key={d.id} director={d} vpName={shownName(vp)} avatarName={vp.name} isOpen={!!openTaskIds?.has(d.id)} onOpen={actions.openTask} onMenu={onMenu} data-vp={vp.key} />;
       })}
       <div className="org-directors-new" role="presentation">
         <OrgNewDirector key={asked?.n ?? 0} projects={projects} defaultProject={defaultProject} inList editing={adding} onEditing={onAdding} />
