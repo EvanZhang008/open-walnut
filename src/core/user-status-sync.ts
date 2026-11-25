@@ -48,6 +48,7 @@ import { keepsThreads, threadsForEveryTask } from './org/keeps-threads.js';
 import { heldLetterIds, holdsLettersNow, isLetterThread, lettersAsThreadsNow } from './human-inbox/letter-threads.js';
 import { briefOffNow, setBriefOff } from './org/brief-off.js';
 import { threadsPopUpNow as popUpNow } from './org/thread-popup-rules.js';
+import { oneIdNow, setThreadsOneId } from './org/thread-one-id.js';
 import { isChoiceThread } from './boards/choice-threads.js';
 import { applyActions, type ActionItem } from './action-needed.js';
 import { taskLines } from './task-lines.js';
@@ -289,6 +290,8 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
   const { carriedRows, poppedIndex } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
+  const { handedIndex, handedRows } = await import('./org/thread-one-id-view.js');
+  let handedBy: ReturnType<typeof handedIndex> | undefined;
   // A targeted status pass may contain only the lead. Its linked owners still belong in the read:
   // the pass's own list of every task when it has one (a copy of the board each pass otherwise,
   // about one a second, 2026-11-24 taskCopiesBy).
@@ -320,15 +323,19 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
       all ??= await (await import('./task-manager.js')).taskStoreSnapshot();
       const popUp = popUpNow();
       const view = await joinedAsks(t.id, threads, all, now, popUp);
-      if (!popUp) return threadCounts(view.threads, now);
+      // threads_one_id: the threads it handed to tasks count here as those tasks' cards (org/thread-one-id.ts).
+      const handed = oneIdNow() ? await handedRows(t.id, threads, { all, index: await (handedBy ??= handedIndex({ all })) }) : null;
+      if (!popUp && !handed?.holders.length) return threadCounts(view.threads, now);
       // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts
       // threadCounts), and a result below on the subject of one of its own threads (carriedRows).
-      const popped = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
-      const listed = view.carried.length ? [...popped, ...await carriedRows(view.carried, popped)] : popped;
+      const popped = popUp ? (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [] : [];
+      const ids = new Set(handed?.rows.map((h) => h.id));
+      const listed = [...(view.carried.length ? [...popped, ...await carriedRows(view.carried, popped)] : popped).filter((p) => !ids.has(p.id)), ...handed?.rows ?? []];
       const owners = threadOwners.get(t.id) ?? new Set<string>();
       for (const p of listed) owners.add(p.owner.task_id);
+      for (const h of handed?.holders ?? []) owners.add(h);
       threadOwners.set(t.id, owners);
-      return threadCounts([...view.threads, ...listed], now);
+      return threadCounts([...view.threads.filter((x) => !handed?.ids.has(x.id)), ...listed], now);
     }, null);
     if (counts && counts.shown > 0) out.set(t.id, counts);
   }
@@ -1462,6 +1469,7 @@ let threadsSeen: boolean | undefined;
 let lettersAsThreadsSeen: boolean | undefined;
 let oneCardSeen: boolean | undefined;
 let briefOffSeen: boolean | undefined;
+let oneIdSeen: boolean | undefined;
 
 async function experimentSwitched(): Promise<boolean> {
   const { getConfig } = await import('./config-manager.js');
@@ -1491,9 +1499,17 @@ async function experimentSwitched(): Promise<boolean> {
   oneCardSeen = oneCard;
   setOneCard(oneCard);
   if (oneCardMoved) threadsChanged();
+  // One thread across a hand-off (org/thread-one-id.ts): a switch moves which handed threads count on the node that handed them.
+  const oneId = experimentalEnabled(flags, 'threads_one_id');
+  const oneIdMoved = oneIdSeen !== undefined && oneIdSeen !== oneId;
+  if (oneIdMoved) threadsChanged();
+  oneIdSeen = oneId;
+  setThreadsOneId(oneId);
   // Walnut keeps the Threads (org/threads-kept.ts): read by the prompt, the hints and the status question.
   const { setThreadsKept } = await import('./org/threads-kept.js');
   setThreadsKept(experimentalEnabled(flags, 'threads_kept_by_walnut'));
+  // A reply is its thread's reply (org/reply-card-switch.ts): read by the prompt, the hint and the status question.
+  (await import('./org/reply-card-switch.js')).setReplyTag(experimentalEnabled(flags, 'threads_reply_tag'));
   // Decision letters as threads (human-inbox/letter-threads.ts): a switch moves which letters count.
   const asThreads = experimentalEnabled(flags, 'letters_as_threads');
   const lettersMoved = lettersAsThreadsSeen !== undefined && lettersAsThreadsSeen !== asThreads;
@@ -1506,7 +1522,7 @@ async function experimentSwitched(): Promise<boolean> {
   briefOffSeen = briefOff;
   setBriefOff(briefOff);
   if (briefOffMoved || (threadsMoved && briefOff)) dropSlow('choices');
-  return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved || briefOffMoved;
+  return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved || briefOffMoved || oneIdMoved;
 }
 
 /**
@@ -1605,7 +1621,7 @@ function onEvent(event: { name: string; data: unknown; source?: string; late?: t
       // (threads_pop_up: the nodes above a task hear its change as their own: org/thread-reply.ts.)
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
       // A node whose thread names that task may list its result (org/thread-subject-pairs.ts carried).
-      if (typeof d.taskId === 'string' && popUpNow()) ownerThreadsChanged(d.taskId, mark);
+      if (typeof d.taskId === 'string' && (popUpNow() || oneIdNow())) ownerThreadsChanged(d.taskId, mark);
       // letters_as_threads: whether a thread still holds a letter decides whether the letter counts.
       if (lettersAsThreadsNow() && (typeof d.threadId !== 'string' || isLetterThread(d.threadId))) dropSlow('letters');
       // brief_off: whether a thread still holds a Board choice decides whether the choice counts.

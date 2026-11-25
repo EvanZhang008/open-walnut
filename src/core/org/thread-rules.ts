@@ -18,6 +18,7 @@
  * the answered ones he wrote after, org/thread-summary-stop.ts answeredBeforeHim).
  */
 import { STATUS_QUESTION, THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
+import { CARD_TAG_FORM } from '../../lib/card-tag.js';
 
 /**
  * With threads_kept_by_walnut on (threads-kept.ts; 2026-11-22, the user, on a VP that wrote a thread
@@ -38,6 +39,39 @@ export const THREADS_KEPT_RULE =
   + 'cannot do: a decision he must make (needs, with its options, user_kind and user_kind_why), a close he asked for in his own '
   + 'words (close with user_words quoting him), and a merge (merge_into), split or move. When Walnut could not ask you (a '
   + '"threads to tidy" note, or a held turn end, names threads), write what it names with thread_update.';
+
+/**
+ * The same with threads_reply_tag on too (reply-card-switch.ts; 2026-11-25, the user, translated: "in
+ * what it returns, it adds this tag. Then it is both its reply to me and its reply to the thread"):
+ * the thread's line is one hidden line at the end of the chat reply (lib/card-tag.ts), which Walnut
+ * takes off every screen and writes to the card (reply-card.ts); the status question asks only about
+ * the threads no line named. This is the one form of a thread's line a reply may hold, and only this
+ * rule and the `threads` hint ask for it (tests/lib/internal-lines.test.ts): a free list of threads
+ * in a reply is still what no text asks for.
+ * 2026-11-25, a live session: after a thread_split it told him in the chat "I moved your compost
+ * question into its own thread". What a session did to a thread is on his cards, so the rule keeps
+ * it out of the reply. A held turn end asks such a session for card lines only
+ * (reply-card-stop.ts), so the rule's last sentence names the tidy note alone.
+ */
+export const THREADS_TAG_RULE =
+  'Walnut keeps your Threads from your chat reply itself, in place of the earlier rules that had you write each thread\'s '
+  + 'summary, state and known mark with thread_update every turn, or give its line only when asked (those no longer apply): '
+  + `answer him in the chat, and end that reply with one hidden line of its own for each thread it speaks for, ${CARD_TAG_FORM} `
+  + '(state working: you are on it now; waiting: a team or something outside has it; answered: the result he asked for is in; '
+  + 'done: finished). Walnut takes the line off before he reads the reply and writes the thread\'s card from it: one line per '
+  + 'thread, at most 6, after your words. Your reply holds no other list of threads and no word of what you did to one (its '
+  + 'line, a split, a merge, a mark) unless he asks: his cards show it. The line may add '
+  + 'summary="where it stands for him, latest first, with the proof\'s path or URL" (240 characters; without it his card shows '
+  + 'your reply), title="..." for an untitled thread, and seen="yes" only where he reacted to your earlier answer in his own '
+  + 'words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure is not seen). thread="th-..." '
+  + 'merge="th-..." alone joins a thread to that open one. A decision he must make is state="needs" ask="what he decides" '
+  + 'options="Larch; Oak" (2 to 5, the one you recommend first) kind="<its user_kind>" why="<what makes it that kind>". A quote '
+  + 'inside a value is &quot;. A card line shown as an example goes in backticks or a code block. A line Walnut cannot read or '
+  + 'write comes back to you before the turn ends. Where these rules name '
+  + `a thread\'s line, this is it; ${STATUS_QUESTION} asks only about the open threads you gave none. His Threads view shows a `
+  + 'thread only when it needs him or its result is in. Call thread_update yourself only for what the line cannot do: a close he '
+  + 'asked for in his own words (close with user_words quoting him), a split or a move. When Walnut could not ask you (a '
+  + '"threads to tidy" note names threads), write what it names with thread_update.';
 
 export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '

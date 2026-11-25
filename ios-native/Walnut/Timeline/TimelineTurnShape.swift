@@ -30,8 +30,9 @@ enum TimelineTurnMarker {
     }
 
     static func read(_ text: String) -> Reading {
-        // The tasks line of an Org chat (MessageAboutTag) may follow the marker: it goes first.
-        let text = MessageAboutTag.read(text).text
+        // The tasks line of an Org chat (MessageAboutTag) and a thread's card lines (CardTagLines)
+        // may follow the marker: they go first.
+        let text = MessageAboutTag.read(CardTagLines.strip(text)).text
         guard tags.contains(where: { text.contains($0) }) else { return Reading(text: text, ack: false) }
         // Foundation splits on "\n" alone (a Swift `split` would keep "\r\n" whole,
         // a single Character), which is how the web's `split('\n')` cuts.

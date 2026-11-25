@@ -82,6 +82,44 @@ export const TMP_PATHS_SCRIPT =
   + '[ -n "$x" ] && [ -e "$x" ] && { printf \'%s|\' "$x"; n=$((n+1)); }; done; }); '
   + '[ -n "$p" ] && q="$q,\\"tmp_paths\\":\\"${p%|}\\""; ;; esac; fi; '
 
+/**
+ * The shape of the turn's final text (`last_assistant_message`), for its thread card lines
+ * (src/lib/card-tag.ts, src/core/org/reply-card-stop.ts): its last 16 lines, each as "x" (words), ""
+ * (blank), its fence mark (a code fence, "x" after it when it names a language), or the line itself
+ * when it holds a card tag; and the fence still open before them, as a first line, so a tag inside a
+ * code block reads as code. Never his words: only what the server needs to tell whether the reply
+ * ends with its card lines. The text is still JSON-escaped, so a line ends at the two characters
+ * backslash and n, and what is printed is a valid JSON string again (a kept line is whole). A line
+ * over 1,500 bytes is words, and a shape over 4,000 is not sent (then nothing is checked).
+ *
+ * Nor is one that would make the request too large: open_items is a GET, so the shape and the
+ * lists in `$q` (WQ here) ride the request line, where a character outside A-Z a-z 0-9 _ . ~ - is
+ * three bytes and one of another script nine, and a server refuses a request whose line and headers
+ * pass 16 KB (431, which names no field). `enc` is an upper bound of what a text weighs there (a
+ * backslash counts one more: an escape is at most that long once read); the two together stay
+ * under 9,000. No single quote inside: it rides a single-quoted shell word; \140 is a backtick.
+ */
+const LAST_LINES_AWK = String.raw`function enc(s,   t, g) { t = s; g = gsub(/[^A-Za-z0-9_.~-]/, "", t); t = s; return length(s) + 2 * g + gsub(/\\/, "", t) }
+{ n = split($0, a, /\\n/); from = n - 15; if (from < 1) from = 1; fo = ""; pre = ""; out = ""
+for (i = 1; i <= n; i++) { l = a[i]; if (i == from) pre = fo; k = "x"
+if (match(l, /^ ? ? ?(\140\140\140+|~~~+)/)) { m = substr(l, RSTART, RLENGTH); sub(/^ +/, "", m); r = substr(l, RLENGTH + 1); b = (r ~ /^( |\\[rt])*$/)
+if (fo == "") fo = m; else if (substr(m, 1, 1) == substr(fo, 1, 1) && length(m) >= length(fo) && b) fo = ""
+k = m (b ? "" : "x") } else if (l ~ /^( |\\[rt])*$/) k = ""; else if (index(l, "<walnut-card") && length(l) <= 1500) k = l
+if (i >= from) out = out (i > from ? "\\n" : "") k }
+if (pre != "") out = pre "\\n" out
+if (length(out) <= 4000 && enc(out) + enc(ENVIRON["WQ"]) <= 9000) print out }`
+
+/**
+ * Sets `$c` to `,"last_lines":"<shape>"`, or to nothing when the hook input holds no final text (an
+ * older CLI) or one over 400 KB. Kept apart from `$q`: a walnut that does not know the field yet
+ * still takes the lists.
+ */
+export const LAST_LINES_SCRIPT =
+  'c=; if [ ${#in} -le 400000 ]; then case "$in" in *\'"last_assistant_message"\'*) '
+  + 'rt=$(printf \'%s\' "$in" | tr \'\\n\' \' \' | sed -nE \'s/.*"last_assistant_message"[[:space:]]*:[[:space:]]*"(([^"\\\\]|\\\\.)*)".*/\\1/p\' '
+  + `| WQ="$q" LC_ALL=C awk '${LAST_LINES_AWK}' 2>/dev/null); `
+  + '[ -n "$rt" ] && c=",\\"last_lines\\":\\"$rt\\""; ;; esac; fi; '
+
 /** The Stop hook's command; `tmpPaths` false (WALNUT_TMP_WRITE_NOTE=0 on the server) leaves the temp paths out. */
 export function stopHookCommand(tmpPaths: boolean): string {
   return 'in=$(cat); case "$in" in *\'"stop_hook_active":true\'*|*\'"stop_hook_active": true\'*) exit 0;; esac; '
@@ -93,7 +131,13 @@ export function stopHookCommand(tmpPaths: boolean): string {
   + (tmpPaths ? TMP_PATHS_SCRIPT : '')
   // Only a block answer is printed: an older walnut, server or host copy that answers with
   // anything else (an error, the whole open-items read) leaves the turn alone.
-  + 'out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"$q}" 2>/dev/null); '
+  // The shape of the final text's last lines, for its thread card lines.
+  + LAST_LINES_SCRIPT
+  + 'out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"$q$c}" 2>/dev/null); rc=$?; '
+  // Anything but an answer (a block, or the {} of a turn free to end) to a call that carried the
+  // last lines: asked once more without them, with the lists. An older walnut that knows no
+  // last_lines refuses the call, and no other failure of that field may cost the checks before it.
+  + 'if [ -n "$c" ]; then case "$rc:$out" in 0:*\'"decision"\'*|"0:{}") ;; *) out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"$q}" 2>/dev/null);; esac; fi; '
   // An older server that knows no lists refuses the call: ask again without them.
   + 'case "$out" in *nrecognized*) [ -n "$q" ] && out=$(walnut tools call open_items "{\\"hook\\":\\"stop\\"}" 2>/dev/null);; esac; '
   + 'case "$out" in *\'"decision"\'*) printf \'%s\\n\' "$out";; esac; exit 0'

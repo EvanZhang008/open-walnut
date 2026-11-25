@@ -273,6 +273,34 @@ describe('what a thread keeper reads', () => {
       expect(text, name).not.toMatch(/at (?:the|this|each|every) turn(?:'s)? end|at the end of (?:the|this|each|your) turn/i)
     }
   })
+  // 2026-11-25 (threads_reply_tag, org/reply-card-switch.ts): the one line a reply may hold is the
+  // thread's card line, and only with that switch on. Off, the texts above stand as they are.
+  it('with the card line on, the rule puts a thread\'s line in the reply as that one tag; off, no text names it', async () => {
+    const { setReplyTag } = await import('../../../src/core/org/reply-card-switch.js')
+    const { THREADS_TAG_RULE } = await import('../../../src/core/org/thread-rules.js')
+    const { TASK_THREADS_TAG_LINE } = await import('../../../src/core/sessions/session-context.js')
+    const { CARD_TAG_FORM } = await import('../../../src/lib/card-tag.js')
+    setThreadsKept(true)
+    try {
+      for (const [name, text] of [['kept rule', THREADS_KEPT_RULE], ['one place, kept', THREAD_ONE_PLACE_KEPT_RULE], ['task threads', TASK_THREADS_LINE], ['task threads, kept', TASK_THREADS_KEPT_LINE], ['lead', orgRoleLine(lead as never)], ['task', orgRoleLine(task as never)]] as const) {
+        expect(text, name).not.toContain('walnut-card')
+      }
+      setReplyTag(true)
+      for (const [name, text] of [['tag rule', THREADS_TAG_RULE], ['task threads, tag', TASK_THREADS_TAG_LINE], ['lead', orgRoleLine(lead as never)], ['task', orgRoleLine(task as never)]] as const) {
+        expect(text, name).toContain(CARD_TAG_FORM)
+        // The status question is still named, for the threads a reply gave no line.
+        expect(text, name).toContain(STATUS_QUESTION)
+        // "In your reply only if he asks" is the rule this one replaces.
+        expect(text, name).not.toContain(THREAD_LINE_CHANNEL)
+        // Still no report field in a reply: the tag is the only form.
+        expect(text, name).not.toMatch(/FOR_USER_/)
+        // The Threads texts themselves (a role's other rules are not theirs to judge) put nothing "at the turn's end".
+        if (name.includes('tag')) expect(text, name).not.toMatch(/at (?:the|this|each|every) turn(?:'s)? end|at the end of (?:the|this|each|your) turn/i)
+      }
+    } finally {
+      setReplyTag(false)
+    }
+  })
   it('a running lead hears the switch: the old Threads rules are told as no longer in force', () => {
     const lead = { id: 'lead-1', title: 'Garden VP', org_role: 'lead' as const }
     const before = parseInstructions(defaultInstructions(lead as never))

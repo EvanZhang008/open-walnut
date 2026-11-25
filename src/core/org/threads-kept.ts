@@ -11,6 +11,7 @@
  * No store import here: the stores import this.
  */
 import { experimentCache } from '../experimental-cache.js';
+import { replyTagNow } from './reply-card-switch.js';
 
 const flag = experimentCache('threads_kept_by_walnut');
 /** The experiment as last read (user-status-sync.ts sets it on every config change). */
@@ -18,3 +19,12 @@ export const setThreadsKept = flag.set;
 export const threadsKeptNow = flag.now;
 /** The experiment, read from the config now. */
 export const threadsKeptOn = flag.on;
+
+/**
+ * Whether a line of the status question is the thread's card (its summary, a title for an untitled
+ * thread, his reaction to an answer): this switch, or threads_reply_tag (reply-card-switch.ts),
+ * whose card line is that same line said in the reply, so the question asks the same of the
+ * threads no line named. 2026-11-25: with the tag on and this switch off, nothing asked whether his
+ * new message reacted to an earlier answer except a turn end sent back for it.
+ */
+export const linesAreCards = (): boolean => flag.now() || replyTagNow();

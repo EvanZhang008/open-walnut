@@ -18,7 +18,7 @@ import type { Task } from '../types.js';
 import type { OrgThread, ThreadWriter } from './threads-model.js';
 
 /** `of`: the telling words of the new title; `theirs`: of the open thread's title. */
-export interface SubjectCandidate { id: string; title: string; taskId: string; taskTitle: string; shared: number; of: number; theirs: number; updatedAt: string }
+export interface SubjectCandidate { id: string; title: string; taskId: string; taskTitle: string; shared: number; of: number; theirs: number; updatedAt: string; /** The two share only the words both open with (sharesOnlyOpening). */ openingOnly?: true }
 /** `below`: a task under the one asking (its subtask, however deep). */
 export interface TreeThreads { task: Pick<Task, 'id' | 'title'>; threads: readonly OrgThread[]; below?: boolean }
 
@@ -39,14 +39,15 @@ const COMMON_PAIRS = new Set(['\u9700\u8981', '\u95ee\u9898', '\u4efb\u52a1', '\
  */
 function subjectPlaces(text: string): string[][] {
   const out: string[][] = [];
-  const lower = text.toLowerCase();
-  for (const w of lower.match(/[a-z0-9][a-z0-9_\-.]*[a-z0-9]|[0-9]{2,}/g) ?? []) {
-    if (/^[0-9.\-]+$/.test(w) ? w.replace(/\D/g, '').length >= 2 : w.length >= 3 && !COMMON.has(w)) out.push([w]);
-  }
-  for (const run of lower.match(/[\u3400-\u9fff\uf900-\ufaff]+/g) ?? []) {
-    const pairs: string[] = [];
-    for (let i = 0; i + 1 < run.length; i++) if (!COMMON_PAIRS.has(run.slice(i, i + 2))) pairs.push(run.slice(i, i + 2));
-    if (pairs.length) out.push(pairs);
+  // One pass, so the places come in the order they stand in the title (sharesOnlyOpening reads it).
+  for (const part of text.toLowerCase().match(/[a-z0-9][a-z0-9_\-.]*[a-z0-9]|[0-9]{2,}|[\u3400-\u9fff\uf900-\ufaff]+/g) ?? []) {
+    if (/^[\u3400-\u9fff\uf900-\ufaff]/.test(part)) {
+      const pairs: string[] = [];
+      for (let i = 0; i + 1 < part.length; i++) if (!COMMON_PAIRS.has(part.slice(i, i + 2))) pairs.push(part.slice(i, i + 2));
+      if (pairs.length) out.push(pairs);
+    } else if (/^[0-9.\-]+$/.test(part) ? part.replace(/\D/g, '').length >= 2 : part.length >= 3 && !COMMON.has(part)) {
+      out.push([part]);
+    }
   }
   return out;
 }
@@ -85,17 +86,33 @@ export function sameSubjectCandidates(title: string, tree: readonly TreeThreads[
 
 /** The open threads of a tree with their telling words, read once for many titles (candidatesIn). */
 export interface SubjectIndex {
-  rows: ReadonlyArray<{ t: OrgThread; task: TreeThreads['task']; words: Set<string>; theirs: number; head: string[] }>;
+  rows: ReadonlyArray<{ t: OrgThread; task: TreeThreads['task']; places: string[][]; words: Set<string>; theirs: number; head: string[] }>;
   seenIn: ReadonlyMap<string, number>;
   everywhere: number;
 }
 
+/**
+ * Which threads an index holds and the text each is compared by. Default: the open ones changed in
+ * the last two weeks, by title. Related threads (thread-related.ts) also take recently closed ones,
+ * by title, ask and summary.
+ */
+export interface SubjectIndexOptions {
+  keep?: (t: OrgThread, now: number) => boolean;
+  textOf?: (t: OrgThread) => string;
+}
+
+const openAndRecent = (t: OrgThread, now: number): boolean => !t.closed && now - Date.parse(t.updatedAt) <= RECENT_MS;
+
 /** The index sameSubjectCandidates reads, built once (a node comparing many titles with its own threads). Pure. */
-export function subjectIndex(tree: readonly TreeThreads[], now: number): SubjectIndex {
-  const rows: Array<{ t: OrgThread; task: TreeThreads['task']; words: Set<string> }> = [];
+export function subjectIndex(tree: readonly TreeThreads[], now: number, opts: SubjectIndexOptions = {}): SubjectIndex {
+  const keep = opts.keep ?? openAndRecent;
+  const textOf = opts.textOf ?? ((t: OrgThread) => t.title);
+  const rows: Array<{ t: OrgThread; task: TreeThreads['task']; places: string[][]; words: Set<string> }> = [];
   for (const { task, threads } of tree) {
     for (const t of threads) {
-      if (!t.closed && now - Date.parse(t.updatedAt) <= RECENT_MS) rows.push({ t, task, words: subjectWords(t.title) });
+      if (!keep(t, now)) continue;
+      const places = subjectPlaces(textOf(t));
+      rows.push({ t, task, places, words: new Set(places.flat()) });
     }
   }
   const seenIn = new Map<string, number>();
@@ -143,17 +160,42 @@ function otherHead(head: readonly string[], theirs: ReadonlySet<string>): boolea
   return head.length > 0 && !head.some((w) => theirs.has(w));
 }
 
-/** sameSubjectCandidates over an index. Pure. */
-export function candidatesIn(index: SubjectIndex, title: string): SubjectCandidate[] {
+/** A title that goes on for this many places of its own after the shared opening names another thing there. */
+const OWN_PLACES_MIN = 2;
+
+/**
+ * Both titles open with the words they share (the screen, the area) and each then goes on, for at
+ * least as long, with words the other has none of: two matters in one place, however many words name
+ * that place (2026-11-25, the thread monitor's [dup]: "<a list>: one row looks bad" and "<the same
+ * list>: other rows' names are too long" shared the list's three words and read as one repeat). Still
+ * a repeat: a title that only adds to the other, one that shares a word after a word of its own, and
+ * two that share the larger part and differ only in where the matter stands (his data held one:
+ * "<place> <stage>: <the switch> stays off, open it?" beside "<place> <stage> <the switch> (same
+ * matter in <thread>)"). Pure.
+ */
+function sharesOnlyOpening(mine: readonly string[][], theirs: readonly string[][], telling: (w: string) => boolean): boolean {
+  const goesOn = (places: readonly string[][], other: ReadonlySet<string>): boolean => {
+    const shared = places.map((place) => place.some((w) => telling(w) && other.has(w)));
+    const opening = shared.indexOf(false);
+    return opening > 0 && !shared.includes(true, opening) && places.length - opening >= Math.max(OWN_PLACES_MIN, opening);
+  };
+  return goesOn(mine, new Set(theirs.flat())) && goesOn(theirs, new Set(mine.flat()));
+}
+
+/** sameSubjectCandidates over an index. `head: false` for a text that is no title (his message: a colon there names no subject). Pure. */
+export function candidatesIn(index: SubjectIndex, title: string, opts: { head?: boolean } = {}): SubjectCandidate[] {
   const { rows, seenIn, everywhere } = index;
-  const all = subjectWords(title);
-  const mine = new Set([...all].filter((w) => (seenIn.get(w) ?? 0) < everywhere));
-  const head = headWords(title).filter((w) => mine.has(w));
+  const places = subjectPlaces(title);
+  const all = new Set(places.flat());
+  const telling = (w: string) => (seenIn.get(w) ?? 0) < everywhere;
+  const mine = new Set([...all].filter(telling));
+  const head = opts.head === false ? [] : headWords(title).filter((w) => mine.has(w));
   const out: SubjectCandidate[] = [];
   for (const r of rows) {
     if (otherItems(all, r.words) || otherHead(head, r.words) || otherHead(r.head, all)) continue;
     const shared = sharedCount(mine, r.words);
-    if (shared) out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt });
+    if (!shared) continue;
+    out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt, ...(sharesOnlyOpening(places, r.places, telling) ? { openingOnly: true as const } : {}) });
   }
   return out.sort((a, b) => b.shared - a.shared || b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -165,10 +207,11 @@ const SHORT_TITLE = 5;
  * The open thread a new title clearly repeats: three telling words shared (four when either title is
  * short), and half of its own (review 2026-11-23: three shared words called "Mac app build icon
  * missing" the same as "Mac app build fails"). Not half of the other's too: that lost a true repeat in
- * one error told once by a place name and once by its short code in a longer title. Pure.
+ * one error told once by a place name and once by its short code in a longer title. Never one that
+ * shares only the opening both titles have (sharesOnlyOpening). Pure.
  */
 export function strongMatch(candidates: readonly SubjectCandidate[]): SubjectCandidate | undefined {
-  return candidates.find((c) => c.shared >= (Math.min(c.of, c.theirs) <= SHORT_TITLE ? 4 : 3) && c.shared * 2 >= c.of);
+  return candidates.find((c) => !c.openingOnly && c.shared >= (Math.min(c.of, c.theirs) <= SHORT_TITLE ? 4 : 3) && c.shared * 2 >= c.of);
 }
 
 /** Why a new thread was refused, naming the open ones it may repeat. Pure. */
@@ -185,8 +228,9 @@ export function sameSubjectRefusal(candidates: readonly SubjectCandidate[], ownT
  * threads: the ones `named` (a thread's tasks) always, then up to TREE_TASKS_MAX by relation and newest
  * change. 2026-11-24, the thread monitor's [copy]: his VP has 59 open tasks below it, and the one its
  * thread named came 47th in tree order, past the cap, so the copy rule never read it.
+ * `closedWithinMs`: a task whose threads are all closed is read too when one closed that recently.
  */
-export async function treeOpenThreads(taskId: string, named: readonly string[] = []): Promise<TreeThreads[]> {
+export async function treeOpenThreads(taskId: string, named: readonly string[] = [], opts: { closedWithinMs?: number; now?: number } = {}): Promise<TreeThreads[]> {
   const { listTasks } = await import('../task-manager.js');
   const { treeAround } = await import('../same-ask-tree.js');
   const { keepsThreads } = await import('./keeps-threads.js');
@@ -200,7 +244,9 @@ export async function treeOpenThreads(taskId: string, named: readonly string[] =
   const rank = { ancestor: 0, descendant: 1, team: 2 } as Record<string, number>;
   // A finished task's leftover threads hold no subject open any more (review 2026-11-23).
   const wanted = new Set(named);
-  const live = treeAround(taskId, everything).filter((a) => a.task.phase !== 'COMPLETE' && (keepsThreads(a.task) || !!a.task.org_role));
+  // With closedWithinMs (related threads), a task finished that recently is read for its closed threads too.
+  const finishedWithin = (t: Task) => opts.closedWithinMs !== undefined && !!t.completed_at && (opts.now ?? Date.now()) - Date.parse(t.completed_at) <= opts.closedWithinMs;
+  const live = treeAround(taskId, everything, opts.closedWithinMs !== undefined ? { allOpen: true } : {}).filter((a) => (a.task.phase !== 'COMPLETE' || finishedWithin(a.task)) && (keepsThreads(a.task) || !!a.task.org_role));
   const around = [
     ...live.filter((a) => wanted.has(a.task.id)),
     ...live.filter((a) => !wanted.has(a.task.id))
@@ -210,9 +256,14 @@ export async function treeOpenThreads(taskId: string, named: readonly string[] =
   // Below it: its subtasks, and for Main or a lead the tasks of its team.
   const isBelow = (relation: string) => relation === 'descendant' || (relation === 'team' && !!self.org_role);
   const out: TreeThreads[] = [];
+  const now = opts.now ?? Date.now();
+  const within = opts.closedWithinMs;
+  const holds = (t: OrgThread) => !t.closed || (within !== undefined && now - Date.parse(t.closed.at) <= within);
   for (const { task, below } of [{ task: self, below: false }, ...around.map((a) => ({ task: a.task, below: isBelow(a.relation) }))]) {
-    const threads = (await readThreads(task.id).catch(() => null))?.threads ?? [];
-    if (threads.some((t) => !t.closed)) out.push({ task: { id: task.id, title: task.title }, threads, ...(below ? { below } : {}) });
+    const read = (await readThreads(task.id).catch(() => null))?.threads ?? [];
+    // A finished task's leftover open threads hold no subject open: only its closed ones.
+    const threads = within !== undefined && task.id !== taskId && task.phase === 'COMPLETE' ? read.filter((t) => t.closed) : read;
+    if (threads.some(holds)) out.push({ task: { id: task.id, title: task.title }, threads, ...(below ? { below } : {}) });
   }
   return out;
 }

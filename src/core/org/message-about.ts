@@ -28,8 +28,8 @@ export function aboutIds(list: string): string[] {
   return out.slice(0, ABOUT_MAX);
 }
 
-/** The lines outside any code fence (true), in order. */
-function outsideFence(lines: readonly string[]): boolean[] {
+/** The lines outside any code fence (true), in order (the card line's reader shares it: lib/card-tag.ts). */
+export function outsideFence(lines: readonly string[]): boolean[] {
   const out: boolean[] = [];
   let open: string | null = null;
   for (const line of lines) {

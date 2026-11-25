@@ -132,4 +132,25 @@ describe('one subject is one thread', () => {
     expect(headWords('Seed storage report: sent')).toEqual(['seed', 'storage', 'report'])
     expect(headWords('Trailing colon:')).toEqual([])
   })
+  it('two titles that share only the place both open with, each going on about its own thing, are two matters (the thread monitor, 2026-11-25)', () => {
+    const tree = (title: string): TreeThreads[] => [{ task: { id: 'n', title: 'Node' }, threads: [thread('th-a', title)] }]
+    const match = (title: string, open: string) => strongMatch(sameSubjectCandidates(title, tree(open), NOW))
+    // "Shed, in the list, the Ladder is too old" and "Shed, in the list, the names of those hose rows are too long".
+    const ladder = 'Shed \u6e05\u5355\u91cc\u7684 Ladder \u592a\u65e7'
+    const hose = 'Shed \u6e05\u5355\u91cc hose \u90a3\u51e0\u884c\u540d\u5b57\u592a\u957f'
+    // The words are there (the refusal still names it as a candidate); it is no clear repeat.
+    expect(sameSubjectCandidates(ladder, tree(hose), NOW)[0]).toMatchObject({ id: 'th-a', shared: 3, openingOnly: true })
+    expect(match(ladder, hose)).toBeUndefined()
+    expect(match(hose, ladder)).toBeUndefined()
+    expect(match('Garden shed list ladder rungs worn', 'Garden shed list hose names long')).toBeUndefined()
+    // Still a repeat: a title that only adds to the open one, one word of its own after the opening,
+    // a word shared after a word of its own, and two that share the larger part and differ in where
+    // the matter stands (invented: "<place> <stage>: the drip main valve switch stays shut, open it with
+    // Lever or not" beside "<place> <stage> the drip main valve switch (the same matter is in <thread>)").
+    expect(match('Pump (north-1) beta\uff1a\u6ef4\u704c\u603b\u9600\u5f00\u5173\u4e00\u76f4\u5173\u7740\uff0c\u8981\u4e0d\u8981\u7528 Lever \u6253\u5f00', 'Pump (north-1) beta \u6ef4\u704c\u603b\u9600\u5f00\u5173\uff08\u540c\u4e00\u4ef6\u4e8b\u5728 th-0a1b2c3d4e5f\uff09')?.id).toBe('th-a')
+    expect(match(`${ladder}\uff0c\u6362\u4e00\u4e2a`, ladder)?.id).toBe('th-a')
+    expect(match('Garden shed tool list ladder worn', 'Garden shed tool list ladder broken')?.id).toBe('th-a')
+    expect(match('Shed list ladder is worn out', 'The ladder on the shed list looks worn')?.id).toBe('th-a')
+  })
+
 })

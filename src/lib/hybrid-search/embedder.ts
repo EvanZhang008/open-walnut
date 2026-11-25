@@ -78,6 +78,9 @@ export interface Embedder {
   isSuspended(): boolean;
   /** The model library is on this machine (config.moduleUrl did not answer null). */
   available(): boolean;
+  /** Which workers run now (not suspended or disposed): a caller that must never start one
+   *  (a send path) embeds only on a lane that is true here, in the same tick. */
+  running(): { query: boolean; passage: boolean };
   /** Stop the passage worker now unless a run is in flight (end of a backfill
    *  pass). Resolves true when it stopped one. */
   releasePassageWorker(): Promise<boolean>;
@@ -625,6 +628,11 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
 
     available() {
       return moduleUrlNow() !== null;
+    },
+
+    running() {
+      const up = !suspended && !disposed;
+      return { query: up && queryLane.running(), passage: up && passageLane.running() };
     },
 
     async dispose() {

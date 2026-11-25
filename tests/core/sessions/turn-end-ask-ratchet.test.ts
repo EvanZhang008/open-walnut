@@ -38,6 +38,7 @@ const TURN_END_WRITER = 'src/core/sessions/status-question.ts'
 /** Writers of task.status_report that derive nothing from a turn end, and why. */
 const NOT_TURN_END: Record<string, string> = {
   'src/core/sessions/report-set.ts': 'task_report_set: an explicit call of the task, its lead or Main, with the words it gives now',
+  'src/core/org/thread-report-ask.ts': 'askNowOnThread only takes an ask off the stored report (a thread of the task now carries that decision): it never adds or brings back one',
 }
 /** Readers of a turn-end report, each storing it only through applyStatusAnswer. */
 const REPORT_READERS = ['src/core/sessions/status-question.ts', 'src/core/session-hooks/builtins.ts']

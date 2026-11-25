@@ -1129,7 +1129,7 @@ async function fileSwitchedRequest(taskId: string, message: string): Promise<voi
       import('../../core/task-manager.js'), import('../../core/org/thread-capture.js'),
     ])
     const task = await getTask(taskId)
-    const capture = await prepareThreadCapture({ task, message, inChat: true })
+    const capture = await prepareThreadCapture({ task, message, inChat: true, related: false })
     await capture?.commit({ told: false })
     // Any other task keeps the user's words as an ask it owes an answer (core/sessions/user-asks.ts).
     if (!capture) {

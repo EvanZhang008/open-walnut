@@ -89,6 +89,7 @@ describe('every parse that hides Walnut\'s lines from a chat row keeps them besi
       'src/web/server.ts', // a subagent result's text
       'src/core/sessions/thread-takeaway.ts', // a thread card's answer
       'src/core/push-notification.ts', // a push preview
+      'src/core/sessions/thread-title.ts', // the title model's input
     ])
     const root = path.resolve(__dirname, '../..')
     const callers: string[] = []

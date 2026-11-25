@@ -24,6 +24,7 @@
  */
 
 import { readAboutTag, stripAboutTag } from '../core/org/message-about.js';
+import { stripCardTags } from './card-tag.js';
 import { FENCE, INDENTED_CODE, stripInternalLines } from './internal-lines.js';
 // The web client reads the hidden lines of a reply through this module (@open-walnut/turn-end-marker).
 export { hiddenLinesOf } from './internal-lines.js';
@@ -51,7 +52,8 @@ export interface TurnMarker {
 
 /** Read the marker off a message's text. */
 export function readTurnMarker(text: string | undefined): TurnMarker {
-  const src = readAboutTag(text ?? '').text;
+  // A thread's card line (card-tag.ts) may follow the marker, as the tasks line may: neither is the turn's last word.
+  const src = readAboutTag(stripCardTags(text ?? '')).text;
   if (!TAGS.some((t) => src.includes(t))) return { text: src, noAction: false };
   const lines = src.split('\n');
   let last = lines.length - 1;

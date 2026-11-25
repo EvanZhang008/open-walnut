@@ -12,6 +12,8 @@
  * Zero imports: the CLI, the server and the daemon twins may all load it.
  */
 
+/** A thread's card line (card-tag.ts), whole: a ">" inside one of its values would end the tag patterns below early. */
+const WALNUT_CARD_LINE_RE = /^[ \t]{0,3}<walnut-card(?![A-Za-z0-9_-])[^\n\r]*>[ \t\r]*$/gm
 /** A whole Walnut block: `<walnut-x ...>...</walnut-x>`, the same name closing it. */
 const WALNUT_BLOCK_RE = /<(walnut-[a-z0-9-]+)\b[^>]*>[\s\S]*?<\/\1>/gi
 /** A self-closing Walnut tag, the turn marker among them: `<walnut-x .../>`. */
@@ -26,6 +28,7 @@ export function withoutWalnutControl(text: string): string {
   if (!text || (!text.includes('<walnut-') && !text.includes('</walnut-') && !text.includes('<system-reminder>'))) return text ?? ''
   return text
     .replace(SYSTEM_REMINDER_RE, ' ')
+    .replace(WALNUT_CARD_LINE_RE, ' ')
     .replace(WALNUT_BLOCK_RE, ' ')
     .replace(WALNUT_SELF_CLOSING_RE, ' ')
     .replace(WALNUT_STRAY_TAG_RE, ' ')

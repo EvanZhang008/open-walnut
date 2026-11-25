@@ -166,9 +166,14 @@ own requests, one thread per subject; `src/core/org/thread-capture.ts`), whether
 on, and the hint says in a line which thread it went to; for a new thread, the open ones it might
 belong to (`thread_update` `merge_into`) and to give it a title, and the threads closed since the
 node was last told. The rules for keeping threads are in the prompt (`THREADS_LINE`), not here.
+With the experiment `threads_reply_tag` on, for a session the status question asks about its
+threads, it ends with the card line for that thread, its id filled in (121 bytes;
+`docs/reference/threads.md`).
 `threads-tidy` (Main and the leads only; every 3 messages, at session start and after a compaction,
 only when there is one): one line naming the open threads that need the node's decision and why
-(did he react to your answer? needs a title; answered, still new).
+(did he react to your answer? needs a title; answered, still new). Not sent while Walnut keeps the
+node's threads itself and can ask it: from the status answer (`threads_kept_by_walnut`), or from
+its reply's card lines (`threads_reply_tag`, a session that writes them).
 
 `hand-on` (Main and the leads, by its default audience; at session start, after a compaction and
 every 3 messages): one line, at most 3 commands of your own in a turn, then hand the rest to the team (`src/core/org/core-instructions.ts` `orgHandOnHint`; 2026-11-03, the user: "it shudo

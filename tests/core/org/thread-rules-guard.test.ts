@@ -63,6 +63,24 @@ describe('every place a node reads it carries it', () => {
     expect(THREADS_LINE).toContain(THREADS_PENDING_RULE)
   })
 
+  // threads_reply_tag (2026-11-25): the hint's one more sentence gives the card line for that thread and
+  // no rule of its own; without the switch (ThreadHintState.card unset) the hint is as it was.
+  it('the threads hint gives the card line only when asked to, and says nothing else new', async () => {
+    const { cardTagLine } = await import('../../../src/lib/card-tag.js')
+    for (const s of [hint, { ...hint, created: false, followUp: true }, { ...hint, open: [] }]) expect(threadHintText(s)).not.toContain('walnut-card')
+    // A thread that has its title: today's words, then the line.
+    const follow = { ...hint, created: false, followUp: true }
+    expect(threadHintText({ ...follow, card: true })).toBe(`${threadHintText(follow)} End your reply with: ${cardTagLine(follow.threadId)} (state: working, waiting, answered, done).`)
+    // A new thread: its title and a merge are the line's, so no thread_update is named beside it
+    // (2026-11-25: the hint asked for the title by thread_update and for the line, in one breath).
+    for (const s of [hint, { ...hint, open: [] }]) {
+      const asked = threadHintText({ ...s, card: true })
+      expect(asked).toContain(`End your reply with: ${cardTagLine(s.threadId).replace('/>', ' title="..."/>')} (state: working, waiting, answered, done; title: a short one of your own).`)
+      expect(asked).not.toMatch(/thread_update|give it a short title/i)
+      expect(asked.includes(`<walnut-card thread="${s.threadId}" merge="th-..."/> alone instead.`)).toBe(s.open.length > 0)
+    }
+  })
+
   it('the threads hint on each of his messages never says the old "close it yourself when he says so"', () => {
     for (const s of [hint, { ...hint, created: false, followUp: true }, { ...hint, open: [] }]) {
       expect(threadHintText(s)).not.toMatch(/close it yourself only when he says/i)

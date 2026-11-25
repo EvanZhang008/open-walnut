@@ -121,7 +121,7 @@ enum InternalLines {
     }()
 
     /// A pattern as the server writes it, compiled with JavaScript's `\s` and `\S`.
-    private static func js(_ pattern: String, _ options: NSRegularExpression.Options = []) -> NSRegularExpression {
+    static func js(_ pattern: String, _ options: NSRegularExpression.Options = []) -> NSRegularExpression {
         var out = ""
         var inClass = false
         var escaped = false
@@ -191,8 +191,13 @@ enum InternalLines {
 
     /// The text without Walnut's internal lines. `streaming`: a last line that is only the start of a
     /// field name, a thread's line, its heading or a tag of Walnut's around them is held back, so it
-    /// never flashes up.
+    /// never flashes up. A reply's thread card lines (`CardTagLines`) go before and after the
+    /// report, as on the server: either may stand last.
     static func strip(_ text: String, streaming: Bool = false) -> String {
+        CardTagLines.strip(stripReport(CardTagLines.strip(text, streaming: streaming), streaming: streaming), streaming: streaming)
+    }
+
+    private static func stripReport(_ text: String, streaming: Bool) -> String {
         guard has(text, "FOR_USER_") || has(text, "[v") || has(text, "th-")
             || (streaming && tailMayHold(text)) else { return text }
         var code: [Bool] = []
@@ -442,7 +447,7 @@ enum InternalLines {
     }
 
     /// `split('\n')`: on U+000A alone, never on the "\r\n" grapheme Swift sees as one character.
-    private static func lines(_ s: String) -> [String] {
+    static func lines(_ s: String) -> [String] {
         let ns = s as NSString
         var parts: [String] = []
         var from = 0
@@ -455,20 +460,20 @@ enum InternalLines {
     }
 
     /// The line without one "\r" at its end.
-    private static func bare(_ l: String) -> String {
+    static func bare(_ l: String) -> String {
         let ns = l as NSString
         return ns.length > 0 && ns.character(at: ns.length - 1) == 13 ? ns.substring(to: ns.length - 1) : l
     }
 
     /// `includes`: UTF-16 units, as the server compares.
-    private static func has(_ s: String, _ part: String) -> Bool {
+    static func has(_ s: String, _ part: String) -> Bool {
         (s as NSString).range(of: part, options: .literal).location != NSNotFound
     }
 
     /// JS `trim()`: JavaScript's whitespace and line ends at both sides.
-    private static func trimmed(_ s: String) -> String { s.trimmingCharacters(in: jsSpaceSet) }
+    static func trimmed(_ s: String) -> String { s.trimmingCharacters(in: jsSpaceSet) }
 
-    private static func test(_ re: NSRegularExpression, _ s: String) -> Bool {
+    static func test(_ re: NSRegularExpression, _ s: String) -> Bool {
         re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length)) != nil
     }
 

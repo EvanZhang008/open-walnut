@@ -652,5 +652,151 @@
     "label": "a letter id the reply already holds does not keep the block",
     "text": "Done: the report is in lt-abc12345. It names both delays.\n\n- th-0a1b2c3d4e5f: answered \u00b7 lt-abc12345\n- th-1b2c3d4e5f60: working",
     "shown": "Done: the report is in lt-abc12345. It names both delays."
+  },
+  {
+    "label": "a card line at the end of a reply goes",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "two card lines, one with a title and a summary, go",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n<walnut-card thread=\"th-1b2c3d4e5f60\" state=\"working\" title=\"Seed order\" summary=\"Ordered; arrives Friday.\"/>",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a card line that asks him to decide goes: the card carries the ask",
+    "text": "Done: the fence is up.\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"needs\" ask=\"Which wood for the fence?\" options=\"Larch; Oak\" kind=\"spending\" why=\"oak is twice the budget\"/>",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a card line that cannot be read still goes",
+    "text": "Done: the fence is up.\n<walnut-card thread=\"fence\" state=\"finished\">",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a reply that is only a card line shows nothing",
+    "text": "<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": ""
+  },
+  {
+    "label": "a card line with Windows line ends goes",
+    "text": "Done: the fence is up.\r\n\r\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\r\n",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a card line before the tasks line and the agent-ack line goes, they stay",
+    "text": "Done: the fence is up.\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n<walnut-about tasks=\"abc-123\"/>\n<walnut-turn status=\"agent-ack\"/>",
+    "shown": "Done: the fence is up.\n<walnut-about tasks=\"abc-123\"/>\n<walnut-turn status=\"agent-ack\"/>"
+  },
+  {
+    "label": "a card line after the status report goes with it",
+    "text": "Done: the fence is up.\n\nFOR_USER_STATE: working\nFOR_USER_NOW: painting the gate\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a card line before a long status report goes with it",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n\nFOR_USER_STATE: working\nFOR_USER_NOW: painting the gate\nFOR_USER_NEXT: hang it\nFOR_USER_ACTION: none\nFOR_USER_WAITING: paint to dry",
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "a card line after thread lines goes, and the lines with it",
+    "text": "Done: the fence is up. It took two days.\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: working\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "Done: the fence is up. It took two days."
+  },
+  {
+    "label": "a card line further up goes too, one blank line stays",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n\nThen the beds.\nThen the gate.\nThen the path.\nThen the shed.",
+    "shown": "Done: the fence is up.\n\nThen the beds.\nThen the gate.\nThen the path.\nThen the shed."
+  },
+  {
+    "label": "a card line right after a code block that closed goes",
+    "text": "The plan:\n```\nplant\n```\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "The plan:\n```\nplant\n```"
+  },
+  {
+    "label": "streaming: a whole card line goes as soon as it is whole",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "streaming": true,
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "streaming: the start of a card line is held back",
+    "text": "Done: the fence is up.\n\n<walnut-c",
+    "streaming": true,
+    "shown": "Done: the fence is up.\n"
+  },
+  {
+    "label": "streaming: a card line still coming in is held back",
+    "text": "Done: the fence is up.\n\n<walnut-card thread=\"th-0a1b2c3d4e5f\" sta",
+    "streaming": true,
+    "shown": "Done: the fence is up.\n"
+  },
+  {
+    "label": "streaming: a second card line coming in after a whole one is held back",
+    "text": "Done: the fence is up.\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n<walnut-card thr",
+    "streaming": true,
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "streaming: a card line coming in as the whole reply shows nothing",
+    "text": "<walnut-card thread=\"th-0a",
+    "streaming": true,
+    "shown": ""
+  },
+  {
+    "label": "streaming: a card line coming in inside a code block shows",
+    "text": "It looks like this:\n```\n<walnut-card thread=\"th-0a",
+    "streaming": true,
+    "shown": "It looks like this:\n```\n<walnut-card thread=\"th-0a"
+  },
+  {
+    "label": "streaming: a card line coming in on a line indented four spaces shows, as code",
+    "text": "Run this:\n\n    <walnut-card thread=\"th-1a2b3c",
+    "streaming": true,
+    "shown": "Run this:\n\n    <walnut-card thread=\"th-1a2b3c",
+    "mustShow": true
+  },
+  {
+    "label": "streaming: a card line coming in after a tab shows, as code",
+    "text": "Run this:\n\n\t<walnut-c",
+    "streaming": true,
+    "shown": "Run this:\n\n\t<walnut-c",
+    "mustShow": true
+  },
+  {
+    "label": "streaming: a card line coming in three spaces in is held back",
+    "text": "Done: the fence is up.\n   <walnut-card thr",
+    "streaming": true,
+    "shown": "Done: the fence is up."
+  },
+  {
+    "label": "must show: a card line quoted in a code block",
+    "text": "The line looks like this:\n\n```\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n```",
+    "shown": "The line looks like this:\n\n```\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>\n```",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a card line quoted in a block that never closed",
+    "text": "Here:\n```\ncode\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "Here:\n```\ncode\n<walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a card line named in a sentence",
+    "text": "I end my replies with <walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/> now.",
+    "shown": "I end my replies with <walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/> now.",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a card line in an indented block",
+    "text": "The line looks like this:\n\n    <walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "shown": "The line looks like this:\n\n    <walnut-card thread=\"th-0a1b2c3d4e5f\" state=\"answered\"/>",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a tag of another name",
+    "text": "Done: the fence is up.\n<walnut-cards count=\"2\"/>",
+    "shown": "Done: the fence is up.\n<walnut-cards count=\"2\"/>",
+    "mustShow": true
   }
 ]

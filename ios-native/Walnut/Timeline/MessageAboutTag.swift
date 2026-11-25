@@ -103,8 +103,9 @@ enum MessageAboutTag {
     }
 
     /// The lines outside any code fence (true), in order. ``` and ~~~ close only
-    /// themselves, and a closing fence carries nothing after it.
-    private static func outsideFence(_ lines: [String]) -> [Bool] {
+    /// themselves, and a closing fence carries nothing after it. The card line's strip
+    /// shares it (`CardTagLines`), as the server's does.
+    static func outsideFence(_ lines: [String]) -> [Bool] {
         var out: [Bool] = []
         var open: String?
         for line in lines {

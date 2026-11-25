@@ -3803,16 +3803,25 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
       const { owedAtStop } = await import('../../core/sessions/user-asks.js')
       // And, for Main or a lead, a Thread whose summary his latest message outdated (org/thread-summary-stop.ts).
       const { staleSummariesAtStop } = await import('../../core/org/thread-summary-stop.js')
-      const [requests, asks, owed, summaries] = await Promise.all([
+      // And, with threads_reply_tag on, the reply's card lines: one missing, unread or refused goes back
+      // now (org/reply-card-stop.ts; `last_lines` is the reply's last lines as the hook read them).
+      // Beside the other checks, never before them: it may take three seconds, and the hook has five for all.
+      const { cardLinesAtStop } = await import('../../core/org/reply-card-stop.js')
+      // Every check here is classified in tests/core/org/stop-checks-guard.test.ts: with the tag on,
+      // none sends a turn back for something a card line can say.
+      const [requests, asks, owed, summaries, cards] = await Promise.all([
         unansweredAtStop(sid),
         askUnansweredAtStop(sid, { asked: req.query.asked, answered: req.query.answered }),
         owedAtStop(sid),
+        // Never asked of a session that writes card lines: its lines are its summaries.
         staleSummariesAtStop(sid),
+        cardLinesAtStop(sid, req.query.last_lines),
       ])
-      const reason = [requests?.reason, asks?.reason, owed?.reason, summaries?.reason].filter(Boolean).join('\n\n')
+      const reason = [requests?.reason, asks?.reason, owed?.reason, summaries?.reason, cards?.reason].filter(Boolean).join('\n\n')
+      const threads = [...(summaries?.threads ?? []), ...(cards?.reason ? cards.threads : [])]
       res.json({ stop: reason ? {
         reason, ...(requests ? { requests: requests.requests } : {}), ...(asks ? { asks: asks.asks } : {}), ...(owed ? { owedUser: owed.asks } : {}),
-        ...(summaries ? { threads: summaries.threads } : {}),
+        ...(threads.length ? { threads } : {}),
       } : null })
       return
     }

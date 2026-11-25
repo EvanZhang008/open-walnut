@@ -232,6 +232,14 @@ describe('the shared cases (tests/fixtures/internal-lines/cases.json)', () => {
     'must show: a bare letter id the reply keeps nowhere else',
     'must show: a task ref the reply keeps nowhere else',
     'must show: a relative image the reply keeps nowhere else',
+    // A thread's card line (lib/card-tag.ts, 2026-11-25) goes only as a line of its own outside code.
+    'must show: a card line quoted in a code block',
+    'must show: a card line quoted in a block that never closed',
+    'must show: a card line named in a sentence',
+    'must show: a card line in an indented block',
+    'must show: a tag of another name',
+    'streaming: a card line coming in on a line indented four spaces shows, as code',
+    'streaming: a card line coming in after a tab shows, as code',
   ]
   it('every must-show shape is still in the file, marked, and shown as written', () => {
     const marked = cases.filter((c) => c.mustShow)
@@ -295,6 +303,31 @@ describe('no text Walnut gives a session tells it to write the report in a reply
       })
     }
     expect(offenders).toEqual([])
+  })
+
+  // 2026-11-25 (threads_reply_tag): one line of Walnut's may be asked for in a reply, the thread's
+  // card line (lib/card-tag.ts), and only by texts the experiment's switch gates
+  // (tests/core/org/reply-card-prompt.test.ts proves each is silent with the switch off). A new
+  // file that names the tag joins this list with what gates it, or does not name it.
+  const NAMES_THE_CARD_LINE: Record<string, string> = {
+    'src/lib/card-tag.ts': 'the reader, and the one place the line\'s form is written',
+    'src/lib/walnut-control-text.ts': 'takes the line out of words read for a person; asks for nothing',
+    'src/providers/stop-unanswered-hook.ts': 'the Stop hook keeps the line whole in the shape it sends; asks for nothing',
+    'src/core/peers/envelope-kit.ts': 'takes the line off the last message a notice quotes (inlined: the kit references nothing outside); asks for nothing',
+    'src/core/org/thread-rules.ts': 'THREADS_TAG_RULE: in a prompt only with the switch on (session-context.ts)',
+    'src/core/org/thread-capture.ts': 'the threads hint: its card sentence only with the switch on (ThreadHintState.card)',
+    'src/core/org/reply-card-stop.ts': 'what is sent back when a turn ends: only with the switch on',
+  }
+  it('only the card line\'s own files name the tag or build its form', () => {
+    const naming: string[] = []
+    for (const file of files('src')) {
+      const rel = file.split(path.sep).join('/')
+      let text = fs.readFileSync(file, 'utf8')
+      // A comment is for the people who read the code; an import brings a reader in, not the form.
+      if (rel.endsWith('.ts')) text = text.split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l) && !/^import\s/.test(l)).join('\n')
+      if (/walnut-card|\bcardTagLine\b|\bCARD_TAG_FORM\b|\bCARD_TAG_NAME\b/.test(text)) naming.push(rel)
+    }
+    expect(naming.sort()).toEqual(Object.keys(NAMES_THE_CARD_LINE).sort())
   })
 
   // 2026-11-24: the Threads rule said "At the end of each turn the status question lists your open

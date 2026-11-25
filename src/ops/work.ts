@@ -625,6 +625,7 @@ defineOp({
     asked: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript was asked, comma separated'),
     answered: z.string().max(4000).optional().describe('Set by the Stop hook: the Ask here thread ids your transcript answered inside their tag, comma separated'),
     tmp_paths: z.string().max(8000).optional().describe('Set by the Stop hook: the temp-dir paths your final text names that exist on your host, | separated'),
+    last_lines: z.string().max(8000).optional().describe('Set by the Stop hook: the shape of your final text\'s last lines, with its thread card lines whole'),
     parts: z.number().int().min(1).max(INSTRUCTION_HOOK_PARTS_MAX).optional().describe(
       'Set by Walnut\'s compaction hook: your changed default instructions come in that many hooks of their own, so this one leaves them out'),
     part: z.number().int().min(1).max(INSTRUCTION_HOOK_PARTS_MAX).optional().describe(

@@ -8,6 +8,7 @@
  * into needs for an Org node. Kept in memory: after a restart the next such line is caught again.
  */
 import { asksHimNow } from '../org/thread-summary-content.js';
+import { cutEnd } from '../text-cut.js';
 
 /** How long a dropped line is named in the questions that follow. */
 const NAMED_MS = 24 * 3_600_000;
@@ -50,6 +51,23 @@ export function askedRule(org: boolean, oneCard: boolean): string {
  */
 export function markAsks<T extends { id: string; state: string; reply?: string }>(listed: readonly T[], dropped: ReadonlySet<string>): Array<T & { asked?: boolean; cardAsks?: boolean }> {
   return listed.map((t) => (dropped.has(t.id) ? { ...t, asked: true } : t.state !== 'needs' && asksHimNow(t.reply) ? { ...t, cardAsks: true } : t));
+}
+
+/** How many decisions already up the question quotes, and how much of each. */
+const UP_MAX = 3;
+const UP_ASK_MAX = 160;
+
+/**
+ * The question's part on the decisions the task's own threads already carry in needs
+ * (org/thread-report-ask.ts askedOnThreads; a card line put them up): '' for none. 2026-11-25: a
+ * session that had put a decision up with its line said it again as FOR_USER_ASK, and he saw it
+ * twice. The question says it is up, so the session need not say it twice; said again all the
+ * same, Walnut keeps it on the thread only (askOnNeedsThread). Pure.
+ */
+export function decisionsUpPart(asks: readonly string[]): string {
+  const quoted = asks.slice(0, UP_MAX).map((a) => { const w = a.replace(/\s+/g, ' ').trim(); return `"${w.slice(0, cutEnd(w, UP_ASK_MAX))}"`; });
+  if (!quoted.length) return '';
+  return `\nYour threads' cards already ask him: ${quoted.join('; ')}. A decision up there stays out of FOR_USER_ASK, which is for another decision only; FOR_USER_STATE is needs-you while one waits on him.`;
 }
 
 /** Tests only. */

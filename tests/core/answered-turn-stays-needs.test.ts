@@ -122,6 +122,7 @@ describe('guard: every writer of a task report', () => {
     'src/core/sessions/status-question.ts': 'the turn\'s own report (native side question and summary): stamps answered_person',
     'src/core/sessions/report-set.ts': 'a person\'s or a lead\'s deliberate change (task_report_set), no turn\'s report',
     'src/core/router/processing.ts': 'a receiving task\'s own saved findings, built with report-set\'s reportOfChange, no turn\'s report',
+    'src/core/org/thread-report-ask.ts': 'takes the ask off the stored report when a thread of the task now carries that decision (askNowOnThread): every other field stays as stored, answered_person too',
   }
   it('no other file writes status_report', async () => {
     const path = await import('node:path')

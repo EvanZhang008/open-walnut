@@ -20,15 +20,31 @@
  * Data an older build wrote: a task whose current report asks and whose threads hold no place for
  * that decision gets one at its next status derive (keepAskOnThread, user-status-sync.ts), once. A
  * report that asks nothing any more takes the places off (here at its answer, or at that derive).
+ *
+ * One decision is shown once, whichever way the session put it up (2026-11-25, the user's strongest
+ * complaint in the Threads work: one decision as two cards). With threads_reply_tag on
+ * (reply-card-switch.ts) a session puts a decision on a thread itself, with a card line
+ * (reply-card.ts), and that thread stores needs. Its status answer then named the same decision as
+ * the task's ask, and the place rule, which never puts an ask on a thread that already waits on
+ * him, put it on another open thread: one decision on two cards and on the task's own item.
+ * The rule: a decision an open thread of the task stores in needs is that thread's (needsThreadOf).
+ * The task's ask that is the same decision is no ask of its own, in either order: a status answer
+ * that names it is stored asking nothing (askOnNeedsThread), a report that asked it before the
+ * line stops asking when the line is written (askNowOnThread), and no place is kept for it
+ * (placeAsk). The task still reads Needs you, through the thread (user-status.ts taskThreadNeeds).
  */
 import type { AskOption, StatusReport, UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
 import { openNotWaiting, snoozedNow, type ThreadHeldAsk } from './thread-view.js';
 import type { OrgThread, ThreadsFile } from './threads-model.js';
-import { reportDecision } from '../ask-decision.js';
+import { memoryOf, reportDecision, sameDecisionWords } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
 import { placesAskOnThread } from '../sessions/status-threads.js';
+import { OWN_ASK_FIELDS } from '../sessions/own-ask-write.js';
+import { log } from '../../logging/index.js';
 import { oneCardNow } from './one-card.js';
+import { replyTagNow, replyTagOn } from './reply-card-switch.js';
+import { threadAskText } from './thread-task-ask.js';
 
 /** The question kept on the place, for the record. */
 const ASK_KEPT_MAX = 400;
@@ -60,6 +76,30 @@ export function reportAskOf(r: StatusReport | null | undefined): TaskAsk | null 
   return { id: d.id, ask: r.ask.trim() };
 }
 
+/** A thread of the task that waits on him for a decision of its own (never a pointer to another task's ask). */
+const asksHim = (t: OrgThread): boolean => !t.closed && !t.movedTo && t.state === 'needs' && !t.askOwner;
+
+/**
+ * The open thread that already carries this decision in needs, or null (threads_reply_tag on only):
+ * its question is the ask's, compared the way one task's ask is over time (ask-decision.ts
+ * sameDecisionWords: the same question in other words, never another target, sign, direction or
+ * number). Pure.
+ */
+export function needsThreadOf(threads: readonly OrgThread[], ask: string | undefined | null): OrgThread | null {
+  if (!replyTagNow() || !ask?.trim()) return null;
+  return threads.find((t) => asksHim(t) && sameDecisionWords(threadAskText(t), ask)) ?? null;
+}
+
+/**
+ * The decisions the task's own threads carry in needs now, in their words, for the status question
+ * (sessions/status-thread-asked.ts decisionsUpPart): none with the experiment off, or for Main and
+ * the leads, whose asks never place. Pure.
+ */
+export function askedOnThreads(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, threads: readonly OrgThread[]): string[] {
+  if (!replyTagNow() || !placesAskOnThread(task)) return [];
+  return threads.filter(asksHim).map((t) => threadAskText(t)?.trim() ?? '').filter(Boolean);
+}
+
 /**
  * The thread an ask goes on, or null: the one named (if it can take it), else the open thread his
  * newest message was filed to, else the only open thread. Pure.
@@ -80,10 +120,12 @@ export function askThreadFor(threads: readonly OrgThread[], named?: string): str
  * The file with `ask` placed on its thread: once per decision (a thread that already holds it keeps
  * it, unless the task now names another), and one decision per task (an older one's place goes).
  * `ask` null: the report asks nothing now, so every place goes (asked again later, it is placed
- * again by the rule). The same file when nothing changes. The place moves no clock: nothing he
- * reads changed yet. Pure.
+ * again by the rule); so does an ask a thread in needs already carries (needsThreadOf). The same
+ * file when nothing changes. The place moves no clock: nothing he reads changed yet. Pure.
  */
 export function placeAsk(file: ThreadsFile, ask: TaskAsk | null, at: string, named?: string): ThreadsFile {
+  // A decision a thread already carries in needs is that thread's: no place beside it (needsThreadOf).
+  if (ask && needsThreadOf(file.threads, ask.ask)) ask = null;
   const held = ask ? file.threads.find((t) => t.reportAsk?.id === ask.id) : undefined;
   const namedOk = !!ask && !!named && file.threads.some((t) => t.id === named && openNotWaiting(t));
   const target = !ask ? null : namedOk ? named! : held ? held.id : askThreadFor(file.threads);
@@ -154,8 +196,72 @@ export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgTh
   try {
     const store = await import('./threads-store.js');
     const list = threads ?? (await store.readThreads(task.id)).threads;
-    if (ask ? list.some((t) => t.reportAsk?.id === ask.id) || !askThreadFor(list) : !list.some((t) => t.reportAsk)) return false;
-    return await store.placeTaskAsk(task.id, ask);
+    // One a thread in needs already carries keeps no place (needsThreadOf): it clears like none.
+    const placed = ask && !needsThreadOf(list, ask.ask) ? ask : null;
+    if (placed ? list.some((t) => t.reportAsk?.id === placed.id) || !askThreadFor(list) : !list.some((t) => t.reportAsk)) return false;
+    return await store.placeTaskAsk(task.id, placed);
+  } catch {
+    return false;
+  }
+}
+
+/** Every field that makes a report's ask: the ones a session may write itself, and what stamping adds (ask-decision.ts, user-spoke.ts). */
+const ASK_FIELDS = [...OWN_ASK_FIELDS, 'ask_rev', 'ask_said', 'ask_since', 'ask_legacy_key'] as const satisfies ReadonlyArray<keyof StatusReport>;
+
+/** The report asking nothing of its own: its state and its other words stay. Pure. */
+export function withoutOwnAsk(report: StatusReport): StatusReport {
+  const next: StatusReport = { ...report };
+  for (const f of ASK_FIELDS) delete next[f];
+  return next;
+}
+
+/** Whether a report asks him a decision of the task's own (never one it folded under another task's). */
+const asksOwn = (r: StatusReport | null | undefined): r is StatusReport => !!r && r.state === 'needs' && !!r.ask?.trim() && !r.same_as && !r.decision_owner;
+
+/**
+ * A status answer on its way to the store (sessions/status-question.ts saveStatusAnswer, before its
+ * decision is stamped): when its ask is the decision one of the task's threads already carries in
+ * needs, it is stored asking nothing, exactly as if the session had left FOR_USER_ASK out. Never throws.
+ */
+export async function askOnNeedsThread(taskId: string, report: StatusReport): Promise<StatusReport> {
+  if (!asksOwn(report) || !(await replyTagOn())) return report;
+  try {
+    const { readThreads } = await import('./threads-store.js');
+    const held = needsThreadOf((await readThreads(taskId)).threads, report.ask);
+    if (!held) return report;
+    log.session.info('status answer: its ask is the decision a thread already carries, kept there only', { taskId, threadId: held.id });
+    return withoutOwnAsk(report);
+  } catch {
+    return report;
+  }
+}
+
+/**
+ * The other order: a thread of the task was just put in needs (a card line, reply-card.ts
+ * applyNeedsCard), and its stored report already asked that decision. The report stops asking it
+ * now, not at its next status answer (one may never come), remembering the decision so the same
+ * ask later keeps its id; its place goes with it. Its times stay, so the turn's own status answer
+ * still replaces it. Never throws; true when the report changed.
+ */
+export async function askNowOnThread(taskId: string): Promise<boolean> {
+  if (!(await replyTagOn())) return false;
+  try {
+    const [{ getTask, updateTaskRaw }, store] = await Promise.all([import('../task-manager.js'), import('./threads-store.js')]);
+    const task = await getTask(taskId).catch(() => null);
+    if (!task || !placesAskOnThread(task) || !asksOwn(task.status_report)) return false;
+    const held = needsThreadOf((await store.readThreads(taskId)).threads, task.status_report.ask);
+    if (!held) return false;
+    const was = task.status_report;
+    const { changed } = await updateTaskRaw(taskId, (cur) => {
+      // Another report came meanwhile: that one is judged when it is stored.
+      if (cur.phase === 'COMPLETE' || cur.status === 'done' || cur.status_report?.at !== was.at || cur.status_report?.ask !== was.ask) return null;
+      const memory = memoryOf(cur.status_report);
+      return { status_report: { ...withoutOwnAsk(cur.status_report), ...(memory ? { last_ask: memory } : {}) } };
+    }, { emitEvent: true, source: 'status-report' });
+    if (!changed) return false;
+    log.task.info('reply card lines: the task\'s own ask is the decision the line put up, kept on its thread only', { taskId, threadId: held.id });
+    await store.placeTaskAsk(taskId, null);
+    return true;
   } catch {
     return false;
   }

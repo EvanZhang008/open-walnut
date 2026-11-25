@@ -317,6 +317,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/lib/history-session-envelope.ts',
   'src/lib/history-turn-window.ts',
   'src/lib/internal-lines.ts',
+  // A reply's thread card lines, taken off with Walnut's other lines (internal-lines.ts imports it).
+  'src/lib/card-tag.ts',
   'src/lib/history-walnut-riders.ts',
   'src/lib/turn-end-marker.ts',
   'src/lib/walnut-added.ts',

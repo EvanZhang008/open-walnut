@@ -359,7 +359,10 @@ export function createEnvelopeKit(): EnvelopeKit {
     // The no-action line (src/lib/turn-end-marker.ts) is the panel's cue,
     // not the session's words: a quote never carries it.
     // The tasks line (org/message-about.ts, inlined: this body references nothing outside) is the chat's too.
+    // So are a thread's card lines (lib/card-tag.ts, inlined the same way): each one among the
+    // message's last lines goes, with only blank lines or Walnut's own tag lines after it.
     const trimmed = text
+      .replace(/(?:^|\n)[ \t]{0,3}<walnut-card(?![A-Za-z0-9_-])[^\n\r]*>[ \t\r]*(?=(?:\n[ \t]{0,3}(?:<walnut-[a-z-]+(?![A-Za-z0-9_-])[^\n\r]*>)?[ \t\r]*)*$)/g, '')
       .replace(/(?:^|\n)[ \t]{0,3}<walnut-about\s+tasks="[^"]*"\s*\/>[ \t]*(?=(?:\s*\n[ \t]{0,3}<walnut-turn status="(?:agent-ack|no-action)"\/>)?\s*$)/, '')
       .replace(/(?:^|\n)[ \t]{0,3}<walnut-turn status="(?:agent-ack|no-action)"\/>\s*$/, '').trim();
     if (!trimmed) return undefined;

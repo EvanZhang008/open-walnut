@@ -30,6 +30,7 @@ import {
 import type { SessionThreadMeta, SessionThreadMetaPatch } from '../types.js';
 import { isQuietTurn } from './quiet-turn.js';
 import { screenTitle } from '../title-answer.js';
+import { stripInternalLines } from '../../lib/internal-lines.js';
 
 export const THREAD_TITLE_REQUIREMENT = 'Name this follow-up question for a navigation tree. 2 to 6 words, a noun phrase naming what the question is about, not the whole conversation. Same language as the question.';
 /** The refine call returns the title AND the verdict. One line, because the
@@ -230,7 +231,8 @@ export async function handleThreadTitleResult(data: ResultData, turnUuid: string
     const key = keyOf(sessionId, head.headId);
     if (!refineClaimed.has(key)) {
       refineClaimed.add(key);
-      enqueue({ sessionId, headId: head.headId, kind: 'refine', answer: data.result ?? '' });
+      // The answer as a person reads it: Walnut's own lines (a status report, a thread's card line) are no words to name it from.
+      enqueue({ sessionId, headId: head.headId, kind: 'refine', answer: stripInternalLines(data.result ?? '') });
     }
   }
   const now = Date.now();

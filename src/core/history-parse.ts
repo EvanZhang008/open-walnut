@@ -33,6 +33,7 @@ import { IDLE_COMPACT_HISTORY_TEXT, IDLE_COMPACT_UUID_PREFIX } from './sessions/
 import { commandTagLine, isWalnutCommandNotice, settingChangeNotice, walnutCommandNotice } from './sessions/walnut-commands.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
 import { splitInternalLines } from '../lib/internal-lines.js';
+import { hasCardLine } from '../lib/card-tag.js';
 import { CLI_ERROR_PREFIX, isCliErrorReply } from './sessions/cli-error-reply.js';
 import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions/side-thread-digest.js';
 
@@ -1686,11 +1687,14 @@ function messagesFromLines(parsedLines: RawJsonlLine[], opts?: ParseSessionMessa
     // produced a response before the call was retried with a new message ID.
     if (msg.role === 'assistant' && !text && tools.length === 0) continue;
 
-    const opensTurn = hiddenTurnStart && !msg.parentToolUseId;
-    if (opensTurn) hiddenTurnStart = false;
     // A reply as a person reads it: Walnut's own lines (a status report, an old version tag) left
     // out, and kept beside it for a developer's chat to show folded (ui.show_hidden_lines).
     const reply = msg.role === 'assistant' ? splitInternalLines(text) : null;
+    // A message of nothing but thread card lines (lib/card-tag.ts: what a session writes when
+    // Walnut sent a missing line back) is no row: the reply before it stays the turn's last words.
+    if (reply && !reply.text && tools.length === 0 && !thinking && hasCardLine(text)) continue;
+    const opensTurn = hiddenTurnStart && !msg.parentToolUseId;
+    if (opensTurn) hiddenTurnStart = false;
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
       text: reply ? reply.text : text,

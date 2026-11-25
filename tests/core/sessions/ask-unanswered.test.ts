@@ -180,7 +180,8 @@ describe('the Stop hook reads the ids from the transcript on its own host', () =
       expect(argsOf(run(input({ last_assistant_message: answer.replace('six', 'other') }), dir)).answered).toBe('');
     });
     withTranscript([user(askHintText('6', 'six'))], (input, dir) => {
-      expect(argsOf(run(input({ last_assistant_message: answer }), dir))).toEqual({ hook: 'stop' });
+      // No ask list; the shape of the final text's last lines rides every stop (stop-hook-last-lines.test.ts).
+      expect(argsOf(run(input({ last_assistant_message: answer }), dir))).toEqual({ hook: 'stop', last_lines: 'x\nx\nx' });
     });
   });
 

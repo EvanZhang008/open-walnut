@@ -138,6 +138,9 @@ async function saveStatusAnswer(
   // The ask the session wrote itself this turn (task_report_set) stays its ask (own-ask-write.ts).
   const { keepOwnAskWrite } = await import('./own-ask-write.js');
   report = keepOwnAskWrite(report, prev, sessionId);
+  // A decision one of its threads already carries in needs (its card line put it up) is that
+  // thread's: said again here, it is no second ask (org/thread-report-ask.ts askOnNeedsThread).
+  if (taskLike) report = await (await import('../org/thread-report-ask.js')).askOnNeedsThread(taskId, report);
   const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
   // The writer is the session asked, recorded here; a session_id the parsed answer carried is dropped.
   report = { ...report, rule: STATUS_RULE_VERSION, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}), session_id: sessionId };
@@ -248,7 +251,8 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     // A session an engine switch replaced is history: its task's status comes from the new session.
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const { isSupersededSession } = await import('./engine-switch-marker.js');
-    if (isSupersededSession(await getSessionByClaudeId(sessionId).catch(() => null))) return false;
+    const rec = await getSessionByClaudeId(sessionId).catch(() => null);
+    if (isSupersededSession(rec)) return false;
     const { getTask } = await import('../task-manager.js');
     const task: Task | null = await getTask(taskId).catch(() => null);
     if (!task || task.phase === 'COMPLETE' || task.status === 'done') return false;
@@ -262,9 +266,11 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
     // The asks its tree already holds, so it does not ask the user the same again (same-ask.ts).
     const { sameAskQuestionFor } = await import('../same-ask-tree.js');
     const sameAsk = await sameAskQuestionFor(taskId);
-    // Its open threads, each asked where it stands (status-threads.ts).
-    const { threadQuestionFor, readThreadLines } = await import('./status-threads.js');
-    const threads = await threadQuestionFor(task, lang ? uiLanguageName(lang) : undefined);
+    // Its open threads, each asked where it stands (status-thread-question.ts); with threads_reminder
+    // on, the ones that need a line now and all of them every few questions (status-thread-remind.ts).
+    const { threadQuestionFor } = await import('./status-thread-question.js');
+    const { readThreadLines } = await import('./status-threads.js');
+    const threads = await threadQuestionFor(task, lang ? uiLanguageName(lang) : undefined, { sessionId, ...(rec?.lastCompactAt ? { compactedAt: rec.lastCompactAt } : {}) });
     const prompt = buildStatusPrompt(FOR_USER_PROMPT, task.title, lang ? uiLanguageName(lang) : undefined) + sameAsk + owed.block + threads.block;
     const answer = (await sessionRunner.requestTurnCompleteSelfReport(sessionId, prompt, STATUS_TIMEOUT_MS)).trim();
     if (owed.listed.length) await applyOwedAnswer(taskId, owed.listed, answer);

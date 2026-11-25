@@ -23,8 +23,10 @@ import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } fr
 import { keepsThreads } from './keeps-threads.js';
 import { asksHimNow } from './thread-summary-content.js';
 import { threadsKeptNow } from './threads-kept.js';
+import { cardTagLine } from '../../lib/card-tag.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
+import { lookupsSettled, relatedForNewThread, relatedThreadsText, threadsRelatedOn, type RelatedThread } from './thread-related.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -97,6 +99,12 @@ export interface ThreadHintState {
   joined?: 'reopened' | 'recent' | 'reaction';
   /** His words switched this task's Threads off or back on (threads-word-switch.ts): nothing was filed. */
   switched?: ThreadsWordSwitch;
+  /** A new thread: threads around it that may be its subject (threads_related, thread-related.ts). */
+  related?: RelatedThread[];
+  /** Its session ends its reply with a card line for this thread (threads_reply_tag, reply-card.ts). */
+  card?: boolean;
+  /** With `card`: the thread has no title of its own yet, so the line it asks for carries one. */
+  untitled?: boolean;
 }
 
 export interface ThreadCapture {
@@ -122,6 +130,8 @@ export async function prepareThreadCapture(input: {
   /** The node session it goes to: its answer is read there (thread-answers.ts). */
   sid?: string;
   now?: number;
+  /** False where its hint is never sent (a filing alone): no related-threads lookup. */
+  related?: boolean;
 }): Promise<ThreadCapture | null> {
   const task = input.task;
   if (!task) return null;
@@ -138,6 +148,8 @@ export async function prepareThreadCapture(input: {
   if (turn === 'off' && keeps) return threadsSwitch(task.id, 'off');
   if (turn === 'on' && !keeps) return threadsSwitch(task.id, 'on');
   const store = await import('./threads-store.js');
+  // A related-threads lookup of the message before still running: plan this one after it (thread-related.ts).
+  await lookupsSettled(task.id);
   const cur = await store.readThreads(task.id);
   const at = new Date(input.now ?? Date.now()).toISOString();
   const messageId = newThreadMessageId();
@@ -195,6 +207,7 @@ export async function prepareThreadCapture(input: {
   const closed = cur.threads.filter((t) => t.closed && !t.closed.told && t.id !== planned.thread.id && nowMs - Date.parse(t.closed.at) < CLOSE_NEWS_MS);
   const open = sortedThreads(planned.file.threads).filter((t) => isOpen(t) && t.id !== planned.thread.id).slice(0, HINT_OPEN_MAX);
   const follows = planned.thread.follows ? cur.threads.find((t) => t.id === planned.thread.follows) : undefined;
+  const related = planned.created && !planned.duplicate && input.related !== false ? await relatedOf(task.id, words.text, planned.thread.id, nowMs, cur.threads) : [];
   const hint: ThreadHintState = {
     threadId: planned.thread.id, title: planned.thread.title, created: planned.created, duplicate: planned.duplicate,
     followUp: !!input.threadId && !planned.created,
@@ -202,6 +215,8 @@ export async function prepareThreadCapture(input: {
     ...(follows ? { follows: { id: follows.id, title: follows.title } } : {}),
     open: open.map((t) => ({ id: t.id, title: t.title, state: t.state, ...(snoozedNow(t, nowMs) ? { snoozedUntil: t.snoozed!.until } : {}), ...(watchedNow(t) ? { watchedBy: t.watched!.by } : {}) })),
     closed: closed.map((t) => ({ id: t.id, title: t.title, how: t.closed!.how, by: t.closed!.by })),
+    ...(related.length ? { related } : {}),
+    ...(await cardLineAsked(task) ? { card: true, ...(planned.thread.titled ? {} : { untitled: true }) } : {}),
   };
   return {
     hint,
@@ -226,6 +241,26 @@ export async function prepareThreadCapture(input: {
       }
     },
   };
+}
+
+/** threads_related: the threads that may be a new thread's subject, within its deadline; [] when off. Never throws. */
+async function relatedOf(taskId: string, text: string, threadId: string, now: number, own: ThreadsFile['threads']): Promise<RelatedThread[]> {
+  try {
+    if (!text.trim() || !(await threadsRelatedOn())) return [];
+    return await relatedForNewThread({ taskId, text, newThreadId: threadId, now, own });
+  } catch {
+    return [];
+  }
+}
+
+/** threads_reply_tag: whether this task's session says where a thread stands with a card line (reply-card.ts). Never throws. */
+async function cardLineAsked(task: Pick<Task, 'org_role'> & { threads_on?: boolean }): Promise<boolean> {
+  try {
+    if (!(await (await import('./reply-card-switch.js')).replyTagOn())) return false;
+    return (await import('./reply-card.js')).tagsReplies(task);
+  } catch {
+    return false;
+  }
 }
 
 /** His words switch the task's Threads: the same write as its ⋮ menu's Turn off / Turn on Threads, nothing filed. */
@@ -287,12 +322,33 @@ export function threadHintText(s: ThreadHintState): string {
     text = `filed as new thread ${s.threadId}${s.follows ? ` (asks again about closed ${s.follows.id} ${q(s.follows.title)})` : ''}.`;
     // Walnut keeps the threads (threads-kept.ts): its title comes with the status answer, so only a merge is the node's.
     const kept = threadsKeptNow();
-    text += s.open.length
-      ? ` Open: ${s.open.map((t) => `${t.id} ${q(t.title)}`).join('; ')}. Same subject as one: thread_update merge_into${kept ? '' : '; else give it a short title'}.`
+    const open = s.open.map((t) => `${t.id} ${q(t.title)}`).join('; ');
+    // A card line asked: its title and a merge are said once, with the line below, never as a
+    // thread_update beside it (2026-11-25: "Give it a short title (thread_update). End your reply
+    // with: ..." asked for the title in two places).
+    if (s.card) text += s.open.length ? ` Open: ${open}.` : '';
+    else text += s.open.length
+      ? ` Open: ${open}. Same subject as one: thread_update merge_into${kept ? '' : '; else give it a short title'}.`
       : kept ? '' : ' Give it a short title (thread_update).';
+    if (s.related?.length) text += relatedThreadsText(s.related, s.threadId, new Set(s.open.map((t) => t.id)), s.card ? 'line' : 'op');
   } else text = `filed under thread ${s.threadId} ${q(s.title)}.`;
   if (s.closed.length) text += ` Closed since: ${s.closed.map((t) => `${t.id}${t.by === 'human' ? ' (by him)' : ''}`).join(', ')}.`;
+  // threads_reply_tag: the line his reply ends with, its thread filled in (the rule is in the prompt).
+  if (s.card) text += cardLineWords(s);
   return text;
+}
+
+/**
+ * The words that ask for the reply's card line. A thread with no title of its own yet gets its
+ * title in that line; a new thread beside open ones may be one of them, which is the line's merge.
+ */
+function cardLineWords(s: Pick<ThreadHintState, 'threadId' | 'created' | 'untitled' | 'open'>): string {
+  const line = cardTagLine(s.threadId);
+  const states = 'state: working, waiting, answered, done';
+  // A thread just opened has none, whatever the mark says.
+  if (!s.untitled && !s.created) return ` End your reply with: ${line} (${states}).`;
+  const merge = s.created && s.open.length ? ` Same subject as an open one: ${line.replace(/ state="[a-z]+"\/>$/, ' merge="th-..."/>')} alone instead.` : '';
+  return ` End your reply with: ${line.replace(/\/>$/, ' title="..."/>')} (${states}; title: a short one of your own).${merge}`;
 }
 
 /** A thread the node should look at again: why, in a few words. */

@@ -70,6 +70,356 @@ Guard tests for the wording: `tests/core/org/thread-rules-guard.test.ts`,
 `reply_thread_line`, `letters_as_threads`, `threads_one_card`, `threads_kept_by_walnut`,
 `brief_off` (all in `src/core/experimental.ts`; "Every experiment on" turns on each one never set alone).
 
+The Threads plan of 2026-11-25, five parts, each its own switch that "Every experiment on" never
+turns on (`ownSwitchOnly`), so each is measured alone: `threads_reply_tag` (the chat reply carries
+one hidden line and is the thread's reply), `threads_related` (a new thread comes with up to five
+related ones), `threads_one_id` (a hand-off keeps one thread id), `threads_reminder` (a reminder now
+and then in place of the question after every turn), `threads_audit` (a small model reads the open
+threads on a schedule and only reports).
+
+### threads_reply_tag
+
+A reply is its thread's reply (2026-11-25, the user, translated: "it can do two things at once: in
+what it returns, it adds this tag. Then it is both its reply to me and its reply to the thread").
+A session the status question asks about its threads (`asksThreads`: a task with Threads on, and Main
+and every lead where Walnut keeps their threads) ends its chat reply with one hidden line per thread
+it speaks for:
+
+    <walnut-card thread="th-1a2b3c4d5e6f" state="answered"/>
+
+`state` is working, waiting, answered or done, and means what a line of the status question means;
+`summary` (240 characters), `title` (an untitled thread) and `seen="yes"` (he reacted to the earlier
+answer) ride it under the same conditions that question's lines have. `merge="th-..."` alone joins
+the thread to that open one. `state="needs"` with `ask`, `options="Larch; Oak"` (the recommended one
+first; one written as `Oak (recommended)` is that one, its label without the mark), `kind` and `why`
+is the `thread_update` into needs. One line per thread, at most 6, each a
+line of its own outside a code block with at most 3 other lines after it; a quote inside a value is
+`&quot;`. A line shown as an example goes in backticks or a code block, where it stays text.
+
+- **The write.** When the turn ends, Walnut reads the lines off the turn's own last words and
+  applies each through the code that already owns the write: a state line is a line of the status
+  question (`applyThreadLines`), a decision is `patchThread` (every refusal of `thread_update`
+  holds), a merge is `merge_into`. A message of his the session has not answered when the turn ends
+  (its line is still in the session's queue, or it was filed after the turn's end) fences the line
+  out of its thread, and the question then asks about that thread as before.
+- **The order.** The write starts in the turn-complete hook, in the step that arms that turn's status
+  question (`turnEndedWith`, then `armStatusQuestion`), and the question waits for it before it
+  lists the threads (`cardsWritten` in `threadQuestionFor`). It needs nothing slower than the words
+  themselves: not the transcript read that keeps answers under his messages, which a busy server
+  finishes late and an isolated one (`dev:ephemeral`) never starts (2026-11-25: the write once
+  followed that read, and on an isolated server no line was ever written). The wait is at most 10
+  seconds; at that bound the question is built as with the switch off (no thread is left out, a
+  warning is logged), and the write still lands when it ends. In the log, `reply card lines applied`
+  names each turn's lines, `reply card lines: threads kept current` the threads they changed, and
+  `status question: threads their card line spoke for are left out` what the question skipped and
+  what it still listed. A status answer's own write says how many thread lines it held (`lines`),
+  and one that only moved the task's ask to a thread says so, so it is never read as a line.
+- **The question.** A thread a line spoke for is not listed by the status question of that turn;
+  every other open thread still is, and with all of them spoken for the question holds no thread
+  block. A thread that still has no title of its own after its line is asked about, for its title.
+  A thread may still be named beside an untitled one as its possible subject. With the switch on
+  the question takes the form in which its line is the card (`linesAreCards` in `threads-kept.ts`:
+  the summary, a title for an untitled thread, his reaction), whether or not
+  `threads_kept_by_walnut` is on: the card line is that same line said in the reply, so the
+  question asks the same of the threads no line named.
+- **One decision, shown once.** A task with Threads asks him in two ways: a card line that puts a
+  thread in needs, and its status answer's `FOR_USER_ASK`, which Walnut places on a thread
+  (`thread-report-ask.ts`). A decision an open thread of the task stores in needs is that thread's
+  (`needsThreadOf`: the same question in other words, compared as one task's ask is over time,
+  `sameDecisionWords`; never another target, sign, direction or number). The task's ask that is the
+  same decision is no ask of its own, in either order: a status answer that names it is stored
+  asking nothing (`askOnNeedsThread`), a report that asked it before the line stops asking when the
+  line is written, before any status answer (`askNowOnThread`, remembering the decision so the same
+  ask later keeps its id), and `placeAsk` keeps no place for it, so it never lands on another open
+  thread (2026-11-25: a decision put up by a line also showed on the thread about another subject
+  and as the task's own item). The task reads Needs you through the thread (`taskThreadNeeds`). The
+  status question says which decisions are up ("Your threads' cards already ask him: ..."), so a
+  session need not say one twice. Another decision in the status answer is still the task's own ask.
+- **The send-back.** The session's Stop hook hands Walnut the shape of the reply's last 16 lines
+  (`last_lines` of `open_items`: a line of words is `x`, only a card line is whole). The turn is held
+  once, with one plain line per thing, when a message of his this turn read was filed under an open
+  thread and the reply has no line for it (the exact line is given), a line cannot be read, a merge
+  is refused, or the store refuses a decision (its own words). A line that names a thread that is
+  not an open thread of the task has nothing to write in its place, so it holds no turn by itself
+  and is named beside another thing that does. Each thing is named at most twice. A message this turn read is one filed after the
+  newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
+  the session answered in before is not asked for a line again while nothing keeps the answer under
+  that message (an isolated server, a slow read); after a restart it is, as before, any message of
+  the last 6 hours with no answer kept. A decision that passes is written right then, and one
+  already up with the same question and choices is left as it is, at the check and at the turn's end
+  (`askedAlready`), so a hold that was lost (a slow check, a restart) never asks it twice.
+- **No thread bookkeeping in his chat.** Whatever a session writes after a hook sends its turn back
+  is a chat message to him (2026-11-25: sent back about answers he had written after, a session
+  closed its reply with "I've left those three threads as they are ... so I haven't marked any of
+  them as read"). So for a session that writes card lines the card check is the only check of the
+  Stop hook about its threads. Every text it sends is in one table (`CARD_STOP_LINES`), names the
+  line to write and no `thread_update` for what a line can say, and the reason ends with "Write only
+  this line now, and no other words about it: anything else you add is shown to him as chat". The
+  summaries check (`thread-summary-stop.ts`: a summary his message outdated, answers he wrote
+  after) is never run for such a session, and the `threads-tidy` hint is not sent to it while
+  Walnut can ask it: a line carries the summary, the state and his reaction, and whether his new
+  message reacted to earlier answers is asked in the status question after the turn, where the
+  answer costs no chat message. That question asks it once after each new message of his, also on a
+  thread whose first need was asked already (`lineNeed`), with `threads_reminder` on or off.
+  `tests/core/org/stop-checks-guard.test.ts` reads the checks from the route's own source, so a new
+  one fails there until it is classified.
+- **The hook's five seconds.** The check runs beside the hook's other checks, never before them,
+  and gives up after 3 seconds, so a slow server costs the turn its card check and nothing else.
+  `open_items` is a GET: the hook sends the last lines only while they and its lists weigh under
+  9,000 bytes in the request (a server refuses one past 16 KB, with a 431 that names no field), and
+  an answer that is neither a block nor the empty answer is asked once more without them.
+- **He never sees it.** `stripInternalLines` drops every card line, wherever it stands, and holds
+  back a last line that began one while a reply streams, so the stored history, the web chat, the
+  thread cards, a push, the ACP rows and the phone's twin (`CardTagLines.swift`) leave it out, with
+  the switch on or off. A message that is only card lines is no chat row.
+- **What sessions are told.** Only with the switch on: the kept rule in the always-loaded prompt is
+  `THREADS_TAG_RULE` (724 bytes more than `THREADS_KEPT_RULE`), which a running session hears through
+  the instruction notice, and the `threads` hint on each filed message of his ends with the line for
+  that thread (121 bytes). The rule also keeps what a session did to a thread (its line, a split, a
+  merge, a mark) out of its reply unless he asks, since his cards show it; who has his ask now
+  is still said (2026-11-25: a
+  live session told him "I moved your compost question into its own thread" after a split). For a
+  thread with no title of its own yet the line it gives carries
+  `title="..."` (165 bytes), and for a new thread beside open ones it adds the merge line (96 bytes
+  more); the hint then names no `thread_update` for the title or the merge, its related threads
+  included (their join is the line's merge, 26 bytes fewer than the op), so the title is asked
+  for in one place. The status question adds one line while a thread of a task waits on him for a
+  decision (176 bytes and each question, at most 3 of 160 characters), and with
+  `threads_kept_by_walnut` off its thread block takes the card form that switch already gives
+  (1,396 bytes for three threads instead of 796; no change where that switch is on). A send-back
+  ends with 101 bytes (one line) or 132 (several). Off, no text names the tag and nothing reads it.
+
+Code: `src/lib/card-tag.ts` (the reader and the strip), `src/core/org/reply-card.ts` (the write),
+`reply-card-stop.ts` (the send-back), `reply-card-switch.ts`, `src/core/sessions/status-thread-carded.ts`
+(what the question skips), `src/providers/stop-unanswered-hook.ts` (`LAST_LINES_SCRIPT`),
+`thread-rules.ts` (`THREADS_TAG_RULE`), `thread-capture.ts` (the hint),
+`src/core/session-hooks/builtins.ts` (the turn end, in `turnCompleteTriageHook`). Tests: `tests/lib/card-tag.test.ts`, `tests/lib/card-tag-readers-guard.test.ts` (every reader of
+reply text drops the line, a subscriber of the turn-end event too), `tests/core/org/reply-card.test.ts` (each state lands as its status line
+does), `tests/core/org/reply-card-prompt.test.ts`, `tests/core/sessions/status-thread-carded.test.ts`,
+`tests/providers/stop-hook-last-lines.test.ts` (the hook's own shell), `tests/e2e/reply-card-line.test.ts`,
+`tests/e2e/reply-card-stop.test.ts`, `tests/e2e/reply-card-stop-budget.test.ts` (the check beside the
+others, and the request's size), `tests/e2e/reply-card-real-flow.test.ts` (every kind of line
+through the runner's own turn-end event and the question the hook arms, on an isolated server),
+`tests/e2e/reply-card-slow-answers.test.ts` (an answers read that takes thirty seconds),
+`tests/e2e/reply-card-one-decision.test.ts` (a decision by a line and the task's ask, both orders),
+`tests/e2e/reply-card-stop-quiet.test.ts` (no send-back to tidy threads; his reaction asked in the
+question) and `tests/core/org/stop-checks-guard.test.ts` (every check and text of the Stop hook).
+
+Limits: the send-back needs a Stop hook that sends the last lines, so an engine without one, and a
+Claude Code process started before this change, is never held and its threads without a line are
+asked by the status question as before. A decision the store refuses at the turn's end (no hook) is
+written nowhere; the next status question names its thread. What a turn's lines spoke for is kept in
+memory, so after a restart the next question asks every thread once more. The write rides the
+turn-complete hook (`turn-complete-triage`), which also arms the status question: where that hook is
+switched off, neither runs, and a turn whose result came while its background work still ran is
+written when it settles, from the lines the Stop hook's check held. A turn end announced again
+with no words (the sweep after a restart, `askMissedReports`, or a snapshot that saw the turn end)
+writes only such held lines and leaves what the last turn's lines spoke for as it is. On a server with no job that
+keeps answers (an isolated one), `seen="yes"` marks an answer only after his Threads were read,
+which is what keeps the answer under his message there.
+
+### threads_related
+
+A new thread comes with the threads that may be its subject (2026-11-25, the user: "It should do a
+fuzzy match, or go through a vector database, and attach the related threads; the agent decides").
+When his message is filed as a NEW thread on a node that keeps Threads, Walnut reads the open threads
+(and those closed in the last 7 days) of the node and of the tasks above, below and beside it, a task
+finished in the last 7 days included for its closed threads (`treeOpenThreads` with `closedWithinMs`),
+never a moved-away pointer or the new thread, and puts up to 5 on that message's `threads` hint. The
+open ones come under how to join one: `Related threads (its subject is one of yours: thread_update
+{"id":"<new>","merge_into":"<id>"}; another task's: that task keeps it, task_send it): th-a "..."
+(answered, yours); th-b "..." (needs, on "<task>" <task id>)`. The closed ones come apart, since a
+merge into a closed thread is refused: `Related, closed this week (no merge: a new ask about it stays
+its own thread; read it, and say on the new card that it continues it): th-c "..." (yours)`. A thread
+of the node already named in the hint's Open list goes by its id alone. Advice only: nothing is merged
+or refused. A filing whose hint is never sent (a message that switches the engine,
+`fileSwitchedRequest`) looks nothing up.
+
+Two lanes, either one is enough: words (his message against each thread's title, ask and first
+summary sentence, with the same-subject brake's telling words: 2 shared words and a tenth of the
+fewer side's words, and 3 when they stand in one place of his message, as two pairs of CJK
+characters in one run can be one word), and meaning (the search stack's model, his message as a
+query and each thread's text as a passage, cosine 0.5 or more). The meaning lane runs only where
+search by meaning is on and the index is open (never in tests or on ephemeral servers), and only on
+workers that already run: no worker (a full model copy of about 2 GB) is ever started for it. With no
+query worker running (searches keep it up for 10 minutes after the last one) the lookup is words only
+(`semantic: "no-worker"`); passages are embedded only while the backfill's passage worker runs, one
+batch of 16 after another so the backfill's own batches queue between them, and cached in memory by a
+hash of model and text (4,000 at most), so the cached ones count when the worker is gone
+(`semantic: "partial"` for the rest). The whole lookup has 600 ms (the meaning lane 400 ms of it);
+past that, or on any error, the list is the words lane alone (the node's own threads alone when the
+tree was not read in time) and his message is filed and sent as without it. One log line per lookup,
+`org threads: related threads` (candidates, words, meaning, shown, semantic
+on/partial/no-worker/timeout/off/error, timedOut, ms), no thread text.
+
+The lookup sits between planning where his message goes and writing it. So that it does not widen
+that window for the next message, a message to the same node is planned only after a lookup still
+running there ends (`lookupsSettled`, at most 600 ms): two messages sent right after each other are
+planned one after the other, as without the lookup. What stays, as before this experiment: a write
+by another hand during the lookup (the agent merging or closing a thread) can make the store file his
+message elsewhere than the hint said (`filed elsewhere than told` in the log); the store re-plans at
+the write, so nothing is lost.
+
+Bars were calibrated on a replay of his own messages (each message that opened a thread or was later
+filed into an existing one, against the threads that existed then): words alone showed a list on 21%
+of new threads and named the thread a message later sat in for 12% of those messages; with the
+meaning lane, 52% and 33%, the list holding that thread 59% of the times it was shown for such a
+message. The hint addition is at most 1,000 bytes (`RELATED_HINT_MAX_BYTES`), sent only on a message
+that opens a new thread with a related one found.
+
+Code: `src/core/org/thread-related.ts` (lanes, ranking, hint text, `lookupsSettled`),
+`src/core/search/short-text-vectors.ts` (the embedder entry and its cache, over
+`SearchIndex.embedShortTexts` in `src/lib/hybrid-search`, which asks a worker only while
+`Embedder.running()` says it runs), `thread-capture.ts` (`relatedOf`, `threadHintText`). Tests:
+`tests/core/org/thread-related.test.ts`, `tests/lib/hybrid-search-short-texts.test.ts`,
+`tests/e2e/threads-related.test.ts`. Limits: the replay scored threads by their titles and summaries
+as they are now, not as they were; titles written in another language than his message rely on the
+meaning lane, which on a quiet server (no search in 10 minutes, no backfill pass running) has only
+its cached vectors and no query worker, so words alone.
+
+### threads_one_id
+
+One request, one id (2026-11-25, the user, of one request he saw as his VP's card and as a second
+card the task opened: "two threads for the same thing"). When Main, a lead or a task with Threads on
+hands a thread on with `thread` (task_send, task_start, task_create) to an open task of its own team
+that keeps Threads, the thread moves to that task under the same id, through the cross-node move
+(`movedTo` pointer on the node, `movedFrom` kind `hand` on the task). The node that handed it on
+lists the task's one record, same id, while it has something for him (it waits on him, a result
+for him, his reply on its way), whatever `threads_pop_up` says; its own pointer steps aside, so it is
+never two cards, and his reply on it goes to the task (`thread-reply.ts`). The node's status counts
+it as a card below, never its own Needs you. Once the task holds an open copy, that copy is the
+thread: a move cut off between its two writes leaves the node's copy open too, which every read
+hides (never a card or a count of its own), his reply skips, and the read that finds it moves again
+into a pointer. A task that finishes while its handed thread waits on him gives the thread back to
+the node that handed it (the follow pass, kind `work`), where it counts in that node's Needs you. A
+thread handed on again is refused, naming the task that holds it. The task hears it in one line (about 140 bytes,
+`sameIdTaskLine`) in the message that hands the work over: task_send and task_start decide before
+the send (`thread-handoff.ts` `sameIdLineBeforeSend`, the same `sameIdDecision` the move runs) and
+move after it succeeds, so a failed send moves nothing; a create puts it in the task's first
+message. When the thread changed between the two decisions the move's wins, and a move the message
+did not announce is told on the task's next message. Its own Threads now hold the thread, so the same-subject refusal and the status line's
+`own` match find it.
+
+A named thread stays on the node and only lists the task, as before, when it waits on him now
+(`needs` or `askOwner`: he answers where he was asked), holds the node's decision letter, Board
+choice or own ask, is watched or Known on the node's Threads, or lists other open tasks; the
+caller's outcome then says why. `hands_on` without `thread`, a target in another team (the
+cross-node rule) and a target that keeps no Threads behave as today. Off again, a moved thread stays
+where it is and reads as an ordinary moved thread; nothing new is stored (`same_card` and `stays`
+in `thread_handoff` are additive).
+
+Code: `src/core/org/thread-one-id.ts` (switch, decision, lines), `thread-handoff.ts` (the hand-off's
+outcome and lines, the decision before the send and at the move), `thread-one-id-view.ts` (the node's
+read: by the task's `movedFrom`, which outlives the week a pointer is kept, and by its pointers),
+`thread-follow.ts` `handOffThread`, `thread-popup.ts` `elsewhereThread`, `user-status-sync.ts`
+counts, the threads route. Tests: `tests/core/org/thread-one-id.test.ts`,
+`tests/e2e/thread-one-id.test.ts`, `tests/core/org/thread-handoff-paths-guard.test.ts` (every
+hand-off route reaches the one decision). Limits: a thread handed on twice reads through on the
+first node only while its pointer is kept (a week); a task_start with no message of its own gets
+the line on its next message; a thread announced in the message that then stays (it changed in
+the moment between) is not corrected to the task.
+
+### threads_reminder
+
+A reminder of the open threads now and then, in place of a line for every thread after every turn
+(2026-11-25, the user, translated: "like that To Do": remind the agent of the threads it still has
+open and of the ones nobody touched for long, the way Claude Code reminds a session of its to-do
+list). It changes only which threads the status question at a turn's end lists; the answer's lines,
+the reply's card lines (`threads_reply_tag`) and every write rule stay as they are.
+
+- **Asked at every turn end:** a thread in the node's hands (new, working), since any turn may have
+  finished it (a subtask's report, a background job's end, a peer's note); `thread-recheck.ts`
+  leaves a quiet working thread to that line while the node's work carries on. Also a line its
+  last answer dropped for asking him. An overdue one is marked so.
+- **Asked once, until the thread changes again:** every need the question ranks first, each placed
+  by name in `ASKED_BETWEEN` (his word after the summary, a summary owed, a card asking him outside
+  needs, a joined message, a held title, an untitled or stale-asking title); a reaction to check on
+  an answer in his sight (answered), once after each new message of his; a thread Walnut's overdue
+  note named since it was last listed. A need asked with nothing moved since is asked again at the
+  reminder: a line that changes nothing writes nothing, so it would otherwise be asked every turn.
+  Nothing to ask: no thread block (a task keeps its one new-subject line).
+- **The reminder** is one question in five (`REMIND_EVERY`), the first after a restart, a session of
+  the task not reminded before, or a compaction, and sooner when a thread went overdue since the
+  last one (`threadOverdue`'s reply clock, at most once per 30 minutes). Every need in full (more
+  than 12: the one listed longest ago first), every other open thread short and grouped by state
+  (`answered: t5 "Orchard fence" 2h, t6 ...; pending: ...`, titles cut to 40 characters, at most 60),
+  with one rule: a line only for a thread that moved. A reminder by count or by an overdue thread
+  leaves out the short items the node wrote since the last reminder and says how many.
+- **With reply card lines** a thread the reply spoke for is left out of both; when every open thread
+  was spoken for the question asks nothing about threads and is not counted.
+- **Bytes**, measured on saved copies of the eight nodes with the most open threads (kept by
+  Walnut): today's block is 3.0 to 4.5 KB on every turn. With the switch on: nothing on a quiet
+  turn with nothing in hand (1.4 to 2.0 KB on the two nodes with threads in hand); 1.2 to 3.6 KB on
+  a turn with one new message of his; 1.7 to 3.9 KB at a reminder (6.3 KB by count, 7.8 KB after a
+  restart, on the one node with 65 open threads).
+
+Code: `src/core/sessions/status-thread-remind.ts` (when, which, the short items),
+`status-thread-question.ts` (`threadQuestionOf`, pure, and `threadQuestionFor`, which reads the file
+and records the listing at the time of the read; re-exported from `status-threads.ts`),
+`status-thread-pick.ts` (`NEED_RANK`, `needName`, `byNeed`'s `rotate`), `status-threads.ts`
+(the block's words), `status-question.ts` (passes the session and its last compaction). Tests:
+`tests/core/sessions/status-thread-remind.test.ts` (the rules, the switch off, the overdue note's
+carry-on case, and a guard that every need name is placed), `tests/e2e/threads-reminder.test.ts`
+(ten questions on a real server, a turn on a peer's note, card lines, then off).
+
+Limits: the record of the last reminder and of when each thread was listed is in memory, so a
+restart brings the reminder early. A question that gets no answer still counts. A need asked once
+and left unanswered waits up to four questions for the reminder. A node with many answers he has
+not reacted to lists each of them again after every message of his (on the 65-thread node that
+turn costs about as much as today's).
+
+### threads_audit
+
+A small model reads the threads now and then, and only reports (2026-11-25, the user: "by default
+it should rely on the agent. But we have an extra agent that scans once, maybe Haiku,
+periodically"). Every 6 hours each node that keeps Threads and has open ones is checked once, one
+node at a time (a clock look every 15 minutes, at most 12 nodes a look, oldest first). Four kinds,
+most important first: `repeat` (two open cards on one subject, on the node or between the node's
+card and one of a task below it or that its card names), `unasked` (a summary that asks him to
+decide, `asksHimNow`, on a card not in needs), `stale` (new or working with nothing written for 24
+hours, needs for 3 days) and `thin` (no summary on an answered or needs card, one that only points
+elsewhere, `summaryPointsElsewhere`, or under 30 characters). The rules pick repeat candidates
+(a card naming the other's id, two or more shared telling words of the same-subject index, the same
+linked task); ONE fast-model call per node judges at most 10 pairs SAME, DIFFERENT or UNSURE with a
+reason, from each card's title, ask and first summary sentence (never his messages). A verdict is
+kept while both cards read the same (at most 14 days), so an unchanged pair costs no second call.
+Only SAME is reported. Without a model (none set up, a timeout, a test run) the rule findings still go.
+
+Only what is new is told: a finding's key is its kind and thread ids, and a key told is not told
+again for 14 days; a later pass that no longer finds it counts it fixed. At most 8 findings a note,
+each with its thread ids and the call that fixes it (`merge_into` for a repeat, the node's card
+merging into a task's card; `state: needs` with options for unasked; its summary or status line for
+stale and thin). A note with a repeat or an unasked decision wakes the node: a notification
+(outcome `threads-audit`) into its session under the source `thread-audit`, as the re-check sends,
+so the org's off switch blocks it and a parked wait comes back with its clock at the turn end
+(`tests/core/wait-words-only-guard.test.ts`, `tests/e2e/thread-audit-wait.test.ts`); a session the
+user stopped is not woken. One with only stale or thin rides the node's next message (`rideLine`,
+key `thread-audit`); that slot keeps one note, so while one is unread the next carries its findings
+still found, and a newer note never drops an older one. A full note is 0.8 KB typically, at most about 3.8 KB (8 findings, longest titles).
+Nothing is merged, closed or rewritten by the check.
+
+Counts per day (UTC) and per node, kept 60 days in `org/thread-audit.json`: passes, found, told and
+fixed per kind, model calls and their milliseconds. Read them with `GET /api/v1/thread-audit`
+(`?days=`, `?task=`) or the op `thread_audit`; `POST /api/v1/thread-audit/run {task}` (op
+`thread_audit` with `run: true`) checks one node now. One log line per pass, counts only.
+
+Leader only, never on an ephemeral server (`WALNUT_THREAD_AUDIT=0` turns the clock off), the switch
+read at every node, skipped while background AI is off; a check run by hand does nothing while the
+org is off. A node tried is not tried again for 6 hours in that process, even when it had no open
+thread or its counts could not be written. A tree that could not be read finds no repeat and counts
+none fixed; a told repeat is fixed only once a card of it is closed on the node, or both read open
+and no longer one subject. Code: `src/core/org/thread-audit.ts`
+(clock, pass, delivery, judge seam `setAuditJudgeOverride`), `thread-audit-rules.ts` (the kinds,
+pairs, judge input, note), `thread-audit-store.ts` (the file and counts),
+`src/core/fast-model-call.ts` (the one short fast-model call, shared with the join check),
+`src/web/routes/thread-audit-v1.ts`, `src/ops/thread-audit.ts`. Tests:
+`tests/core/org/thread-audit-rules.test.ts`, `tests/core/org/thread-audit-store.test.ts`,
+`tests/e2e/thread-audit.test.ts`. On the 2026-11-25 export (95 nodes with open threads): 17 rule
+findings (2 unasked, 11 stale, 4 thin), 173 candidate pairs on 23 nodes (half the nodes none, one
+lead 132), and of 40 judged by the fast model 18 SAME, 21 DIFFERENT, 1 UNSURE, 16 of the 18 a real
+repeat on reading. Limits: a node with more pairs than the cap takes a few passes to have them all
+judged; a pair with a task above the node is judged when that task is checked.
+
 ## What the user's data showed (2026-11-23)
 
 Read from one leader task and its six subtasks (64 threads), the tree the user reported:
@@ -97,6 +447,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 | 11-25 | While he read the Threads list, a card that changed group still pushed what he saw (a review of the hold, item a: 186px in Chromium, 183px in WebKit, the pointer on a group's head at the top) | the card that moved was the one under his pointer (the matrix had picked its point before a move line from its last cell faded, so the pointer came to rest on that card), and a held card drawn again in another group was let go with no correction, so every card he saw moved by its new height: the same as a Needs you card he answers going to Done. Also, a press with no release (a ctrl-click's menu, a native drag) left the pointer counted as down, and a letter typed in a Follow up box counted as his scroll: either way WebKit's pull at the end of the list stayed in (376px) | fixed: when the card he reads leaves its place, the card drawn right before it (else right after it) holds the place until he moves or scrolls, so nothing above the pointer moves and the rest closes up under its line (`heldPlace` in `web/src/hooks/scroll-anchor.ts`, `useScrollAnchor.ts`); a move with no button, a wheel or a key lets a press go, and a letter typed in a text field is no scroll (`stepScrollInput`). The matrix waits for the last cell's lines and cleanups before it picks a point, refuses a pointer that rests on a card in a cell about the space between them, and has a column for his own card changing group (`tests/e2e/browser/threads-hold-matrix.spec.ts`, its columns now in `threads-hold-changes.ts`; `tests/web/threads-hold.test.ts`). Open: at the end of the list, his own card leaving below the rest still moves the cards above it (no scroll is left; it would need room at the bottom) |
 | 11-25 | Replies of sessions with Threads on ended with one line per open thread, often under a heading or inside a tag the session made up | the Threads rule said each turn ends with a line for each thread, and a Claude Code session never sees Walnut's status question in its own chat, so it wrote the lines into its reply | fixed: every screen hides a reply's trailing thread-status block, with its heading and a made-up tag around it (`src/lib/internal-lines.ts` `stripInternalLines`: the web chat, the history every client reads, push, the thread takeaway, ACP; the phone's `InternalLines.swift`; both run `tests/fixtures/internal-lines/cases.json`). Precision first, since a review found the first version hid his content: only a block that is strictly the reply's end goes (a list item, paragraph, table row or quote after a thread line keeps everything; only a line indented under a thread's item carries it on); a table row, a quote or a sentence that names a thread is never a thread line; an item that says its state in free words counts only under a heading, in a made-up tag or beside a line with a known state word; and the block stays when it is the whole reply, follows one sentence (sentences, not lines: a version, a file name, a time or a URL never ends one) or a lead-in (a colon, "as follows", "below", a sentence naming the threads), holds a link, a path, a letter, a task ref or a relative image the reply keeps nowhere else, has a line that waits on him (state needs or new, or words that ask him: a decision, a review, a question, news to answer; a second review found 39 real replies whose decision was hidden, some on threads in waiting, which his Threads view does not show), or ends a longer list. On 834 real replies 268 change, 234 still end with a block (the accepted miss), none hides a link or path the shown text lacks, and the review's reproductions all keep their content. Every text that asks for those lines says they go in Walnut's status question after the turn, in the reply only if he asks (`THREAD_LINE_CHANNEL`). The phone reads text as the server's JavaScript does (whitespace, trim, digits, word ends, the line split): on the 834 replies both show the same text at all 33,469 points tried. Guards `tests/lib/internal-lines.test.ts` (with its list of shapes that must show), `tests/core/sessions/status-threads-kept.test.ts` |
 | 11-25 | thread_split takes a title for the new thread. Real use on 11-24: a node sent a title with its split, was refused `bad_args`, and the split's answer then asked for a second call to give the thread a title | the op took no title | fixed: `title` is written on the thread the split made, in the same call, with thread_update's own write (the split route is unchanged); with merge_into, or on a thread Walnut split out before that has a title already, it is not applied and the answer names it in `not_applied` (`src/ops/org-threads.ts` titleSplitThread; `tests/mcp/org-answers.test.ts`, `tests/e2e/thread-split-route.test.ts`) |
+| 11-25 | Two cards about two things on one screen were read as one repeat (the thread monitor's [dup]): one said a row of a list looks bad, the other that other rows' names there are too long | both titles opened with the list's name, three shared words in a title of six, which is all the title check asks for; what each went on to say was not looked at | fixed: two titles that share only the words both open with, each going on for at least as long with words the other has none of, are two matters (`sharesOnlyOpening` in `thread-same-subject.ts`; the refusal still names such a card as a candidate, it is no clear repeat). Still a repeat: a title that only adds to the other, one word of its own after the opening, a word shared after a word of its own, and two that share the larger part and differ in where the matter stands. On a copy of his threads that day: 14 strong title matches before and after, none lost (the first version of the rule, without the length test, lost one true repeat there). Guard `tests/core/org/thread-same-subject.test.ts` |
 | 11-25 | Two cards on two matters were read as one repeat (the thread monitor's [dup]): each title named its own subject before a colon and both ended in the same state ("comments posted to the design doc" of one person) | the title check counted every shared word alike, so a shared state, person or area outweighed two subjects that shared no word; the same check decides where a status line's new subject goes, so such a line could land on the other card | fixed: a subject named before a colon that the other title does not hold is another matter (`headWords` in `thread-same-subject.ts`). On his data that day: 20 strong title matches before, 15 after, the 5 dropped all two matters (one state on two fixes, one finding in two regions); one such pair with no word-free head is still matched. Guard `tests/core/org/thread-same-subject.test.ts` |
 | 11-25 | One decision showed as two cards, a task's and its lead's, both waiting on him. The task had written its card with `supersedes` naming the lead's card, and the answer listed `supersedes` among what changed | `supersedes` was applied only to the writer's own asks in the file it wrote; any other id was dropped without a word, while the same-subject gate already let the write through for a card named there. The lead's own way out, `ask_owner`, answered that the task "asks the user nothing" because its ask was on a thread, not in its status | fixed: every id `supersedes` names is acted on or refused, never dropped (`thread-supersede.ts` `namedElsewhere`, `namedVerdict`, `setAsideNamed`). A thread on the Threads around the writer (the file it writes, its own, the open tasks above, below and beside it) that waits on him is taken off there when it is the writer's: on its own Threads, on a node below it, opened by it, pointed at it, or naming it and no other task. It closes with the line naming where it is asked now, its buttons gone (while an answer on it is still his to read it steps aside open instead). One that asks him nothing now is left (a retry). Refused by name, with nothing written: another task's card, one that names other tasks too, an id that names nothing within reach, a letter that is not the writer's, and (a review found the first version hid them) any card with something of his on it: a word of his unanswered, a reply on its way, a decision letter, a Board choice, a task's own question shown through it whatever state it stores (`thread-ended.ts` `heldWhy`, judged again inside the lock). A card he watches or snoozed is not refused: it steps aside open and stays in his Watching (the card that showed the bug was one he watched). `supersedes` goes only with a thread that waits on him: on a result or a write that asks nothing it is refused, where it used to pass the same-subject check and do nothing. It holds on a later write of a card already in needs too. `ask_owner` naming a task that asks on a thread of its own now says so and names the way on. Guards `tests/core/org/thread-replaced.test.ts` (every state in every place has one of three outcomes; every reason `heldWhy` knows is refused), `tests/e2e/thread-one-matter.test.ts` (two nodes on a real server) |
 | 11-24 | Seven of his messages in a day went into an unrelated thread only for coming within three minutes of his last one (a complaint about Notes in the thread about the phone link); the Walnut VP split several by hand (its words: file by subject, not by timing alone, or open a new thread when unsure) | the join was by timing alone, and the node's turn-end check kept it unless it wrote a split line | fixed: a message joined by timing is checked for its subject when it is filed, one call to the fast model on the thread's title and his last words there; NEW or UNSURE takes it out into a thread of its own (untitled, and its source listed beside it at the turn end to merge back), SAME or no answer keeps the join for the node's check. On 425 such messages of his VP it took out 45 of the 72 that now sit in another thread (`thread-join-check.ts`; `tests/core/org/thread-join-check.test.ts`) |

@@ -28,6 +28,7 @@
  * as written, and a mention of a field name inside a sentence is not a line of the report.
  */
 import { ABOUT_TAG_NAME } from '../core/org/message-about.js';
+import { stripCardTags } from './card-tag.js';
 
 /**
  * Where a thread's line goes, named by every text that asks for one or says Walnut writes threads from
@@ -281,6 +282,13 @@ const evidenceIn = (lines: readonly string[]) => lines.flatMap((l) => [...l.matc
  * its heading or a tag around them is held back, so it never flashes up while it is being written.
  */
 export function stripInternalLines(text: string, streaming = false): string {
+  // A thread's card line (card-tag.ts) never shows: taken off first, so it is no line of a thread
+  // block below, and again after, when a report stood between it and the reply's end.
+  return stripCardTags(stripReportLines(stripCardTags(text, streaming), streaming), streaming);
+}
+
+/** Everything the comment above describes: the report, the version tags, a trailing thread block. */
+function stripReportLines(text: string, streaming: boolean): string {
   if (!text.includes('FOR_USER_') && !text.includes('[v') && !text.includes('th-') && !(streaming && streamingTailMayHold(text))) return text;
   const lines = text.split('\n');
   const bare = (l: string) => l.replace(/\r$/u, '');

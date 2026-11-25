@@ -17,6 +17,16 @@
  *
  * With threads_kept_by_walnut on (threads-kept.ts) neither is asked: the status question at the
  * turn's end keeps the summaries and the known marks (sessions/status-threads.ts).
+ *
+ * With threads_reply_tag on, a session that says where its threads stand with card lines
+ * (reply-card.ts tagsReplies) is never held here either, whatever the first switch says: a line
+ * carries the summary, the state and his reaction (seen="yes"), the check of its lines names the
+ * one this turn left out, in the line's own words (reply-card-stop.ts), and whether his new message
+ * reacted to earlier answers is asked in the status question after the turn, where the answer
+ * costs no chat message (sessions/status-thread-question.ts). 2026-11-25, a live session sent back
+ * for unread answers closed its reply to him with "I've left those three threads as they are ...
+ * so I haven't marked any of them as read": thread bookkeeping in his chat.
+ * tests/core/org/stop-checks-guard.test.ts lists every check the Stop hook runs.
  */
 import { hasThreadNews, snoozedNow, summaryAt, summaryBehindHim } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
@@ -103,6 +113,8 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
     // is held for, unless its last status ask failed (then this turn's summary is the node's).
     const { threadsKeptNow } = await import('./threads-kept.js');
     if (threadsKeptNow() && await (await import('../sessions/status-question.js')).statusKeepsThreads(sid)) return null;
+    // Its card lines keep them (the header): nothing here is asked with a thread_update.
+    if ((await import('./reply-card.js')).tagsReplies(task)) return null;
     const { readThreads } = await import('./threads-store.js');
     const threads = (await readThreads(taskId)).threads;
     const stale = staleSummaries(threads, nowMs)

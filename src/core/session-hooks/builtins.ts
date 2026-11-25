@@ -1298,6 +1298,10 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     if (p.session?.provider === 'embedded') return;
     if (turnEndedAt.size > 500) turnEndedAt.clear();
     turnEndedAt.set(p.sessionId, Date.now());
+    // The card lines in the turn's last words start being written here, before the question is
+    // armed: the question waits for that write before it lists the threads (org/reply-card.ts
+    // turnEndedWith, experiment threads_reply_tag). Nothing is done for a task that keeps no Threads.
+    await import('../org/reply-card.js').then((m) => m.turnEndedWith({ task: p.task, sessionId: p.sessionId, reply: p.result, settledOnly: p.event !== EventNames.SESSION_RESULT, ...(p.late ? { endedAt: p.timestamp } : {}) })).catch(() => {});
     // Its status words now, not after the quiet window (sessions/status-question.ts).
     if (p.task.phase !== 'COMPLETE') await armStatusQuestion(p.taskId, p.sessionId).catch(() => false);
 

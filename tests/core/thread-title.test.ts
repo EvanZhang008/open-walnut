@@ -165,6 +165,17 @@ describe('trigger 2: refine once at the first answer', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('the model reads the answer as a person does: a thread\'s card line is no part of the excerpt', async () => {
+    await seedNamed('head-card');
+    noteTurnUserUuid(SID, 'head-card');
+    emitResult({ result: 'The cache warms on boot because the loader primes it.\n\n<walnut-card thread="th-0a1b2c3d4e5f" state="answered" summary="Warm on boot."/>' });
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].message).toContain('Answer excerpt: The cache warms on boot because the loader primes it.');
+    expect(calls[0].message).not.toContain('walnut-card');
+    expect(calls[0].answer).toBe('The cache warms on boot because the loader primes it.');
+  });
+
   it('isError and interrupted results never refine (C42)', async () => {
     await seedNamed('head-e');
     noteTurnUserUuid(SID, 'head-e');

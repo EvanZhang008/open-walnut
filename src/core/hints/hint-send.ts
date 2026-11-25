@@ -337,10 +337,12 @@ async function teamGuidanceOf(task: Task | undefined | null, hints: readonly Eff
 async function threadsTidyFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<ThreadsTidyState | null> {
   if (!task || !keepsThreads(task) || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
   try {
-    // Walnut keeps the threads from the status answer (org/threads-kept.ts): nothing here is the
-    // node's to write, unless Walnut cannot ask this session (its engine, or its last ask failed).
+    // Walnut keeps the threads from the status answer (org/threads-kept.ts), or from the reply's
+    // card lines and the status answer for the rest (org/reply-card.ts tagsReplies): nothing here
+    // is the node's to write, unless Walnut cannot ask this session (its engine, or its last ask failed).
     const { threadsKeptNow } = await import('../org/threads-kept.js');
-    if (threadsKeptNow() && await (await import('../sessions/status-question.js')).statusKeepsThreads(target.sessionId)) return null;
+    const { tagsReplies } = await import('../org/reply-card.js');
+    if ((threadsKeptNow() || tagsReplies(task)) && await (await import('../sessions/status-question.js')).statusKeepsThreads(target.sessionId)) return null;
     const { readThreads } = await import('../org/threads-store.js');
     const { threadsTidyOf } = await import('../org/thread-capture.js');
     return threadsTidyOf(await readThreads(task.id));

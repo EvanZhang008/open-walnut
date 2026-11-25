@@ -26,20 +26,22 @@ import type { Task } from '../types.js';
 import { OUTSIDE_WAIT_KINDS, waitWordsNameUser, type StatusReport } from '../user-status.js';
 import { cutEnd } from '../text-cut.js';
 import { keepsThreads } from '../org/keeps-threads.js';
-import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
+import { THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
-import { exchangesOf, hasThreadNews, openNotWaiting, sharedAnswers } from '../org/thread-view.js';
+import { exchangesOf, hasThreadNews } from '../org/thread-view.js';
 import { ackHoldsResult, lineMay } from '../org/thread-known.js';
 import { lastUserAt, reactedSince } from '../org/threads-model.js';
 import { oneCardNow } from '../org/one-card.js';
-import { threadsKeptNow } from '../org/threads-kept.js';
+import { linesAreCards, threadsKeptNow } from '../org/threads-kept.js';
 import { markerRe } from './status-marker.js';
-import { joinedToAsk, JOINS_ASKED_MAX, readSplitLines, splitQuestionPart, type JoinedMessage } from './status-thread-split.js';
-import { heldTitleOf, MERGE_UNTITLED_LINE, MERGES_ASKED_MAX, mergeQuestionPart, nearAll, readMergeLines, type HeldTitle } from './status-thread-title.js';
+import { JOINS_ASKED_MAX, readSplitLines, splitQuestionPart, type JoinedMessage } from './status-thread-split.js';
+import { MERGE_UNTITLED_LINE, MERGES_ASKED_MAX, mergeQuestionPart, readMergeLines, type HeldTitle } from './status-thread-title.js';
 import { answerSteps } from './status-thread-pre.js';
-import { CARD_KEEPS_LINE, cardPart, cardWords, keepsCardWords } from './status-thread-card.js';
-import { ASKED_MARK, CARD_ASKS_MARK, askedRule, linesThatAsked, markAsks, noteLineAsks } from './status-thread-asked.js';
-import { byNeed, lastListed, noteListed } from './status-thread-pick.js';
+import { CARD_KEEPS_LINE, cardPart, keepsCardWords } from './status-thread-card.js';
+import { ASKED_MARK, CARD_ASKS_MARK, askedRule, noteLineAsks } from './status-thread-asked.js';
+import { inStateOrder, OVERDUE_WORDS, REMIND_LIST_MAX, reminderItem, reminderPart, type ReminderMark } from './status-thread-remind.js';
+// The question's read side lives in status-thread-question.ts; its names stay importable from here.
+export { listForQuestion, threadQuestionFor, threadQuestionOf, type QuestionMemory } from './status-thread-question.js';
 
 /** The states a FOR_USER_THREAD line names (stateWord reads them). */
 export const THREAD_LINE_STATES = ['working', 'waiting', 'answered', 'done'] as const;
@@ -56,10 +58,10 @@ export interface StatusThreadNew { title: string; state: 'working' | 'waiting'; 
 export type ThreadRefs = ReadonlyMap<string, ThreadRef>;
 export interface ThreadRef { id: string; title: string; untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; joined?: string; mergeInto?: string }
 /**
- * One thread as the question lists it (threadsKeptNow marks `untitled` and `wrote`): `upTo` its
+ * One thread as the question lists it (linesAreCards marks `untitled` and `wrote`): `upTo` its
  * newest message then, `hisAt` his newest message in any thread then (a reaction is judged on it).
  */
-export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean; near?: string[]; besideOnly?: boolean };
+export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean; near?: string[]; besideOnly?: boolean; reminder?: ReminderMark; overdue?: boolean };
 /** The report's fields the thread lines fill (readThreadLines), each written to the threads, never stored with the report. */
 export const THREAD_REPORT_KEYS = ['threads', 'threads_new', 'ask_thread', 'thread_titles', 'threads_seen', 'threads_split', 'joins_checked', 'threads_merge', 'merges_checked'] as const;
 export type ThreadReportKey = typeof THREAD_REPORT_KEYS[number];
@@ -84,9 +86,9 @@ const ACKED_WORDS = 'he acknowledged its result: a line only closes it (done); n
 export const THREAD_LIST_MAX = 12;
 export const THREAD_NEW_MAX = 3;
 const TITLE_SHOWN_MAX = 60;
-const PROGRESS_MAX = 240;
+export const PROGRESS_MAX = 240;
 /** His newer messages the question quotes, and how much of each. */
-const HIS_SHOWN_MAX = 3;
+export const HIS_SHOWN_MAX = 3;
 const HIS_TEXT_MAX = 80;
 
 /**
@@ -122,15 +124,19 @@ export function placesAskOnThread(task: Pick<Task, 'org_role' | 'threads_on'> | 
 
 /**
  * The block the status question adds, and the refs it listed. `org`: Main's or a lead's (no new
- * subjects; its asks go into needs by thread_update). With threads_kept_by_walnut on, the line is
- * the thread's summary, an untitled thread is named, and a reaction of his is asked. Pure.
+ * subjects; its asks go into needs by thread_update). With threads_kept_by_walnut or
+ * threads_reply_tag on (org/threads-kept.ts linesAreCards), the line is the thread's summary, an
+ * untitled thread is named, and a reaction of his is asked. Pure.
  */
-export function threadQuestionBlock(open: readonly ListedThread[], langName?: string, opts: { org?: boolean; his?: readonly HisWords[] } = {}): { block: string; refs: Map<string, ThreadRef> } {
-  const kept = threadsKeptNow();
+export function threadQuestionBlock(open: readonly ListedThread[], langName?: string, opts: { org?: boolean; his?: readonly HisWords[]; omitted?: number } = {}): { block: string; refs: Map<string, ThreadRef> } {
+  const kept = linesAreCards();
   const refs = new Map<string, ThreadRef>();
   const joins: Array<{ ref: string; joined: JoinedMessage }> = [];
   const merges: Array<{ ref: string; held: HeldTitle; likeRef: string }> = [];
-  const shown = open.slice(0, THREAD_LIST_MAX);
+  // A reminder's short items (threads_reminder, status-thread-remind.ts) come after the ones asked a
+  // line, grouped by state, with a cap of their own.
+  const full = open.filter((t) => !t.reminder).slice(0, THREAD_LIST_MAX);
+  const shown = [...full, ...inStateOrder(open.filter((t) => t.reminder)).slice(0, REMIND_LIST_MAX)];
   const refById = new Map(shown.map((t, i) => [t.id, `t${i + 1}`]));
   const listed = shown.map((t, i) => {
     const ref = `t${i + 1}`;
@@ -140,37 +146,42 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
     if (held) merges.push({ ref, held, likeRef: likeRef! });
     // Asked again by its title when its other thread is not listed; not while it waits its turn.
     const untitled = t.untitled && !held && !(t.held && likeRef);
-    const marks = kept ? { ...(untitled ? { untitled: true } : {}), ...(t.retitle && !untitled ? { retitle: true } : {}), ...(t.wrote ? { wrote: true } : {}) } : {};
+    const marks = kept ? { ...(untitled ? { untitled: true } : {}), ...(t.retitle && !untitled ? { retitle: true } : {}), ...(t.wrote && !t.reminder ? { wrote: true } : {}) } : {};
     const joined = t.joined && joins.length < JOINS_ASKED_MAX ? t.joined : undefined;
     if (joined) joins.push({ ref, joined });
     refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}), ...(joined ? { joined: joined.messageId } : {}), ...(held ? { mergeInto: held.like } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
+    if (t.reminder) return reminderItem(ref, title, t.reminder);
     // The threads listed beside an untitled one as its possible subject (status-thread-title.ts nearThreads).
     const near = marks.untitled ? (t.near ?? []).map((id) => refById.get(id)).filter((r): r is string => !!r) : [];
-    const said = [t.state, ...(t.state === 'needs' ? [joined ? NEEDS_JOIN_WORDS : NEEDS_NO_LINE] : []), ...(near.length ? [`he wrote in ${near.join(', ')} just before it: merge it into one only if it is that subject`] : []), ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.retitle ? [RETITLE_WORDS] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
+    const said = [t.state, ...(t.state === 'needs' ? [joined ? NEEDS_JOIN_WORDS : NEEDS_NO_LINE] : []), ...(near.length ? [`he wrote in ${near.join(', ')} just before it: merge it into one only if it is that subject`] : []), ...(t.acked ? [ACKED_WORDS] : []), ...(t.overdue ? [OVERDUE_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.retitle ? [RETITLE_WORDS] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : []), ...(t.asked ? [ASKED_MARK] : t.cardAsks ? [CARD_ASKS_MARK] : [])].join(', ');
     return `${ref} "${title.slice(0, cutEnd(title, TITLE_SHOWN_MAX))}" (${said}${t.acked ? '' : cardPart(t.card)})`;
   });
   const words = langName ? ` (titles and progress in ${langName})` : '';
   const split = [splitQuestionPart(joins, words), mergeQuestionPart(merges)].filter(Boolean).map((x) => `\n${x}`).join('');
   const asked = shown.some((t) => t.asked || t.cardAsks) ? `\n${askedRule(!!opts.org, oneCardNow())}` : '';
-  if (kept) return { block: keptBlock(listed, refs, words, !!opts.org, opts.his ?? []) + asked + split, refs };
+  const remind = reminderPart(shown.slice(full.length).map((t, i) => ({ state: t.state, text: listed[full.length + i], ...(t.reminder?.acked ? { acked: true } : {}) })), opts.omitted ?? 0);
+  const lines = listed.slice(0, full.length);
+  if (kept) return { block: keptBlock(lines, refs, words, !!opts.org, opts.his ?? [], remind) + asked + split, refs };
   const newLine = `A subject you now follow that no thread covers: FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
   const rule = 'What needs the user\'s decision stays on FOR_USER_ASK, never a thread line.';
   // Its ask lives on a thread only with threads_one_card on (org/one-card.ts, thread-report-ask.ts).
   const askLine = oneCardNow() ? ' With a FOR_USER_ASK, the thread it is about: FOR_USER_ASK_THREAD: <ref>.' : '';
-  const block = listed.length
-    ? `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${CARD_KEEPS_LINE} ${newLine} ${rule}${askLine}`
+  const head = (lines.length ? `\nThis task's open threads (one per subject the user follows here): ${lines.join('; ')}.` : '') + (remind ? `\n${remind}` : '');
+  const block = head
+    ? `${head}\nOne line per thread: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <one line on where it stands>${words}. ${CARD_KEEPS_LINE} ${newLine} ${rule}${askLine}`
     : `\n${newLine.replace(/\.$/, '')}${words}. ${rule}`;
   return { block: block + asked + split, refs };
 }
 
 /** The block with threads_kept_by_walnut on: the line is what his card says, so it says how to write it. */
-function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadRef>, words: string, org: boolean, his: readonly HisWords[]): string {
+function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadRef>, words: string, org: boolean, his: readonly HisWords[], remind = ''): string {
   const refs = [...byRef.values()];
   const newLine = `A subject you now follow that none of these threads covers (one subject is one thread: a subject one covers is its line): FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
-  if (!listed.length) return org ? '' : `\n${newLine.replace(/\.$/, '')}${words}. What needs the user's decision stays on FOR_USER_ASK, never a thread line.`;
+  if (!listed.length && !remind) return org ? '' : `\n${newLine.replace(/\.$/, '')}${words}. What needs the user's decision stays on FOR_USER_ASK, never a thread line.`;
   const parts = [
-    `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.`,
+    ...(listed.length ? [`This task's open threads (one per subject the user follows here): ${listed.join('; ')}.`] : []),
+    ...(remind ? [remind] : []),
     `One line per thread, which Walnut writes as its state and the summary on his card: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <where it stands for him, latest first, readable alone by someone who never saw this chat: the result or the question itself (name the task by its title and where it stands, never only that it was given, sent or told), then at most one sentence of background; a proof's path or URL when there is one>${words}.`
       + ` working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished, or nothing left for him. ${CARD_KEEPS_LINE}`,
   ];
@@ -186,77 +197,17 @@ function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadR
   parts.push(org
     ? 'What needs his decision is a thread_update into needs (with user_kind), never a thread line.'
     : `What needs the user's decision stays on FOR_USER_ASK, never a thread line.${oneCardNow() ? ' With a FOR_USER_ASK, the thread it is about: FOR_USER_ASK_THREAD: <ref>.' : ''}`);
-  return parts.join('\n');
+  return `\n${parts.join('\n')}`;
 }
 
 /** The answers on `t` not known yet that he wrote to the node after (thread-capture.ts threadsTidyOf, its `reacted`). Pure. */
-function answersHeWroteAfter(file: ThreadsFile, t: OrgThread): string[] {
+export function answersHeWroteAfter(file: ThreadsFile, t: OrgThread): string[] {
   return exchangesOf(t).filter((x) => !!x.answer && !x.known && reactedSince(file, x.answer)).map((x) => x.answer!.at);
 }
 
 /** He wrote to the node after an answer on `t` that is not known yet. Pure. */
 export function wroteSinceAnswer(file: ThreadsFile, t: OrgThread): boolean {
   return answersHeWroteAfter(file, t).length > 0;
-}
-
-/**
- * The threads as the question lists them, and his messages since the oldest answer he wrote after
- * (newest first). `near`: each untitled thread's possible subjects (nearAll); `besideOnly`: the ones
- * listed only beside such a thread, never for a need of their own (status-thread-pick.ts byNeed). Pure.
- */
-export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[], near: ReadonlyMap<string, string[]> = new Map(), besideOnly: ReadonlySet<string> = new Set()): { listed: Array<OrgThread & ListedThread>; his: HisWords[] } {
-  const upTo = (t: OrgThread) => t.messages[t.messages.length - 1]?.id ?? '';
-  const hisAt = lastUserAt(file) ?? '';
-  const hasOf = (t: OrgThread) => {
-    const joined = joinedToAsk(t);
-    const held = heldTitleOf(file, t);
-    return { ...(ackHoldsResult(t) ? { acked: true } : {}), ...(joined ? { joined } : {}), ...(held ? { held } : {}) };
-  };
-  const shared = sharedAnswers(file.threads);
-  const card = (t: OrgThread) => { const c = cardWords(t, shared); return c ? { card: c } : {}; };
-  if (!threadsKeptNow()) return { listed: open.map((t) => ({ ...t, ...hasOf(t), ...card(t), upTo: upTo(t), hisAt })), his: [] };
-  let since = '';
-  const listed = open.map((t) => {
-    const after = answersHeWroteAfter(file, t);
-    for (const at of after) if (!since || at < since) since = at;
-    const its = t.titled ? undefined : near.get(t.id);
-    return { ...t, ...hasOf(t), ...card(t), untitled: !t.titled, ...(staleAskTitle(t) ? { retitle: true } : {}), ...(its ? { near: its } : {}), ...(besideOnly.has(t.id) ? { besideOnly: true } : {}), wrote: after.length > 0 && !besideOnly.has(t.id), upTo: upTo(t), hisAt };
-  });
-  const his = since
-    ? file.threads.flatMap((t) => t.messages.filter((m) => m.at > since).map((m) => ({ threadId: t.id, text: m.text, at: m.at })))
-      .sort((a, b) => b.at.localeCompare(a.at)).slice(0, HIS_SHOWN_MAX).map(({ threadId, text }) => ({ threadId, text }))
-    : [];
-  return { listed, his };
-}
-
-/** What the status question adds for `task`: '' and no refs for a task it does not ask. Never throws. */
-export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'threads_on'>, langName?: string): Promise<{ block: string; refs: ThreadRefs }> {
-  if (!asksThreads(task)) return { block: '', refs: new Map() };
-  try {
-    const { readThreads } = await import('../org/threads-store.js');
-    // A thread waiting on him (needs) is his to move, by his answer or the task's own thread_update:
-    // no line is asked for it, so none can take it out of his sight (review round 1). It is listed
-    // only for a message of his joined there by timing, which only this check shows on his card
-    // (the threads inspection, item 6: five of his words on a decision card were off it for 13 hours);
-    // a line for it writes nothing (patchForLine).
-    const file = await readThreads(task.id);
-    const asked = (t: OrgThread) => openNotWaiting(t) || (t.state === 'needs' && !t.closed && !t.movedTo && !!joinedToAsk(t));
-    const sorted = sortedThreads(file.threads);
-    const open = sorted.filter(asked);
-    // An untitled thread's possible subjects come with it, a decision waiting on him too (no line is
-    // asked for it), listed only right after it (review 2026-11-24: never for a rank of its own).
-    const near = threadsKeptNow() ? nearAll(file, open, Date.now()) : new Map<string, string[]>();
-    const beside = new Set([...near.values()].flat());
-    for (const t of open) beside.delete(t.id);
-    const { listed, his } = listForQuestion(file, [...open, ...sorted.filter((t) => beside.has(t.id))], near, beside);
-    // Listed by need first, so the 12 the question names are the ones that need a line (status-thread-pick.ts).
-    const marked = markAsks(listed, linesThatAsked(task.id));
-    const out = threadQuestionBlock(byNeed(marked, Date.now(), lastListed(task.id)), langName, { org: !!task.org_role, his });
-    noteListed(task.id, [...out.refs.values()].map((r) => r.id));
-    return out;
-  } catch {
-    return { block: '', refs: new Map() };
-  }
 }
 
 const LINE_RE = markerRe('FOR_USER_THREAD(_NEW)?', 'gm');
@@ -505,9 +456,10 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
 /**
  * Write the report's thread lines to `taskId`'s threads, by the task, and put the ask the stored
  * report makes (`asks`) on its thread in the same write (org/thread-report-ask.ts). Never throws;
- * returns the threads changed.
+ * returns the threads changed. `from`: the lines came off a reply's card lines (org/reply-card.ts),
+ * which the log then says, so a write is never read as the status question's.
  */
-export async function applyThreadLines(taskId: string, report: Pick<StatusReport, ThreadReportKey>, asks?: StatusReport | null): Promise<string[]> {
+export async function applyThreadLines(taskId: string, report: Pick<StatusReport, ThreadReportKey>, asks?: StatusReport | null, from?: 'reply card lines'): Promise<string[]> {
   // One subject is one thread (org/thread-same-subject.ts): a new subject whose title repeats an open
   // thread of the task is that thread's line; one of another task's opens nothing (that task keeps it).
   const sorted = report.threads_new?.length ? await newSubjectsOnly(taskId, report.threads_new) : null;
@@ -549,7 +501,10 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
     const did = steps.done();
     if (did.opened.length) log.session.info('status question: joined messages split into threads of their own', { taskId, opened: did.opened });
     if (did.merged.length || did.held.length) log.session.info('status question: repeated titles held or merged', { taskId, merged: did.merged, held: did.held });
-    if (changed.length) log.session.info('status question: threads kept current', { taskId, changed });
+    // An answer with no thread line still places the task's ask on a thread: said as that, so the
+    // log never reads as a thread line written (2026-11-25, a live check read it so).
+    const onlyAsk = !lines.length && !opened.length && !marked && !joins && !checks;
+    if (changed.length) log.session.info(from ? 'reply card lines: threads kept current' : onlyAsk ? 'status question: the ask\'s place on a thread moved, no thread line written' : 'status question: threads kept current', { taskId, changed, ...(from ? {} : { lines: lines.length }) });
     if (held.length) log.session.info('status question: lines left out on threads whose result he acknowledged', { taskId, held });
     noteLineAsks(taskId, asked, written);
     if (asked.length) log.session.info('status question: lines that asked the user to decide, not written', { taskId, asked });

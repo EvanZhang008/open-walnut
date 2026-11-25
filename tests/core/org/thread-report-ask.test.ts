@@ -16,7 +16,9 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-thread-report-ask'))
 
 import { setOneCard } from '../../../src/core/org/one-card.js'
-import { askThreadFor, placeAsk, reportAskOf, taskAskNow, withHeldAsk } from '../../../src/core/org/thread-report-ask.js'
+import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
+import { askedOnThreads, askThreadFor, needsThreadOf, placeAsk, reportAskOf, taskAskNow, withHeldAsk, withoutOwnAsk } from '../../../src/core/org/thread-report-ask.js'
+import { decisionsUpPart } from '../../../src/core/sessions/status-thread-asked.js'
 import { readThreadLines, threadQuestionBlock, settleStateFromThreads, planThreadWrites } from '../../../src/core/sessions/status-threads.js'
 import { readStatusReport } from '../../../src/core/session-hooks/builtins.js'
 import { threadOverdue } from '../../../src/core/org/thread-view.js'
@@ -46,7 +48,7 @@ function asking(id: string | null, ask = 'Pick the seed tray size', over: Partia
 
 // The held ask is the one-card experiment's (threads_one_card): on for this file, off in its own case.
 beforeEach(() => setOneCard(true))
-afterEach(() => setOneCard(false))
+afterEach(() => { setOneCard(false); setReplyTag(false) })
 
 describe('with the one-card setting off (threads_one_card)', () => {
   it('a placed ask is kept but never read: the thread reads as stored, and the question asks for no thread', () => {
@@ -293,5 +295,64 @@ describe('the case: a thread reading Done while its task waits on him', () => {
     // His answer: the turn runs, the status asks no more, the thread reads what its lines say.
     const after = withHeldAsk({ ...task, user_status: { state: 'working' } }, placed.threads)
     expect(after[0].state).toBe('answered')
+  })
+})
+
+// 2026-11-25: a card line put a decision on a thread (stored needs), the status answer named the
+// same decision as the task's ask, and the place rule put it on the other open thread.
+describe('a decision a thread already carries in needs is that thread\'s (threads_reply_tag)', () => {
+  const ASK = 'Raised bed or planting straight in the ground for the tomatoes?'
+  const needs = thread('th-aaaaaa01', { state: 'needs', ask: ASK, reply: 'Pick one; the raised bed warms sooner.', options: [{ label: 'Raised bed', recommended: true }, { label: 'In the ground' }] })
+  const other = thread('th-aaaaaa02', { title: 'Compost heap', messages: [{ id: 'tm-aaaaaa02', at: T(-5), text: 'When do I start it?', via: 'chat' }] })
+  const reworded = { id: 'ask-aaaa01', ask: 'Pick where the tomatoes go: in a raised bed, or planted straight in the ground?' }
+
+  it('off: the ask is placed on the other open thread, as today', () => {
+    expect(needsThreadOf([needs, other], reworded.ask)).toBeNull()
+    expect(placeAsk(file(needs, other), reworded, T(10)).threads.find((t) => t.reportAsk)?.id).toBe('th-aaaaaa02')
+    expect(askedOnThreads({ threads_on: true }, [needs, other])).toEqual([])
+  })
+
+  it('on: the same question in other words finds the thread, and no place is made beside it', () => {
+    setReplyTag(true)
+    expect(needsThreadOf([needs, other], reworded.ask)?.id).toBe('th-aaaaaa01')
+    const f = file(needs, other)
+    expect(placeAsk(f, reworded, T(10))).toBe(f)
+    // A place an earlier answer made for it goes.
+    const placed = file(needs, { ...other, reportAsk: { id: 'ask-aaaa01', at: T(8) } })
+    expect(placeAsk(placed, reworded, T(10)).threads.some((t) => t.reportAsk)).toBe(false)
+  })
+
+  it('on: another decision is still placed by the rule (another target, another number, a "not")', () => {
+    setReplyTag(true)
+    for (const ask of ['Order 40 or 60 bags of soil for the compost heap?', 'Raised bed or planting straight in the ground for the beans?', 'Do not use a raised bed for the tomatoes?']) {
+      expect(needsThreadOf([needs, other], ask), ask).toBeNull()
+      expect(placeAsk(file(needs, other), { id: 'ask-bbbb02', ask }, T(10)).threads.find((t) => t.reportAsk)?.id, ask).toBe('th-aaaaaa02')
+    }
+  })
+
+  it('on: only an open thread that waits on him for its own decision counts', () => {
+    setReplyTag(true)
+    expect(needsThreadOf([{ ...needs, state: 'answered' }], ASK)).toBeNull()
+    expect(needsThreadOf([{ ...needs, closed: { how: 'acked', at: T(2), by: 'human' } }], ASK)).toBeNull()
+    expect(needsThreadOf([{ ...needs, askOwner: { task: 'task-b', at: T(2), by: 'task:task-a' } }], ASK)).toBeNull()
+    // With no ask of its own, its summary's first sentence is what it asks.
+    expect(needsThreadOf([{ ...needs, ask: undefined, reply: `${ASK} I recommend the raised bed.` }], ASK)?.id).toBe('th-aaaaaa01')
+  })
+
+  it('the report without its ask keeps its state and words, and every field of the ask goes', () => {
+    const report: StatusReport = { state: 'needs', at: T(10), now: 'The choice is laid out.', next: 'He picks.', ask: ASK, ask_kind: 'single', ask_options: [{ label: 'Raised bed' }, { label: 'In the ground' }], ask_own: { kind: 'spending', why: 'it costs twice the budget' }, ask_id: 'ask-aaaa01', ask_rev: 1, ask_new: 'a new price', ask_said: true, ask_since: T(5), needs_since: T(5) }
+    expect(withoutOwnAsk(report)).toEqual({ state: 'needs', at: T(10), now: 'The choice is laid out.', next: 'He picks.', needs_since: T(5) })
+  })
+
+  it('the question names the decisions that are up, for a task only, at most three, each cut', () => {
+    setReplyTag(true)
+    expect(askedOnThreads({ threads_on: true }, [needs, other])).toEqual([ASK])
+    expect(askedOnThreads({ threads_on: true, org_role: 'lead' }, [needs, other])).toEqual([])
+    expect(decisionsUpPart([])).toBe('')
+    expect(decisionsUpPart([ASK])).toBe(`\nYour threads' cards already ask him: "${ASK}". A decision up there stays out of FOR_USER_ASK, which is for another decision only; FOR_USER_STATE is needs-you while one waits on him.`)
+    const many = decisionsUpPart(['One?', 'Two?', 'Three?', 'Four?', 'x'.repeat(400)])
+    expect(many).toContain('"One?"; "Two?"; "Three?".')
+    expect(many).not.toContain('Four?')
+    expect(Buffer.byteLength(decisionsUpPart(['x'.repeat(400)]))).toBeLessThanOrEqual(175 + 160 + 2)
   })
 })

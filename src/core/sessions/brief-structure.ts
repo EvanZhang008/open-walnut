@@ -16,6 +16,7 @@
  *     written bare becomes a list item.
  */
 import { ABOUT_TAG_NAME } from '../org/message-about.js';
+import { cardLinesOf } from '../../lib/card-tag.js';
 import { ANSWER_TO_READ, BRIEF_SECTIONS, MARKED_ASK, NEEDS_CATEGORY_LABELS, RESULT_TO_READ, TURN_TO_READ, briefTeam, fallbackUserState, lastWordsOfStatus, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type NeedsCategory, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
 import { sameAreaTasks } from '../router/same-area.js';
@@ -352,7 +353,9 @@ export function structureBrief(
   const aboutLine = new RegExp(`^\\s{0,3}<${ABOUT_TAG_NAME}\\b[^>]*/>\\s*$`);
   let offset = 0;
   const rawLines = text.split('\n').map((l) => { const at = offset; offset += l.length + 1; return { l, at }; });
-  for (const { l: raw, at: rawAt } of rawLines.filter(({ l }) => !aboutLine.test(l))) {
+  // Nor is a thread's card line (lib/card-tag.ts); one shown in a code block is the Brief's own text.
+  const card = cardLinesOf(rawLines.map(({ l }) => l));
+  for (const { l: raw, at: rawAt } of rawLines.filter(({ l }, i) => !aboutLine.test(l) && !card[i])) {
     const kept = raw.trimEnd();
     let line: Ln = { text: kept, pieces: kept ? [{ text: kept, src: rawAt }] : [] };
     // Walnut's own count of the asks past the cap is made again below, from the live state.

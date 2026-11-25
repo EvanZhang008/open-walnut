@@ -375,6 +375,16 @@ export interface SearchIndex {
    *  False when there is no embedder, it is suspended, or it did not answer
    *  within `deadlineMs` (default 60 s). */
   warmQueryWorker(deadlineMs?: number): Promise<boolean>;
+  /** The semantic lane's model for a caller's own short texts, not docs of the index, on its
+   *  workers ONLY while they already run: neither call ever starts one (a model copy is about
+   *  2 GB). `running()` says which lane runs now; `query` answers a vector within `deadlineMs`
+   *  (null past it, or with no query worker running), `passages` rejects with no passage worker
+   *  running. Same model, same vector space as the index's own vectors. */
+  embedShortTexts: {
+    running(): { query: boolean; passage: boolean };
+    query(text: string, deadlineMs: number): Promise<Int8Array | null>;
+    passages(texts: string[]): Promise<Int8Array[]>;
+  };
   /** Index-to-index copy (replica.ts): the source's states and exports, the
    *  copy's import and stamps. Writes go through the same change listener. */
   readonly replica: {
@@ -998,6 +1008,19 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       // worker, so a periodic warm restarts the idle clock every time.
       const reply = await embedder.embedQuery(EMBED_HEALTH_PROBE_TEXT, deadlineMs);
       return reply?.source === 'worker' || reply?.source === 'cache';
+    },
+    embedShortTexts: {
+      running: () => (embedder && !closed && !embedderStopped ? embedder.running() : { query: false, passage: false }),
+      // The check and the submit run in one tick (the embed calls submit before their first
+      // await), so a worker reaped in between cannot be forked again here.
+      query: async (text, deadlineMs) => {
+        if (!embedder || closed || embedderStopped || !embedder.running().query) return null;
+        return (await embedder.embedQuery(text, deadlineMs))?.vec ?? null;
+      },
+      passages: async (texts) => {
+        if (!embedder || closed || embedderStopped || !embedder.running().passage) throw new Error('no passage worker running');
+        return embedder.embedPassages(texts);
+      },
     },
     replica: {
       states: (afterId, limit) => replicaStates(db, afterId, limit),
