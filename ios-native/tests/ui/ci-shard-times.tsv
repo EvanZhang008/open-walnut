@@ -38,3 +38,7 @@ ThreadPushUITests	103.7	2
 ViewMemoryUITests	171.0	2
 VoiceDictationUITests	15.9	6
 VoiceModeUITests	51.4	1
+# HiddenLinesUITests: not measured on CI yet; 9.1 to 12 s on the fleet simulator, 15 s until ci-shard.py record replaces it.
+HiddenLinesUITests	15.0	1
+# HiddenLinesUITests: not measured on CI yet; 9.1 and 9.5 s on the fleet simulator (2026-11-25), until ci-shard.py record replaces it.
+HiddenLinesUITests	9.5	1
