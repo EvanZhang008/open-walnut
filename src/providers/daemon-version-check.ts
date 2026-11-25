@@ -329,6 +329,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/transcript-chain-prefilter.ts',
   'src/core/bash-file-ops.ts',
   'src/providers/daemon-instance-lock.ts',
+  'src/providers/daemon-lost-files.ts',
   'src/providers/daemon-command-drain.ts',
   'src/providers/demo-daemon-quiesce-core.ts',
   'src/providers/daemon-restart-mark.ts',
