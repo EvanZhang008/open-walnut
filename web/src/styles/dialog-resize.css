@@ -1,0 +1,36 @@
+/* The resize edges of the topmost dialog (components/common/DialogResizeEdges.tsx). Each is a thin
+   strip fixed to the window along one edge or corner of the dialog panel: 6 px out in the scrim
+   and 3 px over the panel's own edge, so it never covers a scroll bar inside. The pointer turns
+   into a resize arrow on it, and a thin line along the panel's edge shows it while pointed at or
+   dragged. In the modal layer, appended after its dialog (so above it and its scrim), and under a
+   menu opened from the dialog afterwards. */
+.dialog-resize-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  pointer-events: none;
+}
+.dialog-resize-edge {
+  position: fixed;
+  pointer-events: auto;
+  touch-action: none;
+}
+.dialog-resize-edge--n, .dialog-resize-edge--s { cursor: ns-resize; }
+.dialog-resize-edge--e, .dialog-resize-edge--w { cursor: ew-resize; }
+.dialog-resize-edge--ne, .dialog-resize-edge--sw { cursor: nesw-resize; }
+.dialog-resize-edge--nw, .dialog-resize-edge--se { cursor: nwse-resize; }
+.dialog-resize-edge::after {
+  content: '';
+  position: absolute;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+/* The line sits on the panel's edge: 3 px in from the strip's inner side. */
+.dialog-resize-edge--e::after { left: 2px; top: 12px; bottom: 12px; width: 2px; }
+.dialog-resize-edge--w::after { right: 2px; top: 12px; bottom: 12px; width: 2px; }
+.dialog-resize-edge--s::after { top: 2px; left: 12px; right: 12px; height: 2px; }
+.dialog-resize-edge--n::after { bottom: 2px; left: 12px; right: 12px; height: 2px; }
+.dialog-resize-edge:hover::after,
+.dialog-resize-edge.is-dragging::after { opacity: 0.6; }

@@ -66,6 +66,7 @@ export const NOT_OVERLAY: Record<string, string> = {
   'components/common/FileContentView.tsx': 'the full-screen file view (the backdrop the user chose, 2026-11-02), like useFullscreen',
   'components/common/NotificationPanel.tsx': 'the inbox panel docked to the sidebar, full height, not a popover',
   'components/sessions/PromptCards.tsx': 'the phone plan layer (phone-layout.css owns its look)',
+  'components/common/DialogResizeEdges.tsx': 'the resize strips on the edges of the open dialog (a drag handle of that dialog, not a surface)',
   'components/tasks/TodoPanel.tsx': 'the unpin drop zone shown while a pinned row is dragged (a drag target)',
 };
 

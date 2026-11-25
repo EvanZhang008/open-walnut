@@ -18,6 +18,7 @@ import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { StaleBuildPill } from './components/common/StaleBuildPill';
+import { DialogResizeEdges } from './components/common/DialogResizeEdges';
 import { PageFind } from './components/common/PageFind';
 import { useHidesHighlights } from './hooks/useHidesHighlights';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
@@ -173,7 +174,7 @@ export function App() {
 
   // The Mac app's floating quick bar panel (desktop/QuickBarPanel.swift): the bar alone, no app around it.
   if (location.pathname === '/quickbar') return <QuickBarPanelPage />;
-  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /><DialogResizeEdges /></>;
 
   const isHome = isHomePath(location.pathname);
 
@@ -193,6 +194,7 @@ export function App() {
       <HostConnectCard />
       <FirstRunHost />
       <TopicDialogsHost />
+      <DialogResizeEdges />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <RouteShownContext.Provider value={isHome}>
           <StableMainPage visible={isHome} navigateRef={navigateRef} />

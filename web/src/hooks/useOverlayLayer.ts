@@ -195,6 +195,9 @@ function isPopoverTrigger(target: EventTarget | null): boolean {
 function onPointerDownCapture(e: PointerEvent): void {
   // A dialog opened over the popover owns the pointer too: pressing in it never closes the popover under it.
   if (stack.length === 0 || dialogAboveTop()) return;
+  // A press on a dialog's resize edge (DialogResizeEdges.tsx) belongs to that dialog: it is never an
+  // outside press, for the dialog or for a popover open in it.
+  if ((e.target as Element | null)?.closest?.('[data-dialog-resize-edge]')) return;
   const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
   let swallow = false;
   for (let i = stack.length - 1; i >= 0; i -= 1) {

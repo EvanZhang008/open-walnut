@@ -25,6 +25,7 @@ import { SessionRawViewHost } from '@/components/sessions/SessionRawView';
 import { LinkCaptureHost } from '@/plugins/LinkCaptureHost';
 import { PluginDialogHost } from '@/plugins/PluginDialogHost';
 import { PasswordsUnlockHost } from '@/plugins/PasswordsUnlockHost';
+import { DialogResizeEdges } from '@/components/common/DialogResizeEdges';
 import { isPopoutPath } from './openPopout';
 import { PopoutRoot } from './PopoutRoot';
 
@@ -63,5 +64,5 @@ function PopoutApp() {
   useHidesHighlights(true);
   // The hosts App mounts for a pop-out, all of them: a plugin's dialog opened here (a
   // walnut.ui.openDialog from its events) had nowhere to draw (tests/web/popout-light-entry-guard.test.ts).
-  return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
+  return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /><DialogResizeEdges /></>;
 }

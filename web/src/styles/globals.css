@@ -19661,14 +19661,19 @@ a.file-link:hover {
   width: 90vw;
   max-width: 900px;
   height: 80vh;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-/* Explorer variant — wider to fit tree + preview side by side */
+/* Explorer variant: the file tree and its preview side by side. It opens big (the user,
+   2026-11-25: "this default should be bigger"), nearly the whole window up to a wide screen's
+   1760 px; its edges drag it to any size (DialogResizeEdges.tsx), kept for next time. */
 .file-viewer-panel-explorer {
-  max-width: 1200px;
+  width: 94vw;
+  max-width: 1760px;
+  height: 90vh;
 }
 
 /* Body hosts the SessionFileExplorer which manages its own scrolling panes */
