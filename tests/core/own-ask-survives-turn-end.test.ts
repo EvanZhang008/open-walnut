@@ -141,7 +141,10 @@ describe('every stored status_report goes through the turn-end gate or is the ex
     }
     walk(path.join(ROOT, 'src'))
     // report-set.ts is the explicit write; status-question.ts stores every turn-end report through keepOwnAskWrite.
-    expect(files.sort()).toEqual(['src/core/sessions/report-set.ts', 'src/core/sessions/status-question.ts'])
+    // thread-report-ask.ts stores no report of a turn: it only takes an ask off the stored one once the
+    // task's own needs thread asks that decision (the ask lives on as the thread), through withoutOwnAsk.
+    expect(files.sort()).toEqual(['src/core/org/thread-report-ask.ts', 'src/core/sessions/report-set.ts', 'src/core/sessions/status-question.ts'])
+    expect(fss.readFileSync(path.join(ROOT, 'src/core/org/thread-report-ask.ts'), 'utf-8')).toMatch(/status_report:\s*stampSaidDecision\(withoutOwnAsk\(/)
     expect(fss.readFileSync(path.join(ROOT, 'src/core/sessions/status-question.ts'), 'utf-8')).toMatch(/keepOwnAskWrite\(report, prev, sessionId\)/)
   })
 })
