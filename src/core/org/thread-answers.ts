@@ -55,6 +55,17 @@ function said(text: string): boolean {
   return hasWordsBeyondControl(stripAboutTag(text));
 }
 
+/** A row of the node's own words: an assistant row that is no tool call and says something. Pure. */
+export function isReplyRow(row: AnswerRow): boolean {
+  return row.role === 'assistant' && !row.kind && said(row.text);
+}
+
+/** The node's words in `row` as an answer kept on his message (its tasks line read off as `about`). Pure. */
+export function answerOfRow(row: AnswerRow): ThreadAnswer {
+  const about = row.about?.length ? row.about : readAboutTag(row.text).ids;
+  return { text: row.text, at: row.timestamp, ...(about.length ? { about: [...about] } : {}) };
+}
+
 /** His words in a chat row: Walnut's notices batched in front of them taken off. */
 function rowWords(row: AnswerRow, inChat: boolean): ReturnType<typeof userWordsOf> {
   let text = row.textWithoutContext ?? row.text;
@@ -134,7 +145,7 @@ export function answersFromRows(
  */
 function answerAfter(rows: readonly AnswerRow[], i: number, wholeUntil: string | null): ThreadAnswer | null {
   let j = i + 1;
-  while (j < rows.length && !(rows[j].role === 'assistant' && !rows[j].kind && said(rows[j].text))) j++;
+  while (j < rows.length && !isReplyRow(rows[j])) j++;
   if (j >= rows.length) return null;
   let last = j;
   let k = j + 1;
@@ -146,7 +157,7 @@ function answerAfter(rows: readonly AnswerRow[], i: number, wholeUntil: string |
       if (before.role === 'assistant' && before.kind !== 'tool') { closed = true; break; }
       continue;
     }
-    if (!row.kind && said(row.text)) last = k;
+    if (isReplyRow(row)) last = k;
   }
   // Not closed by a turn's end: whole only when every row of it is older than the chat's finish,
   // and it ends on words (a turn ends on its words; a tool call last means more is coming).
@@ -155,9 +166,7 @@ function answerAfter(rows: readonly AnswerRow[], i: number, wholeUntil: string |
     while (end > j && rows[end].role !== 'assistant') end--;
     if (!wholeUntil || rows[k - 1].timestamp > wholeUntil || rows[end].kind === 'tool') return null;
   }
-  const row = rows[last];
-  const about = row.about?.length ? row.about : readAboutTag(row.text).ids;
-  return { text: row.text, at: row.timestamp, ...(about.length ? { about: [...about] } : {}) };
+  return answerOfRow(rows[last]);
 }
 
 /**
@@ -354,18 +363,27 @@ export async function nodeSessionId(taskId: string): Promise<string | undefined>
   return live[live.length - 1]?.claudeSessionId;
 }
 
+/**
+ * The session a transcript read now is the words of: its id, and its host as its record says at this
+ * read (no record: host not stored, a click reads the record then, or says it is gone). `record`:
+ * the record as the caller already read it.
+ */
+export async function transcriptSource(sid: string, record?: { host?: string } | null): Promise<ThreadTextSource> {
+  const rec = record !== undefined ? record : await (await import('../session-tracker.js')).getSessionByClaudeId(sid).catch(() => null);
+  const { normalizeHost } = await import('../sessions/caller-placement.js');
+  return { sid, ...(rec ? { host: normalizeHost(rec.host) || '__local__' } : {}) };
+}
+
 /** The answers one session's chat holds for these messages. */
 async function answersIn(sid: string, messages: readonly ThreadMessage[], endedAt: string | null): Promise<Map<string, ThreadAnswer>> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
-  const { normalizeHost } = await import('../sessions/caller-placement.js');
   const runs = async () => (await getSessionByClaudeId(sid).catch(() => null))?.process_status === 'running';
   // Finished up to its turn's end, or up to now when it runs no turn before and after the read.
   const startedAt = new Date().toISOString();
   const before = await getSessionByClaudeId(sid).catch(() => null);
   const idleBefore = before?.process_status !== 'running';
-  // The answers are this transcript's words: its session, and its host as its record says at this
-  // read (no record: host not stored, a click reads the record then, or says it is gone).
-  const source: ThreadTextSource = { sid, ...(before ? { host: normalizeHost(before.host) || '__local__' } : {}) };
+  // The answers are this transcript's words (transcriptSource).
+  const source = await transcriptSource(sid, before);
   const earliest = messages.reduce((a, m) => (m.at < a ? m.at : a), messages[0].at);
   const rows = await rowsSince(sid, new Date(Date.parse(earliest) - ROW_BEFORE_MS).toISOString());
   if (!rows.length) return new Map();

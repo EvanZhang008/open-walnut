@@ -544,6 +544,28 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   `threads_one_card`). Guard: `tests/core/org/card-answer-thread.test.ts` lists every file that
   builds the frame (the web's and the phone's) and fails on a new one;
   `tests/e2e/letter-thread-follow-up.test.ts` sends one on a real server.
+- **A reply that answers it marks it answered** (`src/core/org/thread-answered-check.ts`; 2026-11-25,
+  the user's lead: "the answer arrived in the chat, the thread still read as working": his question's
+  turn ended on an interim reply, kept under his message, and the real answer came 17 minutes later
+  in a turn a teammate's result started, with no line for the thread). After every stored turn-end
+  status answer (`status-question.ts` `saveStatusAnswer`, the node's own lines first; a quiet turn
+  asks no status and runs nothing), the turn's last words are read from the node's chat, and each
+  thread his question opened that still reads new or working (not needs, waiting, closed, moved or
+  snoozed; nothing of his on it after the reply) is judged by one fast-model call: does this reply
+  give the answer, or only promise, report progress or speak of something else? Only a clear
+  ANSWERED writes, by Walnut in one locked write: the reply replaces the interim answer under his
+  message, the thread reads answered (his Done), and the summary written while it read working is
+  cleared, so the card's line is Walnut's stand-in from the answer itself (`thread-view.ts`
+  `cardView`). Bounds: 3 threads a turn (newest question first), one judgement per thread and reply,
+  6 in a thread's life (in memory), the reply cut to 3,000 characters (a call reads about 1.5 KB
+  typically, at most about 5,800 characters), none for an agent acknowledgement or a reply under 40
+  characters. One log line per verdict (`org threads: answered check`). The model can be wrong both
+  ways: a real answer judged NOT_YET stays working until the node's line or the 30-minute overdue
+  reminder moves it (as before); an interim reply judged ANSWERED shows in his Done with that reply
+  as the answer, until the node's thread_update moves it (a line keeps an answer he has not read in
+  his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
+  `tests/core/org/thread-answered-check-guard.test.ts` (every caller of `applyStatusAnswer(`, and the
+  save reaching the check), `tests/e2e/thread-answered-check.test.ts`.
 - Off: everything as before. Guards: `tests/core/org/thread-each-question.test.ts`,
   `tests/core/org/thread-each-question-guard.test.ts` (every call of `mergeThreads(` and
   `splitMessageInto(`, and every join kind of `fileMessage`, listed with its test),

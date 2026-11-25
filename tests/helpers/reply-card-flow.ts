@@ -138,8 +138,20 @@ export async function cliAnswers(rows: QueuedMessage[]): Promise<void> {
  * the result with the turn's last words. Answers when it ended.
  */
 export async function turnEnds(rows: QueuedMessage[], reply: string): Promise<number> {
-  await writeChat([...rows.map((r) => ({ type: 'user' as const, text: r.message })), { type: 'assistant' as const, text: reply }])
-  await cliAnswers(rows)
+  return turnEndsOn(rows.map((r) => r.message), reply, () => cliAnswers(rows))
+}
+
+/**
+ * A turn no message of his started ends: a teammate's notice woke the node (`notice`, a Walnut
+ * envelope as it reaches the model), and the turn ends on `reply`. Answers when it ended.
+ */
+export async function noticeTurnEnds(notice: string, reply: string): Promise<number> {
+  return turnEndsOn([notice], reply)
+}
+
+async function turnEndsOn(lines: string[], reply: string, answered?: () => Promise<void>): Promise<number> {
+  await writeChat([...lines.map((text) => ({ type: 'user' as const, text })), { type: 'assistant' as const, text: reply }])
+  await answered?.()
   turnGen += 1
   const at = Date.now()
   bus.emit(EventNames.SESSION_RESULT, { sessionId: flow.sid, taskId: flow.taskId, turnGen, result: reply, isError: false, totalCost: 0.01 * turnGen, costDelta: 0.01, duration: 1200 }, ['main-ai', 'session-runner'], { source: 'session-runner' })

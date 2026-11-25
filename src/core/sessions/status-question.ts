@@ -188,6 +188,9 @@ async function saveStatusAnswer(
   // question's wait): read again now that the answer is stored, so the two meet without waiting for
   // the next status answer (org/thread-report-ask.ts askNowOnThread; review 2026-11-25).
   if (taskLike) await (await import('../org/thread-report-ask.js')).askNowOnThread(taskId);
+  // The turn's reply may have answered a question of his whose thread still reads working (a turn
+  // he did not start among them): judged after the lines, never awaited (org/thread-answered-check.ts).
+  if (!opts.midTurn) void import('../org/thread-answered-check.js').then((m) => m.checkTurnAnswers(taskId, sessionId, turnEndedMs)).catch(() => {});
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).

@@ -1662,9 +1662,12 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
 
 /**
  * Walnut read these answers from the node's chat (thread-answers.ts): each lands on its message, by
- * id, wherever the message is now (a merge or split moved it). An answer already kept stays.
+ * id, wherever the message is now (a merge or split moved it). An answer already kept stays, unless
+ * `replace`: the node's later reply that gave the answer to his question takes the place of an
+ * interim one ("I am looking into it"; org/thread-answered-check.ts). A letter note's answer is
+ * never replaced from the chat.
  */
-export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, ThreadAnswer>): { file: ThreadsFile; changed: string[] } {
+export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, ThreadAnswer>, opts: { replace?: boolean } = {}): { file: ThreadsFile; changed: string[] } {
   if (!answers.size) return { file, changed: [] };
   const changed: string[] = [];
   const threads = file.threads.map((t) => {
@@ -1672,7 +1675,8 @@ export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, Threa
     const messages = t.messages.map((m) => {
       const a = answers.get(m.id);
       // A letter note's answer from its letter replaces one an older Walnut took from the chat.
-      if (!a || (m.answer && !(a.from === 'letter' && letterAnswerMissing(m)))) return m;
+      const replaces = !!opts.replace && m.via !== 'letter' && !!m.answer && !(m.answer.at === a?.at && m.answer.text === a?.text);
+      if (!a || (m.answer && !replaces && !(a.from === 'letter' && letterAnswerMissing(m)))) return m;
       hit = true;
       const clipped = a.text.length > THREAD_ANSWER_MAX;
       // Its session is the one Walnut read it from (ThreadAnswer.sid), or none: never the message's own `sid`.

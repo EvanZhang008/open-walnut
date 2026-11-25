@@ -30,7 +30,7 @@ describe('the org\'s fast-model checks share one call', () => {
       .map((f) => path.relative(ORG, f))
     expect(direct.filter((f) => !OWN_CALL[f]), 'call callFastModel from src/core/fast-model-call.ts instead').toEqual([])
   })
-  it('the join check and the thread check use it', () => {
-    for (const f of ['thread-join-check.ts', 'thread-audit.ts']) expect(fs.readFileSync(path.join(ORG, f), 'utf8'), f).toMatch(/fast-model-call\.js/)
+  it('the join check, the thread check and the answered check use it', () => {
+    for (const f of ['thread-join-check.ts', 'thread-audit.ts', 'thread-answered-check.ts']) expect(fs.readFileSync(path.join(ORG, f), 'utf8'), f).toMatch(/fast-model-call\.js/)
   })
 })

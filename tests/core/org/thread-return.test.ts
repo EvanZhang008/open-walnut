@@ -175,7 +175,13 @@ describe('class guard: every way a thread is put before him runs both checks', (
 
   it('only the store (and his own Acknowledge) calls the model\'s open or update; the store runs the one-matter check on both', () => {
     const direct = all.filter(({ f, s }) => f !== 'core/org/threads-model.ts' && /\b(?:openThread|updateThread)\(/.test(s)).map((a) => a.f).sort()
-    expect(direct).toEqual(['core/org/thread-ack.ts', 'core/org/threads-store.ts'])
+    // The answered check (threads_each_question) moves his question's thread from working to answered,
+    // never before him in needs, so neither check has anything to judge there.
+    expect(direct).toEqual(['core/org/thread-ack.ts', 'core/org/thread-answered-check.ts', 'core/org/threads-store.ts'])
+    const answered = all.find((a) => a.f === 'core/org/thread-answered-check.ts')!.s
+    expect(answered.match(/\bupdateThread\(/g)).toHaveLength(1)
+    expect(answered).toMatch(/updateThread\(answered, threadId, \{ state: 'answered',/)
+    expect(answered).not.toMatch(/'needs'|reopen/)
     const store = all.find((a) => a.f === 'core/org/threads-store.ts')!.s
     const body = (name: string) => store.slice(store.indexOf(`export async function ${name}(`), store.indexOf('\nexport ', store.indexOf(`export async function ${name}(`) + 10))
     // Its refusals are a step of their own (a caller may ask them before it writes anything else), run first.

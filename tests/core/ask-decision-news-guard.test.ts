@@ -565,6 +565,7 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/org/thread-ack.ts': 'keeps a thread he acknowledged pending through updateThread and rides a line that he knows it, no ask of the user',
       'src/core/org/thread-answered-notes.ts': 'rides a line telling a lead he answered a thread below, no ask of the user',
       'src/core/org/thread-audit.ts': 'rides the thread check\'s findings (stale or thin cards) to the node that keeps them, no ask of the user',
+      'src/core/org/thread-answered-check.ts': 'moves a thread his question opened from working to answered through updateThread when the node\'s reply answered it, no ask of the user',
       'src/core/sessions/session-request-notify.ts': 'rides a line about a handed-on request, no ask of the user',
       'src/core/sessions/reply-handoff.ts': 'rides a line about a reply that went past it, no ask of the user',
       'src/core/sessions/safeguard-switch.ts': 'rides one line telling the lead its task moved to another model, no ask of the user',

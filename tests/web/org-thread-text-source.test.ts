@@ -152,7 +152,9 @@ describe('guard: the server records each writer from Walnut\'s own record only',
     expect(bodyOf(answers, 'letterAnswerOf')).toMatch(/turnSource\(reply\)/)
     expect(bodyOf(answers, 'letterAnswerOf')).not.toMatch(/\bm\.sid\b/)
     expect(bodyOf(answers, 'answersIn')).toMatch(/answersFromRows\(messages, rows, \{ wholeUntil, source \}\)/)
-    expect(bodyOf(answers, 'answersIn')).toMatch(/const source: ThreadTextSource = \{ sid,/)
+    expect(bodyOf(answers, 'answersIn')).toMatch(/const source = await transcriptSource\(sid, before\)/)
+    // The one source of a transcript read (the answered check uses it too): its session and its record's host.
+    expect(bodyOf(answers, 'transcriptSource')).toMatch(/return \{ sid, \.\.\.\(rec \? \{ host: normalizeHost\(rec\.host\)/)
     expect(answers.match(/from: 'letter'/g) ?? []).toHaveLength(1)
   })
 })
