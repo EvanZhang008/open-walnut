@@ -40,7 +40,7 @@ final class InternalLinesTests: XCTestCase {
     /// list of them, so a widening that drops one fails on both sides.
     func testTheMustShowShapesShowWhole() throws {
         let marked = try cases().filter { $0.mustShow == true }
-        XCTAssertGreaterThanOrEqual(marked.count, 32)
+        XCTAssertGreaterThanOrEqual(marked.count, 45)
         for c in marked {
             XCTAssertEqual(c.shown, c.text, c.label)
             XCTAssertEqual(InternalLines.strip(c.text), c.text, c.label)
@@ -111,7 +111,7 @@ final class InternalLinesTests: XCTestCase {
         let oneLine = "Done: the report is on the board. It names both delays."
         let block = "th-0a1b2c3d4e5f: answered \u{00B7} posted\nth-1b2c3d4e5f60: waiting \u{00B7} in review"
         // "Thread status:", items whose state is said in free words, then one with a known state.
-        let items = "\u{7EBF}\u{7A0B}\u{72B6}\u{6001}\u{FF1A}\n- th-0a1b2c3d4e5f\u{FF08}Fence review\u{FF09}\u{FF1A}\u{7B49}\u{4F60}\u{5BA1}\n"
+        let items = "\u{7EBF}\u{7A0B}\u{72B6}\u{6001}\u{FF1A}\n- th-0a1b2c3d4e5f\u{FF08}Fence review\u{FF09}\u{FF1A}\u{5728}\u{8DD1}\u{6D4B}\u{8BD5}\n"
             + "- th-1b2c3d4e5f60 (Seed list): waits for one approval\n- th-2c3d4e5f6071: answered \u{00B7} posted"
         let shapes: [(String, String)] = [
             (words, words + "\n\n" + block),

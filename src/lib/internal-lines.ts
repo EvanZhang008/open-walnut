@@ -139,12 +139,24 @@ const SENTENCE_END = /(?:[\u3002\uff01\uff1f]+|[.!?]+(?=[)"'\u201d\u300d\uff09*_
 const ENDS_WITH_COLON = /[:\uff1a][*_]*\s*$/u;
 const LEAD_IN = /\u5982\u4e0b|\u4ee5\u4e0b|\u4e0b\u9762|\u4e0b\u5217|as follows|(?<![A-Za-z])below(?![A-Za-z])|the following|\u7ebf\u7a0b|(?<![A-Za-z])threads?(?![A-Za-z])/iu;
 /**
- * Proof a block holds: a URL (to the first CJK character or full-width mark) or an absolute path. A
- * block holding one the reply keeps nowhere else stays (review 2026-11-25: 215 of 541 changed
- * replies lost a link or a path with their block).
+ * Proof a block holds: a URL (to the first CJK character or full-width mark), an absolute path, a
+ * letter's id (lt-..., in a letter: link too), a task ref tag, or the target of a relative link or
+ * image. A block holding one the reply keeps nowhere else stays (review 2026-11-25: 215 of 541
+ * changed replies lost a link or a path with their block).
  */
-const EVIDENCE = /https?:\/\/[^\s<>"'`()\[\]\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+|(?<![A-Za-z0-9._~/-])~?\/[A-Za-z0-9._@-]+(?:\/[A-Za-z0-9._@-]+)+/gu;
+const EVIDENCE = /https?:\/\/[^\s<>"'`()\[\]\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+|(?<![A-Za-z0-9._~/-])~?\/[A-Za-z0-9._@-]+(?:\/[A-Za-z0-9._@-]+)+|(?<![A-Za-z0-9_-])lt-[0-9a-z]{6,}|<task-ref[^>]*>|(?<=\]\()(?![A-Za-z][A-Za-z0-9+.-]*:)[^)\s]+(?=\))/gu;
 const EVIDENCE_TAIL = /[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f]+$/u;
+/**
+ * A line that waits on him: its state is needs or new, or its words ask him ("waits for your review",
+ * "your call", a question; the Chinese ones, escaped: wait for you to decide, review, pick, nod, reply;
+ * needs you to; please answer me; please decide), once the words saying he is not needed are taken
+ * out. A block with one stays (review 2026-11-25: 39 real replies hid a decision of his, some on
+ * threads in waiting, which his Threads view does not show).
+ */
+const ASKING_STATE = /^(?:needs|new)$/iu;
+const TAG_STATE = /(?<![A-Za-z0-9_-])state=["']?([A-Za-z]+)/u;
+const ASKS_HIM = /\u7b49\u4f60(?:\u51b3\u5b9a|\u5b9a|\u5ba1|\u9009|\u70b9\u5934|\u56de|\u6279|\u786e\u8ba4|\u770b)|\u8981\u4f60(?:\u70b9\u5934|\u51b3\u5b9a|\u5b9a|\u786e\u8ba4|\u5ba1|\u9009|\u6279\u51c6|\u56de)|\u9700\u8981\u4f60(?:\u56de|\u51b3\u5b9a|\u786e\u8ba4|\u5ba1|\u9009|\u6279\u51c6|\u70b9\u5934|\u770b|\u5904\u7406)|\u8bf7\u56de\u6211|\u8bf7\u4f60(?:\u5b9a|\u9009|\u786e\u8ba4|\u51b3\u5b9a|\u56de)|\u4f60\u6765\u5b9a|\u7531\u4f60(?:\u5b9a|\u51b3\u5b9a)|(?<![A-Za-z])(?:your call|up to you|wait(?:s|ing)? (?:on|for) your?|needs? (?:you|your (?:decision|review|approval|answer|ok|yes|input))|for your (?:review|approval|decision|answer|ok|yes))(?![A-Za-z])|[?\uff1f]/iu;
+const NOT_ASKING = /\u4e0d\u9700\u8981\u4f60|\u4e0d\u7528\u4f60|\u65e0\u9700\u4f60|\u4e0d\u7b49\u4f60|no need for you|nothing (?:for|from) you|not waiting (?:on|for) you/giu;
 
 /**
  * How many sentences the words before a thread block hold: two lines or more count as two; in one
@@ -167,15 +179,31 @@ export function sentenceCount(lines: readonly string[]): number {
  * thread. Never a table row, a quote, or prose that names a thread. Pure.
  */
 export function isThreadStatusLine(line: string): boolean {
+  return threadStateOf(line) !== null;
+}
+
+/** A thread's line's state word (a tag's state attribute, '' for a tag without one); null for no thread line. */
+function threadStateOf(line: string): string | null {
   const m = THREAD_ID.exec(line);
-  if (!m || TABLE_OR_QUOTE.test(line)) return false;
-  if (THREAD_TAG_LINE.test(line)) return true;
+  if (!m || TABLE_OR_QUOTE.test(line)) return null;
+  if (THREAD_TAG_LINE.test(line)) return TAG_STATE.exec(line)?.[1] ?? '';
   const before = line.slice(0, m.index);
   const rest = line.slice(m.index + m[0].length);
-  if (ID_FIRST.test(before)) return THREAD_STATE.test(rest.slice(THREAD_AFTER_ID.exec(rest)?.[0].length ?? 0));
-  const close = TITLE_FIRST.test(before) ? TITLE_ID_CLOSE.exec(rest) : null;
-  return close !== null && THREAD_STATE.test(rest.slice(close[0].length));
+  let after: string;
+  if (ID_FIRST.test(before)) after = rest.slice(THREAD_AFTER_ID.exec(rest)?.[0].length ?? 0);
+  else {
+    const close = TITLE_FIRST.test(before) ? TITLE_ID_CLOSE.exec(rest) : null;
+    if (!close) return null;
+    after = rest.slice(close[0].length);
+  }
+  return THREAD_STATE.exec(after)?.[0] ?? null;
 }
+
+/** A line that waits on him (ASKS_HIM): its words, without the proof in them (a "?" of a URL). */
+const asksHim = (line: string) => {
+  const state = threadStateOf(line);
+  return (state !== null && ASKING_STATE.test(state)) || ASKS_HIM.test(line.replace(EVIDENCE, ' ').replace(NOT_ASKING, ' '));
+};
 
 /** While a reply streams in, the start of a thread's line: a list mark, bold, then its id as far as it has come. */
 const THREAD_ID_SO_FAR = /^\s{0,3}(?:(?:[-*+]|[0-9]+[.)])(?:\s+|$))?\*{0,2}(?:t(?:h(?:-[0-9a-f]{0,31})?)?)?$/u;
@@ -246,8 +274,9 @@ const evidenceIn = (lines: readonly string[]) => lines.flatMap((l) => [...l.matc
  * words keep new replies clean, so this only cleans what older habits still write, and it never
  * hides what he may need. So the block also stays when it is the whole reply, when it follows one
  * sentence outside a tag a session made up, or a lead-in ("Here is where they stand:", "as
- * follows", a sentence naming the threads), when it holds a URL or a path the reply keeps nowhere
- * else, and when it is the tail of a longer list. Sentences, not lines: a real answer is often one
+ * follows", a sentence naming the threads), when it holds a URL, a path, a letter or a task the
+ * reply keeps nowhere else, when a line of it waits on him (a decision, a question, news he must
+ * answer), and when it is the tail of a longer list. Sentences, not lines: a real answer is often one
  * line of several. `streaming`: a last line that is only the start of a field name, a thread's line,
  * its heading or a tag around them is held back, so it never flashes up while it is being written.
  */
@@ -387,10 +416,11 @@ export function stripInternalLines(text: string, streaming = false): string {
     // The tail of a longer list: the list stays whole.
     const up = above(start);
     const tailOfList = up >= 0 && !code[up] && LIST_ITEM.test(bare(out[start])) && CONTINUATION.test(bare(out[up]));
-    // Proof in it the reply keeps nowhere else.
-    const losesProof = evidenceIn(out.slice(start).map(bare)).some((e) => !shown.includes(e));
+    // Proof in it the reply keeps nowhere else, or a line that waits on him.
+    const blockLines = out.slice(start).map(bare);
+    const keeps = evidenceIn(blockLines).some((e) => !shown.includes(e)) || blockLines.some(asksHim);
     // They stay then, and only the report's field lines after them go.
-    if (isTheAnswer || tailOfList || losesProof) ({ start, threads } = reportStart(NONE));
+    if (isTheAnswer || tailOfList || keeps) ({ start, threads } = reportStart(NONE));
   }
   // From the Brief's field on, everything is the Brief, whatever came after it.
   const briefAt = out.findIndex((l, i) => i > first && isField(i) && BRIEF_FIELD.test(bare(l)));

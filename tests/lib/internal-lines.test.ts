@@ -128,9 +128,9 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
 
   it('while a reply streams in, a thread block after the words never flashes up, and a list that is the answer always shows', () => {
     const ONE_LINE = 'Done: the report is on the board. It names both delays.'
-    // "Thread status:", items whose state is said in free words ("waits for your review", "waits for
-    // one approval"), then one with a known state.
-    const ITEMS = '\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval\n- th-2c3d4e5f6071: answered \u00b7 posted'
+    // "Thread status:", items whose state is said in free words ("tests are running", "waits for one
+    // approval"), then one with a known state.
+    const ITEMS = '\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u5728\u8dd1\u6d4b\u8bd5\n- th-1b2c3d4e5f60 (Seed list): waits for one approval\n- th-2c3d4e5f6071: answered \u00b7 posted'
     for (const [words, hidden] of [
       [WORDS, `${WORDS}\n\n${BLOCK}`],
       // Two sentences on one line; a tag the session made up around the lines after one sentence;
@@ -218,6 +218,20 @@ describe('the shared cases (tests/fixtures/internal-lines/cases.json)', () => {
     'must show: a block with a path the reply keeps nowhere else',
     'must show: thread lines at the end of a longer list',
     'full-width digits are no list mark: the lines stay',
+    // A line that waits on him, and proof that is no URL or path (review 2026-11-25, round 2).
+    'must show: a decision of his on a waiting thread, in a made-up tag (escaped)',
+    'must show: a line in needs that asks him to answer (escaped)',
+    'must show: news he must answer on a new thread (escaped)',
+    'must show: a line in needs',
+    'must show: a tag whose state is needs',
+    'must show: a review that waits for him, under a heading (escaped)',
+    'must show: "for your review" in a thread line',
+    'must show: "your call" in a thread line',
+    'must show: a question in a thread line',
+    'must show: a letter link the reply keeps nowhere else (escaped)',
+    'must show: a bare letter id the reply keeps nowhere else',
+    'must show: a task ref the reply keeps nowhere else',
+    'must show: a relative image the reply keeps nowhere else',
   ]
   it('every must-show shape is still in the file, marked, and shown as written', () => {
     const marked = cases.filter((c) => c.mustShow)

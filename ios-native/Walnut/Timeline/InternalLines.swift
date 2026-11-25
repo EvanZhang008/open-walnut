@@ -3,27 +3,16 @@ import Foundation
 /// Lines of Walnut's own formats that a reply never shows. Port of the server's
 /// `src/lib/internal-lines.ts` (`stripInternalLines`), case for case: both run the
 /// cases in `tests/fixtures/internal-lines/cases.json` (`InternalLinesTests` here,
-/// `tests/lib/internal-lines.test.ts` there), so the two never drift apart.
+/// `tests/lib/internal-lines.test.ts` there), so the two never drift apart. The rules
+/// and their incidents are written out there once.
 ///
-/// Walnut asks a session for its status report in a side question of its own
-/// (FOR_USER_STATE, FOR_USER_NOW, FOR_USER_ASK, ...), and until 2026-11-19 put a
-/// version tag in front of every line of a rule block ("[v16908844] "). Models copy
-/// both into their replies (2026-11-20, the user: "why it show?"), and since
-/// 2026-11-24 one line per open thread too ("th-...: answered · ..."), the status
-/// question's thread lines, which a session never sees in its own chat. The server's
-/// history parse leaves them out of every saved row; a reply still streaming has not
-/// been through it, so the timeline drops them itself (`TimelineTurnMarker.stripLive`).
-///
-/// Only the report at the END of the text goes (field lines, the lines that carry a
-/// value on, blank lines; Walnut's own `<walnut-` tag lines stay), and a version tag
-/// at the start of a line is cut off. Outside code blocks only; a field line with
-/// the session's words after it, a mention in a sentence and a text that opens with
-/// the report (the answer to Walnut's own question) stay as written. Thread lines go
-/// too, with their heading and a tag of Walnut's around them, only when they are
-/// strictly the reply's end. Precision first (review 2026-11-25): they stay when they
-/// are the whole reply, follow one sentence or a lead-in, hold a link or path the
-/// reply keeps nowhere else, or end a longer list; a table row, a quote or a sentence
-/// is never a thread line.
+/// The status report a side question asks (FOR_USER_STATE, ...), an old version tag in
+/// front of a line ("[v16908844] ") and the status question's thread lines
+/// ("th-...: answered · ...") at the END of a reply go; the server's history parse
+/// leaves them out of every saved row, and a reply still streaming has not been through
+/// it, so the timeline drops them itself (`TimelineTurnMarker.stripLive`). Precision
+/// first: a thread block goes only when it is strictly the reply's end and nothing of
+/// it is the answer, proof or an ask of his.
 ///
 /// It reads text as the server's JavaScript does: lines split on "\n" alone, `\s` and
 /// `trim()` take JavaScript's whitespace (`js`, `trimmed`), digits are `[0-9]`, word
@@ -90,9 +79,16 @@ enum InternalLines {
     private static let leadIn = js(
         #"\x{5982}\x{4E0B}|\x{4EE5}\x{4E0B}|\x{4E0B}\x{9762}|\x{4E0B}\x{5217}|as follows|(?<![A-Za-z])below(?![A-Za-z])|the following|\x{7EBF}\x{7A0B}|(?<![A-Za-z])threads?(?![A-Za-z])"#,
         [.caseInsensitive])
-    /// Proof a block holds: a URL (to the first CJK character or full-width mark) or an absolute path.
-    private static let evidence = js(#"https?://[^\s<>"'`()\[\]\x{3000}-\x{303F}\x{4E00}-\x{9FFF}\x{FF00}-\x{FFEF}]+|(?<![A-Za-z0-9._~/-])~?/[A-Za-z0-9._@-]+(?:/[A-Za-z0-9._@-]+)+"#)
+    /// Proof a block holds: a URL (to the first CJK character or full-width mark), an absolute path, a
+    /// letter's id, a task ref tag, or the target of a relative link or image.
+    private static let evidence = js(#"https?://[^\s<>"'`()\[\]\x{3000}-\x{303F}\x{4E00}-\x{9FFF}\x{FF00}-\x{FFEF}]+|(?<![A-Za-z0-9._~/-])~?/[A-Za-z0-9._@-]+(?:/[A-Za-z0-9._@-]+)+|(?<![A-Za-z0-9_-])lt-[0-9a-z]{6,}|<task-ref[^>]*>|(?<=\]\()(?![A-Za-z][A-Za-z0-9+.-]*:)[^)\s]+(?=\))"#)
     private static let evidenceTail = js(#"[.,;:!?\x{3002}\x{FF0C}\x{FF1B}\x{FF1A}\x{FF01}\x{FF1F}]+\z"#)
+    /// A line that waits on him: its state is needs or new, or its words ask him (a decision, a review,
+    /// a question, news to answer), once the words saying he is not needed are taken out.
+    private static let askingState = js(#"^(?:needs|new)\z"#, [.caseInsensitive])
+    private static let tagState = js(#"(?<![A-Za-z0-9_-])state=["']?([A-Za-z]+)"#)
+    private static let asks = js(#"\x{7B49}\x{4F60}(?:\x{51B3}\x{5B9A}|\x{5B9A}|\x{5BA1}|\x{9009}|\x{70B9}\x{5934}|\x{56DE}|\x{6279}|\x{786E}\x{8BA4}|\x{770B})|\x{8981}\x{4F60}(?:\x{70B9}\x{5934}|\x{51B3}\x{5B9A}|\x{5B9A}|\x{786E}\x{8BA4}|\x{5BA1}|\x{9009}|\x{6279}\x{51C6}|\x{56DE})|\x{9700}\x{8981}\x{4F60}(?:\x{56DE}|\x{51B3}\x{5B9A}|\x{786E}\x{8BA4}|\x{5BA1}|\x{9009}|\x{6279}\x{51C6}|\x{70B9}\x{5934}|\x{770B}|\x{5904}\x{7406})|\x{8BF7}\x{56DE}\x{6211}|\x{8BF7}\x{4F60}(?:\x{5B9A}|\x{9009}|\x{786E}\x{8BA4}|\x{51B3}\x{5B9A}|\x{56DE})|\x{4F60}\x{6765}\x{5B9A}|\x{7531}\x{4F60}(?:\x{5B9A}|\x{51B3}\x{5B9A})|(?<![A-Za-z])(?:your call|up to you|wait(?:s|ing)? (?:on|for) your?|needs? (?:you|your (?:decision|review|approval|answer|ok|yes|input))|for your (?:review|approval|decision|answer|ok|yes))(?![A-Za-z])|[?\x{FF1F}]"#, [.caseInsensitive])
+    private static let notAsking = js(#"\x{4E0D}\x{9700}\x{8981}\x{4F60}|\x{4E0D}\x{7528}\x{4F60}|\x{65E0}\x{9700}\x{4F60}|\x{4E0D}\x{7B49}\x{4F60}|no need for you|nothing (?:for|from) you|not waiting (?:on|for) you"#, [.caseInsensitive])
     /// While a reply streams in, the start of a thread's line: a list mark, bold, then its id as far as it has come.
     private static let threadIDSoFar = js(#"^\s{0,3}(?:(?:[-*+]|[0-9]+[.)])(?:\s+|\z))?\*{0,2}(?:t(?:h(?:-[0-9a-f]{0,31})?)?)?\z"#)
     /// While a reply streams in, an id as far as it has come at the line's end ("title (th-3").
@@ -149,19 +145,36 @@ enum InternalLines {
     /// tracks fences): a thread's id, then its state word, with at most a title and separators
     /// between them, or a short title, the id in brackets, a colon and the state; or a line of a
     /// Walnut tag that names a thread. Never a table row, a quote, or prose that names a thread.
-    static func isThreadStatusLine(_ line: String) -> Bool {
+    static func isThreadStatusLine(_ line: String) -> Bool { threadStateOf(line) != nil }
+
+    /// A thread's line's state word (a tag's state attribute, "" for a tag without one); nil for no thread line.
+    private static func threadStateOf(_ line: String) -> String? {
         let ns = line as NSString
         guard let m = threadID.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
-              !test(tableOrQuote, line) else { return false }
-        if test(threadTagLine, line) { return true }
+              !test(tableOrQuote, line) else { return nil }
+        if test(threadTagLine, line) { return firstGroup(tagState, line) ?? "" }
         let before = ns.substring(to: m.range.location)
         let rest = ns.substring(from: NSMaxRange(m.range))
+        let after: String
         if test(idFirst, before) {
-            return test(threadState, (rest as NSString).substring(from: matchLength(threadAfterID, rest)))
+            after = (rest as NSString).substring(from: matchLength(threadAfterID, rest))
+        } else {
+            guard test(titleFirst, before), let close = titleIDClose.firstMatch(in: rest, range: NSRange(location: 0, length: (rest as NSString).length))
+            else { return nil }
+            after = (rest as NSString).substring(from: NSMaxRange(close.range))
         }
-        guard test(titleFirst, before), let close = titleIDClose.firstMatch(in: rest, range: NSRange(location: 0, length: (rest as NSString).length))
-        else { return false }
-        return test(threadState, (rest as NSString).substring(from: NSMaxRange(close.range)))
+        guard let state = threadState.firstMatch(in: after, range: NSRange(location: 0, length: (after as NSString).length)) else { return nil }
+        return (after as NSString).substring(with: state.range)
+    }
+
+    /// A line that waits on him (`asks`): its words, without the proof in them (a "?" of a URL).
+    private static func asksHim(_ line: String) -> Bool {
+        if let state = threadStateOf(line), test(askingState, state) { return true }
+        var words = line
+        for re in [evidence, notAsking] {
+            words = re.stringByReplacingMatches(in: words, range: NSRange(location: 0, length: (words as NSString).length), withTemplate: " ")
+        }
+        return test(asks, words)
     }
 
     /// How many sentences the words before a thread block hold: two lines or more count as two; in
@@ -337,10 +350,11 @@ enum InternalLines {
             // The tail of a longer list: the list stays whole.
             let up = above(start)
             let tailOfList = up >= 0 && !code[up] && test(listItem, bare(out[start])) && test(continuation, bare(out[up]))
-            // Proof in it the reply keeps nowhere else.
-            let losesProof = evidenceIn((start..<out.count).map { bare(out[$0]) }).contains { !has(shown, $0) }
+            // Proof in it the reply keeps nowhere else, or a line that waits on him.
+            let blockLines = (start..<out.count).map { bare(out[$0]) }
+            let keeps = evidenceIn(blockLines).contains { !has(shown, $0) } || blockLines.contains(where: asksHim)
             // They stay then, and only the report's field lines after them go.
-            if isTheAnswer || tailOfList || losesProof {
+            if isTheAnswer || tailOfList || keeps {
                 let fieldsOnly = reportStart(nil)
                 start = fieldsOnly.start
                 threads = fieldsOnly.threads

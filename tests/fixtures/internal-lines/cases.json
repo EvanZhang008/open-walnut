@@ -183,7 +183,7 @@
   },
   {
     "label": "thread lines under a heading go with the heading (Chinese, escaped)",
-    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-2c3d4e5f6071\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5b9a\u3002\n- th-3d4e5f607182\uff1a\u7b49\u4f60\u51b3\u5b9a\u3002",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-2c3d4e5f6071\uff08Fence review\uff09\uff1a\u5df2\u56de\u7b54\u3002\n- th-3d4e5f607182\uff1a\u5904\u7406\u4e2d\u3002",
     "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
   },
   {
@@ -358,7 +358,7 @@
   },
   {
     "label": "items with their state in free words, mixed with known ones, under a heading (escaped)",
-    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff1aposts move\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002\n- th-1b2c3d4e5f60\uff08Seed list\uff09\uff1a\u7b49\u4e00\u4eba\u6279\u51c6\u3002\n- th-2c3d4e5f6071\uff08Path lights\uff09\uff1a\u5df2\u56de\u7b54\u3002",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff1aposts move\uff09\uff1a\u5df2\u53d1\u5e03\uff0c\u81ea\u52a8\u5408\u5e76\u5df2\u5f00\u3002\n- th-1b2c3d4e5f60\uff08Seed list\uff09\uff1a\u7b49\u4e00\u4eba\u6279\u51c6\u3002\n- th-2c3d4e5f6071\uff08Path lights\uff09\uff1a\u5df2\u56de\u7b54\u3002",
     "shown": "Done: the report is on the board. It names both delays."
   },
   {
@@ -504,7 +504,7 @@
   },
   {
     "label": "streaming: free-word items under a heading are held as they come in (escaped)",
-    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff08Seed",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u5728\u8dd1\u6d4b\u8bd5\n- th-1b2c3d4e5f60\uff08Seed",
     "streaming": true,
     "shown": "Done: the report is on the board. It names both delays."
   },
@@ -554,5 +554,103 @@
     "label": "a fence closed with a form feed after its mark",
     "text": "Done. Shipped.\n```\nx\n```\f\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
     "shown": "Done. Shipped.\n```\nx\n```"
+  },
+  {
+    "label": "must show: a decision of his on a waiting thread, in a made-up tag (escaped)",
+    "text": "Restarted the reviewer. Waiting for both runs.\n\n<walnut-turn-status>\n- th-0a1b2c3d4e5f \u00b7 waiting \u00b7 \u5907\u4efd\u5df2\u538b\u7f29\uff1b\u53e6\u5916\u4e24\u9879\uff08\u5e9f\u7eb8\u7bd3 2 GB\u3001\u65e7\u6a21\u62df\u5668 3 GB\uff09\u8fd8\u5728\u7b49\u4f60\u51b3\u5b9a\uff0c\u6211\u63a8\u8350\u5168\u5220\u3002\n- th-1b2c3d4e5f60 \u00b7 waiting \u00b7 \u65e7\u6784\u5efa\u76ee\u5f55\uff08800 MB\uff09\u5220\u4e0d\u5220\u7b49\u4f60\u51b3\u5b9a\uff0c\u6211\u63a8\u8350\u5220\u3002\n</walnut-turn-status>",
+    "shown": "Restarted the reviewer. Waiting for both runs.\n\n<walnut-turn-status>\n- th-0a1b2c3d4e5f \u00b7 waiting \u00b7 \u5907\u4efd\u5df2\u538b\u7f29\uff1b\u53e6\u5916\u4e24\u9879\uff08\u5e9f\u7eb8\u7bd3 2 GB\u3001\u65e7\u6a21\u62df\u5668 3 GB\uff09\u8fd8\u5728\u7b49\u4f60\u51b3\u5b9a\uff0c\u6211\u63a8\u8350\u5168\u5220\u3002\n- th-1b2c3d4e5f60 \u00b7 waiting \u00b7 \u65e7\u6784\u5efa\u76ee\u5f55\uff08800 MB\uff09\u5220\u4e0d\u5220\u7b49\u4f60\u51b3\u5b9a\uff0c\u6211\u63a8\u8350\u5220\u3002\n</walnut-turn-status>",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a line in needs that asks him to answer (escaped)",
+    "text": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\nth-0a1b2c3d4e5f: needs \u00b7 iOS \u90a3\u534a\u8981\u4f60\u70b9\u5934\u624d\u80fd\u53d1\uff0c\u8bf7\u56de\u6211\u300c\u53d1\u300d\u6216\u300c\u4e0d\u53d1\u300d\u3002",
+    "shown": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\nth-0a1b2c3d4e5f: needs \u00b7 iOS \u90a3\u534a\u8981\u4f60\u70b9\u5934\u624d\u80fd\u53d1\uff0c\u8bf7\u56de\u6211\u300c\u53d1\u300d\u6216\u300c\u4e0d\u53d1\u300d\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: news he must answer on a new thread (escaped)",
+    "text": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n1. th-0a1b2c3d4e5f: done\n2. th-1b2c3d4e5f60: new \u00b7 \u4f60\u6628\u5929\u8ba9\u6211\u76ef\u7684\u90a3\u5c01\u90ae\u4ef6\u6765\u4e86\uff0c\u5bf9\u65b9\u95ee\u80fd\u5426\u5468\u4e94\u5f00\u4f1a\uff0c\u9700\u8981\u4f60\u56de\u3002",
+    "shown": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n1. th-0a1b2c3d4e5f: done\n2. th-1b2c3d4e5f60: new \u00b7 \u4f60\u6628\u5929\u8ba9\u6211\u76ef\u7684\u90a3\u5c01\u90ae\u4ef6\u6765\u4e86\uff0c\u5bf9\u65b9\u95ee\u80fd\u5426\u5468\u4e94\u5f00\u4f1a\uff0c\u9700\u8981\u4f60\u56de\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a line in needs",
+    "text": "Done. Shipped.\n\nth-0a1b2c3d4e5f: needs \u00b7 the banner color\nth-1b2c3d4e5f60: done \u00b7 merged",
+    "shown": "Done. Shipped.\n\nth-0a1b2c3d4e5f: needs \u00b7 the banner color\nth-1b2c3d4e5f60: done \u00b7 merged",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a tag whose state is needs",
+    "text": "Done. Shipped.\n<walnut-status thread=\"th-0a1b2c3d4e5f\" state=\"needs\">pick one</walnut-status>",
+    "shown": "Done. Shipped.\n<walnut-status thread=\"th-0a1b2c3d4e5f\" state=\"needs\">pick one</walnut-status>",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a review that waits for him, under a heading (escaped)",
+    "text": "Restarted the reviewer. Waiting for both runs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002\n- th-1b2c3d4e5f60\uff1a\u5df2\u56de\u7b54\u3002",
+    "shown": "Restarted the reviewer. Waiting for both runs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002\n- th-1b2c3d4e5f60\uff1a\u5df2\u56de\u7b54\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: \"for your review\" in a thread line",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 posted for your review, I recommend shipping\n- th-1b2c3d4e5f60: done",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 posted for your review, I recommend shipping\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "must show: \"your call\" in a thread line",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 two options are in the doc; your call\n- th-1b2c3d4e5f60: done",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 two options are in the doc; your call\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a question in a thread line",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 should I delete the old branch?\n- th-1b2c3d4e5f60: done",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 should I delete the old branch?\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "a block that says he is not needed still goes (escaped)",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: done \u00b7 \u4e0d\u9700\u8981\u4f60\u505a\u4ec0\u4e48\n- th-1b2c3d4e5f60: working \u00b7 tests run",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "\"nothing for you\", \"not waiting on you\" still go",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: done \u00b7 nothing for you to do\n- th-1b2c3d4e5f60: waiting \u00b7 not waiting on you, the team has it",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a \"?\" inside a link the reply holds is no question",
+    "text": "Done: the run is at https://example.com/run?id=7. It passed.\n\n- th-0a1b2c3d4e5f: answered \u00b7 https://example.com/run?id=7\n- th-1b2c3d4e5f60: working",
+    "shown": "Done: the run is at https://example.com/run?id=7. It passed."
+  },
+  {
+    "label": "must show: a letter link the reply keeps nowhere else (escaped)",
+    "text": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n- th-0a1b2c3d4e5f: answered \u00b7 \u62a5\u544a\u5728 [\u8fd9\u5c01\u4fe1](letter:lt-abc12345)\n- th-1b2c3d4e5f60: working",
+    "shown": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n- th-0a1b2c3d4e5f: answered \u00b7 \u62a5\u544a\u5728 [\u8fd9\u5c01\u4fe1](letter:lt-abc12345)\n- th-1b2c3d4e5f60: working",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a bare letter id the reply keeps nowhere else",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 the report is letter lt-abc12345\n- th-1b2c3d4e5f60: working",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 the report is letter lt-abc12345\n- th-1b2c3d4e5f60: working",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a task ref the reply keeps nowhere else",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 handed to <task-ref id=\"tk-0a1b2c\" label=\"review\"/>\n- th-1b2c3d4e5f60: done",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: waiting \u00b7 handed to <task-ref id=\"tk-0a1b2c\" label=\"review\"/>\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a relative image the reply keeps nowhere else",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 ![after](shots/after.png)\n- th-1b2c3d4e5f60: done",
+    "shown": "Done. Shipped.\n\n- th-0a1b2c3d4e5f: answered \u00b7 ![after](shots/after.png)\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "a letter id the reply already holds does not keep the block",
+    "text": "Done: the report is in lt-abc12345. It names both delays.\n\n- th-0a1b2c3d4e5f: answered \u00b7 lt-abc12345\n- th-1b2c3d4e5f60: working",
+    "shown": "Done: the report is in lt-abc12345. It names both delays."
   }
 ]
