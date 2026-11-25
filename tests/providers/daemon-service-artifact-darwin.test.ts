@@ -2,8 +2,10 @@
  * What a Mac host's service install root needs that a Linux one does not (daemon-service-artifact.ts):
  *   - the staged copy loses com.apple.quarantine (copyFile keeps a source's marks; Gatekeeper would
  *     refuse the ad-hoc signed walnut file with a dialog nobody at a host sees), the copy only;
- *   - old versions are pruned there too, judged by what ps says runs (a walnut file is ~100 MB a
- *     version); where nothing can tell what runs, nothing is removed.
+ *   - old versions are pruned there too, only where this Walnut asked the one service (its mode file
+ *     is in the install root), judged by what ps says this account runs (a walnut file is ~100 MB a
+ *     version); where nothing can tell what runs (ps fails, or one of this account's processes
+ *     names a relative path: argv[0] is the caller's to set), nothing is removed.
  * MACHINE SAFETY: temp dirs only; no process is started (the runners are fakes).
  */
 import { createHash } from 'node:crypto'
@@ -62,15 +64,20 @@ describe('pruning old versions on a Mac', () => {
       shas.push(sha)
     }
     await fs.chmod(path.join(l.installRoot, 'versions'), 0o700)
+    // This Walnut asked the one service there (service-mode.ts).
+    await fs.writeFile(path.join(l.installRoot, 'service-mode.json'), '{}\n')
     return { ...l, shas, exe: (sha: string) => path.join(l.installRoot, 'versions', sha, 'daemon') }
+  }
+  const UID = process.getuid!()
+  const psSays = (text: string) => (file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string) => void) => {
+    expect([file, args]).toEqual(['/bin/ps', ['-axww', '-o', 'uid=,comm=']])
+    cb(null, text)
   }
 
   it('keeps the kept ones and any ps names, removes the rest', async () => {
     const v = await versions(4)
-    const ps = (file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string) => void) => {
-      expect([file, args]).toEqual(['/bin/ps', ['-axww', '-o', 'comm=']])
-      cb(null, `/sbin/launchd\n${v.exe(v.shas[2]!)}\n/usr/bin/ssh\n`)
-    }
+    // Another account's process named by a relative path is not this account's to judge.
+    const ps = psSays(`    0 /sbin/launchd\n${UID} ${v.exe(v.shas[2]!)}\n${UID + 1} walnut\n${UID} /usr/bin/ssh\n`)
     const removed = await pruneDaemonServiceVersions(v.installRoot, [v.exe(v.shas[0]!)], { platform: 'darwin', execFile: ps })
     expect(removed.map((d) => path.basename(d)).sort()).toEqual([v.shas[1], v.shas[3]])
   })
@@ -81,5 +88,27 @@ describe('pruning old versions on a Mac', () => {
     expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: (_f, _a, _o, cb) => cb(new Error('ps: not allowed'), '') })).toEqual([])
     expect(await runningExecutables('win32')).toBeNull()
     expect((await fs.readdir(path.join(v.installRoot, 'versions'))).sort()).toEqual(v.shas)
+  })
+
+  it('one of this account\'s processes named by a relative path: nothing is removed', async () => {
+    const v = await versions(3)
+    expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: psSays(`${UID} /usr/bin/ssh\n${UID} daemon\n`) })).toEqual([])
+    expect((await fs.readdir(path.join(v.installRoot, 'versions'))).sort()).toEqual(v.shas)
+  })
+
+  it('a path ps names through a link counts by where it leads', async () => {
+    const v = await versions(3)
+    const link = path.join(v.root, 'current-link')
+    await fs.symlink(path.join(v.installRoot, 'versions', v.shas[1]!), link)
+    const removed = await pruneDaemonServiceVersions(v.installRoot, [v.exe(v.shas[0]!)], { platform: 'darwin', execFile: psSays(`${UID} ${link}/daemon\n`) })
+    expect(removed.map((d) => path.basename(d))).toEqual([v.shas[2]])
+  })
+
+  it('no mode file (this Walnut never asked the one service there): nothing is pruned, ps is never run', async () => {
+    const v = await versions(3)
+    await fs.rm(path.join(v.installRoot, 'service-mode.json'))
+    const ps = vi.fn()
+    expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: ps })).toEqual([])
+    expect(ps).not.toHaveBeenCalled()
   })
 })

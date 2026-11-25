@@ -54,7 +54,8 @@ export function judgeServiceUpdate(output: string, tail: UpdateTail | null): 'ap
       || f?.code === 'probationFailed'
       // The host's launcher put the build back, or refuses it (service-launcher-script.ts): the same.
       || f?.code === 'launcherRolledBack' || f?.code === 'launcherRefused'
-    throw failed(`Managed daemon update failed: ${f?.message ?? output}; ${f?.rollback ?? ''}${after}`, buildFailed, f?.stopped === true)
+    // The CLI's failure code rides too: a caller that judges what failed reads it (service-set-provision.ts SERVE_FAILURE_CODES).
+    throw Object.assign(failed(`Managed daemon update failed: ${f?.message ?? output}; ${f?.rollback ?? ''}${after}`, buildFailed, f?.stopped === true), { failureCode: typeof f?.code === 'string' ? f.code : null })
   }
   // Answered as the new daemon, which then did not stay (restored, down): the build's too. A
   // stand-in runs the new build outside launchd, so it says nothing against the build.

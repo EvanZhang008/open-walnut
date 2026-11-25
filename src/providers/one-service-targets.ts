@@ -80,6 +80,20 @@ export function slotArchOf(machine: string): 'arm64' | 'x64' {
   return m === 'aarch64' || m === 'arm64' ? 'arm64' : 'x64'
 }
 
+/**
+ * A Mac's slot arch from the same probe the walnut file's target comes from (host-target.ts: an
+ * x86_64 shell under Rosetta on Apple silicon is the arm64 Mac it runs on), so the slot and the file
+ * in it agree; `uname -m` only when that probe gives no answer.
+ */
+export async function macSlotArch(run: (command: string, timeoutMs?: number) => Promise<string>, machine: string): Promise<'arm64' | 'x64'> {
+  try {
+    const { parseHostTarget, targetProbeScript } = await import('../core/host-server/host-target.js')
+    const { target } = parseHostTarget(await run(targetProbeScript(), 15_000))
+    if (target.startsWith('darwin-')) return target.endsWith('-arm64') ? 'arm64' : 'x64'
+  } catch { /* no answer: uname's */ }
+  return slotArchOf(machine)
+}
+
 /** The daemon slot's file for a walnut file target: `daemon-<system>-<arch>` (a musl file goes in its arch's Linux slot). */
 export function daemonSlotName(target: HostFileTarget): string {
   return `daemon-${target.replace(/-musl$/, '')}`

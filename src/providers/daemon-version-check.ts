@@ -400,6 +400,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/service-launcher-script.ts',
   'src/providers/service-launcher-control.ts',
   'src/providers/service-launcher-beat.ts',
+  'src/providers/launcher-leaving.ts',
   // Host runtime discovery (daemon PATH order, claude/node spawn gate,
   // host.preflight): imported by the binary, text-injected into the source twin.
   'src/providers/host-runtime-core.ts',

@@ -25,6 +25,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pruneDaemonServiceVersions, type ExecFileLike } from './daemon-service-artifact.js'
+import { leavingText, writeLeavingMarkSync } from './launcher-leaving.js'
 import { serviceRolesFrom } from './service-roles.js'
 import { parseServiceRoleFallback, SERVICE_ROLE_FALLBACK_FILE, type ServiceRole } from '../binary/service-mode.js'
 
@@ -106,10 +107,6 @@ async function writeWhole(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.t`
   await fs.promises.writeFile(tmp, text, { mode: 0o600 })
   await fs.promises.rename(tmp, file)
-}
-
-function leavingText(pid: number, reason: string): string {
-  return `pid=${pid}\nreason=${reason.replace(/[\r\n]+/g, ' ')}\nat=${Math.floor(Date.now() / 1000)}\n`
 }
 
 /**
@@ -265,11 +262,7 @@ export function startLauncherBeat(opts: {
     idle() { busyUntil = 0; void beat() },
     leaving(reason) {
       // Sync on purpose: process.exit follows this call, so an async write would never land.
-      try {
-        const file = path.join(dir, 'leaving')
-        fs.writeFileSync(`${file}.t`, leavingText(pid, reason), { mode: 0o600 })
-        fs.renameSync(`${file}.t`, file)
-      } catch (err) { warn(`launcher leaving mark not written: ${(err as Error).message}`) }
+      try { writeLeavingMarkSync(dir, pid, reason) } catch (err) { warn(`launcher leaving mark not written: ${(err as Error).message}`) }
     },
     facts: () => facts,
     stop() { stopped = true; clearInterval(beats); clearInterval(reads) },

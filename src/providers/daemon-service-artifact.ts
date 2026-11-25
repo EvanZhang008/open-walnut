@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { constants as FS, type Stats } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import path from 'node:path'
+import { SERVICE_MODE_FILE } from '../binary/service-mode.js'
 
 export const DAEMON_ARTIFACT_NAME = 'daemon'
 export const DAEMON_ARTIFACT_VERSIONS_DIR = 'versions'
@@ -277,8 +278,13 @@ export async function stageDaemonServiceArtifact(
   }
 }
 
-/** The executables processes run now, as absolute paths: Linux from /proc, macOS from ps (with `execFile`); null when that cannot be told. */
-export async function runningExecutables(platform: NodeJS.Platform, execFile?: ExecFileLike): Promise<string[] | null> {
+/**
+ * The executables processes run now, as real absolute paths: Linux from /proc, macOS from ps (with
+ * `execFile`); null when that cannot be told. On macOS ps names the path each process was started
+ * by (`comm`), which may be relative or a link: every process of this account (`uid`) must name an
+ * absolute path, each resolved to its real one, or the answer is null and nothing is pruned.
+ */
+export async function runningExecutables(platform: NodeJS.Platform, execFile?: ExecFileLike, uid: number | null = typeof process.getuid === 'function' ? process.getuid() : null): Promise<string[] | null> {
   if (platform === 'linux') {
     const out: string[] = []
     for (const pid of await fsp.readdir('/proc').catch(() => [] as string[])) {
@@ -288,13 +294,26 @@ export async function runningExecutables(platform: NodeJS.Platform, execFile?: E
     }
     return out
   }
-  if (platform !== 'darwin' || !execFile) return null
-  // macOS ps prints each process's executable path as its `comm` (every user's, -ax).
-  return new Promise((resolve) => {
-    execFile('/bin/ps', ['-axww', '-o', 'comm='], { timeout: 15_000, maxBuffer: 16 << 20 }, (err, stdout) => {
-      resolve(err ? null : String(stdout).split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/')))
-    })
+  if (platform !== 'darwin' || !execFile || uid === null) return null
+  const text = await new Promise<string | null>((resolve) => {
+    execFile('/bin/ps', ['-axww', '-o', 'uid=,comm='], { timeout: 15_000, maxBuffer: 16 << 20 }, (err, stdout) => resolve(err ? null : String(stdout)))
   })
+  if (text === null) return null
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
+    if (!m || Number(m[1]) !== uid) continue
+    const named = m[2]!
+    // One of this account's processes started by a relative path: where it runs cannot be told.
+    if (!named.startsWith('/')) return null
+    out.push(named, await fsp.realpath(named).catch(() => named))
+  }
+  return out
+}
+
+/** On macOS the prune runs only where this Walnut asked the one service (its mode file is there, macos_one_service). */
+async function darwinPruneAsked(installRoot: string): Promise<boolean> {
+  return fsp.access(path.join(installRoot, SERVICE_MODE_FILE)).then(() => true, () => false)
 }
 
 /**
@@ -304,7 +323,8 @@ export async function runningExecutables(platform: NodeJS.Platform, execFile?: E
  * from it), and with `keepNewerThanMs` any staged that recently. What runs where is
  * read from /proc on Linux and from ps on macOS, run with the caller's `execFile` (a
  * Mac host's one Walnut service stages its ~100 MB walnut file at every update, so
- * its versions must go too); where it cannot be read, nothing is removed. Only plain, private, sha-named dirs
+ * its versions must go too; only where its mode file shows the service was asked);
+ * where it cannot be read, nothing is removed. Only plain, private, sha-named dirs
  * are touched. Returns the removed dirs.
  */
 export async function pruneDaemonServiceVersions(
@@ -313,6 +333,7 @@ export async function pruneDaemonServiceVersions(
 ): Promise<string[]> {
   const platform = opts.platform ?? process.platform
   const versions = daemonArtifactVersionsDir(installRoot)
+  if (platform === 'darwin' && !(await darwinPruneAsked(installRoot))) return []
   const running = await (opts.runningExes ?? (() => runningExecutables(platform, opts.execFile)))().catch(() => null)
   if (!running) return []
   const kept = new Set(keep.map((exe) => path.basename(path.dirname(exe))))

@@ -11,12 +11,17 @@
  * beat.ts). The server takes WALNUT_LAUNCHER_DIR out of its env at its start, so the dir is read
  * from the decision, before the server loads.
  *
- * The follower role also counts its starts (`service-role.starts`): a service that exits before it
- * is ready (a crash at boot) is started again by the launcher forever once its version is committed,
- * and the watch dies with it. Its MAX_UNREADY_STARTS-th start in a row that never got ready leaves
- * the marker and ends at once, so a host where the service cannot come up (a Mac it was never run on)
- * falls back to the two programs by itself. The leader keeps its own: the leader switch decides what
- * a leading machine that does not come up does.
+ * The follower role, only where the one service is new (service-entry.ts serveWatchOn: a Mac, which
+ * runs it only with the experiment macos_one_service), also:
+ *   - counts its starts (`service-role.starts`): a service that exits before it is ready (a crash at
+ *     boot) is started again by the launcher forever once its version is committed, and the watch
+ *     dies with it. After MAX_UNREADY_STARTS starts in a row that never got ready (each within
+ *     STARTS_WINDOW_MS of the one before), the next start leaves the marker and ends at once, so a
+ *     host where the service cannot come up falls back to the two programs by itself;
+ *   - honours the server's own busy word: once the port listens the server beats "busy until" for
+ *     its session adoption (web/serve-launcher-beat.ts), and the watch waits that out plus
+ *     BUSY_MARGIN_SECONDS, as the launcher does, so a slow but healthy adoption is never cut.
+ * The leader keeps its own: the leader switch decides what a leading machine that does not come up does.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -41,9 +46,13 @@ export function serveReadySeconds(env: Record<string, string | undefined>): numb
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_SERVE_READY_SECONDS
 }
 
-/** Starts in a row that never got ready before the follower role falls back to the daemon. */
+/** Starts in a row that never got ready: the start after them falls back to the daemon. */
 export const MAX_UNREADY_STARTS = 3
 export const SERVICE_ROLE_STARTS_FILE = 'service-role.starts'
+/** A start this long after the one counted before begins a new count (planned stops weeks apart are no crash loop). */
+export const STARTS_WINDOW_MS = 3600_000
+/** How long past the server's own "busy until" the follower watch still waits. */
+export const BUSY_MARGIN_SECONDS = 120
 
 interface RoleStarts { v: 1; role: ServiceRole; home: string; exe: string; n: number; at: number }
 
@@ -63,7 +72,8 @@ export function noteRoleStart(stateDir: string, d: { role: ServiceRole; home: st
   let n = 0
   try {
     const raw = JSON.parse(f.readFileSync(file, 'utf8')) as Partial<RoleStarts>
-    if (raw?.v === 1 && raw.role === d.role && raw.home === d.home && raw.exe === d.exe && Number.isInteger(raw.n) && raw.n! > 0) n = raw.n!
+    const recent = typeof raw?.at === 'number' && now - raw.at >= 0 && now - raw.at < STARTS_WINDOW_MS
+    if (raw?.v === 1 && recent && raw.role === d.role && raw.home === d.home && raw.exe === d.exe && Number.isInteger(raw.n) && raw.n! > 0) n = raw.n!
   } catch { /* none yet */ }
   n += 1
   const tmp = `${file}.${process.pid}.tmp`
@@ -84,7 +94,21 @@ export function readyNames(text: string, pid: number): boolean {
 
 export interface LeadReadyWatch { stop(): void }
 
-/** Polls the ready mark until it names `pid`, or calls `onLate` once `seconds` passed without. */
+/**
+ * The heartbeat's "busy until" (`<epoch> <busy until> <pid>`, service-launcher-beat.ts) as a time in
+ * ms, when the beat is `pid`'s; null otherwise.
+ */
+export function busyUntilMs(text: string, pid: number): number | null {
+  const [, until, who] = text.trim().split(/\s+/)
+  const t = Number(until)
+  return Number(who) === pid && Number.isFinite(t) && t > 0 ? t * 1000 : null
+}
+
+/**
+ * Polls the ready mark until it names `pid`, or calls `onLate` once `seconds` passed without. With
+ * `waitUntil`, a late check that gets a later time from it waits until then instead (the server
+ * said it is busy), and asks again then.
+ */
 export function watchLeadReady(o: {
   launcherDir: string
   pid: number
@@ -92,11 +116,15 @@ export function watchLeadReady(o: {
   onLate: () => void
   onReady?: () => void
   readReady?: (file: string) => Promise<string>
+  waitUntil?: () => Promise<number | null>
+  now?: () => number
   pollMs?: number
 }): LeadReadyWatch {
   const file = path.join(o.launcherDir, 'ready')
   const read = o.readReady ?? ((f: string) => fs.promises.readFile(f, 'utf8'))
+  const now = o.now ?? Date.now
   let done = false
+  let late: ReturnType<typeof setTimeout> | undefined
   const stop = () => { done = true; clearInterval(poll); clearTimeout(late) }
   const check = async (): Promise<boolean> => {
     const text = await read(file).catch(() => '')
@@ -104,15 +132,22 @@ export function watchLeadReady(o: {
     return done
   }
   const poll = setInterval(() => { void check() }, o.pollMs ?? POLL_MS)
-  const late = setTimeout(() => {
-    // One last look: a mark written in the last poll interval counts.
-    void check().then((ready) => {
-      if (ready) return
-      stop()
-      o.onLate()
-    })
-  }, o.seconds * 1000)
-  poll.unref?.(); late.unref?.()
+  const arm = (ms: number) => {
+    late = setTimeout(() => {
+      // One last look: a mark written in the last poll interval counts.
+      void check().then(async (ready) => {
+        if (ready || done) return
+        const until = o.waitUntil ? await o.waitUntil().catch(() => null) : null
+        if (done) return
+        if (until !== null && until > now()) { arm(until - now()); return }
+        stop()
+        o.onLate()
+      })
+    }, ms)
+    late.unref?.()
+  }
+  arm(o.seconds * 1000)
+  poll.unref?.()
   return { stop }
 }
 
@@ -127,12 +162,18 @@ export function armLeadReady(
   return armRoleReady({ ...d, role: 'leader' }, deps)
 }
 
-export interface RoleReadyDeps { leave: () => void; pid?: number; now?: () => number; log?: (line: string) => void; readReady?: (file: string) => Promise<string> }
+export interface RoleReadyDeps {
+  leave: () => void; pid?: number; now?: () => number; log?: (line: string) => void
+  readReady?: (file: string) => Promise<string>
+  /** The heartbeat's text (tests); the launcher dir's `heartbeat` by default. */
+  readBeat?: (file: string) => Promise<string>
+}
 
 /**
  * Arms the watch for either role: late, the marker for this mode, then `leave`. The follower role
- * counts this start first (noteRoleStart): past MAX_UNREADY_STARTS it leaves the marker and `leave`s
- * at once, and its ready mark ends the count. Null when no launcher dir is known.
+ * counts this start first (noteRoleStart): after MAX_UNREADY_STARTS unready starts it leaves the
+ * marker and `leave`s at once (null is returned), its ready mark ends the count, and it waits out
+ * the server's busy word (the header). Null also when no launcher dir is known.
  */
 export function armRoleReady(
   d: { role: ServiceRole; home: string; exe: string; stateDir: string; serverEnv: Record<string, string> },
@@ -164,9 +205,17 @@ export function armRoleReady(
   }
   const seconds = follower ? serveReadySeconds(d.serverEnv) : leadReadySeconds(d.serverEnv)
   const pid = deps.pid ?? (Number(d.serverEnv.WALNUT_LAUNCHER_SERVICE_PID) || process.pid)
+  const readBeat = deps.readBeat ?? ((f: string) => fs.promises.readFile(f, 'utf8'))
+  const beatFile = path.join(launcherDir, 'heartbeat')
   return watchLeadReady({
-    launcherDir, pid, seconds, ...(deps.readReady ? { readReady: deps.readReady } : {}),
-    ...(follower ? { onReady: () => { try { clearRoleStarts(d.stateDir) } catch { /* counted again next start */ } } } : {}),
+    launcherDir, pid, seconds, now, ...(deps.readReady ? { readReady: deps.readReady } : {}),
+    ...(follower ? {
+      onReady: () => { try { clearRoleStarts(d.stateDir) } catch { /* counted again next start */ } },
+      waitUntil: async () => {
+        const until = busyUntilMs(await readBeat(beatFile).catch(() => ''), pid)
+        return until === null ? null : until + BUSY_MARGIN_SECONDS * 1000
+      },
+    } : {}),
     onLate: () => {
       if (follower) { try { clearRoleStarts(d.stateDir) } catch { /* the marker decides now */ } }
       fallBack(`${what} was not ready within ${seconds} s`)

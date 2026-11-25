@@ -16,8 +16,8 @@
  * installed or refreshed straight into it: its mode file names this build, and the install proves
  * the build as the service (daemon-boot-proof.ts) before anything moves. The set's first start has
  * no follower spec yet and runs as the session daemon; once its Walnut's follower is configured
- * there, the regular mode update makes it the service. An install or a refresh that fails with
- * `--serve` is run once more without it; when that one goes through, the service was the cause:
+ * there, the regular mode update makes it the service. An install or a refresh whose build did not
+ * come up as the service (SERVE_FAILURE_CODES) is run once more with `--no-serve`; when that one goes through, the service was the cause:
  * `onUnfit` says why (no offer with this build, Walnut Health shows it) and the set runs the two
  * programs, with no step of a person's.
  */
@@ -91,9 +91,10 @@ export async function provisionWith(
     return { ...at, ok: false, buildMissing: scope ? { scope } : {} }
   }
   let done = await runServiceInstall(executable, io, ask, serve?.serve)
-  if (!done.ok && serve) {
-    // Once more as the session daemon: the set must not stay uninstalled for the service's sake.
-    const plain = await runServiceInstall(executable, io, ask)
+  if (!done.ok && serve && SERVE_FAILURE_CODES.includes(done.code ?? '')) {
+    // The build did not come up as the service: once more as the session daemon (`--no-serve`, so no
+    // mode the first try wrote is carried), the set must not stay uninstalled for the service's sake.
+    const plain = await runServiceInstall(executable, io, ask, { home: serve.serve.home, on: false })
     if (plain.ok) serve.onUnfit(`the install as the Walnut service did not go through (${(done.message ?? done.code ?? 'no answer').slice(0, 300)}); it runs as the session helper`)
     done = plain
   }
@@ -114,6 +115,13 @@ async function setHasBuild(io: Pick<RemoteDaemonUpdateIo, 'run'>, set: string, e
   const said = await io.run(`${findSetBuild(set, expected)}\n[ -n "$x" ] && echo build:yes || echo build:no`, 60_000).catch(() => '')
   return /^build:yes$/m.test(said) ? true : /^build:no$/m.test(said) ? false : null
 }
+
+/**
+ * The CLI's failure codes that say the build did not come up as the service (daemon-service-manager.ts):
+ * its boot proof as the service failed, or the launcher put it back or its probation failed. Only
+ * these are retried as the daemon and blamed on the service.
+ */
+export const SERVE_FAILURE_CODES: readonly string[] = ['bootProof', 'launcherRolledBack', 'probationFailed']
 
 /** The service's words for a set's install or refresh, and where its failure is told (the header). */
 export interface ProvisionServe {
@@ -137,15 +145,16 @@ export async function provisionServiceSet(
   const scope = buildMissing.scope === 'cron' ? 'cron' : 'user'
   const set = p.set
   let named: string | null = null
-  const refresh = (serve?: ProvisionServe['serve']) => updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set, onServiceSet: (s) => { named = s }, ...(serve ? { serve } : {}) })
+  const refresh = (serve?: { home: string; on: boolean }) => updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set, onServiceSet: (s) => { named = s }, ...(serve ? { serve } : {}) })
   try {
     try {
       await refresh(opts.serve?.serve)
     } catch (err) {
-      // A cut upload changed nothing (no try as the daemon then); any other failure as the service is tried once as the daemon.
-      if (!opts.serve || (err as { name?: unknown } | null)?.name === 'DaemonUpdateStageError') throw err
+      // Only a build that did not come up as the service is tried once as the daemon (`--no-serve`);
+      // a cut upload, a busy daemon, a timeout or a lost answer is the regular failure.
+      if (!opts.serve || !SERVE_FAILURE_CODES.includes(String((err as { failureCode?: unknown } | null)?.failureCode ?? ''))) throw err
       named = null
-      await refresh()
+      await refresh({ home: opts.serve.serve.home, on: false })
       opts.serve.onUnfit(`the update as the Walnut service did not go through (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); it runs as the session helper`)
     }
   } catch (err) {

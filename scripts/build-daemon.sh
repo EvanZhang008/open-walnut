@@ -305,6 +305,7 @@ SOURCES=(
   src/providers/service-launcher-script.ts
   src/providers/service-launcher-control.ts
   src/providers/service-launcher-beat.ts
+  src/providers/launcher-leaving.ts
   src/providers/host-runtime-core.ts
   src/providers/session-shell.ts
   src/providers/host-fix-core.ts

@@ -51,6 +51,7 @@ import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, 
 import type { DaemonLinkKind } from './daemon-update-paths.js'
 import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
+import { macosOneServiceWanted, serveSlotWhy } from './one-service-targets.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type ClaimEnd } from './daemon-update-claim.js'
 import { serviceSetWords, setWordsDue, type LinkStanding, type SetAsk } from './service-set-leader.js'
 import { provisionServiceSet, type ProvisionServe, type SetProvision } from './service-set-provision.js'
@@ -217,6 +218,8 @@ export async function acpTurnsHoldOverLink(c: NetUpdateLink, now: number = Date.
 
 export interface NetUpdaterDeps {
   conn: NetUpdateLink
+  /** The experiment macos_one_service (tests); read from the config by default. */
+  macos?: () => Promise<boolean>
   kind: () => DaemonLinkKind
   testServer: () => boolean
   /** This server follows a leader (core/server-role.ts isFollower). */
@@ -424,7 +427,10 @@ export class NetDaemonUpdater {
     if (!target) return no('the host\'s system could not be read')
     const say = (message: string) => log.session.info('service set: getting the daemon file for a host network machine', { host: c.host, message })
     const lookup = (walnutFile: boolean) => (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile })
-    let serve = opts.serve
+    // Straight into the service only on a Mac (a Linux set switches after its move, as before), and only as the table allows.
+    let serve = opts.serve && target.startsWith('darwin-') ? opts.serve : undefined
+    const systemWhy = serve ? serveSlotWhy(target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() }) : null
+    if (serve && systemWhy) { serve.onUnfit(systemWhy); serve = undefined }
     let src = await lookup(!!serve)
     if (serve && 'missing' in src) {
       serve.onUnfit(src.missing.slice(0, 300))
@@ -577,6 +583,13 @@ export class NetDaemonUpdater {
     const lookup = (t: HostFileTarget, walnutFile: boolean) => (this.d.source ?? netDaemonSource)(t, expected, say, { walnutFile })
     // `--serve` needs the walnut file (it holds the server), as the SSH path's slot does.
     let serve = mode.serve
+    // Only a system the one table lets take it (one-service-targets.ts: a Mac with macos_one_service on).
+    const systemWhy = serve?.on && facts.target ? serveSlotWhy(facts.target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() }) : null
+    if (systemWhy) {
+      this.d.mode?.unfit(expected, systemWhy)
+      serve = undefined
+      facts.modeDue = false
+    }
     facts.source = facts.target ? await lookup(facts.target, serve?.on === true) : { missing: 'unknown system' }
     if (serve?.on && facts.target && 'missing' in facts.source) {
       // No walnut file of this build for the host: no offer with this build (Walnut Health says why), the build goes as before.

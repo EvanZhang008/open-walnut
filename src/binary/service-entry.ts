@@ -265,6 +265,43 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
   return true
 }
 
+/** Tests and rehearsals: WALNUT_SERVICE_ROLE_WATCH=1 or 0 decides; else a Mac (the one service is new there, macos_one_service). */
+export const SERVE_WATCH_ENV = 'WALNUT_SERVICE_ROLE_WATCH'
+
+/** Whether the follower role's ready watch and start count run for this start (service-lead-ready.ts). */
+export function serveWatchOn(env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): boolean {
+  const forced = env[SERVE_WATCH_ENV]
+  if (forced === '1' || forced === '0') return forced === '1'
+  return platform === 'darwin'
+}
+
+/**
+ * The follower role's watch (service-lead-ready.ts armRoleReady): not ready in time, or never ready in
+ * its last starts (a crash at boot), the marker, and the next start runs the daemon, which starts the
+ * follower as its child. False when this start ends now, before the server loads: it says its exit is
+ * planned (the launcher's leaving mark), so the launcher restarts it at once as a fallback, never
+ * counts a crash and never rolls a trial back for it.
+ */
+async function watchServeRole(d: ServeDecision): Promise<boolean> {
+  const [{ armRoleReady }, { writeLeavingMarkSync }] = await Promise.all([import('./service-lead-ready.js'), import('../providers/launcher-leaving.js')])
+  const pid = Number(d.serverEnv.WALNUT_LAUNCHER_SERVICE_PID) || process.pid
+  let serving = false, left = false
+  armRoleReady({ role: 'replica', home: d.home, exe: process.execPath, stateDir: d.stateDir, serverEnv: d.serverEnv }, {
+    pid,
+    leave: () => { if (serving) endServicePlanned(); else left = true },
+  })
+  if (left) {
+    const dir = d.serverEnv.WALNUT_LAUNCHER_DIR
+    try { if (dir) writeLeavingMarkSync(dir, pid, 'the Walnut service did not get ready in its last starts; running as the session daemon') } catch (err) {
+      process.stderr.write(`walnut --service: the leaving mark was not written: ${err instanceof Error ? err.message : String(err)}\n`)
+    }
+    process.exitCode = 0
+    return false
+  }
+  serving = true
+  return true
+}
+
 /**
  * Runs the host's one Walnut service as the follower (main.ts, after decideServiceEntry said `serve`):
  * the follower server `walnut web --replica` runs (runWeb, one entry for both), holding the daemon
@@ -275,16 +312,7 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
 export async function runHostService(d: ServeDecision, loadRuntime: () => Promise<unknown>, runtimeRoot?: string): Promise<void> {
   if (!(await enterService(d, runtimeRoot))) return
   if (!(await stopOldFollowers([d.pidFile]))) { process.exitCode = 1; return }
-  // Not ready in time, or never ready in its last starts (a crash at boot): the marker, and the next
-  // start runs the daemon, which starts the follower as its child (service-lead-ready.ts).
-  const { armRoleReady } = await import('./service-lead-ready.js')
-  let serving = false, left = false
-  armRoleReady({ role: 'replica', home: d.home, exe: process.execPath, stateDir: d.stateDir, serverEnv: d.serverEnv }, {
-    // Before the server loads there is nothing to stop: this start just ends.
-    leave: () => { if (serving) endServicePlanned(); else left = true },
-  })
-  if (left) { process.exitCode = 1; return }
-  serving = true
+  if (serveWatchOn(d.serverEnv) && !(await watchServeRole(d))) return
   await serveWithRuntime(d, loadRuntime)
 }
 

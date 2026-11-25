@@ -1,10 +1,12 @@
 /**
  * A service set installed or refreshed straight into the host's one Walnut service
  * (service-set-provision.ts `serve`, the experiment macos_one_service): the install and the refresh
- * carry `--serve <home>` under the launcher, and one that fails as the service is run once more as
- * the session daemon, so the set never stays uninstalled or behind for the service's sake; when the
- * plain one goes through, the service was the cause and `onUnfit` says why (Walnut Health), with no
- * step of a person's. A cut upload changed nothing and is not tried as the daemon.
+ * carry `--serve <home>` under the launcher, and one whose build did not come up as the service
+ * (SERVE_FAILURE_CODES) is run once more with `--no-serve`, so the set never stays uninstalled or
+ * behind for the service's sake and no mode the first try wrote is carried; when the plain one goes
+ * through, the service was the cause and `onUnfit` says why (Walnut Health), with no step of a
+ * person's. Any other failure (a cut upload, a busy daemon, a timeout, a lost answer) is the regular
+ * failure: no second try, nothing blamed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -77,13 +79,24 @@ describe('a service set straight into the one Walnut service', () => {
       : `service set: ${SET}\n{"ok":true,"status":{"scope":"user"}}`)
     const s = serve()
     expect(await provisionWith(EXE, h.io, ask, undefined, s.serve)).toMatchObject({ set: SET, installed: true, ok: true })
-    expect(h.installs().map((l) => l.includes('--serve'))).toEqual([true, false])
+    expect(h.installs().map((l) => (l.includes(' --no-serve ') ? 'no-serve' : l.includes(' --serve ') ? 'serve' : 'none'))).toEqual(['serve', 'no-serve'])
+    expect(h.installs()[1]).toContain(` --no-serve ${HOME} `)
     expect(s.onUnfit).toHaveBeenCalledTimes(1)
     expect(s.onUnfit.mock.calls[0]![0]).toMatch(/did not serve as the Walnut service.*runs as the session helper/)
   })
 
+  it('an install that fails for another reason (a handover, a timeout, no answer) is not tried again, and nothing is blamed', async () => {
+    for (const answer of [`{"ok":false,"failure":{"code":"handoverPending","message":"retry install"}}`, `{"ok":false,"failure":{"code":"notReady","message":"timed out"}}`, '']) {
+      const h = host(() => `service set: ${SET}\n${answer}`)
+      const s = serve()
+      expect(await provisionWith(EXE, h.io, ask, undefined, s.serve)).toMatchObject({ ok: false })
+      expect(h.installs().every((l) => l.includes(' --serve '))).toBe(true)
+      expect(s.onUnfit).not.toHaveBeenCalled()
+    }
+  })
+
   it('an install that fails either way says the install failed, and blames nothing on the service', async () => {
-    const h = host(() => `service set: ${SET}\n{"ok":false,"failure":{"message":"no launchd"}}`)
+    const h = host((l) => (l.includes(' --serve ') ? `service set: ${SET}\n{"ok":false,"failure":{"code":"bootProof","message":"no launchd"}}` : `service set: ${SET}\n{"ok":false,"failure":{"message":"no launchd"}}`))
     const s = serve()
     const p = await provisionWith(EXE, h.io, ask, undefined, s.serve)
     expect(p).toMatchObject({ set: SET, installed: false, ok: false })
@@ -118,10 +131,10 @@ describe('a service set straight into the one Walnut service', () => {
     })
 
     it('one that fails as the service (its trial put the build back) is run once as the daemon, and the reason told', async () => {
-      updateFails = (o) => (o.serve ? Object.assign(new Error('Managed daemon update failed: the new daemon did not stay'), { buildFailed: true }) : null)
+      updateFails = (o) => ((o.serve as { on?: boolean } | undefined)?.on ? Object.assign(new Error('Managed daemon update failed: the new daemon did not stay'), { buildFailed: true, failureCode: 'launcherRolledBack' }) : null)
       const s = serve()
       expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', installed as never, ask, { refresh: true, serve: s.serve })).toMatchObject({ ok: true, refreshed: true })
-      expect(updates).toEqual([{ serve: { home: HOME, on: true } }, { serve: undefined }])
+      expect(updates).toEqual([{ serve: { home: HOME, on: true } }, { serve: { home: HOME, on: false } }])
       expect(s.onUnfit.mock.calls[0]![0]).toMatch(/did not stay.*runs as the session helper/)
     })
 
@@ -133,8 +146,16 @@ describe('a service set straight into the one Walnut service', () => {
       expect(s.onUnfit).not.toHaveBeenCalled()
     })
 
-    it('one that fails either way is the regular failure, nothing blamed on the service', async () => {
-      updateFails = () => new Error('the host is out of disk')
+    it('one that fails for another reason (busy, out of disk) is the regular failure: no try as the daemon, nothing blamed', async () => {
+      updateFails = () => Object.assign(new Error('the host is out of disk'), { failureCode: 'commandFailed' })
+      const s = serve()
+      expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', installed as never, ask, { refresh: true, serve: s.serve })).toMatchObject({ ok: false, retryLook: true })
+      expect(updates).toHaveLength(1)
+      expect(s.onUnfit).not.toHaveBeenCalled()
+    })
+
+    it('one that fails as the service and then as the daemon is the regular failure, nothing blamed', async () => {
+      updateFails = (o) => Object.assign(new Error('the host is out of disk'), { failureCode: (o.serve as { on?: boolean } | undefined)?.on ? 'bootProof' : 'commandFailed' })
       const s = serve()
       expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', installed as never, ask, { refresh: true, serve: s.serve })).toMatchObject({ ok: false, retryLook: true })
       expect(updates).toHaveLength(2)

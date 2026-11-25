@@ -18,6 +18,7 @@ import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { resetInProcessDaemonWantedForTests } from '../../src/providers/in-process-daemon.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { log } from '../../src/logging/index.js'
+import { MACOS_OFF_WHY } from '../../src/providers/one-service-targets.js'
 
 const OLD = 'walnut-daemon-0ld000000000'
 const NEW = 'walnut-daemon-new000000000'
@@ -85,6 +86,31 @@ describe('decideNetUpdate with a switch of the mode due', () => {
 })
 
 describe('NetDaemonUpdater carries the mode', () => {
+  it('a Mac with macos_one_service off: no --serve, the table\'s reason is told; with it on, the switch goes', async () => {
+    const off = mode({ due: true, serve: ON })
+    const a = updater({ mode: off, target: async () => 'darwin-arm64', macos: async () => false })
+    a.u.schedule(0)
+    await vi.waitFor(() => expect(a.u.state).toMatchObject({ phase: 'skipped', skip: 'current' }))
+    expect(off.unfit).toHaveBeenCalledWith(NEW, MACOS_OFF_WHY)
+    expect(a.update).not.toHaveBeenCalled()
+    a.u.stop()
+    // A new build still goes, as the session daemon.
+    const off2 = mode({ due: false, serve: ON })
+    const b = updater({ mode: off2, target: async () => 'darwin-arm64', macos: async () => false }, link({ daemonVersion: OLD }))
+    b.u.schedule(0)
+    await vi.waitFor(() => expect(b.u.state.phase).toBe('updated'))
+    expect(b.source.mock.calls[0]![3]).toEqual({ walnutFile: false })
+    expect((b.update.mock.calls[0] as unknown as [unknown, unknown, unknown, unknown, { serve?: unknown }])[4].serve).toBeUndefined()
+    b.u.stop()
+    const on = mode({ due: true, serve: ON })
+    const c = updater({ mode: on, target: async () => 'darwin-arm64', macos: async () => true })
+    c.u.schedule(0)
+    await vi.waitFor(() => expect(c.u.state.phase).toBe('updated'))
+    expect((c.update.mock.calls[0] as unknown as [unknown, unknown, unknown, unknown, { serve?: unknown }])[4].serve).toEqual(ON)
+    expect(on.unfit).not.toHaveBeenCalled()
+    c.u.stop()
+  })
+
   it('a switch on the current build sends the walnut file with --serve, and records the ask', async () => {
     const m = mode({ due: true, serve: ON })
     const { u, update, source } = updater({ mode: m })
