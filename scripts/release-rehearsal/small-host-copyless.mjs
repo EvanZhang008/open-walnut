@@ -254,8 +254,14 @@ async function main() {
 
     await stage('on', async () => {
       experiment(true)
-      const v = await until('the host to run the service without a copy', () => { const x = view(); return x?.phase === 'running' && x.copyless === true && x.daemon?.pid ? x : null }, 600_000, 5_000)
-      await until('the one service to settle (no update running)', () => !hostProcs().some((p) => /update\.sh|daemon update/.test(p.args)), 300_000)
+      await until('the host to run the service without a copy', () => { const x = view(); return x?.phase === 'running' && x.copyless === true && x.daemon?.pid ? x : null }, 600_000, 5_000)
+      // The switch to the one service restarts it (a daemon update): judged once that is over.
+      const v = await until('the one service to settle (no update running, the follower is the service)', () => {
+        const procs = hostProcs()
+        if (procs.some((p) => /update\.sh|daemon update/.test(p.args))) return null
+        const x = view()
+        return x?.phase === 'running' && x.copyless === true && procs.some((p) => p.pid === x.daemon?.pid && /--service/.test(p.args)) ? x : null
+      }, 300_000, 5_000)
       const env = working(work)?.env ?? {}
       if (env.WALNUT_COPIES !== 'none') throw new Error(`the spec kept for the host has no WALNUT_COPIES=none: ${JSON.stringify(env)}`)
       const procs = hostProcs()
