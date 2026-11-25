@@ -204,7 +204,8 @@ function invalidateTaskStoreCache(): void {
 }
 
 /** Store-shape counters for tests and the daily loop check (`scripts/walnut-logs.sh loop`). */
-const storeStats = { fullScans: 0, fingerprintedRows: 0, rowsWritten: 0, wholeStoreWrites: 0, viewReads: 0, cloneReads: 0 };
+/** `copiedRows`: task rows copied out by listTasks and the whole-store clone. */
+const storeStats = { fullScans: 0, fingerprintedRows: 0, rowsWritten: 0, wholeStoreWrites: 0, viewReads: 0, cloneReads: 0, copiedRows: 0 };
 export function _storeStatsForTesting(): Readonly<typeof storeStats> { return { ...storeStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
 export function _dropTaskStoreCacheForTesting(): void { invalidateTaskStoreCache(); }
@@ -770,6 +771,7 @@ async function readStore(): Promise<TaskStore> {
   const store = await loadStore();
   if (!STORE_CACHE_ENABLED) return store;
   storeStats.cloneReads += 1;
+  storeStats.copiedRows += store.tasks.length;
   return cloneTaskStore(store);
 }
 
@@ -3464,6 +3466,7 @@ export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
       : tasks.filter((t) => (t.project || '') === wanted);
   }
 
+  storeStats.copiedRows += tasks.length;
   return tasks.map(cloneTask);
 }
 

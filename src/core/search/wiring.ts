@@ -42,8 +42,8 @@ import { clearTaskSearchRequeue, setTaskSearchRequeue } from './task-requeue.js'
 import { listPersonWordsTasks } from '../sessions/user-asks.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
-import { listTasks } from '../task-manager.js';
-import { listSessions } from '../session-tracker.js';
+import { taskStoreSnapshot } from '../task-manager.js';
+import { listSessionsForTasks } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc } from './serializers.js';
 import { semanticLaneDecision, type SemanticLaneDecision } from './semantic-default.js';
 import { ensureComponent, resolveComponent } from '../components/index.js';
@@ -596,7 +596,8 @@ async function syncTasks(taskIds: string[]): Promise<void> {
   const index = getSearchV2Index();
   const wanted = new Set(taskIds);
   const present = new Map(
-    (await listTasks()).filter((t) => wanted.has(t.id)).map((t) => [t.id, t]),
+    // Copies of the named tasks only (the loop below awaits between them).
+    (await taskStoreSnapshot()).filter((t) => wanted.has(t.id)).map((t) => [t.id, { ...t }]),
   );
   for (const taskId of taskIds) {
     const task = present.get(taskId);
@@ -609,10 +610,10 @@ async function syncTasks(taskIds: string[]): Promise<void> {
 
 async function syncSessions(sessionIds: string[]): Promise<void> {
   const index = getSearchV2Index();
-  const wanted = new Set(sessionIds);
-  const sessions = (await listSessions()).filter((s) => wanted.has(s.claudeSessionId));
-  const tasks = await listTasks();
-  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  // Copies of the named sessions only, and the store's own task rows (read only): this ran on
+  // every session write and copied both whole stores (2026-11-24 sessionCopiesBy).
+  const sessions = await listSessionsForTasks(new Set(), new Set(sessionIds));
+  const taskById = new Map((await taskStoreSnapshot()).map((t) => [t.id, t]));
   const seen = new Set<string>();
   for (const session of sessions) {
     seen.add(session.claudeSessionId);

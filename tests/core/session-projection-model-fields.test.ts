@@ -18,15 +18,17 @@ vi.mock('../../src/core/projection-cache.js', async (orig) => ({
 }))
 const catalogs = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 vi.mock('../../src/core/host-model-catalog.js', () => ({ listHostModelCatalogs: async () => catalogs.value }))
+const rows = vi.hoisted(() => () => [{
+  claudeSessionId: 'bbbbbbbb-2222-4222-8222-222222222222', host: 'devbox', process_status: 'idle',
+  startedAt: '2026-10-07T10:00:00Z', lastActiveAt: '2026-10-07T11:00:00Z',
+  model: 'opus', cliModel: 'sonnet[1m]', effort: 'high', effectiveEffort: 'medium',
+}])
 vi.mock('../../src/core/session-tracker.js', () => ({
-  listSessions: async () => [{
-    claudeSessionId: 'bbbbbbbb-2222-4222-8222-222222222222', host: 'devbox', process_status: 'idle',
-    startedAt: '2026-10-07T10:00:00Z', lastActiveAt: '2026-10-07T11:00:00Z',
-    model: 'opus', cliModel: 'sonnet[1m]', effort: 'high', effectiveEffort: 'medium',
-  }],
+  listSessions: async () => rows(),
+  sessionStoreView: async () => rows(),
   isListableSession: () => true,
 }))
-vi.mock('../../src/core/task-manager.js', () => ({ listTasks: async () => [], listFolderLabels: async () => new Map() }))
+vi.mock('../../src/core/task-manager.js', () => ({ listTasks: async () => [], taskStoreSnapshot: async () => [], listFolderLabels: async () => new Map() }))
 
 import { buildSessionProjection, exportSessionProjection, projectSession } from '../../src/core/session-projection.js'
 import type { SessionRecord } from '../../src/core/types.js'

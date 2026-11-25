@@ -183,8 +183,8 @@ export function withAwaits<T extends OrgThread>(threads: readonly T[], tasks: re
 export async function withKnownAwaits<T extends OrgThread>(threads: readonly T[]): Promise<Array<T & { awaits?: AckWaits }>> {
   if (!threads.some(isKnown)) return [...threads];
   try {
-    const { listTasks } = await import('../task-manager.js');
-    return withAwaits(threads, await listTasks());
+    const { taskStoreSnapshot } = await import('../task-manager.js');
+    return withAwaits(threads, await taskStoreSnapshot());
   } catch (err) {
     log.task.warn('org threads: known awaits not read', { error: err instanceof Error ? err.message : String(err) });
     return [...threads];

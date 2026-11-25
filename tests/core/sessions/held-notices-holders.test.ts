@@ -50,6 +50,7 @@ const HOLDERS: Record<string, How> = {
   'src/core/sessions/place-notice.ts#claims': { 'no-text': 'which send is telling the place note now; the note is read from the task and session records' },
   'src/core/sessions/restart-notice.ts#claims': { 'no-text': 'which send is telling the restart note now; the note is read from the session record' },
   'src/core/org/org-store.ts#claims': { 'no-text': 'which send is telling the digest now; the digest is in the org store' },
+  'src/core/org/org-store.ts#orgViews': { 'no-text': 'the board without test-run tasks, one list per task store snapshot; rebuilt from the store on the next read' },
   'src/core/sessions/folder-gone.ts#noting': { 'no-text': 'a folder check in flight; its result is written on the session record' },
   'src/core/sessions/folder-gone.ts#continuing': { 'no-text': 'a move to a new folder in flight; its result is written on the session record' },
   'src/core/sessions/app-state.ts#published': { 'restart-ok': 'what a running App published; the App runs in this server and publishes again once it runs again' },

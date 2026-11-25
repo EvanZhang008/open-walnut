@@ -27,11 +27,13 @@ let mockTasks: Task[] = []
 
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: async () => mockSessions,
+  sessionStoreView: async () => mockSessions,
   // Real rule (session-tracker): no environment sessions, no lane-bound ones.
   isListableSession: (s: SessionRecord) => !s.lane,
 }))
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasks: async () => mockTasks,
+  taskStoreSnapshot: async () => mockTasks,
   listFolderLabels: async () => new Map(),
 }))
 
