@@ -773,14 +773,17 @@ the job waits for its doors (the take-back time plus 90 s).
 Every server a switch job starts (a trial, a leader, a standby) gets a clean env
 (`side.ts cleanStartEnv`): the account basics (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `PATH`,
 `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), the machine's daemon placement (`WALNUT_DAEMON_*`,
-`WALNUT_IN_PROCESS_DAEMON`, `XDG_*`) and the machine's `env` from `leader_switch.machines`, never the
+`WALNUT_IN_PROCESS_DAEMON`, `XDG_*`), the permission's clock (`WALNUT_LEADER_PERMIT_*`, which the job and
+its servers must count alike) and the machine's `env` from `leader_switch.machines`, never the
 job's own session identity (an agent session's `WALNUT_SESSION_ID` and `WALNUT_TASK_DIR`,
 `CLAUDECODE`): a standby's runtime may run for days, and every CLI it starts inherits its env. So
 whatever else a machine's server needs goes in its `machines[].env`: `WALNUT_CAPABILITIES` (say
 `witness-door`), `WALNUT_BIND_ADDRESS`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` / `NO_PROXY`, and any
 provider credentials the server reads from its env rather than from files under `HOME`. The remote
 rehearsal runs its main switch with an agent's session identity in the command's env and checks that
-the standby the job started booted without it and with the machine's env.
+the standby the job started booted without it and with the machine's env. In a vitest run the test
+setup marks its env (`WALNUT_TEST_ENV_PASSES_ON`): its isolation (the fake `HOME`, the exec guard, the
+knobs that keep servers off the real world) passes on whole, only the session identity taken out.
 
 A standby started while its switch's marker still says `switching` (the job died after the commit,
 or is slower than the new leader's console replica) reads the marker again at each look and keeps

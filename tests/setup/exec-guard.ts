@@ -85,6 +85,9 @@ function install(): ExecGuardState {
   process.env.PATH = guardedPath()
   process.env.WALNUT_TEST_EXEC_GUARD = EXEC_GUARD_BIN
   process.env.WALNUT_TEST_EXEC_GUARD_LOG = log
+  // A leader switch's job starts its servers on a clean env (src/core/leader/switch/side.ts cleanStartEnv);
+  // in a test run this isolation passes on to them whole, only the session identity taken out.
+  process.env.WALNUT_TEST_ENV_PASSES_ON = '1'
   const state: ExecGuardState = { home, log, offset: 0 }
   process.on('exit', () => {
     try {

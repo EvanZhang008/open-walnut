@@ -141,8 +141,10 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     // Both machines' servers open the witness door (whatever they run as); only A has a link (to dev box 2's host service).
     const a = cfg.leader_switch.machines.find((m: { id: string }) => m.id === w.a.id)
     const b = cfg.leader_switch.machines.find((m: { id: string }) => m.id === w.b.id)
-    a.env = { ...a.env, WALNUT_CAPABILITIES: 'witness-door', WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ 'host-c': hostC.port }) }
-    b.env = { ...b.env, WALNUT_CAPABILITIES: 'witness-door' }
+    // What a machine's server needs beyond the account basics goes in its env: a switch job starts every server
+    // on a clean env (side.ts cleanStartEnv), so the loopback CA this process trusts reaches them only from here.
+    a.env = { ...a.env, WALNUT_CAPABILITIES: 'witness-door', NODE_EXTRA_CA_CERTS: cert.certFile, WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ 'host-c': hostC.port }) }
+    b.env = { ...b.env, WALNUT_CAPABILITIES: 'witness-door', NODE_EXTRA_CA_CERTS: cert.certFile }
     fs.writeFileSync(cfgFile, YAML.stringify(cfg))
     Object.assign(w.a, { env: a.env })
     Object.assign(w.b, { env: b.env })

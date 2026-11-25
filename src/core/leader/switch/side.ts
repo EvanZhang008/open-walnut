@@ -31,8 +31,20 @@ function killSpawned(child: { pid?: number }): void {
 
 /** What a clean start keeps of the env it is started from: the account and the shell basics, as a launcher or a daemon stand-in gives (`env -i HOME USER ...`). */
 const CLEAN_START_KEEP = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'USERPROFILE', 'WALNUT_IN_PROCESS_DAEMON']
-/** And the machine's placement, by prefix: where its daemon lives (`WALNUT_DAEMON_DIR`, its install root) and the desktop session's dirs. */
-const CLEAN_START_KEEP_PREFIXES = ['WALNUT_DAEMON_', 'XDG_']
+/**
+ * And by prefix: the machine's placement (where its daemon lives, `WALNUT_DAEMON_DIR`, its install root; the
+ * desktop session's dirs) and the permission's clock (`WALNUT_LEADER_PERMIT_*`: the job and the servers it
+ * starts must count the same permit).
+ */
+const CLEAN_START_KEEP_PREFIXES = ['WALNUT_DAEMON_', 'XDG_', 'WALNUT_LEADER_PERMIT_']
+/** The session identity of whoever ran the switch (an agent's): never on a server the switch starts. */
+const JOB_IDENTITY = ['WALNUT_SESSION_ID', 'WALNUT_TASK_DIR', 'CLAUDECODE']
+/**
+ * Set by the test setup (tests/setup/exec-guard.ts), never on a real machine: this env is a test run's
+ * isolation (its fake HOME, its exec guard, its knobs that keep servers off the real world), which every
+ * server the test's switch starts must keep. Only the session identity is taken out then.
+ */
+export const TEST_ENV_PASSES_ON = 'WALNUT_TEST_ENV_PASSES_ON'
 
 /**
  * The env every server the switch starts (a trial, the new leader, the old leader again, the old home's
@@ -45,6 +57,10 @@ const CLEAN_START_KEEP_PREFIXES = ['WALNUT_DAEMON_', 'XDG_']
  */
 export function cleanStartEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
+  if (from[TEST_ENV_PASSES_ON] === '1') {
+    for (const [k, v] of Object.entries(from)) if (typeof v === 'string' && !JOB_IDENTITY.includes(k)) env[k] = v
+    return env
+  }
   for (const [k, v] of Object.entries(from)) {
     if (typeof v === 'string' && (CLEAN_START_KEEP.includes(k) || CLEAN_START_KEEP_PREFIXES.some((p) => k.startsWith(p)))) env[k] = v
   }
