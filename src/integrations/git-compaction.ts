@@ -19,6 +19,7 @@ import {
   git, gitSafe, gitAsync, gitSafeAsync, isOwnRepoAt, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
 } from './git-sync.js';
 import { deliverCompactedChain } from './git-compaction-deliver.js';
+import { buildCompactedChain } from './git-compaction-chain.js';
 import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import { log } from '../logging/index.js';
 
@@ -133,8 +134,10 @@ function parseGitLog(raw: string): Commit[] {
   if (!raw.trim()) return [];
   return raw.split('\n').map((line) => {
     // Format: <hash> <ISO-date> <subject...>
+    // An empty subject on the last line loses its separator to the output's trim.
     const spaceIdx1 = line.indexOf(' ');
-    const spaceIdx2 = line.indexOf(' ', spaceIdx1 + 1);
+    const found = line.indexOf(' ', spaceIdx1 + 1);
+    const spaceIdx2 = found < 0 ? line.length : found;
     return {
       hash: line.slice(0, spaceIdx1),
       date: line.slice(spaceIdx1 + 1, spaceIdx2),
@@ -156,13 +159,13 @@ const LOG_PAGE_SIZE = 5_000;
  * Pages walk backwards from HEAD (`--skip`), then the whole list is reversed —
  * `--reverse --max-count` would return the OLDEST N instead of paging.
  */
-export function collectCommitsPaged(repoDir: string): Commit[] {
+export function collectCommitsPaged(repoDir: string, ref = 'HEAD'): Commit[] {
   const opts = { cwd: repoDir };
   const pages: Commit[][] = [];
 
   for (let skip = 0; ; skip += LOG_PAGE_SIZE) {
     const raw = git(
-      `log --format="%H %aI %s" --max-count=${LOG_PAGE_SIZE} --skip=${skip}`,
+      `log --format="%H %aI %s" --max-count=${LOG_PAGE_SIZE} --skip=${skip} ${ref}`,
       opts,
     );
     const page = parseGitLog(raw);
@@ -234,7 +237,10 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
   // disabled compaction on exactly the repos that needed it most. At 30s
   // auto-commits that's ~3.5 days of history; the 2026-07-25 incident repo had
   // 161k commits and had never compacted once.
-  const commits = collectCommitsPaged(repoDir);
+  // Everything below is about THIS head: the backup, the tree check and the
+  // swap (a compare-and-swap), so a commit landing meanwhile is never dropped.
+  const headAtStart = git('rev-parse main', opts);
+  const commits = collectCommitsPaged(repoDir, headAtStart);
 
   if (commits.length < 50) {
     return { skipped: true, before: commits.length, after: commits.length };
@@ -251,41 +257,21 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
   // 3. Create backup branch
   const backupName = `backup-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
   gitSafe(`branch -D ${backupName}`, opts); // remove old backup with same name
-  git(`branch ${backupName}`, opts);
+  git(`branch ${backupName} ${headAtStart}`, opts);
   writeState(repoDir, { phase: 'building', backup: backupName, startedAt: new Date().toISOString() });
   // A rewrite starts here: one a deploy cuts short waits COMPACTION_RETRY_HOURS, not the next boot.
   fs.writeFileSync(path.join(repoDir, LAST_ATTEMPT_FILE), new Date().toISOString(), 'utf-8');
 
   try {
-    // 4. Build the compacted chain with `commit-tree` — NO working-tree I/O.
-    // The old implementation materialized every kept commit via
-    // `rm -rf . && checkout <hash> -- . && add -A && commit`: four child
-    // processes plus a full working-tree rewrite PER COMMIT. On the real data
-    // repo (2.5GB tree, ~20k commits inside the keep-everything window) that
-    // is 10+ hours — compaction could never finish even without ENOBUFS.
-    // `commit-tree` snapshots each kept commit's EXISTING tree object into a
-    // new parent chain directly in the object DB: O(1) per commit, and the
-    // resulting trees are byte-identical by construction.
-    let parent = '';
-    let newHead = '';
-    for (const commit of selected) {
-      const safeSubject = commit.subject.replace(/"/g, '\\"');
-      const message = commit === selected[0] && selected.length < commits.length
-        ? `compacted: ${safeSubject}`
-        : safeSubject;
-
-      newHead = git(
-        `commit-tree ${commit.hash}^{tree}${parent ? ` -p ${parent}` : ''} -m "${message}"`,
-        {
-          ...opts,
-          env: {
-            GIT_AUTHOR_DATE: commit.date,
-            GIT_COMMITTER_DATE: commit.date,
-          },
-        },
-      );
-      parent = newHead;
-    }
+    // 4. Build the compacted chain directly in the object DB: NO working-tree
+    // I/O, each kept commit's EXISTING tree reused, so the final tree is
+    // byte-identical by construction. Three git calls, whatever the count:
+    // git-compaction-chain.ts says why not one `commit-tree` per commit.
+    const newHead = buildCompactedChain(repoDir, selected.map((commit, i) => ({
+      hash: commit.hash,
+      date: commit.date,
+      message: i === 0 && selected.length < commits.length ? `compacted: ${commit.subject}` : commit.subject,
+    })));
     git(`update-ref refs/heads/compaction-wip ${newHead}`, opts);
 
     // 5. Verify: final tree of compaction-wip must match main exactly.
@@ -293,7 +279,7 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
     // touching the working tree (there is no checkout to compare anymore).
     writeState(repoDir, { phase: 'verified', backup: backupName, startedAt: new Date().toISOString() });
     const wipTree = gitSafe('rev-parse compaction-wip^{tree}', opts);
-    const mainTree = gitSafe('rev-parse main^{tree}', opts);
+    const mainTree = gitSafe(`rev-parse ${headAtStart}^{tree}`, opts);
     if (!wipTree || wipTree !== mainTree) {
       // MISMATCH — abort (main was never touched)
       gitSafe('update-ref -d refs/heads/compaction-wip', opts);
@@ -302,7 +288,11 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
     }
 
     // 6. Atomic swap: point main at compaction-wip HEAD
-    git(`update-ref refs/heads/main ${newHead}`, opts);
+    if (gitSafe(`update-ref refs/heads/main ${newHead} ${headAtStart}`, opts) === null) {
+      gitSafe('update-ref -d refs/heads/compaction-wip', opts);
+      removeState(repoDir);
+      return { before: commits.length, after: commits.length, error: 'main moved during compaction; nothing changed, will retry next run' };
+    }
     // The working tree still matches (same tree hash) — refresh the index so
     // a subsequent `status` doesn't report phantom changes.
     gitSafe('reset --mixed HEAD', opts);
