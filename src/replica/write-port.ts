@@ -107,6 +107,8 @@ export interface BoardBase {
 export interface WritePortDeps {
   /** The task as this replica shows it now (the copy plus pending records), or null. */
   task(id: string): Promise<TaskRow | null>
+  /** The answer for a write on a task `task` has not (row-source.ts missing); absent: `not_found`. */
+  missing?(id: string): PortAnswer
   /** Whether this host's journal made the task and its create is still pending, never taken by the Mac yet (overlay.ts createPending). */
   createdHere?(id: string): boolean
   /** The Board of a task as this replica shows it now, or null when it has none. */
@@ -267,6 +269,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
   const hex = deps.randomHex ?? ((n: number) => crypto.randomBytes(n).toString('hex'))
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => {})
+  const missing = (id: string): PortAnswer => (deps.missing ? deps.missing(id) : refusalAnswer('not_found', `Task ${id} not found`))
 
   /** The daemon's answer as the route's: the overlay learns a write it took at once. */
   function settle(r: ReplicaWriteResult, actor: WriteActor, record: Record<string, unknown>, ok: (reply: Record<string, unknown>) => PortAnswer, clientRequestId?: string): PortAnswer {
@@ -299,7 +302,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
 
   async function fieldsWrite(w: ReplicaWrite, actor: WriteActor, taskId: string, op: 'task_update' | 'task_complete', values: Record<string, unknown>): Promise<PortAnswer> {
     const row = await deps.task(taskId)
-    if (!row) return refusalAnswer('not_found', `Task ${taskId} not found`)
+    if (!row) return missing(taskId)
     const refused = macRefusalOf(row, values)
     if (refused) return refusalAnswer('bad_request', refused)
     // The drain holds a session's (or a plugin job's) write to what its op takes online
@@ -411,7 +414,7 @@ export function createWritePort(deps: WritePortDeps): WritePort {
     },
     async taskMove(w, actor, taskId, anchor, tier) {
       const row = await deps.task(taskId)
-      if (!row) return refusalAnswer('not_found', `Task ${taskId} not found`)
+      if (!row) return missing(taskId)
       const base = tier !== undefined ? { focus_tier: row.focus_tier ?? 'unknown' } : undefined
       const r = await w.submit('task_move', { id: taskId, anchor, ...(tier !== undefined ? { tier } : {}) }, base, actor)
       return settle(r, actor, { kind: 'task-move', taskId, anchor, ...(tier !== undefined ? { tier } : {}) }, (reply) => ({

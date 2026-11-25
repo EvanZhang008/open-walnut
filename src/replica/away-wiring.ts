@@ -37,6 +37,7 @@ import type { SessionRecord } from '../core/types.js'
 import type { AwayStart } from '../core/offline-merge/task-row-fold.js'
 import type { CallerTaskRow } from '../core/sessions/caller-placement.js'
 import type { AskLaunch } from './ask-launch.js'
+import { copyRowSource, type RowSource } from './row-source.js'
 
 /** The daemon capability note writes away ride on (WP11). */
 const NOTE_JOURNAL_CAP = 'note-journal-v1'
@@ -79,6 +80,8 @@ export interface AwayWiringOptions {
   macAnswers?(): boolean
   /** Whether this replica answers its host's own `walnut` calls (the `host-local-calls` capability). */
   localCalls?(): boolean
+  /** Where reads and writes take their rows (row-source.ts); absent: the copy stores. */
+  source?: RowSource
 }
 
 /** A session row this host started alone, as the reader fold takes it (task-row-fold.ts AwayStart). */
@@ -87,27 +90,9 @@ export function awayStartOf(r: SessionRecord): AwayStart {
   return { sid: r.claudeSessionId, at: Number.isFinite(at) ? at : 0, mode: r.mode, status: r.process_status }
 }
 
-async function copyTask(id: string): Promise<TaskRow | null> {
-  try {
-    const { getTask } = await import('../core/task-manager.js')
-    const t = await getTask(id)
-    return t && t.id === id ? (t as unknown as TaskRow) : null
-  } catch {
-    return null
-  }
-}
-
-async function copyBoard(taskId: string): Promise<Record<string, unknown> | null> {
-  try {
-    const { getBoard } = await import('../core/boards/board-store.js')
-    return (await getBoard(taskId)) as unknown as Record<string, unknown> | null
-  } catch {
-    return null
-  }
-}
-
 export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWiring> {
   const { link } = opts
+  const source = opts.source ?? copyRowSource()
   const linked = () => link.linkState() === 'following'
   /** Tasks made here whose task:created has not gone out yet: id to the page's client_request_id. */
   const created = new Map<string, string>()
@@ -134,7 +119,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
       if (k.kind === 'tasks') {
         const crid = created.get(k.id)
         created.delete(k.id)
-        const row = overlay.taskForReaders(k.id, await copyTask(k.id))
+        const row = overlay.taskForReaders(k.id, await source.task(k.id))
         if (row && crid) opts.broadcast('task:created', { task: row, clientRequestId: crid })
         else if (row) opts.broadcast('task:updated', { task: { ...row, [SYNC_FIELD]: (row as Record<string, unknown>)[SYNC_FIELD] ?? null } })
       } else if (k.kind === 'boards') {
@@ -155,11 +140,11 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   // values only, never the session a reader is shown (overlay.ts taskForReaders).
   const shownTask = async (id: string): Promise<TaskRow | null> => {
     await overlay.refresh(500)
-    return overlay.task(id, await copyTask(id)) as TaskRow | null
+    return overlay.task(id, await source.task(id)) as TaskRow | null
   }
   const shownBoard = async (taskId: string): Promise<BoardBase | null> => {
     await overlay.refresh(500)
-    const b = await copyBoard(taskId)
+    const b = await source.board(taskId)
     const body = overlayBoard(taskId, {
       board: b ? { html: b.html, version: b.version, updated_by: b.updated_by, updated_session_id: b.updated_session_id, html_sources: b.html_sources } : null,
       threads: b?.threads ?? {}, marks: b?.marks ?? {}, projects: b?.projects ?? {}, choices: b?.choices ?? {},
@@ -175,6 +160,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   }
   const port = createWritePort({
     task: shownTask,
+    missing: (id) => source.missing(id),
     // The leader's drain's caller (journal-actor.ts), its task read as this replica shows it.
     createCaller: async (actor) => (await (await import('../core/offline-merge/journal-actor.js'))
       .createCaller(actor, { readTask: async (id) => (await shownTask(id)) as CallerTaskRow | null })).caller,
