@@ -57,6 +57,24 @@ function cliPidOf(daemonDir: string, sid: string): number | null {
   walk(doc)
   return found
 }
+/**
+ * Which daemon shape the servers of one machine ran, from their own logs (every server and standby of a
+ * machine logs into its daemon dir): how many times a server started the daemon in its own process, and how
+ * many times one used a daemon program (its `local daemon ready` with a port).
+ */
+function daemonShapes(daemonDir: string): { inProcess: number; program: number } {
+  let inProcess = 0
+  let program = 0
+  let names: string[] = []
+  try { names = fs.readdirSync(daemonDir).filter((f) => /^open-walnut-.*\.log$/.test(f)) } catch { /* none yet */ }
+  for (const f of names) {
+    for (const line of fs.readFileSync(path.join(daemonDir, f), 'utf8').split('\n')) {
+      if (line.includes('"message":"in-process daemon started"')) inProcess++
+      else if (line.includes('"message":"local daemon ready"') && /"port":\d+/.test(line)) program++
+    }
+  }
+  return { inProcess, program }
+}
 const pidAlive = (pid: number | null) => { if (!pid || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
 
 /** The switch command on the machine that leads: its own process, with that machine's environment. */
@@ -376,6 +394,12 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
     leaderAgain?.daemonInProcess === inProcess && pidAlive(ownPid) && cliPidOf(w.daemons.a.dir, own.sid) === ownPid, `daemonInProcess ${leaderAgain?.daemonInProcess}; pid ${ownPid} alive ${pidAlive(ownPid)}; the registry names ${cliPidOf(w.daemons.a.dir, own.sid)}`)
   await checkCarried(c, w, A, B, { tasks: [...s.tasks, ...acked, ...onBWrites], notes: s.notes, pluginFiles: [...s.pluginFiles, late] }, 'main B -> A')
   checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt, startedAt: back.state?.startedAt })
+  // What each machine's servers really ran (the target's servers are started by its daemon's job with the
+  // machine's env, and read the setting from the home they boot on): the setting of this run, on both machines.
+  const shapes = { a: daemonShapes(w.daemons.a.dir), b: daemonShapes(w.daemons.b.dir) }
+  c.add(`main: every server of A and of B ran the daemon ${inProcess ? 'in its own process' : 'as a program of its own'} (their logs)`,
+    inProcess ? shapes.a.inProcess > 0 && shapes.b.inProcess > 0 && shapes.a.program === 0 && shapes.b.program === 0
+      : shapes.a.inProcess === 0 && shapes.b.inProcess === 0 && shapes.a.program > 0 && shapes.b.program > 0, JSON.stringify(shapes))
   c.add('main: A\'s handed-over home is kept beside the new one', fs.existsSync(`${A.home}.before-${back.state!.id}`) && readMarker(`${A.home}.before-${back.state!.id}`)?.state === 'handed-over')
 }
 
