@@ -16,6 +16,7 @@ import { testBun } from '../helpers/bun-runtime.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { recoverLostDaemon } from '../../src/commands/net.js'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
+import { buildDaemonStartCmd } from '../../src/providers/daemon-start-cmd.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
 let root = ''
@@ -202,5 +203,30 @@ describe.skipIf(!BUN)('standalone daemon (bun)', () => {
     expect(fs.readFileSync(file('daemon.version'), 'utf8')).toBe('walnut-daemon-new')
     expect(again).not.toBe(port)
     try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  }, 90_000)
+
+  // The remote host's start (daemon-connection.ts startDaemon) runs this shell over ssh: it polls
+  // daemon.port and daemon.pid, then asks --status. A dev desk's 13-day-old daemon lost both to
+  // systemd-tmpfiles (2026-11-25) and every connect failed with "did not start".
+  it('the remote start command gets the port of a live daemon that lost its door files', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-runtime-keep-')))
+    const daemonDir = path.join(root, 'daemon')
+    const home = path.join(root, 'home')
+    fs.mkdirSync(home, { recursive: true })
+    const noLegacy = path.join(root, 'no-legacy')
+    const port = await boot({ HOME: home, WALNUT_DAEMON_DIR: daemonDir, WALNUT_LEGACY_STREAMS_DIR: noLegacy, WALNUT_RUNTIME_KEEP_MS: '600000' })
+    const file = (n: string) => path.join(daemonDir, n)
+    expect(await waitFor(() => fs.existsSync(file('daemon.pid')) && fs.existsSync(file('daemon.instance')))).toBe(true)
+    sweepRegularFiles(daemonDir)
+    const wrapper = path.join(root, 'daemon-wrapper')
+    fs.writeFileSync(wrapper, `#!/bin/sh\nexec '${BUN}' '${STANDALONE}' "$@"\n`, { mode: 0o755 })
+    const cmd = buildDaemonStartCmd({ execPath: wrapper, dir: daemonDir, env: { HOME: home, WALNUT_DAEMON_DIR: daemonDir, WALNUT_LEGACY_STREAMS_DIR: noLegacy } })
+    const run = spawnSync('/bin/sh', ['-c', cmd], { env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home }, encoding: 'utf8', timeout: 60_000 })
+    expect(run.status).toBe(0)
+    const lines = run.stdout.trim().split('\n').map((l) => l.trim()).filter(Boolean)
+    expect(lines).toContain(String(port))
+    expect(lines.some((l) => l.includes('"running":true'))).toBe(true)
+    expect(fs.readFileSync(file('daemon.pid'), 'utf8')).toBe(String(proc!.pid))
+    expect(proc!.exitCode).toBeNull()
   }, 90_000)
 })
