@@ -11,7 +11,7 @@ import type { ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AnotherServiceError, anotherServiceHolds, ensureInProcessDaemon } from '../../src/providers/in-process-daemon.js'
+import { AnotherServiceError, anotherHome, anotherServiceHolds, ensureInProcessDaemon } from '../../src/providers/in-process-daemon.js'
 import { readDaemonInstanceOwner } from '../../src/providers/daemon-instance-lock.js'
 import { doorPort, holderEnv, openDoor, startHolder as startHolderOf, stopHolders } from '../helpers/service-holder.js'
 
@@ -138,12 +138,22 @@ describe.skipIf(!BUN)('one Walnut service per machine and daemon dir', () => {
     expect(new AnotherServiceError('/d', { pid: 9, service: true }).message).toMatch(/^Another Walnut service \(pid 9\)/)
   })
 
+  // Review round 2 (N1): the boot removes its own launchd job only when the holder is ANOTHER data dir's
+  // server (final while it lives); the same data dir, or a banner naming none, is a handover still draining.
+  it('only a holder of another data dir is a lasting refusal', () => {
+    expect(anotherHome('/u/a/.open-walnut', '/u/b/.open-walnut')).toBe(true)
+    expect(anotherHome('/u/a/.open-walnut', '/u/a/.open-walnut')).toBe(false)
+    expect(anotherHome('/u/a/.open-walnut/', '/u/a/./.open-walnut')).toBe(false)
+    expect(anotherHome(undefined, '/u/a/.open-walnut')).toBe(false)
+    expect(anotherHome(null, '/u/a/.open-walnut')).toBe(false)
+  })
+
   // Review of the default flip: a refusal under a launchd KeepAlive job would loop as a held instance lock did.
-  it('the server\'s boot removes its own launchd job on this refusal, as on a held instance lock', () => {
+  it('the server\'s boot removes its own launchd job on this refusal only for another data dir\'s holder', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../../src/web/server.ts'), 'utf8')
     const at = src.indexOf('const refusal = new AnotherServiceError(')
     expect(at).toBeGreaterThan(0)
-    expect(src.slice(at, at + 400)).toMatch(/removeOwnLaunchdJob\(refusal\.message\)[^]*throw refusal/)
+    expect(src.slice(at, at + 800)).toMatch(/if \(anotherHome\(other\.home, WALNUT_HOME\)\) \{[^]*?removeOwnLaunchdJob\(refusal\.message\)[^]*throw refusal/)
   })
 
   // The sandbox on :3457 and dev:ephemeral never meet a running server's daemon dir: each gets a data

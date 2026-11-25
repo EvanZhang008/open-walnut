@@ -364,10 +364,16 @@ describe('hostServiceOfferWanted', () => {
     await expect(serviceModeWantNow(i)).resolves.toEqual({ want: null })
     expect(i.note).toHaveBeenCalledWith({ want: null, why: OFFER_NOT_SURE })
     expect(i.follower).not.toHaveBeenCalled()
-    expect(i.platform).not.toHaveBeenCalled()
     const quiet = { ...i, note: vi.fn(), launcherWanted: vi.fn(async () => false) }
     await expect(serviceModeWantNow(quiet)).resolves.toEqual({ want: null })
     expect(quiet.note).not.toHaveBeenCalled()
+    // Review round 2 (N2): a host on another system is never offered, so it never says "not sure"
+    // (a kept list with a listed name offline made every macOS host say it); nor while its system is unknown.
+    for (const platform of ['darwin', null]) {
+      const other = { ...i, note: vi.fn(), platform: vi.fn(async () => platform) }
+      await expect(serviceModeWantNow(other)).resolves.toEqual({ want: null })
+      expect(other.note, String(platform)).not.toHaveBeenCalled()
+    }
   })
 
   // Review of the default flip (M2): one host kept on two programs whose machine is not known (offline,

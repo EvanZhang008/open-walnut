@@ -288,6 +288,11 @@ export class AnotherServiceError extends Error {
   }
 }
 
+/** The holder's data dir is known and is not ours (paths compared resolved): a refusal that stays while it lives. */
+export function anotherHome(otherHome: string | null | undefined, ownHome: string): boolean {
+  return !!otherHome && path.resolve(otherHome) !== path.resolve(ownHome)
+}
+
 /** The other server that holds `dir` in its own process, or null (none, a daemon program, or this process). */
 export async function anotherServiceHolds(dir: string, read: (o: { runtimeDir: string; uid: number }) => Promise<DaemonLockOwnerInfo | null> = readDaemonInstanceOwner): Promise<OtherService | null> {
   const owner = await read({ runtimeDir: dir, uid: os.userInfo().uid }).catch(() => null)

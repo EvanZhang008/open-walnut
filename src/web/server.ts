@@ -1560,16 +1560,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // in_process_daemon), a dir whose daemon another server already runs in its own process is
     // refused here, with why, before anything starts (never taken over or stopped as a program).
     {
-      const { inProcessDaemonWanted, AnotherServiceError } = await import('../providers/in-process-daemon.js')
+      const { inProcessDaemonWanted, AnotherServiceError, anotherHome } = await import('../providers/in-process-daemon.js')
       if (await inProcessDaemonWanted()) {
         const { localDaemon } = await import('../providers/local-daemon.js')
         const other = await localDaemon.otherServiceHolding()
         if (other) {
           releaseInstanceLock()
           const refusal = new AnotherServiceError(localDaemon.dir, other)
-          // The same as a held instance lock: a duplicate the deploy's launchd job started is not relaunched every ~11 s.
-          const { removeOwnLaunchdJob } = await import('../core/launchd-self-remove.js')
-          await removeOwnLaunchdJob(refusal.message)
+          // A server of ANOTHER data dir holds it: final while it lives, so like a held instance lock a
+          // duplicate launchd job is not relaunched every ~11 s. The same data dir (or one the banner does
+          // not name) is a handover, the outgoing server still draining: just refuse, KeepAlive retries.
+          if (anotherHome(other.home, WALNUT_HOME)) {
+            const { removeOwnLaunchdJob } = await import('../core/launchd-self-remove.js')
+            await removeOwnLaunchdJob(refusal.message)
+          }
           throw refusal
         }
       }

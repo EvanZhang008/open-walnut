@@ -191,8 +191,10 @@ export const OFFER_NOT_SURE = 'another name in Walnut\'s hosts may be this same 
 export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceModeWant> {
   const offer = await i.offerWanted()
   if (offer === null) {
-    // Left as it is, and said once in Walnut Health while the service is wanted at all.
-    if (await i.launcherWanted()) i.note?.({ want: null, why: OFFER_NOT_SURE })
+    // Left as it is, and said once in Walnut Health while the service is wanted at all, only for a
+    // Linux host: one on another system is never offered, so "not sure" would only be noise there
+    // (a kept list with a listed name offline made every macOS host say it).
+    if (await i.launcherWanted() && await i.platform().catch(() => null) === 'linux') i.note?.({ want: null, why: OFFER_NOT_SURE })
     return { want: null }
   }
   const experiment = offer && (await i.launcherWanted())
