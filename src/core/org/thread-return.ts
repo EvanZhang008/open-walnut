@@ -52,10 +52,14 @@ const sameOptions = (a: ReadonlyArray<{ label: string }> | undefined, b: Readonl
   (a ?? []).map((o) => o.label).join('\n') === (b ?? []).map((o) => o.label).join('\n');
 
 /**
- * Why a node's write that puts the thread before him again is refused, or null. `handsToUser`: the
- * write moves it into needs; otherwise only a new set of choices while it waits on him is judged.
+ * Which rule a write that puts the thread before him again meets first, or null: `since` (he wrote
+ * since it last waited, and the write says nothing of it), `decision` (it asked before, and the
+ * write says not whether this is that decision), `new` (another decision: its own card, never a
+ * rewrite of this one). `handsToUser`: the write moves it into needs; otherwise only a new set of
+ * choices while it waits on him is judged. Pure; returnRefusal says it in the op's words, a card
+ * line in its own (reply-card-decision.ts).
  */
-export function returnRefusal(cur: OrgThread, patch: ThreadPatch, by: ThreadWriter, handsToUser: boolean): string | null {
+export function returnLack(cur: OrgThread, patch: ThreadPatch, by: ThreadWriter, handsToUser: boolean): ReturnLack | null {
   if (by === 'human') return null;
   // Choices replaced by others (taking them off, or adding them where there were none, keeps the decision).
   const next = Array.isArray(patch.options) ? (patch.options as Array<{ label?: unknown } | string>).map((o) => ({ label: typeof o === 'string' ? o : String(o?.label ?? '') })) : [];
@@ -65,17 +69,43 @@ export function returnRefusal(cur: OrgThread, patch: ThreadPatch, by: ThreadWrit
   const rewritesLetter = !handsToUser && staysNeeds && cur.state === 'needs' && !!cur.letter && !cur.letter.done && typeof patch.reply === 'string' && patch.reply.trim() !== (cur.reply ?? '').trim();
   const rewritesChoice = rewritesLetter || (!handsToUser && staysNeeds && cur.state === 'needs' && next.length > 0 && !!cur.options?.length && !sameOptions(next, cur.options));
   if (!handsToUser && !rewritesChoice) return null;
-  const his = lastHisMessage(cur);
-  if (handsToUser && his && wroteSinceNeeds(cur) && (patch.since_you_wrote ?? '').trim().length < SINCE_MIN) {
+  const asked = handsToUser ? wroteSinceNeeds(cur) : askedBefore(cur);
+  if (handsToUser && lastHisMessage(cur) && asked && (patch.since_you_wrote ?? '').trim().length < SINCE_MIN) return 'since';
+  if (asked && patch.decision !== 'same' && patch.decision !== 'new') return 'decision';
+  return patch.decision === 'new' && asked ? 'new' : null;
+}
+
+export type ReturnLack = 'since' | 'decision' | 'new';
+
+/**
+ * Every rule a write meets, in one go: each one in turn as if the ones before were met, so a writer
+ * with one chance to fix it (a card line's one send-back) hears all of them. `new` ends the list. Pure.
+ */
+export function returnLacks(cur: OrgThread, patch: ThreadPatch, by: ThreadWriter, handsToUser: boolean): ReturnLack[] {
+  const out: ReturnLack[] = [];
+  let p = patch;
+  for (let lack = returnLack(cur, p, by, handsToUser); lack && !out.includes(lack); lack = returnLack(cur, p, by, handsToUser)) {
+    out.push(lack);
+    if (lack === 'new') break;
+    p = lack === 'since' ? { ...p, since_you_wrote: '.'.repeat(SINCE_MIN) } : { ...p, decision: 'same' };
+  }
+  return out;
+}
+
+/** Why a node's write that puts the thread before him again is refused, or null (returnLack, in the op's words). */
+export function returnRefusal(cur: OrgThread, patch: ThreadPatch, by: ThreadWriter, handsToUser: boolean): string | null {
+  const lack = returnLack(cur, patch, by, handsToUser);
+  if (lack === 'since') {
+    const his = lastHisMessage(cur)!;
     return `Not handed to the user: they wrote in this thread since it last waited on them ("${his.text.replace(/\s+/g, ' ').slice(0, 80)}"). `
       + 'Pass since_you_wrote: one line on what you did about their message (the answer to their question, what you checked or changed). '
       + 'Walnut puts it first on the card, under their words, then your summary with the decision.' + OLD_TOOLS;
   }
-  if ((handsToUser ? wroteSinceNeeds(cur) : askedBefore(cur)) && patch.decision !== 'same' && patch.decision !== 'new') {
+  if (lack === 'decision') {
     return 'Not handed to the user: this thread asked them a decision before. Pass decision "same" when it asks that decision again '
       + '(in other words is fine), or "new" when it is another one.' + OLD_TOOLS;
   }
-  if (patch.decision === 'new' && (handsToUser ? wroteSinceNeeds(cur) : askedBefore(cur))) {
+  if (lack === 'new') {
     return 'Not handed to the user: a new decision is its own card, never a rewrite of this one. Answer their message here '
       + '(state answered, with since_you_wrote or the answer in your summary), then open the new decision with thread_create '
       + `naming this thread in supersedes ("${cur.id}") when it replaces what this one asked${cur.letter ? ` and its letter (${cur.letter.id})` : ''}.`;

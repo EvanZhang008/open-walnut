@@ -10,7 +10,8 @@
  *    status-threads.ts applyThreadLines: planThreadWrites, patchForLine, lineMay and the rest), with
  *    its title and its "he reacted" mark under the same conditions the question's lines have;
  *  - needs: the thread_update op's own write (threads-store.ts patchThread), so every refusal of
- *    that op holds (user_kind, needs_options, same_ask, same_subject, other_open_asks, returned_ask);
+ *    that op holds (user_kind, needs_options, same_ask, same_subject, other_open_asks, returned_ask),
+ *    and a new decision opens its own thread (reply-card-decision.ts);
  *  - merge: thread_update merge_into (thread-tree-merge.ts, threads-store.ts mergeThread).
  * A thread a line spoke for is not asked about by the status question of that turn
  * (sessions/status-thread-carded.ts); every other open thread still is, so a line left out loses
@@ -27,6 +28,7 @@ import { log } from '../../logging/index.js';
 import { readCardTags, type CardTag } from '../../lib/card-tag.js';
 import { cutEnd } from '../text-cut.js';
 import type { Task } from '../types.js';
+import { applyNeedsCard, needsKey, notOpenReason, upAlready } from './reply-card-decision.js';
 import type { StatusReport } from '../user-status.js';
 import {
   applyThreadLines, asksThreads, PROGRESS_MAX, staleAskTitle, wroteSinceAnswer,
@@ -36,7 +38,7 @@ import { linesThatAsked, noteLineAsks } from '../sessions/status-thread-asked.js
 import { noteCarded, queueCardWrite } from '../sessions/status-thread-carded.js';
 import { replyTagNow } from './reply-card-switch.js';
 import { openNotWaiting } from './thread-view.js';
-import { THREAD_ASK_MAX, THREAD_TITLE_MAX, type OrgThread, type ThreadMessage, type ThreadPatch, type ThreadsFile } from './threads-model.js';
+import { THREAD_TITLE_MAX, type OrgThread, type ThreadMessage, type ThreadsFile } from './threads-model.js';
 
 /** Whether this task's session says where its threads stand with card lines: the switch, and a task the status question asks about its threads. */
 export function tagsReplies(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined): boolean {
@@ -114,15 +116,6 @@ function noteRead(sessionId: string, file: ThreadsFile, saw: ReplySaw): void {
   if (readUpTo.size > READ_MAX) readUpTo.delete(readUpTo.keys().next().value!);
 }
 
-/** Why a line names no thread a line can write here, or null. Pure. */
-export function notOpenReason(file: ThreadsFile, id: string): string | null {
-  const t = file.threads.find((x) => x.id === id);
-  if (!t) return `${id} is no thread of this task: a card line names one of your own open threads`;
-  if (t.movedTo) return `${id} moved to ${t.movedTo.title} (${t.movedTo.task}) with its work: it is not yours to write`;
-  if (t.closed) return `${id} is closed: a new ask about it is a new thread, which Walnut files and names to you`;
-  return null;
-}
-
 type LineFields = Pick<StatusReport, 'threads' | 'thread_titles' | 'threads_seen'>;
 
 /**
@@ -155,51 +148,6 @@ export function cardLines(file: ThreadsFile, cards: readonly CardTag[], saw: Rep
     spoke.push({ id: t.id, upTo });
   }
   return { fields: { ...(threads.length ? { threads } : {}), ...(titles.length ? { thread_titles: titles } : {}), ...(seen.length ? { threads_seen: seen } : {}) }, spoke, refused };
-}
-
-/** A decision line as the thread_update it stands for: its question is the card's summary unless it wrote one. Pure. */
-export function needsPatch(t: Pick<OrgThread, 'title' | 'titled' | 'state' | 'closed'>, c: CardTag): ThreadPatch {
-  const ask = cut(c.ask ?? '', THREAD_ASK_MAX);
-  return {
-    state: 'needs', ask, reply: c.summary ?? ask,
-    ...(c.options?.length ? { options: c.options.map((label, i) => ({ label, ...(i === 0 ? { recommended: true } : {}) })) } : {}),
-    ...(c.kind ? { user_kind: c.kind } : {}), ...(c.why ? { user_kind_why: c.why } : {}),
-    ...(c.title && (!t.titled || staleAskTitle(t)) ? { title: cut(c.title, THREAD_TITLE_MAX) } : {}),
-  };
-}
-
-/** One decision line as its own words: the same line again is the same write. */
-export const needsKey = (c: CardTag): string => JSON.stringify([c.thread, c.ask, c.options ?? [], c.kind ?? '', c.why ?? '', c.summary ?? '', c.title ?? '']);
-
-/** Write one decision line the way thread_update does. Throws the store's own refusal (ThreadError). */
-export async function applyNeedsCard(taskId: string, sessionId: string, card: CardTag): Promise<void> {
-  const store = await import('./threads-store.js');
-  const file = await store.readThreads(taskId);
-  const why = notOpenReason(file, card.thread);
-  if (why) throw new Error(why);
-  const { resolveThreadCaller } = await import('./thread-caller.js');
-  const { source } = await resolveThreadCaller(sessionId).catch(() => ({ source: undefined }));
-  const before = file.threads.find((t) => t.id === card.thread)!;
-  const report = (await (await import('../task-manager.js')).getTask(taskId).catch(() => null))?.status_report;
-  await store.patchThread(taskId, card.thread, needsPatch(before, card), `task:${taskId}`, source);
-  // Written: a mark left by an earlier refusal of this thread's decision goes (status-thread-asked.ts).
-  noteLineAsks(taskId, [], [card.thread]);
-  const asks = await import('./thread-report-ask.js');
-  // The decision it carries, by id: the task's own when the line asks it, so the folds under it follow it (thread-held-decision.ts).
-  await asks.markThreadDecision(taskId, card.thread, asks.cardDecisionId(before, { ask: cut(card.ask ?? '', THREAD_ASK_MAX), options: card.options }, report));
-  // The task's own ask, when it is this decision, is the thread's from now on: shown once (thread-report-ask.ts).
-  await asks.askNowOnThread(taskId);
-}
-
-/**
- * The decision this line asks is already up on its thread (the same question and choices): the
- * check at the turn's end wrote it and its hold was lost (a check that outlived its time, a restart
- * between the two), or an earlier turn's line is repeated. Written again it is refused as an ask
- * already up, or rewrites a card he has seen. Pure.
- */
-export function askedAlready(t: Pick<OrgThread, 'state' | 'closed' | 'ask' | 'options'>, c: CardTag): boolean {
-  if (t.closed || t.state !== 'needs' || (t.ask ?? '').trim() !== cut(c.ask ?? '', THREAD_ASK_MAX).trim()) return false;
-  return JSON.stringify((t.options ?? []).map((o) => o.label)) === JSON.stringify(c.options ?? []);
 }
 
 /**
@@ -266,9 +214,9 @@ export function resetHeldCards(): void {
  * line held for it nothing is known and what the last turn spoke for stands. Never throws; answers
  * what was written and what was not, with why.
  */
-export async function applyReplyCards(input: { task: Task; sessionId: string; reply: string | undefined; now?: number; endedAt?: string; wordless?: boolean }): Promise<{ applied: string[]; refused: CardRefusal[] }> {
+export async function applyReplyCards(input: { task: Task; sessionId: string; reply: string | undefined; now?: number; endedAt?: string; wordless?: boolean }): Promise<{ applied: string[]; refused: CardRefusal[]; opened: Array<{ from: string; thread: string }> }> {
   const { task, sessionId } = input;
-  const none = { applied: [], refused: [] };
+  const none = { applied: [], refused: [], opened: [] };
   try {
     const { isFollower } = await import('../server-role.js');
     const { replyTagOn } = await import('./reply-card-switch.js');
@@ -284,6 +232,8 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     // turn's check owes none for them.
     const saw: ReplySaw = { queued: await queuedThreads(sessionId), ...(input.endedAt ? { endedAt: input.endedAt } : {}) };
     if (!input.wordless) noteRead(sessionId, await store.readThreads(task.id), saw);
+    // A decision line that could not be read is named by the next status question, as one refused (status-thread-asked.ts).
+    if (read.unread.length) noteUnreadDecisions(task.id, await store.readThreads(task.id), read.unread, new Set(cards.map((c) => c.thread)));
     if (!cards.length) {
       if (!input.wordless) noteCarded(task.id, []);
       if (read.errors.length) log.task.info('reply card lines: not read', { taskId: task.id, sessionId, errors: read.errors });
@@ -292,6 +242,7 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     const by = `task:${task.id}` as const;
     const applied: string[] = [];
     const refused: CardRefusal[] = [];
+    const opened: Array<{ from: string; thread: string }> = [];
     const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
     for (const c of cards.filter((x) => x.merge)) {
       try {
@@ -303,16 +254,17 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     const needs = cards.filter((x) => x.state === 'needs');
     const current = needs.length ? (await store.readThreads(task.id)).threads : [];
     for (const c of needs) {
-      const t = current.find((x) => x.id === c.thread);
-      if (mine.asked.has(needsKey(c)) || (t && askedAlready(t, c))) {
+      if (mine.asked.has(needsKey(c)) || upAlready(current, c)) {
         // Up already (the check before the turn's end wrote it): no mark of a refusal stays.
         noteLineAsks(task.id, [], [c.thread]);
         applied.push(c.thread);
         continue;
       }
       try {
-        await applyNeedsCard(task.id, sessionId, c);
+        const r = await applyNeedsCard(task.id, sessionId, c);
         applied.push(c.thread);
+        // A new decision is its own thread: named, so the status question after this turn lists it.
+        if (r.opened) { applied.push(r.opened); opened.push({ from: c.thread, thread: r.opened }); }
       } catch (err) {
         refused.push({ thread: c.thread, reason: why(err) });
         // A decision that was not written is named by the next status question (status-thread-asked.ts).
@@ -330,12 +282,26 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     const after = lines.spoke.length ? (await store.readThreads(task.id)).threads : [];
     const named = (id: string) => { const t = after.find((x) => x.id === id); return !!t && !!t.titled && !staleAskTitle(t); };
     noteCarded(task.id, lines.spoke.filter((s) => !asked.has(s.id) && named(s.id)));
-    log.task.info('reply card lines applied', { taskId: task.id, sessionId, lines: cards.length, applied, refused, errors: read.errors });
-    return { applied, refused };
+    log.task.info('reply card lines applied', { taskId: task.id, sessionId, lines: cards.length, applied, refused, opened, errors: read.errors });
+    return { applied, refused, opened };
   } catch (err) {
     log.task.warn('reply card lines: not applied', { taskId: task.id, sessionId, error: err instanceof Error ? err.message : String(err) });
     return none;
   }
+}
+
+/**
+ * Decision lines that were not read (an attribute it does not know, two lines for one thread) are
+ * marked as a refused decision is, so the next status question names their threads: never dropped
+ * with only a log row (2026-11-25, a live session's corrected line was not read after its one
+ * send-back, and nothing reached it). A thread another line of the turn wrote, or no open thread
+ * of the task, is not marked.
+ */
+export function noteUnreadDecisions(taskId: string, file: ThreadsFile, unread: ReadonlyArray<{ thread: string; needs: boolean }>, written: ReadonlySet<string> = new Set()): void {
+  const ids = unread.filter((u) => u.needs && !written.has(u.thread) && !notOpenReason(file, u.thread)).map((u) => u.thread);
+  if (!ids.length) return;
+  noteLineAsks(taskId, ids, []);
+  log.task.info('reply card lines: a decision line was not read, the status question names it', { taskId, threads: ids });
 }
 
 /**

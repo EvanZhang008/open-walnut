@@ -164,6 +164,18 @@ describe('the read: needs while the task asks it', () => {
     expect(threadCounts([{ ...t, owner: { task_id: 'task-a', title: 'A' } }], NOW).below).toBeUndefined()
   })
 
+  // 2026-11-25, a live walk: the thread's stored ask of an older decision stayed beside the held
+  // ask's new choices and id, so the card asked the old question over the new buttons.
+  it('while it shows the held ask, its ask is that ask\'s words too; nothing stored changes, and a thread not holding it keeps its own', () => {
+    const older = placed.map((t) => ({ ...t, ask: 'Clay pots or plastic trays?' }))
+    const stored = JSON.stringify(older)
+    const [t] = withHeldAsk(asking('ask-aaaa01'), older)
+    expect(t).toMatchObject({ state: 'needs', askId: 'ask-aaaa01', ask: 'Pick the seed tray size' })
+    expect(JSON.stringify(older)).toBe(stored)
+    expect(withHeldAsk(asking(null), older)[0].ask).toBe('Clay pots or plastic trays?')
+    expect(withHeldAsk(asking('ask-aaaa01'), [thread('th-aaaaaa02', { ask: 'Clay pots or plastic trays?' })])[0].ask).toBe('Clay pots or plastic trays?')
+  })
+
   it('the next report without the ask: the thread reads its stored state again', () => {
     const [t] = withHeldAsk(asking(null), placed)
     expect(t.state).toBe('answered')

@@ -7,7 +7,7 @@
  * already run against the report before it: the thread and the task both asked it until the next
  * status answer.
  *
- * Here the late write is the real one (reply-card.ts applyNeedsCard), run exactly in that window:
+ * Here the late write is the real one (reply-card-decision.ts applyNeedsCard), run exactly in that window:
  * after askOnNeedsThread read the threads, before the answer is stored. The turn end, the question
  * and the store are the real ones (tests/helpers/reply-card-flow.ts).
  *
@@ -44,7 +44,7 @@ import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { setTaskReport } from '../../src/core/sessions/report-set.js'
 import { askKey } from '../../src/core/same-ask.js'
 import { readThreads } from '../../src/core/org/threads-store.js'
-import { applyNeedsCard } from '../../src/core/org/reply-card.js'
+import { applyNeedsCard } from '../../src/core/org/reply-card-decision.js'
 import { readCardTags } from '../../src/lib/card-tag.js'
 import { cliTakes, filedUnder, flow, questionAfter, say, setTag, startFlow, stopFlow, turnEnds } from '../helpers/reply-card-flow.js'
 

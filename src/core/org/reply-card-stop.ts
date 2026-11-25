@@ -10,7 +10,12 @@
  *  - a card line cannot be read, or names a thread that is not an open thread of the task;
  *  - a decision line (state needs) is refused by the store: it is written here, through the
  *    thread_update op's own write, so the refusal is the store's own text, and one that passes is
- *    not written a second time at the turn's end (reply-card.ts holdCards, askedAlready);
+ *    not written a second time at the turn's end (reply-card.ts holdCards, reply-card-decision.ts
+ *    upAlready). What the store would refuse because he wrote on the thread since it last waited, or
+ *    it asked before, is named in the line's own attributes, all at once (`returned`): there is no
+ *    second send-back to name the next one. A decision refused or not read here is also named by
+ *    the next status question (status-thread-asked.ts), in case the session's corrected line fails
+ *    too;
  *  - a merge the task's own Threads refuse.
  * Once per turn (the hook says nothing on a stop it caused: `stop_hook_active`), and each thing is
  * named at most MAX_CARD_NUDGES times, so a session that cannot fix a line is not held again for it.
@@ -30,7 +35,9 @@
 import { cardTagLine, CARD_TAG_FORM, readCardTags, type CardTag } from '../../lib/card-tag.js';
 import { asksThreads } from '../sessions/status-threads.js';
 import { clause } from '../../utils/format.js';
-import { applyNeedsCard, askedAlready, holdCards, needsKey, noteStopCheck, notOpenReason, queuedThreads, readBefore } from './reply-card.js';
+import { holdCards, noteStopCheck, noteUnreadDecisions, queuedThreads, readBefore } from './reply-card.js';
+import { applyNeedsCard, CardLineLacks, needsKey, notOpenReason, upAlready, type CardLack } from './reply-card-decision.js';
+import { noteLineAsks } from '../sessions/status-thread-asked.js';
 import { replyTagOn } from './reply-card-switch.js';
 import { mergeThreads, type OrgThread, type ThreadMessage } from './threads-model.js';
 
@@ -72,6 +79,12 @@ export function owedMessage(t: OrgThread, sid: string, nowMs: number, readBefore
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').trim();
 const period = (s: string) => (/[.!?]$/.test(s) ? s : `${s}.`);
 
+/** The attributes a returned decision lacks, as the session writes them. */
+const RETURN_ATTRIBUTES: Record<CardLack, string> = {
+  since: 'since="what you did about his message"',
+  decision: 'decision="same" (this decision again) or "new" (another: Walnut answers this thread and opens it as its own card)',
+};
+
 /**
  * Every text this check sends back, by what it names. `needs` passes the store's own refusal on
  * (threads-store.ts patchThread), which names thread_update only for what a line cannot carry
@@ -84,6 +97,8 @@ export const CARD_STOP_LINES = {
   gone: (why: string) => `${clause(why)}. That line is not written; give no line for it.`,
   merge: (thread: string, why: string) => `${thread} was not merged: ${period(why)} Give it a line with its own state, or merge it into a thread that takes it.`,
   needs: (thread: string, why: string) => `the decision on ${thread} was not put to him. ${period(why)}${/\buser_kind\b/.test(why) ? ' In a card line user_kind is kind="..." and user_kind_why is why="...".' : ''} Its card line again, with that fixed.`,
+  /** A decision the store would refuse because he wrote on the thread since it last waited, or it asked before (reply-card-decision.ts CardLineLacks): every attribute it lacks. */
+  returned: (thread: string, lacks: readonly CardLack[]) => `the decision on ${thread} was not put to him: ${lacks.includes('since') ? 'he wrote on it since it last waited on him' : 'it asked him a decision before'}. Its line again with ${lacks.map((l) => RETURN_ATTRIBUTES[l]).join(' and ')}.`,
   /** His message went to a thread the reply gave no line. */
   missing: (t: Pick<OrgThread, 'id' | 'title'>) => `your reply holds no card line for thread ${t.id} ${JSON.stringify(t.title)}, where his message went: ${cardTagLine(t.id)}, with its state (working, waiting, answered or done).`,
 } as const;
@@ -114,6 +129,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   const read = readCardTags(tail);
   const { readThreads } = await import('./threads-store.js');
   const file = await readThreads(taskId);
+  noteUnreadDecisions(taskId, file, read.unread);
   const things: Array<{ key: string; kind: CardStopKind; line: string; thread?: string }> = read.errors.map((e) => ({ key: `unread:${e}`, kind: 'unread', line: CARD_STOP_LINES.unread(e) }));
   const good: CardTag[] = [];
   const asked: string[] = [];
@@ -130,12 +146,16 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
       }
     }
     // A decision already up with these words and choices stands as it is (an earlier turn's line, repeated).
-    if (c.state === 'needs' && !askedAlready(file.threads.find((t) => t.id === c.thread)!, c)) {
+    if (c.state === 'needs' && !upAlready(file.threads, c)) {
       try {
         await applyNeedsCard(taskId, sid, c);
         asked.push(needsKey(c));
       } catch (err) {
-        things.push({ key: `needs:${needsKey(c)}`, kind: 'needs', thread: c.thread, line: CARD_STOP_LINES.needs(c.thread, errorText(err)) });
+        // Named by the next status question too, until a line for it is written.
+        noteLineAsks(taskId, [c.thread], []);
+        things.push(err instanceof CardLineLacks
+          ? { key: `needs:${needsKey(c)}`, kind: 'returned', thread: c.thread, line: CARD_STOP_LINES.returned(c.thread, err.lacks) }
+          : { key: `needs:${needsKey(c)}`, kind: 'needs', thread: c.thread, line: CARD_STOP_LINES.needs(c.thread, errorText(err)) });
         continue;
       }
     }
@@ -145,7 +165,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   const queued = await queuedThreads(sid);
   for (const t of file.threads) {
     // A line for it that was not read is named above already.
-    if (t.closed || t.movedTo || named.has(t.id) || queued.has(t.id) || read.errors.some((e) => e.includes(t.id))) continue;
+    if (t.closed || t.movedTo || named.has(t.id) || queued.has(t.id) || read.unread.some((u) => u.thread === t.id) || read.errors.some((e) => e.includes(t.id))) continue;
     const m = owedMessage(t, sid, nowMs, readBefore(sid, task.status_report));
     if (!m) continue;
     things.push({ key: `missing:${t.id}:${m.id}`, kind: 'missing', thread: t.id, line: CARD_STOP_LINES.missing(t) });

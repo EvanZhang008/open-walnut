@@ -5,7 +5,7 @@
  * reply's text shows it, while the reply streams in too.
  */
 import { describe, expect, it } from 'vitest'
-import { CARD_MAX, CARD_TAG_FORM, CARD_TAIL_LINES, cardLinesOf, cardTagLine, hasCardLine, readCardTags, stripCardTags } from '../../src/lib/card-tag.js'
+import { CARD_ALIASES, CARD_MAX, CARD_TAG_FORM, CARD_TAIL_LINES, cardLinesOf, cardTagLine, hasCardLine, readCardTags, stripCardTags } from '../../src/lib/card-tag.js'
 import { stripInternalLines, splitInternalLines } from '../../src/lib/internal-lines.js'
 import { NO_ACTION_TAG, readTurnMarker, stripTurnMarker } from '../../src/lib/turn-end-marker.js'
 import { hasWordsBeyondControl, withoutWalnutControl } from '../../src/lib/walnut-control-text.js'
@@ -23,7 +23,7 @@ describe('the forms a card line takes', () => {
 
   it.each(['working', 'waiting', 'answered', 'done'] as const)('a state alone: %s', (state) => {
     const read = readCardTags(`${WORDS}\n\n${cardTagLine(FENCE, state)}`)
-    expect(read).toEqual({ text: WORDS, cards: [{ thread: FENCE, state }], errors: [], tagged: true })
+    expect(read).toEqual({ text: WORDS, cards: [{ thread: FENCE, state }], errors: [], unread: [], tagged: true })
   })
 
   it('a title, a summary and a reaction ride the line; entities and spaces read as written', () => {
@@ -105,6 +105,7 @@ describe('a wrong line is not read, and says why in one line', () => {
     const read = readCardTags(`${WORDS}\n${cardTagLine(FENCE)}\n${cardTagLine(FENCE, 'done')}\n${cardTagLine(SEEDS, 'working')}`)
     expect(read.cards).toEqual([{ thread: SEEDS, state: 'working' }])
     expect(read.errors).toEqual([`2 card lines name ${FENCE}: one line per thread`])
+    expect(read.unread).toEqual([{ thread: FENCE, needs: false }])
   })
 
   it(`more than ${CARD_MAX} lines is a status list: none is read, all leave the text`, () => {
@@ -114,6 +115,47 @@ describe('a wrong line is not read, and says why in one line', () => {
     expect(read.errors).toEqual([`a reply holds at most ${CARD_MAX} card lines, not ${CARD_MAX + 1}`])
     expect(read.text).toBe(WORDS)
     expect(readCardTags(`${WORDS}\n${ids.slice(0, CARD_MAX).map((id) => cardTagLine(id)).join('\n')}`).cards).toHaveLength(CARD_MAX)
+  })
+})
+
+// 2026-11-25, a live walk: told by the store to "Pass since_you_wrote", a session wrote
+// since_you_wrote="..." into its line, and the whole line was dropped as an unknown attribute.
+describe('a decision line carries what a write after his words needs', () => {
+  const NEEDS = `thread="${FENCE}" state="needs" ask="One big pot or three small ones?" options="One big pot; Three small pots" kind="spending" why="the big pot costs twice the budget he set"`
+
+  it('since and decision ride a decision line', () => {
+    const read = readCardTags(`${WORDS}\n<walnut-card ${NEEDS} since="Dropped the planter comparison as he asked." decision="new"/>`)
+    expect(read.errors).toEqual([])
+    expect(read.cards[0]).toMatchObject({ since: 'Dropped the planter comparison as he asked.', decision: 'new' })
+    expect(readCardTags(`<walnut-card ${NEEDS} decision="same"/>`).cards[0]?.decision).toBe('same')
+  })
+
+  it('the op\'s own field names read as the same attributes, one table', () => {
+    expect(CARD_ALIASES).toEqual({ since_you_wrote: 'since', user_kind: 'kind', user_kind_why: 'why' })
+    const read = readCardTags(`<walnut-card thread="${FENCE}" state="needs" ask="Which wood?" options="Larch; Oak" user_kind="spending" user_kind_why="oak costs twice the budget" since_you_wrote="Checked both suppliers."/>`)
+    expect(read.errors).toEqual([])
+    expect(read.cards).toEqual([{ thread: FENCE, state: 'needs', ask: 'Which wood?', options: ['Larch', 'Oak'], kind: 'spending', why: 'oak costs twice the budget', since: 'Checked both suppliers.' }])
+  })
+
+  it.each([
+    ['a field and its alias both', `<walnut-card ${NEEDS} since="Checked." since_you_wrote="Checked again."/>`, /names since once/],
+    ['kind and user_kind both', `<walnut-card thread="${FENCE}" state="needs" ask="Which wood?" kind="spending" user_kind="spending"/>`, /names kind once/],
+    ['a decision that is neither', `<walnut-card ${NEEDS} decision="maybe"/>`, /decision is "same" or "new", not "maybe"/],
+    ['since on a line that asks nothing', `<walnut-card thread="${FENCE}" state="answered" since="Checked."/>`, /since go with state="needs" only/],
+    ['decision on a line that asks nothing', `<walnut-card thread="${FENCE}" state="working" decision="same"/>`, /decision go with state="needs" only/],
+    ['an alias beside a merge', `<walnut-card thread="${FENCE}" merge="${SEEDS}" since_you_wrote="Checked."/>`, /merge goes alone/],
+    ['a field of the op a line does not carry', `<walnut-card ${NEEDS} supersedes="${SEEDS}"/>`, /"supersedes" is no attribute/],
+  ])('%s is refused', (_label, line, reason) => {
+    const read = readCardTags(line)
+    expect(read.cards).toEqual([])
+    expect(read.errors[0]).toMatch(reason)
+  })
+
+  it('a line not read still names its thread, and whether it asked him to decide', () => {
+    const read = readCardTags(`${WORDS}\n<walnut-card ${NEEDS} colour="red"/>\n<walnut-card thread="${SEEDS}" state="finished"/>`)
+    expect(read.cards).toEqual([])
+    expect(read.unread).toEqual([{ thread: FENCE, needs: true }, { thread: SEEDS, needs: false }])
+    expect(readCardTags('<walnut-card thread="fence" state="needs"/>').unread).toEqual([])
   })
 })
 
@@ -160,7 +202,7 @@ describe('where a card line counts', () => {
       // A fence still open at the reply's end: what follows it is code.
       `Here:\n\`\`\`\ncode\n${cardTagLine(FENCE)}`,
     ]) {
-      expect(readCardTags(text), text).toEqual({ text, cards: [], errors: [], tagged: false })
+      expect(readCardTags(text), text).toEqual({ text, cards: [], errors: [], unread: [], tagged: false })
       expect(stripInternalLines(text), text).toBe(text)
     }
   })

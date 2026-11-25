@@ -1586,6 +1586,11 @@ export interface OpenThreadInput {
    * node sets needs or answered or writes a new summary.
    */
   quiet_summary?: string;
+  /**
+   * Walnut's own, never a route's: the question a thread opened in needs asks, as thread_update's
+   * `ask` stores it (a card line's new decision, org/reply-card-decision.ts).
+   */
+  ask?: string;
 }
 
 /** A thread's options from a write, or a ThreadError naming what is wrong with them. */
@@ -1637,6 +1642,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
     },
     createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}), ...(options.length ? { options } : {}),
     ...(!quiet && by !== 'human' && (input.state ?? 'needs') === 'needs' ? { needsAt: at } : {}),
+    ...(!quiet && waitsOnUser(input.state ?? 'needs') && isStr(input.ask) && input.ask.trim() ? { ask: clip(input.ask, THREAD_ASK_MAX) } : {}),
   };
   if (quiet) { setReply(thread, quiet, by, source); thread.replyAt = at; }
   else if (isStr(input.reply) && input.reply.trim()) { setReply(thread, clip(input.reply, THREAD_REPLY_MAX), by, source); thread.replyAt = at; }

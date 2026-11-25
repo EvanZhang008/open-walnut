@@ -96,7 +96,10 @@ it speaks for:
 answer) ride it under the same conditions that question's lines have. `merge="th-..."` alone joins
 the thread to that open one. `state="needs"` with `ask`, `options="Larch; Oak"` (the recommended one
 first; one written as `Oak (recommended)` is that one, its label without the mark), `kind` and `why`
-is the `thread_update` into needs. One line per thread, at most 6, each a
+is the `thread_update` into needs; after his message on a thread that waited on him, `since` (what was
+done about it) and `decision="same"` or `decision="new"` go with it. The op's own names read as the
+same attributes (`since_you_wrote`, `user_kind`, `user_kind_why`: one table, `CARD_ALIASES`), since the
+store's refusals name them. One line per thread, at most 6, each a
 line of its own outside a code block with at most 3 other lines after it; a quote inside a value is
 `&quot;`. A line shown as an example goes in backticks or a code block, where it stays text.
 
@@ -106,8 +109,18 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   holds), a merge is `merge_into`. A message of his the session has not answered when the turn ends
   (its line is still in the session's queue, or it was filed after the turn's end) fences the line
   out of its thread, and the question then asks about that thread as before. A decision the store
-  refuses is named by the next status questions until a decision line for that thread is written,
-  or the thread is closed, moved or gone (`noteLineAsks`, `linesThatAsked`).
+  refuses, at the turn's end or at the send-back, and a decision line that cannot be read (an
+  unknown attribute, two lines for one thread) are named by the next status questions until a
+  decision line for that thread is written, or the thread is closed, moved or gone (`noteLineAsks`,
+  `linesThatAsked`, `noteUnreadDecisions`): never dropped with only a log row.
+- **A new decision.** `decision="new"` is never a rewrite of the thread's card (`thread-return.ts`).
+  Walnut does for the line what the store asks of a `thread_update`: his message is answered on its
+  thread (state answered, the line's `since` words), and the new decision opens as its own thread
+  through `thread_create`'s path (`openNodeThread`, `supersedes` naming the old one), with the line's
+  ask, choices, kind, why, title and summary (`reply-card-decision.ts`). A thread still waiting on
+  him with nothing of his since is stepped aside by `supersedes` instead. The same line again opens
+  nothing more (`upAlready`). `tests/core/org/reply-card-carries-guard.test.ts` reads every field the
+  store's refusal of a return reads from the source; each is carried by a line or named with why.
 - **The order.** The write starts in the turn-complete hook, in the step that arms that turn's status
   question (`turnEndedWith`, then `armStatusQuestion`), and the question waits for it before it
   lists the threads (`cardsWritten` in `threadQuestionFor`). It needs nothing slower than the words
@@ -169,7 +182,11 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   (`last_lines` of `open_items`: a line of words is `x`, only a card line is whole). The turn is held
   once, with one plain line per thing, when a message of his this turn read was filed under an open
   thread and the reply has no line for it (the exact line is given), a line cannot be read, a merge
-  is refused, or the store refuses a decision (its own words). A line that names a thread that is
+  is refused, or the store refuses a decision (its own words). A decision the store would refuse
+  because he wrote on the thread since it last waited, or it asked before, is named in the line's
+  own attributes, everything it lacks at once (`since="..."` and `decision="same"` or `"new"`, 383
+  bytes in place of 717 that named only `since_you_wrote`; `returnLacks`), since there is no second
+  send-back. A line that names a thread that is
   not an open thread of the task has nothing to write in its place, so it holds no turn by itself
   and is named beside another thing that does. Each thing is named at most twice. A message this turn read is one filed after the
   newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
@@ -221,12 +238,12 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   ends with 101 bytes (one line) or 132 (several). Off, no text names the tag and nothing reads it.
 
 Code: `src/lib/card-tag.ts` (the reader and the strip), `src/core/org/reply-card.ts` (the write),
-`reply-card-stop.ts` (the send-back), `reply-card-switch.ts`, `src/core/sessions/status-thread-carded.ts`
+`reply-card-decision.ts` (a decision line, a new decision), `reply-card-stop.ts` (the send-back), `reply-card-switch.ts`, `src/core/sessions/status-thread-carded.ts`
 (what the question skips), `src/providers/stop-unanswered-hook.ts` (`LAST_LINES_SCRIPT`),
 `thread-rules.ts` (`THREADS_TAG_RULE`), `thread-capture.ts` (the hint),
 `src/core/session-hooks/builtins.ts` (the turn end, in `turnCompleteTriageHook`). Tests: `tests/lib/card-tag.test.ts`, `tests/lib/card-tag-readers-guard.test.ts` (every reader of
 reply text drops the line, a subscriber of the turn-end event too), `tests/core/org/reply-card.test.ts` (each state lands as its status line
-does), `tests/core/org/reply-card-prompt.test.ts`, `tests/core/sessions/status-thread-carded.test.ts`,
+does), `tests/core/org/reply-card-prompt.test.ts`, `tests/core/org/reply-card-carries-guard.test.ts`, `tests/e2e/reply-card-return.test.ts` (his words on a decision's thread, turn d of the live walk), `tests/core/sessions/status-thread-carded.test.ts`,
 `tests/providers/stop-hook-last-lines.test.ts` (the hook's own shell), `tests/e2e/reply-card-line.test.ts`,
 `tests/e2e/reply-card-stop.test.ts`, `tests/e2e/reply-card-stop-budget.test.ts` (the check beside the
 others, and the request's size), `tests/e2e/reply-card-real-flow.test.ts` (every kind of line

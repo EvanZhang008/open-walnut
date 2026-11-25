@@ -23,6 +23,10 @@
  *            needs (he must decide: with ask, options, kind, why)
  *   title    names an untitled thread          summary  what his card says (the store cuts it)
  *   seen     "yes": he reacted to the answer   merge    this thread joins that open one (alone)
+ *   since    with needs, after his message there: what was done about it (thread_update since_you_wrote)
+ *   decision with needs on a thread that asked before: "same" (that decision again) or "new" (another
+ *            one: Walnut answers this thread and opens the new decision as its own, reply-card-decision.ts)
+ * The store's own field names are the same attributes (CARD_ALIASES: its refusals name them).
  *
  * Pure and shared with the web client. The patterns the phone mirrors (ios-native InternalLines.swift)
  * run in Unicode mode and write "any character" out, as internal-lines.ts does.
@@ -48,10 +52,17 @@ const OWN_START = '<walnut-c';
 const CARD_LEAD = /^ {0,3}\S/u;
 const ATTRIBUTE = /\s+([a-z_]+)="([^"]*)"/uy;
 const THREAD_ID = /^th-[0-9a-f]{6,32}$/u;
-const ATTRIBUTES = ['thread', 'state', 'title', 'summary', 'merge', 'seen', 'ask', 'options', 'kind', 'why'] as const;
+const ATTRIBUTES = ['thread', 'state', 'title', 'summary', 'merge', 'seen', 'ask', 'options', 'kind', 'why', 'since', 'decision'] as const;
 type Attribute = (typeof ATTRIBUTES)[number];
+/**
+ * The thread_update fields a decision line stands for, by the op's own name: the store's refusals
+ * name these (2026-11-25, a live session told "Pass since_you_wrote" wrote since_you_wrote="..." in
+ * its line, and the whole line was dropped), so each reads as the line's attribute.
+ */
+export const CARD_ALIASES: Readonly<Record<string, Attribute>> = { since_you_wrote: 'since', user_kind: 'kind', user_kind_why: 'why' };
 /** What only a decision carries. */
-const NEEDS_ONLY: readonly Attribute[] = ['ask', 'options', 'kind', 'why'];
+const NEEDS_ONLY: readonly Attribute[] = ['ask', 'options', 'kind', 'why', 'since', 'decision'];
+export const CARD_DECISIONS = ['same', 'new'] as const;
 
 /** One card line, read. `state` is absent only with `merge`. */
 export interface CardTag {
@@ -68,7 +79,14 @@ export interface CardTag {
   options?: string[];
   kind?: string;
   why?: string;
+  /** With needs, after his message on the thread: what was done about it. */
+  since?: string;
+  /** With needs on a thread that asked before: the same decision again, or a new one. */
+  decision?: (typeof CARD_DECISIONS)[number];
 }
+
+/** A line that was not read, by the thread it names (when that much can be read) and whether it asked him to decide. */
+export interface CardUnread { thread: string; needs: boolean }
 
 export interface CardRead {
   /** The text without its card lines. */
@@ -77,6 +95,8 @@ export interface CardRead {
   cards: CardTag[];
   /** Why a line was not read: one reason each. */
   errors: string[];
+  /** The threads of the lines not read (one unreadable, or one of two naming a thread), where the line names one. */
+  unread: CardUnread[];
   /** The reply held a card line, read or not. */
   tagged: boolean;
 }
@@ -93,6 +113,14 @@ const bare = (l: string) => l.replace(/\r$/u, '');
 /** A value as written: its entities read back (&amp; last, so "&amp;quot;" stays the text "&quot;"). */
 const decoded = (v: string) => v.replace(/&quot;/gu, '"').replace(/&apos;/gu, '\'').replace(/&lt;/gu, '<').replace(/&gt;/gu, '>').replace(/&amp;/gu, '&');
 const oneLine = (v: string) => decoded(v).replace(/\s+/gu, ' ').trim();
+const NAMED_THREAD = /\sthread="(th-[0-9a-f]{6,32})"/u;
+const ASKS_HIM = /\sstate="needs"/u;
+
+/** What a line that was not read still says: the thread it names and whether it asked him to decide, or null. Pure. */
+function unreadOf(raw: string): CardUnread | null {
+  const thread = NAMED_THREAD.exec(raw)?.[1];
+  return thread ? { thread, needs: ASKS_HIM.test(raw) } : null;
+}
 
 /** One card line as its tag, or why it is none. Pure. */
 function parseCardLine(raw: string): { card: CardTag } | { error: string } {
@@ -105,7 +133,7 @@ function parseCardLine(raw: string): { card: CardTag } | { error: string } {
     ATTRIBUTE.lastIndex = at;
     const m = ATTRIBUTE.exec(body);
     if (!m) break;
-    const name = m[1] as Attribute;
+    const name = (CARD_ALIASES[m[1]] ?? m[1]) as Attribute;
     if (!ATTRIBUTES.includes(name)) return { error: `"${m[1]}" is no attribute of a card line (${ATTRIBUTES.join(', ')})` };
     if (got.has(name)) return { error: `a card line names ${name} once` };
     got.set(name, oneLine(m[2]));
@@ -129,6 +157,8 @@ function parseCardLine(raw: string): { card: CardTag } | { error: string } {
   const stray = NEEDS_ONLY.filter((a) => got.has(a));
   if (!needs && stray.length) return { error: `${thread}: ${stray.join(', ')} go with state="needs" only` };
   if (needs && !got.get('ask')) return { error: `${thread}: state="needs" takes ask="what he decides"` };
+  const decision = got.get('decision');
+  if (decision !== undefined && !(CARD_DECISIONS as readonly string[]).includes(decision)) return { error: `${thread}: decision is "same" or "new", not "${decision}"` };
   // Choices split on ";" (a full-width one too), the recommended one first. A choice marked the
   // status answer's way, "Oak (recommended)", is that one: the mark comes off its label and it goes
   // first (2026-11-25, a live session: his button read "Raised bed (recommended)", marked twice).
@@ -137,10 +167,11 @@ function parseCardLine(raw: string): { card: CardTag } | { error: string } {
   const best = choices.findIndex((o) => o.best);
   const options = (best > 0 ? [choices[best], ...choices.slice(0, best), ...choices.slice(best + 1)] : choices).map((o) => o.label);
   const card: CardTag = { thread, state: state as CardState };
-  for (const name of ['title', 'summary', 'ask', 'kind', 'why'] as const) {
+  for (const name of ['title', 'summary', 'ask', 'kind', 'why', 'since'] as const) {
     const v = got.get(name);
     if (v) card[name] = v;
   }
+  if (decision) card.decision = decision as CardTag['decision'];
   if (seen) card.seen = true;
   if (options.length) card.options = options;
   return { card };
@@ -168,10 +199,10 @@ function withoutCards(lines: readonly string[], card: readonly boolean[]): strin
  */
 export function readCardTags(text: string | undefined): CardRead {
   const src = text ?? '';
-  if (!src.includes(HEAD)) return { text: src, cards: [], errors: [], tagged: false };
+  if (!src.includes(HEAD)) return { text: src, cards: [], errors: [], unread: [], tagged: false };
   const lines = src.split('\n');
   const card = cardLinesOf(lines);
-  if (!card.includes(true)) return { text: src, cards: [], errors: [], tagged: false };
+  if (!card.includes(true)) return { text: src, cards: [], errors: [], unread: [], tagged: false };
   const tail: number[] = [];
   let others = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -180,14 +211,22 @@ export function readCardTags(text: string | undefined): CardRead {
     if (++others > CARD_TAIL_LINES) break;
   }
   const errors: string[] = [];
+  const unread: CardUnread[] = [];
   const read: CardTag[] = [];
   for (const i of tail) {
     const r = parseCardLine(lines[i]);
-    if ('error' in r) errors.push(r.error); else read.push(r.card);
+    if ('card' in r) { read.push(r.card); continue; }
+    errors.push(r.error);
+    const u = unreadOf(lines[i]);
+    if (u) unread.push(u);
   }
   const times = new Map<string, number>();
   for (const c of read) times.set(c.thread, (times.get(c.thread) ?? 0) + 1);
-  for (const [id, n] of times) if (n > 1) errors.push(`${n} card lines name ${id}: one line per thread`);
+  for (const [id, n] of times) {
+    if (n < 2) continue;
+    errors.push(`${n} card lines name ${id}: one line per thread`);
+    unread.push({ thread: id, needs: read.some((c) => c.thread === id && c.state === 'needs') });
+  }
   let cards = read.filter((c) => times.get(c.thread) === 1);
   if (tail.length > CARD_MAX) {
     errors.push(`a reply holds at most ${CARD_MAX} card lines, not ${tail.length}`);
@@ -204,7 +243,7 @@ export function readCardTags(text: string | undefined): CardRead {
       errors.push(`the card line for ${r.card.thread} is not among the reply's last lines: move it to the end`);
     }
   });
-  return { text: withoutCards(lines, card), cards, errors, tagged: true };
+  return { text: withoutCards(lines, card), cards, errors, unread, tagged: true };
 }
 
 /** Which of these lines are card lines: a line of its own outside a code fence (the one rule, for a reader that goes line by line too: the Brief). Pure. */

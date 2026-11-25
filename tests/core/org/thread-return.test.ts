@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { emptyThreads, fileMessage, openThread, updateThread, ThreadError, type ThreadsFile } from '../../../src/core/org/threads-model.js'
-import { returnedReply } from '../../../src/core/org/thread-return.js'
+import { returnedReply, returnLack, returnLacks } from '../../../src/core/org/thread-return.js'
 import { otherAsksRefusal, ownNeedsThreads, supersededAsks } from '../../../src/core/org/thread-supersede.js'
 
 const at = (h: number, m: number) => new Date(Date.UTC(2026, 10, 21, h, m)).toISOString()
@@ -106,6 +106,37 @@ describe('his words take the card off Needs you, and it comes back only from the
     const card = returnedReply(cur, 'Answered above: it is a bug.', 'Approve it?')
     expect(card).toBe('Approve it?\n\n**Since your message at 20:11 UTC:** Answered above: it is a bug.')
     expect(card).not.toContain('Did you not answer me')
+  })
+})
+
+// A card line has one send-back a turn: every rule it meets is named at once (reply-card-decision.ts).
+describe('every rule a write meets, in one go', () => {
+  const after = () => { const { file, id } = letterThread(); return { cur: fileMessage(file, { text: HIS_QUESTION, via: 'follow-up', threadId: id, at: at(20, 6) }).thread, id } }
+  const SINCE = 'It is a bug: the timer gave up after 2 minutes.'
+
+  it('back to needs after his words with nothing said: since and decision both, in that order', () => {
+    const { cur } = after()
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION }, TASK, true)).toEqual(['since', 'decision'])
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION, since_you_wrote: SINCE }, TASK, true)).toEqual(['decision'])
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION, decision: 'same' }, TASK, true)).toEqual(['since'])
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION, since_you_wrote: SINCE, decision: 'same' }, TASK, true)).toEqual([])
+    // A new decision is the rule's own answer, named last: its own card.
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION, decision: 'new' }, TASK, true)).toEqual(['since', 'new'])
+    expect(returnLacks(cur, { state: 'needs', reply: NEW_DECISION, since_you_wrote: SINCE, decision: 'new' }, TASK, true)).toEqual(['new'])
+  })
+
+  it('the op refuses on exactly the first of them, in its own words', () => {
+    const { file, id } = letterThread()
+    const later = fileMessage(file, { text: HIS_QUESTION, via: 'follow-up', threadId: id, at: at(20, 6) })
+    for (const [patch, first] of [
+      [{ state: 'needs', reply: NEW_DECISION, ...KIND }, /since_you_wrote/],
+      [{ state: 'needs', reply: NEW_DECISION, since_you_wrote: SINCE, ...KIND }, /Pass decision "same"/],
+      [{ state: 'needs', reply: NEW_DECISION, since_you_wrote: SINCE, decision: 'new', ...KIND }, /its own card/],
+    ] as const) {
+      expect(returnLack(later.thread, patch, TASK, true)).toBe(returnLacks(later.thread, patch, TASK, true)[0])
+      expect(refused(() => updateThread(later.file, id, patch, TASK, at(20, 7))).message).toMatch(first)
+    }
+    expect(returnLacks(later.thread, { state: 'needs' }, 'human', true)).toEqual([])
   })
 })
 

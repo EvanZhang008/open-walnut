@@ -1,7 +1,7 @@
 /**
  * A decision a needs thread of a task carries is that task's to hold, for every teammate whose
  * same ask folds under it (experiment threads_reply_tag; reviews 2026-11-25). A card line puts a
- * decision on a thread (reply-card.ts applyNeedsCard), and a report's ask that is that decision
+ * decision on a thread (reply-card-decision.ts applyNeedsCard), and a report's ask that is that decision
  * moves there (thread-report-ask.ts askNowOnThread, askOnNeedsThread). A teammate folded under it
  * (same-ask.ts, a decision_owner pointer or the words) then lost its holder and showed the decision
  * again, and his answer on the thread reached only the first task.

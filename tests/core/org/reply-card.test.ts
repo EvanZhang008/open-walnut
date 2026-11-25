@@ -15,8 +15,9 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reply-car
 
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
-import { askedAlready, cardLines, needsKey, needsPatch, notOpenReason, seenUpTo, tagsReplies, type ReplySaw } from '../../../src/core/org/reply-card.js'
-import { owedMessage } from '../../../src/core/org/reply-card-stop.js'
+import { cardLines, seenUpTo, tagsReplies, type ReplySaw } from '../../../src/core/org/reply-card.js'
+import { askedAlready, CardLineLacks, needsKey, needsPatch, notOpenReason, upAlready } from '../../../src/core/org/reply-card-decision.js'
+import { CARD_STOP_LINES, cardStopReason, owedMessage } from '../../../src/core/org/reply-card-stop.js'
 import { readCardTags, type CardTag } from '../../../src/lib/card-tag.js'
 import { listForQuestion, planThreadWrites, PROGRESS_MAX, readThreadLines, threadQuestionBlock } from '../../../src/core/sessions/status-threads.js'
 import { emptyThreads, fileMessage, setAnswers, updateThread, ThreadError, THREAD_TITLE_MAX, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
@@ -225,6 +226,39 @@ describe('a decision line is the thread_update it stands for', () => {
     expect(askedAlready({ ...up, closed: { how: 'acked', at: at(7), by: 'user' } }, card)).toBe(false)
     // A decision with no choices, asked the same way.
     expect(askedAlready({ state: 'needs', ask: 'Which supplier?' }, { thread: 'th-aaaaaa02', state: 'needs', ask: 'Which supplier?' })).toBe(true)
+  })
+
+  it('what a write after his words needs is passed on: since as since_you_wrote, decision as decision', () => {
+    const p = needsPatch({ title: 'Orchard fence', titled: true, state: 'working' }, { ...card, since: 'Measured the gap again.', decision: 'same' })
+    expect(p).toMatchObject({ since_you_wrote: 'Measured the gap again.', decision: 'same' })
+    expect(needsPatch({ title: 'Orchard fence', titled: true, state: 'working' }, card)).not.toHaveProperty('since_you_wrote')
+    expect(needsKey({ ...card, decision: 'same' })).not.toBe(needsKey({ ...card, decision: 'new' }))
+    expect(needsKey({ ...card, since: 'Measured.' })).not.toBe(needsKey(card))
+  })
+
+  it('a new decision already up on the thread Walnut opened for it is not opened again; another line is judged on its own thread only', () => {
+    const opened = { id: 'th-aaaaaa09', title: 'Fence wood', state: 'needs' as const, ask: 'Which wood for the fence?', options: [{ label: 'Larch', recommended: true }, { label: 'Oak' }] } as OrgThread
+    const old = { id: 'th-aaaaaa02', title: 'Orchard fence', state: 'answered' as const } as OrgThread
+    expect(upAlready([old, opened], { ...card, decision: 'new' })).toBe(true)
+    expect(upAlready([old, opened], card)).toBe(false)
+    expect(upAlready([old, opened], { ...card, decision: 'same' })).toBe(false)
+  })
+
+  // 2026-11-25, a live walk (turn d): the store's refusal named since_you_wrote and the op, the
+  // session wrote that into its line, and the line was dropped. The send-back names the line's own
+  // attributes, all it lacks at once: there is no second send-back.
+  it('a decision refused as a return is sent back in the line\'s own attributes, all at once', () => {
+    const both = cardStopReason([CARD_STOP_LINES.returned('th-aaaaaa02', ['since', 'decision'])])
+    expect(both).toBe('Walnut: the decision on th-aaaaaa02 was not put to him: he wrote on it since it last waited on him. '
+      + 'Its line again with since="what you did about his message" and decision="same" (this decision again) or "new" (another: Walnut answers this thread and opens it as its own card). '
+      + 'Write only this line now, and no other words about it: anything else you add is shown to him as chat.')
+    expect(CARD_STOP_LINES.returned('th-aaaaaa02', ['decision'])).toBe('the decision on th-aaaaaa02 was not put to him: it asked him a decision before. '
+      + 'Its line again with decision="same" (this decision again) or "new" (another: Walnut answers this thread and opens it as its own card).')
+    expect(CARD_STOP_LINES.returned('th-aaaaaa02', ['since'])).toMatch(/he wrote on it .* with since="what you did about his message"\.$/)
+    // Every attribute it names is one a card line reads.
+    for (const attr of [...both.matchAll(/\b([a-z_]+)="/g)].map((m) => m[1])) expect(readCardTags(`<walnut-card thread="th-aaaaaa02" state="needs" ask="Which wood?" ${attr}="same"/>`).errors, attr).toEqual([])
+    expect(both).not.toMatch(/thread_update|thread_create|since_you_wrote|walnut tools/)
+    expect(new CardLineLacks('th-aaaaaa02', ['since', 'decision']).lacks).toEqual(['since', 'decision'])
   })
 })
 

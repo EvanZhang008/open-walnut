@@ -139,6 +139,7 @@ describe('the card line check sends back only lines to write', () => {
       merge: CARD_STOP_LINES.merge(t.id, 'A thread cannot be merged into itself'),
       needs: CARD_STOP_LINES.needs(t.id, 'A question reaches the user only when it is theirs: name its user_kind'),
       missing: CARD_STOP_LINES.missing(t),
+      returned: CARD_STOP_LINES.returned(t.id, ['since', 'decision']),
     }
     for (const [kind, text] of Object.entries(texts)) expect(text, kind).not.toMatch(THREAD_WRITE)
     // The store's fields in a decision's refusal are given as the line's own attributes.

@@ -116,7 +116,7 @@ export function needsThreadOf(threads: readonly OrgThread[], ask: DecisionWords 
 }
 
 /**
- * The decision id a card line's needs write gives its thread (reply-card.ts applyNeedsCard): the
+ * The decision id a card line's needs write gives its thread (reply-card-decision.ts applyNeedsCard): the
  * task's own decision when the line asks it (its report's ask, or one it stopped asking within
  * ASK_MEMORY_MS), else the one the thread already waits on him for when the line asks that again,
  * else a new one. Pure but for the new id.
@@ -250,7 +250,9 @@ export function repliedSinceAsk(t: Pick<OrgThread, 'messages'>, askedAt: string 
 
 /**
  * The threads as he reads them: the one holding the task's ask now reads needs, with that ask's id,
- * its summary leading with the question, and `heldAsk`; every other thread as stored. One he
+ * its words as the thread's `ask`, its summary leading with the question, and `heldAsk`; every other
+ * thread as stored (2026-11-25, a live walk: a thread's own `ask` of an older decision stayed beside
+ * the held ask's new choices and id, so its card asked the old question over the new buttons). One he
  * answered since the task asked reads as stored (his message made it working) until the task asks
  * again. With threads_one_card off (one-card.ts) every thread reads as stored: the places are kept, unread.
  */
@@ -263,7 +265,7 @@ export function withHeldAsk<T extends OrgThread>(task: AskingTask | null | undef
     if (repliedSinceAsk(t, task?.user_status?.at ?? t.reportAsk?.at)) return t;
     const reply = t.reply?.trim() ? t.reply : undefined;
     const heldAsk: ThreadHeldAsk = { id: ask.id, ask: ask.ask, ...(reply ? { reply } : {}), was: t.state };
-    return { ...t, state: 'needs' as const, askId: ask.id, reply: reply ? `${ask.ask}\n\n${reply}` : ask.ask, heldAsk, ...(ask.options ? { options: ask.options } : {}) };
+    return { ...t, state: 'needs' as const, askId: ask.id, ask: ask.ask, reply: reply ? `${ask.ask}\n\n${reply}` : ask.ask, heldAsk, ...(ask.options ? { options: ask.options } : {}) };
   });
 }
 
@@ -325,7 +327,7 @@ export async function askOnNeedsThread(taskId: string, report: StatusReport): Pr
 }
 
 /**
- * The other order: a thread of the task was just put in needs (a card line, reply-card.ts
+ * The other order: a thread of the task was just put in needs (a card line, reply-card-decision.ts
  * applyNeedsCard), and its stored report already asked that decision. The report stops asking it
  * now, not at its next status answer (one may never come), remembering the decision so the same
  * ask later keeps its id; its place goes with it. Its times stay, so the turn's own status answer
