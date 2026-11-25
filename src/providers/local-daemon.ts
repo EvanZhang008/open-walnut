@@ -440,6 +440,13 @@ export class LocalDaemon {
 
   /** The daemon in this process when the experiment says so (and it can be had), else a daemon program. */
   private async ensureRunningOrInProcess(): Promise<number> {
+    // First, before either way: a daemon that runs with its door files gone (a temp cleaner) is
+    // found through its instance lock (daemon-lost-files.ts). The in-process start then stops
+    // that program and takes the dir, as it does for any daemon program it finds by its port
+    // file (without the files it met the lock, was declined, and the server kept a daemon program
+    // beside itself; a host's one service failed that start). The daemon program path adopts or
+    // updates it: a spawn beside it only exits on that lock, and its port file never comes.
+    await this.recoverLostDaemon()
     if (this.inProcess && !this._inProcessDeclined && await this.inProcess()) {
       const service = this.service
       const verdict = await ensureInProcessDaemon({
@@ -605,12 +612,6 @@ export class LocalDaemon {
   }
 
   private async ensureRunningInner(revived = false): Promise<number> {
-    // 0. A daemon that runs with its door files gone (a temp cleaner) is found through its
-    // instance lock first, so the probation settled below and the checks after it adopt or
-    // update it: a spawn beside it only exits on that lock, and its port file never comes
-    // (daemon-lost-files.ts).
-    await this.recoverLostDaemon()
-
     // The probation a server before this one started, taken up (a deploy restarted it inside it),
     // before a daemon is chosen to start.
     await this._stay.resume(() => this.stayDue(true))
@@ -1444,6 +1445,8 @@ export class LocalDaemon {
 
   /** Writes back the door files of a daemon that runs here without them, from its instance lock. */
   private async recoverLostDaemon(): Promise<void> {
+    // The runtime in this process keeps no daemon.pid on purpose: nothing is lost, and no lock is asked on every call.
+    if (inProcessDaemonRunning()) return
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     if (uid === null) return
     const lost = await recoverLostDaemonFiles({

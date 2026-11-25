@@ -7,8 +7,9 @@
  *                          `url`: a host's daemon reached at that door; without: this computer's own
  *                          daemon, followed as the server follows it (followsLocalDaemon).
  *   round   {word}         one more turn on the session's manager as it is (its link may have dropped).
- *   attach  {url?, word}   the session again on a new manager (what the server's recovery does after
- *                          its link to the daemon dropped), then one turn.
+ *   attach  {url?, word, sid?}  the session again on a new manager (what the server's recovery does after
+ *                          its link to the daemon dropped), then one turn. `sid`: a session another
+ *                          side started (a server that restarted: its session record names it).
  *   ensure  {}             localDaemon.ensureRunning(): this server's own daemon, in process or a program.
  *   exit    {}             lets go (a runtime in this process stops with the keep switch the env sets).
  *
@@ -83,6 +84,7 @@ async function run(cmd: Record<string, unknown>): Promise<Record<string, unknown
     case 'round':
       return round(rsm!, String(cmd.word))
     case 'attach': {
+      if (typeof cmd.sid === 'string') sid = cmd.sid
       const m = manager(url)
       const attached = await m.attach({ sessionId: sid, onOutput, onExit, mode: 'bypass' })
       rsm = m

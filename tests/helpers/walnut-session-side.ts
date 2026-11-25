@@ -1,7 +1,8 @@
 /**
  * A Walnut server's session side in a bun process of its own (tests/providers/fixtures/
  * walnut-session-side.ts): its start on an env the test made, one call per command, its stop.
- * Used by tests/providers/one-service-shared-host-e2e.test.ts and in-process-daemon-takeover-e2e.test.ts.
+ * Used by tests/providers/one-service-shared-host-e2e.test.ts, in-process-daemon-takeover-e2e.test.ts and
+ * daemon-lost-files-e2e.test.ts.
  * MACHINE SAFETY: the process ends when its stdin closes or on `exit`; nothing is signalled.
  */
 import { spawn, type ChildProcess } from 'node:child_process'

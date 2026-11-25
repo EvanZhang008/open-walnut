@@ -104,3 +104,39 @@ describe('recoverLostDaemonFiles', () => {
     expect(reads).toBe(2)
   })
 })
+
+/**
+ * The class: whoever decides "no daemon runs here" from the door files starts one, and that one
+ * yields to the running daemon's lock. Two doors cover every starter, and this pins both:
+ *   - the place a starting daemon yields (the only taker of the instance lock) writes the files back;
+ *   - the two processes that look before they start (the server, the join) ask first, the server
+ *     before it decides whether the daemon runs in its own process (tests/providers/daemon-lost-files-e2e.test.ts
+ *     runs each with a real session).
+ * A new taker of the lock, or one of these three losing its call, fails here.
+ */
+describe('everything that starts a daemon gets a running daemon\'s lost door files back', () => {
+  const ROOT = path.resolve(import.meta.dirname, '../..')
+  const src = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+  const tsFiles = (rel: string): string[] => fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? tsFiles(path.join(rel, e.name)) : /\.ts$/.test(e.name) ? [path.join(rel, e.name)] : [])
+
+  it('the only taker of the instance lock is the daemon\'s start, and it writes them back where it yields', () => {
+    const takers = tsFiles('src').filter((f) => f !== 'src/providers/daemon-instance-lock.ts' && /\bacquireDaemonInstanceLock\(/.test(src(f)))
+    expect(takers, 'a new taker of the daemon instance lock: where it yields to a running daemon, write that daemon\'s lost door files back (daemon-lost-files.ts), then list it here').toEqual(['src/providers/daemon-standalone.ts'])
+    // The block that yields: from its `if (lock.kind === 'existing') {` to its return.
+    const text = src('src/providers/daemon-standalone.ts')
+    const yields = text.indexOf("return { kind: 'existing', port: String(lock.owner.wsPort) }")
+    expect(yields).toBeGreaterThan(0)
+    const block = text.lastIndexOf("if (lock.kind === 'existing') {", yields)
+    expect(block).toBeGreaterThan(0)
+    expect(text.slice(block, yields)).toMatch(/writeBackDoorFiles\(/)
+  })
+
+  it('the server asks before either way to its daemon, and the join asks before it looks', () => {
+    const server = src('src/providers/local-daemon.ts')
+    // First in ensureRunningOrInProcess: after it, the in-process start and the daemon program path both find the daemon by its files.
+    expect(server).toMatch(/private async ensureRunningOrInProcess\(\): Promise<number> \{\n(\s+\/\/[^\n]*\n)*\s+await this\.recoverLostDaemon\(\)/)
+    expect(server).toMatch(/private async recoverLostDaemon\(\)[\s\S]{0,600}recoverLostDaemonFiles\(/)
+    expect(src('src/commands/net.ts')).toMatch(/export async function recoverLostDaemon\(\)[\s\S]{0,400}recoverLostDaemonFiles\(/)
+  })
+})

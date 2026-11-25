@@ -217,6 +217,15 @@ and hands it over to the login service like any running daemon; the CI job's
 `existing-swept` Mac rehearses it. Daemons from this version on keep their own files fresh
 (`keepRuntimeFiles` in `src/providers/daemon-core.ts`).
 
+The same daemon is found by everything else that looks for it by those files
+(`src/providers/daemon-lost-files.ts`). The server's own start asks the lock before it looks,
+and before it decides whether the daemon runs in its own process: without that, every session
+start failed with "port file not created within 10s" after an update from a release older than
+the keeper. A daemon that starts and yields to the running one writes that daemon's files back
+as it leaves, which is what a remote host's start command waits for and what its stop command
+reads. `tests/providers/daemon-lost-files-e2e.test.ts` runs the three starters with a real
+session each.
+
 ### Windows
 
 Walnut runs on Windows inside WSL (Linux beside Windows), in a Linux of its own called
