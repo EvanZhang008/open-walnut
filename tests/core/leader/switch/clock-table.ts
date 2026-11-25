@@ -19,6 +19,7 @@ export type ClockKind = 'gated' | 'stopped' | 'none' | 'not-server'
 /** [kind, what it writes and why that kind, its stop call in stopServer (stopped only)], or 'same'. */
 export type Clock = [ClockKind, string, string?] | 'same'
 export const CLOCKS: Record<string, Clock[]> = {
+  'src/replica/slice-source.ts': [['not-server', 'the slice refresh of a host\'s Walnut service that keeps no copy (WALNUT_COPIES=none): reads the leader over the follower link, never a leader\'s server']],
   'src/binary/service-lead-ready.ts': [['none', 'Poll (52) only reads the launcher\'s ready file.']],
   'src/commands/ephemeral-owner.ts': [['not-server', 'Ephemeral test server (commands/web-ephemeral.ts, its own temp data home), not the leader server of a real home.']],
   'src/commands/logs.ts': [['not-server', 'CLI command `walnut logs --follow` (own process).']],

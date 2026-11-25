@@ -14,6 +14,7 @@ import { readFinalStopResult } from '../../../../src/core/leader/switch/records.
 import { finalMarkName, readSwitchFile, validFinalMark } from '../../../../src/core/leader/switch/ticket.js'
 import { parseSwitchSettings } from '../../../../src/core/leader/switch/settings.js'
 import type { BatchOutcome } from '../../../../src/core/standby/index.js'
+import { PROMOTE_TRIAL_MS } from '../../../../src/core/leader/switch/catch-up.js'
 
 const tmp: string[] = []
 /** The standby copy is read only by design: open it again before removing it. */
@@ -74,7 +75,7 @@ describe('the final batch', () => {
     const peer = fakePeer([true])
     const files = new Map<string, unknown>()
     Object.assign(peer, { writeFile: async (n: string, v: unknown) => { files.set(n, v) } })
-    const r = await finishSwitchStop({ home, sw: { switchId: 'S1', to: 'machine-b', peer, commitDeadline: Date.now() + 150, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: live(), log: () => {} })
+    const r = await finishSwitchStop({ home, sw: { switchId: 'S1', to: 'machine-b', peer, commitDeadline: Date.now() + PROMOTE_TRIAL_MS + 150, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: live(), log: () => {} })
     expect(r.ok).toBe(false)
     expect(r.why).toMatch(/still changed when the commit window ended/)
     expect(files.size).toBe(0)

@@ -214,6 +214,7 @@ const GIT_CHILDREN: Record<string, [number, string]> = {
   'src/hooks/on-stop.ts': [1, 'a session\'s Stop hook: its own process, in the session\'s work dir'],
   'src/core/data-copy-compact.ts': [1, '`git check-ignore` of a copy it may compact: reads the index, takes no lock, writes nothing'],
   'src/integrations/git-bundle-client.ts': [1, 'a bundle of the home\'s repo: refused in a quiet home and tracked for the stop (git-children.ts)'],
+  'src/integrations/git-compaction-chain.ts': [1, 'the history rewrite\'s chain (cat-file, hash-object): runs in the forked compaction worker, which the switch stop waits for and which starts none in a quiet home'],
 }
 
 /** A file's code without its comments (a comment naming a call is not a call). */
@@ -228,6 +229,8 @@ function code(file: string): string {
 const GIT_ENV_USERS: Record<string, string> = {
   'src/integrations/git-sync.ts': 'the data repo\'s git: its spawners refuse a start in a quiet home and track every child',
   'src/integrations/git-bundle-client.ts': 'a bundle of the home\'s repo: refused in a quiet home and tracked (git-children.ts)',
+  'src/integrations/git-compaction-chain.ts': 'the history rewrite\'s chain, in the forked compaction worker (waited for by the switch stop)',
+  'src/integrations/git-compaction-deliver.ts': 'the history rewrite\'s delivery to the hub, in the forked compaction worker (waited for by the switch stop)',
   'src/web/routes/git-bundle-push.ts': 'the companion\'s hub repo',
   'src/web/routes/git-http.ts': 'the companion\'s hub repo',
   'src/core/self-repair/walnut-source.ts': 'Walnut\'s own source checkout',
