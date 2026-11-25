@@ -14,7 +14,11 @@
  * missed. The Mac's `walnut tools call`, which reaches its server over HTTP, kept none of its 5: with
  * the server and its in-process daemon both restarting, it had nowhere to say it. And a session whose
  * failed call was its MCP server's and whose next working call was its CLI's, or a later process's,
- * never told the first.)
+ * never told the first.) The clients: the host's Walnut MCP server (walnut-mcp-stdio.ts) and the
+ * hub's own `open-walnut mcp` mount (mcp/tools.ts) of Main, the VPs and the asks; the in-session CLI
+ * (wn-cli.ts) and the hub's installed CLI (commands/tools.ts, guide.ts, mcp-client.ts through
+ * providers/session-no-answer.ts), which is a Mac session's `walnut`. A guard keeps every such
+ * client on this file (tests/core/usage-watch/no-answer-clients-guard.test.ts).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -175,8 +179,21 @@ export function spoolHoldsNoAnswers(file: string | null): boolean {
  * A call answered so is no sign the hub is back, and a report answered so went nowhere: it is kept
  * for the next call a server answers.
  */
-export function hubAnswered(r: { ok: boolean; result?: unknown }): boolean {
-  return r.ok && (r.result as { offline?: unknown } | null | undefined)?.offline !== true
+export function hubAnswered(r: { ok: boolean; result?: unknown } | null | undefined): boolean {
+  return r?.ok === true && (r.result as { offline?: unknown } | null | undefined)?.offline !== true
+}
+
+/** Tell what the session's spool holds with `send`; kept again unless a Walnut server took it. Never throws. */
+export async function tellSpooledNoAnswers(
+  file: string | null,
+  send: (report: NoAnswer[]) => Promise<{ ok: boolean; result?: unknown }>,
+): Promise<void> {
+  if (!spoolHoldsNoAnswers(file)) return
+  const { report, putBack } = takeSpooledNoAnswers(file)
+  if (!report.length) return
+  try {
+    if (!hubAnswered(await send(report))) putBack()
+  } catch { putBack() }
 }
 
 /** The no-answer failures a client's report names (hub side), or [] when it names none. */

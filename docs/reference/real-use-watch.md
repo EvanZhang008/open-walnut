@@ -26,11 +26,18 @@ On the leader only, in `WALNUT_HOME/local/usage-watch.sqlite` (this machine, nev
   `no_daemon` for a gateway socket that is gone, `hub_timeout` and `hub_unreachable`). This counts
   what the server never answered too. The hook sees a result only while the server reads the session
   live, and a call gets no answer exactly while the server or the host's daemon is away (2026-11-24:
-  all 9 such failures the read missed fell inside a deploy restart). So the client that saw it (the
-  Walnut MCP server in memory, the CLI in `no-answer/<session>.ndjson` beside the daemon socket) tells
-  the hub with the session's next call that gets through (`tools.list` with `report.no_answer`,
-  `lib/no-answer-report.ts`), the recorder keeps what it is told before it starts, and a failure both
-  the hook and the client tell counts once (`record.ts`). A report whose range starts before the first recorded failure
+  all 9 such failures the read missed fell inside a deploy restart). So the client that saw it keeps
+  it in the session's one file, `no-answer/<session>.ndjson` beside the daemon socket, whichever
+  client it is (the host's MCP server, the hub's own MCP mount, the in-session CLI, the hub's CLI that
+  is a Mac session's `walnut`), and the session's next call that gets through, by any of them, tells
+  the hub (`tools.list` with `report.no_answer`, `lib/no-answer-report.ts`); a report the host daemon
+  answered for an away server (`offline: true`) stays kept. A guard reads the clients from the
+  source (`tests/core/usage-watch/no-answer-clients-guard.test.ts`). The recorder keeps what it is
+  told before it starts, and a failure both the hook and the client tell counts once (`record.ts`).
+  A session's Walnut MCP server that is gone (Claude Code's `mcp_status` at a turn end says failed,
+  absent, connected with no tool, or still pending a turn later) counts once per drop as a failed
+  `tools/list` with code `tools_gone` (`usage-watch/mount-watch.ts`); a role's shorter list
+  (`mcp_tools_by_role`) is that session's whole list and counts nothing. A report whose range starts before the first recorded failure
   says where its record starts (`dataFrom`). `usage_watch {"action":"errors","by":"op|code|session|host"}`
   reads them grouped; `"session":"<id or its start>"` lists one session's (or task's) one by one
   (`usage-watch/tool-errors.ts`). Kept 14 days, at most 50,000.

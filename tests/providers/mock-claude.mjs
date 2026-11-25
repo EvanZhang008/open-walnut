@@ -424,6 +424,16 @@ if (inputFormat === 'stream-json') {
             type: 'control_response',
             response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors: {} } },
           }) + '\n');
+        } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_status') {
+          // The real CLI's per-server status. MOCK_CLAUDE_MCP_STATUS="walnut=failed" (or a file
+          // path holding that text, read at each request) says what one is; the rest are connected.
+          let spec = process.env.MOCK_CLAUDE_MCP_STATUS ?? '';
+          try { if (spec && !spec.includes('=')) spec = fs.readFileSync(spec, 'utf8').trim(); } catch { spec = ''; }
+          const said = Object.fromEntries(spec.split(',').filter((p) => p.includes('=')).map((p) => p.split('=')));
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: { mcpServers: liveMcpServers.map((name) => ({ name, status: said[name] ?? 'connected' })) } },
+          }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
           // side_question: the answer as a real model writes it (mock-claude-side-answer.mjs).
           // Mirror the real CLI's 3-level nesting: response.response.response.

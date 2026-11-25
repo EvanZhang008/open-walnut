@@ -10708,6 +10708,32 @@ export class ClaudeCodeSession {
   private atTurnEnd(): void {
     void this.refreshAppliedSettings('turn-end')
     void this.ensureLiveWalnutMount()
+    void this.checkWalnutMountHere()
+  }
+
+  /** What this runner last saw of its process's Walnut mount (usage-watch/mount-watch.ts). */
+  private _walnutMountSeen: import('../core/usage-watch/mount-watch.js').MountSeen | undefined
+
+  /**
+   * Whether the process still has its Walnut MCP tools, asked at each turn end (`mcp_status`):
+   * a mount that failed, disconnected or lists none is counted once per drop in the real-use
+   * monitor (2026-11-25: Main resumed with all 119 gone and no row said so). Read-only, never
+   * throws; a CLI that does not know the request answers nothing and nothing is judged.
+   */
+  private async checkWalnutMountHere(): Promise<void> {
+    const pid = this.pid
+    const sid = this.claudeSessionId
+    if (!this._transport || pid === null || !sid) return
+    if (!this._requestedMcpServers.includes('walnut') || this._walnutMountVerdict === 'blocked') return
+    try {
+      const reply = await this.readControlPayload('mcp-status', 'mcp_status', 10_000)
+      if (!reply || this.pid !== pid) return
+      const { judgeWalnutMount, recordToolsGone } = await import('../core/usage-watch/mount-watch.js')
+      const fresh = this._walnutMountSeen === undefined
+      const { seen, gone } = judgeWalnutMount(this._walnutMountSeen, pid, reply)
+      this._walnutMountSeen = seen
+      if (gone) recordToolsGone({ sid, taskId: this.taskId, host: this._host, why: gone, fresh })
+    } catch { /* a count only */ }
   }
 
   private ensureLiveWalnutMount(): Promise<void> {

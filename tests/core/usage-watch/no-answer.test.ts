@@ -21,8 +21,9 @@ import { recordNoAnswers } from '../../../src/core/usage-watch/gateway-record.js
 import { handleGatewayCapability, type CapabilityRouterDeps } from '../../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
 import {
-  NoAnswerLog, noAnswerSpoolFile, noAnswersOf, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers,
+  hubAnswered, noAnswerSpoolFile, noAnswersOf, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers,
 } from '../../../src/lib/no-answer-report.js'
+import { noteSessionFailure } from '../../../src/providers/session-no-answer.js'
 import { createWalnutMcpHandler } from '../../../src/providers/walnut-mcp-stdio.js'
 import type { GatewayResponse } from '../../../src/providers/gateway-core.js'
 
@@ -139,6 +140,7 @@ describe('the recorder and the hook', () => {
 
 describe('the Walnut MCP server tells its calls no Walnut answered with its next call that gets through', () => {
   const formatError = (e: { code: string; message: string }) => [`walnut: ${e.code}: ${e.message}`]
+  const spoolOf = () => noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)
   const call = (handle: ReturnType<typeof createWalnutMcpHandler>, id: number, name: string) =>
     handle({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: {} } })
 
@@ -150,7 +152,7 @@ describe('the Walnut MCP server tells its calls no Walnut answered with its next
     ]
     const reports: unknown[] = []
     const handle = createWalnutMcpHandler({
-      formatError, lostFollowMs: 1,
+      formatError, lostFollowMs: 1, noAnswerSpool: spoolOf(),
       request: async (op, args) => {
         if (op === 'tools.list') { reports.push(args.report); return { ok: true, result: { recorded: true } } }
         if ((args as { name?: string }).name === 'op_result') return { ok: false, error: { code: 'hub_timeout', message: 'x' } }
@@ -180,7 +182,7 @@ describe('the Walnut MCP server tells its calls no Walnut answered with its next
     let up = false
     const reports: unknown[] = []
     const handle = createWalnutMcpHandler({
-      formatError,
+      formatError, noAnswerSpool: spoolOf(),
       request: async (op, args) => {
         if (op === 'tools.list') { reports.push(args.report); return up ? { ok: true, result: {} } : { ok: false, error: { code: 'hub_unreachable', message: 'away' } } }
         if ((args as { name?: string }).name === 'bad') return { ok: false, error: { code: 'bad_request', message: 'Invalid arguments for bad' } }
@@ -252,11 +254,95 @@ describe('the CLI keeps them beside the daemon socket, one file per session', ()
     expect(fs.existsSync(file)).toBe(true)
   })
 
-  it('a long-lived client keeps at most its last 50', () => {
-    const log = new NoAnswerLog()
-    for (let i = 0; i < 60; i++) log.note(`op_${i}`, 'no_daemon', 'mcp')
-    const { report } = log.take()
+  it('a report tells at most the last 50', () => {
+    const file = noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)
+    for (let i = 0; i < 60; i++) spoolNoAnswer(file, `op_${i}`, 'no_daemon', 'mcp')
+    const { report } = takeSpooledNoAnswers(file)
     expect(report).toHaveLength(50)
     expect(report[0].op).toBe('op_10')
+  })
+})
+
+describe('2026-11-25 audit: every client of a session keeps its failures in one place, and only the server takes a report', () => {
+  const formatError = (e: { code: string; message: string }) => [`walnut: ${e.code}: ${e.message}`]
+  const spoolOf = () => noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)
+  const call = (handle: ReturnType<typeof createWalnutMcpHandler>, id: number, name: string) =>
+    handle({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: {} } })
+  const told = (r: unknown) => (r as { no_answer: Array<{ op: string; code: string; client: string }> }).no_answer.map((n) => `${n.client}:${n.op}:${n.code}`)
+
+  it('a report the host daemon answered for an away server (its offline catalog) is kept, and told once the server is back', async () => {
+    // task_get cffc7f02, 22:05:24: no_daemon, then a call answered 4 s later, and no row.
+    let back = false
+    const reports: unknown[] = []
+    let first = true
+    let offlineCall = false
+    const handle = createWalnutMcpHandler({
+      formatError, noAnswerSpool: spoolOf(),
+      request: async (op, args) => {
+        if (op === 'tools.list') {
+          reports.push(args.report)
+          return back ? { ok: true, result: { recorded: true, no_answer: 1 } } : { ok: true, result: { ops: [{ name: 'task_get' }], offline: true, hint: 'away' } }
+        }
+        if (first) { first = false; throw Object.assign(new Error('connect ENOENT /tmp/open-walnut/agent-gateway.sock'), { code: 'ENOENT' }) }
+        return { ok: true, result: offlineCall ? { id: 'x', offline: true } : { id: 'x' } }
+      },
+    })
+    await call(handle, 1, 'task_get')
+    // Answered from the daemon's own copy: no sign the hub is back, so nothing is told.
+    offlineCall = true
+    await call(handle, 2, 'task_get')
+    expect(reports).toHaveLength(0)
+    // The hub's answer, but the report is answered by the daemon for an away hub: kept.
+    offlineCall = false
+    await call(handle, 3, 'task_get')
+    await vi.waitFor(() => expect(reports).toHaveLength(1))
+    await vi.waitFor(() => expect(spoolHoldsNoAnswers(spoolOf())).toBe(true))
+    back = true
+    await call(handle, 4, 'task_get')
+    await vi.waitFor(() => expect(reports).toHaveLength(2))
+    expect(told(reports[1])).toEqual(['mcp:task_get:no_daemon'])
+    await vi.waitFor(() => expect(spoolHoldsNoAnswers(spoolOf())).toBe(false))
+  })
+
+  it('a failure outlives the MCP process that saw it: the session\'s next process tells it', async () => {
+    const reports: unknown[] = []
+    const gone = createWalnutMcpHandler({
+      formatError, noAnswerSpool: spoolOf(),
+      request: async () => ({ ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down', detail: { stopping: true } } }),
+    })
+    await call(gone, 1, 'task_send')
+    // That process ends; the session's next one gets through.
+    const next = createWalnutMcpHandler({
+      formatError, noAnswerSpool: spoolOf(),
+      request: async (op, args) => {
+        if (op === 'tools.list') { reports.push(args.report); return { ok: true, result: { recorded: true } } }
+        return { ok: true, result: {} }
+      },
+    })
+    await call(next, 1, 'task_get')
+    await vi.waitFor(() => expect(reports).toHaveLength(1))
+    expect(told(reports[0])).toEqual(['mcp:task_send:hub_unreachable'])
+  })
+
+  it('a caller with no session of its own keeps nothing', async () => {
+    const handle = createWalnutMcpHandler({ formatError, request: async () => ({ ok: false, error: { code: 'hub_unreachable', message: 'away' } }) })
+    await call(handle, 1, 'task_get')
+    expect(fs.existsSync(path.join(dir, 'no-answer'))).toBe(false)
+  })
+
+  it('the server took it only when it answered as itself', () => {
+    expect(hubAnswered({ ok: true, result: { recorded: true } })).toBe(true)
+    expect(hubAnswered({ ok: true, result: { recorded: false } })).toBe(true)
+    expect(hubAnswered({ ok: true, result: { ops: [], offline: true } })).toBe(false)
+    expect(hubAnswered({ ok: false })).toBe(false)
+    expect(hubAnswered(null)).toBe(false)
+  })
+
+  it('a client over HTTP keeps only the codes of no answer, under the code its agent read', () => {
+    const sock = path.join(dir, 'agent-gateway.sock')
+    const env = { WALNUT_AGENT_SOCKET: sock, WALNUT_SESSION_ID: SID } as NodeJS.ProcessEnv
+    for (const code of ['hub_unreachable', 'hub_timeout', 'request_failed', 'conflict', 'bad_args', 'other']) noteSessionFailure('task_get', code, 'cli', env)
+    const file = noAnswerSpoolFile(sock, SID)
+    expect(takeSpooledNoAnswers(file).report.map((n) => n.code)).toEqual(['hub_unreachable', 'hub_timeout', 'request_failed'])
   })
 })

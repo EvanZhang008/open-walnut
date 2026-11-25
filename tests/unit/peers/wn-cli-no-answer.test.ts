@@ -94,4 +94,44 @@ describe('the CLI tells its calls no Walnut answered', () => {
       expect(fs.existsSync(path.join(gw.dir, 'no-answer', `${SID}.ndjson`))).toBe(false)
     } finally { gw.close() }
   }, 60_000)
+
+  // 2026-11-25 audit: a report the host daemon answered with its offline catalog was taken as told.
+  it('a report the daemon answered for an away server stays kept, and goes once the server takes it', async () => {
+    let calls = 0
+    let back = false
+    const gw = await gateway((l) => {
+      if (opOf(l) === 'tools.list') return back ? { ok: true, result: { recorded: true, no_answer: 1 } } : { ok: true, result: { ops: [], offline: true } }
+      calls++
+      if (calls === 1) return { ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down', detail: { stopping: true } } }
+      // The second call is answered from the daemon's own copy: no sign the hub is back, it tells nothing.
+      return calls === 2 ? { ok: true, result: { offline: true, id: 'x' } } : { ok: true, result: { id: 'x' } }
+    })
+    try {
+      await run(['tools', 'call', 'task_send', '{"to":"x","message":"y"}'], gw.sock, gw.dir)
+      const spool = path.join(gw.dir, 'no-answer', `${SID}.ndjson`)
+      expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
+      expect(gw.lines.filter((l) => opOf(l) === 'tools.list')).toHaveLength(0)
+      // The third is the hub's, but the report is answered by the daemon for an away hub: kept.
+      expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
+      expect(gw.lines.filter((l) => opOf(l) === 'tools.list')).toHaveLength(1)
+      expect(fs.existsSync(spool)).toBe(true)
+      back = true
+      expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
+      const reports = gw.lines.filter((l) => opOf(l) === 'tools.list').map((l) => argsOf(l).report)
+      expect(reports[1]).toEqual({ no_answer: [{ op: 'task_send', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }] })
+      expect(fs.existsSync(spool)).toBe(false)
+    } finally { gw.close() }
+  }, 60_000)
+
+  it('a failure the session\'s MCP server kept is told by its next CLI call that gets through', async () => {
+    const gw = await gateway((l) => (opOf(l) === 'tools.list' ? { ok: true, result: { recorded: true, no_answer: 1 } } : { ok: true, result: { id: 'x' } }))
+    try {
+      const { spoolNoAnswer } = await import('../../../src/lib/no-answer-report.js')
+      fs.mkdirSync(path.join(gw.dir, 'no-answer'), { mode: 0o700 })
+      spoolNoAnswer(path.join(gw.dir, 'no-answer', `${SID}.ndjson`), 'task_get', 'no_daemon', 'mcp')
+      expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
+      const reports = gw.lines.filter((l) => opOf(l) === 'tools.list').map((l) => argsOf(l).report)
+      expect(reports).toEqual([{ no_answer: [{ op: 'task_get', code: 'no_daemon', client: 'mcp', ms: expect.any(Number) }] }])
+    } finally { gw.close() }
+  }, 60_000)
 })

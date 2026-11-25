@@ -289,6 +289,66 @@ describe('a RUNNING process without the mount gets it before its next turn, with
   }, 60_000)
 })
 
+// 2026-11-25 audit: Main resumed with all 119 Walnut tools gone ("MCP server disconnected") and
+// usage_watch had no row. The runner asks Claude Code at each turn end (usage-watch/mount-watch.ts).
+describe('a process whose Walnut MCP server is gone is counted once per drop', () => {
+  it('failed at a turn end: one tools_gone row; still failed: no second; connected, then failed again: a second', async () => {
+    const { setUsageWatchFile, closeUsageWatchStore, readToolErrors } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting, flushUsage } = await import('../../src/core/usage-watch/record.js')
+    setUsageWatchFile(path.join(WALNUT_HOME, 'usage-watch.sqlite'))
+    _resetUsageRecorderForTesting(true, Date.now() - 60_000)
+    const statusFile = path.join(WALNUT_HOME, 'mcp-status.txt')
+    await fsp.writeFile(statusFile, 'walnut=failed')
+    process.env.MOCK_CLAUDE_MCP_STATUS = statusFile
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const gone = () => { flushUsage(); return readToolErrors({ since: 0, limit: 20 }).filter((r) => r.code === 'tools_gone') }
+    const asked = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_status')).length
+    try {
+      const { session } = await spawnMcpConfig('t-mount-gone', { message: 'snapshot-clean-turn:one' })
+      await waitUntil(() => results >= 1, 15000, 'first result')
+      await waitUntil(() => gone().length >= 1, 8000, 'tools_gone row')
+      expect(gone()).toEqual([expect.objectContaining({ sid: session.sessionId, op: 'tools/list', client: 'mcp', taskId: 't-mount-gone' })])
+      expect(await session.writeMessage('snapshot-clean-turn:two')).toBe(true)
+      await waitUntil(() => results >= 2 && asked() >= 2, 15000, 'second turn end asked')
+      await fsp.writeFile(statusFile, 'walnut=connected')
+      expect(await session.writeMessage('snapshot-clean-turn:three')).toBe(true)
+      await waitUntil(() => results >= 3 && asked() >= 3, 15000, 'third turn end asked')
+      expect(gone()).toHaveLength(1)
+      await fsp.writeFile(statusFile, 'walnut=failed')
+      expect(await session.writeMessage('snapshot-clean-turn:four')).toBe(true)
+      await waitUntil(() => gone().length >= 2, 15000, 'second drop counted')
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      delete process.env.MOCK_CLAUDE_MCP_STATUS
+      closeUsageWatchStore()
+      setUsageWatchFile(null)
+      _resetUsageRecorderForTesting(false)
+    }
+  }, 60_000)
+
+  it('a healthy mount is asked and counts nothing', async () => {
+    const { setUsageWatchFile, closeUsageWatchStore, readToolErrors } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting, flushUsage } = await import('../../src/core/usage-watch/record.js')
+    setUsageWatchFile(path.join(WALNUT_HOME, 'usage-watch.sqlite'))
+    _resetUsageRecorderForTesting(true, Date.now() - 60_000)
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    try {
+      const { session } = await spawnMcpConfig('t-mount-up', { message: 'snapshot-clean-turn:one' })
+      await waitUntil(() => results >= 1, 15000, 'first result')
+      await waitUntil(() => daemon.getCommandHistory().some((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_status')), 8000, 'mcp_status asked')
+      flushUsage()
+      expect(readToolErrors({ since: 0, limit: 20 })).toEqual([])
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      closeUsageWatchStore()
+      setUsageWatchFile(null)
+      _resetUsageRecorderForTesting(false)
+    }
+  }, 60_000)
+})
+
 /**
  * Class guard: nothing a person's line waits on before it is written is unbounded or long.
  * Every `await` in writeMessage ahead of the transport's write is listed here with the

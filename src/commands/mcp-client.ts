@@ -61,6 +61,8 @@ export async function runMcpClient(argv: string[], options: { apiUrl?: string } 
   // Each call's id (src/lib/op-call-id.ts): a lost answer says how to read it, never a bare timeout.
   const { lostCallLines, newCallId } = await import('../lib/op-call-id.js')
   const { cliOpCaller } = await import('../lib/cli-sender.js')
+  const { noteSessionAnswered, noteSessionFailure } = await import('../providers/session-no-answer.js')
+  const { toolErrorCode } = await import('../core/usage-watch/normalize.js')
   const caller = cliOpCaller()
   const run = async (name: string, args: Record<string, unknown>) => {
     const callId = newCallId()
@@ -68,6 +70,10 @@ export async function runMcpClient(argv: string[], options: { apiUrl?: string } 
       origin: LOCAL_ORIGIN, ...caller, callId, ...(options.apiUrl ? { apiBase: options.apiUrl } : {}),
     })
     if (!r.ok && r.lost) console.error(lostCallLines(name, args, callId).join('\n'))
+    // A call no Walnut answered is kept under the code its agent reads in the printed message, and
+    // a call a server answered tells what the session kept (providers/session-no-answer.ts).
+    if (r.ok) await noteSessionAnswered()
+    else noteSessionFailure(name, toolErrorCode(r.message))
     return r
   }
   let outcome

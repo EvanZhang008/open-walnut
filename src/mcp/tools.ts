@@ -134,8 +134,10 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
   if (bad) return fail(bad)
   const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim(), forAgent: 'mcp' })
   if (r.ok) {
-    // A call a server answered tells what the session kept of calls no Walnut answered.
-    await noteSessionAnswered()
+    // A call a server answered tells what the session kept of calls no Walnut answered; never waited
+    // on, so the report never holds the answer of this long-lived server (the mount of Main, the VPs
+    // and the asks).
+    void noteSessionAnswered()
     return ok(r.result, name)
   }
   if (r.result !== undefined) return { ...ok(r.result, name), isError: true }

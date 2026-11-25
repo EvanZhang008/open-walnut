@@ -17,13 +17,17 @@
  *     by no hub: it is kept for the next call, by the CLI and the MCP server alike;
  *   - the MCP server keeps its own in the same spool, so a later process of the session (or its CLI)
  *     tells what an earlier one could not;
- *   - every agent tool-call client in the source keeps them (a ratchet that fails on a new client).
+ *   - piped into another command (the shell's status is the reader's, so the session hook sees no
+ *     failure), the Mac CLI keeps it all the same.
+ * Every agent tool-call client in the source keeps them: tests/core/usage-watch/no-answer-clients-guard.test.ts.
  *
  * Real pieces: runTools, the op executor's HTTP calls (a port nothing listens on, then a small HTTP
  * server), the daemon CLI client over a real unix socket (a small NDJSON server recording what it was
- * asked), and the MCP handler. No Walnut server, no daemon process.
+ * asked), and the MCP handler. No Walnut server, no daemon process. The piped case runs the CLI as its
+ * own process behind a real shell pipe.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -206,6 +210,21 @@ describe('the Mac\'s walnut tools call', () => {
     expect(code).toBe('request_failed')
     expect(takeSpooledNoAnswers(spool).report.map((n) => `${n.op}:${n.code}`)).toEqual([`walnut_status:${code}`])
   })
+  it('piped into another command (the shell says 0): kept all the same', async () => {
+    const runner = path.join(dir, 'runner.ts')
+    fs.writeFileSync(runner, `import { runTools } from ${JSON.stringify(path.join(ROOT, 'src/commands/tools.ts'))}\n`
+      + 'await runTools(process.argv.slice(2), {})\nprocess.exit(process.exitCode ?? 0)\n')
+    const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const line = `${quote(process.execPath)} ${quote(runner)} call walnut_status '{}' 2>&1 | cat > /dev/null`
+    const code = await new Promise<number | null>((resolve) => {
+      const child = spawn('/bin/sh', ['-c', line], { env: { ...process.env, HOME: dir }, stdio: ['ignore', 'pipe', 'pipe'] })
+      child.stdout.resume()
+      child.stderr.resume()
+      child.on('close', (c) => resolve(c))
+    })
+    expect(code).toBe(0)
+    expect(takeSpooledNoAnswers(spool).report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }])
+  }, 60_000)
 })
 
 describe('the open-walnut mcp mount of Main, an ask and a console agent', () => {
@@ -230,7 +249,8 @@ describe('the open-walnut mcp mount of Main, an ask and a console agent', () => 
     await serverUp()
     await daemonUp()
     expect((await callTool('walnut_status')).isError).toBeFalsy()
-    expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number) }]])
+    // Told without holding the answer (a long-lived server): it arrives after the call returned.
+    await vi.waitFor(() => expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number) }]]))
   })
 })
 
@@ -294,33 +314,5 @@ describe('the MCP server keeps its own in the session\'s spool', () => {
       ['cli:task_list:hub_unreachable', 'mcp:task_get:no_daemon'],
     ])
     expect(takeSpooledNoAnswers(spool).report).toEqual([])
-  })
-})
-
-// A new agent tool-call client (a command that calls an op for a session, a client that sends
-// `tools.call` lines) fails here until it keeps the calls no Walnut answered.
-describe('every agent tool-call client keeps the calls no Walnut answered', () => {
-  it('each one in the source keeps them, or says why it is not a session\'s', () => {
-    const NOT_A_SESSIONS: Record<string, string> = {
-      // The builder of the lines themselves, used by the clients below.
-      'src/providers/gateway-request.ts': 'builds tools.call lines for the clients',
-      // A trigger check's calls: no session made them (core/hosts/trigger-caller.ts).
-      'src/commands/tools-daemon-fallback.ts': 'sends a trigger check\'s calls; a session\'s go through wn-cli.ts',
-      // The executor and the servers that run a session's call in their own process: no one away to miss.
-      'src/ops/executor.ts': 'the executor every client calls; it reports, the client keeps',
-      'src/core/peers/capability-router.ts': 'the hub: it runs the call, it does not wait on a Walnut',
-      'src/core/leader/backup-gateway.ts': 'the companion\'s gateway while it leads: it runs the call itself',
-    }
-    const KEEPS = /\bkeepNoAnswer\(|\bnoAnswer\(|\bnoteSessionFailure\(/
-    const walk = (d: string): string[] => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })
-      .flatMap((e) => e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`])
-    const files = walk('src').filter((f) => f.endsWith('.ts'))
-    const clients = files.filter((f) => {
-      const src = fs.readFileSync(path.join(ROOT, f), 'utf-8')
-      return /\btoolsCallLine(?:Within)?\(|request\('tools\.call'/.test(src) || /executeOp\([^)]*forAgent/.test(src) || (/\bexecuteOp\(/.test(src) && /\bforAgent\b/.test(src))
-    })
-    expect(clients).toEqual(expect.arrayContaining(['src/commands/tools.ts', 'src/mcp/tools.ts', 'src/providers/wn-cli.ts', 'src/providers/walnut-mcp-stdio.ts']))
-    const missing = clients.filter((f) => !NOT_A_SESSIONS[f] && !KEEPS.test(fs.readFileSync(path.join(ROOT, f), 'utf-8')))
-    expect(missing).toEqual([])
   })
 })
