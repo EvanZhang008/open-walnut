@@ -118,11 +118,15 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
       !!con && con.port === cw.a.port && con.switchId === st?.id && names.includes(con.device) && !fs.readFileSync(path.join(cw.b.home, 'auth.json'), 'utf8').includes(con.token),
       JSON.stringify({ files, port: con?.port, device: con?.device, onB: names.filter((n) => n?.startsWith('console-')), walnutId }))
     const homeAfterSwitch = await snapshotHome(cw.a.home)
+    // The switch itself started A's home as the standby at the stop when A's server ran the daemon in its own
+    // process (source-job.ts: the standby holds it again): the app then finds it and attaches, spawning nothing.
+    const switchStandby = /its home runs as the standby/.test(sw.out)
+    const appSpawns = switchStandby ? 0 : 1
     // Phase 1: the Mac app, with only the standby page (the replica is not up yet).
     replay.start()
     const loaded = await until('the app shows the standby', () => replay.attachedPort() === cw.a.port, 120_000)
     const page1 = await fetch(`http://127.0.0.1:${cw.a.port}/`).then(async (r) => ({ status: r.status, text: await r.text() })).catch(() => null)
-    c.add('phase 1 (standby only): the app starts `walnut web`, a standby, and shows its page', !!loaded && page1?.status === 200 && /<title>Walnut: standby<\/title>/.test(page1.text),
+    c.add(`phase 1 (standby only): the app ${switchStandby ? 'attaches to the standby the switch started' : 'starts `walnut web`, a standby,'} and shows its page`, !!loaded && page1?.status === 200 && /<title>Walnut: standby<\/title>/.test(page1.text) && replay.spawns().length === appSpawns,
       `${replay.spawns().length} spawn(s); / ${page1?.status}`)
     await sleep(15_000)
     // Phase 2: A becomes a host of B, and B's replica there takes the console.
@@ -140,8 +144,8 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
       !!serving && serving.port === cw.a.port && exits.length === 0 && inst?.instance === walnutId,
       `${JSON.stringify(serving)}; the port answers as ${inst?.instance === walnutId ? 'this Walnut' : JSON.stringify(inst)}; app child exits ${exits.length}`)
     const restarts = () => replay.events.filter((e) => e.kind === 'restart_scheduled').length
-    c.add('phase 3: the app stays on its port, now the replica\'s console (no restart, no spawn)', replay.attachedPort() === cw.a.port && restarts() === 0 && replay.spawns().length === 1,
-      `spawns ${replay.spawns().length}, restarts ${restarts()}`)
+    c.add('phase 3: the app stays on its port, now the replica\'s console (no restart, no spawn)', replay.attachedPort() === cw.a.port && restarts() === 0 && replay.spawns().length === appSpawns,
+      `spawns ${replay.spawns().length} (expected ${appSpawns}), restarts ${restarts()}`)
     // The console answers as B: its data, its writes land on B once.
     const tasks = await cw.api(cw.a, 'GET', '/api/tasks')
     const seen = ((tasks.json?.tasks ?? []) as Array<{ id: string }>).map((t) => t.id)
@@ -193,8 +197,8 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     }
     // The Mac app, the whole time: no stop of a server, no spawn loop, no error screen, shown now.
     const kills = replay.kills()
-    c.add('the Mac app never stopped a server, never restarted or looped, and shows the console', kills.length === 0 && replay.errors().length === 0 && replay.spawns().length === 1 && restarts() === 0 && replay.attachedPort() === cw.a.port,
-      `kills ${JSON.stringify(kills)}; spawns ${replay.spawns().length}; restarts ${restarts()}; errors ${JSON.stringify(replay.errors())}; shown ${replay.attachedPort()}`)
+    c.add('the Mac app never stopped a server, never restarted or looped, and shows the console', kills.length === 0 && replay.errors().length === 0 && replay.spawns().length === appSpawns && restarts() === 0 && replay.attachedPort() === cw.a.port,
+      `kills ${JSON.stringify(kills)}; spawns ${replay.spawns().length} (expected ${appSpawns}); restarts ${restarts()}; errors ${JSON.stringify(replay.errors())}; shown ${replay.attachedPort()}`)
     // A's home, by the manifest's classes: what is leader data or this machine's is byte for byte as handed over.
     const kept = compareKept(homeAfterSwitch, await snapshotHome(cw.a.home))
     c.add(`A's handed-over home: no path of the leader's data or this machine's data changed (by the manifest's classes)${cw.asInstalled ? ', its daemon keeping its state inside it, as installed' : ''}`,

@@ -263,7 +263,10 @@ home, as installed, changes only rebuildable paths there).
 handling runs the whole time; B takes A as a host; the console serves at A's address; writes
 land on B once; `walnut web` by hand (witnesses online and out of reach) only names the console;
 B is cut off (SIGSTOP) and comes back; A's home is checked by its manifest classes; the switch
-back gives the port back. `--browser` walks the console in Chromium (Home, a task, its session's
+back gives the port back. When A's server ran its daemon in its own process (the default), the
+switch itself starts A's home as the standby at the stop (it holds that runtime again), and the
+app attaches to that standby instead of starting `walnut web`: no spawn at all, then as before no
+restart. `--browser` walks the console in Chromium (Home, a task, its session's
 chat and a message, its Board, a rename, a note and an edit, Settings, then the same page while
 B is away) and records it; `--scale` writes a home of 5,000 tasks, 1,000 sessions and 1,000
 notes first and times `/` and a session page five times each at the console and at the leader.
