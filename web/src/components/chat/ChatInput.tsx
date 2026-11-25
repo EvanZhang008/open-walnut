@@ -338,7 +338,7 @@ interface ChatInputProps {
   onSessionCommandsPaletteOpen?: () => void;
   /** Session-mode: where the list came from / whether the host was reachable.
    *  Drives the palette footer note (e.g. "descriptions unavailable, retrying"). */
-  sessionCommandsStatus?: { source: 'cli' | 'discovery'; degraded: boolean };
+  sessionCommandsStatus?: { source: 'cli' | 'discovery'; degraded: boolean; stillLoading?: boolean };
   /** Session-mode: control commands like /model are intercepted and trigger UI actions */
   onControlCommand?: (command: string) => void;
   /**
@@ -2136,9 +2136,13 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           onRefresh={isSessionMode && onRefreshSessionCommands ? handleRefreshCommands : undefined}
           refreshing={refreshing}
           footerNote={isSessionMode && sessionCommandsStatus?.degraded
-            ? (sessionCommandsStatus.source === 'cli'
-              ? 'Host unreachable: descriptions missing, retrying…'
-              : 'Host unreachable: showing built-in commands only, retrying…')
+            ? (sessionCommandsStatus.stillLoading
+              ? (sessionCommandsStatus.source === 'cli'
+                ? 'Still reading this host\'s commands: descriptions show when it is done'
+                : 'Still reading this host\'s commands: built-in commands until then')
+              : sessionCommandsStatus.source === 'cli'
+                ? 'Host unreachable: descriptions missing, retrying…'
+                : 'Host unreachable: showing built-in commands only, retrying…')
             : undefined}
         />
       )}

@@ -14,9 +14,18 @@
  * of MB) and take the LAST init line that carries `slash_commands`. A turn
  * longer than the window means "not found", and the caller falls back to
  * discovery — the same answer it had before this module existed.
+ *
+ * A stream that grew since the last look is read only from where that look
+ * stopped (the end of its last whole line): the newest init is either in the
+ * appended bytes or the one already known. A session mid-turn grows its
+ * stream every second, so a memo keyed by size alone missed on every palette
+ * open and read the 1 MB tail again, and the 4 MB one when the turn's init was
+ * further back, over the host's link (2026-11-25: palette reads of 7 to 15 s
+ * on a remote host after a deploy).
  */
 import { log } from '../../logging/index.js'
 import { daemonStreamPathCandidates } from '../session-reconcile.js'
+import type { DaemonFileReader } from '../daemon-file-reader.js'
 
 export interface RecoveredCliSlashCommands {
   /** `slash_commands` minus `terminal_slash_commands`, in the CLI's order. */
@@ -26,9 +35,23 @@ export interface RecoveredCliSlashCommands {
 }
 
 const TAIL_WINDOWS = [1 * 1024 * 1024, 4 * 1024 * 1024]
+const MAX_WINDOW = TAIL_WINDOWS[TAIL_WINDOWS.length - 1]
 
-/** Per-session memo, valid while the stream file has not grown (same fileSize). */
-const memo = new Map<string, RecoveredCliSlashCommands>()
+/** What the last look at a session's stream found, and how far it read. */
+interface StreamLook {
+  path: string
+  /** The file's incarnation (fs.stat epoch): a new file is read again from its tail. */
+  epoch?: string
+  /** Stream size at the look. */
+  fileSize: number
+  /** Byte offset just past the last whole line read: the next look starts here. */
+  scannedTo: number
+  /** The newest init's names up to `scannedTo`, or null when none was in reach. */
+  names: string[] | null
+}
+
+/** Per-session memo, kept while the stream file is the same incarnation. */
+const memo = new Map<string, StreamLook>()
 
 /** Pure: the last init line in `content` that advertises commands, or null. */
 export function lastInitSlashCommands(content: string): string[] | null {
@@ -48,57 +71,88 @@ export function lastInitSlashCommands(content: string): string[] | null {
   return null
 }
 
+/** [start, EOF) read once: the newest init in its whole lines, and where they end. */
+async function readWholeLines(
+  reader: DaemonFileReader, streamPath: string, start: number, sessionId: string, host: string,
+): Promise<{ names: string[] | null; scannedTo: number } | null> {
+  let buf: Buffer
+  try {
+    const res = await reader.readFileRangeBuffer(streamPath, start)
+    if (res === null) return null
+    buf = res.buf
+  } catch (err) {
+    log.session.debug('cli-slash-commands: stream tail read failed', {
+      sessionId, host, error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+  // Only whole lines count: a line still being written is read whole next time.
+  // A read that starts mid-line (a tail window) tears its first line, which the
+  // backwards scan skips.
+  const end = buf.lastIndexOf(0x0a) + 1
+  return { names: lastInitSlashCommands(buf.toString('utf-8', 0, end)), scannedTo: start + end }
+}
+
 export async function recoverCliSlashCommandsFromStream(
   sessionId: string,
   host: string | null | undefined,
 ): Promise<RecoveredCliSlashCommands | null> {
   const { DaemonFileReader } = await import('../daemon-file-reader.js')
-  const reader = new DaemonFileReader(host ?? '__local__')
+  const hostName = host ?? '__local__'
+  const reader = new DaemonFileReader(hostName)
+  const prev = memo.get(sessionId)
 
   let streamPath = ''
   let size = -1
-  for (const candidate of daemonStreamPathCandidates(sessionId, host)) {
+  let epoch: string | undefined
+  const candidates = daemonStreamPathCandidates(sessionId, host)
+  // The file found last time is asked first (each stat is a round trip).
+  const ordered = prev && candidates.includes(prev.path) ? [prev.path, ...candidates.filter((c) => c !== prev.path)] : candidates
+  for (const candidate of ordered) {
     try {
       const st = await reader.stat(candidate)
       if (st === null) continue
       streamPath = candidate
       size = st.size
+      epoch = st.epoch
       break
     } catch (err) {
       log.session.debug('cli-slash-commands: stream stat failed', {
-        sessionId, host: host ?? '__local__', candidate,
+        sessionId, host: hostName, candidate,
         error: err instanceof Error ? err.message : String(err),
       })
     }
   }
   if (size <= 0) return null
 
-  const cached = memo.get(sessionId)
-  if (cached && cached.fileSize === size) return cached
+  const answer = (look: StreamLook): RecoveredCliSlashCommands | null =>
+    look.names ? { names: look.names, fileSize: look.fileSize } : null
+  const keep = (look: StreamLook): RecoveredCliSlashCommands | null => {
+    memo.set(sessionId, look)
+    return answer(look)
+  }
 
+  const same = prev !== undefined && prev.path === streamPath && prev.epoch === epoch && size >= prev.scannedTo
+  if (same && size === prev.fileSize) return answer(prev)
+  if (same && size - prev.scannedTo <= MAX_WINDOW) {
+    // Only what was appended since the last look.
+    const delta = await readWholeLines(reader, streamPath, prev.scannedTo, sessionId, hostName)
+    if (delta === null) return answer(prev)
+    return keep({ ...prev, fileSize: size, scannedTo: delta.scannedTo, names: delta.names ?? prev.names })
+  }
+
+  // First look, a new file, or one that grew past the widest window: the tail.
+  let look: StreamLook | null = null
   for (const window of TAIL_WINDOWS) {
     const start = Math.max(0, size - window)
-    let content: string
-    try {
-      const res = await reader.readFileRange(streamPath, start)
-      if (res === null) return null
-      content = res.content
-    } catch (err) {
-      log.session.debug('cli-slash-commands: stream tail read failed', {
-        sessionId, host: host ?? '__local__',
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return null
-    }
-    // A tail window starts mid-line; the backwards scan tolerates the torn
-    // first line (JSON.parse fails on it, and it is skipped).
-    const names = lastInitSlashCommands(content)
-    if (names) {
-      const out = { names, fileSize: size }
-      memo.set(sessionId, out)
-      return out
-    }
-    if (start === 0) break
+    const read = await readWholeLines(reader, streamPath, start, sessionId, hostName)
+    if (read === null) return null
+    look = { path: streamPath, epoch, fileSize: size, scannedTo: read.scannedTo, names: read.names }
+    if (read.names || start === 0) break
   }
-  return null
+  if (!look) return null
+  // Nothing in reach of a file that grew past the window: the names known
+  // before still stand rather than none.
+  if (!look.names && same) look.names = prev.names
+  return keep(look)
 }

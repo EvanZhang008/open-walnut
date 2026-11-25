@@ -91,7 +91,10 @@ vi.mock('../../../src/core/hosts/host-connect-action.js', () => ({
   listDirsRoute: async () => listRoute.value,
 }))
 
-import { buildSessionSlashCommandItems, buildSlashCommandItems } from '../../../src/web/routes/slash-commands.js'
+import {
+  buildSessionSlashCommandItems, buildSlashCommandItems, resetRemoteSlashCacheForTest, settleRemoteSlashReadsForTest,
+} from '../../../src/web/routes/slash-commands.js'
+import { PALETTE_HOST_BUDGET_MS } from '../../../src/web/routes/slash-commands-cache.js'
 import { log } from '../../../src/logging/index.js'
 import { mediaV1Router } from '../../../src/web/routes/media-v1.js'
 import { filesRouter } from '../../../src/web/routes/files.js'
@@ -131,10 +134,14 @@ beforeEach(() => {
   pool.dialDelayMs = 0
   listRoute.value = { kind: 'dial' }
   resetSharedHostReadsForTest()
+  resetRemoteSlashCacheForTest()
 })
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers()
+  // A palette answers by its budget and leaves its host reads running: they end
+  // here, not in the next test (whose probe count they would change).
+  await settleRemoteSlashReadsForTest()
 })
 
 /** `work`, or a loud failure after `ms` (a route that waits on the dial never settles here). */
@@ -163,6 +170,7 @@ describe('slash palette: the remote scan is bounded', () => {
     pool.wouldWait = 'dialing'
     const { value, ms } = await within(buildSlashCommandItems({ host: ALIAS, cwd: '/work', fresh: true }), 2_000, 'slash scan')
     expect(value.degraded).toBe(true)
+    expect(value.stillLoading).toBeUndefined() // not reachable now, not "still reading"
     expect(value.items.length).toBeGreaterThan(0) // Walnut + built-in commands still offered
     expect(ms).toBeLessThan(1_000)
     expect(pool.dials).toBe(0)
@@ -184,13 +192,16 @@ describe('slash palette: the remote scan is bounded', () => {
     }
   })
 
-  it('a connected link that went silent answers degraded at the quiet point plus one probe', async () => {
+  it('a connected link that went silent answers degraded by the palette budget, and the read behind it still finds the link silent', async () => {
     pool.wouldWait = 'connected'
     pool.conn = silentConn
     const { value, ms } = await within(buildSlashCommandItems({ host: ALIAS, cwd: '/work', fresh: true }), HOST_READ_QUIET_MS + 3_000, 'slash scan')
     expect(value.degraded).toBe(true)
-    expect(pool.probes).toBe(1)
-    expect(ms).toBeGreaterThanOrEqual(HOST_READ_QUIET_MS - 100)
+    expect(value.stillLoading).toBe(true) // the bound has not called the link silent yet at the budget
+    expect(ms).toBeGreaterThanOrEqual(PALETTE_HOST_BUDGET_MS - 100)
+    expect(ms).toBeLessThan(HOST_READ_QUIET_MS)
+    await settleRemoteSlashReadsForTest()
+    expect(pool.probes).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -203,19 +214,17 @@ describe('a session\'s slash palette: the stream recovery is bounded too', () =>
     expect(pool.dials).toBe(0)
   })
 
-  it('a connected link that went silent answers degraded after one probe, not after the 30s command timeout', async () => {
+  it('a connected link that went silent answers degraded by the palette budget, not after the quiet window and a probe', async () => {
     pool.wouldWait = 'connected'
     pool.conn = silentConn
     const { value, ms } = await within(buildSessionSlashCommandItems({ sessionId: 'sid-remote-2', fresh: true }), HOST_READ_QUIET_MS * 2 + 3_000, 'session slash')
     expect(value.degraded).toBe(true)
-    // The stream recovery asked the host and it did not answer: the discovery
-    // after it degrades at once, not after a second quiet window and probe
-    // (9s on a silent SSH link where one ask takes 6s).
-    expect(pool.probes).toBe(1)
-    expect(ms).toBeLessThan(HOST_READ_QUIET_MS + 1_500)
+    // The stream recovery and the scan start together and share the budget
+    // (asked one after the other, a silent SSH link took 9s where one ask takes 6s).
+    expect(ms).toBeLessThan(PALETTE_HOST_BUDGET_MS + 500)
   })
 
-  it('a refresh (fresh) on a host that just did not answer degrades at once even with a scan cached: it does not ask the silent link again', async () => {
+  it('a refresh (fresh) on a host that went silent answers the scan cached from when it answered, by the budget', async () => {
     // A scan of this host and folder is cached from when it answered.
     pool.wouldWait = 'connected'
     pool.alive = true
@@ -225,12 +234,10 @@ describe('a session\'s slash palette: the stream recovery is bounded too', () =>
     // Then the link goes silent, and the palette is refreshed.
     pool.alive = false
     pool.conn = silentConn
-    pool.probes = 0
     const { value, ms } = await within(buildSessionSlashCommandItems({ sessionId: 'sid-remote-3', fresh: true }), HOST_READ_QUIET_MS * 3 + 3_000, 'session slash')
-    expect(value.degraded).toBe(true)
-    // One ask (the stream recovery), not a second one for the forced re-scan.
-    expect(pool.probes).toBe(1)
-    expect(ms).toBeLessThan(HOST_READ_QUIET_MS + 1_500)
+    expect(value.degraded).toBeUndefined()
+    expect(value.items.map((i) => i.name)).toEqual(warm.items.map((i) => i.name))
+    expect(ms).toBeLessThan(PALETTE_HOST_BUDGET_MS + 500)
   }, 20_000)
 })
 

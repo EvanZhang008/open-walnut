@@ -386,7 +386,6 @@ const NOT_ON_LEDGER: readonly string[] = [
   'src/providers/session-cost-core.ts',
   'src/web/routes/chat-history.ts',
   'src/web/routes/org-avatars-v1.ts',
-  'src/web/routes/slash-commands.ts',
   'src/web/terminal/dtach-provision.ts',
   'src/web/ws/bridge-read-history.ts',
 ];

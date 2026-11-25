@@ -8,7 +8,7 @@
  * With the CLI list as the source of truth, an unreachable host can only cost
  * descriptions (flagged `degraded`), never the list itself.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -30,9 +30,27 @@ vi.mock('../../../src/core/sessions/cli-slash-commands-recover.js', () => ({
   recoverCliSlashCommandsFromStream: (id: string, host: string | null | undefined) => recoverFromStream(id, host),
 }))
 
+// One remote host the tests may scan; the daemon reads are fakes the test drives.
+vi.mock('../../../src/core/config-manager.js', () => ({
+  getConfig: async () => ({ hosts: { box: { hostname: 'box.example.test' } } }),
+}))
+vi.mock('../../../src/core/hosts/link.js', () => ({ link: async () => ({}) }))
+// The host-read bound runs the read as it is: the fakes below decide how long it takes.
+vi.mock('../../../src/core/hosts/remote-read-bound.js', () => ({
+  boundHostRead: (_host: string, read: () => Promise<unknown>) => read(),
+  hostReadFailureLevel: () => 'warn',
+}))
+const listRemoteSkills = vi.fn()
+vi.mock('../../../src/core/remote-skill-loader.js', () => ({
+  listRemoteSkills: () => listRemoteSkills(),
+  listRemoteProjectCommands: async () => [],
+  listRemoteProjectSkills: async () => [],
+}))
+
 import {
-  composeCliPalette, buildSessionSlashCommandItems, type SlashCommandItem,
+  composeCliPalette, buildSessionSlashCommandItems, resetRemoteSlashCacheForTest, type SlashCommandItem,
 } from '../../../src/web/routes/slash-commands.js'
+import { PALETTE_HOST_BUDGET_MS } from '../../../src/web/routes/slash-commands-cache.js'
 import { SessionControlError } from '../../../src/core/sessions/session-controls.js'
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 
@@ -89,6 +107,9 @@ describe('buildSessionSlashCommandItems', () => {
     getSessionByClaudeId.mockReset()
     recoverFromStream.mockReset()
     recoverFromStream.mockResolvedValue(null)
+    listRemoteSkills.mockReset()
+    listRemoteSkills.mockResolvedValue([])
+    resetRemoteSlashCacheForTest()
     await fs.rm(WALNUT_HOME, { recursive: true, force: true })
     await fs.mkdir(GLOBAL_SKILLS_DIR, { recursive: true })
     // A Walnut-only skill the CLI would never list, plus one it does.
@@ -184,7 +205,115 @@ describe('buildSessionSlashCommandItems', () => {
     const res = await buildSessionSlashCommandItems({ sessionId: 's3' })
     expect(res.source).toBe('cli')
     expect(res.degraded).toBe(true)
+    expect(res.stillLoading).toBeUndefined()
     expect(res.items.map((i) => i.name)).toEqual(['deploy', 'review', 'usage'])
     expect(res.items.find((i) => i.name === 'usage')?.description).toBe('Show plan usage limits')
   })
 })
+
+/** A promise the test settles by hand: a host read that has not answered yet. */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => { resolve = r })
+  return { promise, resolve }
+}
+
+async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
+  const t0 = Date.now()
+  const value = await work
+  return { value, ms: Date.now() - t0 }
+}
+
+/**
+ * The palette never waits out a host (2026-11-25: after a wake and two deploys,
+ * eleven reads in an hour took 7 to 15 s, each a cold scan of the same host
+ * for another session folder, several at once on one link, plus a stream tail
+ * re-read on every ask for a session mid-turn).
+ */
+describe('buildSessionSlashCommandItems: a slow host never holds the request', () => {
+  beforeAll(async () => {
+    // One ask first, alone: it loads every module the route imports on demand.
+    // Dynamic imports of a mocked module made in one tick can hand some of them
+    // the real module (.claude/skills/walnut-testing/SKILL.md, "a vi.mock module
+    // factory may not reach it").
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 'warm', cwd: '/work/warm', host: 'box' })
+    findByClaudeId.mockReturnValue({ cliSlashCommands: null, seedCliSlashCommands: () => {} })
+    recoverFromStream.mockResolvedValue(null)
+    listRemoteSkills.mockResolvedValue([])
+    await buildSessionSlashCommandItems({ sessionId: 'warm' })
+  })
+  beforeEach(() => {
+    findByClaudeId.mockReset()
+    getSessionByClaudeId.mockReset()
+    recoverFromStream.mockReset()
+    listRemoteSkills.mockReset()
+    resetRemoteSlashCacheForTest()
+  })
+
+  it('a cold scan that does not answer: the CLI names within the budget, then the late scan serves the next ask at once', async () => {
+    const scan = deferred<Array<{ dirName: string; description: string; plugin: string }>>()
+    listRemoteSkills.mockReturnValue(scan.promise)
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 'r1', cwd: '/work/a', host: 'box' })
+    findByClaudeId.mockReturnValue({ cliSlashCommands: { names: ['deploy', 'compact'], at: Date.now() } })
+
+    const first = await timed(buildSessionSlashCommandItems({ sessionId: 'r1' }))
+    expect(first.ms).toBeLessThan(PALETTE_HOST_BUDGET_MS + 1_000)
+    // Still being read, not unreachable: the palette says so instead of "Host unreachable".
+    expect(first.value).toMatchObject({ source: 'cli', degraded: true, stillLoading: true })
+    expect(first.value.items.map((i) => i.name)).toEqual(['compact', 'deploy'])
+
+    // The scan lands after its request was answered: it still fills the cache.
+    scan.resolve([{ dirName: 'deploy', description: 'Ship it', plugin: '__flat__' }])
+    await new Promise((r) => setTimeout(r, 10))
+    const second = await timed(buildSessionSlashCommandItems({ sessionId: 'r1' }))
+    expect(second.ms).toBeLessThan(200)
+    expect(second.value.degraded).toBeUndefined()
+    expect(second.value.items.find((i) => i.name === 'deploy')?.description).toBe('Ship it')
+    expect(listRemoteSkills).toHaveBeenCalledTimes(1)
+  }, 10_000)
+
+  it('sessions in different folders of one host, asking together, share ONE scan of its skills', async () => {
+    const scan = deferred<Array<{ dirName: string; description: string; plugin: string }>>()
+    listRemoteSkills.mockReturnValue(scan.promise)
+    getSessionByClaudeId.mockImplementation(async (id: string) => ({ claudeSessionId: id, cwd: `/work/${id}`, host: 'box' }))
+    findByClaudeId.mockReturnValue({ cliSlashCommands: { names: ['deploy'], at: Date.now() } })
+
+    // Each ask is in before the next starts (asks started in one tick can get the
+    // real module behind a dynamic import, see beforeAll); all wait on the scan.
+    const asks: Array<ReturnType<typeof buildSessionSlashCommandItems>> = []
+    for (const id of ['a', 'b', 'c']) {
+      asks.push(buildSessionSlashCommandItems({ sessionId: id }))
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    scan.resolve([{ dirName: 'deploy', description: 'Ship it', plugin: '__flat__' }])
+    const out = await Promise.all(asks)
+    expect(listRemoteSkills).toHaveBeenCalledTimes(1)
+    for (const res of out) expect(res.items.find((i) => i.name === 'deploy')?.description).toBe('Ship it')
+    // A fourth folder later: the host's skills are cached, nothing asks it again.
+    await buildSessionSlashCommandItems({ sessionId: 'd' })
+    expect(listRemoteSkills).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stream recovery that does not answer: discovery within the budget; the late names seed the live session', async () => {
+    listRemoteSkills.mockResolvedValue([{ dirName: 'deploy', description: 'Ship it', plugin: '__flat__' }])
+    const recovery = deferred<{ names: string[]; fileSize: number } | null>()
+    recoverFromStream.mockReturnValue(recovery.promise)
+    const seed = vi.fn()
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 'r2', cwd: '/work/a', host: 'box' })
+    findByClaudeId.mockReturnValue({ cliSlashCommands: null, seedCliSlashCommands: seed })
+
+    const first = await timed(buildSessionSlashCommandItems({ sessionId: 'r2' }))
+    expect(first.ms).toBeLessThan(PALETTE_HOST_BUDGET_MS + 1_000)
+    expect(first.value.source).toBe('discovery')
+    expect(first.value.items.map((i) => i.name)).toContain('deploy')
+
+    // A second ask while the first recovery still runs joins it.
+    const joined = buildSessionSlashCommandItems({ sessionId: 'r2' })
+    await new Promise((r) => setTimeout(r, 50))
+    recovery.resolve({ names: ['deploy', 'compact'], fileSize: 10 })
+    expect((await joined).source).toBe('cli')
+    expect(recoverFromStream).toHaveBeenCalledTimes(1)
+    expect(seed).toHaveBeenCalledWith(['deploy', 'compact'], expect.any(Number))
+  }, 10_000)
+})
+

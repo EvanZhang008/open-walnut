@@ -22,21 +22,25 @@
  * discover them THERE over the daemon (mirrors /api/files/list?host=). We do NOT
  * mix in the Mac's local skills — that would list capabilities the remote host
  * doesn't have. Walnut commands (Mac-side injected) + built-ins are still included.
- * Per-host results are cached briefly; on remote failure we degrade to just
- * Walnut + built-in commands (never silently fall back to local skills).
+ * A host's user-level skills are cached per host, its folder's project
+ * commands per folder (slash-commands-cache.ts: one scan at a time, a cached
+ * list answers at once, a request waits PALETTE_HOST_BUDGET_MS at most); with
+ * nothing cached and the host not answering in time we degrade to just Walnut +
+ * built-in commands (never silently fall back to local skills).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { listAvailableSkills } from '../../core/skill-loader.js'
-import { listPluginSkills, parseSkillMeta } from '../../core/plugin-skill-loader.js'
+import { listPluginSkills } from '../../core/plugin-skill-loader.js'
 import { listCommands as listWalnutCommands } from '../../core/command-store.js'
 import { listRemoteSkills, listRemoteProjectCommands, listRemoteProjectSkills } from '../../core/remote-skill-loader.js'
 import { getConfig } from '../../core/config-manager.js'
-import { commandDescription } from '../../utils/frontmatter.js'
+import type { DaemonConnection } from '../../providers/daemon-connection.js'
 import { log } from '../../logging/index.js'
 import { CLAUDE_HOME } from '../../constants.js'
+import { PALETTE_HOST_BUDGET_MS, PaletteScanCache, sharedFlight, withinBudget } from './slash-commands-cache.js'
+import { scanCommandDir, scanProjectSkillsDir } from './slash-commands-scan.js'
 
 export interface SlashCommandItem {
   name: string
@@ -51,15 +55,17 @@ export interface SlashCommandItem {
 }
 
 /**
- * Per-host cache TTL — avoids an ssh round-trip on every "/". Kept short (60s) so a
- * skill just created on the remote host shows up soon without a manual refresh; the
- * frontend serves its own copy instantly (stale-while-revalidate), so this TTL only
- * bounds how stale a background revalidation can be. `?fresh=1` bypasses it entirely.
+ * How long a host's scan is fresh. Kept short (60s) so a skill just created on
+ * the remote host shows up soon without a manual refresh; an expired entry
+ * still answers at once while one background re-scan refreshes it, and the
+ * frontend serves its own copy instantly too. `?fresh=1` re-scans at once.
  */
 const REMOTE_CACHE_TTL_MS = 60_000
-const remoteCache = new Map<string, { time: number; items: SlashCommandItem[] }>()
-/** Cache keys with an in-flight background revalidation (dedupes concurrent expiries). */
-const revalidating = new Set<string>()
+/** A host's user-level skills (plugin + ~/.claude/skills), the same for every folder: keyed by host
+ *  (a few hundred items, about 100 KB of text, per host). */
+const remoteSkillsCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.host-skills', REMOTE_CACHE_TTL_MS, 64, 16 * 1024 * 1024)
+/** A folder's project commands and skills on a host: keyed by host and folder (usually a handful of items). */
+const remoteProjectCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.project-items', REMOTE_CACHE_TTL_MS, 512, 8 * 1024 * 1024)
 
 /**
  * Claude Code built-in commands that support non-interactive (-p) mode.
@@ -99,87 +105,6 @@ const BUILTIN_DESCRIPTIONS: Record<string, string> = {
   rename: 'Rename the current conversation',
   'security-review': 'Complete a security review of the pending changes on the current branch',
   usage: 'Show plan usage limits',
-}
-
-/** Scan a directory for *.md command files and return items. */
-async function scanCommandDir(
-  dir: string,
-  source: SlashCommandItem['source'],
-): Promise<SlashCommandItem[]> {
-  let entries: string[]
-  try {
-    entries = await fsp.readdir(dir)
-  } catch {
-    return []
-  }
-
-  const items: SlashCommandItem[] = []
-  for (const file of entries) {
-    // A hidden file (macOS's `._<name>.md` metadata beside a copied file) is never a command.
-    if (!file.endsWith('.md') || file.startsWith('.')) continue
-    const name = file.slice(0, -3)
-    // Handle subdirectory commands (e.g. address-comments/)
-    if (!name) continue
-    try {
-      const raw = await fsp.readFile(path.join(dir, file), 'utf-8')
-      items.push({ name, description: commandDescription(raw), source })
-    } catch {
-      // Skip unreadable files
-      items.push({ name, description: '', source })
-    }
-  }
-
-  // Also scan subdirectories (Claude Code supports nested commands like address-comments:subcommand)
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry)
-    try {
-      const stat = await fsp.stat(fullPath)
-      if (!stat.isDirectory()) continue
-      const subFiles = await fsp.readdir(fullPath)
-      for (const subFile of subFiles) {
-        if (!subFile.endsWith('.md') || subFile.startsWith('.')) continue
-        const subName = subFile.slice(0, -3)
-        if (!subName) continue
-        const cmdName = `${entry}:${subName}`
-        try {
-          const raw = await fsp.readFile(path.join(fullPath, subFile), 'utf-8')
-          items.push({ name: cmdName, description: commandDescription(raw), source })
-        } catch {
-          items.push({ name: cmdName, description: '', source })
-        }
-      }
-    } catch {
-      // Not a directory or not accessible
-    }
-  }
-
-  return items
-}
-
-/**
- * Scan a PROJECT skills dir ({cwd}/.claude/skills/<name>/SKILL.md). The CLI lists
- * these next to the user-level ones; without this scan they had no description.
- * Reads name/description by line (the cheap lenient parser the plugin loader
- * uses), never strict YAML.
- */
-async function scanProjectSkillsDir(dir: string): Promise<SlashCommandItem[]> {
-  let entries: string[]
-  try {
-    entries = await fsp.readdir(dir)
-  } catch {
-    return []
-  }
-  const items: SlashCommandItem[] = []
-  for (const entry of entries) {
-    try {
-      const raw = await fsp.readFile(path.join(dir, entry, 'SKILL.md'), 'utf-8')
-      const meta = parseSkillMeta(raw)
-      items.push({ name: entry, description: meta.description ?? meta.name ?? '', source: 'project', kind: 'skill' })
-    } catch {
-      // Not a skill dir (no SKILL.md) — skip
-    }
-  }
-  return items
 }
 
 /** Merge command lists by priority (earlier list wins on name collision), then sort. */
@@ -261,128 +186,139 @@ async function buildLocalItems(cwd?: string): Promise<SlashCommandItem[]> {
   return mergeAndSort([await scanLocalItems(cwd)])
 }
 
+/** The host modules, loaded once on the first remote ask (local-only use never loads them). */
+let hostModules: Promise<[typeof import('../../core/hosts/link.js'), typeof import('../../core/hosts/remote-read-bound.js')]> | null = null
+function loadHostModules() {
+  hostModules ??= Promise.all([import('../../core/hosts/link.js'), import('../../core/hosts/remote-read-bound.js')])
+  return hostModules
+}
+
 /**
- * Scan a REMOTE host's skills/commands over the daemon, UNFOLDED and in priority
- * order (see scanLocalItems). Throws on connection/timeout so the caller can
- * degrade. Skills run on the remote host, so local skills are intentionally
- * excluded — and so are the Mac's ~/.claude root commands.
+ * Reads of one request on one host: each goes through the host-read deadline
+ * (remote-read-bound.ts) over the dial AND the read, and they share one
+ * `link(host)` (one dial wait, not one per scan).
  */
-async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommandItem[]> {
-  const config = await getConfig()
-  const hostDef = config.hosts?.[host]
-  if (!hostDef?.hostname) throw new Error(`Unknown host or missing hostname: ${host}`)
+function hostReader(host: string): <T>(read: (conn: DaemonConnection) => Promise<T>) => Promise<T> {
+  let conn: Promise<DaemonConnection> | null = null
+  return async (read) => {
+    const config = await getConfig()
+    if (!config.hosts?.[host]?.hostname) throw new Error(`Unknown host or missing hostname: ${host}`)
+    const [{ link }, { boundHostRead }] = await loadHostModules()
+    // No timer of its own: boundHostRead bounds the dial in every pool state, and
+    // a connected link that stopped answering is noticed in seconds.
+    return boundHostRead(host, async () => read(await (conn ??= link(host))))
+  }
+}
 
-  const { link } = await import('../../core/hosts/link.js')
+function logBackgroundScanFailure(host: string): (err: unknown) => void {
+  return (err) => {
+    void loadHostModules().then(([, { hostReadFailureLevel }]) => {
+      log.session[hostReadFailureLevel(err)]('slash-commands: a scan no request waited for failed (what was cached stays)', {
+        host, error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+}
 
-  // The host-read deadline (remote-read-bound.ts) over the connection AND the
-  // scan: the palette degrades at once while the host is connecting, and a
-  // connected link that stopped answering is noticed in seconds (it held the
-  // scan for the daemon's 30s command timeout).
-  const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
-  const [remoteSkills, remoteProjectCmds, remoteProjectSkills, openWalnutCmds] = await boundHostRead(host, async () => {
-    // No timer of its own: boundHostRead bounds the dial in every pool state.
-    const conn = await link(host)
-    return Promise.all([
-      listRemoteSkills(conn).then((all) => all.map(pluginSkillItem)),
-      cwd
-        ? listRemoteProjectCommands(conn, cwd).then((all) =>
-            all.map((c): SlashCommandItem => ({ name: c.name, description: c.description, source: 'project' })),
-          )
-        : Promise.resolve([]),
-      cwd
-        ? listRemoteProjectSkills(conn, cwd).then((all) =>
-            all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project', kind: 'skill' })),
-          )
-        : Promise.resolve([]),
-      localWalnutCommands(),
-    ])
-  })
-  return [...remoteProjectCmds, ...remoteProjectSkills, ...openWalnutCmds, ...remoteSkills, ...BUILTIN_COMMANDS]
+/**
+ * A REMOTE host's skills/commands over the daemon, UNFOLDED and in priority
+ * order (see scanLocalItems), through the two caches. Skills run on the remote
+ * host, so local skills are intentionally excluded, and so are the Mac's
+ * ~/.claude root commands. Null when nothing is cached and the host did not
+ * answer within `budgetMs` (the scans go on and fill the caches); throws when a
+ * scan with nothing cached failed, so the caller can degrade.
+ */
+async function remoteItems(host: string, cwd: string | undefined, fresh: boolean, budgetMs = PALETTE_HOST_BUDGET_MS): Promise<SlashCommandItem[] | null> {
+  const opts = { fresh, budgetMs, onBackgroundError: logBackgroundScanFailure(host) }
+  const viaHost = hostReader(host)
+  const [skills, project, openWalnutCmds] = await Promise.all([
+    remoteSkillsCache.read(host, () => viaHost(async (conn) =>
+      (await listRemoteSkills(conn)).map(pluginSkillItem)), opts),
+    cwd
+      ? remoteProjectCache.read(`${host}::${cwd}`, () => viaHost(async (conn) => {
+          const [cmds, skills] = await Promise.all([
+            listRemoteProjectCommands(conn, cwd),
+            listRemoteProjectSkills(conn, cwd),
+          ])
+          return [
+            ...cmds.map((c): SlashCommandItem => ({ name: c.name, description: c.description, source: 'project' })),
+            ...skills.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project', kind: 'skill' })),
+          ]
+        }), opts)
+      : Promise.resolve({ value: [] as SlashCommandItem[] }),
+    localWalnutCommands(),
+  ])
+  if (!skills || !project) return null
+  return [...project.value, ...openWalnutCmds, ...skills.value, ...BUILTIN_COMMANDS]
+}
+
+/** Test seam: forget every cached and running remote scan. */
+export function resetRemoteSlashCacheForTest(): void {
+  remoteSkillsCache.clear()
+  remoteProjectCache.clear()
+  recoveries.clear()
+}
+
+/** Test seam: wait out the host reads a request left running behind its answer. */
+export async function settleRemoteSlashReadsForTest(): Promise<void> {
+  await Promise.allSettled([remoteSkillsCache.settled(), remoteProjectCache.settled(), ...recoveries.values()])
 }
 
 export interface SlashCommandsPayload {
   items: SlashCommandItem[]
+  /** The host's own commands are not in this answer (descriptions, or the list itself). */
   degraded?: boolean
+  /** With `degraded`: the host is answering, its commands are still being read
+   *  (the scan goes on and the next ask has them); absent = the host is not reachable. */
+  stillLoading?: boolean
 }
 
+/** A remote host's scan, or why there is none: `late` = still being read, not a failure. */
+interface RemoteScan { items: SlashCommandItem[] | null; late: boolean }
+
 /**
- * Remote scan (UNFOLDED, see scanRemoteItems) through the per-host cache. A fresh entry answers directly;
- * an EXPIRED entry still answers instantly while ONE background re-scan
- * refreshes it (the awaited path held a browser connection for the full 7-9s
- * SSH scan on every TTL expiry; a few of those saturate the browser's
- * 6-per-origin pool and cascade into client timeouts, 2026-07-31). Only an
- * empty cache (or `fresh`) blocks on the scan, and only that path can throw.
+ * A remote host's scan, or why there is none, logged. A host that is away (the
+ * bound said so, or it did not answer in time) is the expected degraded
+ * answer, logged at info; anything else warns.
  */
-async function remoteItemsViaCache(host: string, cwd: string | undefined, fresh: boolean): Promise<SlashCommandItem[]> {
-  const cacheKey = `${host}::${cwd ?? ''}`
-  if (!fresh) {
-    const cached = remoteCache.get(cacheKey)
-    if (cached) {
-      if (Date.now() - cached.time >= REMOTE_CACHE_TTL_MS && !revalidating.has(cacheKey)) {
-        revalidating.add(cacheKey)
-        void scanRemoteItems(host, cwd)
-          .then((items) => { remoteCache.set(cacheKey, { time: Date.now(), items }) })
-          .catch(async (err) => {
-            const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
-            log.session[hostReadFailureLevel(err)]('slash-commands: background revalidation failed (stale cache kept)', {
-              host, error: err instanceof Error ? err.message : String(err),
-            })
-          })
-          .finally(() => { revalidating.delete(cacheKey) })
-      }
-      return cached.items
-    }
+async function remoteItemsOrLogged(host: string, cwd: string | undefined, fresh: boolean, what: string, ctx: Record<string, unknown>): Promise<RemoteScan> {
+  try {
+    const items = await remoteItems(host, cwd, fresh)
+    if (!items) log.session.info(what, { ...ctx, host, error: `still reading after ${PALETTE_HOST_BUDGET_MS}ms (the scan goes on)` })
+    return { items, late: items === null }
+  } catch (err) {
+    const [, { hostReadFailureLevel }] = await loadHostModules()
+    log.session[hostReadFailureLevel(err)](what, { ...ctx, host, error: err instanceof Error ? err.message : String(err) })
+    return { items: null, late: false }
   }
-  const items = await scanRemoteItems(host, cwd)
-  remoteCache.set(cacheKey, { time: Date.now(), items })
-  return items
+}
+
+/** The flags of an answer without the host's commands: still being read, or the host is not reachable. */
+function degradedFlags(scan: RemoteScan): Pick<SlashCommandsPayload, 'degraded' | 'stillLoading'> {
+  return scan.late ? { degraded: true, stillLoading: true } : { degraded: true }
+}
+
+/** Never local skills for a remote host (they'd misrepresent it): only Walnut + built-in commands, flagged. */
+async function degradedDiscovery(scan: RemoteScan): Promise<SlashCommandsPayload> {
+  return { items: mergeAndSort([await localWalnutCommands(), BUILTIN_COMMANDS]), ...degradedFlags(scan) }
 }
 
 /**
  * Build the palette payload for a session composer — the ONE implementation
  * shared by the internal route, the /api/v1 mobile route, and the cloud
- * control relay. Encapsulates the per-host cache, the stale-while-revalidate
- * behavior, and the degraded fallback (never local skills for a remote host).
+ * control relay. Encapsulates the per-host caches, the answer budget, and the
+ * degraded fallback (never local skills for a remote host).
  */
 export async function buildSlashCommandItems(opts: {
   cwd?: string
   host?: string
   /** Force a re-scan, bypassing the per-host cache (manual palette refresh). */
   fresh?: boolean
-  /**
-   * The caller asked this host moments ago, in the same request, and it did not
-   * answer: the cache answers if it can, else the palette degrades now. Asking
-   * again waited out a second probe (a session's palette took 9s on a silent
-   * link where one ask takes 6s).
-   */
-  hostNotAnswering?: boolean
 }): Promise<SlashCommandsPayload> {
-  const { cwd, host, fresh, hostNotAnswering } = opts
-
-  // ── Local session ──
-  if (!host) {
-    return { items: await buildLocalItems(cwd) }
-  }
-
-  // ── Remote session ──
-  try {
-    if (hostNotAnswering && (fresh || !remoteCache.has(`${host}::${cwd ?? ''}`))) {
-      throw new Error('the host did not answer this request')
-    }
-    return { items: mergeAndSort([await remoteItemsViaCache(host, cwd, fresh === true)]) }
-  } catch (err) {
-    // Degrade: never silently fall back to LOCAL skills (they'd misrepresent the
-    // remote host). Return only Walnut + built-in commands, flagged degraded.
-    // A host that is away (it did not answer this request, or the bound said
-    // so) is the expected degraded answer, logged at info; anything else warns.
-    const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
-    log.session[hostNotAnswering ? 'info' : hostReadFailureLevel(err)]('slash-commands: remote discovery failed, degrading', {
-      host,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    const openWalnutCmds = await localWalnutCommands()
-    return { items: mergeAndSort([openWalnutCmds, BUILTIN_COMMANDS]), degraded: true }
-  }
+  const { cwd, host, fresh } = opts
+  if (!host) return { items: await buildLocalItems(cwd) }
+  const scan = await remoteItemsOrLogged(host, cwd, fresh === true, 'slash-commands: remote discovery failed, degrading', {})
+  return scan.items ? { items: mergeAndSort([scan.items]) } : degradedDiscovery(scan)
 }
 
 export interface SessionSlashCommandsPayload extends SlashCommandsPayload {
@@ -431,12 +367,46 @@ export function composeCliPalette(
   return mergeAndSort([items])
 }
 
+/** Stream recoveries running now, per session: requests that arrive together share one. */
+const recoveries = new Map<string, Promise<string[] | null>>()
+
+/**
+ * The CLI's names from the stream tail (bounded, via the daemon), once per
+ * session at a time. A recovery that lands after its request was answered
+ * still seeds the live instance, so the next ask has the names in memory. A
+ * host that cannot answer now is "not recovered".
+ */
+function recoverCliNames(
+  sessionId: string,
+  host: string | undefined,
+  live: { seedCliSlashCommands(names: string[], at: number): void } | null | undefined,
+): Promise<string[] | null> {
+  return sharedFlight(recoveries, sessionId, async () => {
+    const { recoverCliSlashCommandsFromStream } = await import('../../core/sessions/cli-slash-commands-recover.js')
+    const [, { boundHostRead, hostReadFailureLevel }] = await loadHostModules()
+    try {
+      const recovered = await boundHostRead(host, () => recoverCliSlashCommandsFromStream(sessionId, host))
+      if (!recovered) return null
+      live?.seedCliSlashCommands(recovered.names, Date.now())
+      return recovered.names
+    } catch (err) {
+      log.session[hostReadFailureLevel(err)]('slash-commands: stream recovery failed, using discovery', {
+        sessionId, host, error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+  })
+}
+
 /**
  * The palette for ONE live session: the CLI's advertised command set, decorated.
  * The names come from the live capture, or from the last init in the stream
  * tail when this process has not seen one (post-restart reattach). Falls back to
  * plain discovery (flagged `source: 'discovery'`) only when neither exists — a
- * draft, or a session whose stream file is gone.
+ * draft, or a session whose stream file is gone. The stream recovery and the
+ * description scan start together and share one budget: whatever is not in by
+ * then is answered without (the client asks again shortly), and lands in the
+ * caches for that next ask.
  */
 export async function buildSessionSlashCommandItems(opts: {
   sessionId: string
@@ -457,48 +427,26 @@ export async function buildSessionSlashCommandItems(opts: {
   if (own) return { items: own.map((c) => ({ ...c, source: 'built-in' as const })), source: 'cli' }
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const live = sessionRunner.findByClaudeId(sessionId)
-  let cliNames = live?.cliSlashCommands?.names ?? null
-  let hostNotAnswering = false
+  const captured = live?.cliSlashCommands?.names ?? null
+
+  const [cliNames, scan] = await Promise.all([
+    captured
+      ? Promise.resolve(captured)
+      : withinBudget(recoverCliNames(sessionId, record.host, live), PALETTE_HOST_BUDGET_MS).then((out) => out?.value ?? null),
+    record.host
+      ? remoteItemsOrLogged(record.host, record.cwd, fresh === true, 'slash-commands: description scan failed, serving what is known', { sessionId })
+      : scanLocalItems(record.cwd).then((items): RemoteScan => ({ items, late: false })),
+  ])
+  const scanned = scan.items
+
   if (!cliNames) {
-    // Post-restart window: the reattach tails from the end, so the init this
-    // process never saw is recovered from the stream tail (bounded, via the
-    // daemon). A session with no stream yet (draft) stays on discovery. The
-    // read is within the host-read deadline: its stats waited on a dial, or on
-    // a silent link's 30s command timeout, before the palette could open. A
-    // host that cannot answer now is "not recovered", and discovery degrades
-    // without asking it a second time.
-    const { recoverCliSlashCommandsFromStream } = await import('../../core/sessions/cli-slash-commands-recover.js')
-    const { boundHostRead, HostReconnectingError } = await import('../../core/hosts/remote-read-bound.js')
-    const recovered = await boundHostRead(record.host, () => recoverCliSlashCommandsFromStream(sessionId, record.host))
-      .catch((err: unknown) => {
-        if (err instanceof HostReconnectingError) { hostNotAnswering = true; return null }
-        throw err
-      })
-    if (recovered) {
-      cliNames = recovered.names
-      live?.seedCliSlashCommands(recovered.names, Date.now())
-    }
-  }
-  if (!cliNames) {
-    const base = await buildSlashCommandItems({ cwd: record.cwd, host: record.host, fresh, hostNotAnswering })
+    const base = scanned ? { items: mergeAndSort([scanned]) } : await degradedDiscovery(scan)
     return { ...base, source: 'discovery' }
   }
-
-  let scanned: SlashCommandItem[] | null = null
-  try {
-    scanned = record.host
-      ? await remoteItemsViaCache(record.host, record.cwd, fresh === true)
-      : await scanLocalItems(record.cwd)
-  } catch (err) {
-    // The list itself is intact (it came from the CLI); only descriptions are
-    // missing. Say so instead of shrinking the palette to a handful of built-ins.
-    const { hostReadFailureLevel } = await import('../../core/hosts/remote-read-bound.js')
-    log.session[hostReadFailureLevel(err)]('slash-commands: description scan failed, serving CLI names bare', {
-      sessionId, host: record.host, error: err instanceof Error ? err.message : String(err),
-    })
-  }
+  // The list itself is intact (it came from the CLI); a missing scan only
+  // costs descriptions. Say so instead of shrinking the palette to a handful of built-ins.
   const items = composeCliPalette(cliNames, scanned)
-  return scanned ? { items, source: 'cli' } : { items, source: 'cli', degraded: true }
+  return scanned ? { items, source: 'cli' } : { items, source: 'cli', ...degradedFlags(scan) }
 }
 
 export function createSlashCommandsRouter(): Router {
