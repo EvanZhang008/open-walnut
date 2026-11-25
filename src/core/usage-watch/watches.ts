@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { callerSide, emptyAgg, mergeAgg, msPercentile, ownFaults, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readHours, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
+import { RECORDED_NON_OPS } from './counters.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -82,7 +83,9 @@ export interface TargetResult {
   callerSide?: { calls: number; pct: number; badArgs: number; refused: number; newCodes?: string[] }
 }
 
-const TARGET_RE = /^(op:[a-z][a-z0-9_]{0,63}|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\/[A-Za-z0-9_\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$/
+// An op, or a name real use counts that is no op (a session's Walnut mount: counters.ts RECORDED_NON_OPS,
+// plain `word/word` names that need no escaping).
+const TARGET_RE = new RegExp(`^(op:(?:[a-z][a-z0-9_]{0,63}|${RECORDED_NON_OPS.join('|')})|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\\/[A-Za-z0-9_\\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$`)
 
 /** Why a target is not one the monitor can watch, or null. */
 export function targetProblem(t: string): string | null {

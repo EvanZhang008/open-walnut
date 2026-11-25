@@ -11,3 +11,12 @@ export const USAGE_COUNTERS = [
 export function labelValue(v: string): string {
   return v.replace(/[,{}=]/g, '_').slice(0, 160)
 }
+
+/** The name a session's Walnut MCP mount is counted under (record.ts recordMountVerdict): no op has it. */
+export const MOUNT_OP = 'mcp/mount'
+
+/** The MCP method a short or gone tool list is counted under (gateway-record.ts, mount-watch.ts): no op has it. */
+export const SHORT_LIST_OP = 'tools/list'
+
+/** What real use counts under an op's name that is no op, so a watch or a report can name it. */
+export const RECORDED_NON_OPS: readonly string[] = [MOUNT_OP, SHORT_LIST_OP]

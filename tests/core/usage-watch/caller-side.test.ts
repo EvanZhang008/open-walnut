@@ -28,7 +28,8 @@ import { listOps } from '../../../src/ops/index.js'
 import { MOUNT_OP, _resetUsageRecorderForTesting, flushUsage, recordMountVerdict, recordOpCall } from '../../../src/core/usage-watch/record.js'
 import { addObserveTap } from '../../../src/core/observability/metrics.js'
 import { closeUsageWatchStore, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
-import { judgeWatch, newWatch } from '../../../src/core/usage-watch/watches.js'
+import { judgeWatch, newWatch, targetProblem } from '../../../src/core/usage-watch/watches.js'
+import { RECORDED_NON_OPS } from '../../../src/core/usage-watch/counters.js'
 import { runUsageWatchAction } from '../../../src/core/usage-watch/actions.js'
 
 const T0 = Date.parse('2026-11-25T10:00:00Z')
@@ -188,6 +189,13 @@ describe('Walnut\'s own faults, apart from the caller\'s side', () => {
     expect(v.state).toBe('failed')
     expect(v.results[0]!.newCodes).toEqual(['mount_failed'])
     expect(v.results[0]!.callerSide).toMatchObject({ calls: 1, newCodes: ['mount_blocked'] })
+    // A watch and the report can name it, and every other name real use counts that is no op
+    // (2026-11-25: "op:mcp/mount" was refused as no target).
+    for (const name of RECORDED_NON_OPS) {
+      expect(name).toMatch(/^[a-z]+\/[a-z]+$/)
+      expect(targetProblem(`op:${name}`), name).toBeNull()
+    }
+    expect(targetProblem('op:mcp/other')).not.toBeNull()
   })
 
   it('an hour row from before the sides were kept finds a new code of Walnut\'s own, never a caller\'s', () => {

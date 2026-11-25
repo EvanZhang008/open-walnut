@@ -9,6 +9,7 @@ import { log } from '../../logging/index.js'
 import { PROGRAM_CLIENT, answerSize, isToolClient } from '../../lib/tool-answer-size.js'
 import { failureClass } from './normalize.js'
 import { recordOpCall, recordToolError } from './record.js'
+import { SHORT_LIST_OP } from './counters.js'
 
 export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean; result?: unknown; message?: string; invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; fault?: boolean; status?: number; code?: string }, ms: number, whole = false): void {
   try {
@@ -26,8 +27,7 @@ export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean;
   } catch { /* recording never fails a call */ }
 }
 
-/** The MCP method a short list is counted under (no op has that name). */
-export const SHORT_LIST_OP = 'tools/list'
+export { SHORT_LIST_OP } from './counters.js'
 
 /**
  * A Walnut MCP server's word that its session was given fewer Walnut tools than its whole list

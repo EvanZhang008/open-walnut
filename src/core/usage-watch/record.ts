@@ -15,7 +15,8 @@ import { addClientFailures, addEvents, addHours, addToolErrors, clientFailureKno
 import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
 import { ASLEEP_CODE, TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
-import { labelValue } from './counters.js'
+import { MOUNT_OP, labelValue } from './counters.js'
+export { MOUNT_OP } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
 
 const HOUR_MS = 3_600_000
@@ -228,8 +229,6 @@ function sameNoAnswerSeen(row: ToolErrorRow, via: ToolErrorVia): boolean {
   return false
 }
 
-/** The name a session's Walnut MCP mount is counted under (recordMountVerdict): no op has it. */
-export const MOUNT_OP = 'mcp/mount'
 
 /**
  * What a Claude Code session's start said of its Walnut MCP mount (claude-code-session.ts
