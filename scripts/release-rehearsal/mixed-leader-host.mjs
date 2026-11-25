@@ -155,6 +155,9 @@ async function runPairing(name, pairing, { work, older, newSrc, out }) {
     bin = path.join(dir, 'new-leader')
     fs.writeFileSync(bin, sh([`exec ${q(process.execPath)} ${q(path.join(newSrc, 'src/cli.ts'))} "$@"`]), { mode: 0o755 })
     extraEnv.WALNUT_DAEMON_BINARIES_DIR = daemonSlot(dir, pairing.host, ctx)
+    // The pairing's host is the daemon program in this walnut's dir: the new leader must run it, never
+    // take the dir over in its own process (in_process_daemon, on by default since 2026-11-24).
+    extraEnv.WALNUT_IN_PROCESS_DAEMON = '0'
   }
   const w = new IsolatedWalnut({ work, name, extraEnv, bin })
   const jobOut = path.join(w.dir, 'job-out.jsonl')
