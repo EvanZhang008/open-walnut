@@ -35,7 +35,7 @@ import path from 'node:path';
 import { CONFIG_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { selectKept, type RetentionPolicy } from '../lib/retention.js';
-import { CONFIG_FILE_MODE, writeFileAtomic } from './config-file-io.js';
+import { ATOMIC_TEMP_RE, CONFIG_FILE_MODE, writeFileAtomic } from './config-file-io.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { CONFIG_HISTORY_DIR_NAME } from './config-history-name.js';
 
@@ -47,8 +47,6 @@ const DIR_MODE = 0o700;
 export const CONFIG_HISTORY_RETENTION: RetentionPolicy = { recent: 10, daily: 7, weekly: 0, utc: true, oldestOfDay: true };
 
 const NAME_RE = /^config-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})\.(\d{3})Z-([0-9a-f]{12})\.yaml$/;
-/** writeFileAtomic's temp for a copy (config-file-io.ts): `<copy name>.tmp-<pid>-<base36 ms>`. */
-const TEMP_RE = /^(.+)\.tmp-\d+-[0-9a-z]+$/;
 /** A temp this old belongs to no write still in flight. */
 const STALE_TEMP_MS = 3_600_000;
 
@@ -172,7 +170,7 @@ let pruneChain: Promise<void> = Promise.resolve();
 
 /** A copy's write temp, by name (its base is a name this module makes). */
 export function isConfigHistoryTemp(name: string): boolean {
-  const m = TEMP_RE.exec(name);
+  const m = ATOMIC_TEMP_RE.exec(name);
   return !!m && parseConfigHistoryName(m[1]!) !== null;
 }
 

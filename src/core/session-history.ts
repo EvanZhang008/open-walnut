@@ -1484,7 +1484,8 @@ async function readHistoryWindow(
     const read = await readTailWindowRead(key, reader, statPath, at, window,
       (text, startByte) => parseHistoryWindowParts(sessionId, text, opts.parseOpts,
         { byte: startByte, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) }),
-      { keep: opts.keep !== false });
+      // A host's windows are kept on disk too, so a restart does not move them over its link again.
+      { keep: opts.keep !== false, persist: !!host && host !== '__local__' });
     if (!read) return null;
     return {
       messages: read.value.messages, synthetic: read.value.synthetic, text: read.text, endsWithLine: read.endsWithLine,

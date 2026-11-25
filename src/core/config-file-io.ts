@@ -211,7 +211,7 @@ export async function commitConfigFile(
   expected: ConfigFileId | null,
   opts: { holdReplaced?: boolean } = {},
 ): Promise<{ outcome: CommitOutcome; replaced?: fs.FileHandle }> {
-  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  const tmp = atomicTempName(file)
   let held: fs.FileHandle | undefined
   try {
     // Owner only: config.yaml holds keys (a bucket's secret, provider keys).
@@ -296,6 +296,21 @@ async function readWhole(fh: fs.FileHandle, size: number): Promise<string> {
 /** config.yaml and its copies hold keys (a bucket's secret, provider keys): owner only. */
 export const CONFIG_FILE_MODE = 0o600
 
+let atomicWriteSeq = 0
+
+/**
+ * The temp a write of `filePath` goes through (writeFileAtomic, commitConfigFile):
+ * `<file>.tmp-<pid>-<base36 ms>-<base36 seq>`, unique even for two writes in one millisecond.
+ * ATOMIC_TEMP_RE recognizes it (and the older `<file>.tmp-<pid>-<base36 ms>`), so a sweep that
+ * removes the temps a crash left behind finds every one.
+ */
+export function atomicTempName(filePath: string): string {
+  return `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${(atomicWriteSeq++).toString(36)}`
+}
+
+/** A name atomicTempName made (older builds' too); group 1 is the file it was for. */
+export const ATOMIC_TEMP_RE = /^(.+)\.tmp-\d+-[0-9a-z]+(?:-[0-9a-z]+)?$/
+
 /**
  * Replace a file's whole content atomically: write a sibling temp, then rename.
  *
@@ -310,10 +325,10 @@ export const CONFIG_FILE_MODE = 0o600
  * Temp lives in the SAME directory so the rename is a same-filesystem atomic
  * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
  */
-export async function writeFileAtomic(filePath: string, content: string, mode?: number): Promise<void> {
-  const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`
+export async function writeFileAtomic(filePath: string, content: string | Uint8Array, mode?: number): Promise<void> {
+  const tmp = atomicTempName(filePath)
   try {
-    await fs.writeFile(tmp, content, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) })
+    await fs.writeFile(tmp, content, { ...(typeof content === 'string' ? { encoding: 'utf-8' as const } : {}), ...(mode !== undefined ? { mode } : {}) })
     await fs.rename(tmp, filePath)
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {})

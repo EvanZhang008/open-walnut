@@ -197,6 +197,8 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/cache/history/` | rebuildable | no | Session history cache, rebuilt from transcripts |
 | `~/.open-walnut/cache/history-archive-due.json` | rebuildable | no | When the transcript archive sweep is next due |
 | `~/.open-walnut/cache/change-watch-due.json` | rebuildable | no | When the change watcher reads each change next; lost, it reads them all once |
+| `~/.open-walnut/cache/slash-palette.json` | rebuildable | no | The slash palette's last host scans and stream looks; lost, the first palette after a restart scans the host again |
+| `~/.open-walnut/cache/history-tail-windows/` | rebuildable | no | Tail windows of remote sessions' transcripts; lost, the first read after a restart moves the whole window again |
 | `~/.open-walnut/cache/attachment-hashes.json` | rebuildable | no | File hashes of the notes' pictures and files the attachments copy sends; lost, it hashes them all once |
 | `~/.open-walnut/cache/projections/` | rebuildable | no | Session and task list snapshots |
 | `~/.open-walnut/cache/transcripts/` | rebuildable | no | Transcript tails |

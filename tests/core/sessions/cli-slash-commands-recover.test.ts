@@ -28,7 +28,7 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => ({
 }))
 
 import {
-  lastInitSlashCommands, recoverCliSlashCommandsFromStream,
+  lastInitSlashCommands, recoverCliSlashCommandsFromStream, streamLooksKept, _resetStreamLooksForTesting,
 } from '../../../src/core/sessions/cli-slash-commands-recover.js'
 
 const init = (names: string[], terminal: string[] = []) =>
@@ -143,5 +143,47 @@ describe('recoverCliSlashCommandsFromStream', () => {
     expect(await recoverCliSlashCommandsFromStream('sid-h', 'box')).toBeNull()
     expect(readFileRange).toHaveBeenCalledTimes(3)
     expect(readFileRange.mock.calls[2][2]).toBe(10 * MB)
+  })
+
+  /**
+   * A restart emptied the looks, so the first palette of every session after a deploy read
+   * the 1 MB tail (or 4 MB) over the link again. The looks are kept (slash-commands-disk.ts
+   * writes `forDisk()`); one read back is trusted only for the same file incarnation.
+   */
+  it('after a restart, a look read back reads only what the stream gained; another file or no epoch reads the tail', async () => {
+    const MB = 1024 * 1024
+    const size = 3 * MB
+    stat.mockResolvedValue({ size, mtimeMs: 1, epoch: 'e1' })
+    readFileRange.mockResolvedValue({ content: 'torn}\n' + init(['compact', 'ship']) + '\n', fileSize: size })
+    await recoverCliSlashCommandsFromStream('sid-r', 'box')
+    stat.mockResolvedValue({ size, mtimeMs: 1 })
+    await recoverCliSlashCommandsFromStream('sid-noepoch', 'box')
+    stat.mockResolvedValue({ size, mtimeMs: 1, epoch: 'e9' })
+    await recoverCliSlashCommandsFromStream('sid-other', 'box')
+    const onDisk = JSON.parse(JSON.stringify(streamLooksKept.forDisk())) as unknown
+
+    // A new process: nothing in memory, the kept looks read back (a malformed row is dropped).
+    _resetStreamLooksForTesting()
+    await streamLooksKept.restore(Promise.resolve([...(onDisk as unknown[]), ['sid-bad', { path: 7 }], 'junk']))
+    readFileRange.mockClear()
+
+    stat.mockResolvedValue({ size: size + 400, mtimeMs: 2, epoch: 'e1' })
+    readFileRange.mockResolvedValue({ content: '{"type":"assistant"}\n', fileSize: size + 400 })
+    expect((await recoverCliSlashCommandsFromStream('sid-r', 'box'))?.names).toEqual(['compact', 'ship'])
+    expect(readFileRange).toHaveBeenCalledTimes(1)
+    expect(readFileRange.mock.calls[0][2]).toBe(size) // old code: size + 400 - 1 MB, the tail again
+
+    // Kept without an epoch: it cannot prove it is the same file, so the tail is read.
+    readFileRange.mockClear()
+    stat.mockResolvedValue({ size: size + 400, mtimeMs: 2 })
+    readFileRange.mockResolvedValue({ content: init(['clear']) + '\n', fileSize: size + 400 })
+    expect((await recoverCliSlashCommandsFromStream('sid-noepoch', 'box'))?.names).toEqual(['clear'])
+    expect(readFileRange.mock.calls[0][2]).toBe(size + 400 - MB)
+
+    // Another incarnation now: the tail too.
+    readFileRange.mockClear()
+    stat.mockResolvedValue({ size: size + 400, mtimeMs: 2, epoch: 'e10' })
+    expect((await recoverCliSlashCommandsFromStream('sid-other', 'box'))?.names).toEqual(['clear'])
+    expect(readFileRange.mock.calls[0][2]).toBe(size + 400 - MB)
   })
 })

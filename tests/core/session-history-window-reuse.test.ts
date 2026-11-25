@@ -64,6 +64,7 @@ import {
 import { flushHistoryCacheWrites } from '../../src/core/history-disk-cache.js';
 import { HISTORY_OPEN_PREVIEW_BYTES } from '../../src/core/history-open-preview.js';
 import { MAX_TAIL_WINDOWS } from '../../src/core/history-tail-window.js';
+import { startTailWindowDisk, flushTailWindowDisk, _stopTailWindowDiskForTesting } from '../../src/core/history-tail-window-disk.js';
 
 const CWD = '/tmp/window-reuse-project';
 const prevLimit = process.env.WALNUT_MAX_FILE_READ_BYTES;
@@ -259,5 +260,61 @@ describe('a bounded cold read reads through the kept tail window', () => {
     const rows = await readSessionHistoryTail(sid, CWD, HOST, undefined, WINDOW, { poll: true });
     expect(rows).not.toBeNull();
     expect(rows!.at(-1)?.text).toBe('the answer');
+  });
+});
+
+describe('a host\'s window outlives a server restart (history-tail-window-disk.ts)', () => {
+  const keptDir = path.join(path.dirname(HISTORY_CACHE_DIR), 'history-tail-windows');
+  afterEach(async () => {
+    await flushTailWindowDisk();
+    _stopTailWindowDiskForTesting();
+    await fsp.rm(keptDir, { recursive: true, force: true });
+  });
+  /** A new server process: nothing in memory, the kept windows' headers read back. */
+  async function restart() {
+    await flushTailWindowDisk();
+    _resetHistoryCacheForTesting();
+    _stopTailWindowDiskForTesting();
+    await startTailWindowDisk(keptDir);
+  }
+  /** A fresh window read of the file as it is now, with nothing in memory or on disk. */
+  async function trulyFresh(sid: string) {
+    _stopTailWindowDiskForTesting();
+    return freshRows(sid);
+  }
+
+  it('a grown transcript moves only the appended bytes after a restart; a rewritten one reads fresh', async () => {
+    await startTailWindowDisk(keptDir);
+    const sid = 'restart-grown';
+    await write(sid, [...padding(BIG), user('q0'), reply('a0')]);
+    await read(sid);
+
+    await restart();
+    await append(sid, [user('asked after the restart'), reply('answered after the restart')]);
+    reads.ranges.length = 0;
+    const grown = await read(sid);
+    // Old code: a new process held no window, so this moved the whole window again.
+    expect(moved()).toBeGreaterThan(0);
+    expect(moved()).toBeLessThan(1_500);
+    expect(grown.map((m) => m.text)).toContain('answered after the restart');
+
+    await restart();
+    await write(sid, [...padding(BIG, 'rewritten'), user('q1'), reply('a1')]);
+    reads.ranges.length = 0;
+    const rewritten = await read(sid);
+    expect(moved()).toBeGreaterThan(WINDOW - 400);
+    expect(rewritten.map((m) => m.text)).toContain('a1');
+    expect(view(rewritten)).toEqual(view(await trulyFresh(sid)));
+  });
+
+  it('the rows after a restart equal a fresh read of the same file', async () => {
+    await startTailWindowDisk(keptDir);
+    const sid = 'restart-same-rows';
+    await write(sid, [...padding(BIG), user('q0'), reply('a0')]);
+    await read(sid);
+    await restart();
+    await append(sid, [user('q1'), reply('a1')]);
+    const after = await read(sid);
+    expect(view(after)).toEqual(view(await trulyFresh(sid)));
   });
 });

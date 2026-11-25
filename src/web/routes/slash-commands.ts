@@ -24,7 +24,8 @@
  * doesn't have. Walnut commands (Mac-side injected) + built-ins are still included.
  * A host's user-level skills are cached per host, its folder's project
  * commands per folder (slash-commands-cache.ts: one scan at a time, a cached
- * list answers at once, a request waits PALETTE_HOST_BUDGET_MS at most); with
+ * list answers at once, a request waits PALETTE_HOST_BUDGET_MS at most; the
+ * lists outlive a restart through slash-commands-disk.ts); with
  * nothing cached and the host not answering in time we degrade to just Walnut +
  * built-in commands (never silently fall back to local skills).
  */
@@ -63,9 +64,30 @@ export interface SlashCommandItem {
 const REMOTE_CACHE_TTL_MS = 60_000
 /** A host's user-level skills (plugin + ~/.claude/skills), the same for every folder: keyed by host
  *  (a few hundred items, about 100 KB of text, per host). */
-const remoteSkillsCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.host-skills', REMOTE_CACHE_TTL_MS, 64, 16 * 1024 * 1024)
+const remoteSkillsCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.host-skills', REMOTE_CACHE_TTL_MS, 64, 16 * 1024 * 1024, isItemList)
 /** A folder's project commands and skills on a host: keyed by host and folder (usually a handful of items). */
-const remoteProjectCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.project-items', REMOTE_CACHE_TTL_MS, 512, 8 * 1024 * 1024)
+const remoteProjectCache = new PaletteScanCache<SlashCommandItem[]>('slash-palette.project-items', REMOTE_CACHE_TTL_MS, 512, 8 * 1024 * 1024, isItemList)
+
+const ITEM_SOURCES: ReadonlySet<string> = new Set<SlashCommandItem['source']>(['skill', 'open-walnut', 'claude-root', 'project', 'built-in'])
+
+/** A list read back from disk (slash-commands-disk.ts) that has the shape of scanned items. */
+function isItemList(value: unknown): value is SlashCommandItem[] {
+  return Array.isArray(value) && value.every((i) => !!i && typeof i === 'object'
+    && typeof (i as SlashCommandItem).name === 'string' && typeof (i as SlashCommandItem).description === 'string'
+    && ITEM_SOURCES.has((i as SlashCommandItem).source))
+}
+
+/**
+ * Boot, after the listen: read back the host scans and stream looks the last process kept, and
+ * keep them from now on (slash-commands-disk.ts). A palette asked meanwhile waits for them
+ * within its budget.
+ */
+export async function startSlashPaletteDisk(file?: string): Promise<void> {
+  const [{ startPaletteDisk }, { streamLooksKept }] = await Promise.all([
+    import('./slash-commands-disk.js'), import('../../core/sessions/cli-slash-commands-recover.js'),
+  ])
+  await startPaletteDisk({ skills: remoteSkillsCache, project: remoteProjectCache, streams: streamLooksKept }, file)
+}
 
 /**
  * Claude Code built-in commands that support non-interactive (-p) mode.

@@ -13,6 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
+import { atomicTempName } from '../../src/core/config-file-io.js';
 import {
   refreshConfigBackup,
   saveConfig,
@@ -187,16 +188,18 @@ describe('config.yaml history through the write path', () => {
   it('the prune removes an hour-old write temp of a copy, and nothing else it did not name', async () => {
     await updateConfig({ user: { name: 'A' } } as any);
     const [copy] = await listConfigHistory();
-    const old = path.join(HISTORY(), `${copy!.name}.tmp-4242-mh3k2a`);
-    const fresh = path.join(HISTORY(), `${copy!.name}.tmp-4243-mh3k2b`);
-    const stranger = path.join(HISTORY(), 'notes.txt.tmp-4242-mh3k2a');
-    for (const f of [old, fresh, stranger]) await fs.writeFile(f, 'private_note: x\n', 'utf-8');
+    // The names writeFileAtomic really gives its temps, and the shorter form an older build gave.
+    const old = atomicTempName(path.join(HISTORY(), copy!.name));
+    const older = path.join(HISTORY(), `${copy!.name}.tmp-4242-mh3k2a`);
+    const fresh = atomicTempName(path.join(HISTORY(), copy!.name));
+    const stranger = atomicTempName(path.join(HISTORY(), 'notes.txt'));
+    for (const f of [old, older, fresh, stranger]) await fs.writeFile(f, 'private_note: x\n', 'utf-8');
     const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
-    await fs.utimes(old, twoHoursAgo, twoHoursAgo);
-    await fs.utimes(stranger, twoHoursAgo, twoHoursAgo);
+    for (const f of [old, older, stranger]) await fs.utimes(f, twoHoursAgo, twoHoursAgo);
     await updateConfig({ user: { name: 'B' } } as any);
     await _configRepairIdleForTest();
     await expect(fs.stat(old)).rejects.toThrow();
+    await expect(fs.stat(older)).rejects.toThrow();
     await expect(fs.stat(fresh)).resolves.toBeTruthy();
     await expect(fs.stat(stranger)).resolves.toBeTruthy();
   });

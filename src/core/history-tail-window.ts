@@ -17,7 +17,12 @@
  * moves its last complete line (to prove the file was only appended to) plus what came
  * after it. The window is re-parsed whole each time, so the answer is the same parse a
  * fresh window read gives: the lines of the newest window bytes, from a line start.
+ *
+ * A host's windows outlive a restart (history-tail-window-disk.ts): one read back is never
+ * served as held; its first read checks its last line against the file as it is now and moves
+ * only what was appended since, exactly as a window grown in memory.
  */
+import { dropDiskTailWindow, dropDiskTailWindows, newTailLineage, readDiskTailWindow, saveDiskTailWindow, saveDiskTailWindowNow } from './history-tail-window-disk.js'
 
 /** What the reader must answer (DaemonFileReader): bytes [start, EOF), undecoded. */
 export interface TailReader {
@@ -41,7 +46,14 @@ interface TailWindow {
   lastLine: Buffer
   /** The complete lines held, ending at `end`, at most the window size. */
   lines: Buffer
-  value: unknown
+  /** The parse of `lines`; absent on a window read back from disk until its first read. */
+  value?: unknown
+  /** Kept on disk too (a host's transcript): history-tail-window-disk.ts. */
+  persist?: boolean
+  /** Read back from disk and not yet checked against the file: never served as held. */
+  restored?: boolean
+  /** The fresh read this window grew from (newTailLineage): its copy on disk appends only within one. */
+  lineage?: number
 }
 
 /** At most this many windows are kept, least recently used out first. */
@@ -67,9 +79,16 @@ function drop(key: string): void {
   windows.delete(key)
 }
 
-/** Drop every window of a session (a rewind commit: same bytes, new meaning). */
+/** Drop every window of a session (a rewind commit: same bytes, new meaning), on disk too. */
 export function dropTailWindows(keyPrefix: string): void {
   for (const k of [...windows.keys()]) if (k.startsWith(keyPrefix)) drop(k)
+  dropDiskTailWindows(keyPrefix)
+}
+
+/** A window that no longer answers its file goes, and its copy on disk with it. */
+function discard(key: string, persist: boolean | undefined): void {
+  drop(key)
+  if (persist) dropDiskTailWindow(key)
 }
 
 /** Memory pressure: a quarter of the budget, least recent first; the newest stays. */
@@ -83,15 +102,44 @@ function evict(): void {
   const newest = keys[keys.length - 1]
   for (const k of keys) {
     if (windows.size <= MAX_TAIL_WINDOWS && heldBytes <= budget) break
-    if (k !== newest) drop(k)
+    if (k === newest) continue
+    const w = windows.get(k)
+    drop(k)
+    // A save still asked for it is written now: nothing holds its bytes outside the budget.
+    if (w?.persist && !w.restored) saveDiskTailWindowNow(k, w)
   }
 }
 
-function keep(key: string, w: TailWindow): void {
+function hold(key: string, w: TailWindow): void {
   drop(key)
   windows.set(key, w)
   heldBytes += weight(w)
   evict()
+}
+
+/** Hold `w`, and ask for its copy on disk when it is a host's (at most every 30 s, the appended bytes only). */
+function keep(key: string, w: TailWindow): void {
+  hold(key, w)
+  if (!w.persist) return
+  // The write takes the window held then (the newest); one that left memory was saved as it left.
+  saveDiskTailWindow(key, () => {
+    const now = windows.get(key)
+    return now && !now.restored ? now : undefined
+  })
+}
+
+/**
+ * The window a previous process kept for `key` (history-tail-window-disk.ts), held as
+ * `restored`: it answers only once grow() checked it against the file. A window this process
+ * read meanwhile wins.
+ */
+async function restore(key: string, path: string, epoch: string | undefined, window: number): Promise<TailWindow | undefined> {
+  const kept = await readDiskTailWindow(key, path, epoch, window)
+  const now = windows.get(key)
+  if (now || !kept) return now
+  const w: TailWindow = { ...kept, persist: true, restored: true }
+  hold(key, w)
+  return w
 }
 
 /** The window held for `key` moves to most recently used. */
@@ -149,6 +197,8 @@ type WindowParse<R> = (text: string, startByte: number) => Promise<R>
  * `key` null: read fresh and keep nothing (a parse with options of its own). `keep`
  * false: a window held for the key still answers and grows, but a fresh read is not kept
  * (a one-off reader must not push out the windows of the sessions read again and again).
+ * `persist`: a host's transcript, whose windows are kept on disk too and read back from there
+ * when none is held (history-tail-window-disk.ts; a no-op until the server started it).
  */
 export async function readTailWindowRead<R>(
   key: string | null,
@@ -157,24 +207,28 @@ export async function readTailWindowRead<R>(
   st: { mtimeMs: number; size: number; epoch?: string },
   window: number,
   parse: WindowParse<R>,
-  opts: { keep?: boolean } = {},
+  opts: { keep?: boolean; persist?: boolean } = {},
 ): Promise<TailWindowRead<R> | null> {
-  const held = key === null ? undefined : windows.get(key)
+  let held = key === null ? undefined : windows.get(key)
+  // A one-off reader (keep false) holds no window it did not find held, a copy on disk included.
+  if (key !== null && !held && opts.persist && opts.keep !== false) held = await restore(key, path, st.epoch, window)
   if (key !== null && held && held.path === path && held.epoch === st.epoch) {
-    if (held.mtimeMs === st.mtimeMs && held.end === st.size) {
+    const unchanged = held.mtimeMs === st.mtimeMs && held.end === st.size
+    if (unchanged && !held.restored) {
       touch(key, held)
       return { value: held.value as R, text: decodeOnce(held.lines), endsWithLine: true, startByte: held.end - held.lines.length, how: 'held', movedBytes: 0 }
     }
     // Equal size is growth only when the last read went past its stat (an append that
     // landed between the two): then its last line is read again and checked. Any other
     // equal size with a new mtime may be an in-place rewrite, which no line check sees.
-    const grew = st.size > held.end || (st.size === held.end && held.mtimeMs === null)
+    // A window read back from disk is checked the same way even when the stat is unchanged.
+    const grew = st.size > held.end || (st.size === held.end && (held.mtimeMs === null || (unchanged && held.restored === true)))
     if (grew && st.size - held.end < window) {
       const grown = await grow(key, held, reader, st, window, parse)
       if (grown) return grown
     }
   }
-  return fresh(key, reader, path, st, window, parse, opts.keep !== false)
+  return fresh(key, reader, path, st, window, parse, opts.keep !== false, opts.persist === true, held?.persist === true)
 }
 
 /** The text of `buf`, decoded once and only if asked. */
@@ -188,12 +242,12 @@ async function grow<R>(
   window: number, parse: WindowParse<R>,
 ): Promise<TailWindowRead<R> | null> {
   const res = await reader.readFileRangeBuffer(held.path, held.lastLineStart, st)
-  if (res === null) { drop(key); return null }
+  if (res === null) { discard(key, held.persist); return null }
   const buf = res.buf
   // The line held last must still be there, byte for byte: else the file was rewritten
   // (a rewind, an edit), and only a fresh window is right.
   if (buf.length < held.lastLine.length || !buf.subarray(0, held.lastLine.length).equals(held.lastLine)) {
-    drop(key)
+    discard(key, held.persist)
     return null
   }
   const { complete, partial } = split(buf.subarray(held.lastLine.length))
@@ -206,6 +260,8 @@ async function grow<R>(
   keep(key, {
     path: held.path,
     ...(st.epoch !== undefined ? { epoch: st.epoch } : {}),
+    ...(held.persist ? { persist: true } : {}),
+    ...(held.lineage !== undefined ? { lineage: held.lineage } : {}),
     mtimeMs: held.lastLineStart + buf.length === st.size ? st.mtimeMs : null,
     end,
     lastLineStart: last ? held.end + last.start : held.lastLineStart,
@@ -218,10 +274,11 @@ async function grow<R>(
 
 async function fresh<R>(
   key: string | null, reader: TailReader, path: string, st: { mtimeMs: number; size: number; epoch?: string },
-  window: number, parse: WindowParse<R>, keepIt: boolean,
+  window: number, parse: WindowParse<R>, keepIt: boolean, persist: boolean, heldPersisted: boolean,
 ): Promise<TailWindowRead<R> | null> {
-  // A window held for the key no longer answers this file: it goes, kept anew or not.
-  if (key !== null) drop(key)
+  // A window held for the key no longer answers this file: it goes, kept anew or not, and its
+  // copy on disk with it (a new one kept is written in its place).
+  if (key !== null) discard(key, heldPersisted)
   const start = Math.max(0, st.size - window)
   const res = await reader.readFileRangeBuffer(path, start, st)
   if (res === null) return null
@@ -241,7 +298,7 @@ async function fresh<R>(
     const end = start + res.buf.length - partial.length
     const last = lastLineOf(complete)
     keep(key, {
-      path, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}),
+      path, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}), ...(persist ? { persist: true, lineage: newTailLineage() } : {}),
       mtimeMs: start + res.buf.length === st.size ? st.mtimeMs : null, end,
       lastLineStart: end - last.line.length, lastLine: Buffer.from(last.line),
       lines: Buffer.from(complete), value,

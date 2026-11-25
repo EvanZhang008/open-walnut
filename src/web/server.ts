@@ -3602,6 +3602,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
+  // Caches a restart used to empty, read back off the boot's path (each validates what it reads
+  // before it answers): the slash palette's host scans (routes/slash-commands-disk.ts) and the
+  // remote sessions' history tail windows (core/history-tail-window-disk.ts).
+  void import('./routes/slash-commands.js').then((m) => m.startSlashPaletteDisk())
+    .catch((err) => log.web.warn('slash palette cache: not read back', { error: err instanceof Error ? err.message : String(err) }))
+  void import('../core/history-tail-window-disk.js').then((m) => m.startTailWindowDisk())
+    .catch((err) => log.web.warn('tail windows: not read back', { error: err instanceof Error ? err.message : String(err) }))
   // The "is a newer open-walnut published?" check (every 6 h): armed after listen so its
   // first call (20 s out) is clear of the boot fan-out. A source checkout, a
   // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op. The live
@@ -7953,6 +7960,12 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
+  // The palette's host scans and the remote tail windows asked to be written and not yet (at most
+  // 10 s and 30 s of them): written now, so the next boot reads them back.
+  await shutdownStep('kept caches flush', async () => {
+    const [palette, windows] = await Promise.all([import('./routes/slash-commands-disk.js'), import('../core/history-tail-window-disk.js')])
+    await Promise.all([palette.flushPaletteDisk(), windows.flushTailWindowDisk()])
+  }, { budgetMs: 1_500 })
   // Host-exec runs noted since the grants were last written (at most RUN_NOTE_FLUSH_MS of them).
   await shutdownStep('grant runs flush', async () => (await import('../core/hosts/exec-grants.js')).flushRunNotes())
   // Threads changes still waiting to go out to their JSON files (experiment threads_sqlite; a no-op

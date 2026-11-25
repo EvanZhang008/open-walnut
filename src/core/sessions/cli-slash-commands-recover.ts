@@ -22,8 +22,15 @@
  * open and read the 1 MB tail again, and the 4 MB one when the turn's init was
  * further back, over the host's link (2026-11-25: palette reads of 7 to 15 s
  * on a remote host after a deploy).
+ *
+ * The looks outlive a restart (streamLooksKept, written with the palette's caches by
+ * web/routes/slash-commands-disk.ts), so the first palette after a deploy reads only what the
+ * stream gained since. One read back is trusted only for the same file incarnation: it must
+ * carry the daemon's epoch, equal the epoch the stat gives now, and the file must not be shorter
+ * than where the look stopped; anything else reads the tail as on a first look.
  */
 import { log } from '../../logging/index.js'
+import type { KeptSection } from '../kept-cache-file.js'
 import { daemonStreamPathCandidates } from '../session-reconcile.js'
 import type { DaemonFileReader } from '../daemon-file-reader.js'
 
@@ -50,8 +57,62 @@ interface StreamLook {
   names: string[] | null
 }
 
-/** Per-session memo, kept while the stream file is the same incarnation. */
+/** Per-session memo, kept while the stream file is the same incarnation; the least recent go first past the cap. */
 const memo = new Map<string, StreamLook>()
+const MAX_LOOKS = 512
+/** At most this many looks are written to disk, the most recent. */
+const MAX_KEPT_LOOKS = 256
+/** The looks a previous process kept, being read back (a recovery waits for them). */
+let restoring: Promise<void> | null = null
+let lookChanged: (() => void) | null = null
+
+function remember(sessionId: string, look: StreamLook): void {
+  memo.delete(sessionId)
+  memo.set(sessionId, look)
+  while (memo.size > MAX_LOOKS) memo.delete(memo.keys().next().value as string)
+  lookChanged?.()
+}
+
+function isStreamLook(v: unknown): v is StreamLook {
+  if (!v || typeof v !== 'object') return false
+  const l = v as Partial<StreamLook>
+  return typeof l.path === 'string' && typeof l.epoch === 'string'
+    && typeof l.fileSize === 'number' && typeof l.scannedTo === 'number' && l.scannedTo >= 0 && l.scannedTo <= l.fileSize
+    && (l.names === null || (Array.isArray(l.names) && l.names.every((n) => typeof n === 'string')))
+}
+
+/** The stream looks as a part of the palette's kept file (web/routes/slash-commands-disk.ts). */
+export const streamLooksKept: KeptSection = {
+  forDisk: () => [...memo].slice(-MAX_KEPT_LOOKS),
+  restore(data) {
+    const work = data.then((rows) => {
+      if (!Array.isArray(rows)) return
+      // Read back first in the order (older than every look this process took), then this process's.
+      const mine = [...memo]
+      memo.clear()
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length !== 2) continue
+        const [sessionId, look] = row as [unknown, unknown]
+        // A look with no epoch cannot prove it is the same file.
+        if (typeof sessionId !== 'string' || !isStreamLook(look)) continue
+        memo.set(sessionId, { path: look.path, epoch: look.epoch, fileSize: look.fileSize, scannedTo: look.scannedTo, names: look.names })
+      }
+      for (const [sessionId, look] of mine) { memo.delete(sessionId); memo.set(sessionId, look) }
+      while (memo.size > MAX_LOOKS) memo.delete(memo.keys().next().value as string)
+    }, () => undefined)
+    const r = work.finally(() => { if (restoring === r) restoring = null })
+    restoring = r
+    return r
+  },
+  onChange(changed) { lookChanged = changed },
+}
+
+/** Test seam: forget every look (a new process). */
+export function _resetStreamLooksForTesting(): void {
+  memo.clear()
+  restoring = null
+  lookChanged = null
+}
 
 /** Pure: the last init line in `content` that advertises commands, or null. */
 export function lastInitSlashCommands(content: string): string[] | null {
@@ -100,6 +161,7 @@ export async function recoverCliSlashCommandsFromStream(
   const { DaemonFileReader } = await import('../daemon-file-reader.js')
   const hostName = host ?? '__local__'
   const reader = new DaemonFileReader(hostName)
+  if (restoring) await restoring
   const prev = memo.get(sessionId)
 
   let streamPath = ''
@@ -128,7 +190,7 @@ export async function recoverCliSlashCommandsFromStream(
   const answer = (look: StreamLook): RecoveredCliSlashCommands | null =>
     look.names ? { names: look.names, fileSize: look.fileSize } : null
   const keep = (look: StreamLook): RecoveredCliSlashCommands | null => {
-    memo.set(sessionId, look)
+    remember(sessionId, look)
     return answer(look)
   }
 
