@@ -91,8 +91,13 @@ export function createDaemonSessionResume<W extends { data: WsData }>(deps: Daem
     hostResumedAt.set(sid, now)
     hostResumesStarting++
     const stopVersion = sessionStopVersions.get(sid) ?? 0
+    // The fire is decided now, after every stop this host recorded for the session: it carries that
+    // stop as its fence, as a message the server sends after a stop does (session-send-core.ts), so a
+    // session the person stopped wakes for it here as it does through the server. A stop still being
+    // applied, or one that lands while this starts, still wins (deliveryAllowed, the stop version).
+    const fence = cronRuntime()?.get(sid)?.stopRequestId
     const current = () => (sessionStopVersions.get(sid) ?? 0) === stopVersion
-      && (!cronRuntime() || cronRuntime()!.deliveryAllowed(sid, undefined))
+      && (!cronRuntime() || cronRuntime()!.deliveryAllowed(sid, fence))
     try {
       await sessionStartGate.run(sid, async () => {
         if (!current()) throw new Error('a stop request superseded this start')
