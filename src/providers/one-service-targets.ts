@@ -51,13 +51,17 @@ export function serveSlotWhy(target: string, link: ServeLink, o: ServeTargetOpts
 /**
  * The same answer for a host whose system is known only as a word (a hello's or a probe's
  * `platform`: `linux`, `darwin`): null when the service may be offered there. For the mode
- * decision's system check (one-service-mode.ts wantedNow).
+ * decision's system check (one-service-mode.ts wantedNow, the mode itself and Walnut Health's "not sure").
  */
 export function servePlatformWhy(platform: string, o: ServeTargetOpts): string | null {
   const system = systemOf(platform)
   if (system === 'linux') return null
   if (system === 'darwin') return o.macos ? null : MACOS_OFF_WHY
-  return `it runs ${platform}, and the one Walnut service runs on Linux and macOS hosts only`
+  return `it runs ${platformName(system)}, and the one Walnut service runs on Linux hosts, and on Macs with the experiment on, only`
+}
+
+function platformName(p: string): string {
+  return p === 'win32' ? 'Windows' : p
 }
 
 /**

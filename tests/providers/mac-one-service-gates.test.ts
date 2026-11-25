@@ -1,8 +1,8 @@
 /**
  * What keeps the one Walnut service off a Mac unless the experiment macos_one_service is on, and off
  * places that are not this Walnut's (review round 1 of the macOS one-service change):
- *   - the mode decision's system gate (serve-unfit.ts systemServeUnfit, daemon-connection.ts
- *     serveGate): a Mac with the flag off is never asked, on either link;
+ *   - the mode decision's system gate (one-service-mode.ts wantedNow asks one-service-targets.ts
+ *     servePlatformWhy with the flag): a Mac with the flag off is never asked, on either link;
  *   - (the host network path's check of the probed target: daemon-net-update-mode.test.ts);
  *   - setServe (a set straight into the service): a Mac only, the flag on;
  *   - the leader side of a follower that fell back (roleFallbackUnfit, noteRoleFallback): only with the
@@ -14,8 +14,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// This Walnut's follower on the host, as the host-server manager would say it.
+vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), hostFollowerFact: () => ({ kind: 'replica' }) }))
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { roleFallbackUnfit, serveUnfits, systemServeUnfit } from '../../src/providers/serve-unfit.js'
+import { roleFallbackUnfit, serveUnfits } from '../../src/providers/serve-unfit.js'
+import { OFFER_NOT_SURE, serviceModeWantNow, wantedServiceMode, type ServiceModeFacts } from '../../src/providers/one-service-mode.js'
 import { otherWalnuts, sharedMacSlotWhy } from '../../src/providers/mac-shared-slot.js'
 import { walnutKeyOf } from '../../src/providers/daemon-serves.js'
 import { MACOS_OFF_WHY } from '../../src/providers/one-service-targets.js'
@@ -28,30 +32,59 @@ const EXPECTED = 'walnut-daemon-aaaaaaaaaaaa'
 
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
-describe('the system gate of the mode decision', () => {
-  it('a Mac with the flag off is unfit for this build, with the table\'s reason; with it on, or Linux, or not known: no gate', () => {
-    expect(systemServeUnfit('darwin', EXPECTED, { macos: false })).toEqual({ expected: EXPECTED, why: MACOS_OFF_WHY })
-    expect(systemServeUnfit('darwin', EXPECTED, { macos: true })).toBeNull()
-    expect(systemServeUnfit('linux', EXPECTED, { macos: false })).toBeNull()
-    expect(systemServeUnfit(null, EXPECTED, { macos: false })).toBeNull()
-    expect(systemServeUnfit('darwin', null, { macos: false })).toBeNull()
+describe('the system gate of the mode decision (one-service-mode.ts wantedNow, through the one table)', () => {
+  const base: ServiceModeFacts = { experiment: true, serves: 'daemon', serviceHome: null, home: WALNUT_HOME, launcher: true, platform: 'darwin', follower: { kind: 'replica' } }
+
+  it('a Mac with the flag off (or no word of it) gets the daemon with the table\'s reason; on: the service', () => {
+    expect(wantedServiceMode(base)).toEqual({ want: 'daemon', why: MACOS_OFF_WHY })
+    expect(wantedServiceMode({ ...base, macos: false })).toEqual({ want: 'daemon', why: MACOS_OFF_WHY })
+    expect(wantedServiceMode({ ...base, macos: true })).toEqual({ want: 'walnut-serve' })
+    // The flag is for Macs only: another system stays out.
+    expect(wantedServiceMode({ ...base, platform: 'win32', macos: true })).toMatchObject({ want: 'daemon' })
   })
 
-  it('a connection to a Mac (its system from the host profile) passes the gate to the decision as unfit, flag off only', async () => {
+  const inputs = (platform: string, macos: boolean | undefined, offer: boolean | null = true) => ({
+    serves: 'daemon' as const, serviceHome: null, home: WALNUT_HOME, launcher: true, expected: EXPECTED, serveUnfit: null,
+    modeAsked: async () => null, platform: vi.fn(async () => platform), offerWanted: async () => offer, launcherWanted: async () => true,
+    follower: async () => ({ kind: 'replica' as const }), note: vi.fn(),
+    ...(macos === undefined ? {} : { macosWanted: vi.fn(async () => macos) }),
+  })
+
+  it('serviceModeWantNow reads the flag for a Mac only, and a Mac with it on says "not sure" like a Linux host', async () => {
+    await expect(serviceModeWantNow(inputs('darwin', true))).resolves.toEqual({ want: 'walnut-serve' })
+    await expect(serviceModeWantNow(inputs('darwin', false))).resolves.toEqual({ want: 'daemon', why: MACOS_OFF_WHY })
+    await expect(serviceModeWantNow(inputs('darwin', undefined))).resolves.toEqual({ want: 'daemon', why: MACOS_OFF_WHY })
+    const linux = inputs('linux', true)
+    await expect(serviceModeWantNow(linux)).resolves.toEqual({ want: 'walnut-serve' })
+    expect(linux.macosWanted).not.toHaveBeenCalled()
+    const unsureOn = inputs('darwin', true, null)
+    await expect(serviceModeWantNow(unsureOn)).resolves.toEqual({ want: null })
+    expect(unsureOn.note).toHaveBeenCalledWith({ want: null, why: OFFER_NOT_SURE })
+    const unsureOff = inputs('darwin', false, null)
+    await serviceModeWantNow(unsureOff)
+    expect(unsureOff.note).not.toHaveBeenCalled()
+  })
+
+  it('a connection to a Mac hands the decision its flag', async () => {
     const conn = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
     vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
-    vi.spyOn(priv(conn), 'hostSystem').mockResolvedValue('darwin')
+    vi.spyOn(priv(conn), 'hostPlatform').mockResolvedValue('darwin')
+    vi.spyOn(priv(conn), 'modeAsked').mockResolvedValue(null)
+    // The launcher and the host's offer on (their defaults since the one-service flip).
+    vi.stubEnv('WALNUT_SERVICE_LAUNCHER', '1')
+    vi.stubEnv('WALNUT_HOST_SERVICE_OFFER', '1')
+    priv(conn)._launcher = { current: '/x', good: '/x', phase: 'committed', since: 1 }
     vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '0')
-    expect(await priv(conn).serveGate()).toEqual({ expected: EXPECTED, why: MACOS_OFF_WHY })
+    await expect(priv(conn).serviceModeWant()).resolves.toEqual({ want: 'daemon', why: MACOS_OFF_WHY })
     vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
-    expect(await priv(conn).serveGate()).toBeNull()
+    await expect(priv(conn).serviceModeWant()).resolves.toEqual({ want: 'walnut-serve' })
   })
 })
 
 describe('setServe: a set straight into the service', () => {
   function conn(system: string | null) {
     const c = new DaemonConnection('shared-box', { hostname: 'shared-box.example.test', user: 'me' })
-    vi.spyOn(priv(c), 'hostSystem').mockResolvedValue(system)
+    vi.spyOn(priv(c), 'hostPlatform').mockResolvedValue(system)
     const want = vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: 'walnut-serve' })
     return { c, want }
   }
@@ -120,18 +153,15 @@ describe('a follower that fell back, as the leader reads it', () => {
       vi.stubEnv('WALNUT_UPDATE_SERVE_UNFIT_FILE', path.join(dir, 'unfit.json'))
       vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
       const first = fellBack()
-      vi.spyOn(priv(first), 'hostSystem').mockResolvedValue('darwin')
       priv(first).markServeUnfit(EXPECTED, 'the walnut file did not come up as the Walnut service there')
       await vi.waitFor(async () => expect(await serveUnfits.read('ssh:studio-mac')).toMatchObject({ expected: EXPECTED }))
       const again = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
       vi.spyOn(priv(again), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
-      vi.spyOn(priv(again), 'hostSystem').mockResolvedValue('darwin')
-      expect(await priv(again).serveGate()).toMatchObject({ expected: EXPECTED, why: expect.stringMatching(/did not come up/) })
+      expect(await priv(again).keptServeUnfit()).toMatchObject({ expected: EXPECTED, why: expect.stringMatching(/did not come up/) })
       // A newer build is asked again.
       const newer = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
       vi.spyOn(priv(newer), 'getExpectedDaemonVersion').mockReturnValue('walnut-daemon-bbbbbbbbbbbb')
-      vi.spyOn(priv(newer), 'hostSystem').mockResolvedValue('darwin')
-      expect(await priv(newer).serveGate()).toBeNull()
+      expect(await priv(newer).keptServeUnfit()).toBeNull()
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })

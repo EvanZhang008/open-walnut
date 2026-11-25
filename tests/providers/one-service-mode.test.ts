@@ -47,7 +47,8 @@ describe('wantedServiceMode', () => {
       const facts = f({ platform })
       const w = wantedServiceMode(facts)
       expect(w.want, platform).toBe('daemon')
-      expect(w.why, platform).toMatch(/runs (macOS|Windows|freebsd), and the one Walnut service runs on Linux hosts only for now/)
+      // The one table's words (one-service-targets.ts): a Mac waits on its experiment.
+      expect(w.why, platform).toMatch(platform === 'darwin' ? /^it is a Mac, and Macs run the one Walnut service only with the experiment/ : /runs (Windows|freebsd), and the one Walnut service runs on Linux hosts, and on Macs with the experiment on, only/)
       expect(serviceModeDue(w, 'daemon')).toBe(false)
       expect(serviceModeAsk(w, facts)).toBeUndefined()
     }
@@ -191,7 +192,7 @@ describe('serviceModeWantNow', () => {
     await serviceModeWantNow(off)
     expect(off.platform).not.toHaveBeenCalled()
     const mac = inputs({ platform: vi.fn(async () => 'darwin') })
-    await expect(serviceModeWantNow(mac)).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/macOS/) })
+    await expect(serviceModeWantNow(mac)).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/is a Mac/) })
     expect(mac.note).toHaveBeenCalledWith(expect.objectContaining({ want: 'daemon' }))
     await expect(serviceModeWantNow(inputs({ platform: vi.fn(async () => { throw new Error('no profile') }) }))).resolves.toEqual({ want: null })
   })

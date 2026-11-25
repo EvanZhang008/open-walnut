@@ -877,7 +877,8 @@ describe('NetDaemonUpdater', () => {
   it('a service set look with the service asks for the walnut file; none to be had: the daemon build, and the reason told', async () => {
     const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
     const source = vi.fn(async (_t: string, _e: string, _s: unknown, o: { walnutFile?: boolean }) => ({ missing: o.walnutFile ? 'no walnut file for darwin-arm64 in this test' : 'no daemon file in this test' }))
-    const { u } = updater({ source: source as never })
+    // A Mac with macos_one_service on: only there does a set go straight into the service.
+    const { u } = updater({ source: source as never, target: async () => 'darwin-arm64', macos: async () => true })
     const unfit = vi.fn()
     const got = await u.provisionSet(ask, { serve: { serve: { home: ask.home, on: true }, onUnfit: unfit } })
     expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: true }, { walnutFile: false }])
@@ -889,6 +890,26 @@ describe('NetDaemonUpdater', () => {
     expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: false }])
     expect(unfit).toHaveBeenCalledTimes(1)
     u.stop()
+  })
+
+  it('a service set goes straight into the service only on a Mac with macos_one_service on', async () => {
+    const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
+    const source = vi.fn(async (_t: string, _e: string, _s: unknown, o: { walnutFile?: boolean }) => ({ missing: o.walnutFile ? 'walnut file' : 'daemon file' }))
+    // Off: the table's reason is told, the daemon build goes.
+    const off = updater({ source: source as never, target: async () => 'darwin-arm64', macos: async () => false })
+    const unfit = vi.fn()
+    await off.u.provisionSet(ask, { serve: { serve: { home: ask.home, on: true }, onUnfit: unfit } })
+    expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: false }])
+    expect(unfit).toHaveBeenCalledWith(expect.stringMatching(/is a Mac/))
+    off.u.stop()
+    // A Linux set keeps today's install (it switches after its move): no walnut file, nothing told.
+    source.mockClear()
+    const linux = updater({ source: source as never, target: async () => 'linux-x64', macos: async () => true })
+    const quiet = vi.fn()
+    await linux.u.provisionSet(ask, { serve: { serve: { home: ask.home, on: true }, onUnfit: quiet } })
+    expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: false }])
+    expect(quiet).not.toHaveBeenCalled()
+    linux.u.stop()
   })
 
   it('never schedules for a host of another kind', async () => {

@@ -311,7 +311,8 @@ describe('the default offer: which hosts are asked to switch', () => {
     expect(lines).toEqual([])
     expect(source).not.toHaveBeenCalled()
     expect(deploy).not.toHaveBeenCalled()
-    await expect(priv(mac).serviceModeWant()).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/runs macOS/) })
+    // With macos_one_service off (its default): the one table's words.
+    await expect(priv(mac).serviceModeWant()).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/is a Mac, and Macs run the one Walnut service only with the experiment/) })
     // The host-server manager's word agrees: a macOS host is not meant to be one service.
     const hostView = mac.hostServerHandle()
     await expect(hostView.oneServiceWanted()).resolves.toBe(false)

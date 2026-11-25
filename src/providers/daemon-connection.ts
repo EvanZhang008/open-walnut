@@ -75,8 +75,8 @@ import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-s
 import { ServiceSetLink } from './service-set-move-link.js'
 import { pastSetHold, SetHold } from './service-set-hold.js'
 import { provisionServiceSet, type ProvisionServe, type SetProvision } from './service-set-provision.js'
-import { macosOneServiceWanted, macSlotArch, serveSlotWhy, slotArchOf, slotSystemOf, sshTakesSystem } from './one-service-targets.js'
-import { profiledSystem, roleFallbackUnfit, serveUnfits, systemServeUnfit, type ServeUnfit } from './serve-unfit.js'
+import { macosOneServiceWanted, macSlotArch, servePlatformWhy, serveSlotWhy, slotArchOf, slotSystemOf, sshTakesSystem } from './one-service-targets.js'
+import { roleFallbackUnfit, serveUnfits, type ServeUnfit } from './serve-unfit.js'
 import { sharedMacSlotWhy } from './mac-shared-slot.js'
 import type { ServiceModeInputs } from './one-service-mode.js'
 import { createNetUpdateIo } from './daemon-net-update-io.js'
@@ -953,8 +953,6 @@ export class DaemonConnection {
   private _serveUnfit: { expected: string; why: string } | null = null
   /** The SSH host's system as its connect probe said it: the slot's name (`daemon-<system>-<arch>`, one-service-targets.ts). */
   private _remoteSystem: 'linux' | 'darwin' = 'linux'
-  /** The probe set _remoteSystem on this connection (not the default). */
-  private _remoteSystemSeen = false
   /** The kept unfit (serve-unfit.ts) was read from disk on this connection. */
   private _serveUnfitRead = false
   /** The switch an update that ran last asked of this host (ServiceModeAsk; undefined: not read from disk yet). */
@@ -1906,7 +1904,7 @@ export class DaemonConnection {
    */
   private async setServe(expected: string): Promise<ProvisionServe | undefined> {
     // Macs only: a Linux set keeps today's install, and the regular mode update switches it after the move.
-    if (this.isCloudTunnel || (await this.hostSystem()) !== 'darwin' || !(await macosOneServiceWanted())) return undefined
+    if (this.isCloudTunnel || (await this.hostPlatform()) !== 'darwin' || !(await macosOneServiceWanted())) return undefined
     const set = { serves: 'daemon' as const, serviceHome: null, launcher: await serviceLauncherWanted() }
     const want = await this.serviceModeWant(set)
     const ask = serviceModeAsk(want, { ...set, home: WALNUT_HOME, homeHere: this._homeHere })
@@ -4575,9 +4573,9 @@ export class DaemonConnection {
       // and a daemon not under the service launcher cannot become one before an update.
       oneServiceWanted: async () => {
         if (conn.isCloudTunnel || !conn._launcher) return false
-        // A host that is not Linux is never meant to be one (one-service-mode.ts wantedNow); not known yet: as offered.
+        // A host the one table does not offer is never meant to be one (one-service-mode.ts wantedNow); not known yet: as offered.
         const platform = await conn.hostPlatform()
-        if (platform !== null && platform !== 'linux') return false
+        if (platform !== null && servePlatformWhy(platform, { macos: platform === 'darwin' && await macosOneServiceWanted() })) return false
         const offer = await hostServiceOfferWanted(conn.hostKey, pooledMachineIdOf)
         return offer === false ? false : (await serviceLauncherWanted()) ? offer : false
       },
@@ -4593,10 +4591,12 @@ export class DaemonConnection {
   private async serviceModeWant(facts: Partial<Pick<ServiceModeInputs, 'serves' | 'serviceHome' | 'launcher'>> = {}): Promise<ServiceModeWant> {
     // The cloud box gets its daemon from the companion and runs no follower of this Walnut: never switched.
     if (this.isCloudTunnel) return { want: null }
-    const gate = await this.serveGate()
     return serviceModeWantNow({
       ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
-      serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(), platform: () => this.hostPlatform(),
+      // A build kept unfit for the service there (serve-unfit.ts), read from disk once per connection.
+      serveUnfit: await this.keptServeUnfit(), modeAsked: () => this.modeAsked(),
+      // The system as the one table answers it (one-service-targets.ts): Linux, a Mac with macos_one_service on.
+      platform: () => this.hostPlatform(), macosWanted: () => macosOneServiceWanted(),
       offerWanted: () => hostServiceOfferWanted(this.hostKey, pooledMachineIdOf),
       launcherWanted: () => serviceLauncherWanted(),
       follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
@@ -4604,8 +4604,6 @@ export class DaemonConnection {
       noteOff: () => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOfferOff(this.hostKey)).catch(() => {}) },
       // A service set's own facts, as it will run (setServe).
       ...facts,
-      // The host's system as the one table answers it, else a build kept unfit for it (serve-unfit.ts).
-      ...(gate ? { serveUnfit: gate } : {}),
     })
   }
 
@@ -4644,23 +4642,15 @@ export class DaemonConnection {
     void this.serviceModeWant()
   }
 
-  /** What the mode decision takes as unfit now: the host's system per the one table, else a build kept unfit (once read from disk). */
-  private async serveGate(): Promise<ServeUnfit | null> {
+  /** This build found unfit for the service there: in memory, else (once per connection) the record kept on disk. */
+  private async keptServeUnfit(): Promise<ServeUnfit | null> {
     const expected = this.getExpectedDaemonVersion()
-    const system = systemServeUnfit(await this.hostSystem(), expected, { macos: await macosOneServiceWanted() })
-    if (system) return system
     if (this._serveUnfit === null && !this._serveUnfitRead && expected) {
       this._serveUnfitRead = true
       const kept = await this.ownUpdateRecord((k) => serveUnfits.read(k)).catch(() => null)
       if (kept && kept.expected === expected && serveUnfits.fresh(kept) && this._serveUnfit === null) this._serveUnfit = { expected: kept.expected, why: kept.why }
     }
     return this._serveUnfit
-  }
-
-  /** The host's system: the SSH probe's word for an SSH host, else what its daemon last reported (the host profile). */
-  private async hostSystem(): Promise<string | null> {
-    if (!this.noSsh && this._remoteSystemSeen) return this._remoteSystem
-    return profiledSystem(this.hostKey)
   }
 
   /** A switch of the mode alone due on this live link, and the words the update carries for it (the same for every link). */
@@ -5243,7 +5233,6 @@ export class DaemonConnection {
     if (os && !sshTakesSystem(os, { macos: await macosOneServiceWanted() })) throw new Error(notLinuxSentence(this.hostKey, os))
     this._platform = platformOf(os) ?? this._platform
     this._remoteSystem = slotSystemOf(os)
-    this._remoteSystemSeen = !!os
     if (probe.arch) this._remoteArch = this._remoteSystem === 'darwin' ? await macSlotArch((c, t) => this.sshExec(c, t), probe.arch) : slotArchOf(probe.arch)
     if (probe.home) this._remoteHome = probe.home
     // This Walnut's own service set there, once its sessions moved (service-set-move.ts): its runtime dir.

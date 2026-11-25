@@ -9,15 +9,16 @@
  *
  * Offered only with the experiment service_launcher on and the offer on for the host (every host
  * unless the config keeps it on two programs, read live, per host: service-launcher-flag.ts
- * hostServiceOfferWanted), to a Linux host (the walnut file goes only into a Linux daemon slot,
- * daemon-connection.ts deployWalnutFile: a macOS host is never asked, so it never sees an update
- * that fails for it) whose
+ * hostServiceOfferWanted), to a host whose system the one table lets take it (one-service-targets.ts
+ * servePlatformWhy: Linux, and a Mac with the experiment macos_one_service on; any other is never
+ * asked, so it never sees an update that fails for it) whose
  * daemon already runs under the launcher, that runs this Walnut's full follower (`web --replica`,
  * the spec the service starts from), and that can take this build's walnut file (the daemon-only
  * binary holds no server). Otherwise no offer, with the reason for Walnut Health. With the
  * experiments off nothing changes on a host that runs as the daemon; one this Walnut switched
  * before is switched back.
  */
+import { servePlatformWhy } from './one-service-targets.js'
 
 export type ServesAs = 'daemon' | 'walnut-serve'
 
@@ -42,6 +43,8 @@ export interface ServiceModeFacts {
   launcher: boolean
   /** The host's system as its daemon or the connect probe said it (`linux`, `darwin`, ...), null when not known yet. */
   platform: string | null
+  /** The experiment macos_one_service: a Mac is offered too. */
+  macos?: boolean
   follower: FollowerFact
   /** Why this build's walnut file cannot go to the host, when an earlier try found it could not. */
   walnutFileUnfit?: string | null
@@ -87,18 +90,15 @@ function wantedNow(f: ServiceModeFacts): ServiceModeWant {
   // Another Walnut's service: only its own leader may change it (service-entry.ts nextServiceMode).
   if (f.serves === 'walnut-serve' && !servesThisWalnut(f, f.home)) return { want: null }
   if (!f.experiment) return f.serves === 'walnut-serve' ? { want: 'daemon' } : { want: null }
-  // Decided before any update is asked: the walnut file goes into a Linux daemon slot only.
+  // Decided before any update is asked: the walnut file goes only into a slot the one table names.
   if (f.platform === null) return { want: null }
-  if (f.platform !== 'linux') return { want: 'daemon', why: `it runs ${platformName(f.platform)}, and the one Walnut service runs on Linux hosts only for now` }
+  const systemWhy = servePlatformWhy(f.platform, { macos: f.macos === true })
+  if (systemWhy) return { want: 'daemon', why: systemWhy }
   if (!f.launcher) return { want: 'daemon', why: 'its session helper does not run under the service launcher yet (it does after its next update)' }
   if (f.follower.kind === 'unknown') return { want: null }
   if (f.follower.kind === 'none') return { want: 'daemon', ...(f.follower.why ? { why: f.follower.why } : {}) }
   if (f.walnutFileUnfit) return { want: 'daemon', why: `this build's walnut file cannot go to the host: ${f.walnutFileUnfit}` }
   return { want: 'walnut-serve' }
-}
-
-function platformName(p: string): string {
-  return p === 'darwin' ? 'macOS' : p === 'win32' ? 'Windows' : p
 }
 
 /** A host system as a hello or a probe says it: lower case, a plain word, else not known (null). */
@@ -163,6 +163,8 @@ export interface ServiceModeInputs {
   launcher: boolean
   /** The host's system (platformOf), null when not known yet. */
   platform(): Promise<string | null>
+  /** The experiment macos_one_service (one-service-targets.ts macosOneServiceWanted), read only for a Mac; absent: off. */
+  macosWanted?(): Promise<boolean>
   expected: string | null
   serveUnfit: { expected: string; why: string } | null
   /** The switch this host was last asked (ServiceModeAsk): read only when the mode is decided. */
@@ -190,11 +192,16 @@ export const OFFER_NOT_SURE = 'another name in Walnut\'s hosts may be this same 
  */
 export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceModeWant> {
   const offer = await i.offerWanted()
+  // A Mac's offer waits on its own experiment; read only for a Mac.
+  const macosFor = async (p: string | null) => p === 'darwin' && (await i.macosWanted?.().catch(() => false)) === true
   if (offer === null) {
     // Left as it is, and said once in Walnut Health while the service is wanted at all, only for a
-    // Linux host: one on another system is never offered, so "not sure" would only be noise there
-    // (a kept list with a listed name offline made every macOS host say it).
-    if (await i.launcherWanted() && await i.platform().catch(() => null) === 'linux') i.note?.({ want: null, why: OFFER_NOT_SURE })
+    // host whose system is offered: one on another system is never offered, so "not sure" would only
+    // be noise there (a kept list with a listed name offline made every macOS host say it).
+    if (await i.launcherWanted()) {
+      const p = await i.platform().catch(() => null)
+      if (p !== null && servePlatformWhy(p, { macos: await macosFor(p) }) === null) i.note?.({ want: null, why: OFFER_NOT_SURE })
+    }
     return { want: null }
   }
   const experiment = offer && (await i.launcherWanted())
@@ -203,11 +210,12 @@ export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceM
     if (i.serves !== 'walnut-serve') return { want: null }
   }
   const platform = experiment ? await i.platform().catch(() => null) : null
+  const macos = await macosFor(platform)
   const follower: FollowerFact = experiment ? await i.follower().catch((): FollowerFact => ({ kind: 'unknown' })) : { kind: 'unknown' }
   const now = i.expected
   const asked = now ? await i.modeAsked().catch(() => null) : null
   const w = wantedServiceMode({
-    experiment, serves: i.serves, serviceHome: i.serviceHome, home: i.home, launcher: i.launcher, platform, follower,
+    experiment, serves: i.serves, serviceHome: i.serviceHome, home: i.home, launcher: i.launcher, platform, macos, follower,
     walnutFileUnfit: now && i.serveUnfit?.expected === now ? i.serveUnfit.why : null,
     askedAndRefused: asked && asked.expected === now ? asked : null,
   })
