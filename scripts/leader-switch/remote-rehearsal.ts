@@ -926,9 +926,6 @@ async function measure(x: Ctx): Promise<void> {
   for (const slow of [false, true]) {
     // After a switch the copy goes the other way: its first batch there is the whole home.
     await writeAndBatch(x, slow ? 'measure-slow' : 'measure', 3 * 3600_000)
-    // That batch may be the whole home (minutes): the candidate's preflight counts a copy's age from its batch's
-    // start, so the next one (only what came meanwhile) is waited for too.
-    await waitForBatch(roles.other.standbyDir, Date.now(), 3 * 3600_000)
     const from = roles.leader
     const to = roles.other
     const copy = from === w.a ? w.links.copy : w.links.bToA

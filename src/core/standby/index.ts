@@ -41,6 +41,8 @@ export interface StandbyStatus {
   takenAt: string | null
   /** Seconds since the batch's moment. */
   ageSeconds: number | null
+  /** When the target made that batch current (a long batch lands well after its moment); null in an older state. */
+  committedAt: string | null
   fileCount: number
   bytes: number
   lastVerify: { at: string; drift: number; deep: boolean } | null
@@ -62,6 +64,7 @@ export async function standbyStatus(dir: string, now = Date.now()): Promise<Stan
     batch: s.current?.batch ?? null,
     takenAt: s.current?.takenAt ?? null,
     ageSeconds: s.current ? Math.max(0, Math.round((now - Date.parse(s.current.takenAt)) / 1000)) : null,
+    committedAt: s.current?.committedAt ?? null,
     fileCount: s.current?.fileCount ?? 0,
     bytes: s.current?.bytes ?? 0,
     lastVerify: s.lastVerify ?? null,

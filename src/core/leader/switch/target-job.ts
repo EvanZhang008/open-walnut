@@ -39,6 +39,16 @@ import { clause } from '../../../utils/format.js'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** The candidate's copy must hold a batch at most this old (its moment by the old leader's clock). */
 const RECENT_BATCH_S = 5 * 60
+/**
+ * Seconds since the copy's last batch landed: whether its batches still come. From when the target made it
+ * current, not from the batch's moment: a whole-home batch after a switch takes minutes, and its moment is that
+ * long before it lands (the 2026-11-24 rehearsal: a 20 GB batch landed 490 s after its moment, and the switch
+ * right after it was refused as "is the standby running?"). An older state without the time: the moment.
+ */
+export function sinceLanded(s: { ageSeconds: number | null; committedAt: string | null }, now = Date.now()): number {
+  if (s.committedAt) return Math.max(0, Math.round((now - Date.parse(s.committedAt)) / 1000))
+  return s.ageSeconds ?? Infinity
+}
 
 export function targetLockFile(standbyDir: string, switchId: string): string {
   return path.join(switchFolder(standbyDir), `${switchId}.lock`)
@@ -112,7 +122,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     // The copy: complete and recent (its batches still come). The old leader's server verified it just before.
     const status = await standbyStatus(o.standbyDir)
     if (status.batch === null) problems.push(`the standby copy ${o.standbyDir} holds no complete batch yet`)
-    else if ((status.ageSeconds ?? Infinity) > RECENT_BATCH_S) problems.push(`the standby copy's last batch is ${status.ageSeconds} s old (more than ${RECENT_BATCH_S} s): is the standby running?`)
+    else if (sinceLanded(status) > RECENT_BATCH_S) problems.push(`the standby copy's last batch landed ${sinceLanded(status)} s ago (more than ${RECENT_BATCH_S} s): is the standby running?`)
     const free = freeBytes(self.home)
     const need = Math.max(1024 ** 3, status.bytes * 0.2)
     if (free !== null && free < need) problems.push(`only ${(free / 1024 ** 3).toFixed(1)} GB free where the new home goes; ${(need / 1024 ** 3).toFixed(1)} GB needed`)
