@@ -25,8 +25,11 @@ export interface RequestedUpdateDeps {
   running(): string | null
   /** The build this server would put there; null when it names none. */
   expected(): string | null
-  /** Note the ask with what the asker said (the host's gap state, UpdateGapHold.ask): every later decision of `expected` reads it. */
-  ask(expected: string, said: UpdateAsk): void
+  /**
+   * Note the ask with what the asker said and its gate (the host's gap state, UpdateGapHold.ask): every
+   * later decision of `expected` reads it, and drops it once the gate throws.
+   */
+  ask(expected: string, said: UpdateAsk, gate?: () => void): void
   /** Decide the update of `expected` now, past the soft holds; true: it went ahead (the link reconnects on the new build). */
   run(expected: string, gate?: () => void): Promise<boolean>
   /** What the update waits for after the decision (its postpone), if anything. */
@@ -48,7 +51,7 @@ export class RequestedUpdate {
     const expected = this.d.expected()
     if (this.inFlight) {
       // Asked again while one runs: the asker's words count for the tries after it (an over_busy one included).
-      if (expected) { gate?.(); this.d.ask(expected, said) }
+      if (expected) { gate?.(); this.d.ask(expected, said, gate) }
       await within(this.inFlight, waitMs)
       return this.state
     }
@@ -56,7 +59,7 @@ export class RequestedUpdate {
     if (!this.d.connected()) return this.set('skipped', 'the host is not connected')
     // Refused before anything runs: the route answers the refusal itself.
     gate?.()
-    this.d.ask(expected, said)
+    this.d.ask(expected, said, gate)
     // What held the last try (a busy daemon, say), until this one is decided: the asker reads it in this answer.
     const before = this.d.wait()
     this.set('checking', before?.expected === expected ? `checking the host's daemon; the last try: ${before.why}` : 'checking the host\'s daemon')

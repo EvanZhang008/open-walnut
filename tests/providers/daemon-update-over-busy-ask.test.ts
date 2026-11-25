@@ -24,7 +24,8 @@ import { resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim
 import { busyOpenWords, DAEMON_BUSY_WORDS, daemonBusyWhy } from '../../src/providers/daemon-busy-words.js'
 import { createDaemonCommandDrain } from '../../src/providers/daemon-command-drain.js'
 import { OVER_BUSY_GOES_OVER } from '../../src/providers/daemon-over-busy.js'
-import { EXPECTED, MANAGED, OLD, TARGET, priv, state, stub } from '../helpers/daemon-connection-update-stubs.js'
+import { hostUpdateGap, MAX_FORCED_TRIES } from '../../src/providers/daemon-update-gap.js'
+import { EXPECTED, MANAGED, OLD, TARGET, priv, state, stub, type Routes } from '../helpers/daemon-connection-update-stubs.js'
 
 const BUSY = 'Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first (open: 2 ACP workers, 14 relay requests)'
 const HINT = `; host_daemon_update devbox with over_busy goes ahead now: ${OVER_BUSY_GOES_OVER}`
@@ -43,26 +44,34 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** A live link to a service-managed daemon of the old build; `refuse` makes the next tries refused as busy. */
-function make(): { c: DaemonConnection; over: Array<boolean | undefined>; refuse: (n: number) => void } {
+/**
+ * A live link to a service-managed daemon of the old build; `refuse` makes the next tries refused as
+ * busy (`afterStage`: after the staged hook, as the handover's refusal comes, so the try counts as a
+ * forced one when it goes over); `routes.version` is the build the host's daemon.version names.
+ */
+function make(): { c: DaemonConnection; over: Array<boolean | undefined>; refuse: (n: number, o?: { afterStage?: boolean }) => void; routes: Routes } {
   holdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'over-busy-ask-'))
   setAcpUpgradeHoldFileForTest(path.join(holdDir, 'holds.json'))
   const c = new DaemonConnection('devbox', TARGET)
   conns.push(c)
-  stub(c, { probe: MANAGED, version: OLD })
+  const routes: Routes = { probe: MANAGED, version: OLD }
+  stub(c, routes)
   vi.spyOn(log.session, 'info').mockImplementation(() => {})
   vi.spyOn(log.session, 'warn').mockImplementation(() => {})
   vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
   vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
   const over: Array<boolean | undefined> = []
   let refusals = 0
+  let afterStage = false
   managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean>; overBusy?: boolean }) => {
     over.push(opts?.overBusy)
+    if (refusals > 0 && !afterStage) { refusals -= 1; throw new Error(BUSY) }
+    const staged = (await opts?.onStaged?.()) !== false
     if (refusals > 0) { refusals -= 1; throw new Error(BUSY) }
-    return (await opts?.onStaged?.()) === false ? 'held' : 'applied'
+    return staged ? 'applied' : 'held'
   })
   state(c)._connected = true
-  return { c, over, refuse: (n) => { refusals = n } }
+  return { c, over, refuse: (n, o = {}) => { refusals = n; afterStage = o.afterStage === true }, routes }
 }
 
 /** The automatic decision a postpone's timer runs, now (no ask passed, the busy clock forgotten). */
@@ -70,6 +79,8 @@ async function nextAutomaticTry(c: DaemonConnection): Promise<void> {
   clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
   state(c).upgradeRecheckTimer = null
   resetBusyRetryForTest()
+  resetDaemonUpdateClaims()
+  state(c)._lastUpgradeAttempt = null
   state(c)._connected = true
   await priv(c).recheckPostponedUpgrade()
 }
@@ -139,6 +150,93 @@ describe('an SSH host\'s daemon asked for with over_busy', () => {
       phase: 'checking', message: `checking the host's daemon; the last try: the host's daemon is busy (open there: 2 ACP workers, 14 relay requests)${HINT}`,
     })
     release()
+  })
+})
+
+// Review of 116bec87dc: the ask lived for the server's life, over_busy had no bound, and a revoked
+// grant still forced on the automatic retries. Each case failed before its fix.
+describe('an over_busy ask ends', () => {
+  it('once the asked build runs there: the host back on another build later is an automatic decision, never forced', async () => {
+    const { c, over, refuse, routes } = make()
+    refuse(1)
+    await c.requestDaemonUpdate(undefined, { overBusy: true })
+    expect(over).toEqual([true])
+    // The asked build landed (by any way): the decision that reads it ends the ask.
+    routes.version = EXPECTED
+    await nextAutomaticTry(c)
+    expect(over).toEqual([true])
+    expect(hostUpdateGap('devbox').asked(EXPECTED)).toBe(false)
+    // Another Walnut sharing the daemon put its build back: nobody asks now, nothing is forced.
+    routes.version = OLD
+    await nextAutomaticTry(c)
+    expect(over).toEqual([true, false])
+  })
+
+  it('after MAX_FORCED_TRIES swaps over the host\'s work that left it on another build: it waits for the work again', async () => {
+    const { c, over, refuse } = make()
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    // Every try goes over the work and the host still runs the old build (refused at its handover).
+    refuse(99, { afterStage: true })
+    await c.requestDaemonUpdate(undefined, { overBusy: true })
+    for (let i = 1; i < MAX_FORCED_TRIES + 2; i++) await nextAutomaticTry(c)
+    expect(over).toEqual([...Array(MAX_FORCED_TRIES).fill(true), false, false])
+    expect(hostUpdateGap('devbox').forced).toEqual({ expected: EXPECTED, n: MAX_FORCED_TRIES })
+    expect(warn.mock.calls.map(([m]) => m)).toContain('DaemonConnection: daemon update asked over busy went over the host\'s work and it still runs another build; it waits for a quiet moment again')
+    // Its busy answer offers over_busy again, and someone asking with it starts the bound over.
+    const answer = await c.requestDaemonUpdate(undefined, { overBusy: true })
+    expect(over.at(-1)).toBe(true)
+    expect(answer!.message).toBe('waiting: the host\'s daemon is busy (open there: 2 ACP workers, 14 relay requests)')
+  })
+
+  it('when the asker\'s grant is revoked: the automatic retry after it neither forces nor goes past the gap', async () => {
+    const { c, over, refuse } = make()
+    refuse(1)
+    let revoked = false
+    const gate = () => { if (revoked) throw new Error('This task\'s grant to use devbox was revoked') }
+    await c.requestDaemonUpdate(gate, { overBusy: true })
+    expect(over).toEqual([true])
+    revoked = true
+    await nextAutomaticTry(c)
+    expect(over).toEqual([true, false])
+    expect(hostUpdateGap('devbox').asked(EXPECTED)).toBe(false)
+  })
+})
+
+describe('the host\'s gap state of an ask', () => {
+  it('runs(): the asked build there ends its ask and its forced swaps; another build keeps them; no daemon ends the swaps only', () => {
+    const gap = hostUpdateGap('devbox')
+    gap.ask(EXPECTED, { overBusy: true })
+    gap.forcedTry(EXPECTED)
+    gap.runs(OLD, EXPECTED)
+    expect(gap.overBusy(EXPECTED)).toBe(true)
+    expect(gap.forced).toEqual({ expected: EXPECTED, n: 1 })
+    gap.runs('', EXPECTED)
+    expect(gap.forced).toBeNull()
+    expect(gap.asked(EXPECTED)).toBe(true)
+    gap.runs(EXPECTED, EXPECTED)
+    expect(gap.asked(EXPECTED)).toBe(false)
+  })
+
+  it('reads the asker\'s gate at every read, and a held or deferred swap gives its forced try back', () => {
+    const gap = hostUpdateGap('devbox')
+    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    let closed = false
+    gap.ask(EXPECTED, { overBusy: true }, () => { if (closed) throw new Error('closed') })
+    expect(gap.asked(EXPECTED)).toBe(true)
+    closed = true
+    expect(gap.overBusy(EXPECTED)).toBe(false)
+    closed = false
+    // Gone for good once refused: a gate that would pass again brings no ask back.
+    expect(gap.asked(EXPECTED)).toBe(false)
+    gap.ask(EXPECTED, { overBusy: true })
+    for (let i = 0; i < MAX_FORCED_TRIES; i++) gap.forcedTry(EXPECTED)
+    gap.forcedTryUndone(EXPECTED)
+    expect(gap.forcedSpent(EXPECTED)).toBe(false)
+    expect(gap.overBusy(EXPECTED)).toBe(true)
+    gap.forcedTry(EXPECTED)
+    expect(gap.overBusy(EXPECTED)).toBe(false)
+    // Spent for this build only: the ask still goes past the gap.
+    expect(gap.asked(EXPECTED)).toBe(true)
   })
 })
 

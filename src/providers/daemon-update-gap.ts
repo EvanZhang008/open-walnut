@@ -30,6 +30,7 @@
 import { HOST_DEPENDENT_CAPABILITIES } from './daemon-shared.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { sinceTime } from './daemon-update-wait.js'
+import { log } from '../logging/index.js'
 
 export const DAEMON_UPDATE_MIN_GAP_MS = 2 * 60 * 60_000
 
@@ -129,19 +130,32 @@ export interface UpdateAsk {
  * The gap's state of one host, for both paths (hostUpdateGap gives the SSH path of DaemonConnection
  * and its NetDaemonUpdater the same one): since when a build has been held (one gap at most in all,
  * kept for that build once it passed), whether the gap holds it now, the build someone asked for (it
- * goes past the gap until it runs there or another build is expected) with what the asker said, and
- * a capability a feature needs that the running daemon lacks (noted once per running build).
+ * goes past the gap until it runs there or another build is expected) with what the asker said and
+ * the asker's gate, a capability a feature needs that the running daemon lacks (noted once per
+ * running build), and the swaps of a build that went over the host's work (MAX_FORCED_TRIES).
  */
+/**
+ * Swaps of one build that went over the host's work (overdue, or asked with over_busy) before it is
+ * not forced again: a host that still runs another build after them (a broken version stamp, a
+ * wrapper that starts the old file) would have its work ended on every retry for good.
+ */
+export const MAX_FORCED_TRIES = 3
+
 export class UpdateGapHold {
   private build: { expected: string; since: number } | null = null
   private holding: { expected: string; until: number } | null = null
   private needed: { running: string; cap: string } | null = null
-  private askedFor: { expected: string; overBusy: boolean } | null = null
+  private askedFor: { expected: string; overBusy: boolean; gate?: () => void } | null = null
+  private forcedTries: { expected: string; n: number } | null = null
 
-  /** Decide the gap for `expected`, with this build's held time, its ask, and the running build's need. */
-  decide(expected: string, f: Omit<GapFacts, 'heldForMs' | 'needs' | 'asked'> & { running: string | null }): { waitMs: number; until: number; why: string } | null {
+  /**
+   * Decide the gap for `expected`, with this build's held time, its ask, and the running build's need.
+   * `f.asked`: this decision is the asked run itself, which goes past the gap whatever the ask reads
+   * now (a grant revoked meanwhile is the run's own refusal to say, at its gate).
+   */
+  decide(expected: string, f: Omit<GapFacts, 'heldForMs' | 'needs'> & { running: string | null }): { waitMs: number; until: number; why: string } | null {
     const now = f.now ?? Date.now()
-    const hold = daemonUpdateGapHold({ ...f, now, heldForMs: this.heldForMs(expected, now), needs: this.needs(f.running), asked: this.asked(expected) })
+    const hold = daemonUpdateGapHold({ ...f, now, heldForMs: this.heldForMs(expected, now), needs: this.needs(f.running), asked: f.asked || this.asked(expected) })
     if (hold) this.held(expected, hold.until, now)
     else this.release()
     return hold
@@ -171,15 +185,74 @@ export class UpdateGapHold {
    * Someone asked for `expected` (host_daemon_update): every later decision of that build goes past
    * the gap, so an ask a safety hold put off (an open ACP turn) is not then held for up to 2 h. The
    * latest ask's words count: an ask without `overBusy` after one with it waits for the work again.
+   * `gate` (the asking task's grant) is read again at every later read of the ask, the automatic
+   * retries included: once it throws (the grant revoked, the host closed to tasks) the ask is gone.
+   * An ask with `overBusy` starts the build's forced swaps over: the bound is on the retries no one
+   * asked for, and a busy answer offers over_busy again (daemonBusyWhy).
    */
-  ask(expected: string, said: UpdateAsk = {}): void { this.askedFor = { expected, overBusy: said.overBusy === true } }
+  ask(expected: string, said: UpdateAsk = {}, gate?: () => void): void {
+    this.askedFor = { expected, overBusy: said.overBusy === true, ...(gate ? { gate } : {}) }
+    if (said.overBusy === true && this.forcedTries?.expected === expected) this.forcedTries = null
+  }
   /** The asker may no longer have it run (its grant was revoked): the ask is gone, the gap holds as before. */
   unask(expected: string): void { if (this.askedFor?.expected === expected) this.askedFor = null }
-  asked(expected: string): boolean { return this.askedFor?.expected === expected }
-  /** The asker of `expected` said to go over the work in progress (UpdateAsk.overBusy). */
+  asked(expected: string): boolean { return this.standing(expected) !== null }
+  /**
+   * The asker of `expected` said to go over the work in progress (UpdateAsk.overBusy), and the build
+   * has not used up its forced swaps (MAX_FORCED_TRIES): once it has, the ask stops forcing and waits
+   * for the work as a plain ask does.
+   */
   overBusy(expected: string | null | undefined): boolean {
-    return !!expected && this.askedFor?.expected === expected && this.askedFor.overBusy
+    const ask = expected ? this.standing(expected) : null
+    if (!ask?.overBusy) return false
+    if (!this.forcedSpent(ask.expected)) return true
+    ask.overBusy = false
+    log.session.warn('DaemonConnection: daemon update asked over busy went over the host\'s work and it still runs another build; it waits for a quiet moment again', {
+      expected: ask.expected, tries: this.forcedTries!.n,
+    })
+    return false
   }
+  /** The ask of `expected` while its asker may still have it run (its gate, read now); null otherwise. */
+  private standing(expected: string): { expected: string; overBusy: boolean; gate?: () => void } | null {
+    const ask = this.askedFor
+    if (ask?.expected !== expected) return null
+    try { ask.gate?.() } catch {
+      this.askedFor = null
+      return null
+    }
+    return ask
+  }
+
+  /**
+   * What the host runs, as a decision read it (`running`; empty: no daemon). The asked build running
+   * there ends its ask: a later decision of it after the host went back to another build (another
+   * Walnut sharing the daemon swapped it) is an automatic one again, never forced with nobody asking.
+   * Running it, or nothing, ends its forced swaps too.
+   */
+  runs(running: string | null | undefined, expected: string): void {
+    if (!running || running === expected) this.forcedTries = null
+    if (running === expected) this.unask(expected)
+  }
+
+  /** A swap of `expected` that goes over the host's work is starting (counted against MAX_FORCED_TRIES). */
+  forcedTry(expected: string): void {
+    this.forcedTries = { expected, n: this.forcedTries?.expected === expected ? this.forcedTries.n + 1 : 1 }
+  }
+  /**
+   * A counted try whose swap never happened (held or deferred on the host after its upload): it went
+   * over nothing, so it does not use up the forced tries (2026-11-10 review: three dark-wake deferrals
+   * spent them, and the holds were back with no bound).
+   */
+  forcedTryUndone(expected: string): void {
+    if (this.forcedTries?.expected !== expected) return
+    this.forcedTries = this.forcedTries.n > 1 ? { expected, n: this.forcedTries.n - 1 } : null
+  }
+  /** `expected` went over the host's work MAX_FORCED_TRIES times and the host still runs another build. */
+  forcedSpent(expected: string): boolean {
+    return this.forcedTries?.expected === expected && this.forcedTries.n >= MAX_FORCED_TRIES
+  }
+  /** The forced swaps counted, for tests and logs; fields only. */
+  get forced(): { expected: string; n: number } | null { return this.forcedTries ? { ...this.forcedTries } : null }
 
   /** The capability noted while `running` runs there, if any. */
   needs(running: string | null | undefined): string | null {

@@ -40,6 +40,7 @@ import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateGapHold, daemonUpdateMinGapMs, hostUpdateGap, type UpdateAsk } from './daemon-update-gap.js'
 import { daemonBusyWhy } from './daemon-busy-words.js'
+import { OVER_BUSY_NEXT_TRY } from './daemon-over-busy.js'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
@@ -277,7 +278,13 @@ export class NetDaemonUpdater {
     const expected = this.d.expectedVersion()
     if (this.inFlight) {
       // An update under way: the asker's words count for the tries after it (an over_busy one included).
-      if (this.state.phase !== 'checking') { if (expected) { gate?.(); this.gap.ask(expected, said) } return this.state }
+      // The try under way keeps the decision it made, so over_busy counts from the next one (and says so).
+      if (this.state.phase !== 'checking') {
+        if (!expected) return this.state
+        gate?.()
+        this.gap.ask(expected, said, gate)
+        return said.overBusy ? { ...this.state, message: `${this.state.message}; ${OVER_BUSY_NEXT_TRY}` } : this.state
+      }
       // An automatic check still deciding: wait for it, then ask past what held it.
       await this.within(this.inFlight, waitMs)
       // Read again: the wait may have ended it.
@@ -285,7 +292,7 @@ export class NetDaemonUpdater {
     }
     gate?.()
     // The ask stays with its build: a hold that puts it off now does not hand it to the gap after.
-    if (expected) this.gap.ask(expected, said)
+    if (expected) this.gap.ask(expected, said, gate)
     // What held the last try (a busy daemon, say), while this one is still checking: the asker reads it in this answer.
     const before = this.wait
     const run = this.check('request', gate)
@@ -420,6 +427,8 @@ export class NetDaemonUpdater {
     // skips (a cooldown, the gap) still counts as seen: behind this long, the gap, the writes in
     // flight and the host_exec runs no longer hold it, and the daemon goes over its own work.
     const expectedNow = this.d.expectedVersion()
+    // The asked build runs there: its ask is done (UpdateGapHold.runs), and so are its forced swaps.
+    if (expectedNow && c.daemonVersion) this.gap.runs(c.daemonVersion, expectedNow)
     const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!expectedNow && !!c.daemonVersion && c.daemonVersion !== expectedNow, (this.d.now ?? Date.now)())
     const facts = await this.facts(trigger, mode.due, behind.overdue)
     if (this.notServing === undefined) this.notServing = await readBuildBackoff(`net:${c.host}`)
@@ -458,6 +467,7 @@ export class NetDaemonUpdater {
       })
     }
     // Overdue, or asked with over_busy (host_daemon_update): the CLI goes over the daemon's own work, in at most a minute (daemon-over-busy.ts).
+    // An over_busy ask stops forcing after MAX_FORCED_TRIES such swaps of its build (UpdateGapHold.overBusy).
     const goesOver = behind.overdue || this.gap.overBusy(expected)
     if (goesOver && !behind.overdue) log.session.info('DaemonConnection: host network daemon update asked over busy; it goes over the work in progress there', { host: c.host, running: c.daemonVersion, expected })
     // The last try was refused as busy (daemon-busy-retry.ts): none before its wait ends, a new server's
@@ -475,11 +485,14 @@ export class NetDaemonUpdater {
     // wait for a file write: from the launch on (after the upload), this server's file changes
     // wait for the swap (daemon-over-busy.ts).
     let release: (() => void) | undefined
+    let forced = false
     const io = createNetUpdateIo(c, {
       ...this.d.io,
       beforeLaunch: async () => {
         const no = !c.connected ? 'the link dropped' : refused() ?? await holds()
         if (no === null && goesOver && !release) release = this.d.fence?.()
+        // A swap over the host's work, counted for the over_busy ask's bound (the SSH path counts the same).
+        if (no === null && goesOver && !forced) { forced = true; this.gap.forcedTry(expected) }
         return no
       },
       cancelled: () => this.stopped,
@@ -549,6 +562,7 @@ export class NetDaemonUpdater {
       // Read from its record after the launch too (a probation, the install lock): answered, and no failure.
       if (err instanceof NetUpdateHeldError) {
         claimKept = 'held'
+        if (forced) this.gap.forcedTryUndone(expected)
         this.lastAttempt = null
         this.launched.answered()
         this.launched.outcome(expected, null)
@@ -565,7 +579,12 @@ export class NetDaemonUpdater {
       // The answer never came: the update may still run there, so the other names wait it out too.
       else claimKept = true
       // 2026-11-04: deferred on the host (launchd starting no jobs in a dark wake), so nothing changed there: no failure, asked again after the cooldown.
-      if (deferredAt >= 0) { claimKept = 'held'; this.launched.outcome(expected, null); return this.postpone(msg.slice(deferredAt), this.d.cooldownMs) }
+      if (deferredAt >= 0) {
+        claimKept = 'held'
+        if (forced) this.gap.forcedTryUndone(expected)
+        this.launched.outcome(expected, null)
+        return this.postpone(msg.slice(deferredAt), this.d.cooldownMs)
+      }
       // The daemon refused before it changed anything (busy, or its drain ran out): asked again,
       // not a failure that gives the build up after a few, on the busy clock (daemon-busy-retry.ts).
       // Overdue, within a few minutes; otherwise not before the cooldown, since a try may upload again.

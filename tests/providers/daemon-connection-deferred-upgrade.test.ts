@@ -44,6 +44,7 @@ import {
   waitDaemonHandover,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
+import { hostUpdateGap } from '../../src/providers/daemon-update-gap.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { noteBusyRefusal, resetBusyRetryForTest } from '../../src/providers/daemon-busy-retry.js'
 import { recentLinkDrops, resetLinkDropsForTest } from '../../src/providers/daemon-link-drops.js'
@@ -311,7 +312,7 @@ describe('the background update of a service-managed daemon', () => {
       await priv(c).recheckPostponedUpgrade()
       expect(managedUpdate).toHaveBeenCalledTimes(1)
       expect(over).toBe(true)
-      expect(state(c)._forcedTries).toEqual({ expected: EXPECTED, n: 1 })
+      expect(hostUpdateGap('devbox').forced).toEqual({ expected: EXPECTED, n: 1 })
       expect(warn.mock.calls.map(([m]) => m)).toEqual(expect.arrayContaining([
         'DaemonConnection: daemon update overdue; it goes ahead over the work that held it',
         'DaemonConnection: overdue daemon update goes ahead over commands in flight',
@@ -345,7 +346,7 @@ describe('the background update of a service-managed daemon', () => {
 
       // Still another build after MAX_FORCED_TRIES swaps over its work (a broken version stamp):
       // not forced again for this build; the host_exec run holds it as before the bound.
-      state(c)._forcedTries = { expected: EXPECTED, n: DaemonConnection.MAX_FORCED_TRIES }
+      while (!hostUpdateGap('devbox').forcedSpent(EXPECTED)) hostUpdateGap('devbox').forcedTry(EXPECTED)
       state(c)._lastUpgradeAttempt = null
       managedUpdate.mockReset().mockResolvedValue('applied')
       clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)

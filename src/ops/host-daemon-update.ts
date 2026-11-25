@@ -25,6 +25,8 @@ defineOp({
     + 'same daemon updating it). By default it still waits for the work in progress there (writes in flight, host_exec runs, open '
     + 'ACP turns, relays and requests the daemon serves), and a busy host can hold it a long time; the answer then names what is '
     + `open. With \`over_busy: true\` it goes over that work, as an update hours overdue does: ${OVER_BUSY_GOES_OVER}. `
+    + 'It holds for that build\'s later tries until the build runs there, at most 3 swaps over the work, and only while your grant '
+    + 'for the host stands; over_busy rides the grant this task already has for the host (no new letter when it has one). '
     + 'Use over_busy only when the user agreed, or the build must land on a host that is never quiet. It is also the only way for a host whose '
     + 'config says `autofix: false`. Use it when the user wants it now, or when your task changed host-side code and needs it on '
     + 'that host. Running sessions there keep running; the host reconnects on the new build within a minute or two. Same grant as '

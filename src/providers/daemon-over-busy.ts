@@ -19,3 +19,5 @@ export const OVER_BUSY_WAIT_MS = 60_000
 export const OVER_BUSY_PLAIN_MS = 30_000
 /** What going over the daemon's work does, in the words every answer about it uses (host_daemon_update over_busy). */
 export const OVER_BUSY_GOES_OVER = 'it goes over the requests, relays, ACP workers and host_exec runs open there; CLI sessions keep running and the next daemon adopts them'
+/** Asked with over_busy while an update of the build already runs: that try keeps its own decision. */
+export const OVER_BUSY_NEXT_TRY = 'over_busy counts from the next try'

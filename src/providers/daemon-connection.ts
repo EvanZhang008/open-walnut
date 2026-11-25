@@ -167,7 +167,7 @@ import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplica, isHostReplicaProgram, serviceRuntime } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
-import { capabilityNeedWhy, DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateMinGapMs, hostUpdateGap, parseEtimeMs, type UpdateAsk } from './daemon-update-gap.js'
+import { capabilityNeedWhy, DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateMinGapMs, hostUpdateGap, MAX_FORCED_TRIES, parseEtimeMs, type UpdateAsk } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 import { acceptHubStream } from '../core/hosts/hub-ports.js'
@@ -1662,7 +1662,7 @@ export class DaemonConnection {
       running: () => this._daemonVersion,
       expected: () => this.getExpectedDaemonVersion(),
       // The ask stays with its build (UpdateGapHold.ask): a safety hold that puts it off now does not hand it to the gap after.
-      ask: (expected, s) => this._gap.ask(expected, s),
+      ask: (expected, s, g) => this._gap.ask(expected, s, g),
       run: (expected, g) => this.recheckPostponedUpgrade({ expected, gate: g }),
       replacedAt: () => this._replacedAt,
       wait: () => this._updateWait,
@@ -5693,6 +5693,8 @@ export class DaemonConnection {
       const markAt = head.indexOf(SERVES_MARK)
       remoteVersion = (markAt === -1 ? head : head.slice(0, markAt)).trim()
       const runningServes = markAt === -1 ? null : parseServes(head.slice(markAt + SERVES_MARK.length))
+      // The asked build runs there: its ask is done (UpdateGapHold.runs), and so are its forced swaps.
+      this._gap.runs(remoteVersion, expected)
 
       // The new build runs: a later build's busy asks start from the first again, and a record
       // an update left on the host when its answer came late is read and removed.
@@ -5727,7 +5729,7 @@ export class DaemonConnection {
       // with the build of then (daemon-update-gap.ts). A host with no daemon is a start.
       // An asked build goes past it on every decision until it runs there (UpdateGapHold.ask).
       const gap = remoteVersion && remoteVersion !== expected
-        ? this._gap.decide(expected, { host: this.hostKey, ageMs: daemonAgeMs, gapMs: daemonUpdateMinGapMs(), overdue: this._overdueMs > 0, running: remoteVersion })
+        ? this._gap.decide(expected, { host: this.hostKey, ageMs: daemonAgeMs, gapMs: daemonUpdateMinGapMs(), overdue: this._overdueMs > 0, running: remoteVersion, asked: isAsked })
         : (this._gap.release(), null)
       if (gap) {
         this.postponeUpgrade(gap.why, expected, remoteVersion, { delayMs: Math.min(gap.waitMs + 5_000, DAEMON_UPDATE_GAP_RECHECK_MS), until: gap.until })
@@ -6069,25 +6071,18 @@ export class DaemonConnection {
   private _overdueMs = 0
   private _overdueNoted: string | null = null
 
-  /** Swaps of one build that went over the host's work (noteOverdue caps them at MAX_FORCED_TRIES). */
-  private _forcedTries: { expected: string; n: number } | null = null
+  /**
+   * A swap that goes over the host's work (overdue, or asked over busy), counted in the host's gap
+   * state against MAX_FORCED_TRIES (UpdateGapHold.forcedTry; noteOverdue and UpdateGapHold.overBusy
+   * stop forcing once they are spent). A held or deferred one is taken back (uncountForcedTry).
+   */
   private _forcedSpentNoted: string | null = null
-  static MAX_FORCED_TRIES = 3
   private countForcedTry(expected: string): boolean {
-    if (!this._overdueMs) return false
-    this._forcedTries = { expected, n: this._forcedTries?.expected === expected ? this._forcedTries.n + 1 : 1 }
+    if (!this.forceable()) return false
+    this._gap.forcedTry(expected)
     return true
   }
-
-  /**
-   * A counted try whose swap never happened (held or deferred on the host after its upload): it went
-   * over nothing, so it does not use up the forced tries (2026-11-10 review: three dark-wake deferrals
-   * spent them, and the holds were back with no bound).
-   */
-  private uncountForcedTry(expected: string): void {
-    if (this._forcedTries?.expected !== expected) return
-    this._forcedTries = this._forcedTries.n > 1 ? { expected, n: this._forcedTries.n - 1 } : null
-  }
+  private uncountForcedTry(expected: string): void { this._gap.forcedTryUndone(expected) }
 
   /** Overdue, or asked over busy (host_daemon_update over_busy): the update goes over the daemon's own work (`--over-busy`). */
   private forceable(): boolean {
@@ -6116,15 +6111,14 @@ export class DaemonConnection {
    * prepare in a minute is restarted by its service, its sessions kept.
    */
   private noteOverdue(expected: string, remoteVersion: string, verdict: { overdue: boolean; behindMs: number }): void {
-    if (!remoteVersion || remoteVersion === expected) this._forcedTries = null
     // A host that still runs another build after MAX_FORCED_TRIES swaps over its work (a broken
     // version stamp, a wrapper that starts the old file) is not forced again for this build: the
     // holds wait for a quiet moment as before, instead of ending its work every cooldown for good.
-    const spent = !!verdict.overdue && this._forcedTries?.expected === expected && this._forcedTries.n >= DaemonConnection.MAX_FORCED_TRIES
+    const spent = !!verdict.overdue && this._gap.forcedSpent(expected)
     if (spent && this._forcedSpentNoted !== expected) {
       this._forcedSpentNoted = expected
       log.session.warn('DaemonConnection: overdue daemon update went over the host\'s work and it still runs another build; it waits for a quiet moment again', {
-        host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', tries: this._forcedTries!.n,
+        host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', tries: MAX_FORCED_TRIES,
       })
     }
     this._overdueMs = verdict.overdue && !spent ? Math.max(1, verdict.behindMs) : 0

@@ -16,7 +16,7 @@ import {
   LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus, setWordsDue,
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
-import { hostUpdateGap } from '../../src/providers/daemon-update-gap.js'
+import { hostUpdateGap, MAX_FORCED_TRIES } from '../../src/providers/daemon-update-gap.js'
 import { OVER_BUSY_GOES_OVER } from '../../src/providers/daemon-over-busy.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
@@ -651,6 +651,111 @@ describe('NetDaemonUpdater', () => {
       setAcpUpgradeHoldFileForTest(null)
       await fs.rm(dir, { recursive: true, force: true })
     }
+  })
+
+  // Review of 116bec87dc: the over_busy ask lived for the server's life, had no bound on this path,
+  // and a revoked grant still forced on the automatic retries. Each case failed before its fix.
+  describe('an over_busy ask ends', () => {
+    const BUSY = 'Managed daemon update failed: service.handover: active ACP workers or relay requests must finish first (open: 2 ACP workers, 14 relay requests)'
+    let dir = ''
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-over-busy-end-'))
+      setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+      resetBusyRetryForTest()
+    })
+    afterEach(async () => {
+      resetBusyRetryForTest()
+      resetDaemonUpdateClaims()
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    })
+    /** The next automatic try, now: past the busy clock a refusal set. */
+    const nextAuto = async (u: NetDaemonUpdater) => {
+      resetBusyRetryForTest()
+      resetDaemonUpdateClaims()
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).not.toBe('checking'))
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    it('once the asked build runs there: the host back on another build later is an automatic decision, never forced', async () => {
+      const over: unknown[] = []
+      const conn = link()
+      const { u } = updater({ cooldownMs: 0, update: vi.fn(async (...a: unknown[]) => { over.push((a[4] as { overBusy?: boolean }).overBusy); throw new Error(BUSY) }) }, conn)
+      await u.request(2_000, undefined, { overBusy: true })
+      expect(over).toEqual([true])
+      conn.daemonVersion = NEW
+      await nextAuto(u)
+      expect(u.state).toMatchObject({ phase: 'skipped', skip: 'current' })
+      expect(hostUpdateGap('studio-mac').asked(NEW)).toBe(false)
+      // Another Walnut sharing the daemon put its build back: nobody asks now.
+      conn.daemonVersion = OLD
+      await nextAuto(u)
+      expect(over).toEqual([true, false])
+      u.stop()
+    })
+
+    it('after MAX_FORCED_TRIES launches over the host\'s work that left it on another build: it waits for the work again', async () => {
+      const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      const base = link()
+      const conn = link({
+        async send(cmd, params) {
+          if (cmd === 'fs.writePart') return { ok: true, done: true, sha256: (params as { sha256: string }).sha256 }
+          if (cmd === 'fs.read') return { ok: true, data: String((params as { path: string }).path).endsWith('update.done') ? 'done' : '{"ok":true}' }
+          if (cmd === 'exec.run' && String((params as { argv?: string[] }).argv?.[2] ?? (params as { command?: string }).command).includes('setsid')) {
+            return { ok: true, exitCode: 0, output: 'walnut-update-started' }
+          }
+          return base.send(cmd, params)
+        },
+      })
+      const over: unknown[] = []
+      // Launched over the work, and the handover refused it: the host still runs the old build.
+      const update = vi.fn(async (_s: unknown, _v: unknown, io: { serviceUpdate?: (o: { command: string; directory: string; executable: string }) => Promise<string> }, _scope: unknown, opts: { overBusy?: boolean }) => {
+        over.push(opts.overBusy)
+        await io.serviceUpdate!({ command: 'walnut daemon update', directory: '/tmp/open-walnut-update.cap123', executable: '/x/walnut' })
+        throw new Error(BUSY)
+      })
+      const { u } = updater({ cooldownMs: 0, update: update as never, io: { pollMs: 5, waitMs: 2_000, holdWaitMs: 50 } }, conn)
+      void u.request(2_000, undefined, { overBusy: true })
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      for (let i = 1; i < MAX_FORCED_TRIES + 2; i++) await nextAuto(u)
+      expect(over).toEqual([...Array(MAX_FORCED_TRIES).fill(true), false, false])
+      expect(hostUpdateGap('studio-mac').forced).toEqual({ expected: NEW, n: MAX_FORCED_TRIES })
+      expect(warn.mock.calls.map(([m]) => m)).toContain('DaemonConnection: daemon update asked over busy went over the host\'s work and it still runs another build; it waits for a quiet moment again')
+      // Its busy answer offers over_busy again, and someone asking with it starts the bound over.
+      expect(u.state.message).toContain('with over_busy goes ahead now')
+      resetBusyRetryForTest()
+      void u.request(2_000, undefined, { overBusy: true })
+      await vi.waitFor(() => expect(over).toHaveLength(MAX_FORCED_TRIES + 3))
+      expect(over.at(-1)).toBe(true)
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      u.stop()
+    })
+
+    it('when the asker\'s grant is revoked: the automatic retry after it does not force', async () => {
+      const over: unknown[] = []
+      const { u } = updater({ cooldownMs: 0, update: vi.fn(async (...a: unknown[]) => { over.push((a[4] as { overBusy?: boolean }).overBusy); throw new Error(BUSY) }) })
+      let revoked = false
+      await u.request(2_000, () => { if (revoked) throw new Error('This task\'s grant to use studio-mac was revoked') }, { overBusy: true })
+      expect(over).toEqual([true])
+      revoked = true
+      await nextAuto(u)
+      expect(over).toEqual([true, false])
+      expect(hostUpdateGap('studio-mac').asked(NEW)).toBe(false)
+      u.stop()
+    })
+
+    it('asked with over_busy while an update of the build already runs, the answer says it counts from the next try', async () => {
+      let finish!: () => void
+      const { u } = updater({ update: vi.fn(() => new Promise<void>((r) => { finish = r })) })
+      void u.request(2_000)
+      await vi.waitFor(() => expect(u.state.phase).toBe('running'))
+      expect((await u.request(10, undefined, { overBusy: true })).message).toBe(`${u.state.message}; over_busy counts from the next try`)
+      expect(hostUpdateGap('studio-mac').overBusy(NEW)).toBe(true)
+      finish()
+      await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+      u.stop()
+    })
   })
 
   it('a new server does not try before the busy clock says so; a request asks at once', async () => {

@@ -787,7 +787,14 @@ and relays), and a busy refusal's answer names what the daemon counted open (`bu
 the daemon since 2026-11-25; an older one's refusal as it said it). With `over_busy: true` the asked
 build goes over that work by the overdue update's own path below (`--over-busy`), on that try and the
 next ones of that build; a later plain ask, and any other build, wait again (2026-11-25: a host with
-about 95 CLIs and constant gateway relays refused every asked update as busy). Its answer names
+about 95 CLIs and constant gateway relays refused every asked update as busy). The ask ends once a
+decision reads the build running there (`UpdateGapHold.runs`: the host back on another build later is an
+automatic decision, never forced), and the asker's gate (the task's grant) is read at every later read of
+it, so a revoked grant or a host closed to tasks drops it. `over_busy` rides the grant the task already
+has for the host: no new letter when it has one. On both paths a swap over the host's work counts
+against `MAX_FORCED_TRIES` (3) per build in the host's gap state; once spent, the ask waits for the work
+again until someone asks with `over_busy` once more. Asked with it while an update of the build already
+runs, the answer adds that it counts from the next try. Its answer names
 `running` (the build there now), `expected` (this server's build), and while it waits `message` and `until`. This Mac's own daemon is replaced when
 Walnut restarts, and the cloud box's by the companion's own build (`daemonUpdateHowSentence`);
 `tests/providers/daemon-update-paths-ratchet.test.ts` fails for a new kind of link that neither waits out

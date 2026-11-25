@@ -44,6 +44,7 @@ import {
   REVIVE_EVERY_MS,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
+import { hostUpdateGap } from '../../src/providers/daemon-update-gap.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
@@ -388,7 +389,7 @@ describe('DaemonConnection: a managed update over SSH that did not go through', 
     })
     await priv(conn).checkDaemonRunning().catch(() => null)
     expect(managedUpdate).toHaveBeenCalledTimes(1)
-    expect(state(conn)._forcedTries).toEqual(kind === 'failed' ? { expected: EXPECTED_VERSION, n: 1 } : null)
+    expect(hostUpdateGap('devbox').forced).toEqual(kind === 'failed' ? { expected: EXPECTED_VERSION, n: 1 } : null)
   })
 
   // 2026-11-05 review 6: an update inside the last one's probation took its copies, the only way back
