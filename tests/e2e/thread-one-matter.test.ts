@@ -234,13 +234,12 @@ describe('a task\'s card replaces its lead\'s card for the same decision (2026-1
     expect((await onLead(leads)).state).toBe('needs')
   })
 
-  it('named, the lead\'s card steps aside on the lead\'s Threads and one card asks the decision', async () => {
+  it('named, the lead\'s card closes on the lead\'s Threads with where it is asked now, and one card asks the decision', async () => {
     const made = await op('thread_create', { ...HEDGE, from: 'task', text: 'Trim the hedge now or after the frost? I recommend after.', ...APART, supersedes: [leads] })
     expect(made.ok, JSON.stringify(made)).toBe(true)
     mine = (made as { result: { thread: { id: string } } }).result.thread.id
     const old = await onLead(leads)
-    expect(old.state).toBe('pending')
-    expect(old.closed).toBeUndefined()
+    expect(old.closed).toMatchObject({ how: 'dropped', told: true })
     expect(old.options).toBeUndefined()
     expect(old.reply).toBe(`Asked now in "${HEDGE.title}" (${mine}).`)
     // The lead's other card is untouched, and across both nodes one card asks about the hedge.
@@ -252,7 +251,7 @@ describe('a task\'s card replaces its lead\'s card for the same decision (2026-1
   it('named again on a later write (a retry, a reworded summary), it is left alone and the write goes through', async () => {
     const again = await op('thread_update', { id: mine, reply: 'Trim the hedge after the frost? I recommend it: new cuts suffer in the cold, and the birds have left by then.', supersedes: [leads] })
     expect(again.ok, JSON.stringify(again)).toBe(true)
-    expect((await onLead(leads)).state).toBe('pending')
+    expect((await onLead(leads)).closed).toMatchObject({ how: 'dropped' })
   })
 
   it('a later write of a card already waiting on him still takes a named card off', async () => {
@@ -262,7 +261,28 @@ describe('a task\'s card replaces its lead\'s card for the same decision (2026-1
     // No state in the patch: the task's card is in needs already.
     const out = await op('thread_update', { id: mine, supersedes: [second] })
     expect(out.ok, JSON.stringify(out)).toBe(true)
-    expect((await onLead(second)).state).toBe('pending')
+    expect((await onLead(second)).closed).toMatchObject({ how: 'dropped', told: true })
+  })
+
+  it('a card he has just written on asks nothing any more: named, it is left as it is, with his word on it', async () => {
+    const by = `task:${vpId}` as const
+    const third = (await openNodeThread(vpId, { ...HEDGE, title: 'Hedge: one more question for you', text: 'Asked a third time by the lead.', from: 'task', tasks: [taskId], separate_reason: 'Opened by the test to stand beside the task card.' }, by)).id
+    expect((await api('POST', `/tasks/${vpId}/threads`, { text: 'Hold on: does trimming now hurt the nesting birds?', thread: third })).status).toBeLessThan(300)
+    // His message took it off Needs you (working): the lead owes him an answer there, and nothing closes it.
+    const out = await op('thread_update', { id: mine, supersedes: [third] })
+    expect(out.ok, JSON.stringify(out)).toBe(true)
+    const kept = await onLead(third)
+    expect(kept.state).toBe('working')
+    expect(kept.closed).toBeUndefined()
+    expect(kept.reply).not.toMatch(/Asked now in/)
+    expect(kept.messages.at(-1)?.text).toMatch(/nesting birds/)
+  })
+
+  it('supersedes on a write that asks him nothing is refused, never ignored', async () => {
+    const result = await op('thread_create', { title: 'Hedge: trimmed on Tuesday', from: 'task', state: 'answered', text: 'The hedge was trimmed on Tuesday.', reply: 'The hedge was trimmed on Tuesday after the frost; the cuttings went to the compost heap behind the shed.', ...APART, supersedes: [others] })
+    expect(result.ok).toBe(false)
+    expect((result as { message: string }).message).toMatch(/goes only with a thread that waits on the user/)
+    expect((await onLead(others)).state).toBe('needs')
   })
 
   it('the lead pointing its card at the task with ask_owner hears that the task asks on a thread, and what to do', async () => {

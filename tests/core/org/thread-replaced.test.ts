@@ -15,8 +15,8 @@
  * write is refused by name; never a fourth outcome.
  */
 import { describe, expect, it } from 'vitest'
-import { closeReplaced, namedRefusal, namedVerdict, otherAsksRefusal, ownNeedsThreads, stepAsideReplaced } from '../../../src/core/org/thread-supersede.js'
-import { answerUnread, closeWhy, holdsHim, replacedBy, replacedLine } from '../../../src/core/org/thread-ended.js'
+import { closeReplaced, namedRefusal, namedVerdict, otherAsksRefusal, ownNeedsThreads, setAsideNamed } from '../../../src/core/org/thread-supersede.js'
+import { answerUnread, closeWhy, heldWhy, holdsHim, HOLDS, replacedBy, replacedLine } from '../../../src/core/org/thread-ended.js'
 import { THREAD_STATES, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 
 const NOW = Date.parse('2026-11-24T12:00:00Z')
@@ -141,58 +141,107 @@ describe('a replaced card left behind (the sweep)', () => {
 
 describe('a card named as replaced that is no ask of the writer\'s own', () => {
   const TASK = 't-task'
+  const WRITER = `task:${TASK}` as const
   /** The lead's card for the subject it handed to the task. */
   const leads = (over: Partial<OrgThread> = {}): OrgThread => his({ id: 'th-lead0001', tasks: [TASK], ...over })
+  const at = (own: boolean, below: boolean) => ({ own, below, node: LEAD })
   const PLACES = [
-    { name: 'the writer\'s own Threads', where: { own: true, below: false }, over: { tasks: [] } },
-    { name: 'a node below the writer', where: { own: false, below: true }, over: { tasks: [] } },
-    { name: 'a card that names the writer', where: { own: false, below: false }, over: { tasks: [TASK] } },
-    { name: 'a card pointed at the writer', where: { own: false, below: false }, over: { tasks: [], askOwner: { task: TASK, at: ago(9), by: BY } } },
-    { name: 'a card the writer opened there', where: { own: false, below: false }, over: { tasks: [], opener: { by: `task:${TASK}`, from: 'task', at: ago(9), text: 'x' } } },
-    { name: 'another task\'s card', where: { own: false, below: false }, over: { tasks: ['t-other'] } },
+    { name: 'the writer\'s own Threads', where: at(true, false), over: { tasks: [] }, mine: true },
+    { name: 'a node below the writer', where: at(false, true), over: { tasks: [] }, mine: true },
+    { name: 'a card that names the writer and no other task', where: at(false, false), over: { tasks: [TASK, LEAD] }, mine: true },
+    { name: 'a card pointed at the writer', where: at(false, false), over: { tasks: [], askOwner: { task: TASK, at: ago(9), by: BY } }, mine: true },
+    { name: 'a card the writer opened there', where: at(false, false), over: { tasks: [], opener: { by: WRITER, from: 'task', at: ago(9), text: 'x' } }, mine: true },
+    { name: 'a card that names another task too', where: at(false, false), over: { tasks: [TASK, 't-other'] }, mine: false, why: 'shared' },
+    { name: 'another task\'s card', where: at(false, false), over: { tasks: ['t-other'] }, mine: false, why: 'not_yours' },
   ] as const
+  /** Everything that can still be his on a card (thread-ended.ts heldWhy), one fixture per reason. */
+  const HELD: Record<Exclude<NonNullable<ReturnType<typeof heldWhy>>, 'acknowledged'>, Partial<OrgThread>> = {
+    watch: { watched: { at: ago(5), by: 'human' } } as never,
+    letter: { letter: { id: 'lt-other001', task: 't-other' } } as never,
+    ask: { reportAsk: { id: 'ask-1', at: ago(5) } } as never,
+    choice: { choice: { id: 'c-1' } } as never,
+    delivery: { messages: [{ id: 'tm-way00001', at: ago(2), text: 'go with larch', via: 'chat', delivery: { state: 'pending', at: ago(2) } }] } as never,
+    word: { messages: [{ id: 'tm-word0001', at: ago(2), text: 'wait, which wood did the neighbours use?', via: 'chat' }] } as never,
+  }
 
-  it('every state in every place has one of three outcomes, and only a card in needs is touched', () => {
+  it('every state in every place has one of three outcomes, and only a card that waits on him is touched', () => {
     const seen = new Set<string>()
     for (const p of PLACES) {
       for (const state of THREAD_STATES) {
-        const v = namedVerdict(leads({ state, ...(p.over as Partial<OrgThread>) }), TASK, p.where)
-        seen.add(v)
-        const want = state !== 'needs' ? 'nothing' : p.name === 'another task\'s card' ? 'refuse' : 'replace'
-        expect(v, `${p.name}, ${state}`).toBe(want)
+        const v = namedVerdict(leads({ state, ...(p.over as Partial<OrgThread>) }), TASK, p.where, NOW)
+        seen.add(v.verdict)
+        if (state !== 'needs') expect(v, `${p.name}, ${state}`).toEqual({ verdict: 'nothing' })
+        else if (p.mine) expect(v, `${p.name}, ${state}`).toEqual({ verdict: 'replace' })
+        else expect(v, `${p.name}, ${state}`).toEqual({ verdict: 'refuse', why: p.why })
       }
       // Closed or moved, whatever its state: it asks him nothing.
-      expect(namedVerdict(leads({ closed: { how: 'acked', at: ago(5), by: 'human' }, ...(p.over as Partial<OrgThread>) }), TASK, p.where)).toBe('nothing')
-      expect(namedVerdict(leads({ movedTo: { taskId: 't-x', threadId: 'th-x', at: ago(5) }, ...(p.over as Partial<OrgThread>) } as never), TASK, p.where)).toBe('nothing')
+      expect(namedVerdict(leads({ closed: { how: 'acked', at: ago(5), by: 'human' }, ...(p.over as Partial<OrgThread>) }), TASK, p.where, NOW).verdict).toBe('nothing')
+      expect(namedVerdict(leads({ movedTo: { taskId: 't-x', threadId: 'th-x', at: ago(5) }, ...(p.over as Partial<OrgThread>) } as never), TASK, p.where, NOW).verdict).toBe('nothing')
     }
     expect([...seen].sort()).toEqual(['nothing', 'refuse', 'replace'])
   })
 
-  it('stepped aside, it leaves his Needs you with where it is asked now, keeps its conversation, and is never closed from outside', () => {
+  it('a card with something of his on it is never taken off, whoever names it: every reason heldWhy knows is refused by its name', () => {
+    // The fixtures cover every reason: a new one in thread-ended.ts fails here until it is decided.
+    const fixture = (why: string) => leads(HELD[why as keyof typeof HELD])
+    for (const why of Object.keys(HELD)) expect(heldWhy(fixture(why), NOW), why).toBe(why)
+    // "acknowledged" is the one reason with no fixture: only a pending card is in Acknowledged, and a
+    // pending card asks him nothing, so naming it is "nothing" before anything is weighed.
+    expect(Object.keys(HELD).sort()).toEqual(['delivery', 'watch', 'word', ...Object.keys(HOLDS)].sort())
+    for (const why of Object.keys(HELD)) {
+      for (const p of PLACES.filter((x) => x.mine)) {
+        const t = leads({ ...(p.over as Partial<OrgThread>), ...HELD[why as keyof typeof HELD] })
+        expect(namedVerdict(t, TASK, p.where, NOW), `${why}, ${p.name}`).toEqual({ verdict: 'refuse', why })
+        expect(setAsideNamed(file(t), t.id, 'x', WRITER, ago(0)), `${why}, ${p.name}`).toMatchObject({ out: 'held', why })
+      }
+    }
+  })
+
+  it('a card that shows a task\'s own question waits on him whatever state it stores', () => {
+    for (const state of ['working', 'pending'] as const) {
+      expect(namedVerdict(leads({ state, reportAsk: { id: 'ask-1', at: ago(5) } } as never), TASK, at(false, true), NOW)).toEqual({ verdict: 'refuse', why: 'ask' })
+    }
+  })
+
+  it('taken off, it closes with where it is asked now: no buttons, no pointer left, its conversation kept', () => {
     const line = replacedLine({ id: 'th-task0001', title: 'Orchard fence: larch or oak posts?' })
-    const r = stepAsideReplaced(file(leads()), 'th-lead0001', line, `task:${TASK}`, ago(0))
-    expect(r.out).toBe('aside')
+    const r = setAsideNamed(file(leads({ askOwner: { task: TASK, at: ago(9), by: BY } } as never)), 'th-lead0001', line, WRITER, ago(0))
+    expect(r.out).toBe('closed')
     expect(r.changed).toEqual({ kind: 'updated', threadId: 'th-lead0001' })
     const t = r.file.threads[0]!
-    expect(t).toMatchObject({ state: 'pending', reply: line, reply_by: `task:${TASK}` })
-    expect(t.closed).toBeUndefined()
+    expect(t).toMatchObject({ reply: line, reply_by: WRITER, closed: { how: 'dropped', by: WRITER, told: true } })
     expect(t.options).toBeUndefined()
+    expect(t.askOwner).toBeUndefined()
     expect(t.messages).toHaveLength(1)
+    expect(holdsHim(t, NOW)).toBe(false)
+  })
+
+  it('while an answer on it is still his to read, it steps aside open instead', () => {
+    const unread = leads({ messages: [{ id: 'tm-his0001', at: ago(70), text: 'which posts should we order?', via: 'chat', answer: { text: 'Larch or oak: I will ask you.', at: ago(69) } }] } as never)
+    expect(answerUnread(unread)).toBe(true)
+    const r = setAsideNamed(file(unread), 'th-lead0001', 'x', WRITER, ago(0))
+    expect(r.out).toBe('aside')
+    expect(r.file.threads[0]).toMatchObject({ state: 'pending', reply: 'x' })
+    expect(r.file.threads[0]!.closed).toBeUndefined()
   })
 
   it('a card that no longer waits on him is left as it is', () => {
     for (const over of [{ state: 'answered' }, { state: 'pending' }, { closed: { how: 'acked', at: ago(5), by: 'human' } }] as Array<Partial<OrgThread>>) {
       const f = file(leads(over))
-      const r = stepAsideReplaced(f, 'th-lead0001', 'x', `task:${TASK}`, ago(0))
+      const r = setAsideNamed(f, 'th-lead0001', 'x', WRITER, ago(0))
       expect(r.out).toBe('gone')
       expect(r.file).toBe(f)
     }
-    expect(stepAsideReplaced(file(), 'th-lead0001', 'x', `task:${TASK}`, ago(0)).out).toBe('gone')
+    expect(setAsideNamed(file(), 'th-lead0001', 'x', WRITER, ago(0)).out).toBe('gone')
   })
 
-  it('a refusal names the id and the way on', () => {
-    expect(namedRefusal('th-lead0001', 'not_yours', { node: LEAD, nodeTitle: 'Orchard lead', title: 'Fence posts' })).toMatch(/supersedes names th-lead0001.*waits on the user on "Orchard lead" \(lead-1\) as "Fence posts".*task_send lead-1/)
-    expect(namedRefusal('th-none0001', 'unknown')).toMatch(/supersedes names th-none0001.*no open thread of your task/)
+  it('a refusal names the id, the reason and the way on', () => {
+    const where = { node: LEAD, nodeTitle: 'Orchard lead', title: 'Fence posts' }
+    expect(namedRefusal('th-lead0001', 'not_yours', where)).toMatch(/supersedes names th-lead0001.*waits on the user on "Orchard lead" \(lead-1\) as "Fence posts".*does not name your task.*task_send lead-1/)
+    expect(namedRefusal('th-lead0001', 'shared', where)).toMatch(/names other tasks beside yours.*task_send lead-1/)
+    expect(namedRefusal('th-lead0001', 'word', where)).toMatch(/a word of his on it has no answer yet.*task_send lead-1/)
+    expect(namedRefusal('th-none0001', 'unknown')).toMatch(/supersedes names th-none0001.*no open thread within your reach/)
     expect(namedRefusal('lt-none0001', 'letter')).toMatch(/supersedes names lt-none0001.*no decision letter of your task/)
+    expect(namedRefusal('th-lead0001', 'no_ask')).toMatch(/goes only with a thread that waits on the user/)
   })
 })

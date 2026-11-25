@@ -66,9 +66,19 @@ export type ThreadsOf = (taskId: string) => readonly OrgThread[] | undefined;
  * itself just settled (a replaced card's own letter). Pure.
  */
 export function holdsHim(t: OrgThread, now: number = Date.now(), except?: keyof typeof HOLDS): boolean {
-  if (watchedNow(t) || snoozedNow(t, now) || inAcknowledged(t)) return true;
-  if (Object.entries(HOLDS).some(([kind, holds]) => kind !== except && holds(t))) return true;
-  return t.messages.some(deliveryOpen) || hisWordOpen(t);
+  return heldWhy(t, now, except) !== null;
+}
+
+/** What on a thread is still his (holdsHim), named: the first that holds, or null. */
+export type HeldWhy = 'watch' | 'acknowledged' | keyof typeof HOLDS | 'delivery' | 'word';
+
+/** holdsHim with its reason, for a refusal that must say why (thread-supersede.ts). Pure. */
+export function heldWhy(t: OrgThread, now: number = Date.now(), except?: keyof typeof HOLDS): HeldWhy | null {
+  if (watchedNow(t) || snoozedNow(t, now)) return 'watch';
+  if (inAcknowledged(t)) return 'acknowledged';
+  for (const kind of Object.keys(HOLDS) as Array<keyof typeof HOLDS>) if (kind !== except && HOLDS[kind](t)) return kind;
+  if (t.messages.some(deliveryOpen)) return 'delivery';
+  return hisWordOpen(t) ? 'word' : null;
 }
 
 /** Why `t` on node `node` closes now, or null. Pure. */

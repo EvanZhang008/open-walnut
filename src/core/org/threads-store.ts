@@ -300,11 +300,12 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
   const needs = !input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs';
   if (needs) await refuseSameAskThread(taskId, input.title, by, input);
   // The task's other asks: named as replaced, or said to be other decisions (thread-supersede.ts).
-  const { refuseOtherOpenAsks, applySupersedes, namedElsewhere, applyElsewhere } = await import('./thread-supersede.js');
+  const { refuseOtherOpenAsks, applySupersedes, namedElsewhere, applyElsewhere, namedRefusal } = await import('./thread-supersede.js');
   // The thread's own refusals come first (a missing kind, an unclear card): a dry run on the file as it is.
   if (needs && by !== 'human') openThread(await readThreads(taskId), input, by, new Date().toISOString(), source);
   const replaced = needs ? await refuseOtherOpenAsks(taskId, by, input) : [];
   // An ask it names beyond its own (its lead's card, a card below it): stepped aside there, or refused by name.
+  if (!needs && by !== 'human' && input.supersedes?.length) throw new ThreadError('bad_input', 409, namedRefusal(input.supersedes[0]!, 'no_ask'));
   const elsewhere = needs ? await namedElsewhere(taskId, by, input.supersedes, replaced) : [];
   // One subject is one thread, checked after the refusals about one decision (same_ask, other_open_asks), which say more.
   if (opts.sameSubject) {
@@ -381,8 +382,12 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     }
     // The asks it names beyond its own, while this thread waits on him after the write (handed to him
     // now, or already there): stepped aside on their own node, or refused by name (thread-supersede.ts).
-    if (cur && rest.supersedes?.length && (hands || (!cur.closed && !rest.close && (rest.state ?? cur.state) === 'needs'))) {
-      elsewhere = await (await import('./thread-supersede.js')).namedElsewhere(taskId, by, rest.supersedes, replaced, id);
+    if (cur && rest.supersedes?.length) {
+      const mod = await import('./thread-supersede.js');
+      const waits = hands || (!cur.closed && !rest.close && (rest.state ?? cur.state) === 'needs');
+      // Named on a write that leaves the thread asking nothing: refused, never ignored.
+      if (!waits) throw new ThreadError('bad_input', 409, mod.namedRefusal(rest.supersedes[0]!, 'no_ask'));
+      elsewhere = await mod.namedElsewhere(taskId, by, rest.supersedes, replaced, id);
     }
   }
   // His Acknowledge alone (experiment ack_means_known): read the open tasks it lists before the lock.
