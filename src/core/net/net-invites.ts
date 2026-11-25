@@ -12,6 +12,7 @@ import { noteWhere } from './net-where.js'
 import { companionCall, errorOf, localDaemon, syncNet } from './net-mac.js'
 import { windowsAppPublished } from './join-ps1-published.js'
 import { WINDOWS_APP_URL } from './join-ticket.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 const POLL_MS = 3_000
 
@@ -107,7 +108,7 @@ export async function makeInvite(input: { name?: unknown }): Promise<InviteState
   }
   // A PC joins with the Windows app (it takes the link) once a release carries the app.
   if (inv.windowsCommand && await windowsAppPublished()) inv.windowsApp = WINDOWS_APP_URL
-  inv.timer = setInterval(() => { void pollInvite(inv.id) }, POLL_MS)
+  inv.timer = setInterval(() => { if (homeWritesStopped()) return; void pollInvite(inv.id) }, POLL_MS)
   inv.timer.unref?.()
   invites.set(inv.id, inv)
   return view(inv)

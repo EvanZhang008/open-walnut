@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { SessionRecord } from '../types.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 export const TURN_END_POLL_MS = 30_000;
 
@@ -192,7 +193,7 @@ export class TurnEndWait<T> {
   /** `settled`: the look comes a settle after the session was seen free, so a free reading may act. */
   private schedule(sessionId: string, e: Entry<T>, ms: number, settled = false): void {
     if (e.timer) clearTimeout(e.timer);
-    e.timer = setTimeout(() => { e.timer = undefined; void this.look(sessionId, 0, settled); }, ms);
+    e.timer = setTimeout(() => { e.timer = undefined; if (homeWritesStopped()) return; void this.look(sessionId, 0, settled); }, ms);
     e.timer.unref?.();
   }
 

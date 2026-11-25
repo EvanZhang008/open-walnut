@@ -180,6 +180,7 @@ import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
 import { isMachineId } from './machine-id-core.js'
 import { noteFrameParsed } from './line-parse-count.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
+import { homeWritesStopped } from '../lib/leader-clocks.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -3046,7 +3047,8 @@ export class DaemonConnection {
     if (this.bridgeRepushTimer) clearInterval(this.bridgeRepushTimer)
     if (this.pushesNoLeaderState) return
     this.bridgeRepushTimer = setInterval(() => {
-      if (this._destroyed || !this._connected) return
+      // A re-mint writes sync/bridge-tokens.json (leader data): not during a leader switch's stop (lib/leader-clocks.ts).
+      if (this._destroyed || !this._connected || homeWritesStopped()) return
       this.pushBridgeConfig()
     }, DaemonConnection.BRIDGE_REPUSH_INTERVAL_MS)
     // Never keep the process alive just for bridge health refreshes.
@@ -8771,6 +8773,10 @@ export class DaemonConnection {
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
       const event = msg as unknown as DaemonEvent
+      // A leader switch's stop: no host event writes leader data here any more (lib/leader-clocks.ts): session
+      // records, the durable queue, relayed launches and sends, the offline journal's drain. Replies and the copy
+      // link's streams came above. The host keeps what it sent (its journal, its retries) for the next leader.
+      if (homeWritesStopped()) return
       if (event.ev === 'cron-metadata') {
         if (this._connected && this.cronMetadataToken) sessionCronMetadata.apply(this.hostKey, this.cronMetadataToken, event.value)
         return

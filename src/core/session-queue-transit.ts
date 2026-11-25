@@ -17,6 +17,7 @@ import { IS_EPHEMERAL } from '../constants.js';
 import { isProcessAlive } from '../utils/process.js';
 import { processActionsRefused } from './sessions/replica-process-guard.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage, type QueueTransit } from './session-queue-store.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 
 /** Transits this process holds: the sweep leaves them to their owner. */
 const live = new Set<string>();
@@ -247,6 +248,7 @@ function scheduleSweep(): void {
   if (sweepTimer) return;
   sweepTimer = setTimeout(() => {
     sweepTimer = null;
+    if (homeWritesStopped()) return;
     void settleStrandedTransits().catch(() => scheduleSweep());
   }, SWEEP_RETRY_MS);
   sweepTimer.unref?.();

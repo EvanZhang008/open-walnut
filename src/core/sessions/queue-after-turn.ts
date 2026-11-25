@@ -18,6 +18,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import { AFTER_TURN_REASON } from '../relay-fates.js';
 import type { QueuedMessage } from '../session-queue-store.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 export { AFTER_TURN_REASON };
 
@@ -82,6 +83,7 @@ export function noteAfterTurnHold(sessionId: string): void {
 function armSweep(): void {
   if (sweep || watching.size === 0) return;
   sweep = setInterval(() => {
+    if (homeWritesStopped()) return;
     for (const sid of [...watching]) scheduleAfterTurnRelease(sid, 0, false);
   }, SWEEP_MS);
   sweep.unref?.();
@@ -101,6 +103,7 @@ export function scheduleAfterTurnRelease(sessionId: string, delayMs = GRACE_MS, 
   if (timers.has(sessionId)) return;
   const timer = setTimeout(() => {
     timers.delete(sessionId);
+    if (homeWritesStopped()) return;
     releaseAfterTurn(sessionId, { viaEvent }).then((outcome) => {
       // 'busy' too: the row of the turn that just ended leaves the queue a moment after its result.
       if ((outcome === 'running' || outcome === 'busy') && viaEvent && attempt < EVENT_RETRIES) {

@@ -25,6 +25,7 @@ import {
 } from '../cheap-model.js';
 import { hasCrossedThreshold } from '../project-summary.js';
 import { readHostProfile, updateHostProfile, type HostProfile } from './host-profile.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import type { SessionRecord } from '../types.js';
 import type { HostSessionLine } from '../session-tracker.js';
 
@@ -127,6 +128,8 @@ let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Regenerate `host`'s summary when its session count crossed a threshold. True when a new one was stored. */
 export async function maybeLearnHost(host: string, opts: { force?: boolean } = {}): Promise<boolean> {
+  // A debounced refresh writes hosts/<alias>.json (leader data): none in a leader switch's stop (lib/leader-clocks.ts).
+  if (homeWritesStopped()) return false;
   const { hostSessionsWithOverview } = await import('../session-tracker.js');
   const found = await hostSessionsWithOverview(host, MAX_SESSIONS_IN_PROMPT);
   if (found.count === 0) return false;

@@ -20,6 +20,7 @@ import {
   addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock, personWordsText,
   owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, recentWordsReadback, staleOwed, type UserAsk, type UserAsksFile,
 } from './user-asks-model.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const dir = () => path.join(WALNUT_HOME, 'user-asks');
@@ -304,7 +305,7 @@ export async function startUserAsks(opts: { ephemeral?: boolean } = {}): Promise
   }, { global: true, interest: [EventNames.TASK_PHASE_CHANGED] });
   // An ephemeral server's copied asks are someone else's: it wakes nobody about them.
   if (!opts.ephemeral || process.env.WALNUT_USER_ASKS === '1') {
-    timer = setInterval(() => { void wakeIdleOwed().catch(() => {}); }, WAKE_INTERVAL_MS);
+    timer = setInterval(() => { if (homeWritesStopped()) return; void wakeIdleOwed().catch(() => {}); }, WAKE_INTERVAL_MS);
     timer.unref?.();
   }
   return {

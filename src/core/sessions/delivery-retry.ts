@@ -38,6 +38,7 @@ import { AFTER_TURN_REASON, COLD_HOLD_REASON, MOVE_HELD_REASON, START_RECOVERY_H
 import { leaveParked } from '../queue-held-spans.js';
 import { _resetFolderLooksForTesting, endFolderWaits, FOLDER_WAIT_ENDED, FOLDER_WAIT_MAX_AGE_MS, folderIsBackFor, waitsForFolder } from './folder-wait.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage } from '../session-queue-store.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 /** The wait before each automatic try, by how many came before it; then RETRY_EVERY_MS for good. */
 export const RETRY_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 30 * 60_000] as const;
@@ -325,7 +326,7 @@ export function startDeliveryRetry(o: { ownOnly?: boolean; keptFires?: boolean }
   if (sweep) return;
   ownOnly = o.ownOnly === true;
   const fires = o.keptFires !== false;
-  sweep = setInterval(() => { void sweepDeliveryRetries(); if (fires) sweepKeptFires(); }, SWEEP_MS);
+  sweep = setInterval(() => { if (homeWritesStopped()) return; void sweepDeliveryRetries(); if (fires) sweepKeptFires(); }, SWEEP_MS);
   sweep.unref?.();
   void sweepDeliveryRetries();
   if (fires) sweepKeptFires();

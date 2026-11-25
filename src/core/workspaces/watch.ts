@@ -14,6 +14,7 @@ import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
 import { runPeriodic, type PeriodicHandle } from '../periodic-task.js'
 import { MERGE_RECHECK_TICK_MS, sweepMergeRechecks } from './merge-recheck.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 const SUBSCRIBER = 'task-workspaces'
 /** The first re-check pass after a boot: a restart picks up checks that fell due meanwhile. */
@@ -70,6 +71,7 @@ export function startWorkspaceWatch(): void {
   void resumeWorkspaces().catch((err) => log.web.warn('workspace boot resume failed', { error: String(err) }))
   if (recheck) return
   recheck = runPeriodic('workspace-merge-recheck', MERGE_RECHECK_TICK_MS, RECHECK_BUDGET_MS, async (ctx) => {
+    if (homeWritesStopped()) return
     const checked = await sweepMergeRechecks(ctx)
     if (checked > 0) log.web.info('workspace merge re-check pass', { checked })
   })

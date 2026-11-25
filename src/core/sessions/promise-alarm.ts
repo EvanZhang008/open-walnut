@@ -18,6 +18,7 @@ import { doorTimerFloorMs, leaderPermitActive, outwardDoorRefusal } from '../lea
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { Task } from '../types.js';
 import type { StatusReport } from '../user-status.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 export interface PromiseAlarm {
   /** When it fires (ISO). */
@@ -133,6 +134,7 @@ function arm(): void {
   const floor = doorTimerFloorMs();
   timer = setTimeout(() => {
     timer = null;
+    if (homeWritesStopped()) return;
     void firePromiseAlarms().catch((err) => log.task.warn('promise alarm sweep failed', { error: err instanceof Error ? err.message : String(err) }));
   }, Math.max(floor, Math.min(next - Date.now(), RECHECK_MS)));
   timer.unref?.();

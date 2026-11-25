@@ -26,6 +26,7 @@ import { planQwen, QWEN_MLX_MODEL, type QwenPlan, type HostFacts } from './qwen-
 import { installLlama, isLlamaInstalled, downloadPinned, llamaDownloadBytes, type PinnedFile } from './llama-runtime.js';
 import type { SetupEvent } from './setup-stream.js';
 import { extractTarGz } from './untar.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 
 export type QwenSetupState = 'idle' | 'skipped' | 'installing' | 'ready' | 'failed';
@@ -270,7 +271,7 @@ async function attempt(plan: QwenPlan, opts: StartOptions, tries: number): Promi
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      if (running) return;
+      if (running || homeWritesStopped()) return;
       running = (async () => {
         const again = await decide({ ...opts, userAsked: false });
         if (!again.run) {

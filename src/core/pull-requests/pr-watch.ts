@@ -35,6 +35,7 @@ import { followTaskLinks, sendTaskNews, taskNewsTarget } from '../task-news.js'
 import type { PrSnapshot, PrWatchState } from './model.js'
 import { prRefOf, type PrProvider, type PrReadResult, type PrRef } from './providers.js'
 import { evaluatePrWatch, prWakeBody, prWakeSummary, type PrWatchReport } from './watch-eval.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 export const PR_WATCH_SOURCE = 'pr-watch'
 export const PR_WATCH_EVERY_MS = 2 * 60_000
@@ -398,6 +399,7 @@ export async function startPrWatch(deps: PrWatchDeps = defaultPrWatchDeps()): Pr
   if (started) return started
   const { runPeriodic } = await import('../periodic-task.js')
   const handle = runPeriodic('pr-watch', PR_WATCH_TICK_MS, 90_000, async () => {
+    if (homeWritesStopped()) return
     await prWatchTick(deps).catch((err) => log.task.warn('pr-watch tick failed', { error: err instanceof Error ? err.message : String(err) }))
   })
   const unfollow = await followTaskLinks(PR_WATCH_SOURCE, (task) => {
@@ -406,7 +408,7 @@ export async function startPrWatch(deps: PrWatchDeps = defaultPrWatchDeps()): Pr
     // A newly linked pull request, or an unlinked one whose snapshot should go.
     const fresh = refs.some((r) => !known[r.ref.url]) || Object.keys(known).some((url) => !refs.some((r) => r.ref.url === url))
     return fresh ? [] : null
-  }, (taskIds) => { void prWatchTick(deps, { taskIds }).catch(() => undefined) })
+  }, (taskIds) => { if (homeWritesStopped()) return; void prWatchTick(deps, { taskIds }).catch(() => undefined) })
   started = {
     stop() { handle.stop(); unfollow(); started = null },
     kick: (taskIds, force) => prWatchTick(deps, { ...(taskIds ? { taskIds } : {}), ...(force ? { force } : {}) }),

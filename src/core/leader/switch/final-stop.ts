@@ -198,13 +198,13 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * Why the final batch ran out of the commit window. A batch that found the home changed names the writer: this
- * server's own background work that did not stop in time (WritersSettled), else one this server does not run.
+ * server's own background work that did not stop in time (WritersSettled), else one the stop did not end.
  */
 function lateWhy(o: { writer: boolean; last: string; batches: number; writers?: WritersSettled }): string {
   if (!o.writer) return `the final batch did not finish within the commit window (${o.batches} batch(es); last: ${o.last || 'none finished'})`
   const who = o.writers?.late.length
     ? `this server's own ${o.writers.late.join(', ')} did not stop within its budget`
-    : 'a writer this server does not run (another process on this machine) is still at it'
+    : 'a writer the stop did not end is still at it (a write of this server already past its gate, or another process on this machine)'
   return `the home still changed when the commit window ended (${o.batches} batch(es); last: ${o.last}): ${who}`
 }
 

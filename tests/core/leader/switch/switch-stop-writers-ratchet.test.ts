@@ -25,6 +25,8 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { clockFiles, clocksIn, codeOf, sourcesUnder } from './clock-scan.js'
+import { CLOCKS, STARTERS, type Clock } from './clock-table.js'
 
 const ROOT = path.resolve(__dirname, '../../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -286,5 +288,148 @@ describe('the switch stop\'s writers, as child processes', () => {
     const at = server.indexOf('fork(workerPath')
     expect(server.slice(at - 300, at)).toContain('gitQuietAt(WALNUT_HOME)')
     expect(server.slice(at, at + 300)).toContain('compactionChild = child')
+  })
+})
+
+/**
+ * The leader's clocks, from the source (review 2026-11-25, M1): a writer started by `void import(...).then(start)` with
+ * its handle thrown away is in no stop of stopServer, and a link's events reach the server after the stop began. Every
+ * periodic timer under src/ is found wherever it is (clock-scan.ts) and so is every module web/server.ts starts, and
+ * each one that writes leader data either asks homeWritesStopped() first (stopWritersForSwitch calls
+ * stopLeaderClocks() at the switch stop's start) or is stopped by stopServer before the final batch.
+ */
+const GATE = 'homeWritesStopped()'
+
+/** The `(...)` span that starts at the first `(` at or after `at` (balanced). */
+function spanAt(code: string, at: number, open = '(', close = ')'): string {
+  let i = code.indexOf(open, at)
+  const from = i
+  for (let depth = 0; i < code.length; i++) {
+    if (code[i] === open) depth++
+    else if (code[i] === close && --depth === 0) break
+  }
+  return code.slice(from, i + 1)
+}
+
+/** The body of a function, method or arrow named `name` in `code`, or ''. */
+function definitionOf(code: string, name: string): string {
+  const m = new RegExp(`(?:function\\s+${name}\\s*\\(|(?:const|let)\\s+${name}\\s*=|\\b${name}\\s*\\([^)]*\\)\\s*(?::[^{=]*)?\\{)`).exec(code)
+  if (!m) return ''
+  const brace = code.indexOf('{', m.index)
+  return brace < 0 ? '' : spanAt(code, brace, '{', '}')
+}
+
+/** A clock's tick asks the gate first: in its call, or in a function its call names. */
+function gatedAt(code: string, at: number): boolean {
+  const span = spanAt(code, at)
+  if (span.includes(GATE)) return true
+  const named = [...span.matchAll(/(?<![\w.])([A-Za-z_$][\w$]*)\b(?=\s*[(,)])/g)].map((m) => m[1]!)
+  return named.some((n) => !/^(setInterval|runPeriodic|void|async|await|if|return)$/.test(n) && definitionOf(code, n).includes(GATE))
+}
+
+/** What stopServer runs before the final batch, and stopWritersForSwitch: where a `stopped` call must be. */
+function stoppedBeforeFinalBatch(): string {
+  const server = read('src/web/server.ts')
+  const stop = functionBody(server, 'export async function stopServer(')
+  // `a?.stop(` and `a.stop(` are one call.
+  return (stop.slice(0, stop.indexOf('finalStop.run(')) + functionBody(server, 'function stopWritersForSwitch(')).replace(/\?\./g, '.')
+}
+
+/** Every module web/server.ts starts with a start* function, as a path under src/. */
+function serverStarters(): string[] {
+  // The raw text: codeOf would take a glob string's `/*` for a comment's start.
+  const server = read('src/web/server.ts')
+  const specs = new Set<string>()
+  for (const m of server.matchAll(/import\(\s*'([^']+)'\s*\)\s*\.then\(([\s\S]{0,240})/g)) {
+    if (/\bstart[A-Z]\w*\(/.test(m[2]!.split('.catch')[0]!)) specs.add(m[1]!)
+  }
+  for (const m of server.matchAll(/const\s*\{([^}]*)\}\s*=\s*await\s+import\(\s*'([^']+)'\s*\)/g)) {
+    if (/\bstart[A-Z]\w*/.test(m[1]!)) specs.add(m[2]!)
+  }
+  return [...specs].map((spec) => {
+    const p = path.normalize(path.join('src/web', spec)).replace(/\.js$/, '.ts')
+    return fs.existsSync(path.join(ROOT, p)) ? p : p.replace(/\.ts$/, '/index.ts')
+  }).sort()
+}
+
+/** Files that ask the gate on an event or a one-shot timer that arms itself again, not on a clock CLOCKS lists. */
+const EVENT_GATES: Record<string, string> = {
+  'src/providers/daemon-connection.ts': 'a host\'s unsolicited events (session records, the queue, relayed sends, the offline journal): handleFrame',
+  'src/core/offline-handover.ts': 'the offline journal\'s drain into session-requests.json and tasks (a link event): runOfflineHandover',
+  'src/core/deferred-door-work.ts': 'the retry of deferred outward work (a re-arming timer)',
+  'src/core/private-tasks/kept-digest.ts': 'the kept digest\'s two timers (re-arming)',
+  'src/core/session-queue-transit.ts': 'the transit retry of queued rows (re-arming)',
+  'src/core/sessions/session-stop.ts': 'a session stop\'s retry and its fail deadline (each re-arms)',
+  'src/core/sessions/subtask-notices.ts': 'the 3 s coalesce timers that flush edge notices into a session\'s queue',
+  'src/core/sessions/turn-end-wait.ts': 'the turn-end wait\'s timer',
+  'src/core/sessions/queue-after-turn.ts': 'the per-session release timers',
+  'src/core/session-queue-spool.ts': 'the spool watch\'s drain',
+  'src/core/pull-requests/pr-watch.ts': 'the task-link follow (an event) besides its clock',
+}
+
+describe('the leader\'s clocks, from the source', () => {
+  const resolved = (list: Clock[]): Array<Exclude<Clock, 'same'>> => {
+    const out: Array<Exclude<Clock, 'same'>> = []
+    for (const c of list) out.push(c === 'same' ? out.at(-1)! : c)
+    return out
+  }
+
+  it('every periodic timer under src/ is classified, one entry a timer (a new one: say how a switch stop ends it)', () => {
+    const found = clockFiles(ROOT)
+    expect(Object.keys(found).length).toBeGreaterThan(150)
+    const want = Object.fromEntries(Object.entries(CLOCKS).map(([f, list]) => [f, list.length]))
+    const unknown = Object.keys(found).filter((f) => !(f in want))
+    expect(unknown, `classify these in clock-table.ts CLOCKS: ${unknown.join(', ')}`).toEqual([])
+    expect(found).toEqual(want)
+  })
+
+  it('each gated timer asks homeWritesStopped() first; each stopped one is stopped before the final batch', () => {
+    const before = stoppedBeforeFinalBatch()
+    for (const [file, list] of Object.entries(CLOCKS)) {
+      const code = codeOf(read(file))
+      const at = clocksIn(code)
+      resolved(list).forEach(([kind, why, stop], i) => {
+        if (kind === 'gated') expect(gatedAt(code, at[i]!.at), `${file} timer ${i + 1} (${why})`).toBe(true)
+        if (kind === 'stopped') expect(before, `${file} timer ${i + 1}: its stop ${stop}`).toContain(stop!.replace(/\?\./g, '.'))
+      })
+    }
+  })
+
+  it('every module the server starts is classified (a starter with no clock of its own: a re-arming timer, a bus handler, a helper)', () => {
+    const starters = serverStarters()
+    expect(starters.length).toBeGreaterThan(100)
+    const missing = starters.filter((f) => !(f in CLOCKS) && !(f in STARTERS))
+    expect(missing, `classify these in clock-table.ts STARTERS: ${missing.join(', ')}`).toEqual([])
+    const stale = Object.keys(STARTERS).filter((f) => !starters.includes(f) || f in CLOCKS)
+    expect(stale).toEqual([])
+    const before = stoppedBeforeFinalBatch()
+    for (const [file, [kind, why, more]] of Object.entries(STARTERS)) {
+      if (kind === 'gated') expect(codeOf(read(file)), `${file} (${why})`).toContain(GATE)
+      if (kind === 'stopped') expect(before, `${file}: its stop ${more}`).toContain(more!.replace(/\?\./g, '.'))
+      if (kind === 'helper') expect(CLOCKS, `${file}: its timer's file ${more}`).toHaveProperty([more!])
+    }
+  })
+
+  it('a link\'s events and the re-arming timers ask the gate; every file that asks it is in a table', () => {
+    for (const [file, why] of Object.entries(EVENT_GATES)) expect(codeOf(read(file)), `${file}: ${why}`).toContain(GATE)
+    const frame = functionBody(read('src/providers/daemon-connection.ts'), '  private handleFrame(')
+    const event = frame.indexOf('const event = msg as unknown as DaemonEvent')
+    expect(event).toBeGreaterThan(frame.indexOf('this.resolveCommandFrame(msg)'))
+    expect(frame.slice(event, event + 400)).toContain(`if (${GATE}) return`)
+    const handover = functionBody(read('src/core/offline-handover.ts'), 'export function runOfflineHandover(')
+    expect(handover.slice(handover.indexOf('{'))).toMatch(/^\{\s*if \(homeWritesStopped\(\)\) return Promise\.reject/)
+    const asking = sourcesUnder(path.join(ROOT, 'src')).map((f) => path.relative(ROOT, f))
+      .filter((f) => f !== path.join('src', 'lib', 'leader-clocks.ts') && codeOf(read(f)).includes(GATE))
+    const listed = (f: string) => f in EVENT_GATES || STARTERS[f]?.[0] === 'gated' || (CLOCKS[f] && resolved(CLOCKS[f]!).some(([k]) => k === 'gated'))
+    expect(asking.filter((f) => !listed(f))).toEqual([])
+  })
+
+  it('the switch stop stops the leader\'s clocks first, and a server\'s start runs them again', () => {
+    const server = read('src/web/server.ts')
+    const writers = functionBody(server, 'function stopWritersForSwitch(')
+    expect(writers.indexOf('stopLeaderClocks()')).toBeGreaterThan(0)
+    expect(writers.indexOf('stopLeaderClocks()')).toBeLessThan(writers.indexOf('quietGitWriters('))
+    const start = functionBody(server, 'export async function startServer(')
+    expect(start.indexOf('resumeLeaderClocks()')).toBeGreaterThan(start.indexOf('endGitQuiet(WALNUT_HOME)'))
   })
 })

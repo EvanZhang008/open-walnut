@@ -31,6 +31,7 @@ import { demoAdmissionClosed } from './demo-admission.js';
 import { COLD_HOLD_REASON } from '../relay-fates.js';
 import { leaveParked } from '../queue-held-spans.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage } from '../session-queue-store.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 export { COLD_HOLD_REASON };
 
@@ -181,7 +182,7 @@ export function noteQuietHold(): void {
 
 function armSweep(): void {
   if (sweep) return;
-  sweep = setInterval(() => { void sweepColdHolds(); }, SWEEP_MS);
+  sweep = setInterval(() => { if (homeWritesStopped()) return; void sweepColdHolds(); }, SWEEP_MS);
   sweep.unref?.();
 }
 

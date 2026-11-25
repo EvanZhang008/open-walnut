@@ -22,6 +22,7 @@ import { briefAsksUser, briefSectionOf, briefToRead } from '../sessions/brief-st
 import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 import { briefOffNow } from './brief-off.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
@@ -190,7 +191,7 @@ let ticking = false;
 /** Primary only: send each scheduled report when its time comes. Never on an ephemeral copy. */
 export function startReportClock(everyMs = 60_000): void {
   if (timer || IS_EPHEMERAL) return;
-  timer = setInterval(() => { void tickReports(); }, everyMs);
+  timer = setInterval(() => { if (homeWritesStopped()) return; void tickReports(); }, everyMs);
   timer.unref?.();
 }
 

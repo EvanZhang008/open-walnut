@@ -189,6 +189,7 @@ import {
   abortAllTurns,
   getOpenTurnPromise,
 } from './turn-ledger.js'
+import { homeWritesStopped } from '../lib/leader-clocks.js'
 
 /** stale-notice.ts, loaded when a line is written (its imports reach most of the core). */
 const dropStaleNotices: typeof import('../core/sessions/stale-notice.js').dropStaleNotices = async (...args) =>
@@ -2382,7 +2383,7 @@ export class ClaudeCodeSession {
   private _scheduleTeamIdleCheck(resultText?: string, totalCost?: number, durationMs?: number, isError = false): void {
     if (this._teamIdleTimer) clearTimeout(this._teamIdleTimer)
     this._teamIdleTimer = setTimeout(() => {
-      if (!this._teamActive) return
+      if (!this._teamActive || homeWritesStopped()) return
 
       // Check if teammates are still writing to their JSONL files
       if (this._areTeammatesStillActive()) {
@@ -6075,6 +6076,7 @@ export class ClaudeCodeSession {
     const delay = Math.min(ClaudeCodeSession.LINE_ACK_GRACE_MS * 2 ** attempt, Math.max(ClaudeCodeSession.LINE_ACK_GRACE_MS, ClaudeCodeSession.LINE_PROBE_MAX_INTERVAL_MS))
     entry.timer = setTimeout(() => {
       entry.timer = null
+      if (homeWritesStopped()) return
       void this.checkLineAck(uuid, entry, attempt)
     }, delay)
     entry.timer.unref?.()
@@ -6725,6 +6727,7 @@ export class ClaudeCodeSession {
     // unhandledRejection on a floating promise — exactly the class the server's
     // post-boot handler now survives, but it should never fire from here.
     this.livenessTimer = setInterval(async () => {
+      if (homeWritesStopped()) return
       try {
         if (this.pid === null || (this.resultEmitted && !this.hasPipe)) {
           this.stopLivenessMonitor()
@@ -7227,6 +7230,7 @@ export class ClaudeCodeSession {
 
     this._stallDiagTimer = setTimeout(async () => {
       this._stallDiagTimer = null
+      if (homeWritesStopped()) return
       const now = Date.now()
       const currentFileSize = this._transport?.fileSize ?? 0
       const fileSizeGrew = currentFileSize > this._fileSizeAtDelivery
@@ -11956,6 +11960,8 @@ export class ClaudeCodeSession {
     this._clearPermissionReEmitTimer(requestId)
     const REEMIT_INTERVAL_MS = 60_000 // re-emit every 60s
     const timer = setInterval(() => {
+      // Its archived-session backstop settles and writes: not during a leader switch's stop (lib/leader-clocks.ts).
+      if (homeWritesStopped()) return
       if (!this._pendingPermissionRequests.has(requestId)) {
         this._clearPermissionReEmitTimer(requestId)
         return

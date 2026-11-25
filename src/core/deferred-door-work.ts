@@ -42,6 +42,7 @@ import { withFileLock } from '../utils/file-lock.js'
 import { writeJsonFile } from '../utils/fs.js'
 import { bootMode } from './boot-policy.js'
 import { DEFERRED_DOOR_WORK_FILE, isPermitRefusal, leaderPermitActive, onceOutwardDoorsOpened, outwardDoorsOpen } from './leader/switch/doors.js'
+import { homeWritesStopped } from '../lib/leader-clocks.js'
 
 export type DeferredDoorWorkKind = 'task-sync:rename' | 'task-sync:mark-moved' | 'task-sync:delete' | 'mail-unsubscribe'
 
@@ -163,7 +164,7 @@ function replayIfOpen(): void {
 
 function scheduleRetry(): void {
   if (retryTimer) return
-  retryTimer = setTimeout(() => { retryTimer = null; void replayDeferredDoorWork() }, KEEP_RETRY_MS)
+  retryTimer = setTimeout(() => { retryTimer = null; if (homeWritesStopped()) return; void replayDeferredDoorWork() }, KEEP_RETRY_MS)
   retryTimer.unref?.()
 }
 

@@ -19,6 +19,7 @@
 import { log } from '../../logging/index.js'
 import type { VoiceArchiveStore, VoiceRecord } from './voice-archive.js'
 import { discardRecording, inventoryRecordings, recordingIdTime } from './recordings.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 export const DEFAULT_KEEP_COUNT = 1000
 export const DEFAULT_KEEP_MB = 1024
@@ -132,7 +133,7 @@ export function scheduleVoiceRetention(): void {
   if (timer) return
   timer = setTimeout(() => {
     timer = null
-    if (running) return
+    if (running || homeWritesStopped()) return
     running = runOnce().catch((err) => {
       log.stt.warn(`voice retention failed: ${err instanceof Error ? err.message : String(err)}`)
     }).finally(() => { running = null })

@@ -16,6 +16,7 @@ import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage, type QueueStore } from './session-queue-store.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 
 export function spoolDir(): string {
   return `${SESSION_QUEUE_FILE}.spool`;
@@ -141,6 +142,7 @@ function scheduleDrain(): void {
   if (drainTimer) return;
   drainTimer = setTimeout(() => {
     drainTimer = null;
+    if (homeWritesStopped()) return;
     void drainQueueSpool().then(async () => {
       if ((await spooledRows()).length > 0) { drainTry++; scheduleDrain(); } else drainTry = 0;
     }, () => scheduleDrain());
@@ -155,6 +157,7 @@ let watchTimer: ReturnType<typeof setInterval> | null = null;
 export function watchQueueSpool(): void {
   if (watchTimer) return;
   watchTimer = setInterval(() => {
+    if (homeWritesStopped()) return;
     if (spoolMayHoldRows()) void drainQueueSpool().catch(() => 0);
   }, WATCH_MS);
   watchTimer.unref?.();

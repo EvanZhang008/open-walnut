@@ -81,12 +81,13 @@ describe('the final batch', () => {
     expect(readFinalStopResult(home, 'S1')?.ok).toBe(false)
   })
 
-  it('says who still wrote: this server\'s own writer that did not stop in time, else one it does not run (never "outside Walnut" for its own)', async () => {
+  it('says who still wrote: this server\'s own writer that did not stop in time, else one the stop did not end (never "outside Walnut", never "one this server does not run")', async () => {
     const own = await runFinalBatch({ home: '/x/a', peer: fakePeer([true]), deadlineAt: Date.now() + 100, signal: live(), writers: { late: ['git auto-commit'], ms: 30_000 } })
     expect(!own.ok && own.why).toMatch(/still changed .*this server's own git auto-commit did not stop within its budget/)
     expect(!own.ok && own.why).not.toMatch(/outside Walnut/)
     const other = await runFinalBatch({ home: '/x/a', peer: fakePeer([true]), deadlineAt: Date.now() + 100, signal: live(), writers: { late: [], ms: 5 } })
-    expect(!other.ok && other.why).toMatch(/a writer this server does not run/)
+    expect(!other.ok && other.why).toMatch(/a writer the stop did not end/)
+    expect(!other.ok && other.why).not.toMatch(/does not run/)
   })
 
   it('a final batch that only ran out of time (the copy link too slow for what it carries) says so, not "a writer"', async () => {

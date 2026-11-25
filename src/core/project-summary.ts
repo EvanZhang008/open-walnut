@@ -34,6 +34,7 @@ import { isInboxProject } from './inbox-project.js';
 import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 import {
   fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled, fastCallBudgetMs, fastCallText, CLI_FAST_CALL_BUDGET_MS,
 } from './cheap-model.js';
@@ -269,7 +270,8 @@ export async function refreshProjectSummary(
   opts: { tasks?: readonly SummaryTaskLike[]; purpose: CallPurpose; signal?: AbortSignal },
 ): Promise<boolean> {
   const name = (project ?? '').trim();
-  if (isInboxProject(name)) return false;
+  // A debounced refresh writes the project registry (leader data): none in a leader switch's stop (lib/leader-clocks.ts).
+  if (isInboxProject(name) || homeWritesStopped()) return false;
   const generated = await generateProjectSummary(name, { tasks: opts.tasks, purpose: opts.purpose, signal: opts.signal });
   if (!generated) return false;
   const { setProjectMetadata } = await import('./task-manager.js');

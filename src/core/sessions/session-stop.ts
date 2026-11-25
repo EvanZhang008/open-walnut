@@ -4,6 +4,7 @@ import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance }
 import { HOST_LOST_STOP_MAX_MS, hostLostFenceText, hostLostStopError, isHostLostStopError, type HostReach } from './host-lost.js'
 import { leaveParked } from '../queue-held-spans.js'
 import { cliHostOf, thisHostKey } from './session-row-owner.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 type StopRequest = NonNullable<SessionRecord['stopRequest']>
 
@@ -154,6 +155,7 @@ export class SessionStopCoordinator {
     this.retries.set(sid, entry)
     entry.cancel = schedule(() => {
       if (this.retries.get(sid) !== entry) return
+      if (homeWritesStopped()) return
       entry.armed = false
       void this.serial(sid, async () => {
         const current = await this.deps.get(sid)
@@ -180,6 +182,7 @@ export class SessionStopCoordinator {
     this.retries.set(sid, entry)
     entry.cancel = schedule(() => {
       if (this.retries.get(sid) !== entry) return
+      if (homeWritesStopped()) return
       this.retries.delete(sid)
       void this.fail(sid, request.id, attempt + 1)
     }, left)

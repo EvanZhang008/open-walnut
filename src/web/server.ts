@@ -218,6 +218,7 @@ import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
 import { withDeadline } from '../lib/with-deadline.js'
+import { homeWritesStopped, resumeLeaderClocks, stopLeaderClocks } from '../lib/leader-clocks.js'
 import { takeLauncherEnv } from './launcher-env.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, recordLaneWindow } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
@@ -822,6 +823,10 @@ type SwitchStopWriter = { name: string; done: Promise<unknown> }
 /** Synchronous up to its returned promises: nothing of these starts again from the call on. */
 function stopWritersForSwitch(budgetMs: number): SwitchStopWriter[] {
   const out: SwitchStopWriter[] = []
+  // The leader's own clocks and event writers of leader data (lib/leader-clocks.ts): every gated tick or event write
+  // finds the home stopped from now on. A tick already past its gate lands its pass; the final batch's next pass
+  // carries it.
+  stopLeaderClocks()
   // The data repo's git: no git of this server starts in the home any more; one that holds no lock (the large-file
   // lane's hash-object) ends now, one that may (an add, a commit, a gc) gets the budget. No last commit on the way
   // out: the next leader commits what is left at its start.
@@ -1398,6 +1403,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Git in the home again, after a leader switch's stop of an earlier server in this process (tests): never in that
   // stop's own process otherwise, which exits after its final batch.
   endGitQuiet(WALNUT_HOME)
+  resumeLeaderClocks()
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
   const bootStartedAt = Date.now()
   // Until the plugin walk below ends, a task push that finds no plugin waits for
@@ -3552,6 +3558,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       },
     })
     const staticRootTimer = setInterval(() => {
+      // A vanish or return of the web assets writes a recovery notice (leader data): not in a leader switch's stop.
+      if (homeWritesStopped()) return
       refreshBundle()
       staticRootWatch.tick()
     }, 60_000)
@@ -4760,7 +4768,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // 75s start delay: deliberately NOT a multiple of the 30s sync tick —
       // at 60s the two collided on index.lock at every single boot.
       setTimeout(() => { void attemptCompaction() }, 75_000)
-      setInterval(() => { void attemptCompaction() }, 24 * 60 * 60 * 1000).unref?.()
+      setInterval(() => { if (!homeWritesStopped()) void attemptCompaction() }, 24 * 60 * 60 * 1000).unref?.()
     }
   }
 
@@ -4853,6 +4861,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }))
     owedReplies()
     const sweep = setInterval(() => {
+      if (homeWritesStopped()) return
       void import('../core/sessions/session-request-notify.js')
         .then(({ sweepSessionRequests }) => sweepSessionRequests())
         .then((n) => { if (n > 0) log.session.info('session-request sweep notified askers', { count: n }) })
@@ -4999,6 +5008,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // index, usage-scan-index.ts); a restart starts a pass only when the last finished
         // one is an interval old (deploys restart the server many times a day).
         const handle = runPeriodic('usage-collect', USAGE_COLLECT_MS, 40 * 60_000, async () => {
+          if (homeWritesStopped()) return
           await collectUsage(INCREMENTAL).catch((err) => log.usage.warn('usage collection failed', { error: String(err) }))
         })
         const kick = setTimeout(() => { if (collectionStale()) handle.kick() }, 120_000)

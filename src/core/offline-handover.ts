@@ -31,6 +31,7 @@ import { endRefusedRun, refusedRunWords } from './offline-merge/apply-session.js
 import { isCallId, journalCallId } from '../lib/op-call-id.js';
 import { mergeJournalFill, noteJournalFill, readJournalFill, type JournalFill } from './offline-merge/journal-fill.js';
 import { drainRecoveryKey, noteDrainErrorRaised, noteDrainSettled } from './offline-merge/drain-recovery.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
@@ -150,6 +151,9 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
  * reconnect in production does the same). Then this call runs its own once that one ends.
  */
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
+  // A leader switch's stop: this server writes no more leader data (lib/leader-clocks.ts). The journal stays on its
+  // host, unacked, and the next leader's link drains it.
+  if (homeWritesStopped()) return Promise.reject(new Error('this server is stopping for a leader switch: the next leader drains this journal'));
   if (conn.aliases) noteSameJournal(conn.aliases);
   const journal = journalOf(conn);
   const existing = running.get(journal);

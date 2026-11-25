@@ -39,6 +39,7 @@ import { log } from '../logging/index.js'
 import { listDeviceRecords, notifyPaired, resetLastUsedThrottle, revokePairing } from './device-auth.js'
 import { BROWSER_SIGN_IN_NAME, hashesEqual, recordForToken, sha256Hex, tombstone, updateAuth, type BrowserSignInState, type DeviceRecord } from './device-store.js'
 import { dropRevokeIntent, finishRevoke, pairingsOf, trackRevokeWork, writeRevokeIntent, type RevokePlan } from './devices/revoke-parts.js'
+import { homeWritesStopped } from '../lib/leader-clocks.js'
 
 export { BROWSER_SIGN_IN_NAME }
 
@@ -317,7 +318,7 @@ let sweepTimer: ReturnType<typeof setInterval> | null = null
 /** The year-idle sweep, every 6 hours on the server that renews (the primary). Once per process. */
 export function startBrowserSignInSweep(): void {
   if (sweepTimer) return
-  const run = () => { void sweepIdleBrowserSignIns().catch((err) => log.web.warn('browser sign-in: idle sweep failed', { error: err instanceof Error ? err.message : String(err) })) }
+  const run = () => { if (homeWritesStopped()) return; void sweepIdleBrowserSignIns().catch((err) => log.web.warn('browser sign-in: idle sweep failed', { error: err instanceof Error ? err.message : String(err) })) }
   const first = setTimeout(run, 60_000)
   first.unref?.()
   sweepTimer = setInterval(run, SWEEP_EVERY_MS)

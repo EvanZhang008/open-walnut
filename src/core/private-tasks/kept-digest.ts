@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 export type TellKind = 'created' | 'edited' | 'unjudged' | 'edit-unjudged';
 
@@ -85,7 +86,7 @@ function schedule(s: DigestState): void {
   if (timer) clearTimeout(timer);
   const first = Math.min(...s.pending.map((e) => Date.parse(e.at)).filter(Number.isFinite), now);
   const due = told ? Math.max(last + DAY_MS, now + QUIET_MS) : Math.min(now + QUIET_MS, first + MAX_FIRST_WAIT_MS);
-  timer = setTimeout(() => { timer = null; void tellKeptDigestNow(); }, Math.max(0, due - now));
+  timer = setTimeout(() => { timer = null; if (homeWritesStopped()) return; void tellKeptDigestNow(); }, Math.max(0, due - now));
   timer.unref?.();
 }
 
@@ -97,7 +98,7 @@ export async function resumeKeptDigest(): Promise<void> {
 /** Retry a line Main could not take yet (no Main, no session). */
 function retryLater(): void {
   if (timer) clearTimeout(timer);
-  timer = setTimeout(() => { timer = null; void tellKeptDigestNow(); }, RETRY_MS);
+  timer = setTimeout(() => { timer = null; if (homeWritesStopped()) return; void tellKeptDigestNow(); }, RETRY_MS);
   timer.unref?.();
 }
 

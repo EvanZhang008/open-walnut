@@ -31,6 +31,7 @@ import { bus, EventNames, type BusEvent } from './event-bus.js';
 import type { Task } from './types.js';
 import type { CronJob } from './cron/types.js';
 import type { WatchingTrigger } from './task-wait-wake.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 
 const deadlines = new Map<string, number>();
 /** On an ephemeral server: taskId -> the wait_until it was copied with. */
@@ -86,6 +87,7 @@ function arm(): void {
   const delay = Math.max(floor, Math.min(next - Date.now(), RECHECK_MS));
   timer = setTimeout(() => {
     timer = null;
+    if (homeWritesStopped()) return;
     void sweepWaitUntil().catch((err) => log.task.warn('wait_until sweep failed', { error: errText(err) }));
   }, delay);
   timer.unref?.();

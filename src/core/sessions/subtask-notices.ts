@@ -55,6 +55,7 @@ import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { addToEnvelopeBody, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 // The edges worth a new turn for a parent whose own turn is over (completed, error) are the wake policy's.
 import { noticeWakes } from './wake-policy.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 
 const kit = createEnvelopeKit();
 
@@ -509,11 +510,11 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
     if (slot) {
       slot.notices.push(n);
       clearTimeout(slot.timer);
-      slot.timer = setTimeout(() => void flush(sid), COALESCE_MS);
+      slot.timer = setTimeout(() => { if (homeWritesStopped()) return; void flush(sid); }, COALESCE_MS);
       slot.timer.unref?.();
       return;
     }
-    const timer = setTimeout(() => void flush(sid), COALESCE_MS);
+    const timer = setTimeout(() => { if (homeWritesStopped()) return; void flush(sid); }, COALESCE_MS);
     timer.unref?.();
     pending.set(sid, { notices: [n], timer });
   } catch (err) {
@@ -745,7 +746,7 @@ function armHeldWatch(): void {
     }).catch(() => {});
   }
   if (heldTimer) return;
-  heldTimer = setInterval(() => { void sweepHeld().catch(() => {}); }, HELD_SWEEP_MS);
+  heldTimer = setInterval(() => { if (homeWritesStopped()) return; void sweepHeld().catch(() => {}); }, HELD_SWEEP_MS);
   heldTimer.unref?.();
 }
 
