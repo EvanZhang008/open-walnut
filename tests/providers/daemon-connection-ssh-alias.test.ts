@@ -49,13 +49,12 @@ vi.mock('../../src/providers/ssh-control-master.js', async (importOriginal) => {
 })
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { controlSocketPath, ownedMuxClientArgs } from '../../src/providers/ssh-control-master.js'
+import { controlSocketPath, hostControlSocketPath, masterTargetIdentity, ownedMuxClientArgs } from '../../src/providers/ssh-control-master.js'
 import { sshAliasOptions, sshDestination, type SshTarget } from '../../src/providers/session-io.js'
 
 interface SshInternals {
   _controlPath: string | null
   sshHostString: string
-  sshTargetIdentity: string
   baseSshArgs: string[]
   buildSshArgs(opts?: { useControlMaster: boolean }): string[]
   forwardSsh(): { args: string[]; dest: string }
@@ -120,12 +119,14 @@ describe('DaemonConnection: login args for a found host', () => {
   })
 
   it('the master identity is the real user@hostname:port, so a changed hostname never reuses the old socket', () => {
-    expect(internals(FOUND).sshTargetIdentity).toBe('builder@devbox.example.test:2200')
-    expect(internals({ hostname: 'box.example.com', user: 'dev' }, 'box').sshTargetIdentity).toBe('dev@box.example.com:')
-    const a = internals({ hostname: 'devbox-a.example.test', sshAlias: 'devbox' }).sshTargetIdentity
-    const b = internals({ hostname: 'devbox-b.example.test', sshAlias: 'devbox' }).sshTargetIdentity
+    // The connection builds its socket with hostControlSocketPath(hostKey, its target, home), the one builder the warmup uses too.
+    expect(masterTargetIdentity(FOUND)).toBe('builder@devbox.example.test:2200')
+    expect(masterTargetIdentity({ hostname: 'box.example.com', user: 'dev' })).toBe('dev@box.example.com:')
     const home = '/walnut-home-for-test'
-    expect(controlSocketPath({ hostKey: 'devbox', target: a, home }, '/sock')).not.toBe(controlSocketPath({ hostKey: 'devbox', target: b, home }, '/sock'))
+    const a = hostControlSocketPath('devbox', { hostname: 'devbox-a.example.test', sshAlias: 'devbox' } as SshTarget, home, '/sock')
+    const b = hostControlSocketPath('devbox', { hostname: 'devbox-b.example.test', sshAlias: 'devbox' } as SshTarget, home, '/sock')
+    expect(a).not.toBe(b)
+    expect(a).toBe(controlSocketPath({ hostKey: 'devbox', target: masterTargetIdentity({ hostname: 'devbox-a.example.test' }), home }, '/sock'))
   })
 
   it('the alias is part of the pooled target', () => {

@@ -5,9 +5,13 @@
  * click. Before this, that connect began only when the picker opened.
  *
  * Design constraints (the whole point):
- *   - STRICTLY SEQUENTIAL. N hosts at once = N ssh ControlMasters + N deploys
+ *   - SEQUENTIAL FOR LOGINS. N hosts at once = N ssh ControlMasters + N deploys
  *     fired in the same second, which corporate SSH front-ends rate-limit (and
- *     which each burn CPU on the remote). One at a time, always.
+ *     which each burn CPU on the remote). One SSH host at a time, always. Right
+ *     after a restart (sweep 'resume') the host-network machines, which make no
+ *     SSH connection at all, are dialled at once and together, and an SSH host
+ *     whose master an earlier server process left running goes first in the
+ *     queue, without the startup delay.
  *   - PACED: an idle gap between hosts, so a 6-host warmup never looks like a
  *     burst to anything watching.
  *   - NEVER FATAL: a host that is asleep, off-VPN or misconfigured is the normal
@@ -71,6 +75,15 @@ export interface HostWarmupCandidate {
    * with a short backoff, instead of the SSH resweep's.
    */
   cheapDial?: boolean
+  /**
+   * An SSH host whose ControlMaster a server process before this one left running
+   * (ssh-control-master.ts): after a restart it is dialled first, with no startup delay
+   * (sweep 'resume'), still one SSH host at a time (a deploy on connect uploads over fresh
+   * SSH connections). 2026-11-25: 129 restarts in 39 h each cut every host for 9 to 17 s,
+   * 7.5 s of it the server's own start and the rest each host waiting its turn behind the
+   * startup delay and the pace (newdev, last, 9 s after the server listened).
+   */
+  masterReusable?: boolean
 }
 
 export interface HostWarmupEntry {
@@ -133,7 +146,7 @@ const DEFAULTS = {
 } as const
 
 /** Why a sweep is running — decides which hosts it may touch. */
-type SweepReason = 'startup' | 'resweep' | 'cheap' | 'config' | 'explicit' | 'credential' | 'soon'
+type SweepReason = 'resume' | 'startup' | 'resweep' | 'cheap' | 'config' | 'explicit' | 'credential' | 'soon'
 
 /** Bus subscriber names are the unsubscribe key, so each instance needs its own. */
 let instanceSeq = 0
@@ -207,6 +220,10 @@ export class HostWarmup {
   private busSubscribed = false
   /** Guards the "one connect at a time" invariant — asserted by the tests. */
   private inFlight = 0
+  /** Hosts a resume dial is connecting now (dialNow). */
+  private resuming = new Set<string>()
+  /** Hosts the resume sweep took: the startup sweep leaves them to the soon, credential and resweep clocks. */
+  private resumed = new Set<string>()
 
   constructor(deps: HostWarmupDeps) {
     this.deps = deps
@@ -232,6 +249,8 @@ export class HostWarmup {
     }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
     this.busSubscribed = true
 
+    // What a restart cut and comes back with no login, now (HostWarmupCandidate.masterReusable).
+    void this.sweep('resume')
     const t = setTimeout(() => {
       this.timers.delete(t)
       void this.sweep('startup')
@@ -267,6 +286,7 @@ export class HostWarmup {
     this.credentialWaits.clear()
     this.soonRedials.clear()
     this.soonDials.clear()
+    this.resumed.clear()
   }
 
   /**
@@ -355,6 +375,8 @@ export class HostWarmup {
 
     for (const host of hosts) {
       if (hostKey && host.key !== hostKey) continue
+      if (reason === 'resume' && host.cheapDial !== true && host.masterReusable !== true) continue
+      if (reason === 'startup' && this.resumed.has(host.key)) continue
       // The minute sweep looks only at host-network machines not connected, and records nothing
       // else (a "done" for every connected host each minute would push their status each minute).
       if (reason === 'cheap' && (host.cheapDial !== true || this.isConnected(host.key))) continue
@@ -372,7 +394,7 @@ export class HostWarmup {
       // satisfied by definition).
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
       // Somebody else is already connecting it: theirs to finish.
-      if (this.isConnecting(host.key, host.sshTarget)) continue
+      if (this.resuming.has(host.key) || this.isConnecting(host.key, host.sshTarget)) continue
       // The credential clock alone re-dials a waiting host (else each tier advances twice).
       if ((reason === 'resweep' || reason === 'cheap' || reason === 'soon') && this.credentialWaits.has(host.key)) continue
       // Each kind of host has one periodic sweep: a cheap one its own, every other the SSH resweep.
@@ -380,6 +402,11 @@ export class HostWarmup {
       if ((reason === 'resweep' || reason === 'cheap') && !this.dueForResweep(host)) continue
       if (reason === 'explicit' || reason === 'config') this.clearCredentialWait(host.key, true)
       if (reason === 'explicit') this.failures.delete(host.key)
+      if (reason === 'resume') {
+        this.resumed.add(host.key)
+        // No SSH connection at all: together. An SSH host: first in the one-at-a-time queue.
+        if (host.cheapDial === true) { void this.dialNow(host); continue }
+      }
       // Already queued (a startup or resweep dial): that dial stands, counted as it is.
       if (!this.push(host) || reason !== 'soon') continue
       // The failure cache would answer this dial with the failure it re-dials for.
@@ -456,6 +483,8 @@ export class HostWarmup {
       this.queued.delete(host.key)
       const soonDial = this.soonDials.delete(host.key)
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
+      // A resume dial has it: its own record stands.
+      if (this.resuming.has(host.key)) continue
       if (this.isConnecting(host.key, host.sshTarget)) {
         // Queued behind a long connect, and meanwhile somebody else took this
         // host on. Nothing to say about it any more.
@@ -463,52 +492,72 @@ export class HostWarmup {
         continue
       }
 
-      this.record(host.key, 'running')
-      const started = this.now()
-      this.inFlight++
-      if (this.inFlight > 1) {
-        // Should be impossible; loud rather than silently parallel.
-        this.logger.warn('host warmup: concurrent connect detected', { host: host.key, inFlight: this.inFlight })
-      }
-      const hadCredentialWait = this.credentialWaits.has(host.key)
-      try {
-        const result = await this.deps.connect(host.key, host.sshTarget)
-        if (!resolvedConnected(result)) {
-          // connect() has an early return for "somebody else is mid-connect";
-          // a warmup that reported done on that would lie to every surface.
-          throw new Error('connect finished without a live connection')
-        }
-        this.failures.delete(host.key)
-        this.clearCredentialWait(host.key, true)
-        this.clearSoonRedial(host.key)
-        this.record(host.key, 'done')
-        this.logger.info('host warmup: connected', { host: host.key, elapsedMs: this.now() - started })
-        if (hadCredentialWait) this.redialCredentialPeers(host.key)
-      } catch (err) {
-        const message = errText(err)
-        const prior = this.failures.get(host.key)
-        // A soon re-dial is the same outage dialled again, not one more: it keeps the
-        // backoff where it was (three of them once made the next resweep an hour away).
-        this.failures.set(host.key, soonDial
-          ? { count: Math.max(prior?.count ?? 0, 1), at: prior?.at ?? this.now() }
-          : { count: (prior?.count ?? 0) + 1, at: this.now() })
-        const kind = this.classify(message, host)
-        const retryAt = CREDENTIAL_WAIT_KINDS.has(kind) ? this.armCredentialWait(host) : undefined
-        if (retryAt === undefined) this.clearCredentialWait(host.key, true)
-        this.record(host.key, 'failed', message, true, retryAt)
-        // Expected at startup (host asleep, VPN down) — warn, never throw. Once per outage:
-        // the same failure re-dialled on the credential schedule is folded (outage-repeat.ts).
-        this.logger.warn('host warmup: connect failed', {
-          host: host.key, elapsedMs: this.now() - started, error: message, linkFailure: message,
-          consecutiveFailures: this.failures.get(host.key)?.count, kind,
-          ...(retryAt !== undefined ? { credentialRetryInMs: retryAt - this.now() } : {}),
-        })
-      } finally {
-        this.inFlight--
-      }
+      await this.connectOne(host, soonDial, true)
 
       if (this.stopped) return
       if (this.queue.length > 0 && this.paceMs > 0) await this.sleep(this.paceMs)
+    }
+  }
+
+  /**
+   * One dial and what it records. `queued`: the drain's one-at-a-time lane (its inFlight
+   * invariant); a resume dial of a host-network machine runs beside it, each host at most once at a time.
+   */
+  private async connectOne(host: HostWarmupCandidate, soonDial: boolean, queued: boolean): Promise<void> {
+    this.record(host.key, 'running')
+    const started = this.now()
+    if (queued) this.inFlight++
+    if (queued && this.inFlight > 1) {
+      // Should be impossible; loud rather than silently parallel.
+      this.logger.warn('host warmup: concurrent connect detected', { host: host.key, inFlight: this.inFlight })
+    }
+    const hadCredentialWait = this.credentialWaits.has(host.key)
+    try {
+      const result = await this.deps.connect(host.key, host.sshTarget)
+      if (!resolvedConnected(result)) {
+        // connect() has an early return for "somebody else is mid-connect";
+        // a warmup that reported done on that would lie to every surface.
+        throw new Error('connect finished without a live connection')
+      }
+      this.failures.delete(host.key)
+      this.clearCredentialWait(host.key, true)
+      this.clearSoonRedial(host.key)
+      this.record(host.key, 'done')
+      this.logger.info('host warmup: connected', { host: host.key, elapsedMs: this.now() - started })
+      if (hadCredentialWait) this.redialCredentialPeers(host.key)
+    } catch (err) {
+      const message = errText(err)
+      const prior = this.failures.get(host.key)
+      // A soon re-dial is the same outage dialled again, not one more: it keeps the
+      // backoff where it was (three of them once made the next resweep an hour away).
+      this.failures.set(host.key, soonDial
+        ? { count: Math.max(prior?.count ?? 0, 1), at: prior?.at ?? this.now() }
+        : { count: (prior?.count ?? 0) + 1, at: this.now() })
+      const kind = this.classify(message, host)
+      const retryAt = CREDENTIAL_WAIT_KINDS.has(kind) ? this.armCredentialWait(host) : undefined
+      if (retryAt === undefined) this.clearCredentialWait(host.key, true)
+      this.record(host.key, 'failed', message, true, retryAt)
+      // Expected at startup (host asleep, VPN down) — warn, never throw. Once per outage:
+      // the same failure re-dialled on the credential schedule is folded (outage-repeat.ts).
+      this.logger.warn('host warmup: connect failed', {
+        host: host.key, elapsedMs: this.now() - started, error: message, linkFailure: message,
+        consecutiveFailures: this.failures.get(host.key)?.count, kind,
+        ...(retryAt !== undefined ? { credentialRetryInMs: retryAt - this.now() } : {}),
+      })
+    } finally {
+      if (queued) this.inFlight--
+    }
+  }
+
+  /** A resume dial: now, beside the queue and the other resume dials. */
+  private async dialNow(host: HostWarmupCandidate): Promise<void> {
+    if (this.resuming.has(host.key) || this.queued.has(host.key)) return
+    this.resuming.add(host.key)
+    try {
+      this.logger.info('host warmup: dialing at once after a restart', { host: host.key })
+      await this.connectOne(host, false, false)
+    } finally {
+      this.resuming.delete(host.key)
     }
   }
 

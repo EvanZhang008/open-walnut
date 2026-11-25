@@ -143,7 +143,7 @@ import { AWAKE_TICK_MS, AwakeDownClock } from './awake-down-clock.js'
 import { assertFrameFits, DAEMON_FRAME_MAX_BYTES, DaemonFrameTooLargeError, neverFitsGatewayReply, tooLargeGatewayReply, tooSlowGatewayReply } from './daemon-frame-cap.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
-import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, masterTargetIdentity, ownedMuxClientArgs, planControlMaster, recordForward, startControlMaster, type MasterControl } from './ssh-control-master.js'
+import { cancelRecordedForwards, exitControlMaster, hostControlSocketPath, masterLastWords, ownedMuxClientArgs, planControlMaster, recordForward, startControlMaster, type MasterControl } from './ssh-control-master.js'
 import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
@@ -5049,7 +5049,7 @@ export class DaemonConnection {
    */
   private async ensureControlMaster(): Promise<void> {
     if (this._controlMaster) return
-    const socketPath = controlSocketPath({ hostKey: this.hostKey, target: this.sshTargetIdentity, home: WALNUT_HOME })
+    const socketPath = hostControlSocketPath(this.hostKey, this.ssh, WALNUT_HOME)
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
     // Reuse, start, or connect without one; a master that is only slow is kept.
     const control = this.masterControl(socketPath)
@@ -5097,10 +5097,6 @@ export class DaemonConnection {
   }
 
   /** What decides which machine this connection reaches: the master's identity. */
-  private get sshTargetIdentity(): string {
-    return masterTargetIdentity(this.ssh)
-  }
-
   /**
    * Stop the SSH ControlMaster connection. `keep` only forgets it: a server that
    * is stopping leaves the master for the next process (ControlPersist ends it

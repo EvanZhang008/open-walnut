@@ -5433,25 +5433,32 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { onExposeProvidersChanged } = await import('../core/expose/registry.js')
       const { foundHostUnadopted } = await import('../core/hosts/found-hosts.js')
       const warmable = (key: string) => !onlyHost || key === onlyHost
+      const { masterLeftRunning } = await import('../providers/ssh-control-master.js')
       hostWarmup = new HostWarmup({
         // Every configured host, flags included: the warmup itself decides what
         // to skip (and records WHY), which is what the status surface reports.
         listHosts: async () => {
           const config = await getConfig()
           const hosts = config.hosts ?? {}
-          return Object.entries(hosts).filter(([key]) => warmable(key)).map(([key, def]) => ({
-            key,
+          return Object.entries(hosts).filter(([key]) => warmable(key)).map(([key, def]) => {
             // No hostname: the warmup skips it (host-warmup.ts), as before the link layer.
-            sshTarget: def.hostname ? linkTarget(key, { hosts }) : { hostname: '' },
-            enabled: def.enabled,
-            // Known only from ~/.ssh/config: no yes on it (core/hosts/found-hosts.ts). A yes is a configured host.
-            discovered: foundHostUnadopted(def),
-            // A server runs there (its switch, or this computer's tunnel placed on it): dialled
-            // even when the host is known only from ~/.ssh/config.
-            standing: hostRunsServer(key, config),
-            // A host-network machine: trying it costs no login, so it is tried every minute or two.
-            cheapDial: def.transport === 'net',
-          }))
+            const sshTarget = def.hostname ? linkTarget(key, { hosts }) : { hostname: '' }
+            return {
+              key,
+              sshTarget,
+              enabled: def.enabled,
+              // Known only from ~/.ssh/config: no yes on it (core/hosts/found-hosts.ts). A yes is a configured host.
+              discovered: foundHostUnadopted(def),
+              // A server runs there (its switch, or this computer's tunnel placed on it): dialled
+              // even when the host is known only from ~/.ssh/config.
+              standing: hostRunsServer(key, config),
+              // A host-network machine: trying it costs no login, so it is tried every minute or two.
+              cheapDial: def.transport === 'net',
+              // An SSH master the last server left: dialled first after a restart (host-warmup.ts).
+              // (A host-network machine has no master socket: false for it, and the warmup takes it by cheapDial.)
+              masterReusable: masterLeftRunning(key, sshTarget, WALNUT_HOME),
+            }
+          })
         },
         connect: (key) => link(key),
         isConnected: (key) => isDaemonConnected(key),

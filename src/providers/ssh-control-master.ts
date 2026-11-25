@@ -76,6 +76,29 @@ export function controlSocketPath(t: MasterTarget, dir: string = os.tmpdir()): s
   return path.join(dir, `walnut-ssh-${alias.slice(0, Math.max(1, MAX_SOCKET_PATH - fixed))}-${digest}`)
 }
 
+/**
+ * The master socket of one Walnut's link to one host: the one DaemonConnection opens
+ * (ensureControlMaster) and the warmup looks for (masterLeftRunning), built in one place.
+ */
+export function hostControlSocketPath(hostKey: string, t: { hostname: string; user?: string; port?: number }, home: string, dir: string = os.tmpdir()): string {
+  return controlSocketPath({ hostKey, target: masterTargetIdentity(t), home }, dir)
+}
+
+/**
+ * A master a server process of `home` left for this host: its socket is in place (one stat,
+ * no ssh). Dialling it after a restart makes no login, unless the master died since without
+ * removing its socket; the connect finds that (planControlMaster) and logs in, one SSH host
+ * at a time as always (host-warmup.ts).
+ */
+export function masterLeftRunning(hostKey: string, t: { hostname: string; user?: string; port?: number }, home: string, dir: string = os.tmpdir()): boolean {
+  if (!t.hostname) return false
+  try {
+    return fs.statSync(hostControlSocketPath(hostKey, t, home, dir)).isSocket()
+  } catch {
+    return false
+  }
+}
+
 /** Where the forwards opened through the master at `socketPath` are listed. */
 export function forwardsFile(socketPath: string): string {
   return `${socketPath}.forwards`
