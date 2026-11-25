@@ -178,7 +178,9 @@ describe('class guard: every way a thread is put before him runs both checks', (
     expect(direct).toEqual(['core/org/thread-ack.ts', 'core/org/threads-store.ts'])
     const store = all.find((a) => a.f === 'core/org/threads-store.ts')!.s
     const body = (name: string) => store.slice(store.indexOf(`export async function ${name}(`), store.indexOf('\nexport ', store.indexOf(`export async function ${name}(`) + 10))
-    expect(body('openNodeThread')).toMatch(/refuseOtherOpenAsks\(/)
+    // Its refusals are a step of their own (a caller may ask them before it writes anything else), run first.
+    expect(body('openNodeThread')).toMatch(/openNodeThreadChecks\(/)
+    expect(body('openNodeThreadChecks')).toMatch(/refuseOtherOpenAsks\(/)
     expect(body('openNodeThread')).toMatch(/applySupersedes\(/)
     expect(body('patchThread')).toMatch(/refuseOtherOpenAsks\(/)
     expect(body('patchThread')).toMatch(/applySupersedes\(/)
