@@ -215,8 +215,8 @@ function runGit(repoDir: string, args: string[], timeoutMs: number, stdin?: stri
       try { if (child.pid && child.pid > 1) process.kill(-child.pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
       reject(new Error(`git ${args[0]} timed out`))
     }, timeoutMs)
-    child.stdout.on('data', (c: Buffer) => { out += c.toString('utf-8') })
-    child.stderr.on('data', (c: Buffer) => { err = (err + c.toString('utf-8')).slice(-2000) })
+    child.stdout?.on('data', (c: Buffer) => { out += c.toString('utf-8') })
+    child.stderr?.on('data', (c: Buffer) => { err = (err + c.toString('utf-8')).slice(-2000) })
     child.on('error', (e) => { clearTimeout(timer); reject(e) })
     child.on('close', (code) => {
       clearTimeout(timer)
