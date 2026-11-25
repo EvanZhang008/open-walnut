@@ -38,11 +38,13 @@ export interface KeyRoot<T extends KeyNode> { contains(node: T | null): boolean 
  * WebKit a frame later. In WebKit an arrow key on a closed select is a pick, so it saves at once, and
  * the Escape that followed it landed on <body> and closed the whole dialog (2026-11-25). While the
  * focus has gone nowhere else and that control is still disabled, the key is still the control's:
- * `takenBySave` is the last control in a row that had the focus.
+ * `takenBySave` is the last control in a row that had the focus; `page` is <body>, the only place a
+ * save drops the focus to. Focus on anything else outside the dialog is the user's own: the key is its.
  */
-export function keyTargetOf<T extends KeyNode>(root: KeyRoot<T>, active: T | null, takenBySave: T | null): T | null {
+export function keyTargetOf<T extends KeyNode>(root: KeyRoot<T>, active: T | null, takenBySave: T | null, page: T | null): T | null {
   if (active && root.contains(active)) return active;
-  if (takenBySave && root.contains(takenBySave) && takenBySave.matches(':disabled')) return takenBySave;
+  const onPage = !active || active === page;
+  if (onPage && takenBySave && root.contains(takenBySave) && takenBySave.matches(':disabled')) return takenBySave;
   return active;
 }
 

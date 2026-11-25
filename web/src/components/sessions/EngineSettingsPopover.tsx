@@ -255,7 +255,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     passOutsideClick: true,
     onEscape: (e) => {
       const root = rootRef.current;
-      const target = root ? keyTargetOf<Element>(root, document.activeElement, lastControlRef.current) : e.target as Element;
+      const target = root ? keyTargetOf<Element>(root, document.activeElement, lastControlRef.current, document.body) : e.target as Element;
       if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return true; }
       if (target instanceof HTMLSelectElement) {
         target.blur();

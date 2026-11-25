@@ -34,27 +34,34 @@ describe('keyTargetOf', () => {
     it(`a ${kind} its own save disabled keeps the key while the focus is on the page`, () => {
       const control = node(kind, true)
       const body = node('body')
-      expect(keyTargetOf(dialogWith(control), body, control)).toBe(control)
+      expect(keyTargetOf(dialogWith(control), body, control, body)).toBe(control)
     })
   }
 
   it('the focused element inside the dialog is the target', () => {
     const select = node('select')
     const filter = node('filter')
-    expect(keyTargetOf(dialogWith(select, filter), filter, select)).toBe(filter)
+    expect(keyTargetOf(dialogWith(select, filter), filter, select, null)).toBe(filter)
   })
 
   it('once the save is over the control no longer owns a key pressed on the page', () => {
     const select = node('select', false)
     const body = node('body')
-    expect(keyTargetOf(dialogWith(select), body, select)).toBe(body)
+    expect(keyTargetOf(dialogWith(select), body, select, body)).toBe(body)
+  })
+
+  it('focus the user put outside the dialog keeps its key, even while a save disables the control', () => {
+    const select = node('select', true)
+    const body = node('body')
+    const composer = node('composer')
+    expect(keyTargetOf(dialogWith(select), composer, select, body)).toBe(composer)
   })
 
   it('a control outside the dialog (an earlier open) is never the target', () => {
     const stale = node('select', true)
     const body = node('body')
-    expect(keyTargetOf(dialogWith(), body, stale)).toBe(body)
-    expect(keyTargetOf(dialogWith(), null, null)).toBeNull()
+    expect(keyTargetOf(dialogWith(), body, stale, body)).toBe(body)
+    expect(keyTargetOf(dialogWith(), null, null, null)).toBeNull()
   })
 })
 
