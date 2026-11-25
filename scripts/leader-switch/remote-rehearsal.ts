@@ -25,6 +25,8 @@ import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
 import { machineIdFile } from '../../src/core/machine-id.js'
 import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, relayMachine, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
 import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
+import { retakeAfterRestartMs } from '../../src/core/leader/switch/runtime.js'
+import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../../src/core/leader/permit/types.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -654,6 +656,11 @@ function readCfgParams(m: Machine): { validMs: number } {
   return { validMs: (parseCfg(cfg.leader_switch)?.params.validMs) ?? 15_000 }
 }
 const parseCfg = (raw: unknown) => parseSwitchSettings(raw).settings
+/** The permit clocks a machine's server runs on, read as it reads them (remote witnesses: the default ones). */
+function readPermitParams(m: Machine): PermitParams {
+  const cfg = YAML.parse(fs.readFileSync(path.join(m.home, 'config.yaml'), 'utf8')) as { leader_switch?: unknown }
+  return parseCfg(cfg.leader_switch)?.params ?? DEFAULT_PERMIT_PARAMS
+}
 
 /** One witness down before the switch (the old leader's own door: the candidate reaches its own and the companion), and one during it (the companion). */
 async function witnessDown(x: Ctx): Promise<void> {
@@ -830,6 +837,18 @@ async function trialFails(x: Ctx): Promise<void> {
   })
   c.add('failed trial: both sides roll back (the new machine demotes, the old leader takes the lead back)', r.state?.step === 'rolled-back' && r.target?.step === 'rolled-back', `source ${r.state?.step} (${r.state?.rollbackWhy?.slice(0, 140)}); target ${r.target?.step} (${r.target?.rollbackWhy?.slice(0, 140)})`)
   await oneLeader(x, 'failed trial', L)
+  // The old leader leads again within its bound (runtime.ts retakeAfterRestartMs), counted from its restarted server's
+  // boot: its handover runs out at the two witnesses it reaches (its own counts it from that boot; the failed machine's
+  // is out of reach, its door closed with its server), then one round. Before the grant rule took a grant on its own
+  // process's live record, the two could stay on two grants of that process for many minutes (review round 3, B2b step 4).
+  const startedAt = Date.parse(r.state?.log.find((l) => l.step === 'start-source')?.at ?? '')
+  const lines = readMayAct(L.home).filter((l) => l.t >= startedAt)
+  const boot = lines.find((l) => l.event === 'boot')
+  const led = boot ? lines.find((l) => l.event === 'lease' && l.mayAct && l.t >= boot.t) : undefined
+  const bound = retakeAfterRestartMs(readPermitParams(L))
+  const took = boot && led ? led.t - boot.t : NaN
+  x.times['failed trial: the old leader leads again after its server booted'] = Number.isFinite(took) ? `${(took / 1000).toFixed(1)} s (bound ${(bound / 1000).toFixed(1)} s)` : `not seen (boot ${boot?.at ?? 'none'})`
+  c.add(`failed trial: ${L.id} leads again within ${(bound / 1000).toFixed(1)} s of its server's boot (its handover's hold, then one round)`, took <= bound, `${Number.isFinite(took) ? `${(took / 1000).toFixed(1)} s` : 'no lead seen'}; boot ${boot?.at ?? 'none'} (${boot?.why ?? ''}); lead ${led?.at ?? 'none'}`)
   c.add(`failed trial: ${O.id} runs no leader and its tried home is kept aside`, !w.side(O).runningServer() && fs.readdirSync(path.dirname(O.home)).some((n) => n.startsWith(`${path.basename(O.home)}.trial-failed-`)))
   await checkCarried(c, w, L, L, x.carried, 'failed trial')
 }
