@@ -9,7 +9,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { FACT_FLUSH_MS, FactLog, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
-import { HostChannel, attachLeaderChannel, comparePermit, permitOfResume, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
+import { HostChannel, attachLeaderChannel, comparePermit, permitOfResume, replayFrames, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
 let dir = ''
@@ -257,6 +257,32 @@ describe('moving to another leader', () => {
     expect(seqs(b)).toEqual([9, 10, 11, 12])
     lb.cut()
     await log.close()
+  })
+})
+
+describe('reading a large unread log back (2026-11-25: a 102 MB log the leader never caught up with)', () => {
+  it('a leader that was away gets every record once, in bounded frames, from one read of the file per pass', async () => {
+    const { log, host } = await hostOf()
+    const big = 'L'.repeat(20_000)
+    for (let i = 1; i <= 1000; i++) log.append('s1', 'session:tool-result', { i, content: i % 4 ? 'ok' : big })
+    await log.flush()
+    let reads = 0
+    const read = log.read.bind(log)
+    log.read = async (after: number, limit?: number) => { reads++; return read(after, limit) }
+    const a = new Leader(1)
+    const link = connect(host, a)
+    await until(() => a.applied.length === 1000, 15_000)
+    expect(seqs(a)).toEqual(range(1, 1000))
+    expect(reads).toBeLessThanOrEqual(2)
+    link.cut()
+    await log.close()
+  })
+
+  it('cuts records into frames by count and by size, one record at least per frame', () => {
+    const r = (seq: number, size: number): FactRecord => ({ v: 2, seq, opId: `o${seq}`, rev: 1, at: seq, kind: 'session-fact', sid: 's1', sseq: seq, name: 'session:tool-result', data: { c: 'x'.repeat(size) } })
+    expect(replayFrames([r(1, 10), r(2, 10), r(3, 10)], 2, 1e9).map((f) => f.map((x) => x.seq))).toEqual([[1, 2], [3]])
+    expect(replayFrames([r(1, 600), r(2, 600), r(3, 2000), r(4, 10)], 100, 1000).map((f) => f.map((x) => x.seq))).toEqual([[1], [2], [3], [4]])
+    expect(replayFrames([], 2, 10)).toEqual([])
   })
 })
 

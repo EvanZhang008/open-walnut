@@ -135,6 +135,37 @@ describe('the old-leader watch', () => {
     expect(src).toMatch(/onLeaderLinked: \(\) => \{[^}]*watchRef\?\.tick\(\)/)
   })
 
+  it('2026-11-25: a leader that restarts between two looks, its copy not heard again yet, is a new presence; the host waits on, never stands down', async () => {
+    const s = { answers: true, linked: false, says: true, since: 1 }
+    const { w, calls, advance } = harness(s)
+    await w.tick()
+    await advance(70_000)
+    expect(w.state().state).toBe('waiting')
+    // Restarted unseen: a new presence, whose config copy is not heard since it began.
+    s.since = 2
+    s.says = false
+    await advance(10_000)
+    expect(w.standingDown()).toBe(false)
+    s.says = true
+    await advance(120_000)
+    expect(w.standingDown()).toBe(false)
+    expect(w.state().state).toBe('waiting')
+    expect(calls).toEqual([])
+  })
+
+  it('an old leader after a restart still makes the host stand down, a whole bound after its new presence began', async () => {
+    const s = { answers: true, linked: false, says: false, since: 1 }
+    const { w, calls, advance } = harness(s)
+    await w.tick()
+    await advance(50_000)
+    s.since = 2
+    await advance(50_000)
+    expect(w.standingDown()).toBe(false)
+    await advance(20_000)
+    expect(w.standingDown()).toBe(true)
+    expect(calls).toEqual(['down'])
+  })
+
   it('the bound is minutes by default, settable for one process', () => {
     expect(oldLeaderMs({})).toBe(180_000)
     expect(oldLeaderMs({ WALNUT_HOST_OLD_LEADER_MS: '4000' })).toBe(4000)

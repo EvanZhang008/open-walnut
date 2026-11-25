@@ -206,6 +206,84 @@ describe('compaction', () => {
   })
 })
 
+describe('snapshot facts while the leader is away (2026-11-25: 1,242 ledger snapshots of 74 KB in one running turn, 102 MB unread)', () => {
+  it('a running turn keeps only the newest snapshot of each kind per session; its other facts stay', () => {
+    const out = compactRecords([
+      rec(1, 's1', 'session:background-tasks', { tasks: [1] }), rec(2, 's1', 'session:tool-use', {}),
+      rec(3, 's2', 'session:background-tasks', { tasks: [9] }), rec(4, 's1', 'session:background-tasks', { tasks: [1, 2] }),
+      rec(5, 's1', 'session:team-info', { members: [] }), rec(6, 's1', 'session:turn-speed', { speed: 1 }),
+      rec(7, 's1', 'session:turn-speed', { speed: 2 }), rec(8, 's1', 'session:model-catalog', { models: [] }),
+      rec(9, 's1', 'session:model-catalog', { models: [1] }), rec(10, 's1', 'session:team-info', { members: [1] }),
+    ])
+    expect(out.map((r) => [r.seq, r.sid, r.name])).toEqual([
+      [2, 's1', 'session:tool-use'], [3, 's2', 'session:background-tasks'], [4, 's1', 'session:background-tasks'],
+      [7, 's1', 'session:turn-speed'], [9, 's1', 'session:model-catalog'], [10, 's1', 'session:team-info'],
+    ])
+  })
+
+  it('a finished turn still folds its snapshots into its summary, and a later snapshot never takes the summary away', () => {
+    const out = compactRecords([
+      rec(1, 's1', 'session:background-tasks', { tasks: [1] }), rec(2, 's1', 'session:tool-use', { name: 'Bash' }),
+      rec(3, 's1', 'session:result', {}), rec(4, 's1', 'session:background-tasks', { tasks: [1, 2] }),
+    ])
+    expect(out.map((r) => [r.seq, r.name])).toEqual([[1, 'turn-summary'], [3, 'session:result'], [4, 'session:background-tasks']])
+    expect((out[0].data as { facts: number }).facts).toBe(2)
+  })
+
+  it('a long turn with a busy ledger stays small on disk, and the file is not rewritten at every flush', async () => {
+    const said: string[] = []
+    const log = await open({ durable: false, compactBytes: 1024 * 1024, log: (_l, msg) => { said.push(msg) } })
+    const ledger = Array.from({ length: 180 }, (_, i) => ({ taskId: `b${i}`, status: 'completed', description: 'Build and run all rehearsals on HEAD', startedAt: i, endedAt: i + 1 }))
+    for (let i = 0; i < 1200; i++) {
+      log.append('s1', 'session:background-tasks', { sessionId: 's1', inFlight: 1, tasks: ledger.slice(0, 1 + (i % 180)) })
+      if (i % 3 === 0) log.append('s1', 'session:tool-use', { name: 'Bash' })
+      if (i % 20 === 19) await log.flush()
+    }
+    await log.flush()
+    const size = (await fsp.stat(path.join(dir, 'facts-w1.ndjson'))).size
+    expect(size).toBeLessThan(2 * 1024 * 1024)
+    await log.compact()
+    const kept = await log.read(0)
+    expect(kept.filter((r) => r.name === 'session:background-tasks')).toHaveLength(1)
+    expect(kept.filter((r) => r.name === 'session:tool-use')).toHaveLength(400)
+    // Each compaction at least halves what it was given, or the next waits until the file doubles.
+    expect(said.filter((m) => m === 'fact log: compacted').length).toBeLessThan(40)
+    await log.close()
+  })
+
+  it('a leader catching up, acking a little at a time, does not make every ack rewrite the unread rest', async () => {
+    const said: string[] = []
+    const log = await open({ durable: false, compactBytes: 64 * 1024, log: (_l, msg) => { said.push(msg) } })
+    const body = 'x'.repeat(1000)
+    for (let i = 0; i < 400; i++) log.append('s1', 'session:tool-use', { name: 'Bash', input: body })
+    await log.flush()
+    const before = said.filter((m) => m === 'fact log: compacted').length
+    for (let upTo = 10; upTo <= 400; upTo += 10) await log.ack(upTo)
+    // 40 acks: a compaction only when half of what is left is confirmed, a handful, never one per ack.
+    const n = said.filter((m) => m === 'fact log: compacted').length - before
+    expect(n).toBeGreaterThan(0)
+    expect(n).toBeLessThanOrEqual(8)
+    expect(log.floor).toBeGreaterThan(200)
+    await log.close()
+  })
+
+  it('what compaction cannot drop is not read and rewritten again until the file doubles', async () => {
+    const said: string[] = []
+    const log = await open({ durable: false, compactBytes: 64 * 1024, log: (_l, msg) => { said.push(msg) } })
+    const body = 'x'.repeat(1000)
+    for (let i = 0; i < 400; i++) {
+      log.append('s1', 'session:tool-use', { name: 'Bash', input: body })
+      await log.flush()
+    }
+    // 400 flushes past the size of 64 KB: a handful of compactions (64, 128, 256 KB), never one per flush.
+    const n = said.filter((m) => m === 'fact log: compacted').length
+    expect(n).toBeGreaterThan(0)
+    expect(n).toBeLessThanOrEqual(4)
+    expect((await log.read(0))).toHaveLength(400)
+    await log.close()
+  })
+})
+
 describe('size while the leader is away', () => {
   it('10 busy sessions for 24 hours with nothing confirmed stay under 64 MB', async () => {
     const log = await open({ durable: false, flushMs: 1000, compactBytes: 8 * 1024 * 1024 })

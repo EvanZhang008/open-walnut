@@ -105,8 +105,9 @@ export const READS_HELD_TURN_ENDS = 'stand-down-held-v1'
 /** What this build's leader names on its resume (`reads`). */
 export const LEADER_READS: readonly string[] = [READS_HELD_TURN_ENDS]
 
-/** Records per facts frame when the log is read back. */
+/** Records per facts frame when the log is read back, and about the most bytes one frame holds. */
 const REPLAY_BATCH = 256
+const REPLAY_FRAME_BYTES = 4 * 1024 * 1024
 
 interface Reader { link: ChannelLink; leader: boolean; caughtUp: boolean; sentUpTo: number; alive: boolean; reads: ReadonlySet<string> }
 
@@ -253,14 +254,21 @@ export class HostChannel {
     reader.caughtUp = false
     while (reader.alive && reader.sentUpTo < log.head) {
       const head = log.head
-      const recs = await log.read(reader.sentUpTo, REPLAY_BATCH)
+      // One read of the file per pass, sent in frames: a read per frame parsed the whole file each
+      // time, so a large unread log took longer to read back than the leader waited (2026-11-25).
+      const recs = await log.read(reader.sentUpTo)
       if (!reader.alive) return
       // None kept up to the head read before it (a record the file lost): this reader holds all
       // there is up to it. Never left short of caught up, so live() and onLeaderLinked's
       // payOwed (stand-down-held.ts) still reach it.
       if (recs.length === 0) { reader.sentUpTo = Math.max(reader.sentUpTo, head); continue }
-      reader.link.send({ ch: 'sf', op: 'facts', recs, replay: true, sentAt: this.now() })
-      reader.sentUpTo = recs[recs.length - 1].seq
+      for (const frame of replayFrames(recs)) {
+        if (!reader.alive) return
+        reader.link.send({ ch: 'sf', op: 'facts', recs: frame, replay: true, sentAt: this.now() })
+        reader.sentUpTo = frame[frame.length - 1].seq
+        // The event loop between frames: a large read-back never holds this service for its whole length.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
     }
     // Same tick as the head check: any batch made durable from here on reaches live().
     if (reader.alive && reader.sentUpTo >= log.head) reader.caughtUp = true
@@ -285,6 +293,21 @@ export class HostChannel {
     if (this.leaderReader === reader) this.leaderReader = null
     reader.link.close('error')
   }
+}
+
+/** Records in order, cut into facts frames of at most REPLAY_BATCH records and about REPLAY_FRAME_BYTES each (one record at least). */
+export function replayFrames(recs: readonly FactRecord[], maxRecs = REPLAY_BATCH, maxBytes = REPLAY_FRAME_BYTES): FactRecord[][] {
+  const out: FactRecord[][] = []
+  let cur: FactRecord[] = []
+  let bytes = 0
+  for (const r of recs) {
+    const size = JSON.stringify(r).length
+    if (cur.length > 0 && (cur.length >= maxRecs || bytes + size > maxBytes)) { out.push(cur); cur = []; bytes = 0 }
+    cur.push(r)
+    bytes += size
+  }
+  if (cur.length > 0) out.push(cur)
+  return out
 }
 
 export interface ChannelCursor { logId: string; seq: number }

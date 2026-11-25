@@ -99,6 +99,19 @@ export const TURN_DETAIL_FACTS: ReadonlySet<string> = new Set([
   'session:unknown-event', 'session:background-tasks', 'session:turn-speed', 'session:team-info',
 ])
 
+/**
+ * The facts whose payload is a whole snapshot of one session's state (its background-task ledger,
+ * its team, its model catalog, the speed readout of its turn): the newest of a session stands for
+ * every earlier one, as `live` does, so a log the leader has not read keeps one of each per session
+ * (fact-log.ts compaction), a turn still running included. 2026-11-25: a turn of one session with a
+ * busy background ledger wrote 1,242 snapshots of about 74 KB each while the Mac was away; the
+ * unread log reached 102 MB and the leader never caught up on its return. Every fact is either
+ * here or named as kept whole (tests/core/session-channel/event-classes.test.ts).
+ */
+export const SNAPSHOT_FACTS: ReadonlySet<string> = new Set([
+  'session:background-tasks', 'session:team-info', 'session:model-catalog', 'session:turn-speed',
+])
+
 /** The fact that ends a turn (the summary goes in front of it). */
 export const TURN_END_FACT = 'session:result'
 

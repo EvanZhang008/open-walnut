@@ -91,6 +91,8 @@ export function startOldLeaderWatch(deps: OldLeaderWatchDeps, o: { timer?: boole
   const afterMs = deps.afterMs ?? oldLeaderMs()
   const now = deps.now ?? Date.now
   let since: number | null = null
+  /** The presence `since` counts in (presenceSince): a new one, the leader back after a restart, counts from its own start. */
+  let presenceAt: number | null = null
   let down = false
   let waiting = false
   let downAt: number | null = null
@@ -117,6 +119,14 @@ export function startOldLeaderWatch(deps: OldLeaderWatchDeps, o: { timer?: boole
       }
       // Away (or not heard yet): never counts, whatever this host does now stays.
       if (!deps.leaderAnswers()) { since = null; waiting = false; return }
+      // A leader that restarted between two looks is a new presence: its own channel gets the whole
+      // bound, and its config copy (leaderSaysChannel) the time to be heard again. Counted from the
+      // presence before it, a leader that says it speaks the channel read as an old one for the
+      // moment its copy was not heard yet, and the host stood down and up at each restart (2026-11-25).
+      const p = deps.presenceSince?.() ?? null
+      // `waiting` stays as it was: a channel still shut after the restart is the same fault, and
+      // Walnut Health keeps one item for it instead of recovering and raising it at every restart.
+      if (p !== presenceAt) { presenceAt = p; since = null }
       since ??= now()
       if (down) {
         // Stood down, and the leader that answers now says it speaks the channel (a copy heard since

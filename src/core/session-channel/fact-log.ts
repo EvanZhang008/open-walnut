@@ -30,6 +30,8 @@
  *     what it has not, stands one `turn-summary` record for the tool facts of each finished turn
  *     and one merged `row` record for its row patches; facts of a turn still running are kept;
  *     a session's `drop` record (the leader deleted it) stands for all of that session before it;
+ *     a session's newest `live` record and its newest snapshot fact (SNAPSHOT_FACTS) stand for
+ *     the earlier ones; a compaction that left the file large waits until it doubles;
  *   - a torn last line (a crash in a write) is cut at open;
  *   - `toldLine(sid)`: the furthest CLI output line a durable fact of the session came from, so the
  *     host's runner, attaching again after a restart, reads on from exactly where the leader was told
@@ -41,7 +43,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { TURN_DETAIL_FACTS, TURN_END_FACT } from './event-classes.js'
+import { SNAPSHOT_FACTS, TURN_DETAIL_FACTS, TURN_END_FACT } from './event-classes.js'
 import { comparePermit, isPermitPair, type PermitPair } from './channel.js'
 
 export interface FactRef { epoch?: string; v?: number; bytes: number }
@@ -134,6 +136,8 @@ export class FactLog {
   private chain: Promise<void> = Promise.resolve()
   private listeners = new Set<(recs: FactRecord[]) => void>()
   private bytes: number
+  /** The size past which the file is compacted again (twice what the last compaction left). */
+  private compactAgainAt = 0
   private firstSeq: number
   private closed = false
   private durableHead: number
@@ -247,7 +251,10 @@ export class FactLog {
     this.state.acked = Math.min(upTo, this.durableHead)
     await this.serial(async () => {
       await this.saveState()
-      if (this.firstSeq <= this.state.acked && this.bytes > this.o.compactBytes / 2) await this.compactNow()
+      // Only when at least half the records left are confirmed: a leader catching up acks every
+      // 100 ms, and each would otherwise rewrite the whole unread rest of the file.
+      const confirmed = this.state.acked - this.firstSeq + 1
+      if (confirmed > 0 && confirmed * 2 >= this.durableHead - this.firstSeq + 1 && this.bytes > this.o.compactBytes / 2) await this.compactNow()
     })
   }
 
@@ -328,7 +335,7 @@ export class FactLog {
         this.o.log?.('warn', 'fact log: a listener threw', { error: err instanceof Error ? err.message : String(err) })
       }
     }
-    if (this.bytes > this.o.compactBytes) await this.compactNow()
+    if (this.bytes > Math.max(this.o.compactBytes, this.compactAgainAt)) await this.compactNow()
   }
 
   private async compactNow(): Promise<void> {
@@ -348,6 +355,9 @@ export class FactLog {
     const before = this.bytes
     this.bytes = Buffer.byteLength(text)
     this.firstSeq = kept[0]?.seq ?? this.durableHead + 1
+    // Not again on size until the file doubles: what compaction could not drop (facts the leader has
+    // not read) would be read, parsed and rewritten whole at every flush (2026-11-25: 100 MB a flush).
+    this.compactAgainAt = this.bytes * 2
     this.o.log?.('info', 'fact log: compacted', { walnutId: this.o.walnutId, records: records.length, kept: kept.length, before, after: this.bytes })
   }
 
@@ -485,10 +495,15 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
       turn = []
     }
   }
-  // A session's newest `live` record stands for every earlier one.
-  const newestLive = new Map<string, number>()
-  for (const r of records) if (r.name === 'live') newestLive.set(r.sid, r.seq)
-  for (const r of records) if (r.name === 'live' && newestLive.get(r.sid) !== r.seq) replace.set(r.seq, null)
+  // A session's newest `live` record, and its newest snapshot of each kind (SNAPSHOT_FACTS), stands
+  // for every earlier one. A snapshot a finished turn's summary already stands for keeps its place.
+  const newest = new Map<string, number>()
+  const snapshotOf = (r: FactRecord): string | null => (r.name === 'live' || SNAPSHOT_FACTS.has(r.name) ? `${r.sid}\u0000${r.name}` : null)
+  for (const r of records) { const k = snapshotOf(r); if (k) newest.set(k, r.seq) }
+  for (const r of records) {
+    const k = snapshotOf(r)
+    if (k && newest.get(k) !== r.seq && !replace.has(r.seq)) replace.set(r.seq, null)
+  }
   // A session the leader deleted (its `drop` record): nothing of it before the drop is sent any more.
   const droppedAt = new Map<string, number>()
   for (const r of records) if (r.name === 'drop') droppedAt.set(r.sid, r.seq)
