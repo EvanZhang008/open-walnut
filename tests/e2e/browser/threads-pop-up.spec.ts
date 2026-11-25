@@ -20,6 +20,7 @@
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
@@ -90,6 +91,26 @@ async function shot(page: Page, name: string, scope = page.getByTestId('org-rail
   await scope.screenshot({ path: `${SHOTS}/threads-pop-up-${name}-${test.info().project.name}.png` })
 }
 
+/** Ends of the long turns still held (busyUntilEnded); every test ends what it left. */
+const heldTurns: Array<() => void> = []
+
+/**
+ * Keeps a session in a long turn until the test ends it, so his reply stays on its way while the
+ * checks read the card. The turn used to run on a clock (25 to 45 s), and on a loaded machine it
+ * ended first: the task read his words and the card left mid-check (CI run 45635409311; here at
+ * load 65, every test of the file took twice as long). The returned end lets the task read; the
+ * cap only frees the session when a test dies before afterEach ends it.
+ */
+async function busyUntilEnded(request: APIRequestContext, sid: string): Promise<() => void> {
+  const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+  const gate = path.join(fs.mkdtempSync(path.join(fixtureRoot, 'turn-gate-')), 'end')
+  const busy = await request.post(`/api/v1/sessions/${sid}/messages`, { data: { text: `snapshot-long-turn:300000 until:${gate}` } })
+  expect(busy.ok(), await busy.text()).toBe(true)
+  const end = () => { if (!fs.existsSync(gate)) fs.writeFileSync(gate, '') }
+  heldTurns.push(end)
+  return end
+}
+
 async function startSession(request: APIRequestContext, taskId: string, fixtureRoot: string): Promise<string> {
   await post(request, '/api/sessions/quick-start', { cwd: `${fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Started.', taskId })
   let sid = ''
@@ -123,6 +144,8 @@ test.beforeAll(async ({ request }) => {
   const asked = await request.patch(`/api/v1/tasks/${ids.owner}/threads/${ids.thread}`, { data: { reply: ASK, state: 'needs', user_kind: 'user_own', user_kind_why: 'It changes his own settings and data store.' }, headers: { 'x-walnut-caller-sid': ids.ownerSid } })
   expect(asked.ok(), await asked.text()).toBe(true)
 })
+
+test.afterEach(() => { for (const end of heldTurns.splice(0)) end() })
 
 test.afterAll(async ({ request }) => {
   await restoreOneCard(request, oneCardWas)
@@ -251,8 +274,7 @@ test('on: his reply stays on the card through a redraw while the task has not re
   const id = opened.thread.id
   await flag(request, true)
   // The task is busy in a long turn: his reply waits for its end, so it stays on its way meanwhile.
-  const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:25000' } })
-  expect(busy.ok(), await busy.text()).toBe(true)
+  const endTurn = await busyUntilEnded(request, ids.ownerSid)
   await expect.poll(async () => (await (await request.get(`/api/tasks/${ids.owner}`)).json()).task?.phase, { timeout: 20_000 }).toBe('IN_PROGRESS')
   await isolateUiPrefs(page)
   await loadHome(page)
@@ -276,6 +298,7 @@ test('on: his reply stays on the card through a redraw while the task has not re
   await expect(sent.getByTestId('org-thread-unread-by-task')).toHaveText(`Sent: Task status foundation ${STAMP} has not read it yet.`)
   await shot(page, '5-redrawn')
   // The long turn ends, the task reads his words, and the card leaves.
+  endTurn()
   await expect.poll(async () => {
     const file = await (await request.get(`/api/v1/tasks/${ids.owner}/threads`)).json() as { threads: Array<{ id: string; messages: Array<{ text: string; delivery?: { state: string } }> }> }
     return file.threads.find((t) => t.id === id)?.messages.find((m) => m.text === WORDS)?.delivery?.state ?? 'none'
@@ -301,8 +324,7 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
   expect(briefOff.ok(), await briefOff.text()).toBe(true)
   try {
     // The task is busy in a long turn, so his reply is still on its way while the card is read.
-    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:25000' } })
-    expect(busy.ok(), await busy.text()).toBe(true)
+    await busyUntilEnded(request, ids.ownerSid)
     await isolateUiPrefs(page)
     await loadHome(page)
     await openLead(page)
@@ -372,8 +394,7 @@ test('on, Threads by state: a card below snoozed says until when, and its Unsnoo
   expect(briefOff.ok(), await briefOff.text()).toBe(true)
   try {
     // The task is busy in a long turn, so his reply stays on its way while the card is snoozed.
-    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:45000' } })
-    expect(busy.ok(), await busy.text()).toBe(true)
+    await busyUntilEnded(request, ids.ownerSid)
     await isolateUiPrefs(page)
     await loadHome(page)
     await openLead(page)
@@ -451,8 +472,7 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
   expect(put.ok(), await put.text()).toBe(true)
   try {
     // The task is busy in a long turn, so his reply is still on its way while every count is read.
-    const busy = await request.post(`/api/v1/sessions/${ids.ownerSid}/messages`, { data: { text: 'snapshot-long-turn:30000' } })
-    expect(busy.ok(), await busy.text()).toBe(true)
+    await busyUntilEnded(request, ids.ownerSid)
     await isolateUiPrefs(page)
     await loadHome(page)
     await openLead(page)

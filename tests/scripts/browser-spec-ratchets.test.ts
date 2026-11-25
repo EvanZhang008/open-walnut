@@ -2042,3 +2042,33 @@ describe('the quick bar switch', () => {
     expect(writesOf("const res = await request.put('/api/config', { data: {} })")).toEqual(['{ data: {} })'])
   })
 })
+
+describe('a reply kept on its way by a long turn', () => {
+  // threads-pop-up kept the task busy with a mock turn on a clock (`snapshot-long-turn:25000`, up
+  // to 45 s) while it read that his reply had not been read yet. On a loaded machine the turn ended
+  // first, the task read his words and the card left mid-check (2026-11-25, CI run 45635409311 and
+  // twice here at load 65). A test that reads "not read yet" ends the turn itself: the mode's
+  // ` until:<file>` (tests/providers/mock-claude.mjs), as busyUntilEnded does.
+  const CLOCKED = /snapshot-long-turn:\d+(?![^'"`\n]*\suntil:)/
+  const READS_UNREAD = /has not read it yet|\.not\.toBe\('delivered'\)/
+  const offendersOf = (text: string): string[] => text.split(/\n(?=test\()/)
+    .filter((body) => CLOCKED.test(body) && READS_UNREAD.test(body))
+    .map((body) => body.split('\n')[0]!.slice(0, 90))
+
+  it('no test reads an unread reply while a clock ends the turn that holds it', () => {
+    const readers = sources.filter(({ text }) => READS_UNREAD.test(text))
+    expect(readers.map(({ file }) => file)).toContain('threads-pop-up.spec.ts')
+    expect(readers.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "test('his reply stays', async ({ page, request }) => {",
+      "  await request.post(url, { data: { text: 'snapshot-long-turn:25000' } })",
+      "  await expect(sent).toHaveText(`Sent: ${name} has not read it yet.`)",
+      '})',
+    ].join('\n')
+    expect(offendersOf(spec)).toHaveLength(1)
+    expect(offendersOf(spec.replace("'snapshot-long-turn:25000'", '`snapshot-long-turn:300000 until:${gate}`'))).toEqual([])
+  })
+})

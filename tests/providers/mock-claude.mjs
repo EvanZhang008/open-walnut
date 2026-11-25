@@ -1680,10 +1680,15 @@ if (outputFormat === 'stream-json') {
     //                   errors:['[ede_diagnostic] …'], output_tokens:0, no result text}
     //            session_state_changed{idle}
     //          The natural end (no interrupt) is a plain success result + idle.
+    //          ` until:<file>` (after the mode) ends it naturally once that file
+    //          exists, <ms> then only caps it: a test whose checks must finish
+    //          while the turn runs ends it itself, never racing a clock.
     if (effectiveMessage === 'snapshot-long-turn' || effectiveMessage.startsWith('snapshot-long-turn:')) {
       // Only the first line carries the mode; a queued send appends Walnut's
       // rich-output trailer after a blank line.
-      const parts = effectiveMessage.split('\n')[0].split(':');
+      const modeLine = effectiveMessage.split('\n')[0];
+      const until = (modeLine.match(/\suntil:(\S+)/) || [])[1];
+      const parts = modeLine.replace(/\suntil:\S+/, '').split(':');
       const holdMs = Number(parts[1]) || 60000;
       const streamsText = parts[2] === 'text' || parts[2] === 'dense';
       const partialText = parts[2] === 'dense'
@@ -1708,7 +1713,8 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: opening + partialText } }));
         streamedPartial = { msgId, text: opening + partialText };
       }
-      const natural = setTimeout(() => {
+      let natural = null;
+      const endNaturally = () => {
         onInterrupt = null;
         streamedPartial = null;
         const text = `Long turn ${seq} ran to completion.`;
@@ -1716,7 +1722,14 @@ if (outputFormat === 'stream-json') {
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: holdMs, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
         emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
         armSnapshotNextTurn();
-      }, holdMs);
+      };
+      if (until) {
+        const capAt = Date.now() + holdMs;
+        const poll = () => { natural = fs.existsSync(until) || Date.now() >= capAt ? (endNaturally(), null) : setTimeout(poll, 100); };
+        poll();
+      } else {
+        natural = setTimeout(endNaturally, holdMs);
+      }
       if (!sticky) {
         onInterrupt = () => {
           clearTimeout(natural);
