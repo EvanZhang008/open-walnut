@@ -33,8 +33,10 @@ struct ChatDirectorFold: View {
         ViewMemory.key("chatDrawer", "directorsOpen", id: vpRowId)
     }
 
-    /// Lines up with the VP's name: the row's 20pt inset, its 34pt avatar and the 10pt gap.
-    static let nameInset: CGFloat = 64
+    /// Snug to the left (2026-11-25, the user: not this much whitespace, closer to the left): a short
+    /// step right of the VP's avatar (its row's 20pt inset), so a Director's title starts about where
+    /// the VP's name does (20 + 34 + 10), as on the web's fold.
+    static let nameInset: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -65,7 +67,7 @@ struct ChatDirectorFold: View {
                         Text(verbatim: project)
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
-                            .padding(.leading, Self.nameInset + 4)
+                            .padding(.leading, Self.nameInset)
                             .padding(.top, 6)
                             .padding(.bottom, 2)
                             .accessibilityAddTraits(.isHeader)
@@ -91,7 +93,7 @@ struct ChatDirectorFold: View {
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(palette.tint)
                         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                        .padding(.leading, Self.nameInset + 4)
+                        .padding(.leading, Self.nameInset)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -122,8 +124,9 @@ struct ChatDirectorFoldRow: View {
             Spacer(minLength: 4)
             if Self.hasDot(director) { ChatOrgNeedsDot() }
         }
-        .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-        .padding(.leading, ChatDirectorFold.nameInset + 6)
+        // A sibling VP row's tap height (ChatOrgRowView, 44pt).
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.leading, ChatDirectorFold.nameInset)
         // The red dot lines up with a VP row's (12 + 8 from the edge).
         .padding(.trailing, 20)
         .contentShape(Rectangle())

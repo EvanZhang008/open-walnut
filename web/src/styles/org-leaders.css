@@ -4,13 +4,15 @@
 /* In the list: the fold line and its Directors step in one level under the VP's row; each Director is the
    list's own row (DirectorListRow: its 34px avatar slot, its name), so the rows match the VPs' (2026-11-25,
    the user on dots, wrapped titles, counts and a guide line: "too ugly lol"). */
-.org-leaders.is-list { margin: -4px 0 2px 28px; }
+/* Snug to the left (2026-11-25, the user: not this much whitespace, closer to the left): a Director's
+   avatar a short step right of the VP's, its title where the VP's name starts. */
+.org-leaders.is-list { margin: -4px 0 2px 6px; }
 .org-leaders.is-list .org-leaders-toggle { margin-left: 4px; color: var(--fg-secondary); font-size: var(--font-size-sm); }
 .org-leaders.is-list .org-leaders-project { padding-left: 10px; }
 .org-leaders.is-list .org-new-director { margin-left: 14px; }
 /* One level down, as the phone's fold draws it (ChatDirectorFoldRow: a lighter title): the same row,
    slimmer, its name in the regular weight. */
-.org-leaders.is-list .org-channel.is-director { padding-top: 2px; padding-bottom: 2px; }
+.org-leaders.is-list .org-channel.is-director { gap: 8px; padding-top: 2px; padding-bottom: 2px; }
 .org-leaders.is-list .org-channel.is-director .org-channel-name { font-weight: 500; font-size: var(--font-size-sm); }
 /* In a chart card: under the name, above the projects, its chevron in the projects' fold column (org-chart.css .oc-chevron). */
 .org-leaders.is-chart { padding: 0 4px 6px 2px; }

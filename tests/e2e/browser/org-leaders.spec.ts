@@ -127,11 +127,11 @@ test('on: the list\'s VP row is plain, its Directors one folded line under it th
   await expect(listToggle).toHaveText(/1 director$/)
   await expect(listToggle).toHaveAttribute('data-open', 'false')
   await expect(listFold.getByTestId('org-leaders-list')).toHaveCount(0)
-  // Under the row, its chevron just left of the VP's name, so its words start where the name does.
+  // Under the row, its chevron in the VP's avatar column, left of the VP's name.
   const [rowBox, foldBox, nameBox] = await Promise.all([vp.boundingBox(), listToggle.boundingBox(), vp.locator('.org-channel-name').boundingBox()])
   expect(foldBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height - 6)
-  expect(foldBox!.x).toBeGreaterThan(nameBox!.x - 28)
-  expect(foldBox!.x).toBeLessThan(nameBox!.x)
+  expect(foldBox!.x).toBeGreaterThan(rowBox!.x)
+  expect(foldBox!.x).toBeLessThan(nameBox!.x - 12)
   await listToggle.click()
   await expect(listToggle).toHaveAttribute('data-open', 'true')
   // Each Director is the list's own row (2026-11-25, the user on dots, counts and wrapped titles: "too
@@ -143,6 +143,11 @@ test('on: the list\'s VP row is plain, its Directors one folded line under it th
   await expect(listFold.locator('.org-leader-leads, .org-leader-open > i, [data-testid="org-leaders-project"]')).toHaveCount(0)
   const [vpName, rowName] = await Promise.all([vp.locator('.org-channel-name').boundingBox(), listed.locator('.org-channel-name').boundingBox()])
   expect(rowName!.height).toBeLessThanOrEqual(vpName!.height + 1)
+  // Snug to the left (2026-11-25, the user: "not this much whitespace"): a Director's avatar one short
+  // step right of the VP's, its title starting about where the VP's name does.
+  const [vpAvatar, rowAvatar] = await Promise.all([vp.locator('.org-avatar').first().boundingBox(), listed.locator('.org-avatar').first().boundingBox()])
+  expect(rowAvatar!.x - vpAvatar!.x).toBeLessThanOrEqual(20)
+  expect(rowName!.x).toBeLessThanOrEqual(vpName!.x + 6)
   await expect(listRow(listFold, ids.sub)).toHaveCount(0)
   await page.locator('.org-list').screenshot({ path: `${SHOTS}/web-list-fold.png` })
   // Kept across a reload.
