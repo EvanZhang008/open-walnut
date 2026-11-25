@@ -12,8 +12,14 @@
  *    it, one back where it left or gone from the list takes it away;
  *  - his own Acknowledge leaves no line, from any screen (2026-11-25, the user: "直接消失就好了"):
  *    read from the card (ackedAt, or closed acked by him), so every way he acknowledges is covered.
- * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts.
+ *  - the line is drawn in the commit its card leaves (a layout effect), never one later: the focus
+ *    the card held is handed on in the next frame and must find the line there (2026-11-25: stepped
+ *    in a passive effect, the frame often came first and a group's head took the focus).
+ * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts; the focus after a move is
+ * tests/e2e/browser/threads-pop-up.spec.ts.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ThreadGroup } from '../../src/core/org/thread-groups.js'
 import { movesBetween, placesOf, shownGroups, stepMoves, type PlacedCard } from '../../web/src/components/org/thread-moves'
@@ -137,5 +143,13 @@ describe('the line a moved card leaves', () => {
     expect(lines.map((m) => m.id)).toEqual(['a'])
     const acked = { ...b, places: placesOf(groups({ known: [{ ...c('a'), ackedAt: '2026-11-25T02:01:00.000Z' }] })) }
     expect(stepMoves(b, acked, lines)).toEqual([])
+  })
+
+  it('the lines are stepped in a layout effect, so a line is on the page in the frame its card leaves', () => {
+    const src = readFileSync(join(__dirname, '../../web/src/components/org/thread-moves.ts'), 'utf8')
+    const hook = src.slice(src.indexOf('export function useThreadMoves('))
+    expect(hook).toMatch(/useLayoutEffect\(\(\) => \{[\s\S]*?setMoves\(/)
+    // No passive effect anywhere in the file: a second one stepping the lines would bring the race back.
+    expect(src).not.toMatch(/\buseEffect\b/)
   })
 })

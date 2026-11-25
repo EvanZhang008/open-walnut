@@ -323,6 +323,10 @@ test('on, Threads by state: his reply moves the card out of Needs you to Working
     await inGroup('needs').getByTestId('org-thread-popped-send').click()
     // Out of Needs you at once; in Working, with his words and that the task has not read them.
     await expect(inGroup('needs')).toHaveCount(0, { timeout: 1_500 })
+    // The focus his Send held goes to the line the card left, never to a group's head or the page
+    // (2026-11-25: the line came a commit after the card left, and the frame that hands the focus on
+    // often ran first).
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.tagName ?? null)).toBe('org-thread-move-show')
     const working = group('working')
     await expect(working).toBeVisible()
     if ((await working.getAttribute('data-open')) !== 'true') await working.getByTestId('org-thread-group-head').click()

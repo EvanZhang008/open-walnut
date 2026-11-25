@@ -144,7 +144,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
     const active = document.activeElement;
     if (root && active && root.contains(active)) { focusAt.current = placeOf(active, groups) ?? focusAt.current; return; }
     if (!hadFocus.current || (active && active !== document.body)) return;
-    // Its line comes a commit later (useThreadMoves): decided once the frame has it.
+    // Its line is drawn in the commit the card leaves (useThreadMoves, a layout effect), ahead of this frame.
     const id = requestAnimationFrame(() => keepFocusHome(rootRef.current, focusAt.current, groups, wasTyping.current, () => hadFocus.current));
     return () => cancelAnimationFrame(id);
   }, [moves, groups]);

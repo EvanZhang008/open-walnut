@@ -13,7 +13,7 @@
  * himself, so the card just goes. Read from the card (its `ackedAt` newer, or closed acked by him),
  * so his Acknowledge on another screen counts too.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { FOLDED_GROUPS, FOR_HIM_GROUPS, type ThreadGroup } from '@open-walnut/thread-groups';
 
@@ -116,7 +116,10 @@ export function useThreadMoves(groups: Readonly<Record<ThreadGroup, ReadonlyArra
 } {
   const prev = useRef<MoveBase | null>(null);
   const [moves, setMoves] = useState<ThreadMove[]>([]);
-  useEffect(() => {
+  // A layout effect: the line is drawn in the frame its card leaves. A passive one drew it a commit
+  // later, so a frame could show neither, and the focus the card held was handed on before its line
+  // was there to take it (OrgThreadsByState keepFocusHome; 2026-11-25, a group's head got it).
+  useLayoutEffect(() => {
     const was = prev.current;
     const now: MoveBase = { places: placesOf(groups), shown, epoch };
     prev.current = now;
