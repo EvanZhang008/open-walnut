@@ -445,7 +445,10 @@ describe('demo.quiesce background wiring in the daemon', () => {
     const discard = run.indexOf('if (demoQuiesce.fenced || triggerChecksEnded) {', call)
     expect(discard).toBeGreaterThan(call)
     expect(run.indexOf('persistTriggerState', call)).toBeGreaterThan(discard)
-    expect(run.indexOf('sendTriggerEvent', call)).toBeGreaterThan(discard)
+    // Its report goes through reportCheck (which keeps one no server took: trigger-unsent-checks.ts).
+    const report = [run.indexOf('sendTriggerEvent', call), run.indexOf('reportCheck(', call)].filter((i) => i >= 0)
+    expect(report.length).toBeGreaterThan(0)
+    expect(Math.min(...report)).toBeGreaterThan(discard)
     // The run is counted (triggerChecksRunning) after the gate and let go in the finally.
     expect(run).toMatch(/triggerChecksRunning\.add\(entry\)/)
     expect(run.slice(run.lastIndexOf('finally'))).toMatch(/triggerChecksRunning\.delete\(entry\)/)
