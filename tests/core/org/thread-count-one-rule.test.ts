@@ -189,6 +189,7 @@ const SURFACES: Record<string, string> = {
   'src/core/org/thread-view.ts': 'defines ThreadCounts, threadCountLabel and threadLine (the words)',
   'src/core/org/thread-groups.ts': 'threadCounts, made from threadsForHim',
   'src/web/routes/org-threads-v1.ts': 'shown_count (threadCounts) and each thread\'s counted flag (threadsForHim)',
+  'src/core/org/thread-task-ask.ts': 'names the thread a task asks on (user_status.threads id and title) in ask_owner\'s refusal; shows no count',
   'web/src/components/org/org-channels-model.ts': 'the Org row\'s dot and its hover line: user_status.threads (threadCounts on the server)',
   'web/src/components/org/OrgListRow.tsx': 'the list row\'s red dot and its label (threadsBadge, threadCountLabel)',
   'web/src/components/org/OrgNodeDetail.tsx': 'the header\'s "N threads" pill: threadCounts of the live list, else user_status.threads',
