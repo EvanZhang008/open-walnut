@@ -42,7 +42,7 @@ import type {
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import type { CronJob } from '../cron/types.js';
-import type { DeliverResult } from '../cron/trigger-apply.js';
+import type { DeliverAt, DeliverResult } from '../cron/trigger-apply.js';
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
 import { promptOf } from './trigger-push.js';
@@ -439,7 +439,7 @@ export async function sweepOwedFires(nowMs = Date.now()): Promise<string[]> {
 
 /** How one trigger's fires reach their routine: the delivery applyTriggerFired runs outside its lock. */
 function fireDelivery(host: string, head: TriggerFiredEvent) {
-  return async (job: CronJob, fresh: TriggerFiredEvent[], at: { startedAtMs: number }): Promise<DeliverResult> => {
+  return async (job: CronJob, fresh: TriggerFiredEvent[], at: DeliverAt): Promise<DeliverResult> => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
     await endInterruptedWait(job);
     // A clock routine's run is the routine's own run: the session executor gets
@@ -465,7 +465,12 @@ function fireDelivery(host: string, head: TriggerFiredEvent) {
     }
     const { runExecutor } = await import('./registry.js');
     // The same fires get the same id on every try: delivered before a restart lost the mark, the session keeps one.
-    return await runExecutor(job, job.executor, message, { messageId: fireMessageId(job.id, head.epoch, fresh.map((e) => e.seq)) });
+    // The delivery's gate rides along (cron/trigger-apply.ts): a fire its deadline calls timed out stores nothing.
+    return await runExecutor(job, job.executor, message, {
+      messageId: fireMessageId(job.id, head.epoch, fresh.map((e) => e.seq)),
+      ...(at.stillWanted ? { stillWanted: at.stillWanted } : {}),
+      ...(at.markSent ? { markSent: at.markSent } : {}),
+    });
   };
 }
 

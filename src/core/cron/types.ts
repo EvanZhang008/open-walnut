@@ -202,6 +202,12 @@ export interface ExecutorRunContext {
    * counts. The promise is the mark's write; an executor never needs to wait for it.
    */
   markSent?: (info?: SentInfo) => Promise<void>;
+  /**
+   * Asked right before the run's message is stored in a session's queue (its stillWanted): false and
+   * nothing is stored (the send throws). A trigger fire's delivery deadline shuts it, so a fire it
+   * calls timed out never lands too (cron/trigger-apply.ts, lib/send-deadline.ts).
+   */
+  stillWanted?: () => boolean;
 }
 
 /** What an executor knows when its work went out. */

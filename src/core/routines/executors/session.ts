@@ -57,7 +57,7 @@ export interface SessionDelivery {
    * `messageId`: the run's one message id (one per routine and slot), so a run of the same slot
    * again meets the row still queued. `onStored`: called the moment the row is stored.
    */
-  sendToSession(sessionId: string, message: string, taskId: string, opts?: { messageId?: string; onStored?: () => void }): Promise<void>;
+  sendToSession(sessionId: string, message: string, taskId: string, opts?: { messageId?: string; onStored?: () => void; stillWanted?: () => boolean }): Promise<void>;
   getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string; org_role?: string } | null>;
   /**
    * When `id` is a session id rather than a task id: its task ('' = a session
@@ -112,6 +112,7 @@ function defaultDelivery(): SessionDelivery {
         source: 'routine-trigger', taskId,
         ...(opts?.messageId ? { messageId: opts.messageId } : {}),
         ...(opts?.onStored ? { onStored: opts.onStored } : {}),
+        ...(opts?.stillWanted ? { stillWanted: opts.stillWanted } : {}),
       });
     },
     async getTask(taskId) {
@@ -338,7 +339,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       const onStored = () => { void ctx?.markSent?.({ sessionId: target.claudeSessionId, summary }); };
       // A trigger fire names its own id (the same on every try); a scheduled run is keyed by its slot.
       const messageId = ctx?.messageId ?? (ctx?.slotMs !== undefined ? routineRunIdsOf(job.id, ctx.slotMs).messageId : undefined);
-      await delivery.sendToSession(target.claudeSessionId, envelope, taskId, { ...(messageId ? { messageId } : {}), onStored });
+      await delivery.sendToSession(target.claudeSessionId, envelope, taskId, { ...(messageId ? { messageId } : {}), onStored, ...(ctx?.stillWanted ? { stillWanted: ctx.stillWanted } : {}) });
       return {
         status: 'ok',
         summary,

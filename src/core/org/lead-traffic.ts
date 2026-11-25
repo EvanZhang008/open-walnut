@@ -38,28 +38,43 @@ function key(from: string, to: string): string {
   return `${from}>${to}`;
 }
 
-/** Stamp one task's message to another. */
-export function noteSent(fromTaskId: string, toTaskId: string, atMs = Date.now()): void {
-  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return;
+const NOTHING = (): void => {};
+
+/** Stamp one task's message to another; the function returned takes the stamp back. */
+export function noteSent(fromTaskId: string, toTaskId: string, atMs = Date.now()): () => void {
+  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return NOTHING;
   const k = key(fromTaskId, toTaskId);
+  const before = lastSent.get(k);
   lastSent.delete(k);
   lastSent.set(k, atMs);
   // Oldest first in insertion order: drop the oldest pairs past the cap.
   while (lastSent.size > MAX_PAIRS) lastSent.delete(lastSent.keys().next().value!);
+  return () => {
+    // A later message stamped since keeps its own.
+    if (lastSent.get(k) !== atMs) return;
+    if (before === undefined) lastSent.delete(k);
+    else lastSent.set(k, before);
+  };
 }
 
-/** A message queued into a task's session: stamp it when it is another task's. Never throws. */
-export async function noteQueuedMessage(sessionId: string, enqueued: string, atMs = Date.now()): Promise<void> {
+/**
+ * A message queued into a task's session: stamp it when it is another task's. Never throws. The
+ * function returned takes the stamps back, for a send that then stored nothing (a deadline that
+ * shut its gate, lib/send-deadline.ts): a dropped message never reads as sent.
+ */
+export async function noteQueuedMessage(sessionId: string, enqueued: string, atMs = Date.now()): Promise<() => void> {
   try {
     const from = senderTaskOf(enqueued);
-    if (!from) return;
+    if (!from) return NOTHING;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const to = (await getSessionByClaudeId(sessionId))?.taskId;
-    if (!to) return;
-    noteSent(from, to, atMs);
-    if (attr(OPEN.exec(enqueued)?.[0] ?? '', 'kind') === 'peer-note') notePeerNote(from, to, atMs);
+    if (!to) return NOTHING;
+    const unsent = noteSent(from, to, atMs);
+    const unhanded = attr(OPEN.exec(enqueued)?.[0] ?? '', 'kind') === 'peer-note' ? notePeerNote(from, to, atMs) : NOTHING;
+    return () => { unhanded(); unsent(); };
   } catch {
     // Not knowing only means the wait is told, as before.
+    return NOTHING;
   }
 }
 
@@ -71,11 +86,18 @@ export function workerToldLead(workerTaskId: string, leadTaskId: string): boolea
 }
 
 /** Stamp one task's peer note to another: work it handed on. */
-export function notePeerNote(fromTaskId: string, toTaskId: string, atMs = Date.now()): void {
-  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return;
+export function notePeerNote(fromTaskId: string, toTaskId: string, atMs = Date.now()): () => void {
+  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return NOTHING;
+  const before = lastHandedBy.get(toTaskId);
+  const stamp = { from: fromTaskId, at: atMs };
   lastHandedBy.delete(toTaskId);
-  lastHandedBy.set(toTaskId, { from: fromTaskId, at: atMs });
+  lastHandedBy.set(toTaskId, stamp);
   while (lastHandedBy.size > MAX_PAIRS) lastHandedBy.delete(lastHandedBy.keys().next().value!);
+  return () => {
+    if (lastHandedBy.get(toTaskId) !== stamp) return;
+    if (before === undefined) lastHandedBy.delete(toTaskId);
+    else lastHandedBy.set(toTaskId, before);
+  };
 }
 
 /** The task whose peer note to `toTaskId` came last, within `withinMs` (title-topic-notice.ts). A reply is no hand-off. */

@@ -13,7 +13,8 @@
 
 import { MAX_CONSECUTIVE_CHECK_ERRORS, isHostDelivery, isMachineFaultKind } from '../../providers/trigger-check-core.js';
 import type { MachineFaultKind, TriggerCheckedEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
-import type { CronJob, CronServiceState, OwedFire } from './types.js';
+import type { CronJob, CronServiceState, OwedFire, SentInfo } from './types.js';
+import { sendWithin } from '../../lib/send-deadline.js';
 import { diskStampOf, ensureLoaded, persist } from './store.js';
 import { isHostReplicaProgram } from '../server-role.js';
 import { applyJobResult, emit, locked } from './timer.js';
@@ -487,6 +488,13 @@ function checkHealth(
   };
 }
 
+/**
+ * What a fire's delivery is given: when it started, and its deadline's gate (lib/send-deadline.ts).
+ * `stillWanted` goes to the session send as its own (asked right before the row is stored);
+ * `markSent` is called the moment the work is out (ExecutorRunContext.markSent).
+ */
+export type DeliverAt = { startedAtMs: number; stillWanted?: () => boolean; markSent?: (info?: SentInfo) => Promise<void> };
+
 export type DeliverResult = {
   status: 'ok' | 'error';
   summary?: string;
@@ -526,7 +534,7 @@ export type DeliverResult = {
 export async function applyTriggerFired(
   state: CronServiceState,
   events: TriggerFiredEvent | readonly TriggerFiredEvent[],
-  deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
+  deliver: (job: CronJob, fires: TriggerFiredEvent[], at: DeliverAt) => Promise<DeliverResult>,
   opts: ApplyFiredOptions = {},
 ): Promise<TriggerFiredApplied> {
   const batch = (Array.isArray(events) ? [...events] : [events as TriggerFiredEvent]).sort((a, b) => a.seq - b.seq);
@@ -629,13 +637,27 @@ export async function applyTriggerFired(
   const deliveryStartedAt = state.deps.nowMs();
   let result: DeliverResult;
   try {
-    let timeoutId: ReturnType<typeof setTimeout>;
-    result = await Promise.race([
-      deliver(job, fresh, { startedAtMs: deliveryStartedAt }),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('trigger delivery timed out')), DELIVER_TIMEOUT_MS);
-      }),
-    ]).finally(() => clearTimeout(timeoutId!));
+    // The deadline ends only a delivery that stored nothing yet: a fire whose message is on its way
+    // to the disk is answered by its delivery, never "timed out" while it lands all the same
+    // (lib/send-deadline.ts). A launch (an executor that starts a session) asks no gate: the
+    // deadline holds it as before, and its retry meets the fire's own id.
+    let sent: SentInfo | undefined;
+    const outcome = await sendWithin(DELIVER_TIMEOUT_MS, (gate) => deliver(job, fresh, {
+      startedAtMs: deliveryStartedAt,
+      stillWanted: gate.inTime,
+      markSent: async (info) => { sent ??= info ?? {}; gate.stored(); },
+    }), {
+      onLateError: (err) => state.deps.log.warn('a fire whose work went out failed after its delivery was answered', { jobId: job.id, error: err instanceof Error ? err.message : String(err) }),
+    });
+    if (outcome.status === 'sent') result = outcome.value;
+    else if (outcome.status === 'stored') {
+      result = { status: 'ok', summary: sent?.summary ?? 'Sent', ...(sent?.sessionId ? { delivered: { sessionId: sent.sessionId } } : {}) };
+    } else if (outcome.status === 'timed_out') {
+      result = { status: 'error', error: 'trigger delivery timed out', retryable: true };
+    } else {
+      // Its store is still under way: the retry meets the fire's own id (the queue keeps one row of it).
+      result = { status: 'error', error: 'trigger delivery unconfirmed: its message is still being stored', retryable: true };
+    }
   } catch (err) {
     result = { status: 'error', error: err instanceof Error ? err.message : String(err), retryable: true };
   }

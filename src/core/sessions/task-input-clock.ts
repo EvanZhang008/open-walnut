@@ -10,10 +10,18 @@
 const lastInputAt = new Map<string, number>();
 const MAX_TASKS = 5000;
 
-export function noteTaskInput(taskId: string | null | undefined, at = Date.now()): void {
-  if (!taskId) return;
+/** Stamp it; the function returned takes the stamp back (a send that then stored nothing). */
+export function noteTaskInput(taskId: string | null | undefined, at = Date.now()): () => void {
+  if (!taskId) return () => {};
   if (lastInputAt.size >= MAX_TASKS && !lastInputAt.has(taskId)) lastInputAt.clear();
+  const before = lastInputAt.get(taskId);
   lastInputAt.set(taskId, at);
+  return () => {
+    // A later input stamped since keeps its own.
+    if (lastInputAt.get(taskId) !== at) return;
+    if (before === undefined) lastInputAt.delete(taskId);
+    else lastInputAt.set(taskId, before);
+  };
 }
 
 export function lastTaskInputAt(taskId: string): number | undefined {

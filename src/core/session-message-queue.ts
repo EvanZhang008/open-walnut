@@ -404,7 +404,15 @@ export async function sendMessageToSession(
   const { getSessionByClaudeId } = await import('./session-tracker.js');
   const areaRecord = await getSessionByClaudeId(sessionId);
   // Something went into the task's session: a stop after it is news to its lead (sessions/task-input-clock.ts).
-  noteTaskInput(areaRecord?.taskId ?? opts?.taskId);
+  // Taken back, with the lead traffic stamp below, when the send then stores nothing (dropMarks).
+  const unnoteInput = noteTaskInput(areaRecord?.taskId ?? opts?.taskId);
+  let unnoteTraffic = (): void => {};
+  /**
+   * A send that stores nothing leaves none of the marks that say it went in. Kept as they are: the
+   * person's activity (they did use Walnut) and the end of a quiet turn (sessions/quiet-turn.ts: its
+   * unsent row is already taken back; the next idle turn end schedules another).
+   */
+  const dropMarks = (): void => { unnoteTraffic(); unnoteInput(); };
   // The router's wake passes only inside router/wake.ts's own grant, into a router session.
   const { assertAreaDelivery } = await import('./router/delivery-scope.js');
   const scopedArea = assertAreaDelivery(areaRecord, sessionId, opts?.source, opts?.messageId);
@@ -433,7 +441,7 @@ export async function sendMessageToSession(
   // One task's message to another is stamped first, so a lead's team note never repeats what this
   // message tells it (org/lead-traffic.ts).
   const { noteQueuedMessage } = await import('./org/lead-traffic.js');
-  if (!scopedArea) await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
+  if (!scopedArea) unnoteTraffic = await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = scopedArea ? null : await pendingOrgDigest(sessionId);
@@ -510,7 +518,7 @@ export async function sendMessageToSession(
     || queueSentBy(opts?.source) === 'person';
   if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn && !personWords && rowRides(framedBody)) {
     await tellCarried('');
-    if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
+    if (opts?.stillWanted && !opts.stillWanted()) { dropMarks(); throw new SendNoLongerWantedError(); }
     // Held in memory now and written to the held-notices file behind it, never awaited.
     void holdRidingNotice(sessionId, framedBody);
     log.session.info('notice rides the next message: it asks nothing', { sessionId, source: opts?.source });
@@ -549,6 +557,8 @@ export async function sendMessageToSession(
   } catch (err) {
     appState?.release();
     heldNotes?.release();
+    // Nothing was stored (a refusal, or a write that never reached the disk): no mark says it went in.
+    dropMarks();
     // Held rows this send put back in line go out on their own.
     if (released?.count) coldHold.sendReleased(sessionId, released);
     throw err;

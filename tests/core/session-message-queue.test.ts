@@ -253,6 +253,18 @@ describe('a quiet turn and the lines that go out (sessions/quiet-turn.ts)', () =
     await expect(sendMessageToSession('sess-q', '/compact', { source: 'idle-compact', stillWanted: () => false })).rejects.toBeInstanceOf(SendNoLongerWantedError);
     expect(await getQueue('sess-q')).toEqual([]);
   });
+
+  it('a send no longer wanted leaves no mark that something went into its task (lib/send-deadline.ts)', async () => {
+    const { noteTaskInput, lastTaskInputAt, resetTaskInputClockForTest } = await import('../../src/core/sessions/task-input-clock.js');
+    resetTaskInputClockForTest();
+    await expect(sendMessageToSession('sess-q', 'hello', { source: 'peer', taskId: 'task-mark', stillWanted: () => false })).rejects.toBeInstanceOf(SendNoLongerWantedError);
+    expect(lastTaskInputAt('task-mark')).toBeUndefined();
+    noteTaskInput('task-mark', 1_000);
+    await expect(sendMessageToSession('sess-q', 'hello', { source: 'peer', taskId: 'task-mark', stillWanted: () => false })).rejects.toBeInstanceOf(SendNoLongerWantedError);
+    expect(lastTaskInputAt('task-mark')).toBe(1_000);
+    await sendMessageToSession('sess-q', 'hello again', { source: 'peer', taskId: 'task-mark' });
+    expect(lastTaskInputAt('task-mark')).toBeGreaterThan(1_000);
+  });
 });
 
 describe('markNextProcessing', () => {

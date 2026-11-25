@@ -62,6 +62,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
       const result = await performSessionSend({
         to: str(b.to),
         text: typeof b.text === 'string' ? b.text : '',
+        // Its client is told "retry" on a timeout: the send gets a deadline that stores nothing
+        // when it passes, so the retry never delivers it twice (lib/send-deadline.ts).
+        deadline: true,
         // Tri-state, NOT `=== true`: omitting the flag must reach the core as
         // `undefined` so it can apply the session-caller default (on).
         expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,

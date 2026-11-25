@@ -280,7 +280,9 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
       await persist(saved, receipt.requestId, { stage: 'delivering', messageId });
       dispatched = true;
       const delivery = await deliverLetterToOrigin(letter, { choice: action.label, text: action.question }, { messageId });
-      const uncertain = delivery.status === 'pending' || delivery.reason === 'timeout';
+      // A timeout stored nothing (lib/send-deadline.ts): a failure the action can be run again
+      // for, never "may still arrive". Only `pending` is unsure.
+      const uncertain = delivery.status === 'pending';
       return await persist(saved, receipt.requestId, { status: uncertain ? 'pending' : delivery.status === 'failed' ? 'failure' : 'success', stage: uncertain ? 'delivering' : 'finished',
         delivery: uncertain ? 'unconfirmed' : delivery.status as 'queued' | 'deferred' | 'skipped' | 'failed', reason: delivery.reason ? (await words()).raw(delivery.reason) : undefined, recovery: uncertain || delivery.status === 'failed' ? ['check_status'] : [] });
     }
@@ -315,7 +317,10 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
           const recovery = await persistStartRecoveryRefusal(saved, receipt, (await words()).raw(outcome.message));
           if (recovery) return recovery;
         }
-        const unknown = /timeout|timed out|request failed|unreachable|not running at/i.test(outcome.message);
+        // A send's timeout stored nothing ('delivery_failed', lib/send-deadline.ts): a failure.
+        // A store still under way ('delivery_unconfirmed'), or a call whose answer was lost, is unsure.
+        const unknown = outcome.code === 'delivery_unconfirmed'
+          || (outcome.code !== 'delivery_failed' && /timeout|timed out|request failed|unreachable|not running at/i.test(outcome.message));
         return await persist(saved, receipt.requestId, { status: unknown ? 'pending' : 'failure', stage: unknown ? stage : 'finished', reason: (await words()).raw(outcome.message.slice(0, 500)),
           ...(plan.taskId && (operation.tool === 'task_start' || operation.tool === 'task_create') ? { execution: unknown ? 'unconfirmed' : 'not_started', taskCreated } : {}),
           ...(operation.tool === 'task_send' ? { delivery: unknown ? 'unconfirmed' : 'failed' } : {}),

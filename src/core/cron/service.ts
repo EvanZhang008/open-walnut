@@ -20,6 +20,7 @@ import {
   flushRoutineChecks,
   applyTriggerFired,
   type ApplyFiredOptions,
+  type DeliverAt,
   type DeliverResult,
   type TriggerCheckedApplied,
   type TriggerFiredApplied,
@@ -144,7 +145,7 @@ export class CronService {
 
   async applyTriggerFired(
     events: TriggerFiredEvent | readonly TriggerFiredEvent[],
-    deliver: (job: CronJob, fires: TriggerFiredEvent[], at: { startedAtMs: number }) => Promise<DeliverResult>,
+    deliver: (job: CronJob, fires: TriggerFiredEvent[], at: DeliverAt) => Promise<DeliverResult>,
     opts: ApplyFiredOptions = {},
   ): Promise<TriggerFiredApplied> {
     return await applyTriggerFired(this.state, events, deliver, opts);

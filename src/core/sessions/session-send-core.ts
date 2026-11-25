@@ -22,6 +22,7 @@
 import { log } from '../../logging/index.js';
 import { matchIdRef, refNamesId } from '../../lib/id-ref.js';
 import type { SessionRecord } from '../types.js';
+import type { QueuedMessage } from '../session-queue-store.js';
 import type { UserSaid } from './user-spoke.js';
 import { appSenderName, buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { jobAppSender, pluginCallerName } from '../plugins/plugin-caller.js';
@@ -50,7 +51,7 @@ import {
 } from '../session-requests.js';
 import { queueSentBy, sendSourceOf } from './send-sent-by.js';
 import { assertAreaDelivery } from '../router/delivery-scope.js';
-import { sendWithin } from './send-deadline.js';
+import { sendWithin } from '../../lib/send-deadline.js';
 import { frameForSource } from './send-frame.js';
 import { isPersonSource } from './send-sent-by.js';
 import { noteRequestDelivering } from './undelivered-requests.js';
@@ -72,7 +73,7 @@ export class SendError extends Error {
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
       | 'parent_complete' | 'target_complete' | 'lead_handed_over' | 'org_off' | 'not_above' | 'no_open_ask' | 'user_words' | 'user_spoke_since' | 'area_forbidden' | 'cross_area'
-      | 'human_approval' | 'not_confirmed',
+      | 'human_approval' | 'not_confirmed' | 'delivery_unconfirmed',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -86,6 +87,12 @@ export interface SessionSendInput {
   /** Session id, unique id prefix (>=4), task id/prefix, or unique title substring. */
   to?: string;
   text: string;
+  /**
+   * The caller sends again on a timeout (POST /api/v1/messages tells its client "retry"): the
+   * delivery gets a deadline that stores nothing when it passes (deliverToSession `deadline`,
+   * lib/send-deadline.ts). Every other caller's send is never dropped for being slow.
+   */
+  deadline?: true;
   /** Register a pending request; the target is told how to reply. Session
    *  callers only. Tri-state, and `undefined` is NOT "off" (changed
    *  2026-09-01): true = register and fail loudly for a non-session caller,
@@ -515,6 +522,13 @@ export async function deliverToSession(
     stillWanted?: () => boolean;
     /** Why a notice whose kind asks nothing must start a turn (sendMessageToSession, sessions/wake-policy.ts). */
     wakeReason?: string;
+    /**
+     * Only for a caller that sends again on a timeout (an API client told "retry"): the send gets
+     * DELIVERY_TIMEOUT_MS to reach its store, else it stores nothing and throws 'delivery_failed'
+     * (lib/send-deadline.ts). Without it, a send is never dropped for being slow: a notice nobody sends
+     * again is stored late rather than lost.
+     */
+    deadline?: true;
   },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   // A person's source from a browser under automation goes on as an agent's (automated-client.ts).
@@ -540,16 +554,16 @@ export async function deliverToSession(
     const { escapeHintTags } = await import('../hints/hint-format.js');
     const sentBy = queueSentBy(opts.source);
     // No deadline: a raw enqueue starts its store at once, and a store under way is answered by
-    // its own outcome, never "timed out, retry" (send-deadline.ts); the store bounds itself.
+    // its own outcome, never "timed out, retry" (lib/send-deadline.ts); the store bounds itself.
     // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
     const parked = await enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { recentText: opts.busText, ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) });
     return { delivery: 'deferred', messageId: parked.id };
   }
   const { sendMessageToSession } = await import('../session-message-queue.js');
-  // The deadline ends only a send that stored nothing yet (send-deadline.ts): one whose row is on
-  // its way to the disk is answered by its row, never "timed out, retry" (a retry sends it twice).
   const callerWants = opts.stillWanted;
-  const queued = await sendWithin(DELIVERY_TIMEOUT_MS, (inTime) => sendMessageToSession(sid, opts.busText, {
+  // Every reason not to store, asked right before the row is stored.
+  const wanted = (): boolean => (!callerWants || callerWants()) && (!guard || guard.stillWanted());
+  const send = (gate?: { inTime: () => boolean; onStored: (m: QueuedMessage) => void }) => sendMessageToSession(sid, opts.busText, {
     source: opts.source,
     enqueueMessage: opts.enqueueText === opts.busText ? undefined : opts.enqueueText,
     ...(opts.taskId ? { taskId: opts.taskId } : {}),
@@ -558,11 +572,27 @@ export async function deliverToSession(
     ...(opts.endsWait ? { endsWait: true } : {}),
     ...(opts.wakeReason ? { wakeReason: opts.wakeReason } : {}),
     ...(guard ? { stopFence: guard.stopFence } : {}),
-    // Every reason not to store, the deadline last: passed, the row is committed.
-    stillWanted: () => (!callerWants || callerWants()) && (!guard || guard.stillWanted()) && inTime(),
-  }));
-  if (!queued) throw new SendError('delivery_failed', 'delivery timed out — retry', 503);
-  return { delivery: 'queued', messageId: (queued as { id?: string }).id };
+    // The deadline last: passed, the row is committed (lib/send-deadline.ts).
+    stillWanted: gate ? () => wanted() && gate.inTime() : wanted,
+    ...(gate ? { onStored: gate.onStored } : {}),
+  });
+  if (!opts.deadline) {
+    const queued = await send();
+    return { delivery: 'queued', messageId: queued.id };
+  }
+  // The deadline ends only a send that stored nothing yet: one whose row is on its way to the disk
+  // is answered by its row, never "timed out, retry" (a retry would send it twice).
+  let storedId: string | undefined;
+  const outcome = await sendWithin(DELIVERY_TIMEOUT_MS, (gate) => send({
+    inTime: gate.inTime,
+    onStored: (m) => { storedId = m.id; gate.stored(); },
+  }), {
+    onLateError: (err) => log.session.warn('a send whose row was stored failed after its answer', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }),
+  });
+  if (outcome.status === 'sent') return { delivery: 'queued', messageId: outcome.value.id };
+  if (outcome.status === 'stored') return { delivery: 'queued', ...(storedId ? { messageId: storedId } : {}) };
+  if (outcome.status === 'timed_out') throw new SendError('delivery_failed', 'delivery timed out and nothing was queued: retry', 503);
+  throw new SendError('delivery_unconfirmed', 'the message is still being stored and may arrive: do not send it again', 504);
 }
 
 /**
@@ -974,7 +1004,8 @@ async function settleAnswerNotDelivered(
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
   // A send the throttle admitted and that then failed before it reached the queue is taken back
   // from it, so the sender's retry of the same words is admitted (peer-throttle.ts forget). Never
-  // once it was delivered. A timed-out send stored nothing (send-deadline.ts): it is taken back too.
+  // once it was delivered, nor when its store is unconfirmed (it may still land). A timed-out send
+  // stored nothing (lib/send-deadline.ts): it is taken back too.
   const throttled: { undo?: () => void } = {};
   try {
     return await performPlainSendOnce(input, throttled);
@@ -1227,6 +1258,7 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
       ...(wakeReason ? { wakeReason } : {}),
+      ...(input.deadline ? { deadline: true as const } : {}),
     });
     ({ delivery, messageId } = await deliver());
     // Delivered: whatever throws after this must not take the send back from the throttle.
@@ -1236,8 +1268,12 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
     // otherwise sit pending until its deadline and the sweeper would tell the
     // asker "no reply by your deadline" about a send that never happened. A
     // timeout is such a delivery too: the deadline ends only a send that stored
-    // nothing, and shuts its gate so it never does (send-deadline.ts).
-    if (request) {
+    // nothing, and shuts its gate so it never does (lib/send-deadline.ts). An
+    // unconfirmed one is not: its store is still under way and its envelope
+    // (carrying request="rq-…") may arrive, so its row and its throttle entry stay.
+    const mayLand = err instanceof SendError && err.code === 'delivery_unconfirmed';
+    if (mayLand) throttled.undo = undefined;
+    if (request && !mayLand) {
       await deletePendingRequest(request.id).catch((e) => {
         log.session.warn('session_send: could not drop the orphaned request row', {
           requestId: request.id, error: e instanceof Error ? e.message : String(e),
