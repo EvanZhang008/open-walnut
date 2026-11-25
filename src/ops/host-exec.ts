@@ -118,17 +118,17 @@ defineOp({
   name: 'host_exec_read',
   title: 'Read a command\'s output on another host',
   description:
-    'The output of a host_exec job, from `offset` (bytes into its log; `nextOffset` goes on) or, with no offset, its tail: the answer '
-    + 'shows the first lines and the last 6,000 characters, and `outputShown` names the read for the rest. `running` false means it '
-    + 'ended, with `exitCode` (a shell script tests it with jq or python: the CLI prints indented JSON, "running": false). '
+    'The output of a host_exec job, from `offset` (bytes into its log; `nextOffset` goes on) or, with no offset, its tail, '
+    + 'showing the first lines and the last 6,000 characters, and `outputShown` names the read for the rest. `running` false means it '
+    + 'ended, with `exitCode` (the CLI prints indented JSON: a script tests it with jq, never grep). '
     + 'Do not poll: `wait_ms` holds the answer until the job ends (60000 at most), and `wait_for` (as '
     + 'host_exec\'s) until a line of the output matches (from offset, else from the start), the port listens, the '
-    + 'file exists or the job ends (wait_ms up to 600000); through a host\'s gateway (a session on another host) about 10000, then call '
-    + 'again (heldMs says so). A read that finds nothing new says so in a sentence. To go on after a match or a miss, pass the '
+    + 'file exists or the job ends (wait_ms up to 600000); through a host\'s gateway about 10000, then call '
+    + 'again (heldMs says so). A read with nothing new says so. To go on after a match or a miss, pass the '
     + 'answer\'s waitedFor.scanned as offset; an offset inside a line tests that whole line, and only a match ending past the offset '
     + 'counts. Only the task that started a job reads or stops it. Refused: 403 exec_grant_revoked after a revoke of the task\'s grant '
     + 'there or a closed host, until granted again (host_exec_list and host_exec_stop still work); 403 exec_grant_missing '
-    + 'for a grant gone that nobody revoked (call again); 503 exec_grants_unreadable (try again in a minute).',
+    + 'for a grant gone unrevoked (call again); 503 exec_grants_unreadable (retry in a minute).',
   input: {
     host: z.string().min(1).describe('The host the job runs on'),
     job_id: z.string().min(1).describe('The jobId host_exec returned'),
