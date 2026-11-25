@@ -246,6 +246,27 @@ export function relayMayResendTo(relay: { run?: string; readable: boolean }, tar
   return typeof relay.run === 'string' && relay.run.length > 0 && relay.run === targetRun;
 }
 
+/**
+ * A read relayed to the leader got no answer: does it fall to this host's own service (a service
+ * without a copy, which answers it from its slice or with `no_copy`) instead of waiting for that
+ * leader? Only a read the leader named read-only (running it again changes nothing), only when the
+ * leader is not heard: its socket closed under the relay (a closed link, or one the keepalive closed
+ * for its missed beats), or nothing came on it since the attempt went out (a silent link: a closed
+ * lid keeps its socket open and says nothing, while a busy leader still answers its beats), and only
+ * with time left for the service to answer. The replica's dispatcher answers a read away on its
+ * first failed stream the same way (replica/dispatch.ts). 2026-11-25 (tests/e2e/copyless-away-cut-e2e.test.ts
+ * R3): such a read held the session's `walnut` call for the CLI's whole wait (90 s), long after the
+ * leader's quiet window had ended and the service could answer it at once.
+ */
+export function readFallsToService(o: { readOnly: boolean; withoutCopy: boolean; leaderHeardSinceSent: boolean; leftMs: number; minRelayMs: number }): boolean {
+  return o.readOnly && o.withoutCopy && !o.leaderHeardSinceSent && o.leftMs >= o.minRelayMs;
+}
+
+/** A call that fell to the service (readFallsToService) passes its leader by while that leader stays silent since `silentSince`. */
+export function passesSilentLeader(silentSince: number | undefined, lastHeardAt: number | undefined): boolean {
+  return silentSince !== undefined && (lastHeardAt ?? 0) <= silentSince;
+}
+
 /** Most op names one hello may list as read-only (the registry has about 60). */
 export const HELLO_READ_OPS_MAX = 500;
 const READ_OP_NAME = /^[A-Za-z0-9_.:-]{1,80}$/;

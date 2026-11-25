@@ -174,6 +174,8 @@ import {
   SHIM_CORE_BASENAME,
   shimCoreNeedsCopy,
   gatewayApiAnswerOf,
+  passesSilentLeader,
+  readFallsToService,
   type GatewayErrorCode,
   type GatewayRequest,
   type GatewayResponse,
@@ -2211,6 +2213,8 @@ type GatewayRelayCall = {
   attempts: number
   /** The server it last went to names its op read-only (serverReadsOp): it may be sent again after a stop. */
   readOnly?: boolean
+  /** When its last attempt went out (readFallsToService: was the leader heard since?). */
+  sentAt?: number
   /** How many times this call was asked again after a busy refusal (busyAskAgain). */
   busyAgain?: number
   /** Its Walnut identifies itself here (walnutPinned): only a socket of that Walnut answers it. */
@@ -4073,12 +4077,14 @@ function sendGatewayRequest(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean; followerBy?: number; home?: string } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean; followerBy?: number; home?: string; silentSince?: number } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
   // `home`: the Walnut the daemon itself knows the call is for (a trigger check's run), else the caller's.
   const home = plan.home || gatewayOwnerHome(callerSid)
   // Why a server is passed over is logged on a call's first look, not on each look of a wait.
-  const target = gatewayTargetFor(home, plan.followerBy === undefined ? { callerSid, op: payload.name } : undefined)
+  let target = gatewayTargetFor(home, plan.followerBy === undefined ? { callerSid, op: payload.name } : undefined)
+  // A read that fell to this host's service (relayAttemptEnded) passes its silent leader by until it is heard.
+  if (target && passesSilentLeader(plan.silentSince, target.data?.lastHeardAt)) target = null
   const deadline = plan.deadline
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
@@ -4411,6 +4417,7 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
     if (!call.run && !call.readable) call.deadline = Math.min(call.deadline, Date.now() + gatewayHubTimeoutMs())
   }
   call.sentOn = target
+  call.sentAt = Date.now()
   call.attempts += 1
   call.readOnly = serverReadsOp(target, call)
   entry.timer = setTimeout(() => relayAttemptEnded(relayId), relayAttemptMs(call.deadline, Date.now(), gatewayHubTimeoutMs()))
@@ -4433,6 +4440,28 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
 const GATEWAY_RESEND_MIN_MS = 2_000
 
 /**
+ * At the end of an attempt (relayAttemptEnded), a read relayed for this host's service without a copy
+ * whose leader is not heard (its socket closed under the relay and no leader took it again, or silent
+ * since the attempt went out): the service answers it now (its slice, or
+ * no_copy; gateway-core.ts readFallsToService), and the call passes that leader by until it is heard
+ * again (passesSilentLeader). A write keeps waiting for the leader: it may have run there. A plugin
+ * job's call (`caller`) keeps its own route (routeJob), which this one would not carry. Never at the
+ * socket's close itself: a leader that redials within the attempt (a link blip) answers the read. True when it fell.
+ */
+function relayFellToService(relayId: number): boolean {
+  const entry = gatewayRelayPending.get(relayId)
+  const call = entry?.call
+  if (!entry || !call || !call.home || call.caller || call.sentAt === undefined) return false
+  const heard = !!call.sentOn && (call.sentOn.data?.lastHeardAt ?? 0) > call.sentAt
+  if (!readFallsToService({ readOnly: !!call.readOnly, withoutCopy: ownAnswersOff(call.home), leaderHeardSinceSent: heard, leftMs: call.deadline - Date.now(), minRelayMs: GATEWAY_MIN_RELAY_MS })) return false
+  gatewayRelayPending.delete(relayId)
+  clearTimeout(entry.timer)
+  logMsg('info', 'gateway: the leader did not answer a read; this host\'s service answers it', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts, closed: !call.sentOn })
+  sendGatewayRequest(call.capability, call.callerSid, call.payload, entry.respond, { deadline: call.deadline, waits: true, home: call.home, silentSince: call.sentAt })
+  return true
+}
+
+/**
  * An attempt had no answer in time. With time left the relay goes again where it
  * may (the same server run, which answers it once), or waits for a server to say
  * hello; at the call's end it is answered as before: from the copy for a read,
@@ -4443,6 +4472,8 @@ function relayAttemptEnded(relayId: number): void {
   const call = entry?.call
   if (!entry || !call) return
   const left = call.deadline - Date.now()
+  // A read of this host's service without a copy whose leader went silent under it: the service answers it.
+  if (relayFellToService(relayId)) return
   if (left >= GATEWAY_RESEND_MIN_MS) {
     const next = relayResendTarget(call)
     if (next) return sendRelayAttempt(relayId, next)

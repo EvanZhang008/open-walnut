@@ -6,7 +6,10 @@
  *     check; a new one fails until it is;
  *   - the gateway core gives the follower's refusal to the caller (noOwnAnswer), never hands it back;
  *   - a call before the service is seated answers `needs_leader` `service_starting`, which the
- *     `walnut` CLI and the MCP server send again within the call's own time (requestRidingRestart).
+ *     `walnut` CLI and the MCP server send again within the call's own time (requestRidingRestart);
+ *   - a read relayed to a leader that went silent under it falls to the service when its attempt
+ *     ends, and passes that leader by until it is heard again (readFallsToService, passesSilentLeader;
+ *     over real processes: tests/e2e/copyless-away-cut-e2e.test.ts R3).
  * The same count over real processes is tests/e2e/copyless-service-e2e.test.ts (G1).
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -15,7 +18,7 @@ import path from 'node:path'
 import { call, setup } from '../helpers/follower-gateway-harness.js'
 import { requestRidingRestart, serviceStartingAnswer } from '../../src/providers/wn-cli.js'
 import { GATEWAY_ANSWER_SLACK_MS, gatewayLineAgain, toolsCallLine } from '../../src/providers/gateway-request.js'
-import { GATEWAY_MIN_RELAY_MS, type GatewayResponse } from '../../src/providers/gateway-core.js'
+import { GATEWAY_MIN_RELAY_MS, passesSilentLeader, readFallsToService, type GatewayResponse } from '../../src/providers/gateway-core.js'
 import { RESTART_POLL_MS } from '../../src/providers/daemon-restart-mark.js'
 
 const SRC = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
@@ -123,5 +126,40 @@ describe('service_starting, sent again by the client', () => {
     expect(gatewayLineAgain(line, 60_000).req.waitMs).toBe(30_000)
     expect(gatewayLineAgain(line, GATEWAY_MIN_RELAY_MS - 1)).toEqual({ req: { ...line.req, waitMs: 0 }, timeoutMs: GATEWAY_MIN_RELAY_MS - 1 })
     expect(RESTART_POLL_MS).toBeLessThanOrEqual(1_000)
+  })
+})
+
+describe('a read whose leader went silent falls to the service without a copy', () => {
+  const base = { readOnly: true, withoutCopy: true, leaderHeardSinceSent: false, leftMs: 10_000, minRelayMs: GATEWAY_MIN_RELAY_MS }
+
+  it('a read-only op, its leader not heard since it went out (or its socket gone), time left: the service answers it', () => {
+    expect(readFallsToService(base)).toBe(true)
+  })
+
+  it('never a write, never with a copy, never while the leader is heard, never past the call\'s time', () => {
+    expect(readFallsToService({ ...base, readOnly: false })).toBe(false)
+    expect(readFallsToService({ ...base, withoutCopy: false })).toBe(false)
+    expect(readFallsToService({ ...base, leaderHeardSinceSent: true })).toBe(false)
+    expect(readFallsToService({ ...base, leftMs: GATEWAY_MIN_RELAY_MS - 1 })).toBe(false)
+  })
+
+  it('the call passes its leader by only while that leader stays silent', () => {
+    expect(passesSilentLeader(1_000, 900)).toBe(true)
+    expect(passesSilentLeader(1_000, 1_000)).toBe(true)
+    expect(passesSilentLeader(1_000, 1_500)).toBe(false)
+    expect(passesSilentLeader(undefined, 900)).toBe(false)
+  })
+
+  it('the daemon asks it when an attempt ends, before sending the read to the leader again, and routes by it', () => {
+    const at = SRC.indexOf('function relayAttemptEnded(')
+    const ended = SRC.slice(at, SRC.indexOf('function cmdGatewayResult(', at))
+    expect(ended.indexOf('relayFellToService(relayId)')).toBeGreaterThan(-1)
+    expect(ended.indexOf('relayFellToService(relayId)')).toBeLessThan(ended.indexOf('relayResendTarget(call)'))
+    const fell = SRC.slice(SRC.indexOf('function relayFellToService('), SRC.indexOf('function relayAttemptEnded('))
+    expect(fell).toMatch(/const heard = !!call\.sentOn && \(call\.sentOn\.data\?\.lastHeardAt \?\? 0\) > call\.sentAt/)
+    expect(fell).toMatch(/if \(!entry \|\| !call \|\| !call\.home \|\| call\.caller/)
+    expect(fell).toMatch(/silentSince: call\.sentAt/)
+    const send = SRC.slice(SRC.indexOf('function sendGatewayRequest('), SRC.indexOf('function waitForPrimary('))
+    expect(send).toMatch(/if \(target && passesSilentLeader\(plan\.silentSince, target\.data\?\.lastHeardAt\)\) target = null/)
   })
 })
