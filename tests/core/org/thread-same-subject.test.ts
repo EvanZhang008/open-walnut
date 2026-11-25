@@ -151,6 +151,15 @@ describe('one subject is one thread', () => {
     expect(match(`${ladder}\uff0c\u6362\u4e00\u4e2a`, ladder)?.id).toBe('th-a')
     expect(match('Garden shed tool list ladder worn', 'Garden shed tool list ladder broken')?.id).toBe('th-a')
     expect(match('Shed list ladder is worn out', 'The ladder on the shed list looks worn')?.id).toBe('th-a')
+    // Two titles that name one subject before their colon are that subject, whatever follows it (review
+    // 2026-11-25; invented: "the seedbed watering timer does not start: after a restart, still not" and
+    // "...: after new batteries, still no use"). The opening there is the subject, not a place.
+    const timer = '\u82d7\u5e8a\u6d47\u6c34\u5b9a\u65f6\u5668\u4e0d\u542f\u52a8'
+    expect(match(`${timer}\uff1a\u91cd\u542f\u540e\uff0c\u8fd8\u662f\u4e0d\u884c`, `${timer}\uff1a\u6362\u7535\u6c60\u4ee5\u540e\uff0c\u4ecd\u7136\u6ca1\u7528`)?.id).toBe('th-a')
+    expect(match('Shed tool list: resets every reload', 'Shed tool list: flips back off when refreshed')?.id).toBe('th-a')
+    expect(sameSubjectCandidates('Shed tool list: resets every reload', tree('Shed tool list: flips back off when refreshed'), NOW)[0]).not.toHaveProperty('openingOnly')
+    // The same words with no colon name a place, not a subject: two matters there.
+    expect(match('Shed tool list resets every reload', 'Shed tool list flips back off when refreshed')).toBeUndefined()
   })
 
 })

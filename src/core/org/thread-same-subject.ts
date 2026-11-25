@@ -171,7 +171,8 @@ const OWN_PLACES_MIN = 2;
  * a repeat: a title that only adds to the other, one that shares a word after a word of its own, and
  * two that share the larger part and differ only in where the matter stands (his data held one:
  * "<place> <stage>: <the switch> stays off, open it?" beside "<place> <stage> <the switch> (same
- * matter in <thread>)"). Pure.
+ * matter in <thread>)"). Never asked of two titles that name the same subject before their colon
+ * (sameHead): there the opening is the subject, not a place. Pure.
  */
 function sharesOnlyOpening(mine: readonly string[][], theirs: readonly string[][], telling: (w: string) => boolean): boolean {
   const goesOn = (places: readonly string[][], other: ReadonlySet<string>): boolean => {
@@ -180,6 +181,16 @@ function sharesOnlyOpening(mine: readonly string[][], theirs: readonly string[][
     return opening > 0 && !shared.includes(true, opening) && places.length - opening >= Math.max(OWN_PLACES_MIN, opening);
   };
   return goesOn(mine, new Set(theirs.flat())) && goesOn(theirs, new Set(mine.flat()));
+}
+
+/**
+ * Both titles name their subject before a colon and each one's subject stands in the other title:
+ * one subject by the titles' own form ("<subject>: <where it stands>"), whatever follows the colon
+ * (review 2026-11-25: "<a screen> does not show: after a restart, still blank" and "<the same> does
+ * not show: after a refresh, still nothing" shared only their opening and read as two matters). Pure.
+ */
+function sameHead(mine: readonly string[], theirs: readonly string[], myWords: ReadonlySet<string>, theirWords: ReadonlySet<string>): boolean {
+  return mine.length > 0 && theirs.length > 0 && mine.every((w) => theirWords.has(w)) && theirs.every((w) => myWords.has(w));
 }
 
 /** sameSubjectCandidates over an index. `head: false` for a text that is no title (his message: a colon there names no subject). Pure. */
@@ -195,7 +206,7 @@ export function candidatesIn(index: SubjectIndex, title: string, opts: { head?: 
     if (otherItems(all, r.words) || otherHead(head, r.words) || otherHead(r.head, all)) continue;
     const shared = sharedCount(mine, r.words);
     if (!shared) continue;
-    out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt, ...(sharesOnlyOpening(places, r.places, telling) ? { openingOnly: true as const } : {}) });
+    out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt, ...(!sameHead(head, r.head, all, r.words) && sharesOnlyOpening(places, r.places, telling) ? { openingOnly: true as const } : {}) });
   }
   return out.sort((a, b) => b.shared - a.shared || b.updatedAt.localeCompare(a.updatedAt));
 }
