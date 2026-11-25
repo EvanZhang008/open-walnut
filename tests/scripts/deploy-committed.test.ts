@@ -58,6 +58,9 @@ function fixture(opts: { stub?: string } = {}) {
   fs.writeFileSync(path.join(repo, 'web', 'index.html'), '<p>app</p>\n')
   fs.writeFileSync(path.join(repo, 'app.txt'), 'committed app\n')
   fs.copyFileSync(WRAPPER, path.join(repo, 'scripts', 'deploy-committed.sh'))
+  // Its queue library: the skip of a deploy that changes nothing production runs records through it.
+  fs.mkdirSync(path.join(repo, 'scripts', 'lib'), { recursive: true })
+  fs.copyFileSync(path.join(path.dirname(WRAPPER), 'lib', 'deploy-queue.sh'), path.join(repo, 'scripts', 'lib', 'deploy-queue.sh'))
   fs.writeFileSync(path.join(repo, 'scripts', 'dev-prod.sh'), opts.stub ?? STUB)
   fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules\n')
   git(repo, 'init', '-q', '-b', 'main')
@@ -82,7 +85,7 @@ function run(f: ReturnType<typeof fixture>, env: Record<string, string> = {}, ar
     encoding: 'utf-8',
     // Never read the real production server: a config file stands in for it. The deploy
     // itself, not its queue (tests/scripts/deploy-queue.test.ts), is what these pin.
-    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, WALNUT_DEPLOY_QUEUE: '0', WALNUT_DEPLOY_DEPS_MIRROR: '0', WALNUT_DEPLOY_DEPS_DIR: path.join(f.tmp, '..', 'deps'), ...env },
+    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, WALNUT_DEPLOY_QUEUE: '0', WALNUT_DEPLOY_DEPS_MIRROR: '0', WALNUT_DEPLOY_DEPS_DIR: path.join(f.tmp, '..', 'deps'), WALNUT_DEPLOY_QUEUE_DIR: path.join(f.tmp, '..', 'queue'), ...env },
   })
   const report = fs.existsSync(f.report)
     ? Object.fromEntries(fs.readFileSync(f.report, 'utf-8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
@@ -514,6 +517,88 @@ out="$(cd "$here" && bun -e "console.log(require('leftpad'))" 2>&1)"; rc=$?
       expect(r.report).not.toBeNull()
       fs.rmSync(f.report)
     }
+  })
+
+  it('skips the restart for a commit that changes nothing production runs, and records what production runs', () => {
+    // 2026-11-25: 84 restarts in a day, 14 of them for commits of tests, docs or the iOS app only.
+    const f = fixture()
+    const commitFiles = (files: Record<string, string>) => {
+      for (const [p, body] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(f.repo, p)), { recursive: true })
+        fs.writeFileSync(path.join(f.repo, p), body)
+      }
+      // Only these files: the fixture keeps a peer's uncommitted edits in the tree.
+      git(f.repo, 'add', '--', ...Object.keys(files))
+      git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', Object.keys(files).join(' '))
+      return git(f.repo, 'rev-parse', 'HEAD')
+    }
+    const base = git(f.repo, 'rev-parse', 'HEAD')
+    const config = path.join(path.dirname(f.repo), 'config.json')
+    const same = path.join(f.tmp, '..', 'queue', 'runtime-same')
+    fs.writeFileSync(config, JSON.stringify({ build: { version: '0.0.0', commit: base.slice(0, 9), dirty: false } }))
+    const url = { WALNUT_DEPLOY_CONFIG_URL: `file://${config}` }
+
+    const quiet = commitFiles({ 'tests/a.test.ts': 'x\n', 'docs/b.md': 'y\n', 'ios-native/App/c.swift': 'z\n', 'README.md': 'r\n', 'web/src/AGENTS.md': 'w\n', '.github/workflows/ci.yml': 'c\n' })
+    const r = run(f, url)
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/Deploy skipped: [0-9a-f]{12} changes nothing production runs since [0-9a-f]{12} \(6 file\(s\)/)
+    expect(r.report).toBeNull()
+    expect(fs.readFileSync(same, 'utf8').trim().split('\n').pop()).toBe(`${quiet} ${base}`)
+    // Asked again (another land's deploy of the same commit): production runs its code already.
+    const again = run(f, url, [quiet])
+    expect(again.stdout).toMatch(/Deploy skipped: production already serves [0-9a-f]{12}, which contains/)
+    expect(fs.readFileSync(same, 'utf8').trim().split('\n')).toHaveLength(1)
+
+    // A second such commit moves the record on; the first one is still held by it.
+    const quiet2 = commitFiles({ 'tests/d.test.ts': 'd\n' })
+    expect(run(f, url).stdout).toMatch(/changes nothing production runs/)
+    expect(run(f, url, [quiet]).stdout).toMatch(/already serves/)
+    expect(fs.readFileSync(same, 'utf8').trim().split('\n').pop()).toBe(`${quiet2} ${base}`)
+
+    // Anything production runs restarts: the server, the web app, what ships inside the build
+    // (src/data, even its markdown), a root file not on the list, the package.
+    for (const files of [{ 'src/x.ts': 'x\n' }, { 'web/src/y.tsx': 'y\n' }, { 'src/data/skills/s/SKILL.md': 's\n' }, { 'app.txt': 'a\n' }, { 'package.json': '{"name":"open-walnut","v":2}' }]) {
+      commitFiles(files)
+      const d = run(f, url)
+      expect(d.status, d.stderr).toBe(0)
+      expect(d.stdout, JSON.stringify(files)).not.toMatch(/Deploy skipped/)
+      expect(d.report).not.toBeNull()
+      fs.rmSync(f.report)
+      // Back to the commit before (only that file: the peer's edits stay as they were).
+      git(f.repo, 'reset', '-q', '--soft', 'HEAD~1')
+      git(f.repo, 'reset', '-q', '--', ...Object.keys(files))
+      for (const p of Object.keys(files)) {
+        if (git(f.repo, 'ls-tree', 'HEAD', '--', p)) git(f.repo, 'checkout', 'HEAD', '--', p)
+        else fs.rmSync(path.join(f.repo, p))
+      }
+    }
+    // A commit with no change at all (the revert of such a commit is one): no restart, no failure.
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'empty')
+    const empty = run(f, url)
+    expect(empty.status, empty.stderr).toBe(0)
+    // (counted from what production serves: the earlier quiet commits' files)
+    expect(empty.stdout).toMatch(/changes nothing production runs since [0-9a-f]{12} \(7 file\(s\)/)
+    // Forced, it deploys anyway.
+    commitFiles({ 'tests/e.test.ts': 'e\n' })
+    expect(run(f, { ...url, WALNUT_DEVPROD_FORCE: '1' }).report).not.toBeNull()
+    fs.rmSync(f.report)
+    // A commit off the checkout's HEAD, or past a deploy ceiling, is never recorded: it deploys
+    // (or meets the ceiling) as before.
+    const head = git(f.repo, 'rev-parse', 'HEAD')
+    git(f.repo, 'checkout', '-q', '-b', 'side')
+    const side = commitFiles({ 'tests/side.test.ts': 's\n' })
+    git(f.repo, 'checkout', '-q', 'main')
+    const before = fs.readFileSync(same, 'utf8')
+    const off = run(f, url, [side])
+    expect(off.stdout).not.toMatch(/changes nothing production runs/)
+    expect(fs.readFileSync(same, 'utf8')).toBe(before)
+    if (fs.existsSync(f.report)) fs.rmSync(f.report)
+    git(f.repo, 'config', 'walnut.deployCeiling', head)
+    commitFiles({ 'tests/past.test.ts': 'p\n' })
+    const past = run(f, url)
+    expect(past.stdout).not.toMatch(/changes nothing production runs/)
+    expect(past.stderr).toMatch(/Not deployed yet: production goes only to commits a test of main passed/)
+    git(f.repo, 'config', '--unset', 'walnut.deployCeiling')
   })
 
   it('passes the stub\'s failure through and still removes the clone', () => {

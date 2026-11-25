@@ -546,6 +546,49 @@ esac
     expect(deploys(f)).toEqual([])
   }, 30_000)
 
+  it('a commit that changes nothing production runs is answered at once, with no runner and no restart; its record covers it and what it holds (2026-11-25)', async () => {
+    const f = fixture()
+    const head = git(f.repo, 'rev-parse', 'HEAD')
+    fs.writeFileSync(f.config, JSON.stringify({ build: { commit: head.slice(0, 9), dirty: false, builtAt: '2026-11-25T00:00:00Z' } }))
+    fs.mkdirSync(path.join(f.repo, 'tests'), { recursive: true })
+    fs.writeFileSync(path.join(f.repo, 'tests', 'only.test.ts'), 'x\n')
+    git(f.repo, 'add', '-A')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'tests only')
+    const quiet = git(f.repo, 'rev-parse', 'HEAD')
+    const r = await call(f).done
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).toMatch(/changes nothing production runs/)
+    expect(fs.existsSync(path.join(f.queue, 'runner.lock'))).toBe(false)
+    expect(deploys(f)).toEqual([])
+    expect(fs.existsSync(path.join(f.queue, 'last-restart'))).toBe(false)
+    // The queue's own reading of what production holds (dq_served) names the recorded commit, so a
+    // runner's check after such a deploy, and a waiting caller of it, count it live.
+    const read = (sha: string) => execFileSync('bash', ['-c', 'source scripts/lib/deploy-queue.sh; SERVE_ROOT="$PWD"; dq_runtime_same "$1"', 'x', sha],
+      { cwd: f.repo, env: { ...gitChildEnv(), WALNUT_DEPLOY_QUEUE_DIR: f.queue }, encoding: 'utf8' }).trim()
+    expect(read(head)).toBe(quiet)
+    // A record whose commit does not hold what production serves (a rewritten history) is ignored.
+    const other = commit(f, 'other')
+    fs.appendFileSync(path.join(f.queue, 'runtime-same'), `${head} ${other}\n`)
+    expect(read(other)).toBe(other)
+    // Two deploys recording at once (two lands skipping outside the runner) both keep their line.
+    const record = (a: string, b: string) => new Promise<number | null>((resolve) => spawn('bash', ['-c', 'source scripts/lib/deploy-queue.sh; SERVE_ROOT="$PWD"; dq_runtime_record "$1" "$2"', 'x', a, b],
+      { cwd: f.repo, env: { ...gitChildEnv(), WALNUT_DEPLOY_QUEUE_DIR: f.queue } }).on('close', resolve))
+    const fake = (i: number) => String(i).padStart(40, 'a')
+    expect(await Promise.all(Array.from({ length: 12 }, (_, i) => record(fake(i), other)))).toEqual(Array(12).fill(0))
+    const lines = fs.readFileSync(path.join(f.queue, 'runtime-same'), 'utf8').trim().split('\n')
+    for (let i = 0; i < 12; i++) expect(lines).toContain(`${fake(i)} ${other}`)
+    expect(fs.existsSync(path.join(f.queue, 'runtime-same.lock'))).toBe(false)
+    // A later code commit deploys as ever.
+    fs.writeFileSync(path.join(f.repo, 'code.ts'), 'y\n')
+    git(f.repo, 'add', '-A')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'code')
+    const code = git(f.repo, 'rev-parse', 'HEAD')
+    const d = await call(f).done
+    expect(d.code, d.stderr).toBe(0)
+    expect(deploys(f).filter((x) => x.kind === 'start').map((x) => x.sha)).toEqual([code])
+    await runnerGone(f)
+  }, 60_000)
+
   it('a forced deploy and a dry run go straight on, inside the gap', async () => {
     const f = fixture()
     stampNow(f)

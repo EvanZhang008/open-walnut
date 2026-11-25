@@ -82,10 +82,39 @@ try {
 } catch {}
 JS
 )"
-  if [[ -n "$served" ]] && served_sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$served^{commit}")" \
-    && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$served_sha"; then
-    echo "Deploy skipped: production already serves ${served_sha:0:12}, which contains ${SHA:0:12} (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
+  served_sha=""
+  [[ -n "$served" ]] && served_sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$served^{commit}" 2>/dev/null || true)"
+  # What production runs the code of: the newest commit a skipped deploy recorded for what it serves.
+  runs_sha="$served_sha"
+  if [[ -n "$served_sha" && -f "$DQ_LIB" ]]; then
+    # shellcheck source=lib/deploy-queue.sh
+    source "$DQ_LIB"
+    runs_sha="$(dq_runtime_same "$served_sha")"
+  fi
+  if [[ -n "$runs_sha" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$runs_sha"; then
+    echo "Deploy skipped: production already serves ${runs_sha:0:12}, which contains ${SHA:0:12} (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
     exit 0
+  fi
+  # Nothing production runs changed since what it serves (tests, docs, the iOS app, CI, or no change
+  # at all, as a revert of such a commit): no restart (2026-11-25: 84 restarts in a day, 14 of them
+  # for such commits). The pair is recorded as "<commit> <served>" (dq_runtime_record), so a reader
+  # of what production holds (the queue, walnut-cloud live) counts the commit as live while
+  # production still serves <served>. Anything not on the list restarts, src/ (src/data ships inside
+  # the build) and web/ included. Only a commit on the checkout's HEAD, and inside the deploy
+  # ceiling when one is set.
+  ceil_ref="$(git -C "$SERVE_ROOT" config --get walnut.deployCeiling 2>/dev/null || true)"
+  if [[ -n "$served_sha" && -f "$DQ_LIB" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$served_sha" "$SHA" \
+    && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" HEAD \
+    && { [[ -z "$ceil_ref" ]] || git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$ceil_ref" 2>/dev/null; }; then
+    nonruntime='^(tests/|docs/|ios-native/|\.github/|site/|infra/|[^/]+\.md$|([^/]+/)*AGENTS\.md$|vitest[^/]*\.config\.[^/]+$|playwright[^/]*\.config\.[^/]+$)'
+    changed="$(git -C "$SERVE_ROOT" diff --name-only "$served_sha" "$SHA" || true)"
+    runtime="$(printf '%s\n' "$changed" | { grep -v '^$' || true; } | { grep -vE "$nonruntime" || true; })"
+    shipped="$(printf '%s\n' "$changed" | { grep -E '^src/' || true; })"
+    if [[ -z "$runtime" && -z "$shipped" ]]; then
+      dq_runtime_record "$SHA" "$served_sha" || echo "Could not record that production runs ${SHA:0:12}'s code (in $(dq_dir)); it reads live with the next deploy." >&2
+      echo "Deploy skipped: ${SHA:0:12} changes nothing production runs since ${served_sha:0:12} ($(printf '%s\n' "$changed" | grep -c . || true) file(s): tests, docs or the like); no restart (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
+      exit 0
+    fi
   fi
 fi
 

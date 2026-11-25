@@ -277,10 +277,38 @@ JS
 )"
   [[ -n "$line" ]] || return 0
   sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "${line%% *}^{commit}" 2>/dev/null || true)"
-  [[ -n "$sha" ]] && printf '%s %s' "$sha" "${line##* }"
+  [[ -n "$sha" ]] && printf '%s %s' "$(dq_runtime_same "$sha")" "${line##* }"
   return 0
 }
 
+# The newest commit production runs the code of while it serves `sha`: a deploy that changed nothing
+# production runs skipped its restart and wrote "<commit> <served>" to runtime-same
+# (deploy-committed.sh, 2026-11-25). Of the records for `sha`, the one that holds every other and
+# `sha` itself, on the checkout's HEAD (a record off main never stands for production); else `sha`.
+dq_runtime_same() {
+  local best="$1" c
+  [[ -n "$1" ]] || return 0
+  while read -r c; do
+    [[ "$c" =~ ^[0-9a-f]{40}$ ]] || continue
+    git -C "$SERVE_ROOT" merge-base --is-ancestor "$best" "$c" 2>/dev/null || continue
+    git -C "$SERVE_ROOT" merge-base --is-ancestor "$c" HEAD 2>/dev/null || continue
+    best="$c"
+  done < <(awk -v s="$1" '$2 == s { print $1 }' "$(dq_dir)/runtime-same" 2>/dev/null || true)
+  printf '%s' "$best"
+}
+
+# Record that production serving `served` (arg 2) runs the code of `commit` (arg 1). One writer at a
+# time (two lands' deploys skip at once, outside the queue's runner): a lock dir, waited for up to 10 s,
+# then taken over (its maker died). The last 200 records are kept.
+dq_runtime_record() {
+  local f lock i
+  f="$(dq_dir)/runtime-same"; lock="$f.lock"
+  mkdir -p "$(dirname "$f")" || return 1
+  for (( i = 0; i < 100; i++ )); do mkdir "$lock" 2>/dev/null && break; sleep 0.1; done
+  (( i < 100 )) || { rm -rf "$lock"; mkdir "$lock" 2>/dev/null || return 1; }
+  { tail -n 199 "$f" 2>/dev/null; printf '%s %s\n' "$1" "$2"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  rmdir "$lock" 2>/dev/null || true
+}
 
 dq_num() { local v; v="$(cat "$1" 2>/dev/null || true)"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || printf '0'; }
 dq_clock() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S' 2>/dev/null || printf '%s' "$1"; }
@@ -500,7 +528,7 @@ dq_runner() {
     [[ "${WALNUT_DEPLOY_NO_GAP:-0}" == "1" ]] || (( last + DQ_GAP <= $(date +%s) )) || dq_put "$q/stop-at" "$(( last + DQ_GAP ))"
     dq_put "$q/current" "$target $(date +%s) $log"
     dq_log "deploying ${target:0:12} for$pending (log $log)"
-    before="$served_sha"
+    before="$built"
     code=0
     WALNUT_DEPLOY_RUNNER=1 bash "$DQ_SCRIPT" "$target" > "$log" 2>&1 < /dev/null || code=$?
     rm -f "$q/current" "$q/stop-at"
@@ -509,14 +537,15 @@ dq_runner() {
       dq_log "deploy of ${target:0:12} met dev-prod.sh's cooldown; trying again"
       continue
     fi
-    served="$(dq_served)"; served_sha="${served%% *}"
+    served="$(dq_served)"; served_sha="${served%% *}"; built="${served##* }"
     # A clean exit with production answering another build is no deploy of it.
     if (( code == 0 )) && [[ -n "$served_sha" ]] && ! dq_covers "$served_sha" "$target"; then
       echo "The deploy exited 0, but production serves ${served_sha:0:12}, which does not include ${target:0:12}." >> "$log"
       code=70
     fi
     if (( code == 0 )); then
-      [[ "$served_sha" != "$before" ]] && dq_put "$q/last-restart" "$(date +%s)"
+      # A restart is a new build (its built-at); a skip that changed nothing production runs is none.
+      [[ "$built" != "$before" ]] && dq_put "$q/last-restart" "$(date +%s)"
       dq_log "deployed ${target:0:12} (production serves ${served_sha:0:12})"
     else
       dq_log "deploy of ${target:0:12} failed (exit $code)"
