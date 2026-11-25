@@ -23,7 +23,7 @@ import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } fr
 import { keepsThreads } from './keeps-threads.js';
 import { asksHimNow } from './thread-summary-content.js';
 import { threadsKeptNow } from './threads-kept.js';
-import { isQuestionThread } from './thread-question.js';
+import { eachQuestionOn, isQuestionThread } from './thread-question.js';
 import { cardTagLine } from '../../lib/card-tag.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
@@ -203,6 +203,8 @@ export async function prepareThreadCapture(input: {
       },
     };
   }
+  // threads_each_question as it is set now, not as last read (right after a restart or a Settings change).
+  await eachQuestionOn();
   // The same pure step the store runs, on the copy read now: the node is told what will be.
   const planned = fileMessage(cur, draft);
   const nowMs = Date.parse(at);
@@ -335,6 +337,10 @@ export function threadHintText(s: ThreadHintState): string {
     else text += s.open.length
       ? ` Open: ${open}. Same subject as one: thread_update merge_into${kept ? '' : '; else give it a short title'}.`
       : kept ? '' : ' Give it a short title (thread_update).';
+    // His question opened its own thread while another waits on him: his words may answer that one too,
+    // and nothing else moves it (a question typed in the chat is never read as an answer by itself).
+    const waits = s.question ? s.open.find((t) => t.state === 'needs') : undefined;
+    if (waits) text += ` ${waits.id} waits on him: if this answers it, say so there.`;
     if (s.related?.length) text += relatedThreadsText(s.related, s.threadId, new Set(s.open.map((t) => t.id)), s.question ? 'own' : s.card ? 'line' : 'op');
   } else text = `filed under thread ${s.threadId} ${q(s.title)}.`;
   if (s.closed.length) text += ` Closed since: ${s.closed.map((t) => `${t.id}${t.by === 'human' ? ' (by him)' : ''}`).join(', ')}.`;

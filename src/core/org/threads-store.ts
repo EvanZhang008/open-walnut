@@ -28,6 +28,7 @@ import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
 import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
 import { keepThreadDecisions, stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
 import { replyTagNow } from './reply-card-switch.js';
+import { eachQuestionOn } from './thread-question.js';
 import { liveLetter } from './letter-thread-model.js';
 
 function emit(event: OrgThreadsChangedEvent): void {
@@ -250,6 +251,8 @@ export async function threadHolder(taskId: string, threadId: string): Promise<{ 
 
 export async function fileThreadMessage(taskId: string, input: FileMessageInput, hops = 0): Promise<FileMessageResult & { node: string }> {
   const lang = input.lang ?? await letterLang();
+  // threads_each_question as it is set now (thread-question.ts): the filing rule below reads it.
+  await eachQuestionOn();
   // A Follow up on a thread that moved on (a card opened before the move): his words go to the
   // thread where it lives now, never a new thread here (thread-follow.ts). Judged under the lock,
   // on the file as it is then, so a move that lands while this write waits is seen.

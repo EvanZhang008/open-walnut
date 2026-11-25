@@ -467,9 +467,15 @@ its own thread, and 32 seconds later the node's status answer merged it into A's
 thread" and the status question offered the merge. On, "Every experiment on" included:
 
 - **One predicate, by form** (`src/core/org/thread-question.ts` `asksQuestion`, no model): a question
-  mark, an interrogative at a clause start (why, how, what, which, who; when or where before an
-  auxiliary; an auxiliary before its subject), or a Chinese question form, and at least 3 words or
-  4 CJK characters; never a plain reaction. It leans towards yes.
+  mark; why, how, what, which or who wherever it stands, unless the word before makes it part of a
+  statement ("that is how it works"); when or where before an auxiliary and an auxiliary before its
+  subject at a clause start; a few auxiliary forms anywhere ("is there a way", "can we"); a closing
+  "right" or "correct" that is no agreement; or a Chinese question form; and at least 3 words or 4
+  CJK characters; never a plain reaction. It leans towards yes. Measured on a week of real chat
+  messages (2026-11-25): about 6 in 10 read as a question, and 7 in 10 of those had gone
+  into another thread, so the switch makes about 3.5 times as many threads of his questions.
+  A question opened beside a thread that waits on him is told to the node with that thread's id
+  (`thread-capture.ts` `threadHintText`): only the node can say it answers that one.
 - **Filing** (`threads-model.ts` `fileMessage`): such a chat message with no thread named joins no
   thread by timing and none as a reaction, even when the recent thread waits on him. A Follow up, a
   letter's note and a remark that asks nothing keep the old rules.

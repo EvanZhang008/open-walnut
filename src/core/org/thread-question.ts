@@ -39,22 +39,42 @@ const DETERMINER = 'the|a|an|my|your|our|his|her|their|its|any|some|all|every|ea
 const SUBJECT = String.raw`(?:(?:${PRONOUN})\b|(?:${DETERMINER})\s+[a-z0-9])`;
 const NEGATED = "isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|can't|couldn't|wouldn't|shouldn't|haven't|hasn't";
 /**
- * The English interrogatives. why/how/what/which/who/whose/whom ask wherever they stand ("hey why
- * is it red", "the build is red why", "tell me which train is faster"): a statement that holds one
- * ("that is what I meant") only makes one more thread. The rest ask at a clause start: when/where
- * only before an auxiliary ("when will", "where is"), since "when it ends, tell me" is an
- * instruction; an auxiliary asks before its subject ("is the build green", "can you"), and do/have
- * only before i, you, we or they, since "do the dishes" and "have it run" are orders.
+ * The English interrogatives. why/how/what/which/who/whose/whom ask at a clause start, and wherever
+ * else they stand ("hey why is it red", "the build is red why", "tell me which train is faster")
+ * unless the word before makes them part of a statement ("that is how it works", "do what you
+ * think is best", "I know why"). when/where ask only at a clause start before an auxiliary ("when
+ * will", "where is"), since "when it ends, tell me" is an instruction; an auxiliary asks before its
+ * subject ("is the build green", "can you"), and do/have only before i, you, we or they, since "do
+ * the dishes" and "have it run" are orders.
  */
-const EN_WH = /\b(?:why|how|what|which|who|whose|whom)\b/i;
+const WH = 'why|how|what|which|who|whose|whom';
+const EN_WH_START = new RegExp(CLAUSE + String.raw`(?:${WH})\b`, 'i');
+const EN_WH_AFTER = new RegExp(String.raw`(\S+)\s+(?:${WH})\b`, 'gi');
+const STATES = new Set(['is', 'are', 'was', 'were', 'be', 'am', 'do', 'does', 'did', 'know', 'knows', 'knew', 'see', 'sees', 'saw', 'understand',
+  'remember', 'about', 'of', 'for', 'on', 'in', 'to', 'with', 'from', 'that', 'exactly', 'matter', 'not']);
+const bare = (w: string): string => w.toLowerCase().replace(/[^a-z']/g, '');
+function whAsks(t: string): boolean {
+  if (EN_WH_START.test(t)) return true;
+  for (const m of t.matchAll(EN_WH_AFTER)) if (!STATES.has(bare(m[1]))) return true;
+  return false;
+}
 /**
- * An auxiliary before a pronoun asks wherever it stands ("for the charts is there a way to show
- * it", typed or spoken with no comma), and so does a closing tag ("it is still working right").
- * Not is/are before this or that ("the problem is that ..."), not do/have before it ("let's do it").
+ * An auxiliary that asks wherever it stands, typed or spoken with no comma before it: "for the
+ * charts is there a way to show it", "and after lunch can we repaint it". Only the forms a statement
+ * rarely holds: not "the bug is there too", "I did it already", "the problem is that ...".
  */
-const EN_AUX_ANYWHERE = new RegExp(String.raw`\b(?:(?:can|could|would|should|will|shall|does|did|${NEGATED})\s+(?:i|you|u|we|they|it|he|she|there|this|that)`
-  + String.raw`|(?:is|are|was|were)\s+(?:i|you|u|we|they|it|he|she|there)|(?:do|have)\s+(?:i|you|u|we|they))\b`, 'i');
-const EN_TAG = /\b(?:right|correct|or not)\s*[.!]*$/i;
+const EN_AUX_ANYWHERE = new RegExp(String.raw`\b(?:(?:is|are|was|were)\s+there\s+(?:a|an|any|some|no|anything|something|anyone|someone|more|another|enough)\b`
+  + String.raw`|(?:can|could|should|shall|would|will)\s+(?:i|you|u|we)\b|(?:do|did|does)\s+(?:you|u|we)\b|(?:is|are|was|were)\s+(?:you|u|we|they)\b`
+  + String.raw`|(?:does|will|can|could|would|should)\s+it\b)`, 'i');
+/** A closing tag asks ("it is still working right"), unless it closes an agreement ("you are right", "that is correct"). */
+const EN_TAG = /(\S+)\s+(?:right|correct)\s*[.!]*$/i;
+const AGREES = new Set(['is', 'are', 'was', 'were', 'be', 'am', "that's", 'thats', "you're", 'youre', "it's", 'its', 'sounds', 'seems', 'looks', 'feels',
+  'all', 'not', 'quite', 'absolutely', 'exactly', 'totally', 'turn', 'go', 'the', 'on', 'to']);
+function tagAsks(t: string): boolean {
+  if (/\bor not\s*[.!]*$/i.test(t)) return true;
+  const m = EN_TAG.exec(t);
+  return !!m && !AGREES.has(bare(m[1]));
+}
 const EN_QUESTION = new RegExp(CLAUSE + String.raw`(?:(?:when|where)(?:'s|\s+(?:is|are|was|were|will|would|can|could|should|do|does|did|has|have)\b)`
   + String.raw`|(?:can|could|would|should|will|shall|may|might|is|are|was|were|am|does|did|has|${NEGATED})\s+${SUBJECT}`
   + String.raw`|(?:do|have)\s+(?:i|you|we|they)\b)`, 'i');
@@ -62,13 +82,15 @@ const EN_QUESTION = new RegExp(CLAUSE + String.raw`(?:(?:when|where)(?:'s|\s+(?:
  * The Chinese question forms, anywhere in a clause (Chinese puts them where the asked thing is):
  * why (wei shen me, wei sha), how (zen me, zen yang, ru he), what (shen me, sha), whether (shi fou),
  * can or cannot, may or may not, is or is not, have or not, will or not, want or not, right or not,
- * good or not, how many (duo shao, ji ge), which or where (na), who (shui); and the particles ma and
- * ne at a clause's end.
+ * good or not, how many or how long (duo shao, duo jiu, duo chang, ji, never ji hu "almost"), which
+ * or where (na), who (shui), the short forms (za, gan ma, neng fou, ke fou, wei he, xing bu xing,
+ * dui ba, shi ba); and the particles ma and ne, or "le mei (you)", at a clause's end.
  */
 const ZH_QUESTION = new RegExp('\u4e3a\u4ec0\u4e48|\u4e3a\u5565|\u600e\u4e48|\u600e\u6837|\u5982\u4f55|\u4ec0\u4e48|\u5565|\u662f\u5426'
   + '|\u80fd\u4e0d\u80fd|\u53ef\u4e0d\u53ef\u4ee5|\u662f\u4e0d\u662f|\u6709\u6ca1\u6709|\u4f1a\u4e0d\u4f1a|\u8981\u4e0d\u8981|\u5bf9\u4e0d\u5bf9|\u597d\u4e0d\u597d'
-  + '|\u591a\u5c11|\u51e0\u4e2a|\u54ea|\u8c01'
-  + '|[\u5417\u5462](?=$|[\\s,.;:!~\u3001\uff0c\u3002\uff1b\uff1a\uff01\uff1f?])');
+  + '|\u591a\u5c11|\u591a\u4e45|\u591a\u957f|\u591a\u5927|\u591a\u5feb|\u591a\u8fdc|\u51e0(?!\u4e4e)|\u54ea|\u8c01'
+  + '|\u548b|\u5e72\u561b|\u80fd\u5426|\u53ef\u5426|\u4e3a\u4f55|\u884c\u4e0d\u884c|\u5bf9\u5427|\u662f\u5427'
+  + '|(?:[\u5417\u5462]|\u4e86\u6ca1\u6709?)(?=$|[\\s,.;:!~\u3001\uff0c\u3002\uff1b\uff1a\uff01\uff1f?])');
 const LINK_OR_CODE = /https?:\/\/\S+|`[^`]*`/g;
 
 /** Long enough to stand alone: three words, or four CJK characters. "why?" or "really?" is a reaction to what was just said. */
@@ -87,7 +109,7 @@ function standsAlone(text: string): boolean {
 export function asksQuestion(text: string): boolean {
   const t = text.replace(LINK_OR_CODE, ' ').trim();
   if (!t || isPlainReaction(t) || !standsAlone(t)) return false;
-  return /[?\uff1f]/.test(t) || EN_WH.test(t) || EN_AUX_ANYWHERE.test(t) || EN_TAG.test(t) || EN_QUESTION.test(t) || ZH_QUESTION.test(t);
+  return /[?\uff1f]/.test(t) || whAsks(t) || EN_AUX_ANYWHERE.test(t) || tagAsks(t) || EN_QUESTION.test(t) || ZH_QUESTION.test(t);
 }
 
 /**
