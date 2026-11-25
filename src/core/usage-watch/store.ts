@@ -78,6 +78,9 @@ function create(file: string): DB {
     CREATE TABLE IF NOT EXISTS companion_batches (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS client_failures (sid TEXT NOT NULL, id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (sid, id));
   `)
+  // The minutes an hour's machine slept (addSlept), kept beside its recorded ones. A file an older
+  // version wrote gets the column, empty; an older version reading this file never names it.
+  if (!(d.prepare('PRAGMA table_info(alive)').all() as Array<{ name: string }>).some((c) => c.name === 'slept')) d.exec('ALTER TABLE alive ADD COLUMN slept REAL')
   return d
 }
 
@@ -250,9 +253,34 @@ export function markAlive(now = Date.now()): void {
   })
 }
 
-/** Minutes recorded per hour from `sinceHour` on. */
+/** Minutes recorded per hour from `sinceHour` on (an hour with only its sleep kept recorded none). */
 export function readAlive(sinceHour: number): Map<number, number> {
-  return withStore(new Map(), (d) => new Map((d.prepare('SELECT hour, minutes FROM alive WHERE hour >= ?').all(sinceHour) as Array<{ hour: number; minutes: number }>).map((r) => [r.hour, r.minutes])))
+  return withStore(new Map(), (d) => new Map((d.prepare('SELECT hour, minutes FROM alive WHERE hour >= ? AND minutes > 0').all(sinceHour) as Array<{ hour: number; minutes: number }>).map((r) => [r.hour, r.minutes])))
+}
+
+/**
+ * Keeps the machine's sleep by the hour it fell in, for as long as the hours are kept: the sleep ledger
+ * holds a week, a watch reads up to four (2026-11-25 review: a 14-day watch over nightly sleep read
+ * Unknown again once the first week's sleep left the ledger).
+ */
+export function addSlept(spans: ReadonlyArray<{ start: number; end: number }>): void {
+  const per = new Map<number, number>()
+  for (const s of spans) {
+    for (let h = Math.floor(s.start / 3_600_000) * 3_600_000; h < s.end; h += 3_600_000) {
+      const ms = Math.min(s.end, h + 3_600_000) - Math.max(s.start, h)
+      if (ms > 0) per.set(h, (per.get(h) ?? 0) + ms / 60_000)
+    }
+  }
+  if (!per.size) return
+  withStore(undefined, (d) => {
+    const up = d.prepare('INSERT INTO alive (hour, minutes, slept) VALUES (?, 0, ?) ON CONFLICT(hour) DO UPDATE SET slept = MIN(60, COALESCE(slept, 0) + excluded.slept)')
+    for (const [h, m] of per) up.run(h, Math.min(60, m))
+  })
+}
+
+/** Minutes slept per hour from `sinceHour` on, for the hours that kept them (addSlept). */
+export function readSlept(sinceHour: number): Map<number, number> {
+  return withStore(new Map(), (d) => new Map((d.prepare('SELECT hour, slept FROM alive WHERE hour >= ? AND slept IS NOT NULL').all(sinceHour) as Array<{ hour: number; slept: number }>).map((r) => [r.hour, r.slept])))
 }
 
 /** Drops what is older than the retention, and events past the cap. */

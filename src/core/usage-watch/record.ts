@@ -11,13 +11,13 @@
 import { count } from '../observability/metrics.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
-import { addClientFailures, addEvents, addHours, addToolErrors, clientFailureKnown, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
+import { addClientFailures, addEvents, addHours, addSlept, addToolErrors, clientFailureKnown, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
 import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
 import { ASLEEP_CODE, TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { MOUNT_OP, labelValue } from './counters.js'
 export { MOUNT_OP } from './counters.js'
-import { sleptBetween } from '../../lib/sleep-ledger.js'
+import { sleepIntervals, sleptBetween } from '../../lib/sleep-ledger.js'
 
 const HOUR_MS = 3_600_000
 const FLUSH_MS = 60_000
@@ -87,6 +87,8 @@ const MAX_HELD = 2_000
 /** Timeouts of several requests together count once under this kind: a stall that recurs still rings. */
 export const STALL_KIND = 'page requests timed out together'
 let startedAt = 0
+/** Up to when this process kept the machine's sleep (flushUsage). */
+let sleptSeenTo = 0
 /** In arrival order; a judged entry is context only (a failure that never rings, or one already counted). */
 let held: { at: number; kind: string; route?: string; judged: boolean }[] = []
 let lastStallAt = -Infinity
@@ -405,6 +407,10 @@ export function flushUsage(now = Date.now()): void {
   clientIdsToWrite = []
   addClientFailures(ids)
   markAlive(now)
+  // The sleep this process saw since its last flush, kept by the hour (store.ts addSlept).
+  const sleptFrom = sleptSeenTo || startedAt || now
+  if (now > sleptFrom) addSlept(sleepIntervals(sleptFrom, now))
+  sleptSeenTo = now
   if (now - lastPrune > HOUR_MS) { lastPrune = now; pruneStore(now) }
   for (const [route, at] of routeTroubleAt) if (now - at > HOUR_MS) routeTroubleAt.delete(route)
   // The gauge's alarm reads it every 5 minutes: a day of hour rows is read no more often.
@@ -455,6 +461,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0, sink: type
   active = on
   rowSink = sink
   startedAt = started
+  sleptSeenTo = 0
   held = []
   lastStallAt = -Infinity
   pending = new Map()

@@ -102,7 +102,7 @@ let rejudged = false
  * Once a server start: watches that ended Unknown in the last week, judged again (watches.ts
  * rejudgeUnknown). Each new verdict is kept and told as a fresh one is; one still Unknown is left.
  */
-async function rejudgeUnknownWatches(now = Date.now()): Promise<void> {
+export async function rejudgeUnknownWatches(now = Date.now()): Promise<void> {
   if (rejudged) return
   rejudged = true
   const recent = listWatches({ states: ['unknown'], limit: 1_000 }).filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS)
@@ -112,28 +112,39 @@ async function rejudgeUnknownWatches(now = Date.now()): Promise<void> {
     const done: Watch = { ...w, state: v.state, result: v.results }
     putWatch(done)
     log.obs.info('usage watch: judged again', { watch: w.id, taskId: w.taskId, state: v.state })
-    if (!(await realUseOn())) continue
+    if (!(await routeDeps.enabled())) continue
     const summary = `Judged again (it had read Unknown, the machine's sleep counted as time not recorded): ${v.summary}`
-    const told = await tellVerdict(done, summary).catch((err) => `not told: ${err instanceof Error ? err.message : String(err)}`)
+    // Its own row id: the Unknown one may still wait in a queue, and a queue keeps one line per id.
+    const told = await tellVerdict(done, summary, { rowId: `${w.id}-rejudged`, toldBefore: w.told }).catch((err) => `not told: ${err instanceof Error ? err.message : String(err)}`)
     putWatch({ ...done, told })
   }
 }
 
-/** The verdict to its task while open, else (unless it passed) to its project's lead. */
-async function tellVerdict(w: Watch, summary: string): Promise<string> {
+/**
+ * The verdict to its task while open, else (unless it passed) to its project's lead. A verdict judged
+ * again that passed (`toldBefore`: who heard the first) still reaches the lead the Unknown went to: it
+ * may be acting on an Unknown that was not one.
+ */
+async function tellVerdict(w: Watch, summary: string, again: { rowId: string; toldBefore?: string } | null = null): Promise<string> {
   const task = await routeDeps.taskInfo(w.taskId)
+  const rowId = again?.rowId ?? `${w.id}-verdict`
   const text = [
     `Real use: your watch ${w.id} on ${w.targets.join(', ')} ended. ${summary}.`,
     w.state === 'passed' ? 'Nothing to do.' : 'Next: look at Settings › Diagnostics › Real Use (or usage_watch {"action":"report","target":"<target>"}), fix what it names, ship, and arm a new watch.',
   ].join('\n')
   if (task && !task.complete) {
-    const r = await routeDeps.deliver(task.id, text, `${w.id}-verdict`)
+    const r = await routeDeps.deliver(task.id, text, rowId)
     return r.ok ? task.id : `not told: ${r.detail}`
+  }
+  const earlier = again?.toldBefore
+  if (w.state === 'passed' && earlier && earlier !== w.taskId && !/\s/.test(earlier)) {
+    const r = await routeDeps.deliver(earlier, `${text}\n"${task?.title ?? w.taskId}" (${w.taskId}) set it and is complete: its earlier Unknown needs nothing.`, rowId)
+    return r.ok ? earlier : `not told: ${r.detail}`
   }
   if (w.state === 'passed') return 'passed; its task is complete'
   const lead = await routeDeps.leadOf(task?.project ?? 'Walnut')
   if (!lead) return 'not told: its task is complete and no lead'
-  const r = await routeDeps.deliver(lead.id, `${text}\n"${task?.title ?? w.taskId}" (${w.taskId}) set it and is complete: reopen it with task_send force:true and a reason, or hand it on.`, `${w.id}-verdict`)
+  const r = await routeDeps.deliver(lead.id, `${text}\n"${task?.title ?? w.taskId}" (${w.taskId}) set it and is complete: reopen it with task_send force:true and a reason, or hand it on.`, rowId)
   return r.ok ? lead.id : `not told: ${r.detail}`
 }
 

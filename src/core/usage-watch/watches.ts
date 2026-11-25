@@ -10,7 +10,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { callerSide, emptyAgg, mergeAgg, msPercentile, ownFaults, type Agg, type UsageKind } from './agg.js'
-import { readAlive, readHours, usageDb } from './store.js'
+import { readAlive, readHours, readSlept, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 import { RECORDED_NON_OPS } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
@@ -253,17 +253,22 @@ export function rejudgeUnknown(w: Watch): (WatchVerdict & { state: Exclude<Watch
  * A machine asleep runs no server and no one uses it: those minutes are left out, never "not recording"
  * (2026-11-25: 15 watches in three days ended Unknown, every one on the Mac's sleep: 205 minutes one night
  * and 47 in the day, while its 117 restarts cost 13 minutes; a restart's own minute is recorded twice, so
- * hours read 61 to 64). Sleep comes from the sleep ledger (lib/sleep-ledger.ts, a week of it).
+ * hours read 61 to 64). Sleep comes from the hours (store.ts addSlept, kept as long as they are) and the
+ * sleep ledger (lib/sleep-ledger.ts, a week), whichever saw more of it.
  */
 export function recordedShare(since: number, until: number, slept: (from: number, to: number) => number = sleptBetween): number {
-  const alive = readAlive(Math.floor(since / HOUR_MS) * HOUR_MS)
+  const first = Math.floor(since / HOUR_MS) * HOUR_MS
+  const alive = readAlive(first)
+  // The sleep each hour kept (store.ts addSlept: as long as the hours), and the ledger's (a week).
+  const kept = readSlept(first)
   let want = 0
   let got = 0
-  for (let h = Math.floor(since / HOUR_MS) * HOUR_MS; h < until; h += HOUR_MS) {
+  for (let h = first; h < until; h += HOUR_MS) {
     const from = Math.max(since, h)
     const to = Math.min(until, h + HOUR_MS)
     if (!(to > from)) continue
-    const awake = Math.max(0, to - from - slept(from, to)) / 60_000
+    const hourSlept = (kept.get(h) ?? 0) * 60_000 * ((to - from) / HOUR_MS)
+    const awake = Math.max(0, to - from - Math.max(hourSlept, slept(from, to))) / 60_000
     want += awake
     got += Math.min(awake, alive.get(h) ?? 0)
   }
