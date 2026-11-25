@@ -28,6 +28,29 @@ export async function waitFor<T>(pick: () => T | undefined, ms: number, what: st
   throw new Error(`timed out waiting for ${what}`)
 }
 
+/**
+ * A socket to the daemon of `runDir`. The daemon writes daemon.pid before daemon.port, so the port
+ * file seen next to its pid can still be the last daemon's (killed in the restart under test): a
+ * refused connect reads the port again until this daemon's own one answers.
+ */
+async function connectDaemon(child: ChildProcess, runDir: string, twin: Twin): Promise<WebSocket> {
+  const portFile = path.join(runDir, 'daemon.port')
+  const connect = (port: number) => new Promise<WebSocket | null>((res, rej) => {
+    const s = new WebSocket(`ws://127.0.0.1:${port}`)
+    s.on('open', () => res(s))
+    s.on('error', (err) => ((err as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? res(null) : rej(err)))
+  })
+  const first = await waitFor(() => fs.readFileSync(portFile, 'utf8').trim() || undefined, 10_000, 'its port')
+  const by = Date.now() + 10_000
+  for (let port = first; ; port = fs.readFileSync(portFile, 'utf8').trim() || port) {
+    const s = await connect(parseInt(port, 10))
+    if (s) return s
+    if (Date.now() > by) throw new Error(`the ${twin} daemon refused its port ${port}`)
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`the ${twin} daemon exited`)
+    await sleep(50)
+  }
+}
+
 const children: ChildProcess[] = []
 
 /** SIGKILL every daemon group this helper started that is still up. */
@@ -52,13 +75,30 @@ export class TriggerDaemon {
   events: Array<Record<string, unknown>> = []
   private nextId = 1
   private waiters = new Map<number, (reply: Record<string, unknown>) => void>()
-  private constructor(readonly child: ChildProcess, private ws: WebSocket) {
+  private constructor(readonly child: ChildProcess, private ws: WebSocket, private readonly runDir: string) {
+    this.attach(ws)
+  }
+
+  private attach(ws: WebSocket): void {
     ws.on('message', (data: Buffer | string) => {
       const msg = JSON.parse(typeof data === 'string' ? data : data.toString()) as Record<string, unknown>
       if (typeof msg.ev === 'string') { this.events.push(msg); return }
       const waiter = typeof msg.id === 'number' ? this.waiters.get(msg.id) : undefined
       if (waiter) { this.waiters.delete(msg.id as number); waiter(msg) }
     })
+  }
+
+  /** The server goes away: its socket is closed (the daemon keeps running, with no server). */
+  async disconnect(): Promise<void> {
+    if (this.ws.readyState === WebSocket.CLOSED) return
+    await new Promise<void>((r) => { this.ws.once('close', () => r()); this.ws.close() })
+  }
+
+  /** A server comes back: a new socket to the same daemon (events keep accumulating in `events`). */
+  async reconnect(): Promise<void> {
+    await this.disconnect()
+    this.ws = await connectDaemon(this.child, this.runDir, 'standalone')
+    this.attach(this.ws)
   }
 
   static async start(twin: Twin, o: TriggerDaemonStart): Promise<TriggerDaemon> {
@@ -71,25 +111,7 @@ export class TriggerDaemon {
     await waitFor(() => {
       try { return Number(fs.readFileSync(pidFile, 'utf8').trim()) === child.pid && fs.existsSync(portFile) ? true : undefined } catch { return undefined }
     }, 60_000, `the ${twin} daemon to serve`)
-    // The daemon writes daemon.pid before daemon.port, so the port file seen next to its pid can
-    // still be the last daemon's (killed in the restart under test): a refused connect reads the
-    // port again until this daemon's own one answers.
-    const connect = (port: number) => new Promise<WebSocket | null>((res, rej) => {
-      const s = new WebSocket(`ws://127.0.0.1:${port}`)
-      s.on('open', () => res(s))
-      s.on('error', (err) => ((err as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? res(null) : rej(err)))
-    })
-    const ws = await waitFor(() => fs.readFileSync(portFile, 'utf8').trim() || undefined, 10_000, 'its port').then(async (first) => {
-      const by = Date.now() + 10_000
-      for (let port = first; ; port = fs.readFileSync(portFile, 'utf8').trim() || port) {
-        const s = await connect(parseInt(port, 10))
-        if (s) return s
-        if (Date.now() > by) throw new Error(`the ${twin} daemon refused its port ${port}`)
-        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`the ${twin} daemon exited`)
-        await sleep(50)
-      }
-    })
-    return new TriggerDaemon(child, ws)
+    return new TriggerDaemon(child, await connectDaemon(child, o.runDir, twin), o.runDir)
   }
 
   get pid(): number { return this.child.pid! }

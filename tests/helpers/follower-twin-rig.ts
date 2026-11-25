@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { testBun } from './bun-runtime.js'
+import { waitFor } from './poll-wait.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -49,13 +50,7 @@ export interface Daemon { proc: ChildProcess; dir: string; port: number; pid: nu
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-export async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
-  const end = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + label)
-    await sleep(50)
-  }
-}
+export { waitFor } from './poll-wait.js'
 
 export function lines(file: string): Array<Record<string, any>> {
   try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] }
@@ -67,10 +62,12 @@ function alive(pid: number): boolean {
 
 /**
  * One daemon in `base/name`, its journal in `base/name-j`. `takeoverMs` is the
- * companion's takeover window and the quiet window this daemon calls the Mac away by; `beatMs`
- * its keepalive beat. Its pid is pushed onto `started`.
+ * companion's takeover window and, unless `quietMs` names another, the quiet window this daemon
+ * calls the Mac away by; `beatMs` its keepalive beat. `env`: more of the daemon's environment.
+ * `binary`: a build of scripts/build-daemon.sh to run in place of the source under bun (the
+ * program a host really runs). Its pid is pushed onto `started`.
  */
-export async function spawnFollowerTwin(o: { base: string; name: string; twin?: Twin; takeoverMs: number; beatMs: number; started: number[] }): Promise<Daemon> {
+export async function spawnFollowerTwin(o: { base: string; name: string; twin?: Twin; takeoverMs: number; quietMs?: number; beatMs: number; started: number[]; env?: Record<string, string>; binary?: string }): Promise<Daemon> {
   const dir = path.join(o.base, o.name)
   fs.mkdirSync(dir, { recursive: true })
   const env: NodeJS.ProcessEnv = {
@@ -81,15 +78,18 @@ export async function spawnFollowerTwin(o: { base: string; name: string; twin?: 
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(o.beatMs),
     WALNUT_LEADER_TAKEOVER_MS: String(o.takeoverMs),
-    WALNUT_LEADER_QUIET_MS: String(o.takeoverMs),
+    WALNUT_LEADER_QUIET_MS: String(o.quietMs ?? o.takeoverMs),
     WALNUT_GATEWAY_TIMEOUT_MS: '20000',
+    ...o.env,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
   delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
   const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
-  if (!BUN) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
-  const proc: ChildProcess = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
+  if (!BUN && !o.binary) throw new Error('the session daemon runs on bun, and there is none (BUN_INSTALL, ~/.bun/bin/bun)')
+  const proc: ChildProcess = o.binary
+    ? spawn(o.binary, ['--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
+    : spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${o.name}] ` + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')
   await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${o.name} daemon`)
@@ -138,7 +138,7 @@ export const REPLICA_SPEC_ENV: Readonly<Record<string, string>> = { WALNUT_ROLE:
  * second socket as it: follower.hello with the token the daemon gave it, answersLocal. `env`: more
  * of the spec's env (REPLICA_SPEC_ENV: a spec of the program that answers this host's calls).
  */
-export async function linkFollower(o: { base: string; name: string; d: Daemon; mac: WebSocket; home: string; walnutId: string; serverPort: number; env?: Record<string, string>; answersOnline?: boolean }): Promise<{ follower: WebSocket; hello: Record<string, any>; token: string }> {
+export async function linkFollower(o: { base: string; name: string; d: Daemon; mac: WebSocket; home: string; walnutId: string; serverPort: number; env?: Record<string, string>; answersOnline?: boolean; callSocket?: string }): Promise<{ follower: WebSocket; hello: Record<string, any>; token: string }> {
   const fakeOut = path.join(o.base, `${o.name}-fake.jsonl`)
   const entry = path.join(o.base, `${o.name}-server.cjs`)
   fs.writeFileSync(entry, FAKE_SERVER)
@@ -147,16 +147,19 @@ export async function linkFollower(o: { base: string; name: string; d: Daemon; m
   if (configured.ok !== true) throw new Error('server.configure: ' + JSON.stringify(configured))
   await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
   const token = String(lines(fakeOut).at(-1)!.token)
-  const { follower, hello } = await helloFollower({ d: o.d, home: o.home, walnutId: o.walnutId, token, answersOnline: o.answersOnline })
+  const { follower, hello } = await helloFollower({ d: o.d, home: o.home, walnutId: o.walnutId, token, answersOnline: o.answersOnline, callSocket: o.callSocket })
   return { follower, hello, token }
 }
 
-/** A new socket linked as `home`'s follower with the token its server was started with (a restarted server's link). */
-export async function helloFollower(o: { d: Daemon; home: string; walnutId: string; token: string; answersOnline?: boolean }): Promise<{ follower: WebSocket; hello: Record<string, any> }> {
+/**
+ * A new socket linked as `home`'s follower with the token its server was started with (a restarted
+ * server's link). `callSocket`: the host call entry it serves, named in its hello.
+ */
+export async function helloFollower(o: { d: Daemon; home: string; walnutId: string; token: string; answersOnline?: boolean; callSocket?: string }): Promise<{ follower: WebSocket; hello: Record<string, any> }> {
   const follower = await connectWs(o.d.port)
   let hello: Record<string, any> = {}
   for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: o.walnutId, home: o.home, token: o.token, answersLocal: true, ...(o.answersOnline ? { answersOnline: true } : {}) })
+    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: o.walnutId, home: o.home, token: o.token, answersLocal: true, ...(o.answersOnline ? { answersOnline: true } : {}), ...(o.callSocket ? { callSocket: o.callSocket } : {}) })
     if (hello.ok !== true) await sleep(250)
   }
   return { follower, hello }

@@ -15,6 +15,7 @@
  * around it, the tests drive it directly. Design: docs/plan/walnut-trigger.md.
  */
 
+import { coerceUnsentChecks } from './trigger-unsent-checks.js';
 import { spawn } from 'node:child_process';
 import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -275,6 +276,8 @@ export interface TriggerHostState {
   lastFireAtMs?: number;
   /** Latest non-firing check, replayed on reconnect so quiet hosts do not look stalled. */
   lastCheck?: TriggerCheckedEvent;
+  /** Checks no server of the trigger's Walnut took when they ran, oldest first (trigger-unsent-checks.ts). */
+  unsentChecks?: TriggerCheckedEvent[];
   /** A clock routine's place in its schedule (trigger-clock-core.ts). */
   clock?: ClockHostState;
   /**
@@ -469,6 +472,7 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
         !!p && typeof p === 'object' && typeof (p as PendingFire).seq === 'number' && Array.isArray((p as PendingFire).items))
     : [];
   const lastCheck = coerceCheckedEvent(r.lastCheck);
+  const unsentChecks = coerceUnsentChecks(r.unsentChecks);
   return {
     version: 1,
     // A file from before epochs gets one now: the server has no mark for it yet.
@@ -484,6 +488,7 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     ...(coerceClock(r.clock) ? { clock: coerceClock(r.clock) } : {}),
     ...(r.sharedCopy === true ? { sharedCopy: true as const } : {}),
     ...(lastCheck ? { lastCheck } : {}),
+    ...(unsentChecks ? { unsentChecks } : {}),
   };
 }
 

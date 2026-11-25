@@ -48,6 +48,23 @@ export function appendAudit(
   return [entry, ...base].slice(0, Math.max(1, max));
 }
 
+/**
+ * `entry` put in its place by time (newest first), unless the list already has a row of that time and
+ * outcome: a check a host ran while no server took it, reported later than one after it
+ * (providers/trigger-unsent-checks.ts). One older than every row of a full list is left out.
+ */
+export function insertAuditByTime(
+  list: TriggerAuditEntry[] | undefined,
+  entry: TriggerAuditEntry,
+  max: number,
+): TriggerAuditEntry[] {
+  const base = Array.isArray(list) ? list : [];
+  if (base.some((e) => e.atMs === entry.atMs && e.outcome === entry.outcome)) return base;
+  const at = base.findIndex((e) => e.atMs < entry.atMs);
+  const next = at < 0 ? [...base, entry] : [...base.slice(0, at), entry, ...base.slice(at)];
+  return next.slice(0, Math.max(1, max));
+}
+
 /** The preview, flattened and clamped, with the total length kept separately. */
 export function injectedPreview(text: string): { chars: number; preview: string } {
   const chars = text.length;

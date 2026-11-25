@@ -145,6 +145,9 @@ export function startMissedRunSweep(): { stop: () => void } {
     running = true;
     void noticeMissedRunsOnce()
       .catch((err) => log.cron.warn('missed-run sweep failed', { error: err instanceof Error ? err.message : String(err) }))
+      // A periodic check that stopped reporting while its host stayed linked (check-stalls.ts).
+      .then(() => import('./check-stalls.js').then((m) => m.noticeCheckStallsOnce()))
+      .catch((err) => log.cron.warn('check-stall sweep failed', { error: err instanceof Error ? err.message : String(err) }))
       .finally(() => { running = false; });
   };
   const first = setTimeout(run, FIRST_SWEEP_MS);

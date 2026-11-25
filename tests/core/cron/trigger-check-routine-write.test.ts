@@ -16,6 +16,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../../src/constants.js'
 import * as ops from '../../../src/core/cron/ops.js'
 import { applyTriggerChecked, flushRoutineChecks, ROUTINE_WRITE_DELAY_MS } from '../../../src/core/cron/trigger-apply.js'
+import { TRIGGER_CHECK_LOG_MAX } from '../../../src/core/cron/trigger-audit.js'
 import { cronStatePath, ensureLoaded } from '../../../src/core/cron/store.js'
 import { locked } from '../../../src/core/cron/timer.js'
 import type { CronServiceState } from '../../../src/core/cron/types.js'
@@ -166,5 +167,87 @@ describe('routine trigger checks share one write', () => {
     await applyTriggerChecked(state, e)
     await ops.stop(state)
     expect((await onDisk(state, job.id))?.lastCheck?.atMs).toBe(e.atMs)
+  })
+})
+
+/**
+ * A check its host ran while no server took it comes later than a newer one (providers/
+ * trigger-unsent-checks.ts): it goes into the history in its time place, once, and is written;
+ * the latest check stays the newer one. 2026-11-25: a four-hour hole in a trigger's checkLog.
+ */
+describe('a replayed check older than the latest goes into the history in its place', () => {
+  const at = (n: number) => Date.UTC(2026, 10, 25, 4, 40, 0) + n * 30 * MIN
+  const ev = (id: string, atMs: number, extra: Partial<TriggerCheckedEvent> = {}): TriggerCheckedEvent =>
+    ({ type: 'trigger.checked', id, atMs, outcome: 'quiet', reason: 'fire-false', durationMs: 120, nextRunAtMs: atMs + 30 * MIN, consecutiveErrors: 0, ...extra })
+  async function stored(state: CronServiceState, id: string) {
+    return (await ops.list(state, { includeDisabled: true, recompute: false })).find((j) => j.id === id)!.state
+  }
+  async function logOnDisk(state: CronServiceState, id: string): Promise<Array<{ atMs: number; outcome: string; error?: string }>> {
+    return (JSON.parse(await fs.readFile(cronStatePath(state.deps.storePath), 'utf-8')) as { states: Record<string, { checkLog?: Array<{ atMs: number; outcome: string; error?: string }> }> }).states[id]?.checkLog ?? []
+  }
+
+  it('the replays land in time order, the latest check stays, a duplicate is kept once, and each new row is written', async () => {
+    const state = makeState()
+    const job = await trigger(state)
+    now.value = at(8)
+    // Before the outage, then the first check after it, reported live.
+    await applyTriggerChecked(state, ev(job.id, at(0)))
+    await applyTriggerChecked(state, ev(job.id, at(7)))
+    await flushRoutineChecks(state)
+    _resetJsonIoForTesting()
+
+    // The kept ones, out of order, one an error.
+    for (const n of [3, 1, 2]) {
+      const a = await applyTriggerChecked(state, ev(job.id, at(n), { replay: true, ...(n === 2 ? { outcome: 'error', error: 'exit 1', reason: undefined, consecutiveErrors: 1 } : {}) }))
+      expect(a).toMatchObject({ found: true, disabled: false, ignored: true })
+    }
+    let s = await stored(state, job.id)
+    expect(s.checkLog?.map((e) => e.atMs)).toEqual([at(7), at(3), at(2), at(1), at(0)])
+    expect(s.checkLog?.find((e) => e.atMs === at(2))).toMatchObject({ outcome: 'error', error: 'exit 1' })
+    expect(s.lastCheck).toMatchObject({ atMs: at(7), outcome: 'quiet' })
+    expect(s.consecutiveErrors ?? 0, 'a replayed error is never counted').toBe(0)
+    // Written at once, not left for the routine write.
+    expect(stateWrites(state)).toBe(3)
+    expect((await logOnDisk(state, job.id)).map((e) => e.atMs)).toEqual([at(7), at(3), at(2), at(1), at(0)])
+
+    // The same replay again (a second configure, a resend): no second row, no write.
+    _resetJsonIoForTesting()
+    await applyTriggerChecked(state, ev(job.id, at(1), { replay: true }))
+    await applyTriggerChecked(state, ev(job.id, at(2), { outcome: 'error', error: 'exit 1', reason: undefined, consecutiveErrors: 1, replay: true }))
+    await applyTriggerChecked(state, ev(job.id, at(3), { replay: true }))
+    // The replay of the latest one itself adds nothing either.
+    await applyTriggerChecked(state, ev(job.id, at(7), { replay: true }))
+    s = await stored(state, job.id)
+    expect(s.checkLog?.map((e) => e.atMs)).toEqual([at(7), at(3), at(2), at(1), at(0)])
+    expect(stateWrites(state)).toBe(0)
+  })
+
+  it('an older check that is not a replay is ignored as before', async () => {
+    const state = makeState()
+    const job = await trigger(state)
+    await applyTriggerChecked(state, ev(job.id, at(5)))
+    const a = await applyTriggerChecked(state, ev(job.id, at(2)))
+    expect(a).toMatchObject({ found: true, ignored: true })
+    const s = await stored(state, job.id)
+    expect(s.checkLog?.map((e) => e.atMs)).toEqual([at(5)])
+    expect(s.lastCheck?.atMs).toBe(at(5))
+  })
+
+  it('a replay older than every row of a full history is left out', async () => {
+    const state = makeState()
+    const job = await trigger(state)
+    for (let n = 10; n < 10 + TRIGGER_CHECK_LOG_MAX; n++) await applyTriggerChecked(state, ev(job.id, at(n)))
+    await flushRoutineChecks(state)
+    _resetJsonIoForTesting()
+    await applyTriggerChecked(state, ev(job.id, at(1), { replay: true }))
+    const s = await stored(state, job.id)
+    expect(s.checkLog).toHaveLength(TRIGGER_CHECK_LOG_MAX)
+    expect(s.checkLog?.some((e) => e.atMs === at(1))).toBe(false)
+    expect(stateWrites(state)).toBe(0)
+    // One inside the history's span still goes in, and the oldest row gives way.
+    await applyTriggerChecked(state, ev(job.id, at(10) + MIN, { replay: true }))
+    const after = (await stored(state, job.id)).checkLog!
+    expect(after).toHaveLength(TRIGGER_CHECK_LOG_MAX)
+    expect(after.at(-1)!.atMs).toBe(at(10) + MIN)
   })
 })

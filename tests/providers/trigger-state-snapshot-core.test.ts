@@ -247,6 +247,18 @@ describe('takeTriggerStateSnapshot', () => {
     }
   })
 
+  it('reports no server took yet are left out of the snapshot, so a seed into an older daemon never meets them', () => {
+    const unsent = { type: 'trigger.checked', id: TID, atMs: nowMs - 5000, outcome: 'quiet', reason: 'all-seen', durationMs: 9, nextRunAtMs: nowMs + 60_000, consecutiveErrors: 0 }
+    writeState(HOME_A, JSON.stringify(validState({ unsentChecks: [unsent] })))
+    const reply = takeTriggerStateSnapshot(deps())
+    expect(reply.supported).toBe(true)
+    if (!reply.supported) return
+    expect(reply.state).toEqual(validState())
+    expect(reply.digest).toBe(createHash('sha256').update(canonicalTriggerStateJson(validState())).digest('hex'))
+    writeState(HOME_A, JSON.stringify(validState({ unsentChecks: 'many' })))
+    expect(takeTriggerStateSnapshot(deps())).toMatchObject({ supported: false, reason: 'state_corrupt' })
+  })
+
   it('corrupt or unfamiliar files are refused, never coerced', () => {
     const cases: Array<[string, string]> = [
       ['not json', 'state_corrupt'],

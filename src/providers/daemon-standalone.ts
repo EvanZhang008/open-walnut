@@ -4577,8 +4577,11 @@ function sendPluginJobGatewayRequest(home: string, capability: string, payload: 
   if (!target) {
     // This host's own Walnut server answers it while its leader is away (its answer is final);
     // while the leader's quiet window is not over yet, the call waits for one of the two.
-    // A backup leading: neither the leader nor this host's server will take it, so no wait.
-    if (caller && !leaderBook.backupLead(home)) {
+    // The cloud companion leading is the leader away too: this host's server takes the job's
+    // call as it takes a session's, and its refusal stands (no fallback: the companion is never
+    // asked, as it would run the call without the job's name). 2026-11-25: with the Mac away
+    // five hours and the companion leading, every job call was refused here as "not connected".
+    if (caller) {
       const again = () => {
         // The job's process left, or this daemon stops: nobody to answer, and a write relayed now would run for no one.
         if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting', { stopping: true }))

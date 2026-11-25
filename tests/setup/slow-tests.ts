@@ -57,6 +57,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-transport-unit.test.ts', // 3s
   'tests/providers/daemon-triggers.test.ts', // ~35s: real daemon + real check processes on a 5s clock
   'tests/integration/trigger-checked-replay-twins.test.ts', // ~260s measured: the real daemon, offline checks, reboots and failure recovery
+  'tests/integration/trigger-unsent-checks-daemon.test.ts', // ~72s measured: the real daemon checks on its 10s clock with no server, then a restart
   'tests/integration/trigger-host-delivery-daemon.test.ts', // ~60s: the daemon, real sessions, waits out the host grace and the 5s tick
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout

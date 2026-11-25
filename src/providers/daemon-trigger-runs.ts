@@ -9,6 +9,7 @@
  * as it was; deps carry the runtime's own names.
  */
 import type { CheckCallers, PendingFire, TriggerDef, TriggerHostState } from './trigger-check-core.js'
+import { keepUnsentCheck, takeUnsentChecks } from './trigger-unsent-checks.js'
 import type { ClockHostStart } from './clock-host-start-core.js'
 import type { createFollowerTriggerDelivery } from './follower-trigger-delivery-core.js'
 import type { ChildProcessUse } from './daemon-child-spawn.js'
@@ -143,6 +144,23 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
     return entry.def.everyMs
   }
 
+  /**
+   * Report a check to the servers of its trigger's Walnut. One no server took goes into the trigger's
+   * file, for the next configure (trigger-unsent-checks.ts); with a server here again, those kept go
+   * first, oldest first, so the record, which takes only what is newer than it holds, keeps each.
+   */
+  function reportCheck(entry: ArmedTrigger, fields: Record<string, unknown>): void {
+    const kept = entry.state.unsentChecks ?? []
+    if (kept.length && sendTriggerEvent(entry.home, 'trigger.checked', { ...kept[0], replay: true })) {
+      for (const c of kept.slice(1)) sendTriggerEvent(entry.home, 'trigger.checked', { ...c, replay: true })
+      takeUnsentChecks(entry.state)
+      persistTriggerState(entry.home, entry.def.id, entry.state)
+    }
+    if (sendTriggerEvent(entry.home, 'trigger.checked', fields) || !entry.state.lastCheck) return
+    keepUnsentCheck(entry.state, entry.state.lastCheck)
+    persistTriggerState(entry.home, entry.def.id, entry.state)
+  }
+
   async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'quiet' | 'error'; reason?: string; error?: string }> {
     if (demoQuiesce.fenced) return { outcome: 'quiet', reason: 'demo_stopping' }
     if (entry.def.clock) return runClock(entry, false) === 'fired' ? { outcome: 'fired' } : { outcome: 'quiet' }
@@ -191,7 +209,7 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
           consecutiveErrors: entry.state.consecutiveErrors, nextRunAtMs: entry.nextRunAtMs,
           ...(fault ? { fault } : {}),
         })
-        sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck, ...(fault ? { fault } : {}) })
+        reportCheck(entry, { ...entry.state.lastCheck, ...(fault ? { fault } : {}) })
         return { outcome: 'error', error }
       }
       // checkErrorOf already reported every failed parse above; this is the narrow.
@@ -222,7 +240,7 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
       }
       const reason = decision.kind === 'quiet' ? decision.reason : undefined
       // `idle` rides the event only, never the state file (trigger-check-core.ts TriggerCheckedEvent.idle).
-      sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck!, ...(checkIdleOf(output, decision, entry.state) ? { idle: true } : {}) })
+      reportCheck(entry, { ...entry.state.lastCheck!, ...(checkIdleOf(output, decision, entry.state) ? { idle: true } : {}) })
       return { outcome: 'quiet', ...(reason ? { reason } : {}) }
     } finally {
       entry.running = false

@@ -19,7 +19,7 @@ import { isHostReplicaProgram } from '../server-role.js';
 import { applyJobResult, emit, locked } from './timer.js';
 import { applyClockRun, clockTenureOf, owedClockVerdict, settleClockNext } from './clock-fire.js';
 import {
-  appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, mergeFireAttempt,
+  appendAudit, auditDelivery, auditWarnings, checkedAuditEntry, firedAuditEntry, injectedPreview, insertAuditByTime, mergeFireAttempt,
   TRIGGER_CHECK_LOG_MAX, TRIGGER_FIRE_LOG_MAX,
 } from './trigger-audit.js';
 import { checkErrorText, isTimeLimitError, timeLimitSeconds } from './trigger-time-limit.js';
@@ -255,6 +255,19 @@ export async function applyTriggerChecked(
     const durationMs = Number.isFinite(event.durationMs) ? event.durationMs : 0;
     const lastAt = job.state.lastCheck?.atMs;
     if (typeof lastAt === 'number' && atMs <= lastAt) {
+      // A check its host ran while no server took it, reported after a later one: its row goes in the
+      // history in its place; the latest check stays (providers/trigger-unsent-checks.ts).
+      if (event.replay && atMs < lastAt) {
+        const limitS = timeLimitSeconds(job.check);
+        const error = checkErrorText(event.error, limitS);
+        const before = job.state.checkLog;
+        job.state.checkLog = insertAuditByTime(before, checkedAuditEntry({
+          atMs, outcome: event.outcome, reason: event.reason, durationMs, error, warnings: event.warnings, limitSeconds: limitS,
+          ...(isMachineFaultKind(event.fault) ? { fault: event.fault } : {}),
+        }), TRIGGER_CHECK_LOG_MAX);
+        if (job.state.checkLog !== before) await persist(state);
+        return { found: true, disabled: false, ignored: true };
+      }
       // A restart re-arms the clock even when its latest check was already recorded.
       if (event.replay && atMs === lastAt && job.enabled && Number.isFinite(event.nextRunAtMs)
         && event.nextRunAtMs > state.deps.nowMs() && event.nextRunAtMs !== job.state.nextRunAtMs) {

@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  __resetHostLinkLedgerForTest, flushHostLinkLedger, linkDownIntervals, loadHostLinkLedger,
+  __resetHostLinkLedgerForTest, flushHostLinkLedger, linkDownIntervals, linkUpThroughout, loadHostLinkLedger,
   noteHostLinkDialing, noteHostLinkDown, noteHostLinkUp,
 } from '../../src/providers/host-link-ledger.js'
 
@@ -112,5 +112,45 @@ describe('host link ledger', () => {
     __resetHostLinkLedgerForTest()
     await loadHostLinkLedger(path.join(path.dirname(file), 'none.json'), T)
     expect(linkDownIntervals('h', T - 1, T + 9_000, T + 9_000)).toEqual([])
+  })
+})
+
+/**
+ * linkUpThroughout: whether a window counts for a stalled check (src/core/routines/check-stalls.ts).
+ * 2026-11-25: a host's checks look stopped only when its link was up the whole time; a window this
+ * process did not watch, or one with any outage, never counts.
+ */
+describe('linkUpThroughout', () => {
+  const W = 60 * 60_000
+
+  it('a host never seen up is not up throughout', () => {
+    expect(linkUpThroughout('devbox', T, T + W, T + W)).toBe(false)
+    expect(linkUpThroughout('', T, T + W, T + W)).toBe(false)
+  })
+
+  it('a link up before the window and never down in it is up throughout', () => {
+    noteHostLinkUp('devbox', T - 1_000)
+    expect(linkUpThroughout('devbox', T, T + W, T + W)).toBe(true)
+    // From the moment it came up exactly, too.
+    expect(linkUpThroughout('devbox', T - 1_000, T + W, T + W)).toBe(true)
+  })
+
+  it('a link that came up only inside the window did not see its start', () => {
+    noteHostLinkUp('devbox', T + 1_000)
+    expect(linkUpThroughout('devbox', T, T + W, T + W)).toBe(false)
+    expect(linkUpThroughout('devbox', T + 1_000, T + W, T + W)).toBe(true)
+  })
+
+  it('an outage inside the window, closed or still open, breaks it', () => {
+    noteHostLinkUp('devbox', T - 1_000)
+    noteHostLinkDown('devbox', T + 10_000)
+    expect(linkUpThroughout('devbox', T, T + W, T + W), 'down now').toBe(false)
+    noteHostLinkUp('devbox', T + 20_000)
+    expect(linkUpThroughout('devbox', T, T + W, T + W), 'a closed outage in the window').toBe(false)
+    // A window after the outage is clean again.
+    expect(linkUpThroughout('devbox', T + 20_000, T + W, T + W)).toBe(true)
+    // Another host's outage is its own.
+    noteHostLinkUp('other', T - 1_000)
+    expect(linkUpThroughout('other', T, T + W, T + W)).toBe(true)
   })
 })

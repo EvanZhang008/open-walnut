@@ -208,6 +208,10 @@ export function readFileBounded(fs: SnapshotFsLike, file: string, maxBytes: numb
 const STATE_KEYS = new Set([
   'version', 'epoch', 'seen', 'state', 'budget', 'pendingFires', 'consecutiveErrors', 'seq',
   'lastRunAtMs', 'lastFireAtMs', 'clock', 'sharedCopy', 'lastCheck',
+  // Reports no server took yet (trigger-unsent-checks.ts): this host's own bookkeeping of what it
+  // still owes its Walnut, not the watcher's dedup or cursor, so a snapshot leaves them out (and a
+  // seed into an older daemon, which knows no such field, is never refused for them).
+  'unsentChecks',
 ]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -268,6 +272,7 @@ export function parseSnapshotState(bytes: Uint8Array): { ok: true; state: Trigge
     clock = { fromMs: c.fromMs, ...(c.nextRunAtMs !== undefined ? { nextRunAtMs: c.nextRunAtMs as number } : {}) };
   }
   if (raw.sharedCopy !== undefined && raw.sharedCopy !== true) return refuse('state_corrupt', 'sharedCopy');
+  if (raw.unsentChecks !== undefined && !Array.isArray(raw.unsentChecks)) return refuse('state_corrupt', 'unsentChecks');
   const lastCheck = coerceCheckedEvent(raw.lastCheck);
   if ('lastCheck' in raw && (!lastCheck || canonicalTriggerStateJson(lastCheck) !== canonicalTriggerStateJson(raw.lastCheck))) {
     return refuse('state_corrupt', 'lastCheck');

@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { TriggerHold, createOfflineHostCore } from './offline-host-core.js'
 import type { TriggerDef, TriggerHostState } from './trigger-check-core.js'
+import { takeUnsentChecks } from './trigger-unsent-checks.js'
 import type { ClockReport } from './trigger-clock-core.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { ArmedTrigger, TriggerSocket, createDaemonTriggerStore } from './daemon-trigger-store.js'
@@ -400,6 +401,11 @@ export function createDaemonTriggerSet<W extends TriggerSocket>(deps: DaemonTrig
     // A quiet host kept checking too. Only a server that dedups checked replays asks for them.
     if (cmd.replayChecks === true) {
       for (const entry of armedOf(home)) {
+        // The checks it ran with no server here go first, oldest first: the record keeps each one, and
+        // takes only what is newer than what it holds (trigger-unsent-checks.ts).
+        const unsent = takeUnsentChecks(entry.state).filter((c) => c.id === entry.def.id)
+        for (const c of unsent) sendEvent(ws, 'trigger.checked', { ...c, replay: true })
+        if (unsent.length) persistTriggerState(entry.home, entry.def.id, entry.state)
         const checked = entry.state.lastCheck
         if (entry.def.check && checked?.id === entry.def.id) {
           // A failed offline check gets another chance within this interval, not the outage's backoff.

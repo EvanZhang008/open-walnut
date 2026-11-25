@@ -26,298 +26,31 @@
  * job's own call is vouched on the socket all the same (2026-11-23: a job started after the host's
  * service named its entry had every bypass start refused).
  *
+ * The rig is tests/helpers/follower-job-rig.ts; the same call while the cloud companion leads is
+ * tests/integration/follower-gateway-job-companion-twins.test.ts.
+ *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid
  * it wrote into its own dir, the fake host server and the job run by the pids they logged.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { WebSocket } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { testBun } from '../helpers/bun-runtime.js'
-import { createHostCallEntry, listenHostCallEntry, type HostCallListener } from '../../src/replica/host-call-entry.js'
-
-const ROOT = path.resolve(__dirname, '../..')
-const HOME = '/fixture/marina-home'
-const WALNUT = 'wmarinahost01'
-const BUN: string | undefined = testBun()
-/**
- * The daemon runs from source under bun; WALNUT_TEST_DAEMON_BINARIES names a build of
- * scripts/build-daemon.sh to run its binary instead (the program a host really runs).
- */
-const BINARIES = process.env.WALNUT_TEST_DAEMON_BINARIES?.trim()
-const BINARY = BINARIES ? path.join(BINARIES, `daemon-${process.platform}-${process.arch}`) : undefined
-/** Beats of 400 ms: the gateway passes over a silent Mac after 3 (1.2 s), the keepalive closes it after 8 (3.2 s). */
-const BEAT_MS = 400
-/** Between the two: the follower may write once the Mac has been quiet this long. */
-const QUIET_MS = 3_000
-
-/** The host server the daemon starts: hands its follower token to the test (FAKE_OUT) and idles. */
-const FAKE_SERVER = `
-const fs = require('fs')
-fs.appendFileSync(process.env.FAKE_OUT, JSON.stringify({ pid: process.pid, token: process.env.WALNUT_FOLLOWER_TOKEN }) + '\\n')
-process.on('SIGTERM', () => process.exit(0))
-setInterval(() => {}, 1 << 30)
-`
-
-/**
- * The plugin's job, as the Mac bundles it: tells the test its run id and waits. Each line the test
- * writes to `<JOB_OUT>.go` asks it to call: an op name through its own walnut.ops.call, or `child`
- * through a child process it starts (JOB_CHILD), which calls under the run's id on its own socket.
- */
-const BUNDLE = `
-import fs from 'node:fs'
-import { spawn } from 'node:child_process'
-export const jobs = {
-  worker: async (walnut, signal) => {
-    const info = JSON.parse(process.env.WALNUT_PLUGIN_JOB)
-    const out = process.env.JOB_OUT
-    fs.appendFileSync(out, JSON.stringify({ pid: process.pid, sid: info.sid }) + '\\n')
-    let done = 0
-    const poll = setInterval(() => {
-      let asks = []
-      try { asks = fs.readFileSync(out + '.go', 'utf8').split('\\n').filter(Boolean) } catch {}
-      for (const name of asks.slice(done)) {
-        done++
-        if (name === 'child') { spawn(process.env.JOB_NODE || process.execPath, [process.env.JOB_CHILD], { env: process.env, stdio: 'ignore' }); continue }
-        walnut.ops.call(name, {}).then(
-          (r) => fs.appendFileSync(out, JSON.stringify({ called: name, result: r }) + '\\n'),
-          (e) => fs.appendFileSync(out, JSON.stringify({ called: name, error: String(e) }) + '\\n'))
-      }
-    }, 100)
-    await new Promise((resolve) => signal.addEventListener('abort', resolve))
-    clearInterval(poll)
-  },
-}
-`
-
-/** The job's child: one call under the run's id on the gateway socket, its answer to JOB_OUT. */
-const CHILD = `
-const fs = require('fs'), net = require('net')
-const info = JSON.parse(process.env.WALNUT_PLUGIN_JOB)
-const note = (o) => fs.appendFileSync(process.env.JOB_OUT, JSON.stringify({ child: process.pid, ...o }) + '\\n')
-const c = net.connect(process.env.WALNUT_AGENT_SOCKET)
-let buf = ''
-c.on('connect', () => c.write(JSON.stringify({ v: 1, op: 'tools.call', sid: info.sid, args: { name: 'task_get', args: {} } }) + '\\n'))
-c.on('data', (d) => { buf += d; if (buf.includes('\\n')) { note({ reply: JSON.parse(buf.slice(0, buf.indexOf('\\n'))) }); c.destroy(); process.exit(0) } })
-c.on('error', (e) => { note({ error: String(e) }); process.exit(1) })
-`
-
-interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
-  const end = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + label)
-    await sleep(50)
-  }
-}
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
-function lines(file: string): Array<Record<string, any>> {
-  try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] }
-}
+import { BINARY, BUN, JOB, QUIET_MS, cleanupFollowerTwins, gatewayCall, leaderPassedOver, lines, rawGatewayCall, rig as jobRig, sleep, startGatewayCall, waitFor, writeJobChild } from '../helpers/follower-job-rig.js'
 
 let base = ''
 const started: number[] = []
-
-async function spawnDaemon(name: string, jobOut: string): Promise<Daemon> {
-  const dir = path.join(base, name)
-  fs.mkdirSync(dir, { recursive: true })
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    WALNUT_DAEMON_DIR: dir,
-    WALNUT_JOURNAL_DIR: path.join(base, name + '-j'),
-    WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
-    WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
-    WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT_MS),
-    WALNUT_LEADER_QUIET_MS: String(QUIET_MS),
-    WALNUT_GATEWAY_TIMEOUT_MS: '20000',
-    JOB_OUT: jobOut,
-    JOB_CHILD: path.join(base, 'job-child.cjs'),
-    // The child's runtime: a built daemon binary runs the job, and it runs no script of its own.
-    JOB_NODE: process.execPath,
-  }
-  delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  delete env.WALNUT_DAEMON_STATE_DIR
-  delete env.OPEN_WALNUT_API_URL; delete env.WALNUT_AGENT_SOCKET; delete env.WALNUT_SESSION_ID
-  const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
-  const proc = BINARY
-    ? spawn(BINARY, ['--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
-    : spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
-  if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write('[daemon] ' + b.toString()))
-  const sock = path.join(dir, 'agent-gateway.sock')
-  await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, 'the daemon')
-  const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
-  started.push(pid)
-  return { proc, dir, sock, pid, port: parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10) }
-}
-
-/** `autoPong: false`: the Mac is heard only while the test says it is awake (a frozen Mac answers nothing). */
-function connectWs(port: number, autoPong = true): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { autoPong })
-    const t = setTimeout(() => reject(new Error('ws connect timeout')), 5000)
-    ws.once('open', () => { clearTimeout(t); resolve(ws) })
-    ws.once('error', (e) => { clearTimeout(t); reject(e) })
-  })
-}
-
-let cmdId = 1
-function cmd(ws: WebSocket, body: Record<string, unknown>): Promise<Record<string, any>> {
-  const id = cmdId++
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => { ws.off('message', on); reject(new Error(`cmd ${body.cmd} timed out`)) }, 30_000)
-    const on = (data: WebSocket.Data) => {
-      try { const m = JSON.parse(data.toString()); if (m.id === id) { clearTimeout(t); ws.off('message', on); resolve(m) } } catch { /* not json */ }
-    }
-    ws.on('message', on)
-    ws.send(JSON.stringify({ id, ...body }))
-  })
-}
-
-/** A server end: answers every gateway request with who it is; returns what it was asked. */
-function answersAs(ws: WebSocket, who: string): Array<Record<string, any>> {
-  const asked: Array<Record<string, any>> = []
-  ws.on('message', (data) => {
-    let m: Record<string, any>
-    try { m = JSON.parse(String(data)) } catch { return }
-    if (m.ev !== 'gateway-request') return
-    asked.push(m)
-    ws.send(JSON.stringify({ id: cmdId++, cmd: 'gateway-result', relayId: m.relayId, result: { who, op: m.payload?.name } }))
-  })
-  return asked
-}
-
-/**
- * One call on the agent gateway socket under `sid`, as the job's walnut.ops.call sends it:
- * `sent` settles once the request left this process, `done` with the daemon's answer.
- */
-function startGatewayCall(sock: string, sid: string, name: string): { sent: Promise<void>; done: Promise<{ at: number; reply: Record<string, any> }> } {
-  let wrote!: () => void
-  const sent = new Promise<void>((resolve) => { wrote = resolve })
-  const done = new Promise<{ at: number; reply: Record<string, any> }>((resolve, reject) => {
-    const c = net.connect(sock)
-    let buf = ''
-    c.on('connect', () => c.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name, args: {} } }) + '\n', () => wrote()))
-    c.on('data', (d) => { buf += d.toString(); if (buf.includes('\n')) { c.destroy(); resolve({ at: Date.now(), reply: JSON.parse(buf.slice(0, buf.indexOf('\n'))) }) } })
-    c.on('error', reject)
-  })
-  return { sent, done }
-}
-
-const gatewayCall = (sock: string, sid: string, name: string) => startGatewayCall(sock, sid, name).done
-
-/** One raw request line on the agent gateway socket (any fields a caller may write), and the daemon's answer. */
-function rawGatewayCall(sock: string, request: Record<string, unknown>): Promise<Record<string, any>> {
-  return new Promise((resolve, reject) => {
-    const c = net.connect(sock)
-    let buf = ''
-    c.on('connect', () => c.write(JSON.stringify(request) + '\n'))
-    c.on('data', (d) => { buf += d.toString(); if (buf.includes('\n')) { c.destroy(); resolve(JSON.parse(buf.slice(0, buf.indexOf('\n')))) } })
-    c.on('error', reject)
-  })
-}
-
-const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
-
-interface Rig {
-  d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>
-  jobSid: string; jobOut: string; awake: (on: boolean) => void
-  /** The lines the follower's call entry handed to the daemon (`entry: true`), and its listener. */
-  entryLines: Array<Record<string, any>>; entry?: HostCallListener
-}
-
-/**
- * `entry`: the follower serves its host call entry (the real replica/host-call-entry.ts on its own
- * unix socket, each line handed to the daemon over the follower link) and names it in its hello,
- * before the job starts, so the run is given WALNUT_CALL_SOCKET and WALNUT_CALL_TOKEN.
- */
-async function rig(name: string, opts: { entry?: boolean } = {}): Promise<Rig> {
-  const jobOut = path.join(base, `${name}-job.jsonl`)
-  const d = await spawnDaemon(name, jobOut)
-  const mac = await connectWs(d.port, false)
-  let beat: ReturnType<typeof setInterval> | null = null
-  const awake = (on: boolean) => {
-    if (beat) { clearInterval(beat); beat = null }
-    if (on) beat = setInterval(() => { try { mac.send(JSON.stringify({ id: 0, cmd: 'ping' })) } catch { /* closed */ } }, BEAT_MS / 2)
-  }
-  awake(true)
-  const macAsked = answersAs(mac, 'mac')
-  expect((await cmd(mac, { cmd: 'leader.configure', home: HOME, walnutId: WALNUT, backup: false })).ok).toBe(true)
-  // The host server this daemon starts; its token makes the second socket the follower.
-  const fakeOut = path.join(base, `${name}-fake.jsonl`)
-  const entry = path.join(base, `${name}-server.cjs`)
-  fs.writeFileSync(entry, FAKE_SERVER)
-  const spec = { v: 1, home: HOME, walnutId: WALNUT, command: process.execPath, args: [entry], cwd: base, env: { FAKE_OUT: fakeOut }, log: path.join(base, `${name}-server.log`), port: 41_237, settings: { expose: { enabled: false } } }
-  expect((await cmd(mac, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
-  await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
-  const follower = await connectWs(d.port)
-  const entryLines: Array<Record<string, any>> = []
-  let callEntry: HostCallListener | undefined
-  if (opts.entry) {
-    const served = createHostCallEntry({
-      request: (command, params) => { entryLines.push(params); return cmd(follower, { cmd: command, ...params }) },
-      capabilities: () => ['host-call-entry-v1'],
-      linked: () => true,
-      enabled: () => true,
-      log: () => {},
-    })
-    const socketPath = path.join(d.dir, 'host-call', `${crypto.randomBytes(8).toString('hex')}.sock`)
-    callEntry = (await listenHostCallEntry(served, { socketPath, uid: typeof process.getuid === 'function' ? process.getuid() : null, log: () => {} })) ?? undefined
-    expect(callEntry, 'the call entry listens').toBeTruthy()
-  }
-  let hello: Record<string, any> = {}
-  for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true, ...(callEntry ? { callSocket: callEntry.socketPath } : {}) })
-    if (hello.ok !== true) await sleep(250)
-  }
-  expect(hello.ok, JSON.stringify(hello)).toBe(true)
-  const followerAsked = answersAs(follower, 'follower')
-  // A real job run: its run id is the caller the gateway knows.
-  const sha256 = crypto.createHash('sha256').update(BUNDLE).digest('hex')
-  const file = path.join(d.dir, 'plugin-jobs', 'bundles', `${sha256}.mjs`)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, BUNDLE)
-  const jobs = [{ plugin: 'acme-sync', version: '1.0.0', job: 'worker', kind: 'long-running', bundle: { sha256, file }, config: {}, host: 'devbox' }]
-  expect((await cmd(mac, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })).ok).toBe(true)
-  await waitFor(() => lines(jobOut).some((l) => typeof l.sid === 'string'), 30_000, 'the job run')
-  const jobSid = String(lines(jobOut).find((l) => typeof l.sid === 'string')!.sid)
-  return { d, mac, follower, macAsked, followerAsked, jobSid, jobOut, awake, entryLines, ...(callEntry ? { entry: callEntry } : {}) }
-}
-
-/**
- * Waits until the daemon passes over its silent leader: three missed beats, plus the beat of
- * the sweep that notices them, read from the daemon's own clock for the leader (the follower
- * view's `primaryHeardAgoMs`), never from a fixed wait here.
- */
-async function leaderPassedOver(r: Rig): Promise<void> {
-  const end = Date.now() + 30_000
-  for (;;) {
-    const view = await cmd(r.follower, { cmd: 'follower.status' })
-    if (Number(view.primaryHeardAgoMs) >= BEAT_MS * 4 + 100) return
-    if (Date.now() > end) throw new Error('timed out waiting for the daemon to pass over its leader: ' + JSON.stringify(view).slice(0, 300))
-    await sleep(50)
-  }
-}
+const rig = (name: string, opts: { entry?: boolean } = {}) => jobRig({ base, started, name, ...opts })
 
 beforeAll(() => {
   base = fs.mkdtempSync(path.join(os.tmpdir(), 'fgj-'))
-  fs.writeFileSync(path.join(base, 'job-child.cjs'), CHILD)
+  writeJobChild(base)
 })
 
-afterAll(() => {
-  for (const f of fs.existsSync(base) ? fs.readdirSync(base).filter((n) => n.endsWith('.jsonl')) : []) {
-    for (const l of lines(path.join(base, f))) if (typeof l.pid === 'number' && l.pid > 1 && alive(l.pid)) { try { process.kill(l.pid, 'SIGKILL') } catch { /* gone */ } }
-  }
-  for (const pid of started) if (pid > 1) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
-  try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
-})
+afterAll(async () => {
+  await cleanupFollowerTwins(base, started)
+}, 60_000)
 
 describe.skipIf(!BUN && !BINARY)("standalone daemon: a plugin job's call right after its leader went quiet", () => {
   it('awake: the call goes to the Mac, the follower is asked nothing', async () => {

@@ -95,6 +95,16 @@ export function linkDownIntervals(host: string, from: number, to: number, now: n
   return out
 }
 
+/**
+ * Whether this Walnut saw the link to `host` up for the whole of `[from, to]`: a link of this
+ * process was up by `from`, and nothing of the window was down. Unknown (no link seen) is false.
+ */
+export function linkUpThroughout(host: string, from: number, to: number, now: number = Date.now()): boolean {
+  const up = firstUpAt.get(host)
+  if (!host || up === undefined || up > from || open.has(host)) return false
+  return linkDownIntervals(host, from, to, now).length === 0
+}
+
 interface LedgerFile { v: 1; hosts: Record<string, { closed?: DownInterval[]; open?: number }> }
 
 /**
