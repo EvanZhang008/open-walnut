@@ -29,11 +29,24 @@ final class NoticeTimingTests: XCTestCase {
     func testAfterTakesItAwayUnlessCancelled() async {
         var shown = true
         var kept = true
-        NoticeTiming.after(0.05) { shown = false }
-        let cancelled = NoticeTiming.after(0.05) { kept = false }
+        let normal = defaults(uiTest: false)
+        NoticeTiming.after(0.05, defaults: normal) { shown = false }
+        let cancelled = NoticeTiming.after(0.05, defaults: normal) { kept = false }
         cancelled.cancel()
         try? await Task.sleep(for: .milliseconds(400))
         XCTAssertFalse(shown, "the notice stayed past its time")
         XCTAssertTrue(kept, "a cancelled take-away still ran")
+    }
+
+    /// `after` waits the held time, not the normal one: in a UI-test launch a 50 ms notice is still up.
+    @MainActor
+    func testAfterWaitsTheHeldTimeInAUITestLaunch() async {
+        #if DEBUG
+        var shown = true
+        let held = NoticeTiming.after(0.05, defaults: defaults(uiTest: true)) { shown = false }
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(shown, "a UI-test launch took the notice away at its normal time, not the held one")
+        held.cancel()
+        #endif
     }
 }

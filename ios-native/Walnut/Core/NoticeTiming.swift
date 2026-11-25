@@ -10,8 +10,9 @@ import Foundation
 /// In a debug build launched by the UI tests (`-walnut.uiTestKeychain`, UITestLaunch) it stays at
 /// least `uiTestFloor` seconds; release builds and every other launch keep the normal time.
 ///
-/// Every timed take-away in the app goes through here (`after`, or `seconds` for a window the
-/// caller measures itself): tests/web/ios-timed-hide-guard.test.ts finds them in the source.
+/// Every timed take-away a UI test can meet goes through here (`after`, or `seconds` for a wait or a
+/// window the caller measures itself): tests/web/ios-timed-hide-guard.test.ts finds every timed
+/// take-away in the source and lists the rest with why none is a passing thing a test must catch.
 enum NoticeTiming {
     /// The least a passing thing stays in a UI-test launch.
     static let uiTestFloor: Double = 8
@@ -23,11 +24,14 @@ enum NoticeTiming {
         return normal
     }
 
-    /// Runs `takeAway` on the main actor once the thing has been up `normal` seconds (`seconds`),
+    /// Runs `takeAway` on the main actor once the thing has been up its held time, `seconds(normal)`
+    /// (`normal` itself outside a UI-test launch of a debug build, at least `uiTestFloor` in one),
     /// unless the returned task is cancelled first.
     @MainActor @discardableResult
-    static func after(_ normal: Double, _ takeAway: @escaping @MainActor () -> Void) -> Task<Void, Never> {
-        let wait = seconds(normal)
+    static func after(
+        _ normal: Double, defaults: UserDefaults = .standard, _ takeAway: @escaping @MainActor () -> Void
+    ) -> Task<Void, Never> {
+        let wait = seconds(normal, defaults: defaults)
         return Task { @MainActor in
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled else { return }
