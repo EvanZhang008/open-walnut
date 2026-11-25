@@ -91,12 +91,14 @@ describe('the Home list is anchored by hand in every box that scrolls it', () =>
     expect(hook).toMatch(/box\.hasAttribute\(SCROLL_HELD_ATTR\)/);
     // Released: put back what moved, then pick again (no scroll of the person: not `onScroll`).
     expect(hook).toMatch(/addEventListener\(SCROLL_RELEASED_EVENT, pickAgain\)/);
-    expect(hook).toMatch(/const pickAgain = \(\) => keep\(box\);/);
+    expect(hook).toMatch(/const pickAgain = \(\) => \{[\s\S]{0,80}keep\(box\);\s*\};/);
   });
 
   it('lets go of a row that moved in the list instead of scrolling after it', () => {
     const hook = fs.readFileSync(path.join(WEB, 'hooks/useScrollAnchor.ts'), 'utf8');
-    expect(hook).toMatch(/held\.el\.getClientRects\(\)\.length > 0 && stillInOrder\(held\)/);
+    expect(hook).toMatch(/const drawn = [^\n]*el\.isConnected && hasBox\(el\);/);
+    expect(hook).toMatch(/const hasBox = \(el: Element\) => el\.getClientRects\(\)\.length > 0;/);
+    expect(hook).toMatch(/ok: drawn\(held\.el\) && stillInOrder\(held\)/);
   });
 
   it('holds task rows, never a sticky heading', () => {
