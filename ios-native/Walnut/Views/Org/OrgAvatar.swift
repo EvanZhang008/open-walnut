@@ -95,12 +95,17 @@ final class OrgAvatarLoader {
         await task.value
     }
 
-    /// Forget every avatar (Disconnect, `LocalDataReset`).
+    /// Forget every avatar (Disconnect, `LocalDataReset`). Each key keeps its slot and only forgets
+    /// what it held: a view on screen keeps watching the slot it read, so the next pairing's answer
+    /// redraws it. A slot dropped here would leave such a view on a slot nothing writes again.
     func eraseAll() {
         for task in inflight.values { task.cancel() }
         inflight = [:]
-        for slot in slots.values { slot.image = nil }
-        slots = [:]
+        for slot in slots.values {
+            if slot.image != nil { slot.image = nil }
+            slot.data = nil
+            slot.answeredAt = nil
+        }
     }
 }
 

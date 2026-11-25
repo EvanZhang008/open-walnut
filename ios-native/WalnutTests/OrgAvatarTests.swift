@@ -101,4 +101,32 @@ final class OrgAvatarTests: XCTestCase {
         await loader.refresh(vp, scale: 2)
         XCTAssertFalse(vpRedrawn, "the same 404 again redrew the VP's avatar")
     }
+
+    /// An erase (Disconnect) forgets the picture but keeps the key's slot: a view that read the avatar
+    /// before it is redrawn by the next pairing's answer, even when that answer is the same picture.
+    func testAnEraseKeepsTheSlotSoTheNextAnswerRedrawsTheViewOnIt() async {
+        var calls = 0
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { ctx in
+            UIColor.systemTeal.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        let loader = OrgAvatarLoader(fetch: { _, _ in calls += 1; return png }, now: { Date(timeIntervalSince1970: 1_000) })
+        let key = OrgAvatarLoader.Key(server: "s", taskId: "lead-marina", pixels: 60)
+        await loader.refresh(key, scale: 3)
+        XCTAssertNotNil(loader.image(key))
+
+        var erased = false
+        withObservationTracking { _ = loader.image(key) } onChange: { erased = true }
+        loader.eraseAll()
+        XCTAssertTrue(erased, "the erase left the old picture on screen")
+        XCTAssertNil(loader.image(key))
+
+        // The view, redrawn by the erase, reads the avatar again; the next answer must reach it.
+        var answered = false
+        withObservationTracking { _ = loader.image(key) } onChange: { answered = true }
+        await loader.refresh(key, scale: 3)
+        XCTAssertEqual(calls, 2, "the erase did not forget the answer's time: no new read")
+        XCTAssertTrue(answered, "the next pairing's answer did not redraw the view on the slot")
+        XCTAssertNotNil(loader.image(key), "the same picture as before the erase did not show again")
+    }
 }
