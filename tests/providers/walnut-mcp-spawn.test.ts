@@ -13,6 +13,7 @@
  * ZERO real side effects: mock-claude.mjs under a MockDaemon, stores in a temp dir.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import os from 'node:os'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -25,6 +26,14 @@ vi.mock('../../src/providers/daemon-connection.js', async (orig) => ({
   ...(await orig<typeof import('../../src/providers/daemon-connection.js')>()),
   getConnectedDaemonConnection: () => ({ hasCapability: (cap: string) => serving.on && cap === 'walnut-mcp-v1' }),
 }))
+
+// The hub's mount as this install builds it (profiles.ts walnutMcpProfile); null: the real one, which
+// under a test runner names no entry of its own.
+const hubNow: { server: import('../../src/core/types.js').SessionMcpServer | null } = { server: null }
+vi.mock('../../src/core/sessions/profiles.js', async (orig) => {
+  const real = await orig<typeof import('../../src/core/sessions/profiles.js')>()
+  return { ...real, walnutMcpProfile: (o?: Parameters<typeof real.walnutMcpProfile>[0]) => hubNow.server ? { mcpServers: { walnut: { ...hubNow.server } } } : real.walnutMcpProfile(o) }
+})
 
 import { ClaudeCodeSession, LIVE_MOUNT_LINE_WAIT_MS } from '../../src/providers/claude-code-session.js'
 import { readFileSync } from 'node:fs'
@@ -79,6 +88,7 @@ afterAll(async () => { await daemon.stop() })
 
 beforeEach(async () => {
   serving.on = true
+  hubNow.server = null
   bus.clear()
   daemon.clearCommandHistory()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -437,5 +447,74 @@ describe('class guard: a line waits on no side request before its write for more
     const awaits = [...src.slice(start, end).matchAll(/await [^\n;]+/g)].map((m) => m[0].trim())
     expect(awaits).toEqual(Object.keys(BOUNDED_WAITS))
     expect(LIVE_MOUNT_LINE_WAIT_MS).toBeLessThanOrEqual(3_000)
+  })
+})
+
+// 2026-11-24 and 25: Main's record named the hub mount of a deploy stage that a later deploy removed (a
+// Main AI chat's, one of about 2026-10-11). Every resume replayed it, it did not start (ENOENT), and the
+// session ran with none of its Walnut tools; nothing counted it.
+describe('a hub mount its record kept names this install at every spawn, and real use counts each start', () => {
+  const STAGE = {
+    command: path.join(os.tmpdir(), 'open-walnut-stage.1795620328.48485', 'dist-bin', 'walnut-darwin-arm64'),
+    args: ['/$bunfs/root/walnut', 'mcp'], env: { WALNUT_MCP_ROLE: 'org' },
+  }
+  const NOW = { command: process.execPath, args: [path.resolve(import.meta.dirname, '../../src/cli.ts'), 'mcp'] }
+  const mainProfile = (): SessionProfile => ({ systemPrompt: 'persona', systemPromptMode: 'append', mcpServers: { walnut: { ...STAGE } } })
+  let usageDir = ''
+
+  beforeEach(async () => {
+    const { setUsageWatchFile } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting } = await import('../../src/core/usage-watch/record.js')
+    usageDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mount-use-'))
+    setUsageWatchFile(path.join(usageDir, 'usage-watch.sqlite'))
+    _resetUsageRecorderForTesting(true)
+  })
+  afterEach(async () => {
+    const { closeUsageWatchStore, setUsageWatchFile } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting } = await import('../../src/core/usage-watch/record.js')
+    closeUsageWatchStore()
+    setUsageWatchFile(null)
+    _resetUsageRecorderForTesting(false)
+    await fsp.rm(usageDir, { recursive: true, force: true })
+  })
+
+  async function verdictOf(session: ClaudeCodeSession): Promise<string | undefined> {
+    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+    return (await getSessionByClaudeId(session.sessionId!))?.mcpMountStatus?.walnut
+  }
+
+  it('Main\'s resume names this install with its role, its Walnut tools come up, and the start counts as one that worked', async () => {
+    hubNow.server = NOW
+    const { config, session } = await spawnMcpConfig('t-main', { profile: mainProfile(), resume: '11111111-2222-4333-8444-777777777777' })
+    expect(config?.mcpServers.walnut).toEqual({ ...NOW, env: { WALNUT_MCP_ROLE: 'org' } })
+    let verdict: string | undefined
+    await waitUntil(() => { void verdictOf(session).then((v) => { verdict = v }); return verdict === 'connected' }, 8000, 'connected mount')
+    const { flushUsage, MOUNT_OP } = await import('../../src/core/usage-watch/record.js')
+    const { readHours } = await import('../../src/core/usage-watch/store.js')
+    flushUsage()
+    const rows = readHours(0, { kind: 'op', name: MOUNT_OP })
+    expect(rows.reduce((n, r) => n + r.agg.calls, 0)).toBe(1)
+    expect(rows.reduce((n, r) => n + r.agg.errors, 0)).toBe(0)
+    await session.gracefulStop(true).catch(() => {})
+  })
+
+  it('a mount that does not start is Walnut\'s own fault: it rings, and is kept by session', async () => {
+    // This install names no entry of its own (only the bare command on PATH): the record's is kept.
+    const { addObserveTap } = await import('../../src/core/observability/metrics.js')
+    const rang: string[] = []
+    const off = addObserveTap((name, _v, labels) => { if (name === 'usage.op.mount_failed') rang.push(labels?.op ?? '') })
+    try {
+      const { config, session } = await spawnMcpConfig('t-main-gone', { profile: mainProfile(), resume: '11111111-2222-4333-8444-888888888888' })
+      expect(config?.mcpServers.walnut).toEqual(STAGE)
+      let verdict: string | undefined
+      await waitUntil(() => { void verdictOf(session).then((v) => { verdict = v }); return verdict === 'failed' }, 8000, 'failed mount')
+      await waitUntil(() => rang.length > 0, 4000, 'the mount alarm counter')
+      const { flushUsage, MOUNT_OP } = await import('../../src/core/usage-watch/record.js')
+      const { readToolErrors } = await import('../../src/core/usage-watch/store.js')
+      flushUsage()
+      expect(rang).toEqual([MOUNT_OP])
+      expect(readToolErrors({ since: 0 })).toEqual([expect.objectContaining({ sid: session.sessionId, taskId: 't-main-gone', op: MOUNT_OP, code: 'mount_failed', client: 'mcp', host: 'local' })])
+      await session.gracefulStop(true).catch(() => {})
+    } finally { off() }
   })
 })

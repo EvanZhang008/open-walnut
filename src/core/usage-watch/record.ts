@@ -144,7 +144,8 @@ export function recordOpCall(call: OpCall): void {
   if (c.spilled) agg.spilled++
   const labels = { op: labelValue(c.op) }
   if (c.cls === 'error' || c.cls === 'timeout') {
-    count('usage.op.errors', 1, labels)
+    // A session's Walnut tools that did not start ring at the first, on their own alarm (usage.mount).
+    count(c.op === MOUNT_OP ? 'usage.op.mount_failed' : 'usage.op.errors', 1, labels)
     if (watchedOps.has(c.op)) count('usage.op.watched_errors', 1, labels)
   }
   if (c.cls === 'bad_args') count('usage.op.bad_args', 1, labels)
@@ -225,6 +226,27 @@ function sameNoAnswerSeen(row: ToolErrorRow, via: ToolErrorVia): boolean {
   }
   noAnswerSeen.push({ key, at: row.at, via, matched: false, seenAt: now })
   return false
+}
+
+/** The name a session's Walnut MCP mount is counted under (recordMountVerdict): no op has it. */
+export const MOUNT_OP = 'mcp/mount'
+
+/**
+ * What a Claude Code session's start said of its Walnut MCP mount (claude-code-session.ts
+ * reconcileMcpMountStatus): one call of MOUNT_OP per process that asked for one. Connected, or still
+ * starting, worked. Failed (it did not start, or closed before it answered) is Walnut's own fault and
+ * rings at the first (usage.mount): the session runs with none of its Walnut tools. A server a machine
+ * policy or the user's settings refused (blocked, disabled) is a refusal by design. One that did not
+ * work is also kept by session (tool-errors.ts). 2026-11-24 and 25: Main and a Main AI chat started
+ * without them at every resume, their mount naming a deploy's removed stage, and nothing counted it.
+ */
+export function recordMountVerdict(v: { sid?: string; taskId?: string; host: string; status: string; ms: number; now?: number }): void {
+  const ok = v.status === 'connected' || v.status === 'pending'
+  const cls: OutcomeClass = ok ? 'ok' : v.status === 'blocked' || v.status === 'disabled' ? 'refused' : 'error'
+  const code = ok ? undefined : `mount_${v.status.replace(/[^a-z]+/gi, '_').toLowerCase().slice(0, 40)}`
+  const now = v.now ?? Date.now()
+  recordOpCall({ op: MOUNT_OP, client: 'mcp', cls, ...(code ? { code } : {}), size: 0, overLimit: false, ms: Math.max(0, v.ms), now })
+  if (code && v.sid) recordToolError({ at: now, sid: v.sid, ...(v.taskId ? { taskId: v.taskId } : {}), host: v.host, op: MOUNT_OP, client: 'mcp', code })
 }
 
 /** Claude Code said it saved an answer of this op to a file instead of passing it on. */

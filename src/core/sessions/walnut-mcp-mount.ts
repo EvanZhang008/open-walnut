@@ -23,7 +23,29 @@
  * start; the hub's `open-walnut mcp`, which marks every tool always-load, costs
  * about 76K.
  */
+import path from 'node:path'
 import type { SessionMcpServer, SessionProfile } from '../types.js'
+
+/**
+ * The walnut CLI entry of THIS running install, when identifiable.
+ *
+ * The bare bin name `open-walnut` proved unreliable: whether it exists on
+ * PATH depends on how the package was linked (this very machine only links
+ * `walnut`), and a dead command means the MCP mount silently never comes up —
+ * the session falls back to raw curl. The server process IS the CLI
+ * (`bun dist/cli.js web ...`, `bun src/cli.ts web ...` from source, the
+ * compiled file, whose argv[1] is its own entry `/$bunfs/root/walnut`), so its
+ * own argv[1] is the one entry we can trust absolutely, run by its own
+ * runtime (process.execPath). Guarded by a basename allowlist so a test runner
+ * (vitest) is never mistaken for the CLI.
+ */
+export function cliEntryOf(argv1: string | undefined): string | null {
+  if (!argv1) return null
+  const base = path.basename(argv1)
+  return base === 'cli.js' || base === 'cli.ts' || base === 'open-walnut.js' || base === 'walnut.js' || base === 'open-walnut' || base === 'walnut'
+    ? path.resolve(argv1)
+    : null
+}
 
 /** The daemon capability saying its `walnut` CLI serves `walnut mcp-server`. */
 export const WALNUT_MCP_CAPABILITY = 'walnut-mcp-v1'
@@ -75,6 +97,43 @@ export function withWalnutMcpMount(input: WalnutMcpMountInput): SessionProfile |
   return { ...(profile ?? {}), mcpServers: { ...(profile?.mcpServers ?? {}), walnut } }
 }
 
+/** Whether a mount is the hub's own `mcp` command (profiles.ts walnutMcpProfile), as any install built it. */
+export function isHubMount(server: SessionMcpServer | undefined): boolean {
+  const args = server?.args ?? []
+  if (args.length === 1) return args[0] === 'mcp' && server!.command === 'open-walnut'
+  return args.length === 2 && args[1] === 'mcp' && cliEntryOf(args[0]) !== null
+}
+
+/**
+ * The servers a local spawn names when its profile's own Walnut mount is the hub's, built by another
+ * install, else null (spawn with them as they are).
+ *
+ * A profile that carries the hub's mount (the Personal AI's lanes: Main, an ask, a console agent; the old
+ * opt-in) is kept on the session's record, and the mount names the file of the install that built it.
+ * On the Mac that file is one deploy's stage (`$TMPDIR/open-walnut-stage.<n>/dist-bin/walnut-...` or
+ * `.../dist/cli.js`), which a later deploy removes once nothing runs from it. Replayed at a resume, the
+ * mount failed to start (ENOENT, or the old file's process closing at once) and the session ran with no
+ * Walnut tools: 2026-11-24 and 25, Main at each resume, and a Main AI chat whose record named a stage
+ * of about 2026-10-11. So each spawn names this install's own entry and keeps the mount's env (its
+ * listing role). The tools it lists are the same, so the conversation's cached prefix is too.
+ */
+export function currentHubMounts(
+  servers: Record<string, SessionMcpServer> | undefined,
+  input: Pick<WalnutMcpMountInput, 'local' | 'hubMount'>,
+): Record<string, SessionMcpServer> | null {
+  const own = servers?.walnut
+  if (!input.local || !own || !isHubMount(own)) return null
+  const now = input.hubMount().mcpServers?.walnut
+  // This install names no entry of its own (only the bare `open-walnut` on PATH): keep what was built.
+  if (!now || !isHubMount(now) || now.command === 'open-walnut') return null
+  if (now.command === own.command && sameArgs(now.args, own.args)) return null
+  return { ...servers, walnut: { ...own, command: now.command, args: [...(now.args ?? [])] } }
+}
+
+function sameArgs(a: string[] | undefined, b: string[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? [])
+}
+
 /**
  * The servers to hand a RUNNING process that has no Walnut mount, or null when it
  * should get none. `mcp_set_servers` replaces the session's dynamically added set
@@ -84,8 +143,9 @@ export function withWalnutMcpMount(input: WalnutMcpMountInput): SessionProfile |
  *
  * A profile that names `walnut` while the process has none (its init did not list it:
  * 2026-11-11, four clouddev sessions spawned before their record's profile carried the
- * mount) is given that profile's own set, the one it was meant to run with. A profile
- * that leaves `walnut` out chose to, and gets nothing.
+ * mount) is given that profile's own set, the one it was meant to run with, its hub mount
+ * naming this install (currentHubMounts). A profile that leaves `walnut` out chose to, and
+ * gets nothing.
  */
 export function liveWalnutMcpServers(
   input: WalnutMcpMountInput,
@@ -94,12 +154,13 @@ export function liveWalnutMcpServers(
   if (own && Object.keys(own).length > 0) {
     if (!own.walnut || input.cloud || input.profile?.slim) return null
     if (sameServer(own.walnut, hostWalnutMcpServer()) && !input.hostServesMcp) return null
-    return Object.fromEntries(Object.entries(own).map(([name, server]) => [name, { type: 'stdio' as const, ...server }]))
+    const set = currentHubMounts(own, input) ?? own
+    return Object.fromEntries(Object.entries(set).map(([name, server]) => [name, { type: 'stdio' as const, ...server }]))
   }
   const walnut = withWalnutMcpMount(input)?.mcpServers?.walnut
   return walnut ? { walnut: { type: 'stdio', ...walnut } } : null
 }
 
 function sameServer(a: SessionMcpServer, b: SessionMcpServer): boolean {
-  return a.command === b.command && JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? [])
+  return a.command === b.command && sameArgs(a.args, b.args)
 }

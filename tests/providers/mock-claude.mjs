@@ -192,6 +192,12 @@ let safeguardRefuseUnless = null;
 let liveMcpServers = [];
 // Whether an mcp_status request was answered yet (MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST).
 let mcpStatusAnswered = false;
+// Like the real CLI, a server whose program or script file is gone does not start (ENOENT, or the
+// runtime exiting before it answers): init reports it `failed`. A path inside a compiled file
+// (`/$bunfs/...`) is the binary's own.
+const failedMcpServers = new Set();
+const fileGone = (p) => typeof p === 'string' && p.startsWith('/') && !p.startsWith('/$bunfs/') && !fs.existsSync(p);
+const mcpServerStatuses = () => liveMcpServers.map((name) => ({ name, status: failedMcpServers.has(name) ? 'failed' : 'connected' }));
 let effortFlag = null;
 let dangerouslySkipPermissions = false;
 
@@ -227,7 +233,9 @@ for (let i = 0; i < args.length; i++) {
       try { if (!value.trim().startsWith('{')) text = fs.readFileSync(value, 'utf8'); } catch { /* inline */ }
       try {
         const absent = (process.env.MOCK_CLAUDE_MCP_ABSENT ?? '').split(',').filter(Boolean);
-        liveMcpServers = Object.keys(JSON.parse(text).mcpServers ?? {}).filter((n) => !absent.includes(n));
+        const servers = JSON.parse(text).mcpServers ?? {};
+        liveMcpServers = Object.keys(servers).filter((n) => !absent.includes(n));
+        for (const [n, srv] of Object.entries(servers)) if (fileGone(srv?.command) || fileGone(srv?.args?.[0])) failedMcpServers.add(n);
       } catch { /* not JSON: none */ }
     }
     // Pre-assigned session id (init-only spawn): adopted like --resume's.
@@ -418,13 +426,17 @@ if (inputFormat === 'stream-json') {
             response: { subtype: 'success', request_id: parsed.request_id, response: {} },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_set_servers') {
-          const names = Object.keys(parsed.request.servers ?? {});
+          const servers = parsed.request.servers ?? {};
+          // A server whose file is gone does not start: the real CLI names it in `errors`.
+          const errors = {};
+          for (const [n, srv] of Object.entries(servers)) if (fileGone(srv?.command) || fileGone(srv?.args?.[0])) errors[n] = 'ENOENT: no such file or directory';
+          const names = Object.keys(servers).filter((n) => !errors[n]);
           const added = names.filter((n) => !liveMcpServers.includes(n));
           const removed = liveMcpServers.filter((n) => !names.includes(n));
           liveMcpServers = names;
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors: {} } },
+            response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_status') {
           // The real CLI's per-server status (2.1.322): name, status, serverInfo, and a connected
@@ -435,7 +447,7 @@ if (inputFormat === 'stream-json') {
           try { if (spec && !spec.includes('=')) spec = fs.readFileSync(spec, 'utf8').trim(); } catch { spec = ''; }
           const said = Object.fromEntries(spec.split(',').filter((p) => p.includes('=')).map((p) => p.split('=')));
           const row = (name) => {
-            const [status, count] = String(said[name] ?? 'connected').split(':');
+            const [status, count] = String(said[name] ?? (failedMcpServers.has(name) ? 'failed' : 'connected')).split(':');
             if (status !== 'connected') return { name, status };
             const n = count === undefined ? 3 : Number(count);
             const tools = Array.from({ length: n }, (_, i) => ({ name: `tool_${i}`, annotations: { readOnly: i % 2 === 0 } }));
@@ -882,7 +894,7 @@ if (outputFormat === 'stream-json') {
     cwd: process.cwd(),
     model: modelFlag || 'mock-model',
     tools: ['Read', 'Edit', 'Bash'],
-    mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })),
+    mcp_servers: mcpServerStatuses(),
     permissionMode: permissionMode || 'default',
     // Mirrors CLI 2.1.240: the command set THIS process accepts (names only) and
     // the terminal-only ones the palette must hide. `__internal-thing` stands in
@@ -972,7 +984,7 @@ if (outputFormat === 'stream-json') {
       // question's follow-up queued behind a running turn lost its anchor.
       lastInputUserUuid = queued.uuid ?? null;
       if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
-      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' }) + '\n');
+      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' }) + '\n');
       const c = queued.message.content;
       setTimeout(() => onUserLine?.(typeof c === 'string' ? c : JSON.stringify(c)), 0);
     }
@@ -1391,7 +1403,7 @@ if (outputFormat === 'stream-json') {
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       const text = `API Error: ${modelFlag || 'mock-model'}'s safeguards flagged this message (https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal conversations.\n\nDetails: \`[reasoning_extraction]\``;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
       setTimeout(() => {
         const refused = { id: randomUUID(), type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'refusal', stop_sequence: '',
           stop_details: { type: 'refusal', category: 'reasoning_extraction', explanation: 'blocked' },
@@ -1410,7 +1422,7 @@ if (outputFormat === 'stream-json') {
       const sid = outputSessionId;
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
       setTimeout(() => {
         const refused = { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
           content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } };
@@ -1443,7 +1455,7 @@ if (outputFormat === 'stream-json') {
       mockContextTokens = tokens;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
       // The real CLI announces itself at every turn's start (probed 2026-11-04, CLI 2.1.312).
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
       setTimeout(() => {
         emit(wrap({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [], usage } }));
         emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
@@ -1481,7 +1493,7 @@ if (outputFormat === 'stream-json') {
       onInterrupt = () => {
         clearTimeout(compacting);
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { id: `msg_compact_cancel_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>',
           content: [{ type: 'text', text: 'Compaction canceled.' }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, num_turns: 0, result: '', session_id: sid,
@@ -1496,7 +1508,7 @@ if (outputFormat === 'stream-json') {
         mockContextTokens = 18_000;
         // Claude Code 2.1.31x re-announces itself mid-compaction, before the boundary (probed 2026-11-04).
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
         // One uuid on the stream and in the transcript, as the real CLI writes it.
         const boundaryUuid = randomUUID();
         emit({ type: 'system', subtype: 'compact_boundary', session_id: sid, uuid: boundaryUuid,
@@ -1824,7 +1836,7 @@ if (outputFormat === 'stream-json') {
       setTimeout(() => {
         // ── Turn B: a BARE init. No {running}, no user line, no marker — this
         //    is the whole incident. Streaming follows immediately.
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'message_start', message: { id: `msg_edge_b_${seq}`, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 40, output_tokens: 0 } } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'turnB ' } } });

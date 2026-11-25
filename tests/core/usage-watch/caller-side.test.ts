@@ -25,7 +25,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { OUTCOME_SIDE, backfillSides, emptyAgg, type Agg, type OutcomeClass } from '../../../src/core/usage-watch/agg.js'
 import { failureClass } from '../../../src/core/usage-watch/normalize.js'
 import { listOps } from '../../../src/ops/index.js'
-import { _resetUsageRecorderForTesting, flushUsage, recordOpCall } from '../../../src/core/usage-watch/record.js'
+import { MOUNT_OP, _resetUsageRecorderForTesting, flushUsage, recordMountVerdict, recordOpCall } from '../../../src/core/usage-watch/record.js'
+import { addObserveTap } from '../../../src/core/observability/metrics.js'
 import { closeUsageWatchStore, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
 import { judgeWatch, newWatch } from '../../../src/core/usage-watch/watches.js'
 import { runUsageWatchAction } from '../../../src/core/usage-watch/actions.js'
@@ -169,6 +170,24 @@ describe('Walnut\'s own faults, apart from the caller\'s side', () => {
     expect(failureClass({ code: 'settings_refused', result: {} })).toEqual({ cls: 'refused', code: 'settings_refused' })
     // A full disk is neither side's: the disk alarms watch it.
     expect(OUTCOME_SIDE[failureClass({ status: 507, code: 'disk_full' }).cls as Exclude<OutcomeClass, 'ok'>]).toBe('neither')
+  })
+
+  // 2026-11-24 and 25: Main and a Main AI chat started without their Walnut tools at every resume (their
+  // mount named a removed deploy stage), and nothing counted it.
+  it('a session\'s Walnut mount that did not start is Walnut\'s own and rings at the first; a policy\'s refusal is by design', () => {
+    const rang: string[] = []
+    const off = addObserveTap((name) => { if (name.startsWith('usage.op.')) rang.push(name) })
+    try {
+      for (const status of ['connected', 'pending', 'connected']) recordMountVerdict({ sid: 's1', host: 'local', status, ms: 40, now: T0 + H })
+      recordMountVerdict({ sid: 's2', taskId: 't2', host: 'local', status: 'failed', ms: 20, now: T0 + H + 1 })
+      recordMountVerdict({ sid: 's3', host: 'local', status: 'blocked', ms: 5, now: T0 + H + 2 })
+    } finally { off() }
+    // Its own alarm, never "a tool keeps failing" (five in an hour) besides.
+    expect(rang).toEqual(['usage.op.mount_failed'])
+    const v = judge(MOUNT_OP)
+    expect(v.state).toBe('failed')
+    expect(v.results[0]!.newCodes).toEqual(['mount_failed'])
+    expect(v.results[0]!.callerSide).toMatchObject({ calls: 1, newCodes: ['mount_blocked'] })
   })
 
   it('an hour row from before the sides were kept finds a new code of Walnut\'s own, never a caller\'s', () => {

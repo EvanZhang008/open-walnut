@@ -7759,6 +7759,11 @@ export class ClaudeCodeSession {
             })
           }
           this._walnutMountVerdict = status.walnut
+          // Real use counts each process's mount, once: never an init read again after a restart.
+          if (status.walnut && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true) {
+            const verdict = { sid: this.claudeSessionId ?? undefined, taskId: this.taskId || undefined, host: this._host && this._host !== '__local__' ? this._host : 'local', status: status.walnut, ms: Date.now() - this._spawnedAtMs }
+            void import('../core/usage-watch/record.js').then(({ recordMountVerdict }) => recordMountVerdict(verdict)).catch(() => {})
+          }
           if (this.claudeSessionId) {
             sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(this.claudeSessionId!, { mcpMountStatus: status }).catch(() => {}),
@@ -10627,7 +10632,9 @@ export class ClaudeCodeSession {
   /**
    * Put the Walnut MCP mount into this spawn's `--mcp-config` (every spawn: fresh,
    * cold resume, fork). The record's profile is not changed, so a session decides
-   * again at each spawn and one older than the mount gets it at its next one.
+   * again at each spawn and one older than the mount gets it at its next one; a
+   * profile's own hub mount names this install's entry (walnut-mcp-mount.ts
+   * currentHubMounts), never the file of the deploy that built it.
    * Never fails the spawn: a failure to decide spawns without the mount.
    */
   private async applySpawnWalnutMount(
@@ -10636,11 +10643,21 @@ export class ClaudeCodeSession {
     host: string | null | undefined,
   ): Promise<void> {
     try {
-      const { withWalnutMcpMount } = await sessionPort().launch.loadWalnutMcpMount()
-      const mounted = withWalnutMcpMount(await this.walnutMountInput(profile, host))
-      const walnut = mounted?.mcpServers?.walnut
-      if (!walnut || profile?.mcpServers?.walnut) return
-      const mcpServers = { ...(profile?.mcpServers ?? {}), walnut }
+      const { withWalnutMcpMount, currentHubMounts } = await sessionPort().launch.loadWalnutMcpMount()
+      const input = await this.walnutMountInput(profile, host)
+      let mcpServers: Record<string, import('../core/types.js').SessionMcpServer>
+      if (profile?.mcpServers?.walnut) {
+        const current = currentHubMounts(profile.mcpServers, input)
+        if (!current) return
+        log.session.info('spawn: the Walnut MCP mount names this install, not the one its profile was built by', {
+          sessionId: this.claudeSessionId, taskId: this.taskId, was: profile.mcpServers.walnut.command, now: current.walnut!.command,
+        })
+        mcpServers = current
+      } else {
+        const walnut = withWalnutMcpMount(input)?.mcpServers?.walnut
+        if (!walnut) return
+        mcpServers = { ...(profile?.mcpServers ?? {}), walnut }
+      }
       const value = JSON.stringify({ mcpServers })
       const at = args.indexOf('--mcp-config')
       if (at >= 0) args[at + 1] = value

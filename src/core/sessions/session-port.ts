@@ -110,7 +110,7 @@ export type TaskDirPlacePort = Pick<typeof import('./task-dir-place.js'), 'local
 export type OrgOwnFolderPort = Pick<typeof import('./org-own-folder.js'), 'moveToOwnFolderBeforeSpawn'>;
 export type ProfilesPort = Pick<typeof import('./profiles.js'), 'walnutMcpProfile'>;
 export type WalnutMcpMountPort = Pick<typeof import('./walnut-mcp-mount.js'),
-  'WALNUT_MCP_CAPABILITY' | 'liveWalnutMcpServers' | 'withWalnutMcpMount'>;
+  'WALNUT_MCP_CAPABILITY' | 'currentHubMounts' | 'liveWalnutMcpServers' | 'withWalnutMcpMount'>;
 export type HostModelCatalogPort = Pick<typeof import('../host-model-catalog.js'),
   'getHostModelCatalog' | 'saveHostModelCatalog'>;
 export type RouterAreasPort = Pick<typeof import('../router/areas.js'), 'readRouterAreas' | 'taskArea'>;

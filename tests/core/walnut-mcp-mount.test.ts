@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { cliEntryOf } from '../../src/core/sessions/profiles.js'
+import { cliEntryOf } from '../../src/core/sessions/walnut-mcp-mount.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const homes: string[] = []

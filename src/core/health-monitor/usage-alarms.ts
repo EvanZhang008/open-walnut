@@ -31,6 +31,13 @@ export const USAGE_ALARMS: readonly AlarmDef[] = [
     evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'notBreaching', unit: 'errors', action: route,
   },
   {
+    id: 'usage.mount',
+    title: 'A session starts without its Walnut tools',
+    description: 'Claude Code could not start the Walnut MCP server of a session (it did not start, or closed before it answered), so the session runs with none of its Walnut tools. A server that a machine policy or the user\'s settings refuse is not counted.',
+    metric: 'usage.op.mount_failed{op=*}', kind: 'counter', stat: 'sum', periodMin: 60, comparison: '>=', threshold: 1,
+    evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'notBreaching', unit: 'failed starts', action: route,
+  },
+  {
     id: 'usage.bad_args',
     title: 'Agents often call a tool wrong',
     description: 'Calls this tool refused for their arguments, as a share of its calls in 24 hours (10 or more): its description or its shape leads agents to call it wrong.',

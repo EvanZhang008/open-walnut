@@ -56,7 +56,7 @@ export const routeDeps: RouteDeps = {
 
 /** The problem event an alarm's numbers come from. */
 const PROBLEM_OF: Record<string, string> = {
-  'usage.cut': 'cut', 'usage.errors': 'error', 'usage.errors.watched': 'error', 'usage.bad_args': 'bad_args',
+  'usage.cut': 'cut', 'usage.errors': 'error', 'usage.errors.watched': 'error', 'usage.mount': 'error', 'usage.bad_args': 'bad_args',
   'usage.slow': 'slow', 'usage.server_errors': 'server_error', 'usage.page': 'request_failed',
 }
 

@@ -7,7 +7,6 @@
  * built on the spawn path, and the resume path rebuilds them from the record.
  */
 
-import path from 'node:path'
 import { buildRoleSection, buildWorkModesSection } from './persona-sections.js'
 import { PromptComposer, promptRollback, type ComposedBlock, type PromptOverflow } from './prompt-blocks.js'
 
@@ -17,28 +16,8 @@ import { WORK_PLACE_RULE } from '../work-place.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import type { SessionProfile } from '../types.js'
+import { cliEntryOf } from './walnut-mcp-mount.js'
 import { WALNUT_MCP_ROLE_ENV, type ListingRole } from '../../ops/op-groups.js'
-
-/**
- * The walnut CLI entry of THIS running install, when identifiable.
- *
- * The bare bin name `open-walnut` proved unreliable: whether it exists on
- * PATH depends on how the package was linked (this very machine only links
- * `walnut`), and a dead command means the MCP mount silently never comes up —
- * the session falls back to raw curl. The server process IS the CLI
- * (`bun dist/cli.js web ...`, `bun src/cli.ts web ...` from source, the
- * compiled file, whose argv[1] is its own entry `/$bunfs/root/walnut`), so its
- * own argv[1] is the one entry we can trust absolutely, run by its own
- * runtime (process.execPath). Guarded by a basename allowlist so a test runner
- * (vitest) is never mistaken for the CLI.
- */
-export function cliEntryOf(argv1: string | undefined): string | null {
-  if (!argv1) return null
-  const base = path.basename(argv1)
-  return base === 'cli.js' || base === 'cli.ts' || base === 'open-walnut.js' || base === 'walnut.js' || base === 'open-walnut' || base === 'walnut'
-    ? path.resolve(argv1)
-    : null
-}
 
 const CLI_ENTRY: string | null = cliEntryOf(process.argv[1])
 

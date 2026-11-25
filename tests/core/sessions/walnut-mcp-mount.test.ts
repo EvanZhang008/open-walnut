@@ -1,9 +1,13 @@
 /**
  * Which Walnut MCP mount a new Claude Code session gets (src/core/sessions/walnut-mcp-mount.ts).
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { withWalnutMcpMount, liveWalnutMcpServers, hostWalnutMcpServer, WALNUT_MCP_DEFAULT, type WalnutMcpMountInput } from '../../../src/core/sessions/walnut-mcp-mount.js'
-import type { SessionProfile } from '../../../src/core/types.js'
+import { currentHubMounts, isHubMount, withWalnutMcpMount, liveWalnutMcpServers, hostWalnutMcpServer, WALNUT_MCP_DEFAULT, type WalnutMcpMountInput } from '../../../src/core/sessions/walnut-mcp-mount.js'
+import type { SessionMcpServer, SessionProfile } from '../../../src/core/types.js'
+
+const ROOT = path.resolve(import.meta.dirname, '../../..')
 
 const HUB: SessionProfile = { mcpServers: { walnut: { command: '/hub/walnut', args: ['mcp'] } } }
 const base = (over: Partial<WalnutMcpMountInput>): WalnutMcpMountInput => ({
@@ -87,5 +91,62 @@ describe('walnut MCP mount', () => {
     // The host mount from a daemon that no longer serves it: nothing to start.
     expect(liveWalnutMcpServers(base({ hostServesMcp: false, profile: { mcpServers: { walnut: host } } }))).toBeNull()
     expect(liveWalnutMcpServers(base({ cloud: true, profile: { mcpServers: { walnut: host } } }))).toBeNull()
+  })
+})
+
+// 2026-11-24 and 25: Main's record named the hub mount of a deploy's stage the next deploy removed, and a
+// Main AI chat's named one from about 2026-10-11. Each resume replayed it, it did not start, and the
+// session ran with none of its Walnut tools. The real records' shapes, as the Mac had them.
+describe('a hub mount a record kept names this install at every spawn', () => {
+  const STAGE_BIN: SessionMcpServer = {
+    command: '/private/var/folders/ab/c1/T/open-walnut-stage.1795620328.48485/dist-bin/walnut-darwin-arm64',
+    args: ['/$bunfs/root/walnut', 'mcp'], env: { WALNUT_MCP_ROLE: 'org' },
+  }
+  const STAGE_NODE: SessionMcpServer = { command: '/opt/homebrew/bin/node', args: ['/var/folders/ab/c1/T/open-walnut-stage.1791772035.37280/dist/cli.js', 'mcp'] }
+  const NOW: SessionMcpServer = { command: '/private/var/folders/ab/c1/T/open-walnut-stage.1795627029.46744/dist-bin/walnut-darwin-arm64', args: ['/$bunfs/root/walnut', 'mcp'] }
+  const now = (server: SessionMcpServer | null = NOW) => ({ local: true, hubMount: () => (server ? { mcpServers: { walnut: server } } : {}) })
+
+  it('tells the hub\'s mount, as any install built it, from every other', () => {
+    for (const hub of [STAGE_BIN, STAGE_NODE, NOW, { command: 'open-walnut', args: ['mcp'] }, { command: 'bun', args: ['/repo/src/cli.ts', 'mcp'] }]) expect(isHubMount(hub), hub.command).toBe(true)
+    for (const other of [hostWalnutMcpServer(), { command: 'hub', args: ['mcp'] }, { command: 'o' }, { command: 'node', args: ['/repo/scripts/x.mjs', 'mcp'] }, { command: 'walnut', args: ['mcp-server'] }]) expect(isHubMount(other), other.command).toBe(false)
+  })
+
+  it('a stage the record named becomes this install\'s entry, its role and the other servers kept', () => {
+    const servers = { walnut: STAGE_BIN, other: { command: 'o' } }
+    expect(currentHubMounts(servers, now())).toEqual({ walnut: { ...NOW, env: { WALNUT_MCP_ROLE: 'org' } }, other: { command: 'o' } })
+    expect(currentHubMounts({ walnut: STAGE_NODE }, now())).toEqual({ walnut: NOW })
+    // Never the record's own object.
+    expect(servers.walnut.command).toBe(STAGE_BIN.command)
+  })
+
+  it('nothing to change: already this install, not the hub\'s mount, another host, or no entry of its own', () => {
+    expect(currentHubMounts({ walnut: NOW }, now())).toBeNull()
+    expect(currentHubMounts({ walnut: hostWalnutMcpServer() }, now())).toBeNull()
+    expect(currentHubMounts({ other: { command: 'o' } }, now())).toBeNull()
+    expect(currentHubMounts(undefined, now())).toBeNull()
+    expect(currentHubMounts({ walnut: STAGE_BIN }, { ...now(), local: false })).toBeNull()
+    expect(currentHubMounts({ walnut: STAGE_BIN }, now({ command: 'open-walnut', args: ['mcp'] }))).toBeNull()
+    expect(currentHubMounts({ walnut: STAGE_BIN }, now(null))).toBeNull()
+  })
+
+  it('a running process given its profile\'s set live gets this install\'s too', () => {
+    const live = liveWalnutMcpServers(base({ local: true, hubMount: now().hubMount, profile: { mcpServers: { walnut: STAGE_BIN } } }))
+    expect(live).toEqual({ walnut: { type: 'stdio', ...NOW, env: { WALNUT_MCP_ROLE: 'org' } } })
+  })
+
+  // A new way to build a session's Walnut mount fails here until it is one of the two that hold across
+  // deploys: the host daemon's (found from the session's socket at spawn), or the hub's (named again at
+  // every spawn, above). Any other names a file that may be gone when the record is replayed.
+  it('every Walnut mount the source builds is the host\'s or the hub\'s', () => {
+    const walk = (d: string): string[] => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })
+      .flatMap((e) => e.isDirectory() ? walk(`${d}/${e.name}`) : e.name.endsWith('.ts') ? [`${d}/${e.name}`] : [])
+    const builders = walk('src').filter((f) => /mcpServers:\s*\{[^;]{0,80}?\bwalnut\b/.test(fs.readFileSync(path.join(ROOT, f), 'utf-8').replace(/\/\/.*$/gm, '')))
+    const KINDS: Record<string, string> = {
+      'src/core/router/session-policy.ts': 'the host daemon\'s (hostWalnutMcpServer)',
+      'src/core/sessions/profiles.ts': 'the hub\'s (walnutMcpProfile)',
+      'src/core/sessions/walnut-mcp-mount.ts': 'adds one of the two to a profile',
+    }
+    expect(builders.filter((f) => !KINDS[f])).toEqual([])
+    expect(builders.sort()).toEqual(Object.keys(KINDS).sort())
   })
 })
