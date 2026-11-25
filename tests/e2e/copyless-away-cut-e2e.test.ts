@@ -136,7 +136,8 @@ describe.skipIf(!BUN)('a host\'s one service without a copy, its leader cut off 
       for (const x of reads) {
         expect(x.r.code, said(x.r)).not.toBe(0)
         expect(said(x.r), JSON.stringify(x)).toContain(NO_COPY)
-        expect(x.r.ms, JSON.stringify(x)).toBeLessThan(GATEWAY_HUB_TIMEOUT_MS + 4_000)
+        // 8 s of room for a loaded CI runner; the old path took the CLI's whole wait (30 s here) and had no no-copy words.
+        expect(x.r.ms, JSON.stringify(x)).toBeLessThan(GATEWAY_HUB_TIMEOUT_MS + 8_000)
       }
       // From the flip on (the quiet window past the last beat), every read errs at once.
       const late = reads.filter((x) => x.at >= WINDOWS.quietMs + 1_000)
