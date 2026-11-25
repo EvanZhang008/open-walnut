@@ -17,6 +17,7 @@
 import type { NetUpdatePhase, NetUpdateSkip, NetUpdateState } from './daemon-net-update.js'
 import type { UpdateAsk } from './daemon-update-gap.js'
 import type { DaemonUpdateWait } from './daemon-update-wait.js'
+import { OVER_BUSY_NEXT_TRY } from './daemon-over-busy.js'
 
 export interface RequestedUpdateDeps {
   host: string
@@ -53,7 +54,7 @@ export class RequestedUpdate {
       // Asked again while one runs: the asker's words count for the tries after it (an over_busy one included).
       if (expected) { gate?.(); this.d.ask(expected, said, gate) }
       await within(this.inFlight, waitMs)
-      return this.state
+      return said.overBusy && this.state.phase === 'checking' ? { ...this.state, message: `${this.state.message}; ${OVER_BUSY_NEXT_TRY}` } : this.state
     }
     if (!expected) return this.set('skipped', 'this server runs from source and names no daemon build', { skip: 'no-build-version' })
     if (!this.d.connected()) return this.set('skipped', 'the host is not connected')

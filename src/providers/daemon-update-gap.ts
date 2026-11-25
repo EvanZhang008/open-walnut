@@ -141,6 +141,9 @@ export interface UpdateAsk {
  */
 export const MAX_FORCED_TRIES = 3
 
+/** The grants file could not be read just now (host-exec-grant.ts): no answer on the grant, never a revoke. */
+const GRANTS_UNREADABLE = 'exec_grants_unreadable'
+
 export class UpdateGapHold {
   private build: { expected: string; since: number } | null = null
   private holding: { expected: string; until: number } | null = null
@@ -216,7 +219,12 @@ export class UpdateGapHold {
   private standing(expected: string): { expected: string; overBusy: boolean; gate?: () => void } | null {
     const ask = this.askedFor
     if (ask?.expected !== expected) return null
-    try { ask.gate?.() } catch {
+    try { ask.gate?.() } catch (err) {
+      // A grants file read only in part for a moment (a sync merge) is no revoke: the ask waits for the next read.
+      if ((err as { code?: unknown } | null)?.code === GRANTS_UNREADABLE) return null
+      log.session.info('DaemonConnection: an asked daemon update ends, its asker may no longer have it run', {
+        expected, code: (err as { code?: unknown } | null)?.code ?? null,
+      })
       this.askedFor = null
       return null
     }

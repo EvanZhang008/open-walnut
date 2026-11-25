@@ -264,3 +264,25 @@ describe('the busy refusal\'s words', () => {
     expect(daemonBusyWhy(both, { host: 'devbox', forced: true })).toBe('the host\'s daemon is busy (open there: 2 ACP workers, 14 relay requests; 3 requests)')
   })
 })
+
+describe('an SSH update asked again while one runs', () => {
+  it('with over_busy says it counts from the next try, and keeps what the asker said', async () => {
+    const { RequestedUpdate } = await import('../../src/providers/daemon-update-request.js')
+    const { OVER_BUSY_NEXT_TRY } = await import('../../src/providers/daemon-over-busy.js')
+    let finish!: (went: boolean) => void
+    const asks: Array<{ overBusy?: boolean }> = []
+    const r = new RequestedUpdate({
+      host: 'devbox', connected: () => true, running: () => OLD, expected: () => EXPECTED,
+      ask: (_e, said) => { asks.push(said) },
+      run: () => new Promise<boolean>((resolve) => { finish = resolve }),
+      wait: () => null,
+    })
+    expect((await r.request(5)).phase).toBe('checking')
+    const again = await r.request(5, undefined, { overBusy: true })
+    expect(again.message).toContain(OVER_BUSY_NEXT_TRY)
+    expect(asks.at(-1)).toEqual({ overBusy: true })
+    // Asked without it: no such words.
+    expect((await r.request(5)).message).not.toContain(OVER_BUSY_NEXT_TRY)
+    finish(true)
+  })
+})

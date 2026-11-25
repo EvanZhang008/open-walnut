@@ -114,6 +114,19 @@ describe('the gap rule', () => {
     expect(g.decide('walnut-daemon-newer0', young)).not.toBeNull()
   })
 
+  it('a grants file read only in part keeps the ask for the next read; a revoke ends it', () => {
+    const g = new UpdateGapHold()
+    let err: (Error & { code?: string }) | null = Object.assign(new Error('grants file unreadable'), { code: 'exec_grants_unreadable' })
+    g.ask(EXPECTED, { overBusy: true }, () => { if (err) throw err })
+    expect(g.asked(EXPECTED)).toBe(false) // no answer on the grant now: no ask now
+    err = null
+    expect(g.overBusy(EXPECTED)).toBe(true) // read again: it still stands
+    err = Object.assign(new Error('revoked'), { code: 'exec_grant_revoked' })
+    expect(g.asked(EXPECTED)).toBe(false)
+    err = null
+    expect(g.asked(EXPECTED)).toBe(false) // gone for good
+  })
+
   it('every required capability is one a newer daemon brings, so a daemon that lacks one is updated past the gap', () => {
     for (const cap of REQUIRED_DAEMON_CAPABILITIES) expect(capabilityByBuild(cap), cap).toBe(true)
   })
