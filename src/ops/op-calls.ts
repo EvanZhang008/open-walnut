@@ -116,6 +116,7 @@ export async function runOnce(
   callerSid: string | undefined,
   run: () => Promise<OpOutcome>,
   now: () => number = Date.now,
+  neverKeep?: string,
 ): Promise<OpOutcome> {
   const at = now()
   prune(at)
@@ -154,7 +155,8 @@ export async function runOnce(
   // Lost on the way, or refused for now: the next copy runs again, and the ledger answers any
   // write that applied. Too big or a secret: not held, so a copy runs again too, and meets the
   // route's own checks.
-  const notKept = !text || bytes > MAX_ANSWER_BYTES ? `the answer (${bytes} bytes) was too large to keep`
+  const notKept = neverKeep ? neverKeep
+    : !text || bytes > MAX_ANSWER_BYTES ? `the answer (${bytes} bytes) was too large to keep`
     : ANSWER_SECRET_KEYS.test(text) ? 'the answer holds a secret, which is never kept' : ''
   if (notKept) record.notKept = notKept
   else {

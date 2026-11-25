@@ -52,7 +52,7 @@ async function runNotesOp(
     res.json(await fn())
   } catch (err) {
     if (err instanceof NotesOpError) {
-      sendError(res, err.statusCode, err.statusCode === 413 ? 'too_large' : v1ErrorCode(err.statusCode), err.message)
+      sendError(res, err.statusCode, err.code ?? (err.statusCode === 413 ? 'too_large' : v1ErrorCode(err.statusCode)), err.message)
       return
     }
     next(err)
@@ -86,7 +86,7 @@ notesExtrasV1Router.put('/notes/global', async (req: Request, res: Response, nex
         return
       }
       if (err instanceof NotesOpError) {
-        sendError(res, err.statusCode, err.statusCode === 413 ? 'too_large' : v1ErrorCode(err.statusCode), err.message)
+        sendError(res, err.statusCode, err.code ?? (err.statusCode === 413 ? 'too_large' : v1ErrorCode(err.statusCode)), err.message)
         return
       }
       throw err
@@ -186,7 +186,8 @@ notesExtrasV1Router.delete('/notes/attachment/*path', async (req: Request, res: 
 // typed-confirm dialog).
 notesExtrasV1Router.delete('/notes/folder/*path', async (req: Request, res: Response, next: NextFunction) => {
   const { deleteNotesFolder } = await import('./notes-v2.js')
-  await runNotesOp(res, next, () => deleteNotesFolder(wildcardPath(req)))
+  const { isPersonCaller } = await import('./person-caller.js')
+  await runNotesOp(res, next, () => deleteNotesFolder(wildcardPath(req), { person: isPersonCaller(req) }))
 })
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.

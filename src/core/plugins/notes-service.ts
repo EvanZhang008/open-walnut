@@ -98,11 +98,14 @@ export function createPluginNotes() {
       return out
     },
 
-    async read(notePath: string): Promise<{ path: string; content: string; hash: string } | null> {
+    async read(notePath: string): Promise<{ path: string; content: string; hash: string; locked?: true } | null> {
       const full = notePathOf(inside(notePath))
       try {
         const content = await fsp.readFile(full, 'utf8')
-        return { path: noteRelOf(full), content, hash: computeContentHash(content) }
+        // A locked note reads as its stub: its text is the person's alone (docs/reference/locked-notes.md).
+        const { isLockedNoteText, readableNoteText } = await import('../notes/locked-note.js')
+        const locked = isLockedNoteText(content)
+        return { path: noteRelOf(full), content: locked ? readableNoteText(content) : content, hash: computeContentHash(content), ...(locked ? { locked: true } : {}) }
       } catch (error: any) {
         if (error?.code === 'ENOENT' || error?.code === 'EISDIR') return null
         throw error
@@ -178,8 +181,13 @@ export function createPluginNotes() {
       const { deleteNoteFile, deleteNoteAttachment, deleteNotesFolder } = await routes()
       const stat = await fsp.stat(full).catch(() => null)
       if (!stat) return
-      if (stat.isDirectory()) await deleteNotesFolder(noteRelOf(full))
-      else if (full.endsWith('.md')) await deleteNoteFile(full)
+      // A plugin is not the person: a locked note (or a folder holding one) stays (docs/reference/locked-notes.md).
+      if (stat.isDirectory()) await deleteNotesFolder(noteRelOf(full), { person: false })
+      else if (full.endsWith('.md')) {
+        const { assertFileNotLocked } = await import('../notes/locked-note.js')
+        await assertFileNotLocked(full, 'be deleted by a plugin')
+        await deleteNoteFile(full)
+      }
       else if (stat.isFile()) await deleteNoteAttachment(noteRelOf(full))
     },
   }

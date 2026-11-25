@@ -177,9 +177,11 @@ async function loadJournalRecent(budget: number): Promise<string> {
   // A host replica reads the daemon's copy the same way (hostReplicaDiary below).
   const copied = companionDiaryEntries(DIARY, isEntry, 7) ?? await hostReplicaDiary(DIARY, isEntry, 7);
   if (copied === 'needs-mac') return '(the diary is on your Mac, and this server keeps no copy of it to read)';
+  // A locked entry reads as its stub: its text is the person's alone (docs/reference/locked-notes.md).
+  const { readableNoteText } = await import('./notes/locked-note.js');
   const entries: string[] = [];
   if (copied) {
-    for (const e of copied) entries.push(`--- ${e.name.replace('.md', '')} ---\n${e.body.trim()}`);
+    for (const e of copied) entries.push(`--- ${e.name.replace('.md', '')} ---\n${readableNoteText(e.body).trim()}`);
   } else {
     const diaryDir = noteAbs(DIARY);
     let files: string[];
@@ -191,7 +193,7 @@ async function loadJournalRecent(budget: number): Promise<string> {
     for (const file of files) {
       try {
         const content = fs.readFileSync(path.join(diaryDir, file), 'utf-8');
-        entries.push(`--- ${file.replace('.md', '')} ---\n${content.trim()}`);
+        entries.push(`--- ${file.replace('.md', '')} ---\n${readableNoteText(content).trim()}`);
       } catch { /* skip unreadable */ }
     }
   }

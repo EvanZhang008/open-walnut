@@ -13,6 +13,8 @@
  */
 import { useSyncExternalStore } from 'react';
 import { answerApproval, listApprovals, setApprovalsAskMe, type Approval } from '@/api/approvals';
+import { vaultCall } from '@/api/vault';
+import { withMasterPassword } from '@/components/passwords/with-passwords-unlock';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
 import { inMacApp } from '@/utils/mac-app';
@@ -144,6 +146,8 @@ export function applyApprovalEvent(a: Approval): void {
   }
 }
 
+const PASSWORDS_SUB = 'Approving lets an agent read your locked note. Type your master password to approve.';
+
 /** Which device this window is, for the record of who answered. */
 function thisDevice(): { name: string; kind: 'mac-app' | 'web' } {
   return inMacApp() ? { name: 'Mac app', kind: 'mac-app' } : { name: 'Web console', kind: 'web' };
@@ -158,8 +162,13 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny'):
   const { [a.id]: _old, ...errors } = state.errors;
   set({ busy: { ...state.busy, [a.id]: decision }, errors });
   try {
-    const r = await answerApproval(a.id, { decision, digest: a.digest, device: thisDevice() });
-    settle(r.approval);
+    const body = { decision, digest: a.digest, device: thisDevice() };
+    // An agent's ask for a locked note: the yes goes with the master password typed for it, here and
+    // now (docs/reference/locked-notes.md); a cancelled sheet answers nothing.
+    const r = a.needsPasswords && decision === 'approve'
+      ? await withMasterPassword(PASSWORDS_SUB, () => vaultCall<{ approval: Approval }>('POST', `/approvals/${encodeURIComponent(a.id)}/answer`, body))
+      : await answerApproval(a.id, body);
+    if (r) settle(r.approval);
   } catch (err) {
     set({ errors: { ...state.errors, [a.id]: err instanceof Error ? err.message : String(err) } });
     // Changed, answered elsewhere or gone meanwhile: read the list so the card shows what is true now.

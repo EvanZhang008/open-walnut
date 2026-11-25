@@ -180,6 +180,7 @@ import { approvalsV1Router } from './routes/approvals-v1.js'
 import { vaultV1Router } from './routes/vault-v1.js'
 import { vaultAgentV1Router } from './routes/vault-agent-v1.js'
 import { vaultSealedV1Router } from './routes/vault-sealed-v1.js'
+import { vaultNotesV1Router } from './routes/vault-notes-v1.js'
 import { vaultPasskeysV1Router } from './routes/vault-passkeys-v1.js'
 import { browserV1Router } from './routes/browser-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
@@ -3280,6 +3281,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', vaultV1Router)
   app.use('/api/v1', vaultAgentV1Router)
   app.use('/api/v1', vaultSealedV1Router)
+  app.use('/api/v1', vaultNotesV1Router)
   app.use('/api/v1', vaultPasskeysV1Router)
   app.use('/api/v1', browserV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/

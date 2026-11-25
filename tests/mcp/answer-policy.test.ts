@@ -29,7 +29,7 @@ import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
  */
 const CONTENT_WRITES = [
   'api', 'approval_wait', 'browser', 'host_copy', 'host_exec', 'host_exec_pinned', 'host_http',
-  'host_mcp_call', 'mcp_call', 'org_report', 'password_use', 'password_wait', 'subagent_run', 'subagent_send', 'trigger_create',
+  'host_mcp_call', 'locked_note_wait', 'mcp_call', 'org_report', 'password_use', 'password_wait', 'subagent_run', 'subagent_send', 'trigger_create',
   'trigger_test',
 ].sort()
 
@@ -219,6 +219,11 @@ describe('reading a stored document never loses text silently, on every surface'
     {
       label: 'note', op: 'note_read', args: { path: 'Projects/Big' },
       routes: (t) => ({ '*': { content: t, contentHash: 'h1', updatedAt: '2026-11-22T00:00:00Z' } }),
+      text: (r) => String(r.content),
+    },
+    {
+      label: 'locked note the user released', op: 'locked_note_wait', args: { id: 'ap-0123', token: 'tok-0123' },
+      routes: (t) => ({ '*': { status: 'released', path: 'journal/Diary.md', content: t, contentHash: 'h1', readUntil: '2026-11-22T00:10:00Z' } }),
       text: (r) => String(r.content),
     },
     {

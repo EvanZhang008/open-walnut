@@ -12,6 +12,7 @@
  * surface NEVER has less capability than the server.
  */
 
+import { LOCKED_NOTE_AGENT_TEXT } from '../core/notes/locked-note.js'
 import { withOutcome } from './outcome.js'
 import { z } from 'zod'
 import { sessionHandle } from '../core/peers/walnut-message-tag.js'
@@ -484,7 +485,7 @@ async function resolveNoteTarget(args: Record<string, unknown>, call: OpCall): P
 export async function readNote(
   args: Record<string, unknown>,
   call: OpCall,
-): Promise<{ path: string; content: string; contentHash: string; updatedAt?: string }> {
+): Promise<{ path: string; content: string; contentHash: string; updatedAt?: string; locked?: true }> {
   let notePath = await resolveNoteTarget(args, call)
   let body: unknown
   try {
@@ -498,12 +499,15 @@ export async function readNote(
     notePath = await resolveNoteTarget({ id: notePath }, call)
     body = await call('GET', `/notes/content/${encodeVaultPath(notePath)}`)
   }
-  const { content, contentHash, updatedAt } = (body ?? {}) as Record<string, unknown>
+  const { content, contentHash, updatedAt, locked } = (body ?? {}) as Record<string, unknown>
   if (typeof content !== 'string' || typeof contentHash !== 'string') {
     throw new Error(`unexpected note_read response for ${notePath}`)
   }
-  return { path: notePath, content, contentHash, updatedAt: typeof updatedAt === 'string' ? updatedAt : undefined }
+  return { path: notePath, content, contentHash, updatedAt: typeof updatedAt === 'string' ? updatedAt : undefined, ...(locked === true ? { locked: true as const } : {}) }
 }
+
+/** What note_read says beside a locked note's stub (docs/reference/locked-notes.md). */
+const LOCKED_NOTE_NEXT = `${LOCKED_NOTE_AGENT_TEXT} Only when the task cannot go on without it: locked_note_ask with a purpose the user reads, then locked_note_wait.`
 
 defineOp({
   name: 'note_read',
@@ -511,7 +515,8 @@ defineOp({
   description:
     'Read one note from the user\'s notes vault by path (e.g. "Projects/Example" — the .md ' +
     'suffix is optional) OR by the id note_search returns. Returns { content, contentHash, ' +
-    'updatedAt }; keep contentHash for a later note_write or note_edit. A long note comes in pages (`page` says how to read on).',
+    'updatedAt }; keep contentHash for a later note_write or note_edit. A long note comes in pages (`page` says how to read on). ' +
+    'A note the user locked answers `locked: true` and a short stub: its text is private and encrypted, not for agents.',
   input: {
     path: z.string().min(1).optional().describe('Vault-relative note path (or a note title)'),
     id: z.string().min(1).optional().describe('Frontmatter note id from note_search (n_...) — use either id or path'),
@@ -519,6 +524,8 @@ defineOp({
   },
   handler: async (args, call, caller) => {
     const note = await readNote(args, call)
+    // A locked note: its stub only, and what to do (never the text, never the ciphertext).
+    if (note.locked) return { path: note.path, content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt, locked: true, next: LOCKED_NOTE_NEXT }
     const body = { path: note.path, content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt }
     return askedPart(args) ? pagedResult(body, 'content', args, noteAgain(note.path), { ...NOTE_PAGE, fit: caller?.answer }) : body
   },
@@ -597,6 +604,7 @@ defineOp({
     const newStr = String(args.new_str ?? '')
     const replaceAll = args.replace_all === true
     const note = await readNote(args, call)
+    if (note.locked) throw new OwnRefusalError('note_locked', `${note.path}: ${LOCKED_NOTE_NEXT} Changing it needs access "edit", then locked_note_save.`, { status: 423 })
     if (typeof args.expectedHash === 'string' && args.expectedHash && args.expectedHash !== note.contentHash) {
       throw new OwnRefusalError('conflict', `${note.path} changed since you read it (expectedHash ${args.expectedHash}, `
         + `current ${note.contentHash}), so nothing was written: note_read it again and redo the edit on the current text`, { status: 409 })

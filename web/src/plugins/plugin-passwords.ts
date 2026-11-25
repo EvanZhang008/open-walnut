@@ -25,7 +25,8 @@ type VaultClient = Pick<typeof vaultApi, 'list' | 'get' | 'create' | 'update' | 
   ask(pluginName: string, reason: string, status: VaultStatus): Promise<boolean>
 }
 const realClient: VaultClient = {
-  ...vaultApi, session: vaultSession, ask: askPasswordsUnlock,
+  // A plugin's ask always says which plugin asks (the sheet's own line, never one the plugin writes).
+  ...vaultApi, session: vaultSession, ask: (pluginName: string, reason: string, status: VaultStatus) => askPasswordsUnlock(pluginName, reason, status),
   status: () => vaultApi.status({ quiet: true, join: false }),
 }
 const REASON_MAX = 200

@@ -21,6 +21,7 @@
  * those goes to the Mac first while it answers (the source's `forward`). A copy that
  * keeps every note answers exactly as before: no `partial`, no forward.
  */
+import { isLockedNoteText, readableNoteText } from '../core/notes/locked-note.js'
 import type { NextFunction, Request, Response } from 'express'
 import { replicaNotesForward, replicaNotesSource, replicaNotesSourceSearches, type NotesSource } from './notes-source.js'
 import { log } from '../logging/index.js'
@@ -99,10 +100,13 @@ async function answer(src: NotesSource, flavor: Flavor, req: Request, res: Respo
     if (st.partial && await src.leftOut(raw)) {
       return viaMac(() => needsMac(res, flavor, 'not_kept_here', 'This note is kept only on your Mac.'))
     }
-    const note = await src.content(raw)
-    if (!note) { notFound(res, flavor, 'Note not found'); return true }
+    const found = await src.content(raw)
+    if (!found) { notFound(res, flavor, 'Note not found'); return true }
     asOf()
-    if (flavor === 'v1') res.json({ content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt })
+    // A locked note answers its stub, as the Mac's own route does (docs/reference/locked-notes.md).
+    const locked = isLockedNoteText(found.content)
+    const note = locked ? { ...found, content: readableNoteText(found.content), locked: true as const } : found
+    if (flavor === 'v1') res.json({ content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt, ...(locked ? { locked: true } : {}) })
     else res.json(note)
     return true
   }

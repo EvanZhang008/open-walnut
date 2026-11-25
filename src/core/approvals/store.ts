@@ -179,6 +179,8 @@ export interface CreateInput {
   unasked?: string
   /** An ask the Approvals switch never answers (an explicit `walnut approve`, the person's site list). */
   outsideSwitch?: boolean
+  /** Approving it needs Passwords unlocked in the answering window (an agent's ask for a locked note). */
+  needsPasswords?: boolean
 }
 
 const fenceError = (r: FenceRefusal) => new ApprovalError(409, r.code, r.message)
@@ -265,6 +267,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
     ...(input.requestOnly ? { requestOnly: true } : {}),
     ...(input.outsideSwitch ? { outsideSwitch: true } : {}),
+    ...(input.needsPasswords ? { needsPasswords: true } : {}),
     // Approvals off: nobody is asked; the record says the step went ahead and who took it.
     ...(input.unasked ? {
       unasked: input.unasked, status: 'approved' as const, readAt: createdAt,

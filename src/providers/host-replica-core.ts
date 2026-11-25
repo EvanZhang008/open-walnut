@@ -17,7 +17,9 @@
  * A kind the leader turned off here (`replica.drop`) is marked off, not just gone.
  *
  * Imported by daemon-standalone.ts (createHostReplica). The factory body references NOTHING at module scope; every side effect arrives through deps.
+ * (locked-note.ts is pure text parsing: a locked note reads as its stub here as on the Mac.)
  */
+import { isLockedNoteText, readableNoteText } from '../core/notes/locked-note.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 
@@ -627,13 +629,16 @@ export function createHostReplica(deps: HostReplicaDeps) {
     if (r.error) return r.error
     const k = r.k!
     const row = rowIn(v, k)
-    const content = row ? readBody(home, 'notes', k, v) : null
-    if (!row || content === null) return fail('not_found', `Note not found in this host's copy: ${k}`)
+    const raw = row ? readBody(home, 'notes', k, v) : null
+    if (!row || raw === null) return fail('not_found', `Note not found in this host's copy: ${k}`)
+    // A locked note reads as its stub, never its ciphertext (docs/reference/locked-notes.md).
+    const locked = isLockedNoteText(raw)
+    const content = locked ? readableNoteText(raw) : raw
     const updatedAt = row.m && typeof row.m.updatedAt === 'string' ? row.m.updatedAt : undefined
     const noteId = row.m && typeof row.m.id === 'string' ? row.m.id : undefined
     return ok({
       path: k.replace(/\.md$/i, ''), content, contentHash: row.h,
-      ...(updatedAt ? { updatedAt } : {}), ...(noteId ? { id: noteId } : {}),
+      ...(updatedAt ? { updatedAt } : {}), ...(noteId ? { id: noteId } : {}), ...(locked ? { locked: true } : {}),
       offline: true, as_of: ageOf(home, 'notes'),
       outcome: `Read from this host's copy of the notes (as of ${ageOf(home, 'notes')}). ${why}`,
       next: 'A note_write or note_edit needs the Walnut server; keep contentHash for it.',
@@ -673,7 +678,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
       const row = rowIn(v, k)!
       const title = titleOf(k, row)
       const head = `${title}\n${k}`.toLowerCase()
-      const body = (readBody(home, 'notes', k, v) ?? '').toLowerCase()
+      const body = readableNoteText(readBody(home, 'notes', k, v) ?? '').toLowerCase()
       let matched = 0
       let score = 0
       let first = ''
@@ -700,7 +705,7 @@ export function createHostReplica(deps: HostReplicaDeps) {
       const noteId = row.m && typeof row.m.id === 'string' ? row.m.id : undefined
       return {
         id: noteId ?? h.k.replace(/\.md$/i, ''), path: h.k.replace(/\.md$/i, ''), title: h.title,
-        snippet: snippetOf(readBody(home, 'notes', h.k, v) ?? '', h.first),
+        snippet: snippetOf(readableNoteText(readBody(home, 'notes', h.k, v) ?? ''), h.first),
         matchType: 'exact', score: h.score,
       }
     })

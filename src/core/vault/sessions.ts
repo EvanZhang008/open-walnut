@@ -158,6 +158,16 @@ function sweep(now = Date.now()): boolean {
 }
 
 /**
+ * When the unlock a live session holds was made, which only the master password (or the Mac's
+ * keychain) does: a step that needs the password typed just now (an agent's locked-note ask,
+ * docs/reference/locked-notes.md) checks it. Null for no live session.
+ */
+export function sessionUnlockedAt(token: string | undefined, device: string | undefined): number | null {
+  if (!useSession(token, true, device)) return null
+  return sessions.get(hashOf(token!))?.createdAt ?? null
+}
+
+/**
  * The session for a token, or null. `touch` (default) restarts its idle clock; a read the page
  * makes by itself (the one-time code refreshing every 30 s) passes false, so an open item
  * never keeps a window unlocked.

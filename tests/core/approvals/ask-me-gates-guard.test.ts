@@ -38,6 +38,7 @@ const GATES: Record<string, Gate> = {
   'src/core/browser-control/upload-grants.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'uploadGate reads the switch and goes ahead unasked (grantUnasked) before it calls askUpload (2026-11-17)' },
   'src/core/browser-control/fresh-sign-in.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'the fill_login route asks with unasked:true when the switch is off' },
   'src/core/vault/agent.ts': { asks: 1, reads: 'self' },
+  'src/web/routes/vault-notes-v1.ts': { asks: 1, kept: 'an agent\'s ask to read or change a note the person locked: "only human can edit it, or ai can also do it with my password" (2026-11-24), so it always asks, and a yes needs the master password' },
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/unsubscribe.ts': { asks: 1, reads: 'self' },
@@ -116,6 +117,8 @@ describe('with approvals off, only a payment asks', () => {
     'src/web/routes/approvals-v1.ts': 'an explicit walnut approve or approval_request the person put in a script to be asked',
     'src/web/routes/browser-v1.ts': 'a new site, only when the person chose Ask me first for sites in Settings (their own list)',
     'src/web/routes/test-host-fixture.ts': 'the test fixture\'s single-use approval',
+    // Not a step of an agent's work: the person's own lock on their private text, which they said only their password opens.
+    'src/web/routes/vault-notes-v1.ts': 'an agent\'s ask for a note the person locked: "only human can edit it, or ai can also do it with my password" (2026-11-24)',
   };
 
   it('the steps that ask with approvals off are payments, and nothing else', () => {

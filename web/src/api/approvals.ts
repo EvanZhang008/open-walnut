@@ -35,6 +35,8 @@ export interface Approval {
   unasked?: string;
   /** An ask the Approvals switch never answers: no "stop asking me" on it. */
   outsideSwitch?: boolean;
+  /** Approving it needs Passwords unlocked in the answering window (an agent's ask for a locked note). */
+  needsPasswords?: boolean;
   createdAt: string;
   expiresAt: string;
   status: ApprovalStatus;

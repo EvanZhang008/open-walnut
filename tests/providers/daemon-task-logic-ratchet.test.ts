@@ -50,6 +50,8 @@ const TASK_LOGIC_MAX = 19
 
 /** Modules of src/core/ the runtime loads that are no task logic: pure helpers of the process itself. */
 const CORE_HELPERS = new Set([
+  // The locked-note format (a stub and an envelope, parsing only): the replica and the offline host copy answer its stub.
+  'src/core/notes/locked-note.ts',
   'src/core/bash-file-ops.ts',
   'src/core/drained-sends.ts',
   'src/core/hints/hint-format.ts',

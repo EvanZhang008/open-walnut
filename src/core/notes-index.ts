@@ -14,6 +14,7 @@
  * drive reads.
  */
 import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
+import { LOCKED_STUB_LEAD } from './notes/locked-note.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
@@ -1813,14 +1814,20 @@ export interface ListRow {
   id: string
   title: string
   path: string
+  /** A locked note (core/notes/locked-note.ts): its outer frontmatter carries the mark, its body is the stub. */
+  locked?: true
 }
 
 export function listNotes(): ListRow[] {
   const d = getNotesIndexDb()
   if (!d) return []
-  return d
-    .prepare(`SELECT id, title, path FROM notes ORDER BY title COLLATE NOCASE`)
-    .all() as ListRow[]
+  const rows = d
+    // The mark in its outer frontmatter and the stub as its body (the indexer keeps only the stub
+    // of a locked note): a plain note that merely names the mark is not marked.
+    .prepare(`SELECT id, title, path, (instr(COALESCE(frontmatter, ''), 'walnut_locked: 1') > 0
+        AND substr(ltrim(body, char(10, 13, 32, 9)), 1, length(?)) = ?) AS locked FROM notes ORDER BY title COLLATE NOCASE`)
+    .all(LOCKED_STUB_LEAD, LOCKED_STUB_LEAD) as Array<ListRow & { locked: number | true | undefined }>
+  return rows.map(({ locked, ...r }) => (locked ? { ...r, locked: true as const } : r))
 }
 
 export function tagCounts(): Array<{ tag: string; count: number }> {

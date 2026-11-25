@@ -172,8 +172,11 @@ function keepBrowserKey(r: { browserKey?: unknown }): void {
   try { localStorage.setItem(BROWSER_KEY, r.browserKey) } catch { /* storage off: this page keeps it */ }
 }
 
-/** `used` learns the unlock the request went with, so a dead one is dropped and never a newer one. */
-async function call<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000, extra: Record<string, string> = {}, used?: { token: string | null }): Promise<T> {
+/**
+ * One vault request with this window's unlock (api/locked-notes.ts uses it too). `used` learns the
+ * unlock the request went with, so a dead one is dropped and never a newer one.
+ */
+export async function vaultCall<T>(method: string, path: string, body?: unknown, timeoutMs = 20_000, extra: Record<string, string> = {}, used?: { token: string | null }): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra }
   const device = getDeviceToken()
   if (device) headers.Authorization = `Bearer ${device}`
@@ -205,7 +208,7 @@ const canDerive = () => typeof globalThis.crypto?.subtle?.deriveBits === 'functi
 async function proof(password: string, kdf: KdfParams | undefined, field: 'password' | 'oldPassword' | 'newPassword' = 'password'): Promise<Record<string, string>> {
   const keyField = field === 'password' ? 'passwordKey' : field === 'oldPassword' ? 'oldPasswordKey' : 'newPasswordKey'
   if (kdf && canDerive()) return { [keyField]: toB64(await derivePasswordKey(password, kdf)) }
-  if (!(await call<VaultStatus>('GET', '/vault/status')).privateLink) {
+  if (!(await vaultCall<VaultStatus>('GET', '/vault/status')).privateLink) {
     throw new VaultApiError(400, 'Open Walnut over https or Tailscale to unlock Passwords from this device: plain http would send the master password readable on the network.', 'insecure_link')
   }
   return { [field]: password }
@@ -214,9 +217,9 @@ async function proof(password: string, kdf: KdfParams | undefined, field: 'passw
 /** One unlock: the KDF read fresh, and once more when the master password changed meanwhile (`kdf_changed`). */
 async function unlockOnce(password: string, secretKey?: string): Promise<void> {
   for (let tries = 0; ; tries++) {
-    const kdf = (await call<VaultStatus>('GET', '/vault/status')).kdf
+    const kdf = (await vaultCall<VaultStatus>('GET', '/vault/status')).kdf
     try {
-      const r = await call<{ session: { token: string }; browserKey?: string }>('POST', '/vault/unlock', {
+      const r = await vaultCall<{ session: { token: string }; browserKey?: string }>('POST', '/vault/unlock', {
         ...(await proof(password, kdf)), ...(kdf ? { kdfSalt: kdf.salt } : {}), ...(secretKey ? { secretKey } : {}), client: CLIENT,
       }, 60_000)
       keepBrowserKey(r)
@@ -247,11 +250,11 @@ export const vaultApi = {
   async status(opts: { quiet?: boolean; join?: boolean } = {}): Promise<VaultStatus> {
     const used = { token: null as string | null }
     const quiet: Record<string, string> = opts.quiet ? { 'x-walnut-vault-quiet': '1' } : {}
-    const st = await call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet, used)
+    const st = await vaultCall<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet, used)
     if (!st.unlocked && used.token) dropSession(used.token)
     if (st.unlocked || !st.canJoin || opts.join === false) return st
     if (!(await vaultApi.join())) return { ...st, canJoin: false } // the unlock ended meanwhile: the lock screen stays
-    return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
+    return vaultCall<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
   },
 
   /** Share an unlock made on this computer (`canJoin`), with no password. True when this window has an unlock now. */
@@ -259,7 +262,7 @@ export const vaultApi = {
     // Another tab may have taken it meanwhile: share only while this browser still has no unlock.
     if (vaultSession()) return true
     try {
-      const r = await call<{ session: { token: string } }>('POST', '/vault/join', { client: CLIENT })
+      const r = await vaultCall<{ session: { token: string } }>('POST', '/vault/join', { client: CLIENT })
       if (!vaultSession()) setSession(r.session.token)
       return true
     } catch { return false }
@@ -267,7 +270,7 @@ export const vaultApi = {
 
   async setup(password: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
-    const r = await call<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/setup', {
+    const r = await vaultCall<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/setup', {
       ...(await proof(password, kdf)), ...(kdf ? { kdf } : {}), agentsWhileAway: false, client: CLIENT, ...(hint ? { hint } : {}),
     }, 60_000)
     keepBrowserKey(r)
@@ -278,7 +281,7 @@ export const vaultApi = {
   /** A forgotten master password: the recovery code sets a new one and returns the new kit. */
   async recover(recoveryCode: string, newPassword: string, secretKey?: string, hint = ''): Promise<RecoveryKit> {
     const kdf = newKdf()
-    const r = await call<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/recover', {
+    const r = await vaultCall<RecoveryKit & { session: { token: string }; browserKey?: string }>('POST', '/vault/recover', {
       recoveryCode, ...(secretKey ? { secretKey } : {}), ...(await proof(newPassword, kdf, 'newPassword')), ...(kdf ? { kdf } : {}), client: CLIENT, hint,
     }, 60_000)
     keepBrowserKey(r)
@@ -300,65 +303,65 @@ export const vaultApi = {
 
   /** The person's Lock: every window and the browser extension lock (`all`: and every agent grant ends). */
   async lock(all = false): Promise<void> {
-    try { await call('POST', '/vault/lock', all ? { all: true } : { everywhere: true }) } finally { setSession(null) }
+    try { await vaultCall('POST', '/vault/lock', all ? { all: true } : { everywhere: true }) } finally { setSession(null) }
   },
 
   /** An auto-lock: only this browser's unlock ends (every tab of it shares one). */
   async lockThisBrowser(): Promise<void> {
     const s = vaultSession()
-    try { await call('POST', '/vault/lock', {}) } finally { dropSession(s) }
+    try { await vaultCall('POST', '/vault/lock', {}) } finally { dropSession(s) }
   },
 
   /** Forget the unlock `token` names without asking the server (it already ended it); a newer one stays. */
   forget: (token: string | null) => { if (token) dropSession(token) },
 
-  list: () => call<{ items: VaultItemSummary[] }>('GET', '/vault/items').then((r) => r.items),
-  get: (id: string) => call<{ item: VaultItem }>('GET', `/vault/items/${encodeURIComponent(id)}`).then((r) => r.item),
-  create: (item: VaultItemInput) => call<{ item: VaultItem }>('POST', '/vault/items', { item }).then((r) => r.item),
+  list: () => vaultCall<{ items: VaultItemSummary[] }>('GET', '/vault/items').then((r) => r.items),
+  get: (id: string) => vaultCall<{ item: VaultItem }>('GET', `/vault/items/${encodeURIComponent(id)}`).then((r) => r.item),
+  create: (item: VaultItemInput) => vaultCall<{ item: VaultItem }>('POST', '/vault/items', { item }).then((r) => r.item),
   update: (id: string, item: VaultItemInput, expectedUpdatedAt?: string) =>
-    call<{ item: VaultItem }>('PUT', `/vault/items/${encodeURIComponent(id)}`, { item, expectedUpdatedAt }).then((r) => r.item),
-  trash: (id: string) => call<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/trash`).then((r) => r.item),
-  restore: (id: string) => call<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/restore`).then((r) => r.item),
-  remove: (id: string) => call('DELETE', `/vault/items/${encodeURIComponent(id)}`),
-  favorite: (id: string, favorite: boolean) => call<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/favorite`, { favorite }).then((r) => r.item),
-  used: (id: string) => call('POST', `/vault/items/${encodeURIComponent(id)}/used`),
-  totp: (id: string) => call<{ code: string; period: number; remaining: number }>('GET', `/vault/items/${encodeURIComponent(id)}/totp`),
-  report: () => call<SecurityReport>('GET', '/vault/report'),
+    vaultCall<{ item: VaultItem }>('PUT', `/vault/items/${encodeURIComponent(id)}`, { item, expectedUpdatedAt }).then((r) => r.item),
+  trash: (id: string) => vaultCall<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/trash`).then((r) => r.item),
+  restore: (id: string) => vaultCall<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/restore`).then((r) => r.item),
+  remove: (id: string) => vaultCall('DELETE', `/vault/items/${encodeURIComponent(id)}`),
+  favorite: (id: string, favorite: boolean) => vaultCall<{ item: VaultItem }>('POST', `/vault/items/${encodeURIComponent(id)}/favorite`, { favorite }).then((r) => r.item),
+  used: (id: string) => vaultCall('POST', `/vault/items/${encodeURIComponent(id)}/used`),
+  totp: (id: string) => vaultCall<{ code: string; period: number; remaining: number }>('GET', `/vault/items/${encodeURIComponent(id)}/totp`),
+  report: () => vaultCall<SecurityReport>('GET', '/vault/report'),
   importFile: (text: string, fileName: string, dryRun: boolean, format?: string) =>
-    call<{ dryRun: boolean; report: ImportReport; added?: number }>('POST', '/vault/import', { text, fileName, dryRun, ...(format ? { format } : {}) }, 120_000),
-  agentPolicy: () => call<AgentPolicy>('GET', '/vault/agent/policy'),
-  setAgentsSwitch: (agents: AgentsSwitch) => call<AgentPolicy>('PUT', '/vault/agent/policy', { agents }),
-  setGrantLength: (grantMs: number) => call<AgentPolicy>('PUT', '/vault/agent/policy', { grantMs }),
-  endAgentGrants: () => call<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
-  revokeGrant: (id: string) => call<{ revoked: AgentGrant }>('POST', `/vault/agent/grants/${encodeURIComponent(id)}/revoke`),
-  bitwardenSync: () => call<BitwardenSyncStatus>('GET', '/vault/sync/bitwarden'),
-  runBitwardenSync: (allowMassTrash = false) => call<{ report: BitwardenSyncReport; summary: string }>('POST', '/vault/sync/bitwarden/run', allowMassTrash ? { allowMassTrash: true } : {}, 400_000),
-  keychain: () => call<{ available: boolean; present: boolean; service: string }>('GET', '/vault/keychain'),
-  removeKeychain: () => call<{ removed: boolean }>('DELETE', '/vault/keychain'),
-  agentLog: () => call<{ entries: AgentLogEntry[] }>('GET', '/vault/agent/log').then((r) => r.entries),
+    vaultCall<{ dryRun: boolean; report: ImportReport; added?: number }>('POST', '/vault/import', { text, fileName, dryRun, ...(format ? { format } : {}) }, 120_000),
+  agentPolicy: () => vaultCall<AgentPolicy>('GET', '/vault/agent/policy'),
+  setAgentsSwitch: (agents: AgentsSwitch) => vaultCall<AgentPolicy>('PUT', '/vault/agent/policy', { agents }),
+  setGrantLength: (grantMs: number) => vaultCall<AgentPolicy>('PUT', '/vault/agent/policy', { grantMs }),
+  endAgentGrants: () => vaultCall<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
+  revokeGrant: (id: string) => vaultCall<{ revoked: AgentGrant }>('POST', `/vault/agent/grants/${encodeURIComponent(id)}/revoke`),
+  bitwardenSync: () => vaultCall<BitwardenSyncStatus>('GET', '/vault/sync/bitwarden'),
+  runBitwardenSync: (allowMassTrash = false) => vaultCall<{ report: BitwardenSyncReport; summary: string }>('POST', '/vault/sync/bitwarden/run', allowMassTrash ? { allowMassTrash: true } : {}, 400_000),
+  keychain: () => vaultCall<{ available: boolean; present: boolean; service: string }>('GET', '/vault/keychain'),
+  removeKeychain: () => vaultCall<{ removed: boolean }>('DELETE', '/vault/keychain'),
+  agentLog: () => vaultCall<{ entries: AgentLogEntry[] }>('GET', '/vault/agent/log').then((r) => r.entries),
 
   /** Turning agents-while-away on or off asks for the master password again; off brings a new recovery kit. */
   async setAgentsWhileAway(on: boolean, password: string, kdf: KdfParams | undefined): Promise<VaultStatus & { recoveryKit?: RecoveryKit }> {
-    return call<VaultStatus & { recoveryKit?: RecoveryKit }>('POST', '/vault/settings', { agentsWhileAway: on, ...(await proof(password, kdf)) }, 60_000)
+    return vaultCall<VaultStatus & { recoveryKit?: RecoveryKit }>('POST', '/vault/settings', { agentsWhileAway: on, ...(await proof(password, kdf)) }, 60_000)
   },
 
   /** The person saved the newest kit: Walnut stops asking for one. */
-  confirmRecoveryKit: () => call('POST', '/vault/recovery-kit/confirm'),
+  confirmRecoveryKit: () => vaultCall('POST', '/vault/recovery-kit/confirm'),
 
   /** A new recovery kit (a new recovery code; the old one stops working). Needs the master password. */
   /** The vault's Secret Key, to set up another device (the iPhone app) by pasting it there once. */
   async revealSecretKey(password: string, kdf: KdfParams | undefined): Promise<string> {
-    return (await call<{ secretKey: string }>('POST', '/vault/secret-key', { ...(await proof(password, kdf)) }, 60_000)).secretKey
+    return (await vaultCall<{ secretKey: string }>('POST', '/vault/secret-key', { ...(await proof(password, kdf)) }, 60_000)).secretKey
   },
 
   async newRecoveryKit(password: string, kdf: KdfParams | undefined): Promise<RecoveryKit> {
-    return call<RecoveryKit>('POST', '/vault/recovery-kit', { ...(await proof(password, kdf)) }, 60_000)
+    return vaultCall<RecoveryKit>('POST', '/vault/recovery-kit', { ...(await proof(password, kdf)) }, 60_000)
   },
 
   /** A new master password; the vault's recovery code changes with it (the new kit comes back). */
   async changePassword(oldPassword: string, newPassword: string, kdf: KdfParams | undefined, hint = ''): Promise<{ recoveryKit?: RecoveryKit }> {
     const next = newKdf()
-    const r = await call<{ recoveryKit?: RecoveryKit; browserKey?: string }>('POST', '/vault/password', {
+    const r = await vaultCall<{ recoveryKit?: RecoveryKit; browserKey?: string }>('POST', '/vault/password', {
       ...(await proof(oldPassword, kdf, 'oldPassword')), ...(await proof(newPassword, next, 'newPassword')), ...(next ? { kdf: next } : {}), hint,
     }, 60_000)
     // Every other browser's key ended with the old password; this one gets a new one.
@@ -368,11 +371,11 @@ export const vaultApi = {
 
   /** A new master password hint (checked against the master password), or '' to remove it (no password needed). */
   async setHint(hint: string, password: string, kdf: KdfParams | undefined): Promise<void> {
-    await call('PUT', '/vault/hint', { hint, ...(hint ? await proof(password, kdf) : {}) }, 60_000)
+    await vaultCall('PUT', '/vault/hint', { hint, ...(hint ? await proof(password, kdf) : {}) }, 60_000)
   },
 
   async exportAll(password: string, kdf: KdfParams | undefined, format: 'csv' | 'json'): Promise<{ fileName: string; text: string }> {
-    return call('POST', '/vault/export', { ...(await proof(password, kdf)), format }, 60_000)
+    return vaultCall('POST', '/vault/export', { ...(await proof(password, kdf)), format }, 60_000)
   },
 }
 

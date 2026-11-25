@@ -355,6 +355,19 @@ approvalsV1Router.post('/approvals/:id/cancel', (req: Request, res: Response, ne
   })
 })
 
+/** Whether this request carries a live Passwords unlock (a vault session the master password bought). */
+/** How recent the master password must be for a yes that needs it (an agent's locked-note ask). */
+const PASSWORD_PROOF_MS = 2 * 60_000
+
+/** This window typed the master password (or used the Mac's keychain) in the last two minutes. */
+async function passwordJustTypedHere(req: Request): Promise<boolean> {
+  const s = await import('../../core/vault/sessions.js')
+  await (await import('../../core/vault/session-store.js')).sessionsRestored()
+  const { deviceOf } = await import('./vault-v1.js')
+  const at = s.sessionUnlockedAt(header(req, s.SESSION_HEADER), deviceOf(req))
+  return at !== null && Date.now() - at <= PASSWORD_PROOF_MS
+}
+
 approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
   // The one condition: a person, on any device they are signed in on (see the header).
@@ -365,6 +378,12 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
     // A test run answers only its own approvals, and the person never answers a test run's by accident.
     const target = await getApproval(param(req.params.id))
     if (!target || !visibleTo(target, ambientTestRun())) throw new ApprovalError(404, 'not_found', 'No such approval.')
+    // An agent's ask for a locked note: a yes needs the master password, so Passwords unlocked in
+    // this window (docs/reference/locked-notes.md). A no needs nothing.
+    // "ai can also do it with my password" (2026-11-24): the yes goes with the master password typed for it.
+    if (body.decision === 'approve' && target.needsPasswords && !(await passwordJustTypedHere(req))) {
+      throw new ApprovalError(401, 'master_password_needed', 'Approving this needs your Passwords master password, typed for this approval: approve it in Walnut on your Mac or in the web console, where it asks for it.')
+    }
     const device = (body.device ?? {}) as Record<string, unknown>
     const deviceName = (req as Request & { deviceName?: string }).deviceName
     const kinds: ApprovalDeviceKind[] = ['iphone', 'mac-app', 'web']

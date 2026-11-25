@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { LockedMark } from './LockedMark';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { DisclosureChevron } from '@/components/controls';
 
@@ -19,6 +20,8 @@ function basenameNoExt(p: string): string {
 }
 
 interface NotesBookmarksGroupProps {
+  /** Paths of locked notes: their rows carry the lock (LockedMark). */
+  lockedPaths?: Set<string>;
   /** Vault-relative paths (WITH .md) of bookmarked notes. */
   favoriteNotes: string[];
   /** Active path (highlights the matching row). */
@@ -35,7 +38,7 @@ interface NotesBookmarksGroupProps {
   onContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
-export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onToggleFavorite, onContextMenu }: NotesBookmarksGroupProps) {
+export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onToggleFavorite, onContextMenu, lockedPaths }: NotesBookmarksGroupProps) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem(LS_BOOKMARKS_KEY) !== 'collapsed'; } catch { return true; }
   });
@@ -68,6 +71,7 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
             >
               <BookmarkGlyph />
               <span className="notes-tree-name wn-title">{basenameNoExt(path)}</span>
+              {lockedPaths?.has(path) && <LockedMark />}
               <button
                 className="notes-bookmark-remove"
                 aria-label={`Remove bookmark ${basenameNoExt(path)}`}

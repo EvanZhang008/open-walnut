@@ -98,6 +98,8 @@ export interface MarkdownEditorPanelProps {
    * embeds instead of the chat image store (see NotesEditor.attachmentNotePath).
    */
   attachmentNotePath?: string | null;
+  /** No image goes in (a locked note: an image would be stored unencrypted, docs/reference/locked-notes.md). */
+  noImages?: boolean;
   tasks?: React.ComponentProps<typeof NotesEditor>['tasks'];
   focusedTaskId?: string | null;
   placeholder?: string;
@@ -148,6 +150,8 @@ export interface MarkdownEditorPanelProps {
    */
   remountKey?: string | null;
 
+  /** Buttons of the surface's own, first in the header's row (a locked note's Hide, the Lock). */
+  headerActions?: React.ReactNode;
   /** Fallback shown when content === null (loading / failed). */
   loadingFallback?: React.ReactNode;
   /** This document is the page's own: Cmd+F searches it from anywhere on the
@@ -167,6 +171,7 @@ export function MarkdownEditorPanel({
   tagSuggestions,
   onWikiLinkClick,
   attachmentNotePath,
+  noImages = false,
   tasks,
   focusedTaskId,
   placeholder,
@@ -191,6 +196,7 @@ export function MarkdownEditorPanel({
   rawFlushIO,
   docId,
   remountKey,
+  headerActions,
   loadingFallback,
 }: MarkdownEditorPanelProps) {
   // Wiki/tag corpora: caller may inject, else the shell reads the page-lifetime
@@ -471,7 +477,7 @@ export function MarkdownEditorPanel({
     ? breadcrumbPath.replace(/\.md$/, '').split('/')
     : null;
 
-  const hasToolbar = showWidthToggle || showRawToggle || showBookmark || showLocate || saveStatus !== 'idle' || !!updatedAt;
+  const hasToolbar = !!headerActions || showWidthToggle || showRawToggle || showBookmark || showLocate || saveStatus !== 'idle' || !!updatedAt;
   // Breadcrumb segments are clickable only when a navigate handler is wired
   // (the /notes page owns the tree; pop-outs have no tree → plain text).
   const breadcrumbClickable = !!onBreadcrumbNavigate;
@@ -511,6 +517,7 @@ export function MarkdownEditorPanel({
             </div>
           ) : <div />}
           <div className="notes-editor-meta">
+            {headerActions}
             {showLocate && onLocate && (
               <button
                 className="btn btn-icon notes-locate-btn"
@@ -560,6 +567,7 @@ export function MarkdownEditorPanel({
           key={live.gen}
           editor={live.editor}
           attachmentNotePath={attachmentNotePath ?? undefined}
+          noImages={noImages}
         />
       )}
       {pendingExternal && pendingExternal.path === key && (
@@ -595,6 +603,7 @@ export function MarkdownEditorPanel({
             tagSuggestions={tagList}
             onWikiLinkClick={onWikiLinkClick}
             attachmentNotePath={attachmentNotePath ?? undefined}
+            noImages={noImages}
             tasks={tasks}
             focusedTaskId={focusedTaskId ?? undefined}
             onEditorReady={showFormatToolbar ? handleEditorReady : undefined}

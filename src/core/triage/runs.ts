@@ -55,6 +55,7 @@ import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { addContextRecoveryFailListener } from '../sessions/context-full-recovery.js';
 import { loadTurnRetriers, turnEndAnsweredNothing, turnMidWorkNow } from '../sessions/turn-run.js';
 import { noteAbsIn } from '../notes/note-paths.js';
+import { isLockedNoteText } from '../notes/locked-note.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -189,13 +190,15 @@ async function appendToRunsNote(line: string, nowMs: number, home: string): Prom
   const notePath = triageRunsNotePath(nowMs);
   const file = noteAbsIn(home, notePath);
   await mkdir(path.dirname(file), { recursive: true });
-  await withFileLock(file, async () => {
+  const wrote = await withFileLock(file, async () => {
     let current = '';
     try {
       current = await readFile(file, 'utf-8');
     } catch {
       current = '';
     }
+    // A note the person locked (docs/reference/locked-notes.md) takes no line in the clear.
+    if (isLockedNoteText(current)) return false;
     if (!current.trim()) current = runsNoteSkeleton(nowMs);
     // A note a human created at this path keeps its own frontmatter; only the id
     // is added, exactly as every other note write in the vault does.
@@ -203,7 +206,9 @@ async function appendToRunsNote(line: string, nowMs: number, home: string): Prom
     if (!readId(data)) current = stampId(current, generateNoteId());
     const next = `${current.replace(/\s*$/, '')}\n${line}\n`;
     await writeFile(file, next, 'utf-8');
+    return true;
   });
+  if (!wrote) return notePath;
   // `notes/{path-without-.md}` is the shared source contract (api-v1's writeNote,
   // notes-v2's reconcile subscriber, the files tool).
   bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${notePath.replace(/\.md$/, '')}` }, ['web-ui']);

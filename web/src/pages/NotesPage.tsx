@@ -31,6 +31,8 @@ import { NoteMissingState } from '@/components/notes/NoteMissingState';
 import { hasHeldText } from '@/hooks/useNoteGone';
 import { primaryDoc, requestPageFind } from '@/utils/find-doc';
 import { useAlert } from '@/hooks/useConfirm';
+import { LockedNotePanel } from '@/components/notes/LockedNotePanel';
+import { isLockablePath, useLockNote } from '@/components/notes/useLockNote';
 import { useNoteAutoName } from '@/hooks/useNoteAutoName';
 import { fileBaseFromTitle, followAutoName, forgetAutoName, markAutoNamed, pickUntitledPath } from '@/components/notes/note-auto-name';
 
@@ -449,6 +451,7 @@ export function NotesPage() {
   const {
     content,
     loading: contentLoading,
+    locked: noteLocked,
     updatedAt,
     saveStatus,
     onEditorUpdate,
@@ -915,6 +918,9 @@ export function NotesPage() {
   const filePaths = useMemo(() => treeFilePaths(tree), [tree]);
   const alert = useAlert();
 
+  // Lock the open note (components/notes/useLockNote.ts).
+  const { lock: lockOpenNote, locking } = useLockNote({ unsaved: hasUnsavedEdits, status: saveStatus });
+
   // A note renamed or moved: its open tab follows in place (position and active
   // state kept), so flush-on-switch is not triggered spuriously (§1.6).
   const retargetTab = useLeanCallback((from: string, to: string) => {
@@ -1189,6 +1195,18 @@ export function NotesPage() {
               >
                 {ICON_EXPAND}
               </button>
+              {noteLocked ? (
+                <LockedNotePanel
+                  key={activeNotePath}
+                  notePath={activeNotePath}
+                  onNavigate={handleFollowLink}
+                  onLocate={() => revealInTree(activeNotePath)}
+                  onBreadcrumbNavigate={revealInTree}
+                  isFavorite={isNoteFavorite(activeNotePath)}
+                  onToggleFavorite={() => toggleFavoriteNote(activeNotePath)}
+                  readOnly={noteLayer.readOnly}
+                />
+              ) : (
               <NotesEditorPanel
                 notePath={activeNotePath}
                 remountKey={remountKey}
@@ -1204,8 +1222,10 @@ export function NotesPage() {
                 onDismissExternal={dismissExternalChange}
                 isFavorite={isNoteFavorite(activeNotePath)}
                 onToggleFavorite={() => toggleFavoriteNote(activeNotePath)}
-                readOnly={noteLayer.readOnly}
+                readOnly={noteLayer.readOnly || locking === activeNotePath}
+                onLock={isLockablePath(activeNotePath) ? () => void lockOpenNote(activeNotePath) : undefined}
               />
+              )}
             </div>
           )}
         </div>

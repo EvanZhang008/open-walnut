@@ -21,6 +21,7 @@
  *     committed with both parents, so the losing version stays in history.
  */
 
+import { isLockedNoteText } from '../core/notes/locked-note.js';
 import {
   contentClock, must, removalLine, replayCommits, writeTreeEntries, type GitStatusRunner,
 } from './git-sync-rewrite-carry.js';
@@ -68,7 +69,7 @@ export function setMergeTreeWriteTreeForTest(value: boolean | null): void {
 
 export type LwwSide = 'local' | 'remote';
 /** What decided a conflicted path: the store's own clock, commit time, or a record merge of both sides. */
-export type LwwClock = 'content' | 'commit' | 'records';
+export type LwwClock = 'content' | 'commit' | 'records' | 'locked';
 
 /**
  * Which side of a conflicted path is the newer write. The store's own
@@ -87,10 +88,25 @@ export async function chooseLww(
     const [a, b] = await Promise.all([contentClock(run, mine), contentClock(run, theirs)]);
     if (a !== null && b !== null && a !== b) return { side: a > b ? 'local' : 'remote', clock: 'content' };
   }
+  // A note locked on one side only (docs/reference/locked-notes.md): the locked side stays, so an
+  // older plain copy never goes over the ciphertext; the plain one is the other parent's.
+  if (file.endsWith('.md')) {
+    const [a, b] = await Promise.all([lockedBlob(run, mine), lockedBlob(run, theirs)]);
+    if (a !== b) return { side: a ? 'local' : 'remote', clock: 'locked' };
+  }
   const touched = async (ref: string): Promise<number> =>
     Number((await run(['--literal-pathspecs', 'log', '-1', '--format=%ct', ref, '--', file])).stdout.trim() || '0');
   const [localAt, remoteAt] = await Promise.all([touched(localHead), touched(remoteHead)]);
   return { side: localAt > remoteAt ? 'local' : 'remote', clock: 'commit' };
+}
+
+/** Whether a blob (`"<mode> <oid>"`) is a locked note's file. */
+async function lockedBlob(run: GitStatusRunner, entry: string | undefined): Promise<boolean> {
+  const oid = entry?.split(' ')[1];
+  if (!oid) return false;
+  const size = Number((await run(['cat-file', '-s', oid])).stdout.trim());
+  if (!Number.isFinite(size) || size > 8 * 1024 * 1024) return false;
+  return isLockedNoteText((await run(['cat-file', 'blob', oid])).stdout);
 }
 
 /**

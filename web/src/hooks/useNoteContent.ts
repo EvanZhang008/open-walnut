@@ -10,6 +10,8 @@ import {
 import type { Editor } from '@tiptap/core';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
+import { isLockedNote } from '@/components/notes/locked-note';
+import { keepUnsavedEdit } from '@/components/notes/locked-note-saves';
 import { threeWayMerge } from '@open-walnut/three-way-merge';
 import { leaderErrorMessage } from '@/api/leader-presence';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
@@ -88,7 +90,7 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
    * later). Now that render shows the new note from the cache when it has it,
    * and the spinner otherwise, never the wrong note.
    */
-  const [doc, setDoc] = useState<{ path: string | null; body: string | null }>({ path: null, body: null });
+  const [doc, setDoc] = useState<{ path: string | null; body: string | null; locked?: boolean }>({ path: null, body: null });
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('idle');
   /**
@@ -115,8 +117,10 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   const propPathRef = useRef<string | null>(notePath);
   propPathRef.current = notePath;
   /** Body for the note the load effect is currently serving (always currentPathRef). */
+  // Every caller sets frontmatterRef first, so the mark of a locked note (its outer frontmatter,
+  // docs/reference/locked-notes.md) is read with the body it belongs to.
   const setContent = useCallback((body: string | null) => {
-    setDoc({ path: currentPathRef.current, body });
+    setDoc({ path: currentPathRef.current, body, ...(isLockedNote(frontmatterRef.current, body) ? { locked: true } : {}) });
   }, []);
   const editorRef = useRef<Editor | null>(null);
   const contentHashRef = useRef<string | null>(null);
@@ -806,6 +810,16 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
         setSaveStatus('idle');
         return;
       }
+      if (err?.status === 423) {
+        // Locked meanwhile, here or in another window (docs/reference/locked-notes.md): no plain text
+        // goes over it. What was typed waits as an unsaved edit of the locked note and is saved sealed
+        // (merged on its plain base) once the person unlocks; the page reads the note again, locked.
+        keepUnsavedEdit(pathToSave, { text: md, base: base ?? '', hash: 'before-lock' });
+        dirtyRef.current = false;
+        setSaveStatus('idle');
+        if (currentPathRef.current === pathToSave) reloadContent(pathToSave);
+        return;
+      }
       if (err?.status === 409) forgetAutoName(pathToSave);
       if (err?.status === 409 && currentPathRef.current === pathToSave && await mergeAfterConflict(pathToSave, err)) {
         setSaveStatus('idle');
@@ -1048,19 +1062,26 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   // `body: null` under the path, which reads as "not loading, no content".
   let content: string | null = null;
   let loading = false;
+  let locked = false;
   if (notePath) {
     if (doc.path === notePath) {
       content = doc.body;
+      locked = !!doc.locked;
     } else {
       const hit = peekCachedNote(notePath);
-      if (hit) content = splitFrontmatter(hit.content).body;
-      else loading = true;
+      if (hit) {
+        const split = splitFrontmatter(hit.content);
+        content = split.body;
+        locked = isLockedNote(split.frontmatter, split.body);
+      } else loading = true;
     }
   }
 
   return {
     content,
     loading,
+    /** A locked note: `content` is its stub, its text opens only with the master password (LockedNotePanel). */
+    locked,
     updatedAt,
     saveStatus,
     onEditorUpdate,

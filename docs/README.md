@@ -106,6 +106,7 @@ must live under one of these top-level categories instead of directly under
 - [ACP seam map](reference/acp-seam-map.md)
 - [Frozen API v1 contract](reference/api-v1.md)
 - [Passwords](reference/passwords.md): Walnut's own password vault, its keys and recovery code, the Walnut browser extension for Chrome and Firefox, and how agents ask for a credential.
+- [Locked notes](reference/locked-notes.md): a note locked with the Passwords master password: encrypted on disk, hidden until Show, and read by an agent only with the person's approval.
 - [Agents in your browser](reference/browser-control.md): the extension lets Walnut agents open, read and act in tabs of their own in your signed-in browser, on sites you approve; Walnut in the side panel, asking about the page you are on and acting in a tab you hand it; `walnut browser` and the `browser` op.
 - [Approvals](reference/approvals.md): `walnut approve "<what>"` in any script stops it until you say yes with one tap on any device you are signed in on; exit codes, the rules and the API.
 - [Walnut tools: groups and what each session lists](reference/walnut-tools.md): every op in one group (`walnut tools list --group`, `tool_help`), and the per-role tool listing of the experiment `mcp_tools_by_role`.

@@ -18,6 +18,7 @@
  * `expectedHash` for optimistic locking (mirrors the notes save contract).
  */
 
+import { isLockedNoteText } from '../../core/notes/locked-note.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import os from 'node:os'
@@ -388,7 +389,7 @@ function isBinaryContent(buffer: Buffer): boolean {
 
 /** Validation failure with an HTTP-ish status — each edge maps its own shape. */
 export class FileContentError extends Error {
-  constructor(message: string, public statusCode = 400) {
+  constructor(message: string, public statusCode = 400, public code?: string) {
     super(message)
     this.name = 'FileContentError'
   }
@@ -883,6 +884,11 @@ export async function writeFileContentPayload(
   // client that derives the token from the base bytes can make it. That also means
   // a TAB STILL RUNNING AN OLD BUNDLE is fenced out here, with no reload needed.
   const unverifiedBase = machineWrite && baseFrom !== 'content'
+  // Only Walnut's Lock writes a locked note's file (docs/reference/locked-notes.md): a copy written
+  // here would read as locked and could never be edited again.
+  if (isLockedNoteText(content)) {
+    throw new FileContentError('This text is a locked note\'s file (its mark and envelope): only Walnut\'s Lock writes one.', 400, 'locked_note_text')
+  }
   if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
     throw new FileContentError(
       `Content too large to save (max ${MAX_FILE_SIZE} bytes) — the editor only loads the first ${MAX_FILE_SIZE} bytes of a file`,
@@ -1055,6 +1061,10 @@ export function announceSavedDoc(
 function assertOverwritable(current: string, filePath: string): void {
   if (isBinaryContent(Buffer.from(current.slice(0, 8192), 'utf-8'))) {
     throw new FileContentError(`Refusing to overwrite a binary file: ${path.basename(filePath)}`, 415)
+  }
+  // A locked note (wherever its file is) is written only through its own route (docs/reference/locked-notes.md).
+  if (isLockedNoteText(current)) {
+    throw new FileContentError(`${path.basename(filePath)} is a locked note: open it in Notes and press Show to change it.`, 423, 'note_locked')
   }
 }
 
@@ -1364,7 +1374,7 @@ fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunctio
       return
     }
     if (err instanceof FileContentError) {
-      res.status(err.statusCode).json({ error: err.message })
+      res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) })
       return
     }
     // The checks before a remote write could not reach the host in time

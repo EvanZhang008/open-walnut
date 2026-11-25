@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
+import { LockedNotePanel } from '@/components/notes/LockedNotePanel';
 import { VAULT_RAW_IO } from '@/components/notes/vault-raw-io';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { NoteMissingState } from '@/components/notes/NoteMissingState';
@@ -36,6 +37,7 @@ export function PopoutNote() {
     missing,
     createMissing,
     updatedAt,
+    locked,
   } = useNoteContent(notePath || null, {
     mayCreate: (p) => following && p === notePath,
     onSavedAs: (_from, to) => setParams({ path: to }, { replace: true }),
@@ -58,6 +60,14 @@ export function PopoutNote() {
     return <EmptyState size="pane" icon={ICON_NOTE} title="No note to show" hint="This window was opened without a note path." />;
   }
   if (missing) return <NoteMissingState path={notePath} onCreate={createMissing} onClose={() => window.close()} closeLabel="Close window" />;
+  // A locked note opens hidden here too (docs/reference/locked-notes.md).
+  if (locked && !loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        <LockedNotePanel key={notePath} notePath={notePath} onNavigate={(p) => openPopout('note', { path: p, create: 1 })} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>

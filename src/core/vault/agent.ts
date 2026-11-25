@@ -22,6 +22,7 @@
  * asked the person again): the same request id waits on the same approval after boot, and a value
  * is released only while the vault is open, as before. Lock all ends every grant and ask.
  */
+import { endAllLockedNoteAsks } from '../notes/locked-note-ask.js'
 import { keptMap } from '../kept-asks.js'
 import { appendAgentLog, type AgentLogEntry, type AgentUseKind } from './agent-log.js'
 import {
@@ -588,5 +589,6 @@ export function endAllGrants(): { grants: number; asks: string[] } {
   const asks = [...pending.entries()].filter(([, p]) => p.releasedAt === undefined).map(([id]) => id)
   // Released ones go too: their re-read window gives nothing after Lock all.
   pending.clear()
-  return { grants: n, asks }
+  // An agent's asks for locked notes end with it (core/notes/locked-note-ask.ts), approved edits too.
+  return { grants: n, asks: [...asks, ...endAllLockedNoteAsks()] }
 }

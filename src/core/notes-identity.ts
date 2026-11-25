@@ -24,6 +24,7 @@
  * and picked up on the next reconcile.
  */
 import fsp from 'node:fs/promises'
+import { isLockedNoteText } from './notes/locked-note.js'
 import path from 'node:path'
 import { noteAbs } from './notes/note-paths.js'
 import { withFileLock } from '../utils/file-lock.js'
@@ -223,6 +224,8 @@ export async function mergeNoteIds(opts: {
   // stays on disk verbatim — a redundant duplicate carrying the winner id.
   try {
     const bytes = await withUserFileLock(abs, () => fsp.readFile(abs, 'utf-8'))
+    // A locked note keeps its file as its lock wrote it (docs/reference/locked-notes.md).
+    if (isLockedNoteText(bytes)) throw new Error('a locked note is left as it is')
     const baseHash = computeContentHash(bytes)
     const rewritten = stampId(stripId(bytes), winnerId)
     await withUserFileLock(abs, async () => {

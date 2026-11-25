@@ -249,7 +249,7 @@ filesV1Router.put('/file-content', async (req: Request, res: Response, next: Nex
         return
       }
       if (err instanceof FileContentError) {
-        sendError(res, err.statusCode, err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request', err.message)
+        sendError(res, err.statusCode, err.code ?? (err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request'), err.message)
         return
       }
       // The reads before a remote write got no answer in time: nothing was written.

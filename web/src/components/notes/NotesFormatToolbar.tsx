@@ -33,6 +33,8 @@ interface NotesFormatToolbarProps {
   editor: Editor;
   /** Vault note path — routes the Image button's upload into `_attachment/`. */
   attachmentNotePath?: string;
+  /** No Image button (a locked note: an image would be stored unencrypted). */
+  noImages?: boolean;
 }
 
 /** Block kinds the picker offers, in menu order, with their display labels. */
@@ -66,7 +68,7 @@ function blockLabel(kind: BlockKind): string {
   return BLOCK_OPTIONS.find((o) => o.kind === kind)?.label ?? 'Normal text';
 }
 
-export function NotesFormatToolbar({ editor, attachmentNotePath }: NotesFormatToolbarProps) {
+export function NotesFormatToolbar({ editor, attachmentNotePath, noImages = false }: NotesFormatToolbarProps) {
   const prompt = usePrompt();
   const s = useEditorState({
     editor,
@@ -156,10 +158,14 @@ export function NotesFormatToolbar({ editor, attachmentNotePath }: NotesFormatTo
       <ToolbarButton title="Link" active={s.link} disabled={s.marksOff} onClick={run((ed) => { void editLinkViaPrompt(ed, prompt); })}>
         {ICON_LINK}
       </ToolbarButton>
-      <ToolbarButton title="Image" disabled={s.marksOff} onClick={() => fileInputRef.current?.click()}>
-        {ICON_IMAGE}
-      </ToolbarButton>
-      <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
+      {!noImages && (
+        <>
+          <ToolbarButton title="Image" disabled={s.marksOff} onClick={() => fileInputRef.current?.click()}>
+            {ICON_IMAGE}
+          </ToolbarButton>
+          <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
+        </>
+      )}
       <ToolbarButton title="Table" disabled={s.blocksOff || s.marksOff} onClick={run((ed) => insertBlock(ed, 'table'))}>
         {ICON_TABLE}
       </ToolbarButton>

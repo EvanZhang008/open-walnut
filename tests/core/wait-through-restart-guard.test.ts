@@ -43,6 +43,9 @@ const ASK_HOLDERS: Record<string, string[]> = {
   'src/core/vault/agent.ts': ['src/core/vault/agent.ts'],
   // password_use / password_wait (only its header names the answer).
   'src/web/routes/vault-agent-v1.ts': ['src/core/vault/agent.ts'],
+  // locked_note_ask / locked_note_wait (docs/reference/locked-notes.md).
+  'src/core/notes/locked-note-ask.ts': ['src/core/notes/locked-note-ask.ts'],
+  'src/web/routes/vault-notes-v1.ts': ['src/core/notes/locked-note-ask.ts'],
 }
 
 /** Module-level state in an ask holder that a restart may forget, and why. */
@@ -69,7 +72,7 @@ const NOT_A_WAIT: Record<string, string> = {
 
 describe('every wait on a person keeps its asks across a restart', () => {
   it('every place that answers a wait on a person is known, with the modules holding its asks', () => {
-    const producers = grepFiles("status: 'needs_ok'|status: 'pending', requestId")
+    const producers = grepFiles("status: 'needs_ok'|status: 'pending'( as const)?, requestId")
     const unknown = producers.filter((f) => !ASK_HOLDERS[f])
     expect(unknown, `${unknown.join(', ')} answer a wait on a person. Keep their asks with keptMap (src/core/kept-asks.ts) so the same request id is the same ask after a restart, then add them to ASK_HOLDERS here.`).toEqual([])
     // A stale entry is dropped here too.
@@ -128,7 +131,7 @@ describe('every command that waits on a person waits through a restart', () => {
     const waitOps = [...new Set(execFileSync('git', ['grep', '--untracked', '-hoE', "name: '[a-z_]+_wait'", '--', 'src/ops'], { cwd: root, encoding: 'utf8' })
       .split('\n').filter(Boolean).map((l) => l.slice("name: '".length, -1)))].sort()
     // The person-answer wait ops, read from the op registry, plus the reply and task reads `wait` polls.
-    expect(waitOps).toEqual(['approval_wait', 'password_wait'])
+    expect(waitOps).toEqual(['approval_wait', 'locked_note_wait', 'password_wait'])
     const named = grepFiles(`'(${[...waitOps, 'request_get', 'task_get'].join('|')})'|=== 'needs_ok'`)
     const loops = named.filter((f) => /for \(;;\)|while \(/.test(read(f)))
     const problems: string[] = []

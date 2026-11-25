@@ -851,3 +851,8 @@ mark.notes-search-mark {
 /* The close button and the caption stay put above the scrolling picture. */
 .lightbox-overlay--scroll .lightbox-close,
 .lightbox-overlay--scroll .lightbox-caption { z-index: 1; }
+
+/* A locked note's notice (LockedNotePanel): layout only, the card is the shared NoticeCard. */
+.notes-locked-notice {
+  margin: 8px 16px 0;
+}

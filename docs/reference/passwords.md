@@ -288,6 +288,10 @@ Bitwarden's columns, or Walnut JSON.
 The security check (weak, reused, not changed in a year, saved for plain http) runs on this
 machine; no password or site leaves it.
 
+One item is Walnut's own: "Walnut locked notes key", the key that seals locked notes
+([Locked notes](locked-notes.md)). Agents never get it, and the vault refuses to change, trash or
+delete it (409 `locked_notes_key`).
+
 ## Browser extension
 
 `packages/browser-extension` is one source for Chrome (and Edge, Brave, Arc) and Firefox (128
@@ -688,6 +692,9 @@ cache, the identities, the extension's build number).
 Code: `src/core/vault/agent.ts` (the decision `decideAgentUse`, asks, brakes), `agent-grants.ts`,
 `agent-log.ts`, `policy.ts`, `pass-cli.ts` (`walnut pass`), `src/web/routes/vault-agent-v1.ts`,
 `src/ops/vault.ts`, the `walnut-passwords` skill, and Passwords, Agent Activity in the app.
+
+A locked note's text is not an item: an agent asks for it with `locked_note_ask`, which always
+asks the person and needs their master password to approve ([Locked notes](locked-notes.md)).
 
 An agent never holds a vault session. It names an item (its id, name, a site, or an API key's
 env var), says why and how it will use it (`use`: `reveal`, the value itself; `env`, given to a

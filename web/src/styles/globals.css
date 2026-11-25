@@ -19140,6 +19140,13 @@ a.tag-chip:hover .tag-chip-value,
   flex: 1;
   min-width: 0;
 }
+/* A locked note's row (docs/reference/locked-notes.md): a quiet lock after its name, like the icon before it. */
+.notes-tree-lock {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--fg-muted);
+  opacity: 0.8;
+}
 /* The `_attachment` folder holds the files of the notes beside it: shown after them, quieter. */
 .notes-tree-attachments .notes-tree-name { color: var(--fg-muted); font-size: 0.95em; }
 .notes-tree-attachments svg { opacity: 0.6; }

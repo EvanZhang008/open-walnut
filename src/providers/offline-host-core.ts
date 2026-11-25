@@ -27,6 +27,7 @@
  * builds the journal store itself when none is given.
  */
 
+import { isLockedNoteText } from '../core/notes/locked-note.js'
 import { createHash } from 'node:crypto'
 import type { EnvelopeKit, EnvelopeOutcome } from '../core/peers/envelope-kit.js'
 import type { SendRules } from '../core/sessions/send-rules.js'
@@ -3865,6 +3866,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const shown = view && view.has(key) ? view.get(key) : undefined
     const current = shown === undefined ? replica.copyBody(home, key) : shown === null ? null : shown.body
     const currentHash = current === null ? null : replica.hashOf(current)
+    // A locked note is changed only on the Mac, by its owner (docs/reference/locked-notes.md).
+    if (isLockedNoteText(current)) return fail('needs_leader', 'this note is locked, so it is changed only in Walnut on your Mac', { detail: { why: 'note_locked' } })
+    if (req.mode !== 'delete' && typeof req.content === 'string' && isLockedNoteText(req.content)) return fail('needs_leader', 'this text is a locked note\'s file: only Walnut\'s Lock on your Mac writes one', { detail: { why: 'locked_note_text' } })
     const expected = typeof req.expectedHash === 'string' && req.expectedHash ? req.expectedHash : null
     const content = req.mode === 'delete' ? null : req.content
     if (req.mode === 'delete') {

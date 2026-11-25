@@ -72,6 +72,8 @@ export interface NoteListItem {
   id?: string;
   /** Display title (first H1, then basename). Falls back to `name` when absent. */
   title?: string;
+  /** A locked note (docs/reference/locked-notes.md): its text opens only with the master password. */
+  locked?: true;
 }
 
 /** ● exact / ○ semantic / ◐ both / ▣ attachment — the hybrid-search match label (§1.2). */

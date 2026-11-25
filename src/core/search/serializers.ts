@@ -23,6 +23,7 @@ import type { SessionRecord, Task } from '../types.js';
 import { isLedgerJunk, isSearchArtifact } from '../task-junk.js';
 import { isLaneSession } from '../session-tracker.js';
 import { parseFrontmatter } from '../parse-frontmatter.js';
+import { readableNoteText } from '../notes/locked-note.js';
 
 /** Bump when any serializer changes shape: it salts every doc's content hash
  *  (via the meta field), so the next sync re-feeds everything. */
@@ -147,7 +148,8 @@ export function markdownToDoc(
   raw: string,
   mtimeMs: number,
 ): Doc {
-  const parsed = parseFrontmatter(raw);
+  // A locked note is searched as its stub: its text is the person's alone (docs/reference/locked-notes.md).
+  const parsed = parseFrontmatter(readableNoteText(raw));
   const frontTitle = typeof parsed.data.title === 'string' ? parsed.data.title.trim() : '';
   const frontDescription =
     typeof parsed.data.description === 'string' ? parsed.data.description.trim() : '';

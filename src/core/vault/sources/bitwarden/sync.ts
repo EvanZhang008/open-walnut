@@ -34,6 +34,7 @@
 import crypto from 'node:crypto'
 import { randomBytes, seal, sealJson } from '../../crypto.js'
 import { aadItem, aadItemKey, mutate, openSide, updateSide, VaultError, type VaultFile } from '../../state.js'
+import { isLockedNotesKeyItem } from '../../locked-notes-key.js'
 import { cleanInput } from '../../items.js'
 import { parseBitwardenExport } from '../../import.js'
 import { PASSWORD_HISTORY_MAX, type VaultItem, type VaultItemInput } from '../../types.js'
@@ -197,6 +198,8 @@ export async function syncFromBitwarden(text: string, trigger: SyncTrigger, opts
     if (!e.item) { skipped.push({ row: e.row, title: e.title, reason: e.skip ?? 'skipped' }); continue }
     let input: VaultItemInput
     try { input = cleanInput(e.item) } catch (err) { skipped.push({ row: e.row, title: e.title, reason: (err as Error).message }); continue }
+    // Walnut's locked-notes key is made by Walnut alone: one from Bitwarden never becomes a key here.
+    if (isLockedNotesKeyItem(input)) { skipped.push({ row: e.row, title: e.title, reason: 'Walnut\'s locked notes key is never taken from Bitwarden' }); continue }
     bitwarden[input.type] = (bitwarden[input.type] ?? 0) + 1
     wanted.push({ id: e.id, ...(e.revisionDate ? { revisionDate: e.revisionDate } : {}), input, hash: hashOf(input) })
   }
@@ -222,7 +225,8 @@ export async function syncFromBitwarden(text: string, trigger: SyncTrigger, opts
     // Unlinked live Walnut items, by what makes them the same one: candidates for adoption.
     const adoptable = new Map<string, VaultItem[]>()
     for (const it of items.values()) {
-      if (it.trashedAt || linkedIds.has(it.id)) continue
+      // The locked-notes key is Walnut's own: never linked, so Bitwarden never updates or trashes it.
+      if (it.trashedAt || linkedIds.has(it.id) || isLockedNotesKeyItem(it)) continue
       const k = matchKey(it)
       adoptable.set(k, [...(adoptable.get(k) ?? []), it])
     }

@@ -9,6 +9,8 @@ export interface PasswordsUnlockRequest {
   pluginName: string
   reason: string
   status: VaultStatus
+  /** Walnut's own ask (a locked note): the sheet's line as given, not a plugin's. */
+  sub?: string
 }
 
 const listeners = new Set<() => void>()
@@ -26,10 +28,10 @@ export function subscribePasswordsUnlock(listener: () => void): () => void {
 function publish(): void { for (const listener of listeners) listener() }
 
 /** Opens the unlock; one at a time, so a second ask while one is open answers false. */
-export function askPasswordsUnlock(pluginName: string, reason: string, status: VaultStatus): Promise<boolean> {
+export function askPasswordsUnlock(pluginName: string, reason: string, status: VaultStatus, sub?: string): Promise<boolean> {
   if (request) return Promise.resolve(false)
   opener = typeof document === 'undefined' ? null : document.activeElement
-  request = { sequence: ++sequence, pluginName, reason, status }
+  request = { sequence: ++sequence, pluginName, reason, status, ...(sub ? { sub } : {}) }
   const answer = new Promise<boolean>((resolve) => { settle = resolve })
   publish()
   return answer

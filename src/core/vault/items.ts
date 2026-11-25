@@ -11,6 +11,23 @@ import {
 } from './types.js'
 import { normalizeUrl } from './url-match.js'
 import { mergePasskeys } from './passkey.js'
+import { isLockedNotesKeyItem, lockedNotesKeyValue } from './locked-notes-key.js'
+
+/**
+ * The locked-notes key item stays as it is: a change, trash or delete would make every locked note
+ * unreadable. A copy of it (the same key in a second item, say an export imported twice) may go to
+ * the trash or be deleted while another live item keeps that key (`others`).
+ */
+function keepLockedNotesKey(it: VaultItem | undefined, others?: Map<string, VaultItem>): void {
+  if (it && others && isLockedNotesKeyItem(it)) {
+    const mine = lockedNotesKeyValue(it)
+    const kept = [...others.values()].some((o) => o.id !== it.id && !o.trashedAt && isLockedNotesKeyItem(o) && !!mine && lockedNotesKeyValue(o) === mine)
+    if (kept) return
+  }
+  if (isLockedNotesKeyItem(it)) {
+    throw new VaultError('Walnut opens your locked notes with this item, so it cannot be changed, moved to the trash or deleted. Remove the lock from every locked note first.', 409, 'locked_notes_key')
+  }
+}
 
 
 function clip(s: unknown, max: number): string | undefined {
@@ -117,6 +134,7 @@ export async function updateItem(id: string, input: VaultItemInput, expectedUpda
   return mutate(async ({ f, key, items }) => {
     const prev = items.get(id)
     if (!prev) throw new VaultError('No such item', 404, 'not_found')
+    keepLockedNotesKey(prev)
     if (expectedUpdatedAt && prev.updatedAt !== expectedUpdatedAt) throw new VaultError('This item changed since you opened it', 409, 'stale_item')
     const now = new Date().toISOString()
     let history = prev.passwordHistory ?? []
@@ -141,11 +159,11 @@ export async function updateItem(id: string, input: VaultItemInput, expectedUpda
 }
 
 /** Change one item in place (null deletes it), under the vault's write lock. */
-export async function patchItem(id: string, fn: (it: VaultItem) => VaultItem | null): Promise<VaultItem | null> {
+export async function patchItem(id: string, fn: (it: VaultItem, items: Map<string, VaultItem>) => VaultItem | null): Promise<VaultItem | null> {
   return mutate(async ({ f, key, items }) => {
     const prev = items.get(id)
     if (!prev) throw new VaultError('No such item', 404, 'not_found')
-    const next = fn(prev)
+    const next = fn(prev, items)
     if (next === null) {
       items.delete(id)
       delete f.items[id]
@@ -158,7 +176,10 @@ export async function patchItem(id: string, fn: (it: VaultItem) => VaultItem | n
 }
 
 export async function trashItem(id: string): Promise<VaultItem> {
-  return (await patchItem(id, (it) => ({ ...it, trashedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })))!
+  return (await patchItem(id, (it, items) => {
+    keepLockedNotesKey(it, items)
+    return { ...it, trashedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+  }))!
 }
 
 export async function restoreItem(id: string): Promise<VaultItem> {
@@ -167,7 +188,8 @@ export async function restoreItem(id: string): Promise<VaultItem> {
 
 /** Delete for good: only from the trash. */
 export async function deleteItem(id: string): Promise<void> {
-  await patchItem(id, (it) => {
+  await patchItem(id, (it, items) => {
+    keepLockedNotesKey(it, items)
     if (!it.trashedAt) throw new VaultError('Move the item to the trash first', 409, 'not_in_trash')
     return null
   })

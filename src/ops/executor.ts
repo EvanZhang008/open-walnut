@@ -654,7 +654,7 @@ export async function executeOp(
     // made, say an edit already applied) is told what that first try already applied.
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
-  const outcome = once ? await runOnce(once, op.name, args, explicitSid, run) : await run()
+  const outcome = once ? await runOnce(once, op.name, args, explicitSid, run, Date.now, op.answerNeverKept) : await run()
   // A key read under its right name, or a read-size count read as its most, says so (parseOpArgs), to every caller.
   const moved = parsed.renamed ? renameNote(op.name, parsed.renamed) : undefined
   // A refusal after a key was read under its right name says so too, or the caller cannot tell what it was told about.

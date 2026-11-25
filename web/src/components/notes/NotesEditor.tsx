@@ -119,6 +119,8 @@ interface NotesEditorProps {
    * images fall back to the chat image store (`/api/images`) as before.
    */
   attachmentNotePath?: string;
+  /** No image goes in (a locked note: an image would be stored unencrypted, docs/reference/locked-notes.md). */
+  noImages?: boolean;
   /**
    * Directory the edited file lives in (e.g. `/home/dev/repo/designs`). Set it
    * and a relative markdown image (`![alt](diagram.png)`) RENDERS through
@@ -220,7 +222,7 @@ function isUrl(text: string): boolean {
 /** An empty note's prompt: start writing, nothing about formats (plain text is fine; 2026-11-21 words audit). */
 export const NOTES_PLACEHOLDER = 'Start writing...';
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkMissing, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, findLabel = 'Find in document', tasks, focusedTaskId, enableWikiLinks, wikiLinkNotes, onWikiLinkMissing, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, onComment, noDragEdits = false, tagSuggestions, attachmentNotePath, noImages = false, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -288,7 +290,10 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
 
   // Paste / drop share the toolbar's upload path (image-insert.ts); the vault
   // vs. chat-store routing is decided by the current attachment path.
+  const noImagesRef = useRef(noImages);
+  noImagesRef.current = noImages;
   const handleImageUpload = useCallback((file: File, editor: Editor) => {
+    if (noImagesRef.current) return; // the paste or drop is taken, and nothing goes in
     insertImageFile(file, editor, attachmentNotePathRef.current);
   }, []);
 

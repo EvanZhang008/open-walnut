@@ -42,6 +42,7 @@
  * a copy or a letter entry.
  */
 
+import { isLockedNoteText } from '../notes/locked-note.js';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { noteKey, notesRoot } from '../notes/note-paths.js';
@@ -262,6 +263,18 @@ async function applyNote(deps: NoteDrainDeps, hooks: NoteApplyHooks, record: Not
     const out: NoteOutcome = { action: 'noop', path: rel, copies: [], entries: [] };
     const vkey = `${deps.hostKey}/${record.opId ?? `seq-${record.seq}`}`;
     const note = (e: Partial<ConflictEntry>): void => { out.entries.push(entryOf(record, { notePath: rel, ...e })); };
+    // A locked note on the Mac is changed only there, by its owner (docs/reference/locked-notes.md):
+    // a save or delete made away never lands over its ciphertext. The user hears of it, and the
+    // words written away stay in the entry (they were typed in a plain copy, before the lock got there).
+    if (isLockedNoteText(mac)) {
+      note({
+        why: 'locked', kept: 'mac', replicaAt: at, ...(ours !== null ? { replica: ours } : {}), ...(base !== null ? { base } : {}),
+        reason: 'the note is locked on the Mac, so a change made away was not applied; its text is in this entry: Show the note on the Mac and add it there',
+      });
+      hooks.conflicts(out.entries);
+      out.action = 'kept';
+      return out;
+    }
     if (record.mode === 'delete') return applyDelete(deps, hooks, out, { record, rel, abs, mac, base, ctxKey, vkey, at, note });
     if (ours === null) throw new Error('a note save without its body');
     if (record.mode === 'create' || base === null) return applyCreate(deps, hooks, out, { record, rel, abs, mac, ours, ctxKey, vkey, at, note });

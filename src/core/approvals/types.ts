@@ -95,6 +95,12 @@ export interface ApprovalRecord {
   unasked?: string
   /** An ask the Approvals switch never answers, so its card offers no "stop asking me". */
   outsideSwitch?: boolean
+  /**
+   * Approving it needs Passwords unlocked in the window that answers, so the master password was
+   * typed there: an agent's ask to read or change a locked note (docs/reference/locked-notes.md).
+   * A deny needs nothing. An older Walnut ignores it and takes a tap.
+   */
+  needsPasswords?: true
   /** When the asker first read how it ended, whatever it was (an expiry too): it knows. */
   readAt?: string
   /** When Walnut told the asking session the decision (tell-asker.ts), at most once. */

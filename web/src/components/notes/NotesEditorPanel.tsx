@@ -2,7 +2,7 @@ import type { Editor } from '@tiptap/core';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import { VAULT_RAW_IO } from './vault-raw-io';
 import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
-import { ICON_NOTE } from '@/components/common/Icons';
+import { ICON_LOCK, ICON_NOTE } from '@/components/common/Icons';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
 
 /**
@@ -40,6 +40,8 @@ interface NotesEditorPanelProps {
   onToggleFavorite?: () => void;
   /** Read only (the phone's default for a note, until Edit). */
   readOnly?: boolean;
+  /** Lock the note with the master password (LockedNotePanel shows it then); absent where a note cannot be locked. */
+  onLock?: () => void;
 }
 
 export function NotesEditorPanel({
@@ -58,6 +60,7 @@ export function NotesEditorPanel({
   isFavorite,
   onToggleFavorite,
   readOnly = false,
+  onLock,
 }: NotesEditorPanelProps) {
   if (!notePath) {
     return (
@@ -102,6 +105,11 @@ export function NotesEditorPanel({
       onApplyExternal={onApplyExternal}
       onDismissExternal={onDismissExternal}
       rawFlushIO={VAULT_RAW_IO}
+      headerActions={onLock && !readOnly ? (
+        <button type="button" className="btn btn-icon notes-lock-btn" onClick={onLock} aria-label="Lock this note" title="Lock note" data-testid="note-lock">
+          {ICON_LOCK}
+        </button>
+      ) : undefined}
       findPrimary
       loadingFallback={
         <UnavailableState size="pane" title="Couldn't load this note" />

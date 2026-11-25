@@ -5,6 +5,7 @@ import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
+import { LockedMark } from './LockedMark';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
 import { jumpNeedles, findQueries } from './jump-target';
@@ -16,6 +17,7 @@ import '@/styles/header-fit.css';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 import { EmptyState } from '@/components/common/EmptyState';
 import { DisclosureChevron } from '@/components/controls';
+import { useNotesListCorpus } from '@/stores/notes-corpus-store';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -207,6 +209,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const confirm = useConfirm();
   const alert = useAlert();
+  // Locked notes (docs/reference/locked-notes.md) carry a lock in their row; the list says which.
+  const notesList = useNotesListCorpus(true);
+  const lockedPaths = useMemo(() => new Set(notesList.filter((n) => n.locked).map((n) => n.path)), [notesList]);
 
   // Reveal-in-tree: expand every ancestor folder of revealPath, then scroll the
   // node into view. Re-fires whenever revealNonce changes (so the locate button
@@ -933,6 +938,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         ) : (
           <span className="notes-tree-name wn-title">{node.name.replace(/\.md$/, '')}</span>
         )}
+        {!isRenaming && lockedPaths.has(node.path) && <LockedMark />}
       </div>
     );
   };
@@ -1006,6 +1012,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           onSelect={onSelect}
           onToggleFavorite={onToggleFavorite}
           onContextMenu={handlePathContextMenu}
+          lockedPaths={lockedPaths}
         />
       )}
 
@@ -1019,6 +1026,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           expanded={recentExpanded}
           onToggle={toggleRecent}
           onContextMenu={handlePathContextMenu}
+          lockedPaths={lockedPaths}
         />
       )}
 
@@ -1088,6 +1096,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                         <span className="notes-tree-name notes-search-file-name wn-title" title={r.path}>
                           <HighlightedTitle text={label.name} query={searchQuery} tokens={searchTokens} />
                         </span>
+                        {lockedPaths.has(r.path) && <LockedMark />}
                         {label.title && (
                           <span className="notes-search-note-title wn-title">
                             <HighlightedTitle text={label.title} query={searchQuery} tokens={searchTokens} />

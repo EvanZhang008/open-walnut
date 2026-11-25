@@ -58,7 +58,7 @@ async function writeTemp(abs: string, bytes: string): Promise<string> {
   return tmp
 }
 
-/** Replace a file's bytes whole: temp in the same folder, flushed, then rename. */
+/** Replace a file's bytes whole: temp in the same folder, flushed, then rename, and the folder flushed. */
 export async function replaceAtomically(abs: string, bytes: string): Promise<void> {
   const tmp = await writeTemp(abs, bytes)
   try {
@@ -67,6 +67,9 @@ export async function replaceAtomically(abs: string, bytes: string): Promise<voi
     await fsp.rm(tmp, { force: true }).catch(() => {})
     throw err
   }
+  // The rename itself reaches the disk (a locked note's file is the only copy of its text).
+  const dir = await fsp.open(path.dirname(abs), 'r').catch(() => null)
+  if (dir) await dir.sync().catch(() => {}).finally(() => dir.close().catch(() => {}))
 }
 
 /** Create a file only if nothing is at its path. False when something already is. */
