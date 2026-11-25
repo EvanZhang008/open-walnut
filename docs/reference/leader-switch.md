@@ -475,19 +475,23 @@ ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
    and each of them asks `homeWritesStopped()` at the top of its tick or handler. Among them: the
    delivery retry (the session queue, every 60 s), the session requests sweep (every 60 s), the PR watch
    (tasks, every 30 s while CI runs), usage collect, the held and coalesced notices, the user asks, the
-   offline journal's handover and every unsolicited event of a host link (replies to this server's own
-   commands and the copy link's streams still come in). A host keeps what it sent (its journal, its
-   retries) for the next leader. The same ratchet finds every `setInterval` and `runPeriodic` under
-   `src/` and every module `web/server.ts` starts with a `start*` function, wherever they are
-   (`tests/core/leader/switch/clock-table.ts`): each is gated, stopped before the final batch, or writes
-   no leader data, and a new one fails until it is classified.
+   offline journal's handover and every unsolicited event of a host link, on its main socket and its bulk
+   socket (replies to this server's own commands and the copy link's streams still come in), the session
+   title sweep, and a plugin's writes (its tasks, config, router items and data files, from its own timers
+   too). A host keeps what it sent (its journal, its retries) for the next leader. The same ratchet finds every `setInterval` and
+   `runPeriodic` under `src/`, every `setTimeout` that arms its own function again, and every module
+   `web/server.ts` starts with a `start*` function, wherever they are (`tests/core/leader/switch/clock-table.ts`):
+   each is gated, stopped before the final batch, or writes no leader data, and a new one fails until it is
+   classified. Event handlers, and timers armed again through another function, cannot be told from a
+   one-shot by their text: those are a short hand list (`EVENT_GATES`).
    `tests/core/leader/switch/final-batch-live-writers.test.ts` runs the real delivery retry (a row whose
    delivery keeps failing) and the real PR watch (a running CI) beside real final batches: with the gate
    off the home changes at every batch and the window ends in a refusal; with it the second batch finds
    nothing changed.
 3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
    void batch is tried again after 250 ms; one the target refuses while it applies this server's last
-   periodic batch, after 1 s), bounded by the commit deadline, then a verify pass. A writer that lands
+   periodic batch, after 1 s), ending 30 s before the commit deadline (the new leader's promote, trial
+   and commit, `catch-up.ts` `PROMOTE_TRIAL_MS`), then a verify pass. A writer that lands
    after one batch is in the next: the mark names only a batch that found nothing changed. Out of time,
    its reason says which: the final batch did not finish within the window (what it had to carry was too
    much for the link), or the home still changed at the deadline, by this server's own writer named
