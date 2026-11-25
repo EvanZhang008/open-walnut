@@ -5,7 +5,10 @@
  * of the page's many observers changed a box inside its own callback (2026-11-23: 43 in a day in
  * the Mac app, filed as "Other in the unknown chunk"). Every observer the page makes is wrapped:
  * each callback that runs notes what it watches (one short name, at most a few per frame), and
- * the logger adds the notes of the frame the error ended to its line. Only names are kept: a
+ * the logger adds the notes of the frame the error ended to its line, and of the frame after it:
+ * the browser delivers the notifications it left undelivered there, so those are the boxes a
+ * callback resized inside its own delivery (2026-11-25: two loops left after the composer fix
+ * named only the observers that ran, a dozen layout boxes). Only names are kept: a
  * tag, up to two classes and a test id, never text. (tests/e2e/browser/resize-observer-culprits.ts
  * names boxes the same way inside an init script, which cannot import this.)
  */
@@ -30,7 +33,14 @@ function armTick(): void {
 
 /** The observers whose callbacks ran in this frame, in order, each once. */
 export function resizeLoopWitness(): string {
-  return [...new Set(frame)].slice(0, 8).join(', ');
+  return [...new Set(frame)].slice(0, 12).join(', ');
+}
+
+/** Runs `then` once the next frame's observers have run, with their notes. */
+export function afterNextFrame(then: (next: string) => void): void {
+  // The next frame's animation callbacks run first (this one after the tick that clears the
+  // notes), then its observers; a task queued from here runs after that frame is drawn.
+  requestAnimationFrame(() => { setTimeout(() => then(resizeLoopWitness()), 0); });
 }
 
 export function installResizeLoopWitness(): void {

@@ -4,7 +4,7 @@
  * them. Node env: ResizeObserver and requestAnimationFrame are stubbed with the surface the
  * witness touches.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 type Cb = (entries: Array<{ target: unknown }>, ro: unknown) => void
 const frames: Array<() => void> = []
@@ -16,7 +16,7 @@ class NativeRO {
 const el = (tag: string, cls: string, testid?: string) => ({ tagName: tag.toUpperCase(), className: cls, getAttribute: (k: string) => (k === 'data-testid' ? testid ?? null : null) })
 Object.assign(globalThis, { window: { ResizeObserver: NativeRO }, requestAnimationFrame: (f: () => void) => { frames.push(f); return frames.length } })
 
-const { installResizeLoopWitness, resizeLoopWitness } = await import('../../web/src/utils/resize-loop-witness')
+const { afterNextFrame, installResizeLoopWitness, resizeLoopWitness } = await import('../../web/src/utils/resize-loop-witness')
 
 describe('resize loop witness', () => {
   it('names the observers whose callbacks ran this frame, by tag, classes and test id only, and forgets them next frame', () => {
@@ -38,5 +38,18 @@ describe('resize loop witness', () => {
     expect(resizeLoopWitness()).toBe('div.session-panel-input.glass[composer], span, p')
     for (const f of frames.splice(0)) f()
     expect(resizeLoopWitness()).toBe('')
+  })
+
+  it('after a loop, names what the next frame delivers: the boxes left undelivered', async () => {
+    const RO = (globalThis as unknown as { window: { ResizeObserver: new (cb: Cb) => NativeRO } }).window.ResizeObserver
+    const ro = new RO(() => {})
+    ro.fire(el('div', 'session-panel-input'))
+    let next: string | null = null
+    afterNextFrame((n) => { next = n })
+    // The next frame: its animation callbacks (the tick, then ours), then its observers.
+    for (const f of frames.splice(0)) f()
+    ro.fire(el('div', 'session-history'))
+    expect(next).toBeNull()
+    await vi.waitFor(() => expect(next).toBe('div.session-history'))
   })
 })

@@ -16,6 +16,7 @@
 import { devices, expect, test, type APIRequestContext } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { installResizeLoopProbe, resizeLoopReport } from './resize-observer-culprits'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1512, height: 900 } })
 
@@ -39,7 +40,7 @@ test('really runs in WebKit', async ({ browserName }) => {
 })
 
 test('sending from Home\'s columns and opening Org\'s nodes resizes no box outside an observer\'s own', async ({ page, request }) => {
-  test.setTimeout(240_000)
+  test.setTimeout(420_000)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   const cwd = `${fixtureRoot}/projects/walnut`
   const cfg = (await (await request.get('/api/config')).json()) as { config: { experimental?: Record<string, boolean> } }
@@ -55,11 +56,36 @@ test('sending from Home\'s columns and opening Org\'s nodes resizes no box outsi
     sids.push(sessionId)
   }
 
+  // A list as long as the user's (1,200 open tasks on 2026-11-24): the two loops left after the
+  // composer fix came as Home and Org loaded and their task list arrived.
+  for (let i = 0; i < 150; i++) {
+    const { task } = await post<{ task: { id: string } }>(request, '/api/tasks', { title: `Resize observer list row ${i + 1}`, project: 'Work', source: 'local' })
+    made.push(task.id)
+  }
+
+  // The sidebar folds below: its open or shut pref stays in this page.
+  await isolateUiPrefs(page)
   await installResizeLoopProbe(page)
   await page.goto(`/?s1=${sids[0]}&s2=${sids[1]}&s3=${sids[2]}`)
   const columns = page.locator('.main-page-session-column .session-panel.is-glass-chat')
   await expect(columns.first()).toBeVisible({ timeout: 60_000 })
   await page.waitForTimeout(3000)
+  const culprits: string[] = []
+  const collect = async (where: string) => {
+    const r = await resizeLoopReport(page)
+    culprits.push(...r.culprits.map((c) => `${where} (loops ${r.loops}): ${c.count}x told about ${c.told.join(', ')}; resized ${c.changed.join(', ')}`))
+  }
+  await collect('Home load')
+  // A reload is a load with the list already cached; each one starts the probe again.
+  await page.reload()
+  await expect(columns.first()).toBeVisible({ timeout: 60_000 })
+  await page.waitForTimeout(3000)
+  await collect('Home reload')
+  // The sidebar closing and opening again changes every column's width at once.
+  const fold = page.locator('.sidebar-collapse-btn').first()
+  if (await fold.isVisible()) {
+    for (let i = 0; i < 2; i++) { await fold.click(); await page.waitForTimeout(800) }
+  }
 
   for (const width of [1700, 1440, 1280, 1100, 980, 1512]) {
     await page.setViewportSize({ width, height: 900 })
@@ -97,7 +123,7 @@ test('sending from Home\'s columns and opening Org\'s nodes resizes no box outsi
   }
 
   // Home's findings are read before Org's load starts the probe again.
-  const home = await resizeLoopReport(page)
+  await collect('Home')
   await page.goto('/org')
   await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
   const nodes = page.locator('[data-testid="org-channel"], [data-testid="org-channel-main"]')
@@ -105,10 +131,12 @@ test('sending from Home\'s columns and opening Org\'s nodes resizes no box outsi
   const shown = Math.min(await nodes.count(), 3)
   for (let i = 0; i < shown; i++) { await nodes.nth(i).click(); await page.waitForTimeout(1200) }
   for (const width of [1300, 1000, 1512]) { await page.setViewportSize({ width, height: 900 }); await page.waitForTimeout(500) }
-  const org = await resizeLoopReport(page)
+  await collect('Org')
+  await page.reload()
+  await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
+  await page.waitForTimeout(3000)
+  await collect('Org reload')
 
   // The cause is asserted, not the browser's error: whether that fires depends on box depths.
-  const named = [...home.culprits.map((c) => ['Home', c] as const), ...org.culprits.map((c) => ['Org', c] as const)]
-    .map(([where, c]) => `${where}: ${c.count}x told about ${c.told.join(', ')}; resized ${c.changed.join(', ')}`)
-  expect(named, `a ResizeObserver callback resized a box outside the ones it was told about (loop errors: Home ${home.loops}, Org ${org.loops}): write it on the next frame, as useHeightVar.ts does`).toEqual([])
+  expect(culprits, 'a ResizeObserver callback resized a box outside the ones it was told about: write it on the next frame, as useHeightVar.ts does').toEqual([])
 })
