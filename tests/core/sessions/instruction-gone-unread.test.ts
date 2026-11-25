@@ -28,7 +28,7 @@ import { _resetReplyLanguageForTesting, refreshReplyLanguage } from '../../../sr
 import { _resetThreadsForEveryTaskForTesting, setThreadsForEveryTask } from '../../../src/core/org/keeps-threads.js';
 import { FACT_INLINE_CAP } from '../../../src/core/session-channel/fact-log.js';
 import { updateConfig } from '../../../src/core/config-manager.js';
-import type { Config, SessionRecord, Task } from '../../../src/core/types.js';
+import type { Config, SessionInstructionsNoted, SessionRecord, Task } from '../../../src/core/types.js';
 
 const GONE = /A part of your instructions \(v[0-9a-f]{8}\) is gone/;
 
@@ -146,6 +146,32 @@ describe('a session told a part is gone that is still there hears it still appli
       blocks: { 'user-profile': { version: profile.version, words: [], gone: true } }, toldAt: new Date().toISOString(),
     } };
     expect(instructionNoticeFor(told, task, { ignoreTold: true })).toContain('It was not: it still applies');
+  });
+});
+
+describe('a gone mark one server made stands against the other server\'s copy that did not answer it', () => {
+  // 2026-11-25, sessions 83ef36e0 and six more: the host told "Language for other people" (v9c7fc7a0)
+  // gone under the name "#0"; the leader's copy of what it told, written later, still held it.
+  it('the session hears it still applies, once, whichever copy is newer', async () => {
+    await updateConfig({ session: { outward_language: { language: 'English' } } } as Partial<Config>);
+    await refreshReplyLanguage();
+    const { task, record } = await spawned();
+    const prompt = record.appliedAppendSystemPrompt!;
+    const block = parseInstructions(prompt).blocks.get('outward-language')!;
+    const copy = (toldAt: string, blocks: NonNullable<SessionInstructionsNoted['blocks']>): SessionInstructionsNoted =>
+      ({ version: 'x', promptHash: hash(prompt), lines: [], blocks, toldAt });
+    const hostGone = copy(new Date(Date.now() - 2 * 3_600_000).toISOString(), { '#0': { version: block.version, words: [], gone: true } });
+    const leaderHeld = copy(new Date(Date.now() - 3_600_000).toISOString(), { '#0': { version: block.version, words: block.words } });
+    const row = { ...record, judge: 'host' as const, taskRoutingNoted: hostGone, taskRoutingNotedByLeader: leaderHeld };
+    expect(instructionNoticeFor(row, task)).toContain(`(${block.version}) was gone. It was not: it still applies`);
+    // The leader told it (its copy now holds the block, restated); the host's mark is still there.
+    const leaderTold = copy(new Date().toISOString(), { 'outward-language': { version: block.version, words: block.words, form: block.form, restoredAt: new Date().toISOString() } });
+    const after = { ...row, taskRoutingNotedByLeader: leaderTold };
+    expect(instructionNoticeFor(after, task)).toBeNull();
+    expect(instructionNoticeFor(after, task, { ignoreTold: true }) ?? '').not.toContain('It was not');
+    // A real removal told after that restatement is a new mark, and counts again.
+    const goneAgain = copy(new Date(Date.now() + 60_000).toISOString(), { '#0': { version: block.version, words: [], gone: true, at: new Date(Date.now() + 60_000).toISOString() } });
+    expect(instructionNoticeFor({ ...after, taskRoutingNoted: goneAgain }, task)).toContain('It was not: it still applies');
   });
 });
 

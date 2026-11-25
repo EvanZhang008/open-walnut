@@ -138,7 +138,13 @@ export interface Changed { line: string; heading?: string; was?: string }
 export interface Block { id: string; heading?: string; head: string; form: string; version: string; words: string[]; tagged: string[] }
 
 /** The version of a block a session holds: told to it, or in its prompt (`form`: formOf its head; none from before it was kept). */
-export interface BlockView { version: string; words: string[]; form?: string; /** Told it is gone. */ gone?: true }
+export interface BlockView {
+  version: string; words: string[]; form?: string;
+  /** Told it is gone, and when (`at`; none on marks from before 2026-11-25). */
+  gone?: true; at?: string;
+  /** Restated whole after a notice had said it was gone (instruction-diff.ts dueChanges `restored`). */
+  restoredAt?: string;
+}
 
 export interface Parsed {
   /** Every trimmed line of the text, block lines included. */
@@ -260,8 +266,10 @@ export function dueChanges(
     // from before `gone` was kept says so when the version is the one it was told is gone.
     // Told under another id, the same version: a block of a kind not named yet was named by where
     // it sat ("#0"), and is named by its kind now (2026-11-25: "Language for other people").
-    const told = views[block.id] ?? goneByVersion(views, block.version);
-    const toldGone = !!told && !told.words.length && block.words.length > 0 && (!!told.gone || told.version === block.version);
+    const own = views[block.id];
+    const told = own && !own.words.length ? own : goneByVersion(views, block.version);
+    const toldGone = !!told && !told.words.length && block.words.length > 0 && (!!told.gone || told.version === block.version)
+      && !answeredGone(views, told);
     if (view?.version === block.version && !toldGone) continue;
     // Whole: never had it, was told it is gone, or it changed form (Walnut's default
     // became the user's own words): a list of changes would read against the wrong head.
@@ -544,20 +552,53 @@ export function rewordedLines(had: string[], now: string[]): string[] {
   return wordChanges(had, now).added.filter((l) => l.reworded && !opensSection(l.word)).map((l) => l.word);
 }
 
-/** A view told gone at `version` under any id. */
+/** A view that says the session was told its block is gone. */
+export const isGoneMark = (v?: BlockView): v is BlockView => !!v && !v.words.length && !!v.gone;
+
+/** A view told gone at `version` under any id, that no restatement answered yet. */
 function goneByVersion(views: Record<string, BlockView>, version: string): BlockView | undefined {
-  return Object.values(views).find((v) => !v.words.length && v.gone && v.version === version);
+  return Object.values(views).find((v) => isGoneMark(v) && v.version === version && !answeredGone(views, v));
+}
+
+/** `held` is the restatement that answered the told-gone mark `mark` (made after it). */
+const answers = (held: BlockView, mark: BlockView) => !!held.words.length && held.version === mark.version && !!held.restoredAt
+  && (!mark.at || Date.parse(held.restoredAt) > Date.parse(mark.at));
+
+/**
+ * Whether some other view restated a told-gone mark's block after it. A mark from before marks had
+ * a time is answered by any other view of its version that holds the words: the restatement of
+ * 2026-11-25 (before `restoredAt`) told the block under its kind and left the mark under "#0".
+ */
+export function answeredGone(views: Record<string, BlockView>, mark: BlockView): boolean {
+  return Object.values(views).some((v) => v !== mark && (answers(v, mark) || (!mark.at && !!v.words.length && v.version === mark.version)));
+}
+
+/**
+ * Two servers' views of one session's blocks (told-copies.ts), the newer's winning, except that a
+ * told-gone mark stands against a view of the same version that did not answer it: the newer copy
+ * may only carry what it held before the other server told the session the block was gone
+ * (2026-11-25: the leader's copy, newer, still held "Language for other people" the host had told
+ * gone, so the session was never told it still applied).
+ */
+export function mergeBlockViews(older: Record<string, BlockView>, newer: Record<string, BlockView>): Record<string, BlockView> {
+  const out = { ...older, ...newer };
+  for (const [id, o] of Object.entries(older)) {
+    const n = newer[id];
+    if (!n || o.version !== n.version) continue;
+    if (isGoneMark(o) && !answers(n, o)) out[id] = o;
+    else if (isGoneMark(n) && answers(o, n)) out[id] = o;
+  }
+  return out;
 }
 
 /** The block versions a session holds once `due` reached it. */
-export function viewsAfter(views: Record<string, BlockView>, due: Due): Record<string, BlockView> {
+export function viewsAfter(views: Record<string, BlockView>, due: Due, at = new Date().toISOString()): Record<string, BlockView> {
   const out = { ...views };
   for (const c of due.blocks) {
-    out[c.block.id] = { version: c.block.version, words: c.block.words, form: c.block.form };
-    // A told-gone mark of the same version under another id is answered by this one too.
-    if (c.restored) for (const [id, v] of Object.entries(out)) if (id !== c.block.id && !v.words.length && v.version === c.block.version) delete out[id];
+    // A restatement answers every told-gone mark of its version made before it, under any id (answeredGone).
+    out[c.block.id] = { version: c.block.version, words: c.block.words, form: c.block.form, ...(c.restored ? { restoredAt: at } : {}) };
   }
-  for (const g of due.gone) out[g.id] = { version: g.from, words: [], gone: true };
+  for (const g of due.gone) out[g.id] = { version: g.from, words: [], gone: true, at };
   return out;
 }
 

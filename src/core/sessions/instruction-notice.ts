@@ -31,7 +31,7 @@ import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
 import { currentUserProfile } from './user-profile-context.js';
 import { refreshPromptInputs } from './prompt-inputs.js';
-import { dueChanges, hash, parseInstructions, renderDue, sameRule, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
+import { dueChanges, hash, parseInstructions, renderDue, sameRule, viewsAfter, answeredGone, mergeBlockViews, type BlockView, type Due, type Parsed } from './instruction-diff.js';
 import {
   NOTICE_OPENING, bumpNoticeTold, clearNoticeDelivering, leadsWithNotice, noticeDelivering, noticeInFlight,
   noticeToldGeneration,
@@ -95,7 +95,8 @@ function heldNoted(record: NoticeRecord): Noted | undefined {
   const [top, ...rest] = toldNewestFirst(record, (n) => sameBase(n, record));
   if (!top || !rest.length) return top;
   const lines = [...new Set([...(top.lines ?? []), ...rest.flatMap((n) => n.lines ?? [])])];
-  const blocks = Object.assign({}, ...rest.reverse().map((n) => n.blocks ?? {}), top.blocks ?? {}) as Noted['blocks'];
+  // A told-gone mark stands against a newer copy's view that did not answer it (instruction-diff.ts mergeBlockViews).
+  const blocks = [...rest.reverse(), top].reduce<NonNullable<Noted['blocks']>>((acc, n) => mergeBlockViews(acc, n.blocks ?? {}), {});
   // The wordings held in full stay the newer one's: an older copy may still hold one it replaced.
   return { ...top, lines, blocks };
 }
@@ -107,7 +108,7 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
     // A restatement still says a part it was told is gone is there after all (instruction-diff.ts
     // dueChanges `restored`): the summary may carry "gone" on, and the prompt's copy reads as held.
     const toldGone = ignoreTold && noted?.blocks
-      ? Object.fromEntries(Object.entries(noted.blocks).filter(([id, v]) => !v.words.length
+      ? Object.fromEntries(Object.entries(noted.blocks).filter(([id, v]) => !v.words.length && !answeredGone(noted.blocks!, v)
         && (current.blocks.has(id) || [...current.blocks.values()].some((b) => b.version === v.version)))) : {};
     return { told: new Set<string>(), views: toldGone as Record<string, BlockView>, texts: [] as string[] };
   }
@@ -206,9 +207,12 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   // (block-sources.ts): a session is never told the user's profile or its Threads rules stopped applying.
   const due = found && found.gone.some((g) => !goneKnownHere(g.id)) ? { ...found, gone: found.gone.filter((g) => goneKnownHere(g.id)) } : found;
   if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
-  // Every change waits out the gap after the last notice (gapClock).
+  // Every change waits out the gap after the last notice (gapClock), except the word that a part
+  // told gone still applies: until then the session works without it (2026-11-25: told its words for
+  // other people were gone, a session may write a ticket in the user's language). Once per mark.
   const lastAt = gapClock(record, current, parsedPrompt);
-  if (!ignoreTold && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS) return null;
+  const restores = due.blocks.some((c) => c.restored);
+  if (!ignoreTold && !restores && lastAt && now - Date.parse(lastAt) < NOTICE_GAP_MS) return null;
   return { due, views, texts };
 }
 

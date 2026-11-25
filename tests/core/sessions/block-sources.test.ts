@@ -80,8 +80,11 @@ describe('a session told a block was gone while it had no kind hears it still ap
     const due = dueChanges(current, current, new Set(), views)!
     expect(renderDue(due)).toContain(`An earlier notice said this part of your instructions (${block.version}) was gone. It was not: it still applies`)
     const after = viewsAfter(views, due)
-    expect(Object.keys(after)).toEqual(['outward-language'])
+    expect(after['outward-language']?.restoredAt).toBeTruthy()
     expect(dueChanges(current, current, new Set(), after)).toBeNull()
+    // Told by the restatement of the first fix (no restoredAt), the mark left under "#0": answered too.
+    const { restoredAt: _r, ...plain } = after['outward-language']!
+    expect(dueChanges(current, current, new Set(), { ...views, 'outward-language': plain })).toBeNull()
   })
 })
 

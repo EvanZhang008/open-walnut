@@ -411,7 +411,7 @@ export interface SessionPlaceNoted {
 export interface SessionInstructionsNoted {
   version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[];
   /** The version of each versioned block (the user's profile, core instructions) the session holds, by block id (instruction-diff.ts). */
-  blocks?: Record<string, { version: string; words: string[]; form?: string; gone?: true }>;
+  blocks?: Record<string, { version: string; words: string[]; form?: string; gone?: true; at?: string; restoredAt?: string }>;
   /** When the last notice reached it: the next waits for NOTICE_GAP_MS, so changes close together go out as one. */
   toldAt?: string;
   /** The plain lines it was told, in full words, newest first (up to 30K characters): the base when one of them is reworded again (instruction-diff.ts). */
