@@ -19,6 +19,7 @@ import {
   scanForConflictMarkers,
 } from '../utils/json-conflict-recovery.js';
 import { SECRET_IGNORE_PATTERNS } from './git-sync-secrets.js';
+import { GIT_TEMP_IGNORE_LINES, sweepGitTempLeftovers } from './git-sync-temp-leftovers.js';
 import { releasePrivateDataHolds } from './git-sync-private-data.js';
 import { carryLocalCommits, must, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
 import { mergeRecords } from './git-sync-records.js';
@@ -1028,6 +1029,10 @@ sessions.json.*
 /*.backup
 /*.backup.gz
 /*.backup-*
+
+# Temp copies git writes for a merge driver, left behind when the merge is killed:
+# each a whole copy of a store (git-sync-temp-leftovers.ts).
+${GIT_TEMP_IGNORE_LINES.join('\n')}
 `;
 export const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
 
@@ -1141,6 +1146,8 @@ const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
   // A root `<x>.backup` compressed in place (data-copy-compact.ts) stays as ignored as it was.
   '/*.backup.gz',
+  // git's merge-driver temps a killed merge leaves (git-sync-temp-leftovers.ts).
+  ...GIT_TEMP_IGNORE_LINES,
   // Write temps and set-aside copies of the secret files above, left by a crash
   // mid-write: they hold the same secret (see GITIGNORE_CONTENT). Root only.
   '/auth.json.*', '/config.yaml.*', '/cloud-setup-job.json.*',
@@ -1726,6 +1733,7 @@ async function ensureMachineLocalUntrackedAsync(atBoot = false): Promise<string[
   // ignore rules must exist before the query — otherwise a repo whose
   // .gitignore predates CRITICAL_IGNORES reports nothing and the guard no-ops.
   try { ensureCriticalIgnores(); } catch { /* best-effort */ }
+  await sweepGitTempsAsync();
   const tracked = await gitSafeAsync('ls-files -i -c --exclude-standard');
   if (!tracked) return [];
   const targets = criticalTrackedTargets(tracked
@@ -1753,6 +1761,18 @@ async function ensureMachineLocalUntrackedAsync(atBoot = false): Promise<string[
     );
   }
   return untracked;
+}
+
+/** Untrack and remove the stale temp copies a killed git merge left at the root (after the ignore line exists). */
+async function sweepGitTempsAsync(): Promise<void> {
+  try {
+    const sweep = await sweepGitTempLeftovers(WALNUT_HOME, (args) => gitSafeAsync(args));
+    if (sweep.removed.length > 0) {
+      log.git.warn('git-sync removed temp files a killed git merge left in the data repo', {
+        removed: sweep.removed.length, untracked: sweep.untracked.length, bytes: sweep.bytes,
+      });
+    }
+  } catch { /* best-effort: the next tick tries again */ }
 }
 
 /** A new data home gets the standard .gitignore; an existing one gets its critical rules back. */
