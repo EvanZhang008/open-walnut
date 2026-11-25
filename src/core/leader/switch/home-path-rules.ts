@@ -132,7 +132,7 @@ const RULES: readonly PathRule[] = [
       'human-inbox', 'topics', 'topic-mail', 'org', 'org.threads-db', 'org-reflection', 'boards', 'drawings', 'notifications',
       'approvals', 'host-exec-grants', 'usage-db', 'op-calls', 'offline-conflicts', 'offline-conflicts.log', 'private-tasks',
       'time-tracking', 'time-tracking.outside', 'time-tracking.day', 'time-tracking.outside.day', 'time-tracking.outside.detail', 'time-tracking.outside.calls',
-      'browser-replays', 'browser-replays.index', 'voice-archive', 'data-repo', 'repositories', 'obsidian-config',
+      'browser-replays', 'browser-replays.index', 'voice-archive', 'data-repo', 'data-repo-ignore', 'repositories', 'obsidian-config',
       'cron-state', 'routine-state', 'triage-state', 'triage', 'cache.leader-op-outcomes', 'cache.suggest-accuracy', 'cache.agent-actions', 'cache.held-notices',
       'local.ai', 'local.drafts', 'local.page-visits', 'local.usage-watch', 'local.preview-storage', 'local.stt-learned',
       'config.stt-vocab', 'stt-vocab-legacy', 'tmp.stt-recordings', 'tmp.recordings', 'stt-debug-legacy', 'recordings-legacy',

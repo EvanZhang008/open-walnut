@@ -27,7 +27,7 @@ vi.mock('../../src/constants.js', async () => {
   return createMockConstants('walnut-ignore-restore', { WALNUT_HOME: dirs.home });
 });
 
-import { endGitQuiet, ensureRepo, git, quietGitWriters } from '../../src/integrations/git-sync.js';
+import { commitIfDirty, endGitQuiet, ensureRepo, git, quietGitWriters, restoreMissingGitignore } from '../../src/integrations/git-sync.js';
 
 const ignored = (rel: string): boolean => {
   try { execFileSync('git', ['-C', dirs.home, 'check-ignore', '-q', rel]); return true; } catch { return false; }
@@ -94,8 +94,26 @@ describe('a data repo without its .gitignore at boot', () => {
     expect(await ensureRepo()).toEqual({ available: true });
     fs.rmSync(path.join(dirs.home, '.gitignore'));
     await quietGitWriters(dirs.home, { budgetMs: 0 });
+    expect(await restoreMissingGitignore()).toEqual({ ok: false, error: expect.stringMatching(/quiet for a leader switch/) });
     expect((await ensureRepo()).available).toBe(false);
     expect(fs.existsSync(path.join(dirs.home, '.gitignore'))).toBe(false);
+  });
+
+  it('gone while the server runs: the next commit writes it back first, and commits neither its deletion nor what it ignores', async () => {
+    expect(await ensureRepo()).toEqual({ available: true });
+    const gi = path.join(dirs.home, '.gitignore');
+    const committed = fs.readFileSync(gi);
+    fs.rmSync(gi);
+    fs.mkdirSync(path.join(dirs.home, 'tmp'), { recursive: true });
+    fs.writeFileSync(path.join(dirs.home, 'tmp', 'scratch'), 'x');
+    fs.mkdirSync(path.join(dirs.home, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(dirs.home, 'notes', 'a.md'), 'a\n');
+    await commitIfDirty();
+    expect(fs.readFileSync(gi).equals(committed)).toBe(true);
+    const files = git('ls-files').split('\n');
+    expect(files).toContain('.gitignore');
+    expect(files).toContain('notes/a.md');
+    expect(files.filter((f) => f.startsWith('tmp/'))).toEqual([]);
   });
 
   it('one that has its .gitignore: left as it is', async () => {

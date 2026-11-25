@@ -1252,6 +1252,11 @@ export async function stageAllForCommit(
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
+  // Every `add -A` of the home goes through here: never one with no ignore list (restoreMissingGitignore).
+  if (path.resolve(root) === path.resolve(WALNUT_HOME)) {
+    const ignore = await restoreMissingGitignore();
+    if (!ignore.ok) throw new Error(`git-sync: the data repo has no .gitignore, so nothing is staged: ${ignore.error}`);
+  }
   await releasePrivateDataHolds(gitRunnerAt(root), root);
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
   else await prepareSyncedPluginFiles(root);
@@ -1769,10 +1774,10 @@ function writeOrHealGitignore(): void {
  * data since), so the new leader booted an existing repo with no ignore list.
  * ensureCriticalIgnores() returns when the file is missing, so nothing wrote it, and the
  * auto-commit's `git add -A` took in tmp/ (the standby's own spool), /voice-archive/, local/ and
- * every machine-local store, and committed the .gitignore's deletion. Run at boot (ensureRepo)
- * and before every sync tick's ignore heal.
+ * every machine-local store, and committed the .gitignore's deletion. Run at boot (ensureRepo),
+ * before every `add -A` (stageAllForCommit) and before the sync tick's ignore heal.
  */
-async function restoreMissingGitignore(): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function restoreMissingGitignore(): Promise<{ ok: true } | { ok: false; error: string }> {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
   if (fs.existsSync(gitignorePath)) return { ok: true };
   // A leader switch's stop: nothing of this server writes the home now (the next leader's boot writes it).
