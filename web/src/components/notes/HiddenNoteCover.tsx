@@ -6,7 +6,7 @@
  * covers it again. While shown the editor hands nothing to a model: no dictation, and the Notes
  * page's chat is not told which note is open (NotesPage).
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ICON_EYE_OFF } from '@/components/common/Icons';
 import { HIDDEN_NOTE_LINE, noteName } from './locked-note';
@@ -36,10 +36,13 @@ export function CoverButton({ onClick, testId }: { onClick: () => void; testId: 
 
 /**
  * Whether the hidden note open under `openKey` (its editor's remount key: new for every open, kept
- * by a rename in place) is shown. Show is for that open only, so any other key reads covered.
+ * by a rename in place) is shown. Show is for that open only, so any other key reads covered, and
+ * so is the same open once the note stops being hidden: hidden again (Unhide, then Hide from AI),
+ * it is covered again.
  */
-export function useHiddenNoteShown(openKey: string | null) {
+export function useHiddenNoteShown(openKey: string | null, hidden: boolean) {
   const [uncoveredFor, setUncoveredFor] = useState<string | null>(null);
+  useEffect(() => { if (!hidden) setUncoveredFor(null); }, [hidden]);
   return {
     shown: openKey !== null && uncoveredFor === openKey,
     show: () => setUncoveredFor(openKey),

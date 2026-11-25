@@ -62,7 +62,7 @@ import { LOCAL_HOST } from '../../core/sessions/host-admission.js'
 import { LockedNoteError } from '../../core/notes/locked-note.js'
 import { assertLockedNoteDelete, assertLockedNoteMove, assertNoLockedNoteCopy } from '../../core/notes/locked-note-moves.js'
 import { log } from '../../logging/index.js'
-import { isPersonCaller } from './person-caller.js'
+import { isPersonInOwnWindow } from './person-caller.js'
 
 export type FileOpName = 'mkdir' | 'create' | 'rename' | 'duplicate' | 'delete'
 
@@ -113,7 +113,7 @@ export interface FileOpInput {
   newPath?: unknown
   host?: unknown
   recursive?: unknown
-  /** The caller is the person (person-caller.ts isPersonCaller); left out, it is not. */
+  /** The caller is the person (person-caller.ts isPersonInOwnWindow); left out, it is not. */
   person?: boolean
 }
 
@@ -469,7 +469,7 @@ async function assertAbsent(target: string): Promise<void> {
 async function guardLockedNotes(p: PreparedOp, person: boolean): Promise<void> {
   if (p.host && p.host !== LOCAL_HOST) return
   if (p.op === 'rename') await assertLockedNoteMove(p.filePath, p.newPath!, { person })
-  else if (p.op === 'duplicate') await assertNoLockedNoteCopy(p.filePath, { person })
+  else if (p.op === 'duplicate') await assertNoLockedNoteCopy(p.filePath, { person, ...(p.newPath ? { to: p.newPath } : {}) })
   else if (p.op === 'delete') await assertLockedNoteDelete(p.filePath, { person })
 }
 
@@ -591,7 +591,7 @@ for (const op of FILE_OP_NAMES) {
         newPath: body.newPath,
         host: body.host,
         recursive: body.recursive,
-        person: isPersonCaller(req),
+        person: isPersonInOwnWindow(req),
       })
       res.status(result.status).json(result.body)
     } catch (err) {

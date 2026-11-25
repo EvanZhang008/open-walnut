@@ -63,7 +63,12 @@ searched first, then locked, edited and read by an approved agent):
 - the notes index and the search index (`notes-index.sqlite`, `search.sqlite` and their `-wal`
   files): once both hold the stub, `src/core/notes/locked-note-residue.ts` merges their full-text
   segments, writes zeros over their free pages and truncates their write-ahead logs, in small
-  steps; both open with `secure_delete = FAST`, so a later delete zeroes what it frees in a page;
+  steps that never wait inside SQLite for another connection (a busy step is tried again after a
+  pause), several locks in one round; both open with `secure_delete = FAST`, so a later delete
+  zeroes what it frees in a page. The merge rewrites the full-text index, so on a large search
+  database a lock costs about a minute of background work and about as much written as the index
+  holds. A wipe that did not finish (a restart, a database busy the whole time) leaves
+  `locked-notes-wipe-pending` in the data folder, and the next start runs it again;
 - Walnut's logs: they carry paths, never a note's text;
 - git commits made after the lock: the ciphertext only.
 
@@ -91,19 +96,32 @@ hint are also kept in the data folder, in `locked-notes-key-backup.json`
 (`src/core/vault/locked-notes-key-backup.ts`; the user's pick, 2026-11-25: back up the key and the
 hint). It holds what the phone is given of the vault, for the key items only: the vault's id, its
 KDF settings, `aukSalt`, the password wrap and each key item sealed as stored, plus the hint in
-plain text as in `vault.json`. No machine wrap, no recovery wrap, no other item. Opening it needs
-the master password and the Secret Key, as the vault does. It is written after every vault write
-while a key item exists, only when its bytes change, so a new master password rewraps it.
+plain text. Unlike `vault.json`, this file leaves the machine with the data folder (its git
+history, the sync hub, the companion), so the hint does too. No machine wrap, no recovery wrap, no
+other item. Opening it needs the master password and the Secret Key, as the vault does.
+
+It is written after every vault write and every open of the vault while a key item exists, only
+when its bytes change, so a new master password rewraps it; a lock waits for it before it seals
+with a new key. An entry is a vault id and its key items: an entry the new one does not cover
+(another vault's, or this vault's holding a key item it no longer has, as after putting back an
+older `vault.json`) stays in `earlier` with its own password wrap. A file that does not read (a
+damaged file, a git conflict) is set aside as `locked-notes-key-backup.unreadable-<time>.json`,
+never written over; one a newer Walnut wrote is left as it is. Git sync carries the file whole
+(the newer side wins), so two machines with vaults of their own each keep only their own entry on
+top; the other machine's stays in its history.
 
 On a new computer, or a vault set up again, a locked note's Show finds no key (410
 `locked_key_missing`), and the Notes page shows "Restore the key" in its place
 (`web/src/components/notes/LockedNoteKeyRestore.tsx`): the backup's hint, the master password and
 the Secret Key of the vault that locked the note (from its recovery kit), and with backups of more
-than one vault a pick of which. `GET /api/v1/vault/notes/key-backup` answers each backup's vault
-id, KDF and hint, the newest first (`earlier` holds the vaults a restore replaced); `POST
-/api/v1/vault/notes/restore-key {passwordKey | password, secretKey, vaultId?}` (person, vault
-session, the wrong-password brake) adds each key that backup holds to this vault, unless an item
-already holds the same key, and the note opens. The page sends the password as its derived key,
+than one vault a pick of which (the one holding the note's key first, ones whose keys are all in
+this vault left out). `GET /api/v1/vault/notes/key-backup?path=` answers each backup's `entry`,
+vault id, KDF and hint, the newest first, whether its keys are all in the open vault (`inVault`)
+and whether it holds the key the note at `path` names (`holdsNoteKey`); `POST
+/api/v1/vault/notes/restore-key {passwordKey | password, secretKey, entry? | vaultId?}` (person,
+vault session, the wrong-password brake) adds each key that backup holds to this vault, unless an
+item already holds the same key, and the note opens. A restore that adds nothing and leaves the
+note shut says so on the card. The page sends the password as its derived key,
 as an unlock does. With no backup in the data folder the card says so and points to a Passwords
 backup or its trash. The git history keeps earlier copies of the file: anyone with an earlier master password and
 the Secret Key could open one of those, and the key itself never changes, so after a leak of both,
@@ -227,8 +245,14 @@ block (a new block when the note has none, its id stamped first); Unhide takes i
 - `POST /api/v1/notes/hide {path, expectedHash?}` and `POST /api/v1/notes/unhide {path,
   expectedHash?}` (`src/web/routes/hidden-notes-v1.ts`) answer `{path, contentHash, updatedAt,
   hidden, changed}`. The person only (403 `human_only`), on the Mac only (503 `not_here` on a
-  replica), no Passwords session. A locked note answers 409 `note_locked`. After a hide, the
-  indexes' freed copies of the text are wiped as after a lock.
+  replica), no Passwords session. A locked note answers 409 `note_locked`. After a hide the
+  indexes answer the stub at once; what they freed is not wiped, since the file itself is plain.
+- "The person" is one rule for every one of these routes (`isPersonInOwnWindow`,
+  `src/web/routes/person-caller.ts`): no session caller, no automation mark, no browser under
+  automation, no test run, and no call another Walnut forwards here (the cloud companion's forward
+  carries none of its caller's session headers, so it never counts as the person).
+- The offline-conflict log route answers an entry about a hidden or locked note without the words
+  typed away (`replica`, `base`) to anyone but the person.
 - Lock works on a hidden note: its whole text is sealed, the mark with it, so Remove lock gives
   back the hidden note.
 - In a git sync conflict a hidden side stays over a plain one, and a locked side over both.
@@ -239,8 +263,8 @@ block (a new block when the note has none, its id stamped first); Unhide takes i
 
 - The tree, Recent, Bookmarks and search rows show an eye-off beside a hidden note (from `hidden`
   in `/api/notes-v2/list`), unlike a locked note's lock (`web/src/components/notes/LockedMark.tsx`).
-- Opening one shows its title, the line "Hidden from AI. Agents cannot read it, and its text is
-  stored unencrypted." and Show, which needs no password
+- Opening one shows its title, the line "Hidden from AI: no agent reads it through Walnut. The file
+  is not encrypted, so a program that opens it directly can; Encrypt keeps it from those too." and Show, which needs no password
   (`web/src/components/notes/HiddenNoteCover.tsx`). Show puts the text in the ordinary editor,
   whose saves go through the notes route and keep the mark. Hide, a note switch, closing and
   reopening the note, or a reload covers it again: being shown lives in the page's memory, for that
@@ -273,9 +297,11 @@ reach of anything an agent runs is locked, not hidden.
   outside Walnut. Walnut keeps that history as the person's backup and never rewrites it on its
   own (the user, 2026-11-25: git history "is needed, it has to be the backup"). To keep a note's
   text out of it from the start, lock the note while it is still empty, then write in it.
-- Pages of the search databases written before this version may still hold pieces of a note's
-  old text inside pages still in use; the wipe after a lock clears free pages, deleted full-text
-  entries and the write-ahead logs, not those.
+- Pieces of a note's old text can stay in unused gaps inside pages still in use, in any version
+  (`secure_delete = FAST` zeroes a freed page part only in some cases); only a VACUUM clears them.
+  The wipe after a lock clears free pages, deleted full-text entries and the write-ahead logs, not
+  those. A replica's own indexes (the companion's search copy, a host replica's notes index) are
+  never wiped.
 - A program that deliberately digs the window's Passwords unlock token out of the browser's
   storage and calls Walnut as that window reads the note while Passwords stays unlocked. Lock
   Passwords when done, or keep its unlock short ("Keep Passwords unlocked" in Settings).
@@ -289,8 +315,9 @@ reach of anything an agent runs is locked, not hidden.
   names (`<data folder>/offline-conflicts/<drain>.ndjson`).
 - Text typed into a locked note's file outside Walnut (another editor) is not part of its locked
   text and goes on its next sealed save.
-- Old plain copies can stay in places Walnut does not wipe: free pages of the search databases
-  and this browser's file cache from before the lock.
+- Old plain copies can stay in places Walnut does not wipe: the gaps above, a write-ahead log
+  whose checkpoint stayed busy until the next start, and this browser's file cache from before
+  the lock.
 - An older Walnut (after a downgrade) has no lock checks: it shows the stub as the note and keeps
   the file as it is, but an edit or rewrite of the note there (by the person or an agent) can drop
   the ciphertext line and lose the note. The stub itself says not to edit the file anywhere else.

@@ -86,16 +86,28 @@ vaultNotesV1Router.post('/vault/notes/remove-lock', async (req, res, next) => {
 
 // ── The key's backup in the data folder (core/vault/locked-notes-key-backup.ts) ──
 //
-//   GET  /api/v1/vault/notes/key-backup     → { vaultId, kdf, hint?, keys, earlier: [{ vaultId, kdf, hint?, keys }] } | 404 no_key_backup
-//   POST /api/v1/vault/notes/restore-key    { passwordKey | password, secretKey, vaultId? } → { added }
+//   GET  /api/v1/vault/notes/key-backup?path=  → { entry, vaultId, kdf, hint?, keys, inVault, holdsNoteKey?, earlier: [the same] } | 404 no_key_backup
+//   POST /api/v1/vault/notes/restore-key       { passwordKey | password, secretKey, entry? | vaultId? } → { added }
 //
 // The restore takes the master password of the vault that wrote the backup (which may be another
 // computer's) and its Secret Key, under the wrong-password brake, into this window's open vault.
+// `path`: the locked note being opened, so the backup holding its key is marked.
+
+/** The text of the note at `p` (a notes path), or null. */
+async function noteText(p: unknown): Promise<string | null> {
+  if (typeof p !== 'string' || !p) return null
+  const [fsp, { resolveNotePath }] = await Promise.all([import('node:fs/promises'), import('../../core/notes/note-paths.js')])
+  const full = resolveNotePath(p)
+  if (!full) return null
+  try { return await fsp.readFile(full.endsWith('.md') ? full : `${full}.md`, 'utf-8') } catch { return null }
+}
 
 vaultNotesV1Router.get('/vault/notes/key-backup', async (req, res, next) => {
   if (!(await person(req, res))) return
   await run(res, next, async () => {
-    const info = await (await import('../../core/vault/locked-notes-key-backup.js')).keyBackupInfo()
+    const text = await noteText(req.query.path)
+    const noteKey = text === null ? undefined : (await import('../../core/notes/locked-note.js')).parseLockedNote(text)?.envelope?.key
+    const info = await (await import('../../core/vault/locked-notes-key-backup.js')).keyBackupInfo(noteKey)
     if (!info) { res.status(404).json({ error: 'There is no backup of the locked notes key in this Walnut\'s data folder', code: 'no_key_backup' }); return SENT }
     return info
   })
@@ -105,16 +117,16 @@ vaultNotesV1Router.post('/vault/notes/restore-key', async (req, res, next) => {
   if (!(await person(req, res))) return
   await run(res, next, async () => {
     const backup = await import('../../core/vault/locked-notes-key-backup.js')
-    const info = await backup.keyBackupInfo()
-    if (!info) { res.status(404).json({ error: 'There is no backup of the locked notes key in this Walnut\'s data folder', code: 'no_key_backup' }); return SENT }
-    const b = body(req) as { passwordKey?: unknown; password?: unknown; secretKey?: unknown; vaultId?: unknown }
-    const vaultId = typeof b.vaultId === 'string' && b.vaultId ? b.vaultId : undefined
-    const kdf = await backup.keyBackupKdf(vaultId)
-    if (!kdf) { res.status(404).json({ error: 'No backup of that vault is in this Walnut\'s data folder', code: 'no_key_backup' }); return SENT }
+    if (!(await backup.readKeyBackup())) { res.status(404).json({ error: 'There is no backup of the locked notes key in this Walnut\'s data folder', code: 'no_key_backup' }); return SENT }
+    const b = body(req) as { passwordKey?: unknown; password?: unknown; secretKey?: unknown; vaultId?: unknown; entry?: unknown }
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const pick = { ...(str(b.entry) ? { entry: str(b.entry) } : {}), ...(str(b.vaultId) ? { vaultId: str(b.vaultId) } : {}) }
+    const kdf = await backup.keyBackupKdf(pick)
+    if (!kdf) { res.status(404).json({ error: 'No such backup is in this Walnut\'s data folder', code: 'no_key_backup' }); return SENT }
     const r = await attempt(res, async () => backup.restoreLockedNotesKey({
+      ...pick,
       passwordKey: await passwordKeyOf(req, b, kdf),
       secretKey: typeof b.secretKey === 'string' ? b.secretKey : '',
-      ...(vaultId ? { vaultId } : {}),
     }))
     return r ? r.value : SENT
   })
@@ -139,14 +151,9 @@ function agentHere(res: Response): boolean {
 }
 
 async function askDeps() {
-  const [{ createApproval, waitApproval, cancelInternal }, lockedStore, { isHiddenNoteText, parseLockedNote }, fsp, { resolveNotePath }] = await Promise.all([
-    import('../../core/approvals/store.js'), store(), import('../../core/notes/locked-note.js'), import('node:fs/promises'), import('../../core/notes/note-paths.js'),
+  const [{ createApproval, waitApproval, cancelInternal }, lockedStore, { isHiddenNoteText, parseLockedNote }] = await Promise.all([
+    import('../../core/approvals/store.js'), store(), import('../../core/notes/locked-note.js'),
   ])
-  const noteText = async (p: string): Promise<string | null> => {
-    const full = resolveNotePath(p)
-    if (!full) return null
-    try { return await fsp.readFile(full.endsWith('.md') ? full : `${full}.md`, 'utf-8') } catch { return null }
-  }
   const deps: import('../../core/notes/locked-note-ask.js').AskDeps = {
     async askPerson(input) {
       // Always asked: the person locked this note so no agent reads it unasked (ask-me-gates-guard).

@@ -11,7 +11,10 @@
  * `isPersonNotAutomation` adds: a browser under automation is never the person on the user's own
  * install (core/sessions/automated-client.ts; the middleware scopes it only there, so a throwaway
  * server's fixtures still stand in for the person). `isPersonInOwnWindow` adds that the request is
- * no test run (core/test-run.ts): what reads or writes a hidden note's text, hides or unhides one.
+ * no test run (core/test-run.ts) and no call another Walnut forwards here (the cloud companion's
+ * forward keeps none of the caller's session headers, so every call it forwards would read as the
+ * person): the one rule for what reads or writes a hidden note's text, hides or unhides one, and
+ * moves, copies or deletes a hidden or locked note (docs/reference/locked-notes.md).
  */
 import type { IncomingHttpHeaders } from 'node:http'
 import type { Request } from 'express'
@@ -19,7 +22,7 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientAutomatedClient } from '../../core/sessions/automated-client.js'
 import { ambientTestRun } from '../../core/test-run.js'
-import { requestOrigin } from '../middleware/request-origin.js'
+import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
 
 /** What the rule reads of a request: its headers and its socket (an HTTP request, or a WebSocket upgrade). */
 type CallerRequest = { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string; localPort?: number } }
@@ -42,7 +45,7 @@ export function isPersonNotAutomation(req: Request): boolean {
   return isPersonCaller(req) && !ambientAutomatedClient()
 }
 
-/** The person in their own window: no session, no automation, no test run (see the file comment). */
+/** The person in their own window: no session, no automation, no test run, no forwarded call (see the file comment). */
 export function isPersonInOwnWindow(req: Request): boolean {
-  return isPersonNotAutomation(req) && !ambientTestRun()
+  return isPersonNotAutomation(req) && !ambientTestRun() && !isOnBehalfOfRemote(req)
 }

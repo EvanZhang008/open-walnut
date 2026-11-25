@@ -68,6 +68,8 @@ const NO_CHANGE = new Set([
   'sessionList', 'selfLockList',
   // A read: which unlock an extension's session may hand a browser key from.
   'handingSource',
+  // A read: when a window's unlock was made, so a yes to an agent's locked-note ask needs a fresh master password.
+  'sessionUnlockedAt',
   // A restart's own records coming back before any window is served: no window is open to tell.
   'restoreSessions', 'restoreSelfLocks',
   'unlockWaitMs', 'noteUnlockFailure', 'noteUnlockSuccess', 'isAttemptRunning', 'beginAttempt', 'endAttempt',

@@ -82,7 +82,7 @@ import {
 } from '../../core/notes-index.js'
 import { nameAnswersHere } from '../middleware/answer-name.js'
 import { LockedNoteError, assertNotLocked, hasHiddenMark, looksProtectedNoteText, noteForReader, noteProtection } from '../../core/notes/locked-note.js'
-import { isPersonCaller, isPersonInOwnWindow } from './person-caller.js'
+import { isPersonInOwnWindow } from './person-caller.js'
 import { assertLockedNoteDelete, assertLockedNoteMove } from '../../core/notes/locked-note-moves.js'
 import { walnutWritesNote } from '../../core/notes/vault-files.js'
 
@@ -731,8 +731,8 @@ export async function writeNoteContent(
   log.memory.info('Note updated', { path: notePath, size: finalContent.length })
   // source format `notes/{path}` is a shared contract with files-tools.ts and useNoteContent.ts
   bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
-  // The person hid it with this save: the indexes' freed copies of its text are wiped, as Hide does.
-  if (hidNow) void import('../../core/notes/locked-note-residue.js').then((m) => m.wipeLockedNoteResidue(noteRelOf(filePath), filePath))
+  // The person hid it with this save: the indexes go to the stub at once, as Hide does.
+  if (hidNow) void import('../../core/notes/locked-note-residue.js').then((m) => m.wipeLockedNoteResidue(noteRelOf(filePath), filePath, { wipe: false }))
   return { ok: true, path: noteRelOf(filePath), updatedAt: stat.mtime.toISOString(), contentHash, id: id as string, created }
 }
 
@@ -773,7 +773,7 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
 
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
     // A locked or hidden note is the person's to delete: an agent's delete is refused (deleting data).
-    try { await assertLockedNoteDelete(filePath, { person: isPersonCaller(req) }) } catch (err) {
+    try { await assertLockedNoteDelete(filePath, { person: isPersonInOwnWindow(req) }) } catch (err) {
       if (!(err instanceof LockedNoteError)) throw err
       res.status(err.status).json({ error: err.message, code: err.code })
       return
@@ -938,7 +938,7 @@ export async function deleteNotesFolder(folderPath: unknown, opts: { person?: bo
 // dialog.
 notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await deleteNotesFolder(getWildcardPath(req), { person: isPersonCaller(req) }))
+    res.json(await deleteNotesFolder(getWildcardPath(req), { person: isPersonInOwnWindow(req) }))
   } catch (err) {
     if (err instanceof NotesOpError) {
       res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) })
@@ -966,7 +966,7 @@ async function asNotesOp(check: () => Promise<void>): Promise<void> {
  * Move/rename a note or attachment. Shared by this router's POST /move and
  * POST /api/v1/notes/move — throws NotesOpError so each edge maps its shape.
  * A locked note moves only for the person (`person: true`, the caller's
- * isPersonCaller; left out, the caller is not the person), and never onto a note
+ * isPersonInOwnWindow; left out, the caller is not the person), and never onto a note
  * Walnut writes itself (core/notes/locked-note-moves.ts).
  */
 export async function moveNote(from: unknown, to: unknown, opts: { person?: boolean } = {}): Promise<{ ok: true }> {
@@ -1026,7 +1026,7 @@ export async function moveNote(from: unknown, to: unknown, opts: { person?: bool
 notesV2Router.post('/move', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { from, to } = req.body ?? {}
-    res.json(await moveNote(from, to, { person: isPersonCaller(req) }))
+    res.json(await moveNote(from, to, { person: isPersonInOwnWindow(req) }))
   } catch (err) {
     if (err instanceof NotesOpError) {
       res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) })

@@ -97,6 +97,7 @@ export function useLockedNoteEditor(notePath: string) {
     editorRef.current = null;
     dirtyRef.current = false;
     setConflict(null);
+    setKeyMissing(false);
     setUpdatedAt(disk.updatedAt);
     setSaveStatus('idle');
     setEditorDoc({ body, gen: ++genRef.current });
@@ -203,33 +204,39 @@ export function useLockedNoteEditor(notePath: string) {
     return run;
   }, []);
 
-  /** Show the text: an edit that waited for this note comes back in the editor, merged, and is saved. */
-  const show = useLeanCallback(async () => {
+  /**
+   * Show the text: an edit that waited for this note comes back in the editor, merged, and is saved.
+   * `fromRestore`: the key's restore card asks, and stays up while it reads (it says what came of it).
+   * Answers 'key_missing' when the key is still not in Passwords.
+   */
+  const show = useLeanCallback(async (opts: { fromRestore?: boolean } = {}): Promise<'shown' | 'key_missing' | 'not_shown'> => {
     const path = pathRef.current;
-    if (path == null) return;
+    if (path == null) return 'not_shown';
     const epoch = epochRef.current;
     setError(null);
-    setKeyMissing(false);
+    if (!opts.fromRestore) setKeyMissing(false);
     setOpening(true);
     try {
       const r = await withPasswordsUnlock(SHOW_SUB, () => lockedNotesApi.read(path));
-      if (!r) { if (unlockSheetBusy()) setError(SHEET_BUSY_WORDS); return; }
-      if (epoch !== epochRef.current || pathRef.current !== path || !vaultSession()) return;
+      if (!r) { if (unlockSheetBusy()) setError(SHEET_BUSY_WORDS); return 'not_shown'; }
+      if (epoch !== epochRef.current || pathRef.current !== path || !vaultSession()) return 'not_shown';
       mergesRef.current = 0;
       const waiting = takeUnsavedEdit(path);
-      if (!waiting || waiting.text === r.content) { mount(r.content, r); return; }
+      if (!waiting || waiting.text === r.content) { mount(r.content, r); return 'shown'; }
       const merged = mergeEdit(waiting, r.content);
       if (merged == null) {
         // The person's version, unsaved, with the choice: theirs did not merge with it.
         mount(waiting.text, r);
         enterConflict({ theirs: r, base: waiting.base, hash: waiting.hash });
-        return;
+        return 'shown';
       }
       mount(merged, r);
       if (merged !== r.content) void flush({ text: merged, base: r.content, hash: r.contentHash });
+      return 'shown';
     } catch (err) {
-      if (err instanceof VaultApiError && err.code === 'locked_key_missing') { setKeyMissing(true); return; }
+      if (err instanceof VaultApiError && err.code === 'locked_key_missing') { setKeyMissing(true); return 'key_missing'; }
       setError(words(err));
+      return 'not_shown';
     } finally {
       setOpening(false);
     }
@@ -343,7 +350,7 @@ export function useLockedNoteEditor(notePath: string) {
   const comesBackHidden = () => isHiddenNote(diskRef.current?.frontmatter);
 
   return {
-    editorDoc, updatedAt, opening, removing, error, setError, keyMissing, saveStatus, conflict,
+    editorDoc, updatedAt, opening, removing, error, setError, keyMissing, backFromRestore: () => setKeyMissing(false), saveStatus, conflict,
     show, hide, hideIfSaved, removeLock, onEditorUpdate, keepMine, takeTheirs, comesBackHidden,
   };
 }

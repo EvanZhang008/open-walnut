@@ -19,10 +19,10 @@ export type NoteProtectAction = 'hide' | 'lock' | 'unhide';
 
 /** The menu's rows for a plain or a hidden note, in the order they show. */
 export function protectMenuItems(hidden: boolean, run: (action: NoteProtectAction) => void): ContextMenuItem[] {
-  const encrypt: ContextMenuItem = { key: 'lock', label: 'Encrypt', icon: ICON_LOCK, title: 'Encrypt it with your Passwords master password', onSelect: () => run('lock') };
+  const encrypt: ContextMenuItem = { key: 'lock', label: 'Encrypt', icon: ICON_LOCK, title: 'Encrypt it with your Passwords master password: nothing reads it without that password', onSelect: () => run('lock') };
   return hidden
     ? [encrypt, { key: 'unhide', label: 'Unhide', icon: ICON_EYE, title: 'Let agents read it again', onSelect: () => run('unhide') }]
-    : [{ key: 'hide', label: 'Hide from AI', icon: ICON_EYE_OFF, title: 'Agents cannot read it. Its text stays unencrypted.', onSelect: () => run('hide') }, encrypt];
+    : [{ key: 'hide', label: 'Hide from AI', icon: ICON_EYE_OFF, title: 'No agent reads it through Walnut. The file stays unencrypted.', onSelect: () => run('hide') }, encrypt];
 }
 
 export function NoteProtectMenu({ hidden, onAction }: { hidden: boolean; onAction: (action: NoteProtectAction) => void }) {

@@ -79,6 +79,7 @@ const ALERT_SITES: Record<string, string> = {
   'hooks/useProjectActions.ts': 'a project the person renamed, archived or deleted',
   'components/sessions/useFileTreeMutations.ts': 'a file the person duplicated or deleted',
   'components/notes/NotesTreePanel.tsx': 'a note the person moved, deleted or copied',
+  'components/notes/useLockNote.ts': 'a note the person asked to encrypt, hide or open for good, and why it did not',
   'components/notes/AttachmentPreview.tsx': 'an attachment the person asked to open',
   'components/workspaces/WorkspaceMenuSection.tsx': 'a workspace action the person picked',
   'components/calendar/calendar-event-actions.ts': 'a calendar change the person confirmed',

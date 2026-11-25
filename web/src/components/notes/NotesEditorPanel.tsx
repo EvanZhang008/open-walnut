@@ -75,7 +75,7 @@ export function NotesEditorPanel({
   onProtect,
 }: NotesEditorPanelProps) {
   const lockOn = useExperimental('locked_notes');
-  const cover = useHiddenNoteShown(remountKey ?? notePath);
+  const cover = useHiddenNoteShown(remountKey ?? notePath, hidden);
   if (!notePath) {
     return (
       <EmptyState

@@ -7,7 +7,7 @@
 import { isLockedError, vaultApi } from '@/api/vault';
 // A Lock anywhere (another window, the extension, Lock all) reaches this window at once.
 import '@/api/vault-live';
-import { askPasswordsUnlock } from '@/plugins/passwords-unlock-store';
+import { askPasswordsUnlock, type UnlockWords } from '@/plugins/passwords-unlock-store';
 
 export type UnlockOutcome = 'ok' | 'cancel' | 'not_set_up';
 
@@ -43,9 +43,9 @@ export const NOT_SET_UP_WORDS = 'Locked notes use your Passwords master password
  * already unlocked: a yes the server takes only with the password just typed (an agent's ask for a
  * locked note, src/web/routes/approvals-v1.ts). Null when they cancel.
  */
-export async function withMasterPassword<T>(sub: string, work: () => Promise<T>, who = 'Approvals'): Promise<T | null> {
+export async function withMasterPassword<T>(sub: string, work: () => Promise<T>, words: UnlockWords, who = 'Approvals'): Promise<T | null> {
   const st = await vaultApi.status();
   if (!st.setUp) throw Object.assign(new Error(NOT_SET_UP_WORDS), { code: 'vault_not_set_up' });
-  if (!(await askPasswordsUnlock(who, '', st, sub))) return null;
+  if (!(await askPasswordsUnlock(who, '', st, sub, words))) return null;
   return work();
 }

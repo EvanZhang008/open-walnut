@@ -44,8 +44,8 @@ export async function hideNote(notePath: unknown, expectedHash: unknown): Promis
   const rel = noteRelOf(file)
   if (walnutWritesNote(rel)) throw new LockedNoteError('Walnut writes this note itself, so it cannot be hidden', 400, 'not_lockable')
   const done = await rewrite(file, expectedHash, (text) => (noteProtection(text) === 'hidden' ? text : withHiddenMark(withNoteId(text, text).content)))
-  // The indexes held the plain text: once they hold the stub, their freed pages are wiped too.
-  if (done.changed) void import('./locked-note-residue.js').then((m) => m.wipeLockedNoteResidue(rel, file))
+  // The indexes go to the stub at once. No wipe of what they freed: the file itself is plain text.
+  if (done.changed) void import('./locked-note-residue.js').then((m) => m.wipeLockedNoteResidue(rel, file, { wipe: false }))
   return done
 }
 

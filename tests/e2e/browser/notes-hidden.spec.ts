@@ -13,6 +13,10 @@ import { test, expect, type Page } from '@playwright/test'
 import path from 'node:path'
 import { vaultSession } from './vault-session-helper'
 import { API, boot, editorOf, lockMenu, nameIn, openNoteIn, putNotes, stamp, typeAtEnd } from './protected-notes-helper'
+import { holdVaultLock } from './vault-lock'
+
+// The fixture's one vault: these tests unlock it for their own window only (vault-lock.ts).
+holdVaultLock('shared', 'test')
 
 const SECRET = 'wombatlantern'
 const TEXT = `# Diary\n\nMonday: ${SECRET} is what I wrote.\n\nTuesday: rain all day.\n`
@@ -78,7 +82,7 @@ test('hide a note from AI: covered until Show, no password, saves keep the mark,
   // Covered at once: the name, the one line, Show; the text is not in the page; an eye-off in the tree.
   await expect(cover(page)).toBeVisible({ timeout: 15_000 })
   await expect(cover(page)).toContainText(nameOf(note))
-  await expect(cover(page)).toContainText('Hidden from AI. Agents cannot read it, and its text is stored unencrypted.')
+  await expect(cover(page)).toContainText('Hidden from AI: no agent reads it through Walnut. The file is not encrypted, so a program that opens it directly can; Encrypt keeps it from those too.')
   await expect(page.locator('body')).not.toContainText(SECRET)
   const row = page.locator('.notes-tree-file', { hasText: nameOf(note) }).first()
   await expect(row.getByTestId('tree-note-hidden')).toBeVisible({ timeout: 15_000 })
@@ -153,6 +157,18 @@ test('hide a note from AI: covered until Show, no password, saves keep the mark,
   await expect(page.getByTestId('hidden-note-hide')).toHaveCount(0, { timeout: 15_000 })
   await expect(editorOf(page)).toContainText('Then soup.')
   await expect(page.locator('.notes-tree-file', { hasText: nameOf(note) }).first().getByTestId('tree-note-hidden')).toHaveCount(0, { timeout: 15_000 })
+
+  // Hidden again in the same open (Unhide, then Hide from AI): covered at once, the Show before
+  // does not carry over. Then Unhide once more.
+  await lockMenu(page, 'Hide from AI')
+  await expect(cover(page)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('body')).not.toContainText(SECRET)
+  await page.getByTestId('hidden-note-show').click()
+  await expect(editorOf(page)).toContainText('Then soup.')
+  await lockMenu(page, 'Unhide', ['Encrypt', 'Unhide'])
+  await page.locator('.app-modal').getByRole('button', { name: 'Unhide', exact: true }).click()
+  await expect.poll(async () => (await onDisk()).hidden, { timeout: 15_000 }).toBeUndefined()
+
   await openNote(page, other)
   await openNote(page, note)
   await expect(cover(page)).toHaveCount(0)

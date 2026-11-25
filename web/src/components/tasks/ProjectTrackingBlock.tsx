@@ -47,7 +47,7 @@ export function ProjectTrackingBlock({ notePath }: ProjectTrackingBlockProps) {
       // (its own comment records the same lesson).
       const { frontmatter, body } = splitFrontmatter(content);
       // A hidden note shows its text only on the Notes page after Show (docs/reference/locked-notes.md).
-      setState({ status: 'present', sanitizedHtml: renderNoteMarkdown(isHiddenNote(frontmatter) ? HIDDEN_NOTE_LINE : body) });
+      setState({ status: 'present', sanitizedHtml: renderNoteMarkdown(isHiddenNote(frontmatter, body) ? HIDDEN_NOTE_LINE : body) });
     } catch (err) {
       if (generation.current !== mine) return;
       // 404 is the only answer that means "the note is gone". Everything else is

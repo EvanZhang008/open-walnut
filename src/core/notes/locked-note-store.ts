@@ -117,6 +117,8 @@ export async function lockNote(notePath: unknown, expectedHash: unknown): Promis
   }
   // The key first (it may make the item): the file lock is never held across a vault write.
   const key = await lockedNotesKeyForNewLock()
+  // Its backup is written before any note depends on it (a quit right after the first lock keeps it).
+  await (await import('../vault/locked-notes-key-backup.js')).settleKeyBackup()
   const out = await withUserFileLock(file, async () => {
     const { text } = await readNoteFile(file)
     if (hasLockMark(text)) throw new LockedNoteError('This note is already locked', 409, 'already_locked')

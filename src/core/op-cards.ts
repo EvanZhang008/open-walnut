@@ -200,6 +200,7 @@ export const NOT_CARDED: Record<string, string> = {
   agent_memory_write: 'the session writes its own memory',
   memory_write: 'writes memory, not to anyone',
   note_write: 'writes a note file',
+  locked_note_save: 'writes the locked note the person let the agent change, back into its file',
   task_not_done_settle: 'bookkeeping on a result',
   board_remind: 'sets a reminder clock',
   hint_set: 'configuration',

@@ -118,7 +118,7 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   // Every caller sets frontmatterRef first, so the mark of a locked or hidden note (its first
   // frontmatter block, docs/reference/locked-notes.md) is read with the body it belongs to.
   const setContent = useCallback((body: string | null) => {
-    setDoc({ path: currentPathRef.current, body, protection: noteProtectionOf(frontmatterRef.current) ?? undefined });
+    setDoc({ path: currentPathRef.current, body, protection: noteProtectionOf(frontmatterRef.current, body) ?? undefined });
   }, []);
   const editorRef = useRef<Editor | null>(null);
   const contentHashRef = useRef<string | null>(null);
@@ -1061,7 +1061,7 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
       if (hit) {
         const split = splitFrontmatter(hit.content);
         content = split.body;
-        protection = noteProtectionOf(split.frontmatter);
+        protection = noteProtectionOf(split.frontmatter, split.body);
       } else loading = true;
     }
   }

@@ -61,7 +61,7 @@ import {
 } from './notes-v2.js'
 import { assertLockedNoteDelete } from '../../core/notes/locked-note-moves.js'
 import { LockedNoteError, assertFileNotLocked, assertNotLockedText, noteForReader } from '../../core/notes/locked-note.js'
-import { isPersonCaller } from './person-caller.js'
+import { isPersonInOwnWindow } from './person-caller.js'
 import { isNotesExtrasPath, noteRelOf, resolveNotePath } from '../../core/notes/note-paths.js'
 import { getNotesTree, invalidateNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
@@ -4788,7 +4788,7 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
     // A locked or hidden note is the person's to delete: an agent's delete is refused (deleting data).
-    try { await assertLockedNoteDelete(filePath, { person: isPersonCaller(req) }) } catch (err) {
+    try { await assertLockedNoteDelete(filePath, { person: isPersonInOwnWindow(req) }) } catch (err) {
       if (sentLockedNoteError(res, err)) return
       throw err
     }

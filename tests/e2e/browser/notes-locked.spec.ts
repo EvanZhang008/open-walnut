@@ -10,6 +10,10 @@
 import { test, expect, type APIRequestContext, type BrowserContext, type Page, type Route } from '@playwright/test'
 import { VAULT_MASTER, vaultSession } from './vault-session-helper'
 import { API, boot, editorOf, lockMenu, nameIn, openNoteIn, putNotes, stamp, typeAtEnd } from './protected-notes-helper'
+import { holdVaultLock } from './vault-lock'
+
+// The fixture's one vault: these tests unlock it for their own window only (vault-lock.ts).
+holdVaultLock('shared', 'test')
 
 const SECRET = 'quokkamarmalade'
 const TEXT = `# Week\n\nMonday: ${SECRET} is the word I keep.\n\nTuesday: a walk by the river.\n`
@@ -47,11 +51,12 @@ async function openAndShow(page: Page, p = note) {
   await page.getByTestId('locked-note-show').click()
   await expect(editorOf(page)).toContainText(SECRET, { timeout: 15_000 })
 }
-async function unlockInSheet(page: Page) {
+/** The master password sheet: `button` is Unlock, or Approve for a yes to an agent's ask. */
+async function unlockInSheet(page: Page, button: 'Unlock' | 'Approve' = 'Unlock') {
   const sheet = page.getByTestId('pw-unlock-sheet')
   await expect(sheet).toBeVisible()
   await sheet.getByLabel('Master password').fill(VAULT_MASTER)
-  await sheet.getByRole('button', { name: 'Unlock', exact: true }).click()
+  await sheet.getByRole('button', { name: button, exact: true }).click()
   await expect(sheet).toHaveCount(0, { timeout: 30_000 })
 }
 
@@ -201,8 +206,12 @@ test('an agent reads a locked note only after the person approves its card with 
   await expect(card).toContainText(`read your locked note "${nameOf(note)}"`)
   await expect(card).not.toContainText(SECRET)
   await card.getByTestId('approval-approve').click()
-  await expect(page.getByTestId('pw-unlock-sheet')).toContainText('lets an agent read your locked note')
-  await unlockInSheet(page)
+  // The sheet approves, and says who, which note, for how long and where the text goes.
+  const sheet = page.getByTestId('pw-unlock-sheet')
+  await expect(sheet.getByRole('heading')).toHaveText('Approve with your master password')
+  await expect(sheet).toContainText(`read your locked note "${nameOf(note)}". A yes lets the agent read it for 10 minutes`)
+  await expect(sheet).toContainText("goes into that agent's conversation")
+  await unlockInSheet(page, 'Approve')
   await expect(page.locator(`.approval-card-settled[data-approval-id="${read.requestId}"]`)).toContainText('Approved', { timeout: 15_000 })
   const got = await waitFor(read)
   expect(got.status).toBe('released')
@@ -215,8 +224,8 @@ test('an agent reads a locked note only after the person approves its card with 
   const editCard = page.locator(`[data-testid="approval-card"][data-approval-id="${edit.requestId}"]`)
   await expect(editCard).toContainText(`read and change your locked note "${nameOf(note)}"`, { timeout: 30_000 })
   await editCard.getByTestId('approval-approve').click()
-  await expect(page.getByTestId('pw-unlock-sheet')).toContainText('lets an agent read and change your locked note')
-  await unlockInSheet(page)
+  await expect(page.getByTestId('pw-unlock-sheet')).toContainText('A yes lets the agent read and change it for 30 minutes')
+  await unlockInSheet(page, 'Approve')
   await expect(page.locator(`.approval-card-settled[data-approval-id="${edit.requestId}"]`)).toContainText('Approved', { timeout: 15_000 })
 })
 

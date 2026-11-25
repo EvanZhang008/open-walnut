@@ -131,6 +131,17 @@ describe('the Files panel', () => {
     expect(await exists(at('Private/Journal.md'))).toBe(false)
   })
 
+  it('lets the person copy a hidden note, but not onto a note Walnut writes itself', async () => {
+    await put('Quiet/Week.md', '---\nwalnut_hidden: 1\n---\nquiet words\n')
+    await fsp.mkdir(at('Walnut/Triage'), { recursive: true })
+    const intoTriage = await post('/api/files/duplicate', { path: at('Quiet/Week.md'), newPath: at('Walnut/Triage/State.md') })
+    expect(intoTriage.status, JSON.stringify(intoTriage.body)).toBe(400)
+    expect(intoTriage.body.code).toBe('not_lockable')
+    expect(await exists(at('Walnut/Triage/State.md'))).toBe(false)
+    const copied = await post('/api/files/duplicate', { path: at('Quiet/Week.md'), newPath: at('Quiet/Week copy.md') })
+    expect(copied.status, JSON.stringify(copied.body)).toBe(200)
+  })
+
   it('still lets an agent rename, copy and delete plain files in the vault', async () => {
     expect((await post('/api/files/duplicate', { path: at('Open'), newPath: at('Open copy') }, AGENT)).status).toBe(200)
     expect((await post('/api/files/rename', { path: at('Open/plain.md'), newPath: at('Open/renamed.md') }, AGENT)).status).toBe(200)

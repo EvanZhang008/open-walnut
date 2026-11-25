@@ -22,7 +22,7 @@ import { derivePasswordKey, randomBytes, toB64, type KdfParams } from '../../src
 import { resetVaultForTest } from '../../src/core/vault/store.js'
 import { resetSessionsForTest } from '../../src/core/vault/sessions.js'
 import { notesRoot } from '../../src/core/notes/note-paths.js'
-import { settleLockedNoteResidue } from '../../src/core/notes/locked-note-residue.js'
+import { settleLockedNoteResidue, wipePendingPath } from '../../src/core/notes/locked-note-residue.js'
 
 let base = ''
 let session = ''
@@ -32,7 +32,9 @@ const MASTER = 'a disk scan master phrase'
 const AGENT = { 'x-walnut-caller-sid': 'sess-disk-scan-agent' }
 const NOTE = 'journal/Private week.md'
 // Words of the note's text before the lock (it was a plain note, indexed and searched) ...
-const BEFORE = ['marmosetlanternword', 'quillfjordsecret', 'Walked to the harbour alone at dawn']
+// The last: a term whose first letter no other indexed word shares, so the full-text index stores it
+// whole (FTS5 keeps a term as the part after the prefix it shares with the one before it).
+const BEFORE = ['marmosetlanternword', 'quillfjordsecret', 'Walked to the harbour alone at dawn', 'zyxwombatprivate']
 // ... and words written only after the lock (never plain on disk at any moment).
 const AFTER = ['tapirvelvetafter', 'Repainted the garden fence in the afternoon']
 // A diary-like note: a heading, Unicode (escaped), and a body long enough to fill several pages.
@@ -43,6 +45,7 @@ const TEXT = [
   `Search marker: ${SEARCH_WORD}.`,
   `Monday: ${BEFORE[2]}. The word is ${BEFORE[0]}.`,
   `Tuesday: ${BEFORE[1]}, caf\u00e9 and \u4f60\u597d\u4e16\u754c.`,
+  `Wednesday: ${BEFORE[3]}.`,
   ...Array.from({ length: 120 }, (_, i) => `- entry line ${i} of an ordinary private week`),
   '',
 ].join('\n')
@@ -174,5 +177,7 @@ describe('a locked note on disk', () => {
     stopped = true
     expect(fs.readFileSync(path.join(notesRoot(), NOTE), 'utf8')).toContain('walnut-locked-note v1')
     expect(plainHits([...BEFORE, ...AFTER, '\u4f60\u597d\u4e16\u754c'])).toEqual([])
+    // Finished: no wipe is left for the next start.
+    expect(fs.existsSync(wipePendingPath())).toBe(false)
   }, 120_000)
 })

@@ -12,6 +12,7 @@ import { CopyButton as SharedCopyButton } from '@/components/common/CopyButton'
 import { Checkbox } from '@/components/controls'
 import { log } from '@/utils/log'
 import { unlockFootText } from './unlock-words'
+import type { UnlockWords } from '@/plugins/passwords-unlock-store'
 import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry'
 import { HintInput, ShowHint, hintError } from './HintField'
 
@@ -181,7 +182,7 @@ function useWait(initialMs: number) {
  * `sub`, `onCancel` and `onBusy`: the unlock a plugin asked for (PasswordsUnlockSheet) says who asks,
  * can be cancelled, and is told when an unlock or a recovery is on its way (it must not close then).
  */
-export function UnlockScreen({ status, onUnlocked, onKit, sub, onCancel, onBusy }: { status: VaultStatus; onUnlocked: () => void; onKit: (k: KitToShow) => void; sub?: string; onCancel?: () => void; onBusy?: (busy: boolean) => void }) {
+export function UnlockScreen({ status, onUnlocked, onKit, sub, words, onCancel, onBusy }: { status: VaultStatus; onUnlocked: () => void; onKit: (k: KitToShow) => void; sub?: string; words?: UnlockWords; onCancel?: () => void; onBusy?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<'unlock' | 'recover'>('unlock')
   const [pw, setPw] = useState('')
   const [secretKey, setSecretKey] = useState('')
@@ -221,7 +222,7 @@ export function UnlockScreen({ status, onUnlocked, onKit, sub, onCancel, onBusy 
     <div className="pw-gate">
       <form className="pw-gate-card" onSubmit={(e) => { e.preventDefault(); void unlock() }} data-testid="pw-unlock">
         <div className="pw-gate-icon pw-gate-icon-lock"><LockIcon size={28} /></div>
-        <h1>Passwords are locked</h1>
+        <h1>{words?.title ?? 'Passwords are locked'}</h1>
         <p className="pw-gate-sub">{sub ?? `Enter your master password to unlock${status.itemCount ? ` ${status.itemCount} items` : ''}.`}</p>
         <input data-no-draft="secret" ref={input} className="pw-input pw-input-big" type="password" autoComplete="current-password" autoFocus placeholder="Master password" aria-label="Master password"
           value={pw} onChange={(e) => setPw(e.target.value)} disabled={waitS > 0} />
@@ -233,7 +234,7 @@ export function UnlockScreen({ status, onUnlocked, onKit, sub, onCancel, onBusy 
           </>
         )}
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
-        <button type="submit" className="btn btn-primary btn-block pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}</button>
+        <button type="submit" className="btn btn-primary btn-block pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : words ? `${words.action}…` : 'Unlocking…') : (words?.action ?? 'Unlock')}</button>
         {onCancel && <button type="button" className="btn btn-block pw-btn-block pw-unlock-cancel" disabled={busy} onClick={onCancel}>Cancel</button>}
         <button type="button" className="btn btn-link pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
         <p className="pw-gate-foot">{unlockFootText(status)}</p>

@@ -31,7 +31,7 @@ vi.mock('@/api/approvals', () => ({
   answerApproval: api.answer,
 }));
 vi.mock('@/api/test-run', () => ({ testRunLabel: () => api.label }));
-vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@/utils/log', () => ({ log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/contexts/notifications/quiet', () => ({
   currentQuiet: () => api.quiet,
   onQuietState: (fn: (q: Record<string, unknown>) => void) => { api.quietListener = fn; return () => undefined; },

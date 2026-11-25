@@ -22,7 +22,7 @@ import { resetVaultForTest } from '../../src/core/vault/store.js'
 import { resetSessionsForTest } from '../../src/core/vault/sessions.js'
 import { notesRoot } from '../../src/core/notes/note-paths.js'
 import { HIDDEN_STUB_LEAD, noteProtection } from '../../src/core/notes/locked-note.js'
-import { settleLockedNoteResidue } from '../../src/core/notes/locked-note-residue.js'
+import { settleLockedNoteResidue, wipePendingPath } from '../../src/core/notes/locked-note-residue.js'
 import { withTestRun } from '../../src/core/test-run.js'
 import { isPersonInOwnWindow } from '../../src/web/routes/person-caller.js'
 import { getOp } from '../../src/ops/index.js'
@@ -34,6 +34,8 @@ const kdf: KdfParams = { name: 'PBKDF2-SHA256', iterations: 600_000, salt: toB64
 const MASTER = 'a hidden notes master phrase'
 const AGENT = { 'x-walnut-caller-sid': 'sess-hidden-agent' }
 const AUTOMATION = { 'x-walnut-caller-kind': 'automation' }
+// A call the cloud companion forwards to this Walnut: its forward keeps none of the caller's session headers.
+const FORWARDED = { 'x-walnut-origin': 'remote-http' }
 const NOTE = 'journal/Quiet week.md'
 // Words of the note's text: never in an answer to anyone but the person, never in an index after the hide.
 const SECRET = ['wombatlanternhidden', 'pangolinfjordprivate', 'Walked by the river alone']
@@ -128,6 +130,8 @@ describe('hidden notes', () => {
     const req = { headers: {} } as unknown as Parameters<typeof isPersonInOwnWindow>[0]
     expect(isPersonInOwnWindow(req)).toBe(true)
     expect(withTestRun('t-hidden', () => isPersonInOwnWindow(req))).toBe(false)
+    // Nor a call another Walnut forwards here, whoever made it there.
+    expect(isPersonInOwnWindow({ headers: FORWARDED, socket: { remoteAddress: '127.0.0.1' } } as unknown as Parameters<typeof isPersonInOwnWindow>[0])).toBe(false)
   })
 
   it('starts as a plain note, indexed and found by search', async () => {
@@ -235,6 +239,22 @@ describe('hidden notes', () => {
     expect(fs.existsSync(path.join(notesRoot(), 'journal/Made by agent.md'))).toBe(false)
   })
 
+  it('a call the companion forwards here is not the person: it reads the stub and changes nothing', async () => {
+    const disk = await file()
+    const read = await http('GET', `/api/notes-v2/content/${NOTE}`, undefined, FORWARDED)
+    expect(read.status).toBe(200)
+    expectStub(read.body.content)
+    const refusals = [
+      await http('PUT', `/api/notes-v2/content/${NOTE}`, { content: disk, expectedHash: hash }, FORWARDED),
+      await v1('POST', '/notes/unhide', { path: NOTE }, FORWARDED),
+      await http('DELETE', `/api/notes-v2/content/${NOTE}`, undefined, FORWARDED),
+      await http('POST', '/api/notes-v2/move', { from: NOTE, to: 'journal/Moved.md' }, FORWARDED),
+    ]
+    for (const r of refusals) expect(r.status, JSON.stringify(r.body)).toBeGreaterThanOrEqual(400)
+    expect(await file()).toBe(disk)
+    expect(fs.existsSync(path.join(notesRoot(), 'journal/Moved.md'))).toBe(false)
+  })
+
   it('the person\'s editor keeps saving it, the mark kept; a save that drops the mark is refused', async () => {
     const cur = (await http('GET', `/api/notes-v2/content/${NOTE}`)).body
     const next = `${cur.content}Wednesday: a third private line.\n`
@@ -248,13 +268,19 @@ describe('hidden notes', () => {
     expect(await file()).toBe(next)
   })
 
-  it('search, the list and the indexes hold only the stub after the hide', async () => {
+  it('search, the list and the indexes answer only the stub after the hide', async () => {
     const list = await waitFor(() => http('GET', '/api/notes-v2/list'), (r) => (r.body.notes ?? []).some((n: { path: string; hidden?: boolean }) => n.path === NOTE && n.hidden))
     expect(list.body.notes.find((n: { path: string }) => n.path === NOTE)).toMatchObject({ hidden: true })
     const gone = await waitFor(() => http('GET', `/api/notes-v2/search?q=${SEARCH_WORD}&mode=string`), (r) => !r.text.includes('Quiet week'))
     expect(gone.text).not.toContain('Quiet week')
     await settleLockedNoteResidue()
-    expect(indexHits([...SECRET, 'a third private line'])).toEqual([])
+    // No word of its text is found any more. (Their freed bytes are not wiped: the file itself is
+    // plain on disk, so a hide wipes nothing; a lock does, locked-notes-disk-scan.test.ts.)
+    for (const w of SECRET.slice(0, 2)) {
+      const r = await http('GET', `/api/notes-v2/search?q=${w}&mode=string`)
+      expect(r.text).not.toContain('Quiet week')
+    }
+    expect(fs.existsSync(wipePendingPath())).toBe(false)
   })
 
   it('locked_note_ask on it is refused: no ask opens a hidden note', async () => {

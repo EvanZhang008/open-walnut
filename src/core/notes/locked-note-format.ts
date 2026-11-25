@@ -49,7 +49,7 @@ export const HIDDEN_STUB_LEAD = '**Hidden note.**'
 /** The paragraph every reader but the person sees of a hidden note, below its frontmatter. */
 export const HIDDEN_NOTE_STUB =
   '**Hidden note.** Its owner keeps it away from agents: it is written by hand and private. ' +
-  'Agents, search and sync see only this paragraph. Open it in Walnut and press Show to read it.'
+  'Agents and search see only this paragraph. Open it in Walnut and press Show to read it.'
 
 /** Which protected kind a note is: locked (its text is ciphertext) or hidden (plain, shown only to the person). */
 export type NoteProtection = 'locked' | 'hidden'

@@ -186,8 +186,8 @@ notesExtrasV1Router.delete('/notes/attachment/*path', async (req: Request, res: 
 // typed-confirm dialog).
 notesExtrasV1Router.delete('/notes/folder/*path', async (req: Request, res: Response, next: NextFunction) => {
   const { deleteNotesFolder } = await import('./notes-v2.js')
-  const { isPersonCaller } = await import('./person-caller.js')
-  await runNotesOp(res, next, () => deleteNotesFolder(wildcardPath(req), { person: isPersonCaller(req) }))
+  const { isPersonInOwnWindow } = await import('./person-caller.js')
+  await runNotesOp(res, next, () => deleteNotesFolder(wildcardPath(req), { person: isPersonInOwnWindow(req) }))
 })
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.

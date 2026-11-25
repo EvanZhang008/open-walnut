@@ -40,17 +40,25 @@ beforeEach(() => {
 
 describe('approving an ask for a locked note', () => {
   it('the sheet says "read and change" for an edit ask and "read" for a read ask', async () => {
-    expect(store.passwordsSubFor({ what: 'Let the task "Plan" read and change your locked note "Diary"' })).toContain('read and change your locked note')
+    const edit = store.passwordsSubFor({ what: 'Let the task "Plan" read and change your locked note "Diary"' })
+    // Who asks and which note (the card's own words), what a yes allows, for how long, where the text goes.
+    expect(edit).toContain('Let the task "Plan" read and change your locked note "Diary". A yes lets the agent read and change it for 30 minutes')
+    expect(edit).toContain("goes into that agent's conversation")
     const read = store.passwordsSubFor({ what: 'Let the task "Plan" read your locked note "Diary"' })
-    expect(read).toContain('lets an agent read your locked note')
+    expect(read).toContain('A yes lets the agent read it for 10 minutes')
     expect(read).not.toContain('change')
-    // The server writes the card in those words (the asker's what), one per access.
+    // The server writes the card in those words (the asker's what), one per access, and keeps a
+    // read open 10 minutes and an edit 30: a change there must change the sheet's line too.
     const server = fs.readFileSync(path.join(__dirname, '../../src/core/notes/locked-note-ask.ts'), 'utf8')
     expect(server).toContain('read and change your locked note')
     expect(server).toContain('read your locked note')
+    expect(server).toContain('export const EDIT_MS = 30 * 60_000')
+    expect(server).toContain('export const READ_MS = 10 * 60_000')
 
     await store.decideApproval(ask('Let the task "Plan" read and change your locked note "Diary"'), 'approve')
     expect(h.withMasterPassword.mock.calls[0]![0]).toContain('read and change your locked note')
+    // The sheet approves: its own title and an Approve button, not "Passwords are locked" and Unlock.
+    expect((h.withMasterPassword.mock.calls[0] as unknown[])[2]).toEqual({ title: 'Approve with your master password', action: 'Approve' })
   })
 
   it('a sheet that cannot open because another is open says so on the card; a cancel says nothing', async () => {

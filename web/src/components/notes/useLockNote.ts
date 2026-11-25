@@ -38,7 +38,7 @@ export function useLockNote(saveState: { unsaved: () => boolean; status: string 
     if (action === 'lock') {
       return confirm({
         title: 'Lock this note?',
-        message: 'Its text is encrypted with your Passwords master password. Agents, search and sync see only that it is locked, and the note opens hidden: you press Show and enter the master password to read it.\n\nText saved before the lock stays in your data\'s history, so lock a note before you write private text in it.',
+        message: 'Its text is encrypted with your Passwords master password. Agents, search and sync see only that it is locked, and the note opens hidden: you press Show and enter the master password to read it.\n\nText saved before the lock stays in your data\'s history, so lock a note before you write private text in it. Pictures already in it stay unencrypted files.',
         confirmLabel: 'Lock',
       });
     }

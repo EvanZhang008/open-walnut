@@ -101,6 +101,9 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/auth.json` | leader-data | yes | Paired device token hashes, and this Walnut's instance id: it moves with the leader on purpose, and a standby keeps the copy but never serves from it before it is promoted |
 | `~/.open-walnut/secrets/` | leader-data | yes | Credentials: plugin secrets, provider keys, sign-in tokens |
 | `~/.open-walnut/vault/` | leader-data | yes | Password vault of a throwaway or fake-HOME server (the real one is outside the home) |
+| `~/.open-walnut/locked-notes-key-backup.json` | leader-data | yes | The locked notes key and the master password hint, sealed with the master password and Secret Key, so a locked note opens again on a new computer |
+| `~/.open-walnut/locked-notes-key-backup.unreadable.json` (and names matching `^locked-notes-key-backup\.unreadable-\d+\.json$`) | leader-data | yes | A key backup file that did not read (damaged, a git conflict), set aside instead of written over |
+| `~/.open-walnut/locked-notes-wipe-pending` | machine | no | A locked note's wipe of the search indexes that has not finished; the next start runs it |
 | `~/.open-walnut/router/` | leader-data | yes | Router areas, routing ledgers, approval tokens and frozen incoming content |
 | `~/.open-walnut/approvals/` | leader-data | yes | Approval requests and the approvals switch (a `keys.json` an older Walnut left is no longer read) |
 | `~/.open-walnut/host-exec-grants.json` | leader-data | no | The user's grants for running commands on hosts |

@@ -64,6 +64,35 @@ describe('wipeFreedText', () => {
     again.close()
   })
 
+  it('never holds the event loop while another connection keeps a read open, and truncates the log once it ends', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'locked-residue-busy-'))
+    dirs.push(dir)
+    const file = path.join(dir, 'index.sqlite')
+    const db = new Database(file)
+    db.pragma('journal_mode = WAL')
+    db.pragma('busy_timeout = 5000') // as the indexes open: a checkpoint that waited inside SQLite would hold 5 s
+    db.exec(`CREATE VIRTUAL TABLE t USING fts5(body)`)
+    for (let i = 0; i < 300; i++) db.prepare('INSERT INTO t (rowid, body) VALUES (?, ?)').run(i, `line ${i} ${SECRET} `.repeat(20))
+    db.prepare('DELETE FROM t WHERE rowid < 150').run()
+    // An embed worker's read, say: it holds the log until it ends, 1.5 s from now.
+    const reader = new Database(file)
+    reader.prepare('BEGIN').run()
+    reader.prepare('SELECT count(*) FROM t').get()
+    setTimeout(() => { reader.prepare('COMMIT').run(); reader.close() }, 1500)
+    let last = Date.now()
+    let worst = 0
+    const tick = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last); last = now }, 20)
+    try {
+      const report = await wipeFreedText(db, ['t'])
+      expect(report.walTruncated).toBe(true)
+    } finally {
+      clearInterval(tick)
+    }
+    expect(worst).toBeLessThan(1000)
+    expect(Number(db.pragma('busy_timeout', { simple: true }))).toBe(5000) // put back after each step
+    db.close()
+  })
+
   it('stops quietly when the database closes under it', async () => {
     const db = new Database(':memory:')
     db.exec(`CREATE VIRTUAL TABLE t USING fts5(body)`)

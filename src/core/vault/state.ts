@@ -199,7 +199,7 @@ async function backupDaily(d: string): Promise<void> {
 
 const savedListeners = new Set<() => void>()
 
-/** Told after every write of vault.json (locked-notes-key-backup.ts keeps its copy current). */
+/** Told after every write of vault.json and every open of the vault (locked-notes-key-backup.ts keeps its copy current). */
 export function onVaultSaved(listener: () => void): () => void {
   savedListeners.add(listener)
   return () => { savedListeners.delete(listener) }
@@ -297,6 +297,7 @@ export function setOpen(key: Uint8Array, items: Map<string, VaultItem>, gen: num
   if (gen !== closeGen) return
   vk = key
   cache = items
+  for (const listener of savedListeners) { try { listener() } catch { /* a listener never fails the open */ } }
 }
 
 /** Forget the vault key: nothing in this process can read the vault until it is opened again. */

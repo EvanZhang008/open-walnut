@@ -37,7 +37,7 @@ export default function PasswordsUnlockSheet({ request }: { request: PasswordsUn
     <div className="pw-unlock-sheet-overlay wn-scrim" onPointerDown={(event) => event.stopPropagation()}>
       <div ref={ref} className="pw-unlock-sheet" role="dialog" aria-modal="true" aria-label="Unlock Passwords" tabIndex={-1} data-testid="pw-unlock-sheet">
         {kit ? <KitScreen {...kit} doneLabel="Done" onDone={() => done(!!vaultSession())} />
-          : <UnlockScreen status={request.status} sub={sub} onBusy={onBusy} onCancel={() => done(false)} onKit={setKit} onUnlocked={() => done(!!vaultSession())} />}
+          : <UnlockScreen status={request.status} sub={sub} words={request.words} onBusy={onBusy} onCancel={() => done(false)} onKit={setKit} onUnlocked={() => done(!!vaultSession())} />}
       </div>
     </div>, document.body,
   )

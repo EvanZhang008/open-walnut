@@ -58,7 +58,7 @@ export function LockedNotePanel({ notePath, onNavigate, onLocate, onBreadcrumbNa
     if (ok) await note.removeLock();
   }, [confirm]);
 
-  if (!editorDoc && note.keyMissing) return <LockedNoteKeyRestore noteName={noteName(notePath)} onRestored={() => void note.show()} />;
+  if (!editorDoc && note.keyMissing) return <LockedNoteKeyRestore notePath={notePath} onRestored={() => note.show({ fromRestore: true })} onBack={note.backFromRestore} />;
 
   if (!editorDoc) {
     return (

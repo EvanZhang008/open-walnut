@@ -21,10 +21,10 @@ const READS = /\b(fetchNoteContent|useNoteContent|loadNoteIntoCache|peekCachedNo
 
 /** Readers that put the text on screen, with what in their source shows they handle a hidden note. */
 const SHOWS_TEXT: Record<string, RegExp> = {
-  'hooks/useNoteContent.ts': /noteProtectionOf\(frontmatterRef\.current\)/,
+  'hooks/useNoteContent.ts': /noteProtectionOf\(frontmatterRef\.current, body\)/,
   'pages/NotesPage.tsx': /hidden=\{protection === 'hidden'\}/,
   'popout/PopoutNote.tsx': /protection === 'hidden' && !loading && !cover\.shown\) return <HiddenNoteCover /,
-  'components/tasks/ProjectTrackingBlock.tsx': /isHiddenNote\(frontmatter\) \? HIDDEN_NOTE_LINE/,
+  'components/tasks/ProjectTrackingBlock.tsx': /isHiddenNote\(frontmatter, body\) \? HIDDEN_NOTE_LINE/,
 }
 
 /** Readers that show nothing of the text, and why. */

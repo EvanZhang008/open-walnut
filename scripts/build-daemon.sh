@@ -393,6 +393,11 @@ SOURCES=(
   src/providers/host-runtime-types.ts
   src/providers/codex-outside-core.ts
   src/providers/claude-outside-core.ts
+  # The mark of a locked or hidden note (host replica and offline host copies read it), and the text
+  # helpers a daemon bundle imports.
+  src/core/notes/locked-note.ts
+  src/core/notes/locked-note-format.ts
+  src/utils/format.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

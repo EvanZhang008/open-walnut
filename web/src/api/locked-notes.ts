@@ -21,9 +21,9 @@ export const lockedNotesApi = {
     vaultCall<LockedNoteSaved>('POST', '/vault/notes/lock', { path, ...(expectedHash ? { expectedHash } : {}) }),
   removeLock: (path: string, expectedHash?: string) =>
     vaultCall<LockedNoteText>('POST', '/vault/notes/remove-lock', { path, ...(expectedHash ? { expectedHash } : {}) }),
-  /** The key's backups in the data folder, the newest first (404 no_key_backup: none). */
-  keyBackups: async (): Promise<KeyBackupVault[]> => {
-    const b = await vaultCall<KeyBackupVault & { earlier?: KeyBackupVault[] }>('GET', '/vault/notes/key-backup');
+  /** The key's backups in the data folder, the newest first, marked for the note at `path` (404 no_key_backup: none). */
+  keyBackups: async (path: string): Promise<KeyBackupVault[]> => {
+    const b = await vaultCall<KeyBackupVault & { earlier?: KeyBackupVault[] }>('GET', `/vault/notes/key-backup?path=${encodeURIComponent(path)}`);
     return [b, ...(b.earlier ?? [])];
   },
   /**
@@ -32,14 +32,17 @@ export const lockedNotesApi = {
    * it waits and sends it again, as an unlock does; a wrong password is never sent again.
    */
   restoreKey: async (from: KeyBackupVault, password: string, secretKey: string) => {
-    const body = { ...(await proof(password, from.kdf)), secretKey, vaultId: from.vaultId };
+    const body = { ...(await proof(password, from.kdf)), secretKey, entry: from.entry, vaultId: from.vaultId };
     return throwingWhileUnlockBusy(() => vaultCall<{ added: number }>('POST', '/vault/notes/restore-key', body, 60_000),
       (err) => (err instanceof VaultApiError ? busyWaitOf(err) : null));
   },
 };
 
-/** One backup of the locked-notes key (core/vault/locked-notes-key-backup.ts): no secret in it. */
-export interface KeyBackupVault { vaultId: string; kdf: KdfParams; hint?: string; keys: number }
+/**
+ * One backup of the locked-notes key (core/vault/locked-notes-key-backup.ts): no secret in it.
+ * `inVault`: its keys are all in Passwords already; `holdsNoteKey`: it holds the key the note names.
+ */
+export interface KeyBackupVault { entry: string; vaultId: string; kdf: KdfParams; hint?: string; keys: number; inVault?: boolean; holdsNoteKey?: boolean }
 
 /** What a hide or an unhide answers: no text, so it is kept like any answer. */
 export interface HiddenNoteChange { path: string; contentHash: string; updatedAt: string; hidden: boolean; changed: boolean }

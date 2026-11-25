@@ -57,7 +57,7 @@ export function PopoutNote() {
   const handleWikiLinkClick = useCallback((target: string) => {
     openPopout('note', { path: target, create: 1 });
   }, []);
-  const cover = useHiddenNoteShown(remountKey);
+  const cover = useHiddenNoteShown(remountKey, protection === 'hidden');
 
   if (!notePath) {
     return <EmptyState size="pane" icon={ICON_NOTE} title="No note to show" hint="This window was opened without a note path." />;

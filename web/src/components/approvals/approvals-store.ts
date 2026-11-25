@@ -148,14 +148,18 @@ export function applyApprovalEvent(a: Approval): void {
 }
 
 /**
- * The unlock sheet's line for an agent's ask for a locked note: what a yes lets it do, in the
- * words of the card (src/core/notes/locked-note-ask.ts: "read and change your locked note" for an
- * edit ask, "read your locked note" for a read ask).
+ * The master password sheet's line for an agent's ask for a locked note: the card's own words (who
+ * asks, which note, read or read and change: src/core/notes/locked-note-ask.ts writes "read and
+ * change your locked note" for an edit ask, "read your locked note" for a read ask), for how long
+ * (its READ_MS and EDIT_MS), and where the text goes.
  */
 export function passwordsSubFor(a: Pick<Approval, 'what'>): string {
-  const what = /\bread and change your locked note\b/.test(a.what) ? 'read and change' : 'read';
-  return `Approving lets an agent ${what} your locked note. Type your master password to approve.`;
+  const edit = /\bread and change your locked note\b/.test(a.what);
+  return `${a.what.replace(/[.\s]+$/, '')}. A yes lets the agent ${edit ? 'read and change' : 'read'} it for ${edit ? 30 : 10} minutes, and its text goes into that agent's conversation. Type your master password to approve.`;
 }
+
+/** The sheet's title and button for that yes: it approves, it does not unlock. */
+export const APPROVE_WORDS = { title: 'Approve with your master password', action: 'Approve' };
 
 /** Which device this window is, for the record of who answered. */
 function thisDevice(): { name: string; kind: 'mac-app' | 'web' } {
@@ -175,7 +179,7 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny'):
     // An agent's ask for a locked note: the yes goes with the master password typed for it, here and
     // now (docs/reference/locked-notes.md); a cancelled sheet answers nothing.
     const r = a.needsPasswords && decision === 'approve'
-      ? await withMasterPassword(passwordsSubFor(a), () => vaultCall<{ approval: Approval }>('POST', `/approvals/${encodeURIComponent(a.id)}/answer`, body))
+      ? await withMasterPassword(passwordsSubFor(a), () => vaultCall<{ approval: Approval }>('POST', `/approvals/${encodeURIComponent(a.id)}/answer`, body), APPROVE_WORDS)
       : await answerApproval(a.id, body);
     if (r) settle(r.approval);
     // No sheet came up: another step's sheet is open. Said on the card, never a silent no.

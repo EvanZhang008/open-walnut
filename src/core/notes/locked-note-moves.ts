@@ -135,15 +135,27 @@ function agentRefusal(rel: string, what: string, kind: NoteProtection): LockedNo
 export async function assertLockedNoteMove(from: string, to: string, opts: { person: boolean }): Promise<void> {
   const reach = await reachOf(from)
   if (reach.files.length === 0) return
+  if (!opts.person) {
+    const hit = await firstProtected(reach.files)
+    if (hit) throw agentRefusal(relName(reach.root, hit.file), 'moves or renames', hit.kind)
+    return
+  }
+  await assertNotOntoWalnutNote(reach, to, 'Move')
+}
+
+/**
+ * The person's move or copy: refused (400 `not_lockable`) when a locked or hidden note it carries
+ * would land on a note Walnut writes itself, which Walnut reads raw and writes over (as Lock and
+ * Hide refuse that path). Only the notes that would land on one are read.
+ */
+async function assertNotOntoWalnutNote(reach: Reach, to: string, verb: 'Move' | 'Copy'): Promise<void> {
   const dest = await realParent(to)
   const destRel = (f: string): string | null => relIn(reach.root, path.join(dest, path.relative(reach.from, f)))
-  // The person's move reads only the notes that would land on a Walnut-written path.
   const owned = (f: string): boolean => { const r = destRel(f); return r !== null && walnutWritesNote(r) }
-  const hit = await firstProtected(opts.person ? reach.files.filter(owned) : reach.files)
+  const hit = await firstProtected(reach.files.filter(owned))
   if (!hit) return
-  if (!opts.person) throw agentRefusal(relName(reach.root, hit.file), 'moves or renames', hit.kind)
   throw new LockedNoteError(
-    `${relName(reach.root, hit.file)} is a ${hit.kind} note, and ${destRel(hit.file)} is a note Walnut writes itself, so a ${hit.kind} note cannot go there. Move it somewhere else.`,
+    `${relName(reach.root, hit.file)} is a ${hit.kind} note, and ${destRel(hit.file)} is a note Walnut writes itself, so a ${hit.kind} note cannot go there. ${verb} it somewhere else.`,
     400, 'not_lockable')
 }
 
@@ -156,13 +168,14 @@ export async function assertLockedNoteDelete(abs: string, opts: { person: boolea
 }
 
 /**
- * A copy of `abs` (a note or a folder): refused for everyone when it holds a locked note, and for
- * anyone but the person when it holds a hidden one (a copy is a read of its whole text).
+ * A copy of `abs` (a note or a folder) to `to`: refused for everyone when it holds a locked note,
+ * for anyone but the person when it holds a hidden one (a copy is a read of its whole text), and
+ * for the person when a hidden one would land on a note Walnut writes itself.
  */
-export async function assertNoLockedNoteCopy(abs: string, opts: { person?: boolean } = {}): Promise<void> {
+export async function assertNoLockedNoteCopy(abs: string, opts: { person?: boolean; to?: string } = {}): Promise<void> {
   const reach = await reachOf(abs)
   const hit = await firstProtected(reach.files, opts.person ? 'hidden' : undefined)
-  if (!hit) return
+  if (!hit) { if (opts.person && opts.to && reach.files.length) await assertNotOntoWalnutNote(reach, opts.to, 'Copy'); return }
   if (hit.kind === 'hidden') throw agentRefusal(relName(reach.root, hit.file), 'copies', 'hidden')
   throw new LockedNoteError(
     `${relName(reach.root, hit.file)} is a locked note, and a locked note's file is never copied: the copy could never be opened or edited. To copy its text, press Show on it in Walnut.`,

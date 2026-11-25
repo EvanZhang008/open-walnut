@@ -56,9 +56,13 @@ afterAll(async () => {
   await stopServer()
 })
 
+const vaultFile = () => path.join(WALNUT_HOME, 'vault', 'vault.json')
+
 describe('the locked notes key backup', () => {
   let secretKey = ''
   let keyValue = ''
+  let freshKey = ''
+  let beforeRestore = ''
 
   it('is written with the first lock: the vault id, its password wrap, the sealed key item and the hint', async () => {
     expect((await http('PUT', `/api/notes-v2/content/${NOTE}`, { content: `# Backed up\n${SECRET}\n` })).status).toBe(200)
@@ -103,13 +107,15 @@ describe('the locked notes key backup', () => {
     const fresh = await v1('POST', '/vault/setup', { passwordKey: toB64(await derivePasswordKey('a brand new vault phrase', kdf2)), kdf: kdf2, agentsWhileAway: false, client: 'test' })
     expect(fresh.status).toBe(200)
     session = fresh.body.session.token
+    freshKey = fresh.body.secretKey
+    beforeRestore = fs.readFileSync(vaultFile(), 'utf8')
     // The new vault has no key item, so it never touched the backup.
     await settleKeyBackup()
     expect(fs.readFileSync(keyBackupPath(), 'utf8')).toBe(keep)
     expect((await v1('POST', '/vault/notes/read', { path: NOTE })).status).not.toBe(200)
 
     const info = (await v1('GET', '/vault/notes/key-backup')).body
-    expect(info).toMatchObject({ hint: 'the second one', keys: 1 })
+    expect(info).toMatchObject({ hint: 'the second one', keys: 1, inVault: false })
     const pwKey = async (pw: string) => toB64(await derivePasswordKey(pw, info.kdf))
     // Nothing less than both secrets opens it.
     expect((await v1('POST', '/vault/notes/restore-key', { passwordKey: await pwKey(OLD), secretKey })).body.code).toBe('wrong_password')
@@ -129,5 +135,52 @@ describe('the locked notes key backup', () => {
     expect(now.earlier.map((e: { vaultId: string }) => e.vaultId)).toEqual([JSON.parse(keep).vaultId])
     const again = await v1('POST', '/vault/notes/restore-key', { passwordKey: await pwKey(NEXT), secretKey, vaultId: JSON.parse(keep).vaultId })
     expect(again.body.added).toBe(0)
+    // The note's own key is marked, and a backup whose keys are all in the vault says so.
+    const marked = (await v1('GET', `/vault/notes/key-backup?path=${encodeURIComponent(NOTE)}`)).body
+    expect(marked.earlier.find((e: { vaultId: string }) => e.vaultId === JSON.parse(keep).vaultId)).toMatchObject({ holdsNoteKey: true })
+    expect(marked).toMatchObject({ vaultId: fresh.body.vaultId, inVault: true, holdsNoteKey: false })
+  })
+
+  it('keeps the only backup of a key the vault lost under the same vault id (an older vault.json put back)', async () => {
+    // This vault's file from before its key came back: the same vault id, no key item.
+    const prior = backup()
+    resetVaultForTest(null)
+    resetSessionsForTest()
+    fs.writeFileSync(vaultFile(), beforeRestore)
+    session = ''
+    const unlocked = await v1('POST', '/vault/unlock', { password: 'a brand new vault phrase', secretKey: freshKey })
+    expect(unlocked.status, JSON.stringify(unlocked.body)).toBe(200)
+    session = unlocked.body.session.token
+    expect((await v1('POST', '/vault/notes/read', { path: NOTE })).body.code).toBe('locked_key_missing')
+    // A new lock makes a new key: the backup of the key it lost stays, with its own wrap.
+    expect((await http('PUT', '/api/notes-v2/content/journal/Second.md', { content: '# Second\nanother word\n' })).status).toBe(200)
+    expect((await v1('POST', '/vault/notes/lock', { path: 'journal/Second.md' })).status).toBe(200)
+    await settleKeyBackup()
+    const now = backup()
+    expect(now.vaultId).toBe(prior.vaultId)
+    expect(Object.keys(now.items)).not.toEqual(Object.keys(prior.items))
+    const lost = now.earlier.find((e: { vaultId: string; items: Record<string, unknown> }) => e.vaultId === prior.vaultId)
+    expect(Object.keys(lost.items)).toEqual(Object.keys(prior.items))
+    // Restored by that entry, the first note opens again.
+    const info = (await v1('GET', '/vault/notes/key-backup')).body
+    const entry = info.earlier.find((e: { vaultId: string }) => e.vaultId === prior.vaultId)
+    expect(entry).toMatchObject({ inVault: false })
+    const ok = await v1('POST', '/vault/notes/restore-key', { passwordKey: toB64(await derivePasswordKey('a brand new vault phrase', entry.kdf)), secretKey: freshKey, entry: entry.entry })
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200)
+    expect(ok.body.added).toBe(1)
+    expect((await v1('POST', '/vault/notes/read', { path: NOTE })).body.content).toContain(SECRET)
+  })
+
+  it('sets a file that does not read aside instead of writing over it', async () => {
+    fs.writeFileSync(keyBackupPath(), '<<<<<<< ours\n{ not json\n')
+    // The next open of the vault writes the backup again; the damaged file stays beside it.
+    const again = await v1('POST', '/vault/unlock', { password: 'a brand new vault phrase', secretKey: freshKey })
+    expect(again.status, JSON.stringify(again.body)).toBe(200)
+    session = again.body.session.token
+    await settleKeyBackup()
+    expect(backup().format).toBe('walnut-locked-notes-key-backup')
+    const aside = fs.readdirSync(WALNUT_HOME).filter((f) => f.startsWith('locked-notes-key-backup.unreadable-'))
+    expect(aside).toHaveLength(1)
+    expect(fs.readFileSync(path.join(WALNUT_HOME, aside[0]!), 'utf8')).toContain('<<<<<<< ours')
   })
 })

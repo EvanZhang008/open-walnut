@@ -4171,6 +4171,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (wiring.isSearchV2Enabled()) {
         searchV2WiringHandle = wiring.startSearchV2Wiring(bus)
         log.memory.info('search-v2 wiring started')
+        // A locked note's index wipe that did not finish before this start runs again (locked-note-residue.ts).
+        void import('../core/notes/locked-note-residue.js').then((m) => m.resumePendingWipe()).catch(() => undefined)
       }
     } catch (err) {
       log.memory.warn('search-v2 startup failed', {

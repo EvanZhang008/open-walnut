@@ -133,6 +133,7 @@ export const USER_TEXT_EXEMPT: Readonly<Record<string, string>> = {
   task_update_bulk: 'task titles and descriptions: they may sync to an outside tracker other people read',
   memory_write: 'a memory file: a document keeps the language it is written in',
   note_write: 'a note in the user\'s notes: a document keeps the language it is written in',
+  locked_note_save: 'a locked note\'s text, written back by an agent the user approved: a document keeps the language it is written in',
   task_note_write: 'a task\'s working note, which its sessions write for themselves and the next session',
   agent_skill_write: 'a skill an agent reads',
   agent_memory_write: 'an agent\'s own memory folder',

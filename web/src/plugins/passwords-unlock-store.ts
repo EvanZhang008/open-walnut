@@ -11,7 +11,12 @@ export interface PasswordsUnlockRequest {
   status: VaultStatus
   /** Walnut's own ask (a locked note): the sheet's line as given, not a plugin's. */
   sub?: string
+  /** Walnut's own ask: the sheet's title and button, when the password is for something else than an unlock (a yes). */
+  words?: UnlockWords
 }
+
+/** A step that needs the master password for itself (a yes to an agent): its title and its button. */
+export interface UnlockWords { title: string; action: string }
 
 const listeners = new Set<() => void>()
 let request: PasswordsUnlockRequest | null = null
@@ -28,10 +33,10 @@ export function subscribePasswordsUnlock(listener: () => void): () => void {
 function publish(): void { for (const listener of listeners) listener() }
 
 /** Opens the unlock; one at a time, so a second ask while one is open answers false. */
-export function askPasswordsUnlock(pluginName: string, reason: string, status: VaultStatus, sub?: string): Promise<boolean> {
+export function askPasswordsUnlock(pluginName: string, reason: string, status: VaultStatus, sub?: string, words?: UnlockWords): Promise<boolean> {
   if (request) return Promise.resolve(false)
   opener = typeof document === 'undefined' ? null : document.activeElement
-  request = { sequence: ++sequence, pluginName, reason, status, ...(sub ? { sub } : {}) }
+  request = { sequence: ++sequence, pluginName, reason, status, ...(sub ? { sub } : {}), ...(words ? { words } : {}) }
   const answer = new Promise<boolean>((resolve) => { settle = resolve })
   publish()
   return answer

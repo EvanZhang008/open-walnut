@@ -51,7 +51,7 @@ export const OP_GROUPS: readonly OpGroupDef[] = [
     id: 'memory', title: 'Your memory folder and skills, the user\'s memory, Walnut\'s skills',
     ops: ['memory_read', 'memory_write', 'agent_memory_read', 'agent_memory_write', 'agent_skill_read', 'agent_skill_write', 'skill_read'],
   },
-  { id: 'notes', title: 'The user\'s notes: search, read, write, edit, attach', prefixes: ['note_'] },
+  { id: 'notes', title: 'The user\'s notes: search, read, write, edit, attach, and an ask to read a locked one', prefixes: ['note_', 'locked_note_'] },
   {
     id: 'hosts', title: 'Run commands, copy files and use MCP servers or web services on a host, and see the hosts',
     ops: [
