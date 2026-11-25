@@ -40,7 +40,7 @@ import {
   aboutScopeLine, dialogAriaLabel, hostLabel, scopeUnavailableReason, shortenCwd, splitCwdShort,
 } from '@/utils/engine-settings-copy';
 import { log } from '@/utils/log';
-import { committedValueOf, focusInside, isTextEntry, quietFocus, visibleFocusable } from './engine-settings-popover-focus';
+import { committedValueOf, focusInside, isTextEntry, keyTargetOf, quietFocus, refocusAfterSave, visibleFocusable } from './engine-settings-popover-focus';
 import {
   EngineSettingsFilterBar,
   EngineSettingsFooter,
@@ -99,6 +99,10 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   /** A guarded pointerdown still produces a click; that click must not switch the scope. */
   const suppressClickRef = useRef(false);
   const guardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The last row control that had the focus: a save that disables it leaves the user's keys for it (keyTargetOf). */
+  const lastControlRef = useRef<HTMLElement | null>(null);
+  /** Escape stepped out of a select to the dialog: a save that finishes after it leaves the focus there. */
+  const steppedOutRef = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -229,7 +233,8 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   // goes through: a press on "+" closes this and the click that follows opens the menu, one state
   // flip each (the composer's textarea takes its caret the same way). Escape steps out one thing at
   // a time: the About overlay, a focused native select (its popup, when open, took the key before
-  // the page), the filter's text, and only then the popover. A row's input whose Escape has work of
+  // the page; a select a save disabled under him counts: keyTargetOf), the filter's text, and only
+  // then the popover. A row's input whose Escape has work of
   // its own (discard a typed draft, close the "Custom..." box: EngineSettingRows) keeps the key:
   // `closeOnEscape` is read when the key is pressed, so the layer lets that one through to it. The
   // layer listens on the window, so a key pressed while focus fell to <body> (a saving row disables
@@ -249,9 +254,15 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     trapFocus: false,
     passOutsideClick: true,
     onEscape: (e) => {
-      const target = e.target as HTMLElement;
+      const root = rootRef.current;
+      const target = root ? keyTargetOf<Element>(root, document.activeElement, lastControlRef.current) : e.target as Element;
       if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return true; }
-      if (target instanceof HTMLSelectElement) { target.blur(); rootRef.current?.focus({ preventScroll: true }); return true; }
+      if (target instanceof HTMLSelectElement) {
+        target.blur();
+        root?.focus({ preventScroll: true });
+        steppedOutRef.current = true;
+        return true;
+      }
       if (target === filterRef.current && filter) { setFilter(''); return true; }
       return false;
     },
@@ -285,6 +296,8 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   // control. "Not on a control" includes the dialog ROOT: WebKit does
   // not focus a button on click, so after a mouse toggle the root, focused at
   // open, is still the active element and a keyboard user would Tab from the top.
+  // Never from where he put it: a control, the root after an Escape out of a select, or outside
+  // the dialog (refocusAfterSave).
   // (c) The footer may have grown with that answer (a three-line saved sentence,
   // a failed save's banner) and the rows area shrinks from the bottom: the row
   // the user just acted on is scrolled back into view so its control never
@@ -301,7 +314,8 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     const row = rowsRef.current?.querySelector<HTMLElement>(`.engine-settings-popover-row[data-key="${CSS.escape(key)}"]`);
     if (row) requestAnimationFrame(() => row.scrollIntoView({ block: 'nearest' }));
     const active = document.activeElement;
-    if (active && active !== root && active !== document.body && root.contains(active)) return;
+    const at = !active || active === document.body ? 'page' : active === root ? 'dialog' : root.contains(active) ? 'control' : 'elsewhere';
+    if (!refocusAfterSave(at, steppedOutRef.current)) return;
     const control = row
       ? visibleFocusable(row)[0] ?? row.querySelector<HTMLElement>('[role="switch"], select, input, button') ?? undefined
       : undefined;
@@ -359,7 +373,12 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
       data-state={dataState}
       aria-label={dialogAriaLabel(displayName, cwdShort, hostText, view?.appliesOn)}
       aria-busy={loading || undefined}
-      onPointerDownCapture={() => { modalityRef.current = 'pointer'; }}
+      onFocus={(e) => {
+        if (e.target === rootRef.current) return;
+        steppedOutRef.current = false;
+        lastControlRef.current = e.target.closest('.engine-settings-popover-row') ? e.target : null;
+      }}
+      onPointerDownCapture={() => { modalityRef.current = 'pointer'; steppedOutRef.current = false; }}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDownCapture={() => { modalityRef.current = 'keyboard'; }}
       onKeyDown={onRootKeyDown}

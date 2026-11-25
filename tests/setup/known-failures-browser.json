@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 221,
+  "count": 220,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -51,7 +51,6 @@
     "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide",
     "engine-settings-popover-r3.spec.ts :: engine settings popover: round three, copy and chrome › an unavailable side wears a lock and its reason; the dark popover is a raised layer",
     "engine-settings-popover-scope.spec.ts :: engine settings popover: write scope › two columns, one dialog at a time; long cwds stay distinct; a closed column takes its dialog along",
-    "engine-settings-popover.webkit.spec.ts :: webkit: a focused native select survives one Escape, the dialog leaves on the second; a keyboard change lands",
     "error-notification-routing.spec.ts :: session errors appear only in Notifications, never in main chat",
     "file-live-edit-markdown.spec.ts :: a visible Markdown file follows terminal writes with no tool event",
     "file-live-edit-markdown.spec.ts :: ten alternating Markdown typing bursts and script updates stay writable",
@@ -274,7 +273,6 @@
     "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide": "Error: expect(locator).toHaveText(expected) failed",
     "engine-settings-popover-r3.spec.ts :: engine settings popover: round three, copy and chrome › an unavailable side wears a lock and its reason; the dark popover is a raised layer": "Error: expect(received).toBeGreaterThanOrEqual(expected)",
     "engine-settings-popover-scope.spec.ts :: engine settings popover: write scope › two columns, one dialog at a time; long cwds stay distinct; a closed column takes its dialog along": "Error: expect(locator).toContainText(expected) failed",
-    "engine-settings-popover.webkit.spec.ts :: webkit: a focused native select survives one Escape, the dialog leaves on the second; a keyboard change lands": "Error: expect(locator).toHaveCount(expected) failed",
     "error-notification-routing.spec.ts :: session errors appear only in Notifications, never in main chat": "Error: expect(received).toBe(expected) // Object.is equality",
     "file-live-edit-markdown.spec.ts :: a visible Markdown file follows terminal writes with no tool event": "Test timeout of 30000ms exceeded.",
     "file-live-edit-markdown.spec.ts :: ten alternating Markdown typing bursts and script updates stay writable": "Test timeout of 30000ms exceeded.",
