@@ -3781,7 +3781,18 @@ function gatewayOwnerHome(callerSid: string): string | undefined {
   // The copy names the session, else what this host recorded of the Walnut that asked
   // for it (its spawn, the spawn journal): pinned to its Walnut from its first spawn,
   // whether or not a copy lists it yet (gateway-identity-core.ts).
-  return offlineHost.ownerOf(callerSid) || sessionHomeOf(callerSid) || undefined
+  return sessionOwnerHome(callerSid)
+}
+
+/**
+ * The Walnut a session id belongs to on this host: the copy that names it, the record of its spawn,
+ * or, for an ACP session, whose worker its runtime id is (the id its `walnut` calls carry: the
+ * copy's runtimeId, else the record of the worker's start). 2026-11-25: an Antigravity session's
+ * task_send named only its runtime id, so no Walnut was found, the call went to a link that names
+ * none (this host's own replica) and its needs_leader came back instead of reaching the Mac.
+ */
+function sessionOwnerHome(sid: string): string | undefined {
+  return offlineHost.ownerOf(sid) || sessionHomeOf(sid) || offlineHost.runtimeOwnerOf(sid) || acpRuntimeOwner(sid) || undefined
 }
 
 function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -5454,7 +5465,7 @@ setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
  * checked against the manifest's hashes here.
  */
 function historyFetchTarget(sid: string): { target: ServerWebSocket<WsData> | null; home: string | undefined } {
-  const home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || gatewayOwnerHome(EXTERNAL_CALLER_SID) || undefined
+  const home = sessionOwnerHome(sid) || gatewayOwnerHome(EXTERNAL_CALLER_SID) || undefined
   return { target: home ? gatewayTargetFor(home) : pickTrustedClient('').client, home }
 }
 function fetchRemoteHistory(dir: string, sid: string): Promise<void> {

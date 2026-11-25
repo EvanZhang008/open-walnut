@@ -106,8 +106,26 @@ describe('a session\'s call goes only to a server of its own Walnut', () => {
     // Every socket a run of a bound Walnut opened speaks for it (the bulk channel).
     expect(fnBody(src, 'bindGatewayClientHome')).toMatch(/gatewayIdentity\.noteRun\(ws(\.data\?)?\.serverRun, home\)/)
     // A session is pinned to the Walnut that asked for it, copy or not.
-    expect(fnBody(src, 'gatewayOwnerHome')).toMatch(/offlineHost\.ownerOf\(callerSid\) \|\| sessionHomeOf\(callerSid\) \|\| undefined/)
+    expect(fnBody(src, 'gatewayOwnerHome')).toMatch(/return sessionOwnerHome\(callerSid\)/)
+    // An ACP session's calls carry its worker's runtime id: its Walnut is found by it too (2026-11-25).
+    expect(fnBody(src, 'sessionOwnerHome')).toMatch(/offlineHost\.ownerOf\(sid\) \|\| sessionHomeOf\(sid\) \|\| offlineHost\.runtimeOwnerOf\(sid\) \|\| acpRuntimeOwner\(sid\) \|\| undefined/)
     expect(fnBody(src, 'walnutPinned')).toMatch(/offlineHost\.hasHome\(home\) \|\| servedWalnuts\.knows\(home\) \|\| gatewayIdentity\.knowsHome\(home\)/)
+  })
+
+  it("every kind of caller the gateway accepts has its Walnut found by the owner lookup", () => {
+    // The kinds after the tracked-session resolve (`resolveGatewayCallerSid(...) ?? (<kind> ? sid : null)`):
+    // each needs its own lookup in sessionOwnerHome, or its calls go to a link that names no Walnut
+    // (2026-11-25: an ACP worker's runtime id found none, and its task_send never reached the Mac).
+    const needs: Record<string, RegExp[]> = {
+      'acp.hasWorker': [/offlineHost\.runtimeOwnerOf\(sid\)/, /acpRuntimeOwner\(sid\)/],
+    }
+    const kinds = [...src.matchAll(/resolveGatewayCallerSid\([^)]*\)\s*\?\?\s*\(([\w.]+)\(/g)].map((m) => m[1]!)
+    expect(kinds.length).toBeGreaterThan(0)
+    const owner = fnBody(src, 'sessionOwnerHome')
+    for (const kind of new Set(kinds)) {
+      expect(needs[kind], `a new kind of gateway caller (${kind}): add its Walnut lookup to sessionOwnerHome and here`).toBeDefined()
+      for (const lookup of needs[kind]!) expect(owner).toMatch(lookup)
+    }
   })
 
   it(`another Walnut's server cannot settle a call`, () => {
