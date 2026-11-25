@@ -20,6 +20,7 @@ import crypto from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { experimentalEnabled } from '../experimental.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import {
   AUDIT_JUDGE_SYSTEM, MAX_PAIRS, auditNote, judgeInput, pairSig, pickToTell, readJudgement, repeatCandidates, repeatFinding,
@@ -276,6 +277,8 @@ export async function runThreadAuditPass(now = Date.now()): Promise<string[]> {
     const nodes = all.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE' && !t.plugin_only && !quieted.has(t.id)).map((t) => t.id);
     for (const id of dueNodes(nodes, last, triedAt, now)) {
       if (done.length >= NODES_PER_TICK) break;
+      // A leader switch's stop: a pass in flight (one model call a node) writes no more audit state or notes (lib/leader-clocks.ts).
+      if (homeWritesStopped()) break;
       // Read at every node: turning it off stops the pass where it is.
       const r = await auditNode(id, { now, tasks: all });
       if (r.why === 'off' || r.why === 'org_off') break;

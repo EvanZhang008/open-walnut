@@ -66,6 +66,7 @@ export const CLOCKS: Record<string, Clock[]> = {
   'src/core/org/morning-report.ts': [['gated', 'Every 60 s tickReports(): reads org/report-schedule.json;']],
   'src/core/org/reflection/runner.ts': [['stopped', 'stopped by stopServer before the final batch', 'm.stopOrgDuties(']],
   'src/core/org/thread-answers.ts': [['stopped', 'stopped by stopServer before the final batch', 'threadAnswersHandle.stop(']],
+  'src/core/org/thread-audit.ts': [['stopped', 'stopped by stopServer before the final batch; a pass in flight stops at its next node (homeWritesStopped)', 'threadAuditHandle?.stop()']],
   'src/core/org/thread-follow.ts': [['stopped', 'stopped by stopServer before the final batch', 'threadFollowHandle.stop(']],
   'src/core/org/thread-recheck.ts': [['stopped', 'stopped by stopServer before the final batch', 'threadAnswersHandle.stop(']],
   'src/core/org/thread-reply.ts': [['stopped', 'stopped by stopServer before the final batch', 'threadRepliesHandle.stop(']],
