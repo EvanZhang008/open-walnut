@@ -107,11 +107,14 @@ test.beforeAll(async ({ request }) => {
   const cwd = `${fixtureRoot}/projects/walnut`
   await createTask(request, `Side work ${STAMP}`, LED)
   await createTask(request, `Side review ${STAMP}`, LED)
-  await createTask(request, `Plain work ${STAMP}`, PLAIN)
+  const plainWork = await createTask(request, `Plain work ${STAMP}`, PLAIN)
   const a = await lead(request, LED, cwd)
   ids.lead = a.id; ids.leadSid = a.sid
   const b = await lead(request, PLAIN, cwd)
   ids.plain = b.id; ids.plainSid = b.sid
+  // A project of one task gets its own lead on first contact, never that task as its VP (3812f5cff8).
+  expect(ids.plain, 'the plain project\'s contact is a lead made for it, not its one task').not.toBe(plainWork)
+  expect((await (await request.get(`/api/tasks/${ids.plain}`)).json()).task?.org_role).toBe('lead')
   const board = await request.put(`/api/v1/tasks/${ids.lead}/board`, { data: { html: `<h1>Side</h1><p>${BOARD_TEXT}</p>` } })
   expect(board.ok(), await board.text()).toBe(true)
 })
@@ -366,7 +369,7 @@ test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files op
 
 test('Tasks as All tasks or Board, kept per node; sections fold by default; an old Status or Team opens All tasks; a node with no Board offers none', async ({ page }) => {
   await isolateUiPrefs(page)
-  // What an older build kept: the lead left on Team, the plain lead on Status (once per tab, so the
+  // What an older build kept: the lead left on Team, the plain project's VP on Status (once per tab, so the
   // picks this spec makes survive its reload).
   await page.addInitScript(([key, value]) => {
     if (sessionStorage.getItem('pw-old-task-mode')) return
@@ -429,14 +432,18 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '1')
   await expect(sideWork).toBeVisible()
 
-  // The plain lead keeps no Board: All tasks only, with no switch (its old Status read as All tasks), and no Board
-  // row in its kebab.
+  // The plain project's VP keeps no Board: All tasks only, with no switch (its old Status read as All tasks), and no
+  // Board row in its kebab. It is a real VP since 3812f5cff8 (its one task no longer stands in), so it keeps Threads
+  // and opens on them, as every VP does; Tasks is one click away.
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PLAIN)}"]`).click()
   await expect(detail).toHaveAttribute('data-key', rowKey(PLAIN))
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  await detail.getByTestId('org-top-task').click()
+  await expect(detail.getByTestId('org-top-task')).toHaveText('Tasks 1')
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
   // One way to draw its work, so no switch at all.
   await expect(detail.getByTestId('org-task-modes')).toHaveCount(0)
-  // Folds are per node: the led node's opened Not started leaves the plain lead's sections at their
+  // Folds are per node: the led node's opened Not started leaves the plain VP's sections at their
   // defaults (its one task may have started by now, so read whichever sections it shows).
   const plainSections = detail.getByTestId('org-task-section')
   await expect(plainSections.first()).toBeVisible()
