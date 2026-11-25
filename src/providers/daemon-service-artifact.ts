@@ -296,7 +296,7 @@ export async function runningExecutables(platform: NodeJS.Platform, execFile?: E
   }
   if (platform !== 'darwin' || !execFile || uid === null) return null
   const text = await new Promise<string | null>((resolve) => {
-    execFile('/bin/ps', ['-axww', '-o', 'uid=,comm='], { timeout: 15_000, maxBuffer: 16 << 20 }, (err, stdout) => resolve(err ? null : String(stdout)))
+    execFile('/bin/ps', ['-axww', '-o', 'uid=', '-o', 'comm='], { timeout: 15_000, maxBuffer: 16 << 20 }, (err, stdout) => resolve(err ? null : String(stdout)))
   })
   if (text === null) return null
   const out: string[] = []

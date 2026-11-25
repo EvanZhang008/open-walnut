@@ -1627,7 +1627,7 @@ export class DaemonConnection {
       mode: {
         read: () => this.serviceModeNow(),
         asked: (ask) => this.recordModeAsked(ask),
-        unfit: (expected, why) => this.markServeUnfit(expected, why),
+        unfit: (expected, why) => { void this.markServeUnfit(expected, why) },
       },
       // Service sets (service-set-move-link.ts): the same link object the SSH path uses.
       sets: {
@@ -1904,7 +1904,8 @@ export class DaemonConnection {
    */
   private async setServe(expected: string): Promise<ProvisionServe | undefined> {
     // Macs only: a Linux set keeps today's install, and the regular mode update switches it after the move.
-    if (this.isCloudTunnel || (await this.hostPlatform()) !== 'darwin' || !(await macosOneServiceWanted())) return undefined
+    // (The cloud box is Linux, and its mode decision says none: never this.)
+    if ((await this.hostPlatform()) !== 'darwin' || !(await macosOneServiceWanted())) return undefined
     const set = { serves: 'daemon' as const, serviceHome: null, launcher: await serviceLauncherWanted() }
     const want = await this.serviceModeWant(set)
     const ask = serviceModeAsk(want, { ...set, home: WALNUT_HOME, homeHere: this._homeHere })
@@ -1913,7 +1914,7 @@ export class DaemonConnection {
       serve: { home: ask.home, on: true },
       onUnfit: (why, o) => {
         log.session.warn('DaemonConnection: the service set goes in as the session daemon, not the Walnut service', { host: this.hostKey, expected, why })
-        this.markServeUnfit(expected, why, { serviceFailed: o?.serviceFailed === true })
+        void this.markServeUnfit(expected, why, { serviceFailed: o?.serviceFailed === true })
       },
     }
   }
@@ -4625,14 +4626,12 @@ export class DaemonConnection {
    * that would restart the host's service for nothing. A newer build tries again (its mode write
    * clears the marker).
    */
-  private noteRoleFallback(): void {
+  private async noteRoleFallback(): Promise<void> {
     const unfit = roleFallbackUnfit({ launcher: this._launcher, expected: this.getExpectedDaemonVersion(), running: this._daemonVersion, home: WALNUT_HOME })
     if (!unfit || this._serveUnfit?.expected === unfit.expected) return
-    void macosOneServiceWanted().then((on) => {
-      if (!on) return
-      log.session.warn('DaemonConnection: the host\'s Walnut service fell back to the session daemon', { host: this.hostKey, expected: unfit.expected, why: unfit.why })
-      this.markServeUnfit(unfit.expected, unfit.why, { serviceFailed: true })
-    })
+    if (!(await macosOneServiceWanted().catch(() => false))) return
+    log.session.warn('DaemonConnection: the host\'s Walnut service fell back to the session daemon', { host: this.hostKey, expected: unfit.expected, why: unfit.why })
+    await this.markServeUnfit(unfit.expected, unfit.why, { serviceFailed: true })
   }
 
   /**
@@ -4641,12 +4640,12 @@ export class DaemonConnection {
    * disk too, for a real server's connection (serve-unfit.ts): a walnut file not to be had (often a
    * passing download or build failure) clears with a leader restart, as before.
    */
-  private markServeUnfit(expected: string, why: string, o: { serviceFailed?: boolean } = {}): void {
+  private async markServeUnfit(expected: string, why: string, o: { serviceFailed?: boolean } = {}): Promise<void> {
     this._serveUnfit = { expected, why }
-    if (o.serviceFailed && this.isolation.mode === 'shared') {
-      void this.hostPlatform().then((p) => { if (p === 'darwin') return serveUnfits.write(`ssh:${this.hostKey}`, { expected, why, at: Date.now() }) }).catch(() => {})
-    }
     void this.serviceModeWant()
+    // The promise is the disk step (tests wait on it); callers go on at once.
+    if (!o.serviceFailed || this.isolation.mode !== 'shared') return
+    if ((await this.hostPlatform().catch(() => null)) === 'darwin') await serveUnfits.write(`ssh:${this.hostKey}`, { expected, why, at: Date.now() }).catch(() => {})
   }
 
   /** This build found unfit for the service there: in memory, else (once per connection) the record kept on disk. */
@@ -6468,7 +6467,7 @@ export class DaemonConnection {
       // A compiled build has the walnut file only: then the build itself cannot go, as before.
       if (serve?.on !== true || !(error instanceof WalnutFileUnavailableError) || !(await this.getLocalBinaryPath())) return stageFailed(error)
       // No walnut file of this build for the host: no offer with this build (Walnut Health says why), the build goes as before.
-      this.markServeUnfit(expected, error.message.slice(0, 300))
+      void this.markServeUnfit(expected, error.message.slice(0, 300))
       if (remoteVersion === expected) return false
       serve = undefined
       try { source = await this.serviceDaemonSource(false) } catch (again) { return stageFailed(again) }
@@ -6826,7 +6825,7 @@ export class DaemonConnection {
       this._helloServiceSet = helloServiceSet(res)
       // Said again by this connection's leader.configure.
       this._homeHere = null
-      this.noteRoleFallback()
+      void this.noteRoleFallback()
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {
@@ -8685,7 +8684,7 @@ export class DaemonConnection {
       // The launcher's facts again after hello (the good version's roles became known): no reconnect needed.
       if (event.ev === 'launcher-facts') {
         const facts = launcherFactsFrom((event as unknown as { launcher?: unknown }).launcher)
-        if (facts) { this._launcher = facts; this.noteRoleFallback() }
+        if (facts) { this._launcher = facts; void this.noteRoleFallback() }
         return
       }
       // STT relay (cloud voice input): the daemon forwards phone audio from

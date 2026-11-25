@@ -138,13 +138,12 @@ describe('a follower that fell back, as the leader reads it', () => {
   it('noteRoleFallback with the flag on: this build is unfit there; off: nothing changes', async () => {
     vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '0')
     const off = fellBack()
-    priv(off).noteRoleFallback()
-    await new Promise((r) => setTimeout(r, 20))
+    await priv(off).noteRoleFallback()
     expect(priv(off)._serveUnfit).toBeNull()
     vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
     const on = fellBack()
-    priv(on).noteRoleFallback()
-    await vi.waitFor(() => expect(priv(on)._serveUnfit).toMatchObject({ expected: EXPECTED }))
+    await priv(on).noteRoleFallback()
+    expect(priv(on)._serveUnfit).toMatchObject({ expected: EXPECTED })
   })
 
   it('a Mac\'s service failure is kept on disk per host and build: a new connection (a leader restart) on the same build reads it back', async () => {
@@ -154,8 +153,8 @@ describe('a follower that fell back, as the leader reads it', () => {
       vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
       const first = fellBack()
       vi.spyOn(priv(first), 'hostPlatform').mockResolvedValue('darwin')
-      priv(first).markServeUnfit(EXPECTED, 'the walnut file did not come up as the Walnut service there', { serviceFailed: true })
-      await vi.waitFor(async () => expect(await serveUnfits.read('ssh:studio-mac')).toMatchObject({ expected: EXPECTED }))
+      await priv(first).markServeUnfit(EXPECTED, 'the walnut file did not come up as the Walnut service there', { serviceFailed: true })
+      expect(await serveUnfits.read('ssh:studio-mac')).toMatchObject({ expected: EXPECTED })
       const again = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
       vi.spyOn(priv(again), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
       expect(await priv(again).keptServeUnfit()).toMatchObject({ expected: EXPECTED, why: expect.stringMatching(/did not come up/) })
@@ -174,9 +173,8 @@ describe('a follower that fell back, as the leader reads it', () => {
         const c = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
         vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: null })
         const plat = vi.spyOn(priv(c), 'hostPlatform').mockResolvedValue(platform)
-        priv(c).markServeUnfit(EXPECTED, 'no walnut file of this build for linux-x64 (download failed)', { serviceFailed })
+        await priv(c).markServeUnfit(EXPECTED, 'no walnut file of this build for linux-x64 (download failed)', { serviceFailed })
         expect(priv(c)._serveUnfit, `${platform} ${serviceFailed}`).toMatchObject({ expected: EXPECTED })
-        await new Promise((r) => setTimeout(r, 20))
         if (serviceFailed) expect(plat).toHaveBeenCalled()
       }
       expect(await serveUnfits.read('ssh:devbox')).toBeNull()

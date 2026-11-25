@@ -70,7 +70,7 @@ describe('pruning old versions on a Mac', () => {
   }
   const UID = process.getuid!()
   const psSays = (text: string) => (file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string) => void) => {
-    expect([file, args]).toEqual(['/bin/ps', ['-axww', '-o', 'uid=,comm=']])
+    expect([file, args]).toEqual(['/bin/ps', ['-axww', '-o', 'uid=', '-o', 'comm=']])
     cb(null, text)
   }
 
