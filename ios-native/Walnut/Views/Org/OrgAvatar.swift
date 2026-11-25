@@ -35,6 +35,8 @@ final class OrgAvatarLoader {
 
     @ObservationIgnored private var slots: [Key: Slot] = [:]
     @ObservationIgnored private var inflight: [Key: Task<Void, Never>] = [:]
+    /// How many erases ran: a read started before one is of the pairing that left.
+    @ObservationIgnored private var erasures = 0
     private let fetch: (String, Int) async throws -> Data?
     private let now: () -> Date
 
@@ -75,8 +77,10 @@ final class OrgAvatarLoader {
         if let at = slots[key]?.answeredAt, Self.isFresh(at, now: now()) { return }
         if let running = inflight[key] { return await running.value }
         let fetch = self.fetch
+        let erasedBefore = erasures
         let task = Task { @MainActor in
-            defer { self.inflight[key] = nil }
+            // A read cancelled by an erase never clears the next pairing's read of the same key.
+            defer { if self.erasures == erasedBefore { self.inflight[key] = nil } }
             do {
                 let data = try await fetch(key.taskId, key.pixels)
                 // Erased meanwhile (Disconnect): this answer belongs to the pairing that left.
@@ -101,6 +105,7 @@ final class OrgAvatarLoader {
     func eraseAll() {
         for task in inflight.values { task.cancel() }
         inflight = [:]
+        erasures += 1
         for slot in slots.values {
             if slot.image != nil { slot.image = nil }
             slot.data = nil
