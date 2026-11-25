@@ -24,12 +24,12 @@
  * The table is written to $WALNUT_TASK_DIR/hold-matrix-<surface>-<engine>.json and the log.
  * Run in WebKit too (no CSS scroll anchoring there): `walnut-dev webkit tests/e2e/browser/threads-hold-matrix.spec.ts`.
  *
- * The whole matrix is an acceptance run, about six minutes a browser: THREADS_HOLD_MATRIX=1 runs it
- * (after any change to the hold, the anchor or what a Threads list draws; tests/web/threads-hold.test.ts
- * fails when the list draws something the matrix has no column for). Every run keeps the short
- * test below it: the case he reported (a new card above while he reads at the very top) and the
- * same while he types. The flags are the server's own and other Threads specs set them too, so six
- * minutes beside them in every run would be six minutes for one of them to change the view under it.
+ * Every run takes the cells of what he reported (inRun: at the list at the very top, and the
+ * pointer on a card in the middle), about two minutes; THREADS_HOLD_MATRIX=1 runs the whole matrix,
+ * about six minutes a browser, after any change to the hold, the anchor or what a Threads list
+ * draws (tests/web/threads-hold.test.ts fails when the list draws something the matrix has no
+ * column for). The flags are the server's own and other Threads specs put theirs back while this
+ * one runs, so the page reads his flags whatever the server says meanwhile (pinHisFlags).
  */
 import fs from 'node:fs'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -49,6 +49,13 @@ const SEPARATE = { separate_reason: 'Each garden row is its own decision.' }
 const HIS_FLAGS = ['task_threads', 'threads_pop_up', 'letters_as_threads', 'top_thread', 'reply_thread_line', 'ack_means_known', 'threads_one_card', 'brief_off', 'org_leaders', 'quiet_rail', 'topics'] as const
 const made: string[] = []
 const ids = { task: '', sid: '', lead: '', leadSid: '' }
+/**
+ * The ones the server itself reads for what this spec writes (a task's threads, his Acknowledge);
+ * the rest only choose what the page draws, and the page reads them pinned (pinHisFlags), so they
+ * are never set on the server: putting them back at the end changed the view under another Threads
+ * spec still running (the groups left thread-groups-folds' rail).
+ */
+const SERVER_FLAGS = ['task_threads', 'letters_as_threads', 'reply_thread_line', 'ack_means_known', 'org_leaders']
 let flagsWere: Record<string, boolean> = {}
 let n = 0
 
@@ -61,6 +68,9 @@ type Pos = 'top' | 'little' | 'middle'
 type Presence = 'pointer' | 'typing' | 'away'
 const POSITIONS: Pos[] = ['top', 'little', 'middle']
 const PRESENCES: Presence[] = ['pointer', 'typing', 'away']
+/** The whole matrix, or in every run the cells of what he reported: at the list at the very top, and the pointer on a card in the middle. */
+const WHOLE = !!process.env.THREADS_HOLD_MATRIX
+const inRun = (pos: Pos, presence: Presence) => WHOLE || (pos === 'top' ? presence !== 'away' : pos === 'middle' && presence === 'pointer')
 
 interface Node { task: string; sid: string }
 interface Ctx { page: Page; request: APIRequestContext; node: Node; target: string | null; targetGroup: string | null; box: string }
@@ -370,6 +380,7 @@ async function runMatrix(page: Page, request: APIRequestContext, surface: 'pane'
     }
     for (const pos of POSITIONS) {
       for (const presence of PRESENCES) {
+        if (!inRun(pos, presence)) continue
         const c = await runCell(page, request, surface, node, box, pos, presence, ch)
         console.log(`[cell] ${surface} ${c.verdict} ${pos} ${presence} ${ch.name}: dev ${c.maxDev} scroll ${c.scroll ?? ''} ${c.reading ?? ''} ${c.note ?? ''}`)
         cells.push(c)
@@ -387,8 +398,8 @@ test.beforeAll(async ({ request }) => {
   test.setTimeout(400_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks and threads: run them on a test server, never production')
   const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  flagsWere = Object.fromEntries(HIS_FLAGS.map((f) => [f, cfg.config?.experimental?.[f] === true]))
-  const on = await request.put('/api/config', { data: { experimental: Object.fromEntries(HIS_FLAGS.map((f) => [f, true])) } })
+  flagsWere = Object.fromEntries(SERVER_FLAGS.map((f) => [f, cfg.config?.experimental?.[f] === true]))
+  const on = await request.put('/api/config', { data: { experimental: Object.fromEntries(SERVER_FLAGS.map((f) => [f, true])) } })
   expect(on.ok(), await on.text()).toBe(true)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   const cwd = `${fixtureRoot}/projects/walnut`
@@ -437,6 +448,21 @@ async function keepSocket(page: Page): Promise<void> {
   })
 }
 
+/**
+ * His flags as this page reads them, whatever the server says meanwhile: they are the server's own,
+ * and another Threads spec that ends while this one runs puts them back (the groups left the rail
+ * mid-run that way). Only the page's reads: the server keeps what beforeAll set.
+ */
+async function pinHisFlags(page: Page): Promise<void> {
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const res = await route.fetch()
+    const body = await res.json() as { config?: { experimental?: Record<string, boolean> } }
+    body.config = { ...body.config, experimental: { ...body.config?.experimental, ...Object.fromEntries(HIS_FLAGS.map((f) => [f, true])) } }
+    await route.fulfill({ response: res, json: body })
+  })
+}
+
 /** The list is drawn once it holds this many of the 14 seeded cards: the matrix run before the proof moves a card or two out of Done. */
 const LIST_MIN = 10
 
@@ -466,10 +492,10 @@ const judged = (cells: Cell[]) => cells.filter((c) => c.verdict === 'FAIL').map(
 
 // Both surfaces in one test, judged together at the end: a surface that fails still lets the other run.
 test('nothing above the card he reads moves it, in the session pane and the Org rail', async ({ page, request }) => {
-  test.skip(!process.env.THREADS_HOLD_MATRIX, 'the whole matrix is an acceptance run: THREADS_HOLD_MATRIX=1')
   const pageErrors: string[] = []
   page.on('pageerror', (err) => pageErrors.push(err.message))
   await isolateUiPrefs(page)
+  await pinHisFlags(page)
   await keepSocket(page)
   const all: Cell[] = []
   for (const surface of ['pane', 'rail'] as const) {
@@ -488,6 +514,7 @@ test('nothing above the card he reads moves it, in the session pane and the Org 
 test('a new card above does not move the card he reads at the very top, or the box he types in', async ({ page, request }) => {
   const video = await startProofVideo(page)
   await isolateUiPrefs(page)
+  await pinHisFlags(page)
   const box = await openRail(page)
   const lead = { task: ids.lead, sid: ids.leadSid }
   await page.evaluate((b) => { document.querySelector<HTMLElement>(b)!.scrollTop = 0 }, box)

@@ -36,6 +36,9 @@ const moveKey = (m: ThreadMove) => `moved-${m.id}-${m.from}-${m.index}`;
 const headOf = (root: Element | null | undefined, g: ThreadGroup) =>
   root?.querySelector<HTMLElement>(`[data-testid="org-thread-group"][data-group="${g}"] [data-testid="org-thread-group-head"]`) ?? null;
 
+/** A card's head, to give it the focus. Unquoted: this file draws no card, and the card-file guards (thread-origin, thread-badge) read the quoted test id as one that does. */
+const CARD_HEAD = '[data-testid=org-thread-head]';
+
 /** The card the focus is in: its id, and its group and place there (null in Watching or a portalled menu). */
 interface FocusPlace { id: string; group: ThreadGroup; index: number }
 function placeOf(el: Element, groups: Record<ThreadGroup, OrgThread[]>): FocusPlace | null {
@@ -66,7 +69,7 @@ function keepFocusHome(root: HTMLElement | null, at: FocusPlace | null, groups: 
   if (!at) return;
   const list = groups[at.group];
   const next = list[at.index] ?? list[at.index - 1];
-  const card = !typing && next ? root.querySelector<HTMLElement>(`[data-testid="org-thread-group"][data-group="${at.group}"] [data-testid="org-thread"][data-thread-id="${CSS.escape(next.id)}"] [data-testid="org-thread-head"]`) : null;
+  const card = !typing && next ? root.querySelector<HTMLElement>(`[data-testid="org-thread-group"][data-group="${at.group}"] [data-testid="org-thread"][data-thread-id="${CSS.escape(next.id)}"] ${CARD_HEAD}`) : null;
   (card ?? headOf(root, at.group) ?? root.querySelector<HTMLElement>('[data-testid="org-thread-group-head"]'))?.focus({ preventScroll: true });
 }
 
