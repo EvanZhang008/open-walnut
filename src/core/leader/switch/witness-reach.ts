@@ -22,6 +22,8 @@ export interface WitnessReachOne {
   held?: PermitRecord | null
   /** Its list generation (answered only). */
   epoch?: number | null
+  /** It has a direct door (its `url` and `key`): a way that stands once the old leader stopped (answered only). */
+  door?: boolean
   why?: string
 }
 
@@ -83,7 +85,7 @@ export async function probeWitnessReach(o: {
   const epochs = new Map(r.replies.map((x) => [x.witness, x.epoch ?? null]))
   const answered = new Set(held.keys())
   const witnesses = o.places.map((p): WitnessReachOne => {
-    if (answered.has(p.id)) return { id: p.id, answered: true, way: came.get(p.id) ?? 'here', held: held.get(p.id) ?? null, epoch: epochs.get(p.id) ?? null }
+    if (answered.has(p.id)) return { id: p.id, answered: true, way: came.get(p.id) ?? 'here', held: held.get(p.id) ?? null, epoch: epochs.get(p.id) ?? null, door: isRemoteWitness(p) && !!(p.url && p.key) }
     return { id: p.id, answered: false, why: whyNot(p, o.here, drops.get(p.id), o.hostLink) }
   })
   return { machine: o.here.machineId, witnesses, answered: answered.size, majority: answered.size >= need, standing: r.standing }
@@ -121,14 +123,14 @@ export function commitReach(r: WitnessReachReport): number {
 /**
  * How many of the witnesses reached hold a record that passes `test`. Not the standing: a witness
  * that was out of reach for a while holds an older renew of the same holder, which is no
- * disagreement about who holds the permission. Every way counts, `host-link` too: the answer says what
- * the witness HOLDS, and a witness that answered over the host link is often reached by its direct door
- * as well, which the commit then takes (counting it out refused a switch that commits: the remote
- * rehearsal's split after the stop). Whether the commit has a majority without the host link is the
- * check's question (commitReach).
+ * disagreement about who holds the permission. A `host-link` answer counts when that witness also has a
+ * direct door, which the commit takes once the old leader stopped (counting every host-link answer out
+ * refused a switch that commits: the remote rehearsal's split after the stop); one reached only over the
+ * host link does not. Whether the commit has a majority without the host link is also the check's
+ * question (commitReach).
  */
 export function reachedHolding(r: WitnessReachReport, test: (held: PermitRecord) => boolean): number {
-  return r.witnesses.filter((w) => w.answered && w.held && test(w.held)).length
+  return r.witnesses.filter((w) => w.answered && (w.way !== 'host-link' || w.door === true) && w.held && test(w.held)).length
 }
 
 /** One line for a person: which witnesses the machine reaches, and why each other one is missing. */

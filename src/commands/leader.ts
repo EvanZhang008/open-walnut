@@ -31,7 +31,7 @@ export async function runLeaderSwitchCommand(options: Record<string, unknown>): 
     // The jobs themselves (the command below starts them, detached): exit 0 done, 3 rolled back, 1 refused.
     if (options.job === 'source') {
       const { runSourceJob } = await import('../core/leader/switch/source-job.js')
-      const st = await runSourceJob({ home, ...(typeof options.to === 'string' ? { to: options.to } : {}), ...(typeof options.switch === 'string' ? { switchId: options.switch } : {}), ...(typeof options.forwardedBy === 'string' ? { forwardedBy: options.forwardedBy } : {}), back: !!options.back, resume: !!options.resume, out })
+      const st = await runSourceJob({ home, ...(typeof options.to === 'string' ? { to: options.to } : {}), ...(typeof options.switch === 'string' ? { switchId: options.switch } : {}), back: !!options.back, resume: !!options.resume, out })
       process.exitCode = st.step === 'done' ? 0 : 3
       return
     }

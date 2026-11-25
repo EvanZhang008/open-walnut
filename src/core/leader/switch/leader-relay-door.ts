@@ -24,6 +24,7 @@
  * the DaemonConnection destroys the stream before this module loads.
  */
 import fs from 'node:fs'
+import path from 'node:path'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, RELAY_WHOAMI_PATH } from './leader-relay.js'
@@ -51,9 +52,26 @@ export interface ForwardedBegin {
 
 const forwarded = new Map<string, ForwardedBegin>()
 
-/** The forwarded begin of `switchId`, if this server took one (the source job's own begin on loopback reads it). */
-export function forwardedBeginOf(switchId: string): ForwardedBegin | null {
-  return forwarded.get(switchId) ?? null
+/** What is kept on disk of a forwarded begin: who began it, over which link (written only here, from the link). */
+export type KeptForwardedBegin = Pick<ForwardedBegin, 'switchId' | 'to' | 'by' | 'hostKey' | 'at'>
+
+/** Beside the source state of `home`: a forwarded begin, so its job's own begin finds it after a restart of this server. */
+export function forwardedBeginFile(home: string, switchId: string): string {
+  return path.join(home, 'local', 'leader-switch', `forwarded-begin-${switchId}.json`)
+}
+
+/**
+ * The forwarded begin of `switchId`, if this server took one (the source job's own begin on loopback reads it): in
+ * memory, else (`home` given: a restart of this server since) as kept on disk. Never from anything a request says.
+ */
+export function forwardedBeginOf(switchId: string, home?: string): KeptForwardedBegin | null {
+  const had = forwarded.get(switchId)
+  if (had) return had
+  if (!home) return null
+  try {
+    const k = JSON.parse(fs.readFileSync(forwardedBeginFile(home, switchId), 'utf8')) as KeptForwardedBegin
+    return k && k.switchId === switchId && typeof k.to === 'string' && k.by?.via === 'forwarded' ? k : null
+  } catch { return null }
 }
 
 /** Tests only. */
@@ -71,8 +89,10 @@ export interface ForwardedBeginDeps {
   underWay(): { id: string; to: string; step: string } | null
   /** Who began it, in the console and Walnut Health. */
   record(o: { switchId: string; from: string; to: string; by: StartedBy }): void
+  /** Keep the begin on disk before its job starts (forwardedBeginOf after a restart); absent: memory only. */
+  keep?(k: KeptForwardedBegin): void
   /** Start the source job, detached; its log and where its output for this switch starts. */
-  startSourceJob(o: { switchId: string; to: string; forwardedBy: string }): { log: string; from: number; pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> }
+  startSourceJob(o: { switchId: string; to: string }): { log: string; from: number; pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> }
 }
 
 export interface RelayAnswerBody { status: number; json: Record<string, unknown> }
@@ -100,15 +120,17 @@ export async function beginForwarded(from: RelayFrom, body: unknown, deps: Forwa
     const open = deps.underWay()
     if (open) return { status: 409, json: { ok: false, why: `switch ${open.id} to ${open.to} is under way here (step ${open.step})`, leader: me.machine } }
     const by: StartedBy = { machine: to, via: 'forwarded' }
+    const at = new Date().toISOString()
     let job: ReturnType<ForwardedBeginDeps['startSourceJob']>
     try {
-      // The job carries who began it, so its own begin on loopback says so after a restart of this server too.
-      job = deps.startSourceJob({ switchId, to, forwardedBy: to })
+      // Kept first, so the job's own begin on loopback finds who began it after a restart of this server too.
+      deps.keep?.({ switchId, to, by, hostKey: from.hostKey, at })
+      job = deps.startSourceJob({ switchId, to })
     } catch (err) {
       return { status: 500, json: { ok: false, why: `the switch job did not start on ${me.machine}: ${err instanceof Error ? err.message : String(err)}`, leader: me.machine } }
     }
     deps.record({ switchId, from: me.machine, to, by })
-    const entry: ForwardedBegin = { switchId, to, by, hostKey: from.hostKey, at: new Date().toISOString(), job: { log: job.log, from: job.from, pid: job.pid, exit: null } }
+    const entry: ForwardedBegin = { switchId, to, by, hostKey: from.hostKey, at, job: { log: job.log, from: job.from, pid: job.pid, exit: null } }
     forwarded.set(switchId, entry)
     void job.exit.then((e) => { entry.job.exit = e })
     return { status: 200, json: { ok: true, switchId, leader: me.machine, startedBy: by } }
@@ -163,14 +185,15 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
 
 /** The production deps of the forwarded begin, in a leader server. */
 async function serverDeps(): Promise<ForwardedBeginDeps> {
-  const [{ currentLeaderPermit }, { switchLink }, { WALNUT_HOME }, { readSwitchState, SOURCE_FINAL }, { startSourceJobFor }] = await Promise.all([
-    import('./boot.js'), import('./switch-link.js'), import('../../../constants.js'), import('./flow.js'), import('./switch-command.js'),
+  const [{ currentLeaderPermit }, { switchLink }, { WALNUT_HOME }, { readSwitchState, SOURCE_FINAL }, { startSourceJobFor }, { writeDurableJson }] = await Promise.all([
+    import('./boot.js'), import('./switch-link.js'), import('../../../constants.js'), import('./flow.js'), import('./switch-command.js'), import('./records.js'),
   ])
   return {
     leader: () => { const p = currentLeaderPermit(); return p && !p.trial ? { machine: p.machine } : null },
     switchLink,
     underWay: () => { const st = readSwitchState(WALNUT_HOME); return st && !SOURCE_FINAL.has(st.step) ? { id: st.id, to: st.to, step: st.step } : null },
     record: (o) => { void recordBegin(o) },
+    keep: (k) => { writeDurableJson(forwardedBeginFile(WALNUT_HOME, k.switchId), k) },
     // As the switch command on this machine starts it (its env, its log beside this machine's id).
     startSourceJob: (o) => startSourceJobFor({ home: WALNUT_HOME, ...o }),
   }

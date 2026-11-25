@@ -238,7 +238,6 @@ export function registerCommands(program: Command): void {
     .option('--home <dir>', 'The leader\'s home (default: this Walnut\'s)')
     .option('--job <side>', 'Run one machine\'s job of a switch: source or target (the command starts it)')
     .option('--switch <id>', 'The switch of a job')
-    .option('--forwarded-by <machine>', 'A source job of a switch begun on that machine (its leader started the job)')
     .option('--standby-dir <dir>', 'The standby folder of a target job, or of this machine when the switch is run here, on the machine that will lead')
     .option('--check', 'A target job\'s candidate check only: read, report, change nothing')
     .action(async (options: Record<string, unknown>) => {

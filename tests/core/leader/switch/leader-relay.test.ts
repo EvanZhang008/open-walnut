@@ -43,7 +43,8 @@ import { waysOf } from '../../../../src/core/leader/switch/witness-transport.js'
 import { runTargetJob } from '../../../../src/core/leader/switch/target-job.js'
 import { runCandidateSwitch } from '../../../../src/core/leader/switch/candidate-command.js'
 import { DaemonConnection } from '../../../../src/providers/daemon-connection.js'
-import { relayAbsent } from '../../../../src/core/leader/switch/leader-relay.js'
+import { _forgetWhoami, relayAbsent } from '../../../../src/core/leader/switch/leader-relay.js'
+import { reachedHolding, type WitnessReachReport } from '../../../../src/core/leader/switch/witness-reach.js'
 import type { RemoteWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
 import type { SwitchSide } from '../../../../src/core/leader/switch/side.js'
 import type { CheckReport } from '../../../../src/core/leader/switch/ticket.js'
@@ -59,7 +60,11 @@ const roots = { 'w-a': path.join(base, 'a', 'leader-witness'), 'w-b': path.join(
 const here = { machineId: 'machine-m', root: path.join(base, 'm', 'leader-witness'), walnutId: () => WALNUT }
 
 /** The fake host link: a TCP hop into the leader's relay door, which the test delays, drops (no stream) and cuts. */
-const fault = { delayMs: 0, refuse: false, cutAfterBytes: -1 }
+const fault = { delayMs: 0, refuse: false, cutAfterBytes: -1, silent: false }
+/** Streams the fake host link opened (one per relay connection). */
+let opened = 0
+/** A peer that takes the stream and never answers (a leader's server half way through its stop). */
+let silentPort = 0
 let linkServer: net.Server
 let linkPort = 0
 let companion: http.Server
@@ -72,8 +77,9 @@ const socketPath = leaderRelaySocketPath(path.join(base, 'mdaemon'), WALNUT)
 /** One stream of the host link: what the Mac's daemon relays to the leader's DaemonConnection. */
 const hostLinkStream = (): Promise<net.Socket> => new Promise((resolve, reject) => {
   if (fault.refuse) { reject(new Error('the daemon has no primary')); return }
+  opened++
   setTimeout(() => {
-    const s = net.connect(linkPort, '127.0.0.1')
+    const s = net.connect(fault.silent ? silentPort : linkPort, '127.0.0.1')
     s.once('connect', () => {
       if (fault.cutAfterBytes >= 0) {
         let n = 0
@@ -105,6 +111,9 @@ beforeAll(async () => {
   companion = http.createServer(app)
   await new Promise<void>((r) => companion.listen(0, '127.0.0.1', () => r()))
   companionPort = (companion.address() as net.AddressInfo).port
+  const silent = net.createServer((sock) => { sock.pause() })
+  await new Promise<void>((r) => silent.listen(0, '127.0.0.1', () => r()))
+  silentPort = (silent.address() as net.AddressInfo).port
   // A door nobody answers at (the leader's and the other dev box's public doors, out of the Mac's reach).
   const s = net.createServer()
   await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()))
@@ -124,7 +133,7 @@ afterAll(async () => {
   fs.rmSync(base, { recursive: true, force: true })
 })
 
-beforeEach(() => { Object.assign(fault, { delayMs: 0, refuse: false, cutAfterBytes: -1 }); spy.links.length = 0 })
+beforeEach(() => { Object.assign(fault, { delayMs: 0, refuse: false, cutAfterBytes: -1, silent: false }); spy.links.length = 0; _forgetWhoami() })
 
 const viaRelay = (): StreamOpener => relaySocketOpener(socketPath)
 const startRelay = async (linked = true) => {
@@ -292,5 +301,45 @@ describe('a candidate that is a host of the leader', () => {
     expect(logs).toHaveLength(1)
     expect(logs[0]).toMatch(/not served the socket path is \d+ bytes, more than a unix socket takes \(103\)/)
     expect(relayAbsent(deep)).toMatch(/this Walnut's service on this machine does not serve its leader relay: the socket path is \d+ bytes/)
+  })
+
+  it('whoami over a relay whose leader takes the stream and never answers: no host-link way, within its bound (never a wait for good)', async () => {
+    await startRelay()
+    fault.silent = true
+    const env = { ...process.env, WALNUT_DAEMON_DIR: path.join(base, 'mdaemon') }
+    const t0 = Date.now()
+    expect(await hostLinkCallHere(WALNUT, env)).toBeNull()
+    expect(Date.now() - t0).toBeLessThan(8_000)
+  }, 20_000)
+
+  it('whoami is asked once per relay socket for a while: kept when it answered, not asked again soon when it did not', async () => {
+    await startRelay()
+    const env = { ...process.env, WALNUT_DAEMON_DIR: path.join(base, 'mdaemon') }
+    opened = 0
+    expect((await hostLinkCallHere(WALNUT, env))?.machine).toBe('machine-a')
+    expect((await hostLinkCallHere(WALNUT, env))?.machine).toBe('machine-a')
+    expect(opened).toBe(1)
+    _forgetWhoami()
+    fault.refuse = true
+    expect(await hostLinkCallHere(WALNUT, env)).toBeNull()
+    fault.refuse = false
+    opened = 0
+    // Within the retry time a failed whoami is not asked again, even with the leader back.
+    expect(await hostLinkCallHere(WALNUT, env)).toBeNull()
+    expect(opened).toBe(0)
+  }, 20_000)
+})
+
+describe('the wait for the handover counts a host-link answer only for a witness with a direct door', () => {
+  it('a host-link answer of a witness with a direct door counts, of one without does not; every other way counts', () => {
+    const held = { number: 7, kind: 'handover', holder: 'machine-a', to: 'machine-m' } as never
+    const r = (w: Array<{ way: 'here' | 'host-link' | 'direct'; door: boolean }>): WitnessReachReport => ({
+      machine: 'machine-m', answered: w.length, majority: true, standing: null,
+      witnesses: w.map((x, i) => ({ id: `w${i}`, answered: true, way: x.way, door: x.door, held })),
+    })
+    const isIt = (x: { number: number }) => x.number === 7
+    expect(reachedHolding(r([{ way: 'here', door: false }, { way: 'host-link', door: true }]), isIt)).toBe(2)
+    expect(reachedHolding(r([{ way: 'here', door: false }, { way: 'host-link', door: false }]), isIt)).toBe(1)
+    expect(reachedHolding(r([{ way: 'direct', door: true }, { way: 'host-link', door: false }, { way: 'here', door: false }]), isIt)).toBe(2)
   })
 })

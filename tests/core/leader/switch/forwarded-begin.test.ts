@@ -38,7 +38,7 @@ for (const d of [sa, sb]) fs.mkdirSync(d, { recursive: true })
 /** The leader machine-a, its copy going to machine-b's standby_dir (`standby`), its host links by key. */
 function deps(o: { standby?: { dir?: string; host?: string }; links?: Record<string, string | null>; underWay?: ReturnType<ForwardedBeginDeps['underWay']>; leader?: boolean; settings?: LeaderSwitchSettings } = {}) {
   const recorded: Array<{ switchId: string; from: string; to: string; by: StartedBy }> = []
-  const started: Array<{ switchId: string; to: string; forwardedBy: string }> = []
+  const started: Array<{ switchId: string; to: string }> = []
   let closed = 0
   const d: ForwardedBeginDeps = {
     leader: () => (o.leader === false ? null : { machine: 'machine-a' }),
@@ -74,7 +74,7 @@ describe('the leader takes a forwarded begin only from the machine it goes to', 
   it('taken by the first condition: the machine id the link\'s own hello said is `to` (no host_key needed)', async () => {
     const f = deps({ links: { 'host-of-b': 'machine-b' } })
     expect((await f.begin('host-of-b', { to: 'machine-b', switchId: 'S-2a' })).status).toBe(200)
-    expect(f.started).toEqual([{ switchId: 'S-2a', to: 'machine-b', forwardedBy: 'machine-b' }])
+    expect(f.started).toEqual([{ switchId: 'S-2a', to: 'machine-b' }])
   })
 
   it('taken by the second condition: the link is the leader\'s host whose key leader_switch.machines gives `to` (its hello says another id)', async () => {
@@ -124,7 +124,7 @@ describe('the leader takes a forwarded begin only from the machine it goes to', 
     const r = await f.begin('dev-b', { to: 'machine-b', switchId: 'S-6' })
     expect(r).toEqual({ status: 200, json: { ok: true, switchId: 'S-6', leader: 'machine-a', startedBy: { machine: 'machine-b', via: 'forwarded' } } })
     expect(f.recorded).toEqual([{ switchId: 'S-6', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' } }])
-    expect(f.started).toEqual([{ switchId: 'S-6', to: 'machine-b', forwardedBy: 'machine-b' }])
+    expect(f.started).toEqual([{ switchId: 'S-6', to: 'machine-b' }])
     expect(f.closed()).toBe(1)
     expect(forwardedBeginOf('S-6')?.by).toEqual({ machine: 'machine-b', via: 'forwarded' })
     const again = await f.begin('dev-b', { to: 'machine-b', switchId: 'S-6' })

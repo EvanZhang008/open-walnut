@@ -35,8 +35,6 @@ export interface SourceJobOptions {
   startedBy?: StartedBy
   /** The switch's id, when the command made it on the new leader's machine (a forwarded begin); default a new one. */
   switchId?: string
-  /** The machine that began it there (a forwarded begin, leader-relay-door.ts): its begin on loopback says so. */
-  forwardedBy?: string
   /** This machine (default LocalSide of the home's machine). */
   side?: SwitchSide
   /** Tests: the witnesses, the notes, the service role, where it dies (a test kill point), how long the new leader may take to say it saw the handover. */
@@ -178,7 +176,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
       if (cancelAsked() && PRE_COMMIT.has(s.step) && s.step !== 'preflight') { s.rollbackWhy ??= 'cancelled by hand'; save('cancel', 'cancelled by hand'); continue }
       switch (s.step) {
         case 'preflight': {
-          await preflight(s, settings, side, read, o.forwardedBy)
+          await preflight(s, settings, side, read)
           save('handover', `checks passed; handing over to ${s.to}`)
           break
         }
@@ -357,7 +355,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
   }
 }
 
-async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: SwitchSide, read: () => Promise<WitnessReading>, forwardedBy?: string): Promise<void> {
+async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: SwitchSide, read: () => Promise<WitnessReading>): Promise<void> {
   const problems: string[] = []
   const running = src.runningServer()
   st.sourceWasRunning = !!running
@@ -380,7 +378,7 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   if (readMarker(st.sourceHome)) problems.push('this home carries a leader-switch marker already')
   // Who started it, recorded by the leader (console and Walnut Health), and the trust rule for a begin.
   if (running && !problems.length) {
-    const b = await src.api('POST', '/api/leader/switch/begin', { to: st.to, switchId: st.id, ...(forwardedBy ? { forwardedBy } : {}) }).catch(() => null)
+    const b = await src.api('POST', '/api/leader/switch/begin', { to: st.to, switchId: st.id }).catch(() => null)
     const bj = b?.json as { ok?: boolean; why?: string; startedBy?: StartedBy } | null
     if (!bj?.ok) problems.push(`the old leader refused the switch: ${bj?.why ?? `status ${b?.status ?? 0}`}`)
     else if (bj.startedBy) st.startedBy = bj.startedBy

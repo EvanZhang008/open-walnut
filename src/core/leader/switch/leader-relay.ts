@@ -140,6 +140,19 @@ export async function hostLinkCallHere(walnutId: string, env: NodeJS.ProcessEnv 
   const socket = leaderRelaySocketPath(await relayDaemonDir(env), walnutId)
   if (relayAbsent(socket)) return null
   const open = relaySocketOpener(socket)
-  const machine = await relayMachine(open)
+  // Asked once per socket for a while: a job that probes every 2 s (the target job's wait for the mark) does not
+  // wait for a whoami each time, and once the leader stopped answering it stops asking for a while.
+  const seen = whoamiSeen.get(socket)
+  const fresh = seen && Date.now() - seen.at < (seen.machine ? WHOAMI_KEEP_MS : WHOAMI_RETRY_MS)
+  const machine = fresh ? seen.machine : await relayMachine(open)
+  if (!fresh) whoamiSeen.set(socket, { machine, at: Date.now() })
   return machine ? { call: hostLinkWitnessCall(streamDoorPost(open)), machine } : null
 }
+
+/** The last whoami of each relay socket: its machine (null: none answered) and when. */
+const whoamiSeen = new Map<string, { machine: string | null; at: number }>()
+const WHOAMI_KEEP_MS = 30_000
+const WHOAMI_RETRY_MS = 10_000
+
+/** Tests only. */
+export function _forgetWhoami(): void { whoamiSeen.clear() }

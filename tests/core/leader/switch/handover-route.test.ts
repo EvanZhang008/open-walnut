@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
+import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -34,6 +35,8 @@ const settings = {
   ],
 }
 
+// Every home path of the routes in a temp dir (never ~/.open-walnut).
+vi.mock('../../../../src/constants.js', async () => (await import('../../../helpers/mock-constants.js')).createMockConstants('walnut-handover-route'))
 vi.mock('../../../../src/core/leader/switch/boot.js', () => ({ currentLeaderPermit: () => permit }))
 vi.mock('../../../../src/web/server.js', () => ({
   listeningAddress: () => null, onPlainStop: () => {}, switchStopAvailable: () => true,
@@ -167,16 +170,20 @@ describe('the begin a source job asks on loopback', () => {
   const begin = (body: Record<string, unknown>) => fetch(`${base}/api/leader/switch/begin`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     .then(async (r) => ({ status: r.status, json: await r.json() as { ok: boolean; startedBy?: unknown } }))
 
-  it('records a forwarded begin by the job\'s own word when this server lost it (a restart in between), only for `to` itself', async () => {
+  it('a forwarded begin this server lost by a restart is read as its relay door kept it; what a request says counts for nothing', async () => {
     began.length = 0
-    const fwd = await begin({ to: 'machine-b', switchId: '20261124T000000-bbbbbb', forwardedBy: 'machine-b' })
-    expect(fwd.json).toEqual({ ok: true, startedBy: { machine: 'machine-b', via: 'forwarded' } })
-    // A word naming another machine than `to` is no forwarded begin (only `to` forwards): this machine's command.
-    const other = await begin({ to: 'machine-b', switchId: '20261124T000000-cccccc', forwardedBy: 'machine-c' })
-    expect(other.json).toEqual({ ok: true, startedBy: { machine: 'machine-a', via: 'cli' } })
-    expect(began).toEqual([
-      { switchId: '20261124T000000-bbbbbb', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' } },
-      { switchId: '20261124T000000-cccccc', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-a', via: 'cli' } },
-    ])
+    const { WALNUT_HOME } = await import('../../../../src/constants.js')
+    const { forwardedBeginFile } = await import('../../../../src/core/leader/switch/leader-relay-door.js')
+    const { writeDurableJson } = await import('../../../../src/core/leader/switch/records.js')
+    const kept = '20261124T000000-bbbbbb'
+    writeDurableJson(forwardedBeginFile(WALNUT_HOME, kept), { switchId: kept, to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' }, hostKey: 'machine-b', at: new Date().toISOString() })
+    try {
+      // Kept by the door: its job's begin answers who began it, and records nothing again.
+      expect((await begin({ to: 'machine-b', switchId: kept })).json).toEqual({ ok: true, startedBy: { machine: 'machine-b', via: 'forwarded' } })
+      // No record kept: a body that says it was forwarded is this machine's own command.
+      const other = await begin({ to: 'machine-b', switchId: '20261124T000000-cccccc', forwardedBy: 'machine-b', startedBy: { machine: 'machine-b', via: 'forwarded' } })
+      expect(other.json).toEqual({ ok: true, startedBy: { machine: 'machine-a', via: 'cli' } })
+      expect(began).toEqual([{ switchId: '20261124T000000-cccccc', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-a', via: 'cli' } }])
+    } finally { fs.rmSync(forwardedBeginFile(WALNUT_HOME, kept), { force: true }) }
   })
 })

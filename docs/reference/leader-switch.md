@@ -182,8 +182,8 @@ Source job:
 Target job:
 
 1. **wait-mark**: the handover stands at a majority this machine reaches (within 10 s, else it gives
-   up; an answer over its host link to the old leader counts: it says what the witness holds, and the check
-   made sure a majority answers without that link), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
+   up; an answer over its host link to the old leader counts for a witness that also has a direct door,
+   which the commit takes once the old leader stopped, and not for one reached only over that link), then it waits for the final mark. Every 2 s it reads the witnesses: a record of the old
    leader above the handover (its cancel) means it took the lead back, and the job rolls back.
    It never promotes without the mark, and starts no commit after the deadline.
 2. **promote**: the switch claim goes beside this machine's id ([A launcher during a switch](#a-launcher-during-a-switch)),
@@ -255,8 +255,9 @@ is its account's machine id, which is not the permit's id where `WALNUT_MACHINE_
 another, as in the rehearsal) (`final-stop.ts` `beginRefusal`, through `switch-link.ts`, which also
 checks the copy link answers). Both names are read off the DaemonConnection the stream arrived on; nothing
 the request says about where it comes from counts. One forwarded begin at a time: a second one while the
-first is between its checks and its job is refused. The job is started with `--forwarded-by <to>`, so its
-own begin on loopback records the forwarded begin even when the leader's server restarted in between. Either way the
+first is between its checks and its job is refused. The relay door keeps the begin on disk before it starts
+the job (`local/leader-switch/forwarded-begin-<id>.json`), so the job's own begin on loopback reads who began it
+even when the leader's server restarted in between; what that loopback request says is never taken for it. Either way the
 leader's console (its log) and Walnut Health record who began it on which machine
 (`Started by the switch command on machine-a`, or `Started by machine-b, forwarded by its replica`),
 and the source state keeps it (`startedBy`, shown by `--status`).
@@ -315,13 +316,17 @@ is known by its link. The door answers, one request per stream:
 |---|---|
 | `POST /leader-switch/begin` | the forwarded begin (above) |
 | `GET /leader-switch/job?switchId=&from=` | the output of the source job that begin started, whole lines from a byte offset, whether it runs, its step; only to the host link the begin came over (another gets the 404 of an unknown switch) |
-| `GET /leader-switch/whoami` | the machine id of the leader (only while it holds a permit that is no trial): the one machine whose witness the `host-link` way asks there |
+| `GET /leader-switch/whoami` | the machine id of the leader (only while it holds a permit that is no trial): the one machine whose witness the `host-link` way asks there. A process keeps the answer of a socket for 30 s, and after none does not ask again for 10 s (the target job probes every 2 s) |
 | `POST /leader-witness/challenge`, `/request` | this machine's witness door (`witness-door.ts`, the one the capability `witness-door` opens), proven with the witness's own key |
 
 With the permit not running, the DaemonConnection destroys such a stream before any switch code loads. Every
 process of the candidate's machine (the command, its check, the target job's probe) reaches the door by opening
 that socket: none builds a link (`leader-relay.ts`, the opener injected everywhere as `StreamOpener`, so the
 transport does not care how the stream is made). No new key, no new ssh, no public door, no daemon change.
+Every request over it is bounded by `requestOver` itself (`src/core/host-server/request-over.ts`): idle time with
+nothing moving, its stream destroyed. http.request's own `timeout` option never fires on a stream handed over
+already connected, so a leader that takes the stream half way through its stop and never answers would hold the
+caller (a target job's wait for the mark, the command's polls) for good.
 A service that cannot serve it (a daemon dir too deep for a unix socket's 103 bytes, say) logs why once per
 reason and writes it beside the socket (`<socket>.why`); the command there reports that reason instead of
 "no relay socket".
