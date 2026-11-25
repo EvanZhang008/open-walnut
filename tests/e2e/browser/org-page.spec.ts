@@ -301,7 +301,7 @@ test('the rows hold still under the pointer, and take their new order once it le
   }, { timeout: 15_000 }).toBe(true)
 })
 
-test('a task whose Board asks the user to choose needs them: its row, its line, the ask, and its name opens the Board', async ({ page, request }) => {
+test('a task whose Board asks the user to choose needs them: its row, its line, the ask, and its name opens the task', async ({ page, request }) => {
   // No prompt in any session: only the task's status says it needs the user (src/core/user-status.ts).
   const project = `Org page choice ${STAMP}`
   const id = await createTask(request, `Renewal ${STAMP}`, project)
@@ -334,10 +334,11 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Pick the renewal date ${STAMP}`)
   await expect(alert.getByTestId('org-ask-category')).toHaveCount(0)
-  // The task's name leads to where the ask lives: the Board.
+  // The task's name leads to the task, beside the page: the project has no VP yet, so the row's
+  // Board is not the task's (2026-11-25: its one task is never the row's own node).
   await alert.getByTestId('org-alert-link').click()
-  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')
-  await expect(page.getByTestId('board-status-answer')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('org-side')).toHaveAttribute('data-target', new RegExp(id))
+  await expect(page.getByTestId('org-chat-start')).toHaveAttribute('data-state', 'no-vp')
 })
 
 async function letterFrom(request: APIRequestContext, taskId: string, subject: string): Promise<void> {
@@ -351,8 +352,9 @@ async function letterFrom(request: APIRequestContext, taskId: string, subject: s
     .toBe('letter')
 }
 
-test('a task waiting on a decision letter needs the user: its name opens the letter, in its chat or beside the page', async ({ page, request }) => {
-  // The row's own task: its chat. A task under a row with no lead: beside the page.
+test('a task waiting on a decision letter needs the user: its name opens the letter beside the page', async ({ page, request }) => {
+  // A row with no VP yet, of one task or several: its tasks are not the row's own node, so a letter
+  // opens beside the page (2026-11-25: the one task is never the row's node).
   const project = `Org page letter ${STAMP}`
   const id = await createTask(request, `Lease ${STAMP}`, project)
   await letterFrom(request, id, `Sign the lease ${STAMP}`)
@@ -361,32 +363,24 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await createTask(request, `Movers ${STAMP}`, other)
   await letterFrom(request, deposit, `Send the deposit ${STAMP}`)
 
-  await openOrg(page)
-  await page.getByTestId('org-search').fill(project)
-  const r = row(page, project)
-  await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
-  await expect(r).toHaveAttribute('title', new RegExp(`\\nLease ${STAMP}: Decide: \\S`))
-  await r.click()
-  await expectChatShown(page)
-  await showTasks(page)
-  const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
-  await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Sign the lease ${STAMP}`)
-  await alert.getByTestId('org-alert-link').click()
-  const chat = page.getByTestId('org-chat')
-  await expect(chat.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
-  await expect(chat.locator('.session-inbox-pane')).toContainText(`Sign the lease ${STAMP}`)
-  await page.keyboard.press('Escape')
-  await expect(chat.locator('.session-inbox-pane')).toHaveCount(0)
-
-  await page.getByTestId('org-search').fill(other)
-  await row(page, other).click()
-  await showTasks(page)
-  const beside = page.getByTestId('org-alert').filter({ hasText: `Deposit ${STAMP}` })
-  await expect(beside.getByTestId('org-ask-summary')).toHaveText(`Send the deposit ${STAMP}`)
-  await beside.getByTestId('org-alert-link').click()
-  const side = page.getByTestId('org-side')
-  await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
-  await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
+  for (const [name, title, subject] of [[project, `Lease ${STAMP}`, `Sign the lease ${STAMP}`], [other, `Deposit ${STAMP}`, `Send the deposit ${STAMP}`]] as const) {
+    await openOrg(page)
+    await page.getByTestId('org-search').fill(name)
+    const r = row(page, name)
+    await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
+    await expect(r).toHaveAttribute('title', new RegExp(`\\n${title}: Decide: \\S`))
+    await r.click()
+    await expect(page.getByTestId('org-chat-start')).toHaveAttribute('data-state', 'no-vp')
+    await showTasks(page)
+    const alert = page.getByTestId('org-alert').filter({ hasText: title })
+    await expect(alert.getByTestId('org-ask-summary')).toHaveText(subject)
+    await alert.getByTestId('org-alert-link').click()
+    const side = page.getByTestId('org-side')
+    await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
+    await expect(side.locator('.session-inbox-pane')).toContainText(subject)
+    await page.keyboard.press('Escape')
+    await expect(side.locator('.session-inbox-pane')).toHaveCount(0)
+  }
 })
 
 test('back on the Org page, it is where it was: the pick, its folds, the task beside it, the list scroll; a reload too', async ({ page }) => {
