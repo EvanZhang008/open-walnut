@@ -205,9 +205,8 @@ describe('only running workers', () => {
     const e = fakeEmbedder({ passageMs: 30 })
     const texts = Array.from({ length: 40 }, (_, i) => `rose bed ${i}`)
     const first = passageVectors(e, texts, 5_000)
-    await new Promise((r) => setTimeout(r, 10))
-    // One batch in flight, not all three at once.
-    expect(e.passageCalls).toBe(1)
+    // One batch in flight, not all three at once (three started together would never read 1).
+    await vi.waitFor(() => expect(e.passageCalls).toBe(1))
     e.up = { query: true, passage: false }
     expect((await first).size).toBe(16)
     expect(e.batches.map((b) => b.length)).toEqual([16])
