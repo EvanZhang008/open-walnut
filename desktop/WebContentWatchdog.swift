@@ -505,6 +505,11 @@ final class WebContentWatchdog {
                 var fields = sampleFields
                 fields["level"] = level.rawValue
                 fields["categories"] = footprintSummary(rows)
+                // The app side of the page's graphics: its layers in the web view, and in the whole
+                // window (a layer kept outside the web view's tree shows up only in the second).
+                fields["webviewLayers"] = WebContentProcess.layerCensusField(WebContentProcess.layerCensus(self.webView?.layer))
+                fields["windowLayers"] = WebContentProcess.layerCensusField(
+                    WebContentProcess.layerCensus(self.webView?.window?.contentView?.superview?.layer))
                 DesktopLogger.shared.log("webcontent_breakdown", fields: fields)
                 self.postToServer(level: "info", message: "page process memory by category", fields: fields)
             }

@@ -108,6 +108,31 @@ enum WebContentProcess {
         }
     }
 
+    /// How many layers this process holds under `root`, and of them how many draw something
+    /// (`contents` set: a page's layer backing surface) and how many show nothing (hidden or fully
+    /// transparent, themselves or through an ancestor).
+    /// 2026-11-25: the app held 4,487 WebKit compositing layers and 1,054 layer surfaces that only
+    /// WindowServer still shared (3.4 GB), for one page of about 2,300 nodes. This census says whether
+    /// they sit in the web view's own layer tree (and, by `hidden`, whether that tree still shows them).
+    struct LayerCensus: Equatable { var total = 0, withContents = 0, hidden = 0, maxDepth = 0 }
+
+    static func layerCensus(_ root: CALayer?, limit: Int = 200_000) -> LayerCensus {
+        var census = LayerCensus()
+        var stack: [(CALayer, Int, Bool)] = root.map { [($0, 0, false)] } ?? []
+        while let (layer, depth, hiddenAbove) = stack.popLast(), census.total < limit {
+            let hidden = hiddenAbove || layer.isHidden || layer.opacity == 0
+            census.total += 1
+            if layer.contents != nil { census.withContents += 1 }
+            if hidden { census.hidden += 1 }
+            census.maxDepth = max(census.maxDepth, depth)
+            for sub in layer.sublayers ?? [] { stack.append((sub, depth + 1, hidden)) }
+        }
+        return census
+    }
+
+    /// The census as a log field: "total/withContents/hidden/maxDepth".
+    static func layerCensusField(_ c: LayerCensus) -> String { "\(c.total)/\(c.withContents)/\(c.hidden)/\(c.maxDepth)" }
+
     /// The page a view shows, never the blank page `emptyInPlace` or a retire put there.
     static func pageURL(_ view: WKWebView) -> URL? {
         guard let url = view.url, url.scheme != "about" else { return nil }

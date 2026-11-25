@@ -70,6 +70,13 @@ if [ "$(uname -s)" = Darwin ]; then
         -o "$OUT_DIR/walnut-demo-app-tests"
     "$OUT_DIR/walnut-demo-app-tests"
 
+    swiftc -parse-as-library \
+        "$ROOT/tests/desktop/layer-census-tests.swift" \
+        "$ROOT/desktop/WebContentProcess.swift" \
+        -framework Cocoa -framework WebKit \
+        -o "$OUT_DIR/walnut-layer-census-tests"
+    "$OUT_DIR/walnut-layer-census-tests"
+
     swiftc \
         "$ROOT/tests/desktop/claude-sign-in-tests.swift" \
         "$ROOT/desktop/ClaudeSignInBridge.swift" \
