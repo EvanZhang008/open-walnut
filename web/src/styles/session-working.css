@@ -75,5 +75,8 @@
   white-space: nowrap;
 }
 
-/* The workers line under the live turn's working line takes its own line (SessionWorkingIndicator). */
-.session-working-row > .session-working-row { flex-basis: 100%; }
+/* The workers line under the live turn's working line takes its own line (SessionWorkingIndicator),
+   no wider than the column: a flex item's min-width is its content's by default, so without the
+   zero the longest worker's chip widened the line past a narrow column and its title lost its
+   ellipsis (2026-11-25, 13 workers in a 508px column while the lead's turn ran). */
+.session-working-row > .session-working-row { flex-basis: 100%; min-width: 0; max-width: 100%; }
