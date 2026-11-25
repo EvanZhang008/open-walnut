@@ -294,6 +294,15 @@ function printsOnItsOwn(c: ShellCommand): boolean {
   return true
 }
 
+/**
+ * The code of a timeout or a gateway answer (502/503/504) that was mostly this machine's sleep:
+ * counted as unreachable (Walnut was away), never as the tool's or the route's own fault; a thrown
+ * error or a 500 stays a fault, and a read is slow only by its time awake (record.ts sleptOf)
+ * (2026-11-25: the Mac slept 3.4 hours on 1% battery, and two host_exec_read calls held across it
+ * rang "A watched tool fails" as timeouts of 12,380,000 ms).
+ */
+export const ASLEEP_CODE = 'asleep'
+
 /** How a failed op call ended, from what the op answered (executor.ts OpOutcome). */
 export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string; result?: unknown }): { cls: 'refused' | 'bad_args' | 'error' | 'timeout' | 'unreachable'; code: string } {
   const code = safeCode(r.code)

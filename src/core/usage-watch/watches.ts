@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { emptyAgg, mergeAgg, msPercentile, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readHours, usageDb } from './store.js'
-import { pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
+import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -208,7 +208,7 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   if (agg.calls > 0 && failPct > c.max_fail_pct) notes.push(`failures ${failPct}% over ${c.max_fail_pct}%`)
   if (c.no_new_codes) {
     const before = mergedFor(target, since - 7 * 24 * HOUR_MS, since)
-    const fresh = Object.keys(agg.codes).filter((k) => !(k in before.codes) && !k.startsWith('http_4') && k !== 'unreachable')
+    const fresh = Object.keys(agg.codes).filter((k) => !(k in before.codes) && !k.startsWith('http_4') && k !== 'unreachable' && k !== ASLEEP_CODE)
     if (fresh.length) { out.newCodes = fresh.slice(0, 10); notes.push(`new error code${fresh.length === 1 ? '' : 's'}: ${fresh.slice(0, 5).join(', ')}`) }
   }
   out.ok = notes.length === 0

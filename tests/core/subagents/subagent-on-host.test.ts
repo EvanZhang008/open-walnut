@@ -817,6 +817,37 @@ describe('a Walnut subagent outlives the server', () => {
     expect(restoreSubagentCallerAliases()).toBe(0)
   }, 90_000)
 
+  // 2026-11-25: two deploys 14 s apart. The second server stopped while its startup recovery still
+  // ran, before it took the run up, and wrote the run with no session: the third failed a 31-minute
+  // run as "restarted before its session had started" while its CLI still ran on.
+  it('a server that stops before it took a run up writes its session again: the next one carries it on', async () => {
+    await updateSessionRecord(SID, { process_status: 'idle' } as never)
+    hold()
+    const run = await startLightSubagent(SID, { host: 'cloud', prompt: 'A long job.', background: true })
+    await until(() => starts.length > 0 && !!lightSubagentRows(SID)[0]?.walnutSessionId)
+    const sid = String(lightSubagentRows(SID)[0]!.walnutSessionId)
+    await updateSessionRecord(sid, { process_status: 'running', pid: 4242, status_reason: 'session_started' } as never)
+    await detachAllLightSubagents('the first deploy')
+    _forgetLightSubagentsForTest()
+    // The next server lists it; its startup recovery has not ended when it stops too.
+    void restoreLightSubagents(new Promise<void>(() => {}))
+    await detachAllLightSubagents('the second deploy')
+    _forgetLightSubagentsForTest()
+    _clearCallerAliasesForTest()
+    await restoreLightSubagents()
+    expect(lightSubagentRows(SID).map((r) => [r.taskId, r.status, r.walnutSessionId])).toEqual([[run.id, 'running', sid]])
+    expect(canonicalCallerSid(sid)).toBe(SID)
+    expect(starts).toHaveLength(1)
+    expect(W.stops).toEqual([])
+    release!()
+    await until(() => told(run.id).length > 0)
+    expect(told(run.id).map((d) => d.sid)).toEqual([SID])
+    expect(told(run.id)[0]!.text).toContain('the cut-off answer')
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    stopLightSubagent(SID, run.id, 'the test')
+    await lightSubagentSettled(run.id)
+  }, 90_000)
+
   it('a turn that ended while the server was down (its session idle, no end seen) is asked again, and the answer is told', async () => {
     await updateSessionRecord(SID, { process_status: 'idle' } as never)
     hold()

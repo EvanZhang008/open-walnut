@@ -142,6 +142,13 @@ interface Live {
   timer?: ReturnType<typeof setTimeout>
   idleTimer?: ReturnType<typeof setTimeout>
   handle: Handle | null
+  /**
+   * What the server before this one wrote of its session, kept until this server takes it up
+   * (restoreLightSubagents): a server that stops in between writes it down again as it came
+   * (2026-11-25: two restarts 14 s apart wrote a 31-minute run with no session, and the next
+   * server failed it as "restarted before its session had started" while its CLI still ran).
+   */
+  savedHandle?: SubagentSessionState
   /** Turns run one after another: a follow-up sent while one runs waits for it. */
   chain: Promise<void>
   /** The caller turn running now (1 = the first prompt). */
@@ -818,7 +825,7 @@ function saveNow(): void {
   for (const l of runs.values()) {
     const untold = [...l.tells.values()].some((t) => !t.told)
     if (l.settled && !untold) continue
-    const handle = l.handle?.state?.()
+    const handle = l.handle?.state?.() ?? (l.handle ? undefined : l.savedHandle)
     // Only what the next server needs: ends not told yet, and the latest one (a read of it shows it).
     const tells = [...l.tells].filter(([turn, t]) => !t.told || turn === l.run.turnsEnded)
     rows.push({ run: l.run, ...(handle ? { handle } : {}), tells, pending: l.pending, settled: l.settled })
@@ -912,6 +919,7 @@ export async function restoreLightSubagents(ready: Promise<unknown> = Promise.re
     const live = newLive(s.run)
     live.tells = new Map(s.tells)
     live.pending = [...s.pending]
+    if (s.handle) live.savedHandle = s.handle
     if (s.settled) { live.settled = true; live.settle(); live.closing = Promise.resolve() }
     runs.set(s.run.id, live)
     // The session runner has reattached the sessions and replayed their queues first.

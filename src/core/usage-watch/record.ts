@@ -13,9 +13,10 @@ import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
 import { addEvents, addHours, addToolErrors, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
 import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
-import { TemplateMatcher, type PageErrorKind } from './normalize.js'
+import { ASLEEP_CODE, TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { labelValue } from './counters.js'
+import { sleptBetween } from '../../lib/sleep-ledger.js'
 
 const HOUR_MS = 3_600_000
 const FLUSH_MS = 60_000
@@ -26,6 +27,15 @@ const MAX_EVENTS_PER_FLUSH = 200
 export const SLOW_READ_MS = 5_000
 
 export { USAGE_COUNTERS } from './counters.js'
+
+/**
+ * How much of a call's `ms` (wall clock, as its callers measure it) this machine slept (the sleep
+ * ledger), with a second's margin for a sleep that ended as the call's awake time began.
+ */
+const SLEPT_MARGIN_MS = 1_000
+function sleptOf(now: number, ms: number): number {
+  return ms > 0 ? Math.min(ms, sleptBetween(now - ms - SLEPT_MARGIN_MS, now)) : 0
+}
 
 /** The routes a page failure is matched against (only templates this server answered). */
 export const answeredTemplates = new TemplateMatcher()
@@ -120,9 +130,13 @@ export interface OpCall {
 }
 
 /** One gateway tool call. */
-export function recordOpCall(c: OpCall): void {
+export function recordOpCall(call: OpCall): void {
   if (!active) return
-  const now = c.now ?? Date.now()
+  const now = call.now ?? Date.now()
+  // A timeout that was mostly this machine's sleep: Walnut was away (ASLEEP_CODE), not the tool's
+  // fault; its time is the part awake. A thrown error is the tool's fault, slept or not.
+  const slept = call.cls === 'timeout' ? sleptOf(now, call.ms) : 0
+  const c: OpCall = slept > 0 && slept * 2 >= call.ms ? { ...call, cls: 'unreachable', code: ASLEEP_CODE, ms: call.ms - slept } : call
   const agg = bucket('op', c.op, now)
   const overLimit = c.overLimit && !c.whole
   addCall(agg, { cls: c.cls, ...(c.code ? { code: c.code } : {}), ...(c.whole && c.cls === 'ok' ? {} : { chars: c.size }), ms: c.ms })
@@ -228,20 +242,28 @@ export function recordHttp(r: HttpRequest): void {
   // Health's host link), not on every route that read through it (2026-11-23: deploys cut the
   // clouddev link, and the history route's "Reconnecting" answers rang as its server errors).
   // Any other 503 (a store busy, a state unavailable) is still the route's.
-  const unreachable = r.status === 503 && r.hostUnreachable === true
+  const hostAway = r.status === 503 && r.hostUnreachable === true
+  // This machine's sleep inside the request (ASLEEP_CODE): a gateway answer (502/503/504) that was
+  // mostly sleep is Walnut away, and a read is slow only by its time awake. A 500 stays the route's.
+  const gatewayAnswer = r.status === 502 || r.status === 503 || r.status === 504
+  const slept = gatewayAnswer || (r.method === 'GET' && r.ms > SLOW_READ_MS) ? sleptOf(now, r.ms) : 0
+  const awakeMs = r.ms - slept
+  const asleep = gatewayAnswer && !hostAway && slept > 0 && slept * 2 >= r.ms
+  const unreachable = hostAway || asleep
   const serverError = r.status >= 500 && r.status !== 501 && !unreachable
   const cls: OutcomeClass = unreachable ? 'unreachable' : serverError ? 'error' : r.status >= 400 ? 'refused' : 'ok'
+  const code = asleep ? ASLEEP_CODE : `http_${r.status}`
   // A client that left before any answer waited that long: a read held past the slow line is the
   // route holding it (2026-11-24: such hang-ups were counted as waits of 0 ms, so a route that held
   // its page until the page gave up read as fast). A shorter one, or a write's, stays a wait: it
   // says nothing of the route, and a write that waits on purpose (a long poll by POST) would skew
   // its p95.
-  const waited = r.waits || (r.hungUp === true && !(r.method === 'GET' && r.ms > SLOW_READ_MS))
-  addCall(agg, { cls, ...(r.status >= 400 ? { code: `http_${r.status}` } : {}), chars: 0, ms: waited ? 0 : r.ms })
+  const waited = r.waits || (r.hungUp === true && !(r.method === 'GET' && awakeMs > SLOW_READ_MS))
+  addCall(agg, { cls, ...(r.status >= 400 ? { code } : {}), chars: 0, ms: waited ? 0 : awakeMs })
   const labels = { route: labelValue(name) }
   if (unreachable) {
     routeTroubleAt.set(name, now)
-    event({ at: now, kind: 'http', name, problem: 'unreachable', code: `http_${r.status}`, ms: r.ms })
+    event({ at: now, kind: 'http', name, problem: 'unreachable', code, ms: r.ms })
   }
   if (serverError) {
     agg.serverErrors++
@@ -249,7 +271,7 @@ export function recordHttp(r: HttpRequest): void {
     routeTroubleAt.set(name, now)
     event({ at: now, kind: 'http', name, problem: 'server_error', code: `http_${r.status}`, ms: r.ms })
   }
-  if (!waited && r.method === 'GET' && r.ms > SLOW_READ_MS) {
+  if (!waited && r.method === 'GET' && awakeMs > SLOW_READ_MS) {
     agg.slow++
     routeTroubleAt.set(name, now)
     count('usage.http.slow', 1, labels)
