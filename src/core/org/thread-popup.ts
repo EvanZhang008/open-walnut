@@ -122,7 +122,7 @@ export async function poppedIndex(opts: { all?: readonly Task[]; onlyViewer?: st
     const viewers = opts.onlyViewer ? [opts.onlyViewer] : [...viewersOf(owner, c.byId, c.places)];
     for (const v of viewers) {
       const list = byViewer.get(v) ?? [];
-      for (const t of listed) list.push(popped(t, owner, answerable));
+      for (const t of listed) list.push(poppedRow(t, owner, answerable));
       byViewer.set(v, list);
     }
   }
@@ -143,7 +143,7 @@ export async function carriedRows(carried: ReadonlyArray<{ thread: OrgThread; ta
     if (listed.has(c.thread.id)) continue;
     listed.add(c.thread.id);
     if (opts.answerable && !can.has(c.task.id)) can.set(c.task.id, await canAnswerNow(c.task));
-    out.push({ ...popped(c.thread, c.task, opts.answerable ? can.get(c.task.id) : undefined), carries: c.carries });
+    out.push({ ...poppedRow(c.thread, c.task, opts.answerable ? can.get(c.task.id) : undefined), carries: c.carries });
   }
   return out;
 }
@@ -153,7 +153,8 @@ export async function poppedThreadsFor(viewerId: string, opts: { answerable?: bo
   return (await poppedIndex({ onlyViewer: viewerId, ...opts })).byViewer.get(viewerId) ?? [];
 }
 
-function popped(t: OrgThread, owner: Task, answerable: boolean | undefined): PoppedThread {
+/** One thread of `owner` as a node above it lists it (also a handed thread, thread-one-id.ts). */
+export function poppedRow(t: OrgThread, owner: Task, answerable: boolean | undefined): PoppedThread {
   return {
     ...t, owner: { task_id: owner.id, title: orgDisplayTitle(owner) },
     ...(answerable !== undefined ? { can_answer_now: answerable } : {}),
@@ -216,19 +217,27 @@ export async function locateThread(threadId: string, skip?: string): Promise<{ n
 export async function poppedOne(found: { node: string; task?: Task; thread: OrgThread }): Promise<PoppedThread> {
   const owner = found.task ?? (await (await import('../task-manager.js')).listTasksByIds([found.node]))[0];
   if (!owner) return { ...found.thread, owner: { task_id: found.node, title: found.node } };
-  return popped(found.thread, owner, await canAnswerNow(owner));
+  return poppedRow(found.thread, owner, await canAnswerNow(owner));
 }
 
 /**
  * A thread `viewerId` names that is not on its own Threads (a moved thread's pointer there is
- * followed: threads-store.ts threadHolder), under the experiment only: where it lives.
+ * followed: threads-store.ts threadHolder), under the experiment only: where it lives. With
+ * threads_one_id, a thread this node handed to a task is that task's one record here too
+ * (`handed`), whatever threads_pop_up says (thread-one-id-view.ts).
  */
-export async function elsewhereThread(viewerId: string, threadId: string): Promise<{ node: string; task?: Task; thread: OrgThread } | null> {
+export async function elsewhereThread(viewerId: string, threadId: string): Promise<{ node: string; task?: Task; thread: OrgThread; handed?: true } | null> {
   const { threadsPopUpOn } = await import('./thread-popup-rules.js');
-  if (!(await threadsPopUpOn())) return null;
+  const { oneIdOn } = await import('./thread-one-id.js');
+  const popUp = await threadsPopUpOn();
+  if (!popUp && !(await oneIdOn())) return null;
   const store = await import('./threads-store.js');
   const here = (await store.readThreads(viewerId)).threads.find((t) => t.id === threadId);
+  // Asked first: a copy left open here by a cut-off move still reads as the task's (thread-one-id-view.ts).
+  const handed = await (await import('./thread-one-id-view.js')).handedHolder(viewerId, threadId, here);
+  if (handed) return { ...handed, handed: true };
   if (here && !movedAway(here)) return null;
+  if (!popUp) return null;
   if (here) {
     const holder = await store.threadHolder(here.movedTo!.task, threadId).catch(() => null);
     if (holder && !movedAway(holder.thread)) return { node: holder.node, thread: holder.thread };

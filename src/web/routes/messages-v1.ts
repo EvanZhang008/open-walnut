@@ -58,10 +58,16 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
     // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
     // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
     const automationCaller = !trust.callerSid && header(req, CALLER_KIND_HEADER) === 'automation'
+    // threads_one_id: the message that hands the work over says which thread it is (core/org/thread-handoff.ts).
+    const { oneIdOn } = await import('../../core/org/thread-one-id.js')
+    const { sameIdLineBeforeSend, withSameIdLine } = await import('../../core/org/thread-handoff.js')
+    const named = str(b.thread) && str(b.to) && !b.in_reply_to && await oneIdOn()
+      ? await (await import('../../core/sessions/session-send-core.js')).resolveSendTarget(str(b.to)!).catch(() => null) : null
+    const sameId = named ? await sameIdLineBeforeSend({ callerSid: trust.callerSid, target: named.taskId ?? named.session.taskId, threadId: str(b.thread) }) : ''
     try {
       const result = await performSessionSend({
         to: str(b.to),
-        text: typeof b.text === 'string' ? b.text : '',
+        text: withSameIdLine(typeof b.text === 'string' ? b.text : '', sameId),
         // Its client is told "retry" on a timeout: the send gets a deadline that stores nothing
         // when it passes, so the retry never delivers it twice (lib/send-deadline.ts).
         deadline: true,
@@ -113,7 +119,7 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
       // One of the sender's Threads goes with the work it handed on (core/org/thread-follow.ts).
       const { handOffThread } = await import('../../core/org/thread-follow.js')
       const threadHandoff = result.targetTaskId && !result.repliedTo
-        ? await handOffThread({ callerSid: trust.callerSid, target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length })
+        ? await handOffThread({ callerSid: trust.callerSid, target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length, told: sameId ? [str(b.thread)!] : [] })
         : null
       res.status(202).json({ ...result, ...(waiting ? { waiting } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}) })
     } catch (err) {

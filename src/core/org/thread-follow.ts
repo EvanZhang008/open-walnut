@@ -32,6 +32,11 @@ import { projectOrInbox, sameProject } from '../inbox-project.js';
 import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
 import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
+import { oneIdNow, oneIdOn, sameIdTaskLine, stayWords } from './thread-one-id.js';
+import { holdsHanded } from './thread-one-id-view.js';
+import { handOffParties, sameIdDecision, type HandOffResult } from './thread-handoff.js';
+
+export { handOffLine, type HandOffResult } from './thread-handoff.js';
 
 /** Every route that hands work to another task, and so may hand a thread on with it (guard test). */
 export const HANDOFF_ROUTES = [
@@ -101,6 +106,11 @@ export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefi
  */
 export function moveTargetOf(target: FollowTask, p: OrgPlaces): FollowTask | undefined {
   return keepsThreads(target) ? target : ownerNodeOf(target, p);
+}
+
+/** The node a hand-off from `from` to `target` sends a thread's work to. A task with Threads on is no Org node: none. */
+export function handOffTo(from: FollowTask, target: FollowTask, p: OrgPlaces): FollowTask | undefined {
+  return isNode(from) ? ownerNodeOf(target, p) : undefined;
 }
 
 /** The nodes a task reports up through: its owner, the VP leading that owner's project, Main. */
@@ -188,17 +198,19 @@ export function planThreadFollows(nodes: ReadonlyArray<{ node: FollowTask; threa
 function end(t: FollowTask): MoveEnd { return { task: t.id, title: orgDisplayTitle(t as Task) }; }
 
 /** One line for each node, riding its next message (never a wake). The org off: nobody is told. */
-async function tellNodes(move: { from: FollowTask; to: FollowTask; threadId: string; title: string; why: string }, opts: { tellFrom: boolean }): Promise<void> {
+async function tellNodes(move: { from: FollowTask; to: FollowTask; threadId: string; title: string; why: string }, opts: { tellFrom: boolean; toLine?: string }): Promise<void> {
   try {
     const { isOrgEnabled } = await import('./org-enabled.js');
-    if (!(await isOrgEnabled())) return;
+    // A task's own line (threads_one_id) is told with the org off too: a task with Threads on keeps them without it.
+    if (opts.toLine === undefined && !(await isOrgEnabled())) return;
     const { leadSession } = await import('./org-store.js');
     const { tellOrRide } = await import('../sessions/status-push.js');
     const fromName = orgDisplayTitle(move.from as Task);
     const toName = orgDisplayTitle(move.to as Task);
     const toSession = await leadSession(move.to.id);
-    if (toSession) {
-      await tellOrRide(toSession.claudeSessionId, `thread-moved-in:${move.threadId}`,
+    // An empty `toLine`: the message that handed the work over already said it (thread-handoff.ts).
+    if (toSession && opts.toLine !== '') {
+      await tellOrRide(toSession.claudeSessionId, `thread-moved-in:${move.threadId}`, opts.toLine ??
         `Thread ${move.threadId} ${q(move.title)} moved to your Threads from ${fromName} (${move.from.id}), because ${move.why}: the user's messages and the answers came with it. It is yours now: keep it current with thread_update and answer him in it.`);
     }
     if (!opts.tellFrom) return;
@@ -243,7 +255,7 @@ export async function deliverMovedFollowUp(input: { node: string; threadId: stri
   }
 }
 
-async function runMove(move: PlannedMove, by: ThreadWriter, opts: { tellFrom: boolean; owners?: string }, kind: ThreadMoveKind): Promise<OrgThread | null> {
+export async function runMove(move: PlannedMove, by: ThreadWriter, opts: { tellFrom: boolean; owners?: string; toLine?: string }, kind: ThreadMoveKind): Promise<OrgThread | null> {
   const { moveThread } = await import('./threads-store.js');
   try {
     const thread = await moveThread({ from: end(move.from), to: end(move.to), threadId: move.threadId, by, why: move.why, kind, ...(opts.owners !== undefined ? { owners: opts.owners } : {}) });
@@ -306,6 +318,8 @@ export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<
   watched = watchSet([...nodes, ...acked], p);
   let n = 0;
   for (const move of planThreadFollows(nodes, p)) if (await runMove(move, 'agent', { tellFrom: true }, 'work')) n++;
+  // threads_one_id: a thread handed to a task that finished while it waits on him goes back with its work.
+  n += await (await import('./thread-one-id-view.js')).returnFinishedAsks(p).catch(() => 0);
   knownDueAt = undefined;
   // Judged against every task, as at his ack (orgTasks leaves test-run tasks out, which would read as done).
   const { taskStoreSnapshot } = await import('../task-manager.js');
@@ -315,53 +329,50 @@ export async function runThreadFollowPass(opts: { now?: number } = {}): Promise<
   return n;
 }
 
-export interface HandOffResult {
-  moved: Array<{ id: string; title: string; to: MoveEnd }>;
-  linked: Array<{ id: string; title: string }>;
-  /** Why the named thread was not handed on. */
-  refused?: string;
-}
-
-const NO_THREADS = 'Only Main, a lead or a task with Threads on keeps Threads: no thread was handed on.';
-
 /**
  * A node handed work to task `target` (a send, a start, a create). With `threadId`, that thread of
  * the caller's goes with it: to the target's node when that is another node, else it only lists the
  * target. With `handsOn` (a request handed on), the caller's open threads that list the target go to
- * its node when that is another lead. Null when nothing was asked of a thread. Never throws.
+ * its node when that is another lead. `told`: threads whose line the handing message carried
+ * (thread-handoff.ts). Null when nothing was asked of a thread. Never throws.
  */
-export async function handOffThread(input: { callerSid?: string; target: string; threadId?: string; handsOn?: boolean }): Promise<HandOffResult | null> {
+export async function handOffThread(input: { callerSid?: string; target: string; threadId?: string; handsOn?: boolean; told?: readonly string[] }): Promise<HandOffResult | null> {
   if (!input.threadId && !input.handsOn) return null;
   try {
-    const { resolveBoardCaller } = await import('../boards/board-team.js');
-    const caller = await resolveBoardCaller(input.callerSid);
     const refuse = (why: string): HandOffResult | null => (input.threadId ? { moved: [], linked: [], refused: why } : null);
-    if (caller.kind !== 'task') return refuse(NO_THREADS);
-    const { orgTasks } = await import('./org-store.js');
-    const p = orgPlaces(await orgTasks());
-    const from = p.byId.get(caller.taskId);
-    const target = p.byId.get(input.target);
-    if (!from || !keepsThreads(from)) return refuse(NO_THREADS);
-    if (!target) return refuse(`No task ${input.target}: no thread was handed on.`);
+    const parties = await handOffParties(input.callerSid, input.target);
+    if ('refused' in parties) return refuse(parties.refused);
+    const { from, target, p } = parties;
     const store = await import('./threads-store.js');
-    const open = (await store.readThreads(from.id)).threads.filter(isOpen);
+    const mine = (await store.readThreads(from.id)).threads;
+    const open = mine.filter(isOpen);
     const picked = input.threadId
       ? open.filter((t) => t.id === input.threadId)
       : open.filter((t) => (t.tasks ?? []).includes(target.id));
-    if (input.threadId && !picked.length) return refuse(`No open thread ${input.threadId} on your Threads: none was handed on.`);
-    // A task with Threads on is no Org node: its threads stay with it and only list the task.
-    const to = isNode(from) ? ownerNodeOf(target, p) : undefined;
+    const gone = input.threadId && !picked.length ? mine.find((t) => t.id === input.threadId)?.movedTo : undefined;
+    if (input.threadId && !picked.length) return refuse(gone ? `Thread ${input.threadId} is on ${gone.title}'s Threads already (${gone.task}): it was handed on before, so it stays there.` : `No open thread ${input.threadId} on your Threads: none was handed on.`);
+    const to = handOffTo(from, target, p);
     const writer: ThreadWriter = `task:${from.id}`;
     const out: HandOffResult = { moved: [], linked: [] };
+    const oneId = !!input.threadId && await oneIdOn();
     for (const t of picked) {
+      const why = `${orgDisplayTitle(from as Task)} handed it to ${q(target.title)}`;
+      // threads_one_id: a thread named for a task of the caller's own team that keeps Threads goes to that task, same id.
+      const same = oneId ? sameIdDecision({ from, target, thread: t, to, p }) : null;
+      const toLine = input.told?.includes(t.id) ? '' : sameIdTaskLine(t.id, t.title);
+      if (same?.move && await runMove({ from, to: target, threadId: t.id, title: t.title, why }, writer, { tellFrom: false, owners: ownersKey(t.tasks, p), toLine }, 'hand')) {
+        out.moved.push({ id: t.id, title: t.title, to: end(target), same_card: true });
+        continue;
+      }
+      const stays = stayWords(same);
+      const link = () => out.linked.push({ id: t.id, title: t.title, ...(stays ? { stays } : {}) });
       // The thread lists the task it went to (a node needs no chip of itself).
       if (to?.id !== target.id && !(t.tasks ?? []).includes(target.id)) {
         await store.patchThread(from.id, t.id, { add_tasks: [target.id] }, writer).catch(() => {});
       }
-      if (!to || to.id === from.id || !openTask(to)) { out.linked.push({ id: t.id, title: t.title }); continue; }
+      if (!to || to.id === from.id || !openTask(to)) { link(); continue; }
       // hands_on alone moves it only to another lead's team; a thread named moves wherever its work went.
-      if (!input.threadId && to.org_role !== 'lead') { out.linked.push({ id: t.id, title: t.title }); continue; }
-      const why = `${orgDisplayTitle(from as Task)} handed it to ${q(target.title)}`;
+      if (!input.threadId && to.org_role !== 'lead') { link(); continue; }
       const tasks = (t.tasks ?? []).includes(target.id) || to?.id === target.id ? t.tasks : [...(t.tasks ?? []), target.id];
       const moved = await runMove({ from, to, threadId: t.id, title: t.title, why }, writer, { tellFrom: false, owners: ownersKey(tasks, p) }, 'hand');
       if (moved) out.moved.push({ id: t.id, title: t.title, to: end(to) });
@@ -371,16 +382,6 @@ export async function handOffThread(input: { callerSid?: string; target: string;
     log.task.warn('org threads: hand-off failed', { target: input.target, threadId: input.threadId, error: err instanceof Error ? err.message : String(err) });
     return input.threadId ? { moved: [], linked: [], refused: `The thread was not handed on: ${err instanceof Error ? err.message : String(err)}` } : null;
   }
-}
-
-/** The line an op's outcome carries about a hand-off (empty when there was none). */
-export function handOffLine(r: HandOffResult | null | undefined): string {
-  if (!r) return '';
-  const parts: string[] = [];
-  for (const m of r.moved) parts.push(`Thread ${m.id} ${q(m.title)} moved to ${m.to.title}'s Threads with the work; it is closed on yours.`);
-  for (const l of r.linked) parts.push(`Thread ${l.id} ${q(l.title)} lists this task now.`);
-  if (r.refused) parts.push(r.refused);
-  return parts.join(' ');
 }
 
 /**
@@ -470,6 +471,7 @@ export function startThreadFollow(opts: { debounceMs?: number; firstMs?: number 
       }
       const task = d?.task;
       if (!task) { schedule(); return; }
+      if (oneIdNow() && task.phase === 'COMPLETE' && holdsHanded(task.id)) { schedule(); return; }
       if (isNode(task)) {
         // A node's own turns update it all the time: only what it leads, or its closing, can move a thread.
         const key = `${task.project ?? ''}|${(task.org_leads ?? []).join(',')}|${task.phase ?? ''}|${task.org_role ?? ''}`;

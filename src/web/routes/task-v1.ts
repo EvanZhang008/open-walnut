@@ -563,10 +563,13 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
     const { HostsFullError } = await import('../../core/sessions/host-admission.js')
     const { launchErrorCodeOf } = await import('../../core/sessions/mobile-launch.js')
+    // threads_one_id: the message that hands the work over says which thread it is (core/org/thread-handoff.ts).
+    const { sameIdLineBeforeSend, withSameIdLine } = await import('../../core/org/thread-handoff.js')
+    const sameId = str('thread') && str('message') ? await sameIdLineBeforeSend({ callerSid, target: id, threadId: str('thread') }) : ''
     try {
       const started = await startSessionForTask({
         taskIdPrefix: id,
-        message: str('message'),
+        message: sameId ? withSameIdLine(str('message')!, sameId) : str('message'),
         cwd: str('cwd'),
         // The person picked that folder: a VP or lead keeps it instead of its own directory (org-own-folder.ts).
         ...(b.cwd_chosen === true ? { cwdChosen: true } : {}),
@@ -598,7 +601,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       // One of the starter's Threads goes with the work it handed on (core/org/thread-follow.ts),
       // also when the start is still coming up: the work went there either way.
       const { handOffThread } = await import('../../core/org/thread-follow.js')
-      const threadHandoff = await handOffThread({ callerSid, target: started.taskId, threadId: str('thread'), handsOn: !!str('hands_on') })
+      const threadHandoff = await handOffThread({ callerSid, target: started.taskId, threadId: str('thread'), handsOn: !!str('hands_on'), told: sameId ? [str('thread')!] : [] })
       // An agent's start is a sync call (2026-11-06, the user: "if it did not start, it must be an
       // error"): one whose session did not confirm in time answers an error, never a 202 the caller
       // reads as started. The start itself goes on: it may still come up.

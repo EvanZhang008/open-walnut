@@ -65,6 +65,7 @@ import { ACK_PLACES, hasThreadNews, readAfter, readsAsReaction, threadReactionAt
 import { sameDecisionWords } from '../ask-decision.js';
 import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
+import { oneIdNow } from './thread-one-id.js';
 import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
 import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
 import { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
@@ -1205,7 +1206,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.watch === false && cur.watched) checkHisWatch(cur, by, 'unwatched');
   if (patch.close && !cur.closed) checkHisWatch(cur, by, 'closed');
   // His reply from a card above has not reached the task yet: it is not done with it (thread-reply.ts).
-  if (threadsPopUpNow() && by !== 'human' && !cur.closed && (patch.close || patch.state === 'answered') && cur.messages.some(deliveryOpen)) {
+  if ((threadsPopUpNow() || oneIdNow()) && by !== 'human' && !cur.closed && (patch.close || patch.state === 'answered') && cur.messages.some(deliveryOpen)) {
     throw new ThreadError('reply_pending', 409, `Thread ${id} holds his reply that has not reached you yet: read it first (thread_list shows it now; it also comes with your next message).`);
   }
   if (onlyWatch(patch)) return watchOnly(file, cur, patch, by, at);

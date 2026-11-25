@@ -21,6 +21,7 @@ import crypto from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 import { threadsPopUpNow } from './thread-popup-rules.js';
+import { oneIdNow } from './thread-one-id.js';
 import { deliveryOpen, type FileMessageResult, type OrgThread, type ThreadDelivery, type ThreadMessage, type ThreadWriter } from './threads-model.js';
 
 const GATHER_MS = 1_500;
@@ -304,7 +305,8 @@ async function tellAbove(owner: string): Promise<void> {
  */
 export async function sweepThreadReplies(): Promise<void> {
   const { threadsPopUpOn } = await import('./thread-popup-rules.js');
-  if (!(await threadsPopUpOn())) return;
+  // threads_one_id: a handed thread's card takes his replies the same way (thread-one-id.ts).
+  if (!(await threadsPopUpOn()) && !(await (await import('./thread-one-id.js')).oneIdOn())) return;
   const store = await import('./threads-store.js');
   const { findQueuedMessage } = await import('../session-message-queue.js');
   const { wentOutAsLine } = await import('../session-queue-lines.js');
@@ -354,7 +356,7 @@ export function startThreadReplies(opts: { firstMs?: number } = {}): { stop: () 
         return;
       }
       if (event.name === EventNames.ORG_THREADS_CHANGED) {
-        if (d.taskId && d.kind !== 'below' && threadsPopUpNow()) noteOwnerChanged(d.taskId);
+        if (d.taskId && d.kind !== 'below' && (threadsPopUpNow() || oneIdNow())) noteOwnerChanged(d.taskId);
         return;
       }
       if (d.taskId && pendingOwners.has(d.taskId)) scheduleWake(d.taskId);

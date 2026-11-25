@@ -8,6 +8,7 @@ import { BRIEF_READ_ANSWER, BRIEF_WRITE_ANSWER } from './org-answer-shapes.js'
 import type { AnswerFit } from './answer.js'
 import { REVIEW_SCORE_INPUT } from './review-score-input.js'
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
+import { sameIdLineFor } from '../core/org/thread-one-id.js'
 import { defineOp } from './registry.js'
 import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, pageOnce, pagedResult } from './doc-page.js'
 import { materializeBinding } from './executor.js'
@@ -727,6 +728,9 @@ defineOp({
     }
     const extra = placement ? { placement } : {}
     const handoff = (created as { thread_handoff?: HandOffResult } | undefined)?.thread_handoff
+    // threads_one_id: the thread went to the new task before it had a session, so its first message says which it is.
+    const sameId = sameIdLineFor(handoff, id)
+    if (sameId && typeof launch.message === 'string') launch.message = `${launch.message}\n\n${sameId}`
     const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
       + teamSentence(placement) + hostNote + (handoff ? `${handOffLine(handoff)} ` : '')
     // Where its card sits depends on whether a session started, so it is read after the start answers.

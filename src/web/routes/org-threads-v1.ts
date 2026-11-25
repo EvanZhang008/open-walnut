@@ -59,6 +59,8 @@ import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
 import { carriedRows, elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
+import { oneIdOn } from '../../core/org/thread-one-id.js'
+import { handedRows } from '../../core/org/thread-one-id-view.js'
 import { withKnownAwaits } from '../../core/org/thread-ack.js'
 
 export const orgThreadsV1Router = Router()
@@ -192,7 +194,15 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const now = Date.now()
   const open = flag(req.query.open)
   const closedOnly = !open && flag(req.query.closed)
-  let threads = all.filter((t) => (open ? !t.closed : closedOnly ? !!t.closed : true))
+  // threads_one_id: a thread this node handed to a task reads here as that task's one record while it
+  // has something for him, its pointer here stepping aside: one card, one id (core/org/thread-one-id.ts).
+  // A copy left open here by a cut-off move is never a card or a count of its own.
+  const handedRead = closedOnly || !(await oneIdOn()) ? null : await handedRows(task.id, file.threads, { answerable: true })
+  const handed = handedRead?.rows ?? []
+  const handedIds = new Set(handed.map((t) => t.id))
+  const aside = (t: OrgThread) => handedIds.has(t.id) || (!t.closed && !!handedRead?.ids.has(t.id))
+  const mine = handedRead ? all.filter((t) => !aside(t)) : all
+  let threads = mine.filter((t) => (open ? !t.closed : closedOnly ? !!t.closed : true))
   const limit = positive(req.query.limit)
   if (limit !== undefined) threads = threads.slice(0, limit)
   // `answer_max`: each answer he already reacted to cut to that many characters (`clipped`), so a
@@ -201,12 +211,13 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const answerMax = positive(req.query.answer_max)
   const popUp = !closedOnly && await threadsPopUpOn()
   const popped = popUp ? await poppedThreadsFor(task.id, { answerable: true }) : []
-  const below = popUp && view.carried.length ? [...popped, ...await carriedRows(view.carried, popped, { answerable: true })] : popped
+  const listed = popUp && view.carried.length ? [...popped, ...await carriedRows(view.carried, popped, { answerable: true })] : popped
+  const below = handed.length ? [...listed.filter((t) => !handedIds.has(t.id)), ...handed] : listed
   // Judged over ALL the node's threads and the ones below (an answer shared with a closed thread
   // counts). `shown`: his list holds it (thread-view.ts listedForHim). `counted`: it waits on him
   // (thread-groups.ts threadsForHim), the rule `user_status.threads` and `shown_count` count by, so
   // a client's count of its list (the phone's Threads tab) is the badge's. Both additive.
-  const forHim = new Set<unknown>(threadsForHim([...all, ...below], now))
+  const forHim = new Set<unknown>(threadsForHim([...mine, ...below], now))
   const out = [
     ...threads.map((t) => ({
       ...markShared(answerMax === undefined ? t : clipAnswers(t, shared, answerMax), shared),
@@ -230,7 +241,7 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   res.json({
     task_id: task.id, title: task.title, threads: oneCard ? out.map((t) => ({ ...t, one_card: true })) : out,
     closed_count: file.threads.filter((t) => !!t.closed).length,
-    shown_count: threadCounts([...all, ...below], now).shown,
+    shown_count: threadCounts([...mine, ...below], now).shown,
   })
 }))
 
@@ -289,7 +300,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
     // with the thread of this node whose subject it carries, as the list reads it.
     const there = await elsewhereThread(task.id, id)
     if (there) {
-      const carries = view.carried.find((c) => c.thread.id === id)?.carries
+      const carries = view.carried.find((c) => c.thread.id === id)?.carries ?? (there.handed ? id : undefined)
       const one = { ...await poppedOne(there), ...(carries ? { carries } : {}) }
       res.json({ task_id: task.id, thread: { ...one, shown: shownToHim(one, sharedAnswers([one]), Date.now()), counted: threadsForHim([one]).includes(one) } })
       return
@@ -439,7 +450,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     thread = await patchThread(there.node, id, patch, by, source)
     log.task.info('org thread updated on its owner', { taskId: task.id, owner: there.node, threadId: id, by, fields: Object.keys(patch) })
     // Still a result carried here: its card keeps `carries` (its Acknowledge), as the list reads it.
-    const carries = (await nodeView(task.id, (await readThreads(task.id)).threads)).carried.find((c) => c.thread.id === id)?.carries
+    const carries = (await nodeView(task.id, (await readThreads(task.id)).threads)).carried.find((c) => c.thread.id === id)?.carries ?? (there.handed ? id : undefined)
     res.json({ task_id: task.id, thread: { ...await poppedOne({ node: there.node, thread: await projected(there.node, thread) }), ...(carries ? { carries } : {}) } })
     return
   }

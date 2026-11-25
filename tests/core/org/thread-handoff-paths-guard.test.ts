@@ -96,3 +96,61 @@ describe('a task moved by any path moves its thread', () => {
     expect(code(read('src/web/server.ts'))).toContain('startThreadFollow()')
   })
 })
+
+/** Every src file whose code calls `name(`. */
+function callersOf(name: string, dir = 'src'): string[] {
+  const out: string[] = []
+  for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${e.name}`
+    if (e.isDirectory()) out.push(...callersOf(name, rel))
+    else if (e.name.endsWith('.ts') && code(read(rel)).includes(`${name}(`)) out.push(rel)
+  }
+  return out
+}
+
+/** Where `marker` stands in `src`; fails when it is not there (a marker that moved must not pass by accident). */
+function at(src: string, marker: string | RegExp, what: string, from = 0): number {
+  const i = typeof marker === 'string' ? src.indexOf(marker, from) : src.slice(from).search(marker) + from
+  expect(i, `${what}: ${String(marker)} not found`).toBeGreaterThanOrEqual(from)
+  return i
+}
+
+describe('every hand-off goes through the one-id decision (threads_one_id, src/core/org/thread-one-id.ts)', () => {
+  it('handOffThread asks the decision for a named thread before it links it or moves it anywhere', () => {
+    const src = code(read('src/core/org/thread-follow.ts'))
+    const start = at(src, 'export async function handOffThread(', 'handOffThread')
+    const body = src.slice(start, at(src, 'export async function moveThreadTo(', 'the function after handOffThread', start))
+    const decide = at(body, 'sameIdDecision(', 'handOffThread calls sameIdDecision (thread-handoff.ts, the one caller of oneIdDecision)')
+    expect(decide, 'before the link (add_tasks)').toBeLessThan(at(body, 'add_tasks', 'the link'))
+    expect(decide, 'before any move').toBeLessThan(at(body, 'runMove(', 'the move'))
+  })
+
+  it('the rule lives in one place: only handOffThread decides, and every caller hands it the named thread', () => {
+    expect(callersOf('oneIdDecision').filter((f) => f !== 'src/core/org/thread-one-id.ts')).toEqual(['src/core/org/thread-handoff.ts'])
+    // The decision before the send (the handing message's line) and the one at the move are the same function.
+    expect(code(read('src/core/org/thread-handoff.ts')).match(/sameIdDecision\(/g)?.length).toBe(2)
+    const callers = callersOf('handOffThread').filter((f) => f !== 'src/core/org/thread-follow.ts')
+    expect(callers.sort()).toEqual(HANDOFF_ROUTES.map((r) => r.file).sort())
+    for (const rel of callers) {
+      const src = code(read(rel))
+      const i = at(src, 'handOffThread(', rel)
+      const call = src.slice(i, i + 240)
+      expect(call, rel).toMatch(/threadId:/)
+    }
+  })
+
+  it('a create tells the new task which thread it holds (it had no session when the thread moved)', () => {
+    expect(code(read('src/ops/tasks.ts'))).toContain('sameIdLineFor(')
+  })
+
+  it('every route that sends the handing message itself puts the line in it before the send, and tells the move so', () => {
+    // POST /tasks sends no message: its op puts the line in the first one (above).
+    for (const r of HANDOFF_ROUTES.filter((x) => x.path !== '/tasks')) {
+      const src = code(read(r.file))
+      const line = at(src, 'sameIdLineBeforeSend(', `${r.file} decides before the send`)
+      expect(line, `${r.file}: before the send`).toBeLessThan(at(src, /performSessionSend\(|startSessionForTask\(/, `${r.file} sends`))
+      expect(src, r.file).toContain('withSameIdLine(')
+      expect(src.slice(at(src, 'handOffThread(', r.file)), r.file).toMatch(/told:/)
+    }
+  })
+})
