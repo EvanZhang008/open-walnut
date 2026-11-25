@@ -80,7 +80,7 @@ export async function recordNoAnswers(sid: string, host: string, report: unknown
     const taskId = await taskIdOf(sid).catch(() => undefined)
     const where = !host || host === '__local__' ? 'local' : host
     for (const n of items) {
-      if (recordToolError({ at: now - n.ms, sid, ...(taskId ? { taskId } : {}), host: where, op: n.op, client: n.client, code: n.code }, 'client')) counted++
+      if (recordToolError({ at: now - n.ms, sid, ...(taskId ? { taskId } : {}), host: where, op: n.op, client: n.client, code: n.code }, 'client', n.id)) counted++
     }
     log.session.info('real use: a session told calls no Walnut answered', { sessionId: sid, ...(taskId ? { taskId } : {}), host: where, told: items.length, counted, codes: [...new Set(items.map((n) => n.code))] })
   } catch { /* recording never fails a call */ }

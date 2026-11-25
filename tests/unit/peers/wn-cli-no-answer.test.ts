@@ -10,7 +10,7 @@
  * MACHINE SAFETY: the socket and the spool are under a temp dir; the only processes are the CLIs
  * this file starts, each ended when it answers.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
@@ -79,7 +79,7 @@ describe('the CLI tells its calls no Walnut answered', () => {
       up = true
       expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
       const reports = gw.lines.filter((l) => opOf(l) === 'tools.list').map((l) => argsOf(l).report)
-      expect(reports).toEqual([{ no_answer: [{ op: 'host_copy', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }] }])
+      expect(reports).toEqual([{ no_answer: [{ op: 'host_copy', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number), id: expect.any(String) }] }])
       expect(fs.existsSync(spool)).toBe(false)
       // Told once.
       expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
@@ -118,20 +118,35 @@ describe('the CLI tells its calls no Walnut answered', () => {
       back = true
       expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
       const reports = gw.lines.filter((l) => opOf(l) === 'tools.list').map((l) => argsOf(l).report)
-      expect(reports[1]).toEqual({ no_answer: [{ op: 'task_send', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }] })
+      expect(reports[1]).toEqual({ no_answer: [{ op: 'task_send', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number), id: expect.any(String) }] })
       expect(fs.existsSync(spool)).toBe(false)
     } finally { gw.close() }
   }, 60_000)
 
-  it('a failure the session\'s MCP server kept is told by its next CLI call that gets through', async () => {
-    const gw = await gateway((l) => (opOf(l) === 'tools.list' ? { ok: true, result: { recorded: true, no_answer: 1 } } : { ok: true, result: { id: 'x' } }))
+  // The real `walnut mcp-server` process (runMcpServer) writes the session's spool, so a failure it
+  // saw outlives it and the session's next CLI call tells it (2026-11-25: kept in its memory).
+  it('a failure the session\'s MCP server process saw is told by its next CLI call, after that process ended', async () => {
+    let up = false
+    const gw = await gateway((l) => {
+      if (opOf(l) === 'tools.list') return argsOf(l).report ? { ok: true, result: { recorded: true, no_answer: 1 } } : { ok: true, result: { ops: [] } }
+      return up ? { ok: true, result: { id: 'x' } } : { ok: false, error: { code: 'hub_unreachable', message: 'daemon is shutting down', detail: { stopping: true } } }
+    })
     try {
-      const { spoolNoAnswer } = await import('../../../src/lib/no-answer-report.js')
-      fs.mkdirSync(path.join(gw.dir, 'no-answer'), { mode: 0o700 })
-      spoolNoAnswer(path.join(gw.dir, 'no-answer', `${SID}.ndjson`), 'task_get', 'no_daemon', 'mcp')
+      const env: NodeJS.ProcessEnv = { ...process.env, WALNUT_DAEMON_DIR: gw.dir, WALNUT_AGENT_SOCKET: gw.sock, WALNUT_SESSION_ID: SID, WALNUT_MCP_WAIT_MS: '0', WALNUT_CLI_WAIT_MS: '0' }
+      const child = spawn(process.execPath, [runnerFile, 'mcp-server'], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+      child.stderr.resume()
+      let out = ''
+      child.stdout.on('data', (d) => { out += d.toString('utf-8') })
+      const closed = new Promise<void>((resolve) => child.on('close', () => resolve()))
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'task_send', arguments: { to: 'x', message: 'y' } } }) + '\n')
+      await vi.waitFor(() => expect(out).toContain('"id":1'), { timeout: 20_000 })
+      expect(out).toContain('hub_unreachable')
+      child.stdin.end()
+      await closed
+      up = true
       expect(await run(['tools', 'call', 'task_get', '{"id":"x"}'], gw.sock, gw.dir)).toBe(0)
-      const reports = gw.lines.filter((l) => opOf(l) === 'tools.list').map((l) => argsOf(l).report)
-      expect(reports).toEqual([{ no_answer: [{ op: 'task_get', code: 'no_daemon', client: 'mcp', ms: expect.any(Number) }] }])
+      const reports = gw.lines.filter((l) => opOf(l) === 'tools.list' && argsOf(l).report).map((l) => argsOf(l).report)
+      expect(reports).toEqual([{ no_answer: [{ op: 'task_send', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number), id: expect.any(String) }] }])
     } finally { gw.close() }
   }, 60_000)
 })

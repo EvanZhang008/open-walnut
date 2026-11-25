@@ -10713,18 +10713,32 @@ export class ClaudeCodeSession {
 
   /** What this runner last saw of its process's Walnut mount (usage-watch/mount-watch.ts). */
   private _walnutMountSeen: import('../core/usage-watch/mount-watch.js').MountSeen | undefined
+  /** When this runner last asked a process for its mount, and which process (the turn-end gap). */
+  private _mountAskedAt = 0
+  private _mountAskedPid: number | null = null
 
   /**
-   * Whether the process still has its Walnut MCP tools, asked at each turn end (`mcp_status`):
-   * a mount that failed, disconnected or lists none is counted once per drop in the real-use
-   * monitor (2026-11-25: Main resumed with all 119 gone and no row said so). Read-only, never
-   * throws; a CLI that does not know the request answers nothing and nothing is judged.
+   * A turn end asks again only this long after the last ask in one process. The CLI's answer names
+   * every tool of every server (10 KB and more with Walnut's) and lands in the session's stream file,
+   * as get_settings' does (TURN_END_SETTINGS_GAP_MS). A new process (a spawn, a resume) is asked at
+   * its first turn end: that is when a mount comes up or does not (2026-11-25, Main's resume).
+   */
+  static TURN_END_MOUNT_GAP_MS = 15 * 60_000
+
+  /**
+   * Whether the process still has its Walnut MCP tools, asked at a turn end (`mcp_status`): a mount
+   * that failed, disconnected or lists none is counted once per drop in the real-use monitor
+   * (2026-11-25: Main resumed with all 119 gone and no row said so). Read-only, never throws; a CLI
+   * that does not know the request answers nothing and nothing is judged.
    */
   private async checkWalnutMountHere(): Promise<void> {
     const pid = this.pid
     const sid = this.claudeSessionId
     if (!this._transport || pid === null || !sid) return
     if (!this._requestedMcpServers.includes('walnut') || this._walnutMountVerdict === 'blocked') return
+    if (this._mountAskedPid === pid && Date.now() - this._mountAskedAt < ClaudeCodeSession.TURN_END_MOUNT_GAP_MS) return
+    this._mountAskedPid = pid
+    this._mountAskedAt = Date.now()
     try {
       const reply = await this.readControlPayload('mcp-status', 'mcp_status', 10_000)
       if (!reply || this.pid !== pid) return

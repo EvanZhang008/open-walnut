@@ -382,14 +382,14 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   const tellNoAnswers = () => {
     if (!noAnswers.size && !spoolHoldsNoAnswers(spool)) return
     const here = noAnswers.take()
+    // The spool's lines stay in the file until the server took them (their ids count them once).
     const kept = takeSpooledNoAnswers(spool)
     const report = [...kept.report, ...here.report]
-    const putBack = () => { kept.putBack(); here.putBack() }
     // Nothing left to tell (each one past its age): dropped, never kept again.
     if (!report.length) return
     // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
     void deps.request('tools.list', { report: { no_answer: report } }, MCP_SHORT_REPORT_MS)
-      .then((r) => { if (!hubAnswered(r)) putBack() }, () => putBack())
+      .then((r) => { if (hubAnswered(r)) kept.told(); else here.putBack() }, () => here.putBack())
   }
 
   // Calls still running, by the client's request id: `notifications/cancelled` aborts one.

@@ -6,9 +6,10 @@
  * server disconnected)" and no row said so; it had dropped to none twice before. The MCP server
  * cannot tell of its own end, and the short-list report (gateway-record.ts recordShortToolList) comes
  * only from a server that is still there to see its whole list. So the session runner asks Claude
- * Code at every turn end (`mcp_status`, claude-code-session.ts atTurnEnd) and this judges the answer:
- * the mount is gone when Claude Code lists it failed, absent, or connected with no tool, or still
- * pending at a second turn end of the same process (a turn ran without it). One row per drop: the
+ * Code at a turn end (`mcp_status`, claude-code-session.ts checkWalnutMountHere: a new process at its
+ * first, then at most every TURN_END_MOUNT_GAP_MS) and this judges the answer: the mount is gone
+ * when Claude Code lists it failed, absent, or connected with no tool, or still pending at the next
+ * ask of the same process (turns ran without it). One row per drop: the
  * mount must be seen connected again (or a new process start) before another counts, and a runner
  * that knows nothing yet (a server restart re-attached it) takes a row of the last few hours for the
  * drop it sees.

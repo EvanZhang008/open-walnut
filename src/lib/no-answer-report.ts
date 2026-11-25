@@ -20,6 +20,7 @@
  * providers/session-no-answer.ts), which is a Mac session's `walnut`. A guard keeps every such
  * client on this file (tests/core/usage-watch/no-answer-clients-guard.test.ts).
  */
+import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -36,39 +37,53 @@ export interface NoAnswer {
   client: 'mcp' | 'cli'
   /** How long before the report the call failed (a duration, so no two clocks are compared). */
   ms: number
+  /** The failure's own id: a report sent twice (a slow answer that still landed) counts it once. */
+  id?: string
 }
 
-/** At most this many in one report, and kept by one client; older ones go first. */
+/** At most this many in one report, and kept by one session's spool; older ones go first. */
 export const NO_ANSWER_MAX = 50
 /** A failure older than this when it could be told is no longer told. */
 export const NO_ANSWER_MAX_AGE_MS = 24 * 3_600_000
 
 const OP_RE = /^[a-z][a-z0-9_]{0,63}$/
+export const NO_ANSWER_ID_RE = /^[a-z0-9]{6,40}$/
 
-interface Kept { at: number; op: string; code: string; client: 'mcp' | 'cli' }
+interface Kept { at: number; op: string; code: string; client: 'mcp' | 'cli'; id: string }
+
+/** The id of a line an older client wrote without one: the same for every reader of it. */
+function idOf(at: number, op: string, code: string, client: string): string {
+  return createHash('sha1').update(`${at}|${op}|${code}|${client}`).digest('hex').slice(0, 16)
+}
+
+const newId = (): string => randomBytes(8).toString('hex')
 
 function keptOf(v: unknown): Kept | null {
   const r = v as Partial<Kept> | null
   if (!r || typeof r.at !== 'number' || !Number.isFinite(r.at) || typeof r.op !== 'string' || !OP_RE.test(r.op)) return null
   if (typeof r.code !== 'string' || !NO_ANSWER_CODES.has(r.code) || (r.client !== 'mcp' && r.client !== 'cli')) return null
-  return { at: r.at, op: r.op, code: r.code, client: r.client }
+  const id = typeof r.id === 'string' && NO_ANSWER_ID_RE.test(r.id) ? r.id : idOf(r.at, r.op, r.code, r.client)
+  return { at: r.at, op: r.op, code: r.code, client: r.client, id }
 }
 
-/** What is still told: within its age, the last NO_ANSWER_MAX. Only these are ever kept again. */
+/** What is still told: within its age, the last NO_ANSWER_MAX. Only these are ever kept again or told. */
 function fresh(items: readonly Kept[], now: number): Kept[] {
   return items.filter((k) => now - k.at <= NO_ANSWER_MAX_AGE_MS).slice(-NO_ANSWER_MAX)
 }
 
 function told(items: readonly Kept[], now: number): NoAnswer[] {
-  return items.map((k) => ({ op: k.op, code: k.code, client: k.client, ms: Math.max(0, now - k.at) }))
+  return items.map((k) => ({ op: k.op, code: k.code, client: k.client, ms: Math.max(0, now - k.at), id: k.id }))
 }
 
-/** A long-lived client's failures (the MCP server), held in memory until a call gets through. */
+/**
+ * A long-lived client's failures held in memory, only for a spool it cannot write (an outside caller
+ * with no session, or a folder that is not this user's own): the MCP server (walnut-mcp-stdio.ts).
+ */
 export class NoAnswerLog {
   private items: Kept[] = []
 
   note(op: string, code: string, client: 'mcp' | 'cli', now = Date.now()): void {
-    const k = keptOf({ at: now, op, code, client })
+    const k = keptOf({ at: now, op, code, client, id: newId() })
     if (!k) return
     this.items.push(k)
     if (this.items.length > NO_ANSWER_MAX) this.items.splice(0, this.items.length - NO_ANSWER_MAX)
@@ -88,22 +103,28 @@ export class NoAnswerLog {
 }
 
 /**
- * A one-shot client's failures (the CLI), kept in a file beside this host's daemon socket, one per
- * session (`no-answer/<session id>.ndjson`), until a later call of the same session gets through.
- * The directory may sit under a shared /tmp: the file is this user's own regular file, opened
- * without following a link, and a bad line is skipped.
+ * A session's failures, kept in a file beside this host's daemon socket, one per session
+ * (`no-answer/<session id>.ndjson`), until the server took a report of them, whichever client of
+ * the session sends it. Nothing lives only in a process's memory: a line leaves the file only once
+ * the server took it, so a process that ends at any point loses none, and two clients that send the
+ * same lines are counted once by their ids (usage-watch/record.ts). The directory may sit under a
+ * shared /tmp: the file is this user's own regular file, opened without following a link, and a bad
+ * line is skipped.
  */
 export function noAnswerSpoolFile(socketPath: string, sid: string): string | null {
   if (!socketPath || !/^[A-Za-z0-9_-]{1,80}$/.test(sid)) return null
   return path.join(path.dirname(socketPath), 'no-answer', `${sid}.ndjson`)
 }
 
-const SPOOL_MAX_BYTES = 64 * 1024
+/** A spool past this is cut to its last NO_ANSWER_MAX lines when it is written (a night of calls with the server down). */
+const SPOOL_COMPACT_BYTES = 16 * 1024
+/** At most this much of a spool's end is read: a file that grew past it anyway is read by its tail. */
+const SPOOL_READ_BYTES = 64 * 1024
 
-function ownRegularFile(fd: number): boolean {
+function ownFile(fd: number): fs.Stats | null {
   const st = fs.fstatSync(fd)
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1
-  return st.isFile() && (uid < 0 || st.uid === uid) && st.size <= SPOOL_MAX_BYTES
+  return st.isFile() && (uid < 0 || st.uid === uid) ? st : null
 }
 
 /**
@@ -119,81 +140,165 @@ function ownPrivateDir(dir: string): boolean {
   } catch { return false }
 }
 
-/** Keep one failure in the session's spool; true when it was kept. Never throws: counting never fails a call. */
-export function spoolNoAnswer(file: string | null, op: string, code: string, client: 'mcp' | 'cli' = 'cli', now = Date.now()): boolean {
-  const k = keptOf({ at: now, op, code, client })
-  if (!file || !k) return false
+/** The lines a spool file holds (its last SPOOL_READ_BYTES), oldest first; [] for none. */
+function readSpool(file: string): Kept[] {
+  let fd: number | undefined
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const st = ownFile(fd)
+    if (!st) return []
+    const from = Math.max(0, st.size - SPOOL_READ_BYTES)
+    const buf = Buffer.alloc(st.size - from)
+    const n = fs.readSync(fd, buf, 0, buf.length, from)
+    let text = buf.subarray(0, n).toString('utf-8')
+    // Read from its middle: the first line is a part of one.
+    if (from > 0) text = text.slice(text.indexOf('\n') + 1)
+    return text.split('\n').flatMap((l) => {
+      try { const k = keptOf(JSON.parse(l)); return k ? [k] : [] } catch { return [] }
+    }).sort((a, b) => a.at - b.at)
+  } catch { return [] } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
+  }
+}
+
+/** Append lines to the spool (created when missing); its size after, or -1 when nothing was written. */
+function appendLines(file: string, items: readonly Kept[]): number {
+  if (!items.length) return -1
   let fd: number | undefined
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-    if (!ownPrivateDir(path.dirname(file))) return false
+    if (!ownPrivateDir(path.dirname(file))) return -1
     const c = fs.constants
     fd = fs.openSync(file, c.O_WRONLY | c.O_APPEND | c.O_CREAT | (c.O_NOFOLLOW ?? 0), 0o600)
-    if (!ownRegularFile(fd)) return false
-    fs.writeSync(fd, `${JSON.stringify(k)}\n`)
-    return true
-  } catch { return false /* a count only */ } finally {
+    if (!ownFile(fd)) return -1
+    fs.writeSync(fd, items.map((k) => `${JSON.stringify(k)}\n`).join(''))
+    return fs.fstatSync(fd).size
+  } catch { return -1 } finally {
     if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
   }
 }
 
 /**
- * Take what the session's spool holds: its report, and `putBack` to keep it when the report did
- * not go. Taken by a rename first, so two calls ending together tell each failure once.
+ * Rewrite the spool to `keep(lines)`. The file is moved aside first, so a client appending meanwhile
+ * writes a new one and loses nothing; what is kept is appended to it. A process that ends between the
+ * two leaves its `.taking` file, which the next take puts back (reclaimTaking).
  */
-export function takeSpooledNoAnswers(file: string | null, now = Date.now()): { report: NoAnswer[]; putBack: () => void } {
-  const none = { report: [] as NoAnswer[], putBack: () => {} }
-  if (!file || !ownPrivateDir(path.dirname(file))) return none
-  const taking = `${file}.${process.pid}.taking`
-  try { fs.renameSync(file, taking) } catch { return none }
-  let fd: number | undefined
-  let items: Kept[] = []
+function rewrite(file: string, keep: (items: Kept[]) => Kept[]): void {
+  const taking = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.taking`
+  try { fs.renameSync(file, taking) } catch { return }
   try {
-    fd = fs.openSync(taking, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
-    if (ownRegularFile(fd)) {
-      items = fs.readFileSync(fd, 'utf-8').split('\n').flatMap((l) => {
-        try { const k = keptOf(JSON.parse(l)); return k ? [k] : [] } catch { return [] }
-      })
-    }
-  } catch { /* nothing to tell */ } finally {
-    if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
+    appendLines(file, keep(readSpool(taking)))
+  } finally {
     try { fs.rmSync(taking, { force: true }) } catch { /* gone */ }
-  }
-  // Only what is still told goes back: a spool that only ever grew would pass its size and be lost whole.
-  const kept = fresh(items, now)
-  return {
-    report: told(kept, now),
-    putBack: () => { for (const k of kept) spoolNoAnswer(file, k.op, k.code, k.client, k.at) },
   }
 }
 
-/** Whether the session's spool holds anything (one stat after a call that got through). */
+function pidAlive(pid: number): boolean {
+  // Signal 0 only asks whether the process is there; never a group or a broadcast pid.
+  if (!Number.isInteger(pid) || pid <= 1) return false
+  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/** Put back what a process that ended mid-rewrite left aside (`<file>.<pid>.<n>.taking`). */
+function reclaimTaking(file: string): void {
+  const dir = path.dirname(file)
+  const base = `${path.basename(file)}.`
+  let names: string[] = []
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) {
+    const m = name.startsWith(base) ? /^(\d+)\.[0-9a-f]+\.taking$/.exec(name.slice(base.length)) : null
+    if (!m || (Number(m[1]) !== process.pid && pidAlive(Number(m[1])))) continue
+    const left = path.join(dir, name)
+    // Moved once more first, so two takers never both put it back.
+    const mine = `${left}.${process.pid}`
+    try { fs.renameSync(left, mine) } catch { continue }
+    appendLines(file, readSpool(mine))
+    try { fs.rmSync(mine, { force: true }) } catch { /* gone */ }
+  }
+}
+
+let sweptAt = 0
+/** Spools of sessions that ended (nothing written for longer than a line is told) are removed, once an hour. */
+function sweepEnded(dir: string, now: number): void {
+  if (now - sweptAt < 3_600_000) return
+  sweptAt = now
+  let names: string[] = []
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) {
+    if (!/\.ndjson(?:\.\d+\.[0-9a-f]+\.taking(?:\.\d+)?)?$/.test(name)) continue
+    const file = path.join(dir, name)
+    try {
+      const st = fs.lstatSync(file)
+      if (st.isFile() && now - st.mtimeMs > NO_ANSWER_MAX_AGE_MS) fs.rmSync(file, { force: true })
+    } catch { /* gone meanwhile */ }
+  }
+}
+
+/** Keep one failure in the session's spool; true when it was kept. Never throws: counting never fails a call. */
+export function spoolNoAnswer(file: string | null, op: string, code: string, client: 'mcp' | 'cli' = 'cli', now = Date.now()): boolean {
+  const k = keptOf({ at: now, op, code, client, id: newId() })
+  if (!file || !k) return false
+  try {
+    const size = appendLines(file, [k])
+    if (size < 0) return false
+    // Only what is still told stays: a spool that only ever grew would pass its size and be read by its tail.
+    if (size > SPOOL_COMPACT_BYTES) rewrite(file, (items) => fresh(items, now))
+    return true
+  } catch { return false /* a count only */ }
+}
+
+/**
+ * What the session's spool holds: its report (oldest first), and `told` to call once the server
+ * took it, which drops those lines (and any too old to tell). Until then they stay in the file.
+ */
+export function takeSpooledNoAnswers(file: string | null, now = Date.now()): { report: NoAnswer[]; told: () => void } {
+  const none = { report: [] as NoAnswer[], told: () => {} }
+  if (!file || !ownPrivateDir(path.dirname(file))) return none
+  sweepEnded(path.dirname(file), now)
+  reclaimTaking(file)
+  const report = told(fresh(readSpool(file), now), now)
+  if (!report.length) return none
+  const sent = new Set(report.map((r) => r.id))
+  return { report, told: () => rewrite(file, (items) => items.filter((k) => !sent.has(k.id) && now - k.at <= NO_ANSWER_MAX_AGE_MS)) }
+}
+
+/**
+ * Whether the session's spool holds anything (one stat after a call that got through), or a rewrite
+ * a process that ended left aside.
+ */
 export function spoolHoldsNoAnswers(file: string | null): boolean {
   if (!file) return false
-  try { return fs.lstatSync(file).isFile() } catch { return false }
+  try { if (fs.lstatSync(file).isFile()) return true } catch { /* none */ }
+  const base = `${path.basename(file)}.`
+  try { return fs.readdirSync(path.dirname(file)).some((n) => n.startsWith(base) && n.endsWith('.taking')) } catch { return false }
 }
 
 /**
  * Whether a Walnut server gave this answer: it is ok, and not this host's daemon's own while its
  * Walnut is away (offline-host-core.ts answers a read or a `tools.list` itself then, `offline: true`).
  * A call answered so is no sign the hub is back, and a report answered so went nowhere: it is kept
- * for the next call a server answers.
+ * for the next call a server answers (2026-11-25: a call answered from the daemon's offline copy
+ * seconds after a restart told its session's failures into that answer, and they were never counted).
  */
 export function hubAnswered(r: { ok: boolean; result?: unknown } | null | undefined): boolean {
   return r?.ok === true && (r.result as { offline?: unknown } | null | undefined)?.offline !== true
 }
 
-/** Tell what the session's spool holds with `send`; kept again unless a Walnut server took it. Never throws. */
+/**
+ * Tell what the session's spool holds with `send`; the lines leave the file only when the server
+ * took them. A send that timed out keeps them, and if it landed after all, the next send of the
+ * same lines is counted once (their ids, usage-watch/record.ts). Never throws.
+ */
 export async function tellSpooledNoAnswers(
   file: string | null,
   send: (report: NoAnswer[]) => Promise<{ ok: boolean; result?: unknown }>,
 ): Promise<void> {
   if (!spoolHoldsNoAnswers(file)) return
-  const { report, putBack } = takeSpooledNoAnswers(file)
+  const { report, told: done } = takeSpooledNoAnswers(file)
   if (!report.length) return
   try {
-    if (!hubAnswered(await send(report))) putBack()
-  } catch { putBack() }
+    if (hubAnswered(await send(report))) done()
+  } catch { /* kept for the next call */ }
 }
 
 /** The no-answer failures a client's report names (hub side), or [] when it names none. */
@@ -206,7 +311,8 @@ export function noAnswersOf(report: unknown): NoAnswer[] {
     const ms = r?.ms
     if (typeof ms !== 'number' || !Number.isInteger(ms) || ms < 0 || ms > NO_ANSWER_MAX_AGE_MS) continue
     const k = keptOf({ at: 0, op: r?.op, code: r?.code, client: r?.client })
-    if (k) out.push({ op: k.op, code: k.code, client: k.client, ms })
+    const id = typeof r?.id === 'string' && NO_ANSWER_ID_RE.test(r.id) ? r.id : undefined
+    if (k) out.push({ op: k.op, code: k.code, client: k.client, ms, ...(id ? { id } : {}) })
   }
   return out
 }

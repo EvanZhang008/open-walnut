@@ -304,6 +304,9 @@ describe('a process whose Walnut MCP server is gone is counted once per drop', (
     bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
     const gone = () => { flushUsage(); return readToolErrors({ since: 0, limit: 20 }).filter((r) => r.code === 'tools_gone') }
     const asked = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_status')).length
+    // Asked at every turn end here; the gap between asks has its own case below.
+    const gap = ClaudeCodeSession.TURN_END_MOUNT_GAP_MS
+    ClaudeCodeSession.TURN_END_MOUNT_GAP_MS = 0
     try {
       const { session } = await spawnMcpConfig('t-mount-gone', { message: 'snapshot-clean-turn:one' })
       await waitUntil(() => results >= 1, 15000, 'first result')
@@ -318,6 +321,39 @@ describe('a process whose Walnut MCP server is gone is counted once per drop', (
       await fsp.writeFile(statusFile, 'walnut=failed')
       expect(await session.writeMessage('snapshot-clean-turn:four')).toBe(true)
       await waitUntil(() => gone().length >= 2, 15000, 'second drop counted')
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      ClaudeCodeSession.TURN_END_MOUNT_GAP_MS = gap
+      delete process.env.MOCK_CLAUDE_MCP_STATUS
+      closeUsageWatchStore()
+      setUsageWatchFile(null)
+      _resetUsageRecorderForTesting(false)
+    }
+  }, 60_000)
+
+  // The answer names every tool (10 KB and more) and lands in the stream file: one ask per process
+  // at its first turn end, then at most every TURN_END_MOUNT_GAP_MS (2026-11-25 review).
+  it('one process is asked at its first turn end, not again within the gap; connected with no tool is a drop', async () => {
+    const { setUsageWatchFile, closeUsageWatchStore, readToolErrors } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting, flushUsage } = await import('../../src/core/usage-watch/record.js')
+    setUsageWatchFile(path.join(WALNUT_HOME, 'usage-watch.sqlite'))
+    _resetUsageRecorderForTesting(true, Date.now() - 60_000)
+    process.env.MOCK_CLAUDE_MCP_STATUS = 'walnut=connected:0'
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const asked = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_status')).length
+    const gone = () => { flushUsage(); return readToolErrors({ since: 0, limit: 20 }).filter((r) => r.code === 'tools_gone') }
+    try {
+      const { session } = await spawnMcpConfig('t-mount-gap', { message: 'snapshot-clean-turn:one' })
+      await waitUntil(() => results >= 1 && gone().length >= 1, 15000, 'first turn end asked and judged')
+      expect(asked()).toBe(1)
+      for (const [i, m] of ['two', 'three'].entries()) {
+        expect(await session.writeMessage(`snapshot-clean-turn:${m}`)).toBe(true)
+        await waitUntil(() => results >= i + 2, 15000, `turn ${m}`)
+      }
+      // One link carries both, in order: an ask at turn two's end would be in before turn three's line.
+      expect(asked()).toBe(1)
+      expect(gone()).toHaveLength(1)
       await session.gracefulStop(true).catch(() => {})
     } finally {
       delete process.env.MOCK_CLAUDE_MCP_STATUS

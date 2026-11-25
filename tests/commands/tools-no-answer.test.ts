@@ -12,7 +12,9 @@
  *     under the code it printed (the session hook reads the same one, so the two count once); a
  *     server's refusal keeps nothing, nor does a trigger check's call;
  *   - the `open-walnut mcp` mount (Main, an ask, a console agent) keeps its own the same way
- *     (2026-11-25 review: it was a client the first fix missed);
+ *     (2026-11-25 review: it was a client the first fix missed), and its report never holds the
+ *     answer of that long-lived server;
+ *   - `walnut guide` and `walnut mcp` keep theirs too;
  *   - a report this host's daemon answered itself while its Walnut was away (`offline: true`) was taken
  *     by no hub: it is kept for the next call, by the CLI and the MCP server alike;
  *   - the MCP server keeps its own in the same spool, so a later process of the session (or its CLI)
@@ -142,15 +144,14 @@ describe('the Mac\'s walnut tools call', () => {
     await runTools(['call', 'walnut_status', '{}'], {})
     expect(process.exitCode).toBe(1)
     const kept = takeSpooledNoAnswers(spool)
-    expect(kept.report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }])
-    kept.putBack()
+    expect(kept.report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number), id: expect.any(String) }])
 
     await serverUp()
     await daemonUp()
     process.exitCode = 0
     await runTools(['call', 'walnut_status', '{}'], {})
     expect(process.exitCode ?? 0).toBe(0)
-    expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }]])
+    expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number), id: expect.any(String) }]])
     expect(asked[0]).toMatchObject({ op: 'tools.list', sid: SID })
     expect(takeSpooledNoAnswers(spool).report).toEqual([])
 
@@ -168,7 +169,6 @@ describe('the Mac\'s walnut tools call', () => {
     expect(reports()).toHaveLength(1)
     const kept = takeSpooledNoAnswers(spool)
     expect(kept.report.map((n) => `${n.op}:${n.code}`)).toEqual(['task_get:hub_unreachable'])
-    kept.putBack()
     listAnswer = { ok: true, result: { recorded: true, no_answer: 1 } }
     await runTools(['call', 'walnut_status', '{}'], {})
     expect(reports()).toHaveLength(2)
@@ -223,7 +223,20 @@ describe('the Mac\'s walnut tools call', () => {
       child.on('close', (c) => resolve(c))
     })
     expect(code).toBe(0)
-    expect(takeSpooledNoAnswers(spool).report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number) }])
+    expect(takeSpooledNoAnswers(spool).report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'cli', ms: expect.any(Number), id: expect.any(String) }])
+  }, 60_000)
+
+  it('walnut guide and walnut mcp keep theirs too, and tell what the spool holds once they get through', async () => {
+    const { runGuide } = await import('../../src/commands/guide.js')
+    const { runMcpClient } = await import('../../src/commands/mcp-client.js')
+    await runGuide({})
+    await runMcpClient(['list'])
+    expect(takeSpooledNoAnswers(spool).report.map((k) => `${k.op}:${k.code}`)).toEqual(['skill_read:hub_unreachable', 'mcp_servers:hub_unreachable'])
+    await serverUp()
+    await daemonUp()
+    await runMcpClient(['list'])
+    expect(reports().map((r) => (r as Array<{ op: string }>).map((n) => n.op))).toEqual([['skill_read', 'mcp_servers']])
+    expect(takeSpooledNoAnswers(spool).report).toEqual([])
   }, 60_000)
 })
 
@@ -244,27 +257,32 @@ describe('the open-walnut mcp mount of Main, an ask and a console agent', () => 
   it('keeps a call no Walnut answered and tells it with its next answered call', async () => {
     expect((await callTool('walnut_status')).isError).toBe(true)
     const kept = takeSpooledNoAnswers(spool)
-    expect(kept.report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number) }])
-    kept.putBack()
+    expect(kept.report).toEqual([{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number), id: expect.any(String) }])
     await serverUp()
     await daemonUp()
     expect((await callTool('walnut_status')).isError).toBeFalsy()
     // Told without holding the answer (a long-lived server): it arrives after the call returned.
-    await vi.waitFor(() => expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number) }]]))
+    await vi.waitFor(() => expect(reports()).toEqual([[{ op: 'walnut_status', code: 'hub_unreachable', client: 'mcp', ms: expect.any(Number), id: expect.any(String) }]]))
+  })
+
+  it('outside a session nothing is kept', async () => {
+    delete process.env.WALNUT_SESSION_ID
+    expect((await callTool('walnut_status')).isError).toBe(true)
+    expect(fs.existsSync(path.dirname(spool))).toBe(false)
   })
 })
 
 describe('what is kept again', () => {
-  it('only what is still told: a failure past its age is dropped, never written back', () => {
+  it('only what is still told: a failure past its age is never told, and leaves the file once a report was taken', () => {
     const now = Date.now()
     spoolNoAnswer(spool, 'task_get', 'hub_unreachable', 'cli', now - NO_ANSWER_MAX_AGE_MS - 60_000)
     spoolNoAnswer(spool, 'task_list', 'hub_unreachable', 'cli', now - 1_000)
     const taken = takeSpooledNoAnswers(spool, now)
     expect(taken.report.map((n) => n.op)).toEqual(['task_list'])
-    taken.putBack()
-    const lines = fs.readFileSync(spool, 'utf-8').trim().split('\n')
-    expect(lines).toHaveLength(1)
-    expect(JSON.parse(lines[0]!).op).toBe('task_list')
+    // Not yet taken by a server: both lines are still in the file.
+    expect(fs.readFileSync(spool, 'utf-8').trim().split('\n')).toHaveLength(2)
+    taken.told()
+    expect(fs.existsSync(spool)).toBe(false)
   })
 })
 

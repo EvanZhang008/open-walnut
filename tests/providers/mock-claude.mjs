@@ -425,14 +425,23 @@ if (inputFormat === 'stream-json') {
             response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors: {} } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_status') {
-          // The real CLI's per-server status. MOCK_CLAUDE_MCP_STATUS="walnut=failed" (or a file
-          // path holding that text, read at each request) says what one is; the rest are connected.
+          // The real CLI's per-server status (2.1.322): name, status, serverInfo, and a connected
+          // server's tools by name and annotations. MOCK_CLAUDE_MCP_STATUS="walnut=failed" (or a file
+          // path holding that text, read at each request) says what one is, "walnut=connected:0" a
+          // connected one with no tool; the rest are connected with three tools.
           let spec = process.env.MOCK_CLAUDE_MCP_STATUS ?? '';
           try { if (spec && !spec.includes('=')) spec = fs.readFileSync(spec, 'utf8').trim(); } catch { spec = ''; }
           const said = Object.fromEntries(spec.split(',').filter((p) => p.includes('=')).map((p) => p.split('=')));
+          const row = (name) => {
+            const [status, count] = String(said[name] ?? 'connected').split(':');
+            if (status !== 'connected') return { name, status };
+            const n = count === undefined ? 3 : Number(count);
+            const tools = Array.from({ length: n }, (_, i) => ({ name: `tool_${i}`, annotations: { readOnly: i % 2 === 0 } }));
+            return { name, status, serverInfo: { name, version: '1' }, tools };
+          };
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { mcpServers: liveMcpServers.map((name) => ({ name, status: said[name] ?? 'connected' })) } },
+            response: { subtype: 'success', request_id: parsed.request_id, response: { mcpServers: liveMcpServers.map(row) } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
           // side_question: the answer as a real model writes it (mock-claude-side-answer.mjs).

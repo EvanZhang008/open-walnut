@@ -159,8 +159,11 @@ export function recordOpCall(call: OpCall): void {
  * refusals, the client's own (Walnut unreachable, the tool gone after a disconnect) and Claude
  * Code's (its input refused). Its session, task, host, op and error code; never its words.
  */
-export function recordToolError(row: Omit<ToolErrorRow, 'at'> & { at?: number }, via: ToolErrorVia = 'hook'): boolean {
+export function recordToolError(row: Omit<ToolErrorRow, 'at'> & { at?: number }, via: ToolErrorVia = 'hook', clientId?: string): boolean {
   const at = row.at ?? Date.now()
+  // A client's report sent again (its first answer was slow, put back, and landed all the same):
+  // each failure has its own id, counted once (lib/no-answer-report.ts).
+  if (via === 'client' && clientId && sameClientIdTold(row.sid, clientId)) return false
   if (NO_ANSWER_CODES.has(row.code) && sameNoAnswerSeen({ ...row, at }, via)) return false
   // Kept before the recorder starts too (2026-11-24 audit: a server's first seconds after a restart
   // are when the calls that failed during it are told, and they were dropped here). A process that
@@ -182,6 +185,22 @@ export type ToolErrorVia = 'hook' | 'client'
 const NO_ANSWER_MATCH_MS = 2 * 60_000
 const NO_ANSWER_KEEP_MS = 30 * 60_000
 let noAnswerSeen: Array<{ key: string; at: number; via: ToolErrorVia; matched: boolean; old?: true; seenAt: number }> = []
+
+/** Client failure ids told here, by session, as long as a client still tells a failure (a day). */
+const CLIENT_IDS_KEEP_MS = 24 * 3_600_000
+const CLIENT_IDS_MAX = 20_000
+let clientIdsTold = new Map<string, number>()
+
+function sameClientIdTold(sid: string, id: string): boolean {
+  const key = `${sid}\t${id}`
+  if (clientIdsTold.has(key)) return true
+  const now = Date.now()
+  if (clientIdsTold.size >= CLIENT_IDS_MAX) {
+    for (const [k, t] of clientIdsTold) if (now - t > CLIENT_IDS_KEEP_MS || clientIdsTold.size >= CLIENT_IDS_MAX) clientIdsTold.delete(k); else break
+  }
+  clientIdsTold.set(key, now)
+  return false
+}
 
 function sameNoAnswerSeen(row: ToolErrorRow, via: ToolErrorVia): boolean {
   const key = `${row.sid}\t${row.op}\t${row.code}`
@@ -410,6 +429,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0, sink: type
   events = []
   toolErrors = []
   noAnswerSeen = []
+  clientIdsTold = new Map()
   routeTroubleAt.clear()
   badArgGauges.clear()
   lastPrune = 0
