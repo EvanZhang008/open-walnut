@@ -86,7 +86,7 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
     expect(out.s1.everyOutputParsed).toBe(true)
     // The CLI is this process's child, and the only one: no daemon program runs beside it.
     expect(out.s1.cliParent).toBe(out.selfPid)
-    expect(out.s1.children).toEqual([{ isCli: true, cmd: expect.stringContaining('fake-cli.sh') }])
+    expect(out.s1.children).toEqual([{ isCli: true, cmd: expect.stringContaining('fake-round-cli.sh') }])
     expect(out.s1.transientOthers.filter((c: string) => /daemon|bun|node/.test(c))).toEqual([])
 
     // 2. Parse once: daemon side and server side together.

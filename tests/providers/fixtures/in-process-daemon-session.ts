@@ -38,36 +38,10 @@ const { startInProcessDaemon, stopInProcessDaemon, IN_PROCESS_DAEMON_URL } = awa
 const { RemoteSessionManager } = await import('../../../src/providers/remote-session-manager.ts')
 const { disconnectAllDaemons } = await import('../../../src/providers/daemon-connection.ts')
 const { WALNUT_HOME, LOG_DIR } = await import('../../../src/constants.ts')
+const { fakeRoundCli } = await import('../../helpers/fake-round-cli.ts')
 type OutputEvent = import('../../../src/providers/session-manager.ts').OutputEvent
 
-/** A fake CLI: an init line, then for every stdin user line an assistant line and a result line naming its ROUND-<word>. */
-function fakeCli(): string {
-  const file = path.join(root, 'fake-cli.sh')
-  fs.writeFileSync(file, [
-    '#!/bin/sh',
-    'sid=fake',
-    'while [ $# -gt 0 ]; do',
-    '  if [ "$1" = "--session-id" ]; then sid="$2"; fi',
-    '  shift',
-    'done',
-    'echo "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\",\\"tools\\":[]}"',
-    'n=0',
-    'while IFS= read -r line; do',
-    '  case "$line" in',
-    '    *\'"type":"user"\'*)',
-    '      n=$((n+1))',
-    '      word=$(printf \'%s\\n\' "$line" | sed -n \'s/.*ROUND-\\([A-Za-z0-9]*\\).*/\\1/p\')',
-    '      echo "{\\"type\\":\\"assistant\\",\\"session_id\\":\\"$sid\\",\\"message\\":{\\"id\\":\\"msg_fake_${n}_$word\\",\\"type\\":\\"message\\",\\"role\\":\\"assistant\\",\\"model\\":\\"fake\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"answer $word\\"}],\\"stop_reason\\":\\"end_turn\\",\\"usage\\":{\\"input_tokens\\":1,\\"output_tokens\\":1}}}"',
-    '      echo "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false,\\"session_id\\":\\"$sid\\",\\"num_turns\\":$n,\\"result\\":\\"answer $word\\"}"',
-    '      ;;',
-    '  esac',
-    'done',
-    '',
-  ].join('\n'), { mode: 0o755 })
-  return file
-}
-
-const FAKE_CLI = fakeCli()
+const FAKE_CLI = fakeRoundCli(root)
 const WORK = path.join(root, 'work')
 fs.mkdirSync(WORK, { recursive: true })
 const cliArgs = (sid: string) => ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--session-id', sid]
