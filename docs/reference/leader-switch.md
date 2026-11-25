@@ -1128,8 +1128,8 @@ Measured by the rehearsal (from the old leader's stop to the new one ready with 
 open) on clouddev, under a 5-minute load of about 90 on 48 cores. The final batch only reads
 what changed since the last periodic batch and the promotion is one rename, so the home's size
 counts mostly through its number of files; the two server starts are the rest. A standby that
-is behind (its last batch over 5 minutes old) is refused at preflight: its final batch would
-make the downtime long.
+is behind is refused at preflight (see "The standby caught up first"): its final batch would
+not fit in the commit window.
 
 | Home | Downtime |
 |---|---|
@@ -1146,12 +1146,30 @@ proxy, on clouddev under a load of 60 to 100 on 48 cores, 2026-11-24):
 | 1 GB of filler | unslowed | 22.1 s | 4.7 s |
 | 1 GB of filler | 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`) | 22.9 s | 5.0 s |
 
-20 GB was not measured between machines: its first batch over the copy link never stood. Each try read the
-whole home for about 4.5 minutes, and the leader's own git auto-commit (every 30 s; `git add -A` of the filler)
-touched `.git/objects` meanwhile, so every try was void (`late`, `gone`): 11 voids in 55 minutes. A 1 GB home's
-first batch took 456 s, through 22 voids. Every try took about as long as the first (a void try saved no time
-for the next), so a home whose full read takes longer than the time between its own writes may get no first
-batch at all over a link of this speed: not solved here.
+20 GB of filler between machines (`--remote --gb 20`, 80 files of 256 MB and 20,000 small files, on clouddev
+under a load of 50 to 75 on 48 cores with three other rehearsals running, 2026-11-25). Each switch ran its
+catch-up first (the time in brackets); the first standby batch over the copy link took 1,057 s (tracked) and
+1,023 s (ignored):
+
+| Filler | Copy link | Downtime | Every host connected to the new leader after |
+|---|---|---|---|
+| tracked by git (`artifacts/`) | unslowed | 29.9 s (catch-up 15.6 s, 257 MB) | 6.9 s |
+| tracked by git (`artifacts/`) | 20 Mbit/s | 31.0 s (catch-up 2.9 s) | 6.0 s |
+| ignored by git (`voice-archive/`) | unslowed | 29.1 s (catch-up 2.5 s) | 7.9 s |
+| ignored by git (`voice-archive/`) | 20 Mbit/s | 34.8 s (catch-up 2.6 s) | 7.0 s |
+
+At a load of about 30 (one rehearsal, 2026-11-24) the tracked group took 21.1 s unslowed and 26.2 s at
+20 Mbit/s.
+
+The `.gitignore` is leader data, copied with `.git` (until 2026-11-25 it was left out as rebuildable, and the
+promoted home booted a repo with no ignore list: its auto-commit took in `tmp/`, where the standby spools its
+chunks, and `/voice-archive/`, so its `.git` changed all the time, its batches back never stood, and the switch
+back was refused). A boot, and every `add -A`, writes back a missing one, the committed copy first. The
+rehearsal checks after each switch that the new leader's `.gitignore` is as committed and that git tracks
+nothing under `tmp/` or `voice-archive/`. A first batch of 20 GB over the copy link stands now. In the earlier
+runs where it never stood (11 void tries in 55 minutes) every rehearsal home had no ignore list at all (the
+rehearsal makes its repo with a bare `git init`, and a boot wrote none into an existing repo), so the leader's
+auto-commit hashed `tmp/` and the filler every 30 s: the likely cause, not proven.
 
 ## Paths
 
