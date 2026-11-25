@@ -186,7 +186,8 @@ export interface ReplicaCluster {
   app: ClusterApp
   macPort: number
   macPid: number
-  macDaemonPid: number
+  /** The Mac's daemon program; null when its daemon runs in the Mac server's own process (macEnv WALNUT_IN_PROCESS_DAEMON=1). */
+  macDaemonPid: number | null
   hostDaemonPid: number
   /** The replica's public port (what the tunnel reaches). */
   replicaPort: number
@@ -698,8 +699,9 @@ export function macEnvOf(o: { base: string; macHome: string; macData: string; ma
     // Without hostService the host stays the plain daemon the cluster started, as it did before every host was
     // offered the service by default (2026-11-24).
     ...(o.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : { WALNUT_HOST_SERVICE_OFFER: '0' }),
-    // The cluster pins the Mac's own daemon as a program (its daemon.pid, macDaemonPin): never in the
-    // Mac's process, which the experiment in_process_daemon does by default since 2026-11-24.
+    // The cluster pins the Mac's own daemon as a program (its daemon.pid, macDaemonPin) unless a spec asks
+    // for the public default, the daemon in the Mac's process (macEnv WALNUT_IN_PROCESS_DAEMON=1:
+    // tests/e2e/replica-cluster-in-process-e2e.test.ts).
     WALNUT_IN_PROCESS_DAEMON: '0',
     ...(o.extra ?? {}),
   }
@@ -906,8 +908,10 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)
-    // The Mac's own daemon, pinned the moment it is there (a pid file can outlive its process).
-    macDaemonPin = await waitFor(() => pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)), 60_000, 'the Mac\'s own daemon')
+    // The Mac's own daemon, pinned the moment it is there (a pid file can outlive its process). In
+    // the Mac's own process (the public default, which a spec asks for in macEnv) there is none to pin.
+    macDaemonPin = macEnv.WALNUT_IN_PROCESS_DAEMON === '1' ? null
+      : await waitFor(() => pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)), 60_000, 'the Mac\'s own daemon')
   } catch (err) {
     await reap()
     keepClusterBase(base, 'boot failed')
@@ -986,7 +990,7 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
   }
 
   const macPid = mac!.pid
-  const macDaemonPid = macDaemonPin!.pid
+  const macDaemonPid = macDaemonPin?.pid ?? null
   /** The lid: both of the Mac's processes, each checked first; refused when either is not the one pinned. */
   const signalMac = (sig: NodeJS.Signals) => {
     // The Mac may have restarted its daemon (an upgrade): the one its pid file names now, pinned again.
@@ -994,7 +998,7 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
       macDaemonPin = pin('mac-daemon', readPid(path.join(d.macDaemon, 'daemon.pid')), (c) => / --start(\s|$)/.test(c)) ?? macDaemonPin
     }
     const timing = { before: 0, after: 0 }
-    for (const p of [macPin, macDaemonPin]) {
+    for (const p of macDaemonPin ? [macPin, macDaemonPin] : [macPin]) {
       if (!signalPinned(p, sig, p === macPin ? timing : undefined)) throw new Error(`replica-cluster: refusing ${sig}: ${p?.name ?? 'a Mac process'} (${p?.pid ?? '?'}) is not the process this cluster started`)
     }
     return timing
