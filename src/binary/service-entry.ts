@@ -22,6 +22,7 @@
  * server's modules read their env (the data dir, the run dir) once, at import.
  */
 import fs from 'node:fs'
+import { stopOldFollowers, type StopFollowerDeps } from '../providers/stop-followers.js'
 import path from 'node:path'
 import { absolute, followerSpecsFor, followerSpecsOfWalnut, readServiceMode, readServiceRoleFallback, serviceRoleOf, type FsLike, type ServiceMode } from './service-mode.js'
 
@@ -230,51 +231,7 @@ async function serveWithRuntime(d: ServeDecision | LeadDecision, loadRuntime: ()
   await runWeb(d.kind === 'serve' ? { replica: true } : { replica: false, ...(d.port ? { port: String(d.port) } : {}) })
 }
 
-/** Deps of stopOldFollowers (tests hand their own). */
-export interface StopFollowerDeps {
-  startTimeOf?: (pid: number) => string | null
-  killGroup?: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
-  exists?: (pid: number) => boolean
-  unknownRetryMs?: number
-  /** Who stops them and whose followers they are, for the stderr line (default: a service start, an older daemon's). */
-  says?: { by: string; whose: string }
-  /**
-   * Try every pid file, and answer at the end (an uninstall: each follower left would run on with no
-   * parent). Off (a service start): the first that does not stop ends it, since this start ends then anyway.
-   */
-  tryEach?: boolean
-}
-
-/**
- * Stops the follower children an older daemon started from these specs (their pid files): they hold
- * the data dir's lock and the port, or run on unmanaged. False when one did not stop, or may still
- * run (its start time did not read): its pid file is kept and this start ends.
- */
-export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDeps = {}): Promise<boolean> {
-  if (pidFiles.length === 0) return true
-  const [{ stopRecordedServer }, { defaultReadStartTime }] = await Promise.all([
-    import('../providers/host-server-core.js'), import('../providers/daemon-core.js'),
-  ])
-  let allStopped = true
-  for (const pidFile of pidFiles) {
-    const stopped = await stopRecordedServer({
-      pidFile, fs,
-      startTimeOf: deps.startTimeOf ?? ((pid) => defaultReadStartTime(fs, pid)),
-      killGroup: deps.killGroup ?? ((pid, signal) => { if (pid > 1) process.kill(-pid, signal) }),
-      ...(deps.exists ? { exists: deps.exists } : {}),
-      ...(deps.unknownRetryMs !== undefined ? { unknownRetryMs: deps.unknownRetryMs } : {}),
-    })
-    if (stopped !== 'none') {
-      const what = stopped === 'stays' ? 'did not stop' : stopped === 'unknown' ? 'may still run (its start time did not read); its pid file is kept' : 'was stopped'
-      process.stderr.write(`${deps.says?.by ?? 'walnut --service'}: the follower ${deps.says?.whose ?? 'an older daemon'} started ${what}\n`)
-    }
-    if (stopped === 'stays' || stopped === 'unknown') {
-      if (!deps.tryEach) return false
-      allStopped = false
-    }
-  }
-  return allStopped
-}
+export { stopOldFollowers, type StopFollowerDeps }
 
 /** Tests and rehearsals: WALNUT_SERVICE_ROLE_WATCH=1 or 0 decides; else a Mac (the one service is new there, macos_one_service). */
 export const SERVE_WATCH_ENV = 'WALNUT_SERVICE_ROLE_WATCH'

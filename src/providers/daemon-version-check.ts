@@ -496,6 +496,7 @@ export const DAEMON_SOURCE_FILES = [
   // What the --service entry runs, the daemon or the Walnut service in either role, its mode file
   // (bundled in daemon-service-cli.cjs), its start hooks and the ready watch of a leading service.
   'src/binary/service-entry.ts',
+  'src/providers/stop-followers.ts',
   'src/binary/service-mode.ts',
   'src/binary/service-mode-lock.ts',
   'src/binary/service-mode-update.ts',

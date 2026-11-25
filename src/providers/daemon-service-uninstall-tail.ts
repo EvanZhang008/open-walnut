@@ -3,7 +3,7 @@
  * in this order:
  *   - the launcher's own files: its script (systemd, launchd; cron's is the boot script, removed with the
  *     service) and its dir,
- *   - the followers its server-*.pid files name (service-entry.ts stopOldFollowers): a daemon in its
+ *   - the followers its server-*.pid files name (stop-followers.ts stopOldFollowers): a daemon in its
  *     two-program fallback starts its follower in a process group of its own, so the service's stop
  *     leaves it running with no parent (drill r9 on a Mac),
  *   - the service mode (no launcher, no service: a later install starts as the daemon unless its leader
@@ -23,6 +23,7 @@ import { readDaemonServiceDir } from './daemon-service-config.js'
 import { releaseSetOwner } from './service-set-choice.js'
 import { removeServiceSetDir, type SetRemoveDeps, type SetRemoveResult } from './service-set-remove.js'
 import { HOST_SERVER_STATE_DIR } from './daemon-service-state-move.js'
+import { stopOldFollowers } from './stop-followers.js'
 import type { ServicePlatform, ServiceSet } from './service-set.js'
 
 export interface UninstallTailInput {
@@ -51,7 +52,7 @@ async function stopFollowersOf(root: string, o: UninstallTailInput): Promise<voi
   const names = await fs.readdir(dir).catch(() => [] as string[])
   const pidFiles = names.filter((n) => /^server-.*\.pid$/.test(n)).map((n) => path.join(dir, n))
   if (!pidFiles.length) return
-  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files, { says: { by: 'walnut daemon uninstall', whose: 'the service' }, tryEach: true }))
+  const stop = o.stopFollowers ?? (async (files: string[]) => stopOldFollowers(files, { says: { by: 'walnut daemon uninstall', whose: 'the service' }, tryEach: true }))
   const stopped = await stop(pidFiles).catch(() => false)
   if (!stopped) o.say(`walnut daemon: a follower of the service may still run (its pid file in ${dir} is kept)\n`)
 }

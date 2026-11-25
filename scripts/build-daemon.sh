@@ -361,6 +361,7 @@ SOURCES=(
   src/providers/registry-writer-core.ts
   src/providers/log-appender-core.ts
   src/binary/service-entry.ts
+  src/providers/stop-followers.ts
   src/binary/service-mode.ts
   src/binary/service-mode-lock.ts
   src/binary/service-mode-update.ts
