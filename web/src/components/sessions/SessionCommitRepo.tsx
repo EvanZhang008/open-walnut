@@ -75,7 +75,8 @@ function HunkView({ hunk, checked, onToggle }: { hunk: CommitHunk; checked: bool
       <label className="scd-hunk-head">
         <Checkbox checked={checked} onChange={() => onToggle()} aria-label={`Include the change at line ${hunk.newStart + 1}`} />
         <span className="scd-hunk-pos">Line {hunk.newStart + 1}</span>
-        <span className="scd-stat"><span className="scd-add">+{hunk.newLines.length}</span> <span className="scd-del">-{hunk.oldLines.length}</span></span>
+        {/* A zero side says nothing (as in the git glance): only the side that moved shows. */}
+        <span className="scd-stat">{hunk.newLines.length > 0 && <span className="scd-add">+{hunk.newLines.length}</span>} {hunk.oldLines.length > 0 && <span className="scd-del">-{hunk.oldLines.length}</span>}</span>
         <OwnerBadge label={hunkOwnerLabel(hunk.owner)} owner={hunk.owner} />
       </label>
       <pre className="scd-diff">
@@ -107,7 +108,7 @@ function FileRow({ file, sel, onSel }: { file: CommitPlanFile; sel: RepoSelectio
           : <span className="scd-disclose-spacer" />}
         <span className={`scd-status-letter scd-st-${file.status}`}>{file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span>
         <span className="scd-path">{file.path}</span>
-        {splittable && <span className="scd-stat"><span className="scd-add">+{file.added ?? 0}</span> <span className="scd-del">-{file.removed ?? 0}</span></span>}
+        {splittable && <span className="scd-stat">{(file.added ?? 0) > 0 && <span className="scd-add">+{file.added}</span>} {(file.removed ?? 0) > 0 && <span className="scd-del">-{file.removed}</span>}</span>}
         {file.session && <OwnerBadge label={fileOwnerLabel(file.owner)} owner={file.owner} />}
       </div>
       {note && <div className="scd-file-note">{note}</div>}

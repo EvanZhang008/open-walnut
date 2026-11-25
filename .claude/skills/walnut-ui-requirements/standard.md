@@ -567,7 +567,7 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
 | Text | `--fg`, `--fg-secondary`, `--fg-muted` (light `#6E6E73`, 5.1:1 on `--bg`: the quietest grey that still passes AA for 12 px text), `--on-accent` (on a solid `--error` or `--accent` fill) |
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
-| State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
+| State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle`. A count in a state colour takes it only above zero: "0 in alarm" and a diff's "-0" read plain or drop (`tests/web/zero-in-warning-colour.test.ts`) |
 | Corners | `--radius-full` (every key, chip, segment, tab and count: standard "Shapes"), `--label-radius` (a badge: round; `badge-long` 4 px), `--radius-xs` 4 px (kbd, checkboxes, a long label), `--radius-sm` 8 px (rows, small boxes), `--radius-md` 12 px (inputs, menus), `--radius-lg` 16 px (cards) |
 | Type | `--font-size-xs` 11 px (labels, badges), `--font-size-sm` 12 px (secondary text), `--font-size-md` 13 px (body, controls), `--font-size-lg` 15 px (card titles), `--font-size-xl` 17 px (section and dialog headings), `--font-size-2xl` 20 px (page titles); families `--font-sans`, `--font-mono` |
 | Depth | on a surface: `--shadow-sm` (a raised chip), `--shadow-md` (a hovered card), `--card-shadow`, `--card-shadow-hover`; floating: the overlay family's `--overlay-shadow`, `--dialog-shadow`; glass: `--glass-frost-*`, `--glass-legible-*` |

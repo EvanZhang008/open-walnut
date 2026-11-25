@@ -186,7 +186,8 @@ export function HealthMonitorSection() {
         {view && (
           <>
             <div className="health-summary" data-testid="health-summary">
-              <span className="health-count health-count-ALARM">{view.counts.ALARM} in alarm</span>
+              {/* Alarm colour only when something is in alarm: a zero reads as plain text, like the other counts. */}
+              <span className={view.counts.ALARM > 0 ? 'health-count health-count-ALARM' : 'health-count'}>{view.counts.ALARM} in alarm</span>
               <span className="health-count">{view.counts.OK} OK</span>
               <span className="health-count">{view.counts.INSUFFICIENT_DATA} no data</span>
             </div>

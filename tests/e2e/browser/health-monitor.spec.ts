@@ -41,6 +41,8 @@ test.describe('Walnut Health', () => {
     await expect(spike).toContainText('A log line far more often than usual')
     await expect(spike).toContainText(HEALTH_SPIKE_SIG)
     await expect(section.getByTestId('health-summary')).toContainText('in alarm')
+    // with alarms seeded the count takes the alarm colour (a zero would read plain)
+    await expect(section.locator('.health-count-ALARM')).toContainText(/^[1-9]\d* in alarm$/)
     // every built-in alarm has a row, the ones without data too
     expect(await section.locator('tr.health-row').count()).toBeGreaterThanOrEqual(12)
 

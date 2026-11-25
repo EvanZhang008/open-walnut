@@ -309,8 +309,8 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
                           >
                             <span className={`turns-file-status ${g.cls}`}>{g.ch}</span>
                             <span className="turns-file-path">{f.path}</span>
-                            {f.additions !== null && <span className="turns-file-add">+{f.additions}</span>}
-                            {f.deletions !== null && <span className="turns-file-del">−{f.deletions}</span>}
+                            {(f.additions ?? 0) > 0 && <span className="turns-file-add">+{f.additions}</span>}
+                            {(f.deletions ?? 0) > 0 && <span className="turns-file-del">−{f.deletions}</span>}
                           </button>
                         );
                       })}
