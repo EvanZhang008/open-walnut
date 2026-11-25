@@ -15,7 +15,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { DaemonRuntime, DaemonRuntimeOptions } from './daemon-runtime-types.js'
 import { IN_PROCESS_DAEMON_URL, type InProcessConnect } from './in-process-daemon-socket.js'
-import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { DAEMON_BINARIES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import os from 'node:os'
 import { readDaemonInstanceOwner, type DaemonLockOwnerInfo } from './daemon-instance-lock.js'
@@ -153,6 +153,8 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
       ...(service ? { pidFile: true, serves: 'walnut-serve' as const, selfHome: service.home, launcherFacts } : {}),
       ...(service?.leads ? { leadsWalnut: service.leads } : {}),
       listen: false,
+      // Its lock banner names this server's data dir: a second server's refusal says which one runs (AnotherServiceError).
+      serverHome: WALNUT_HOME,
       // The door stays open for everyone this server does not call directly (walnut-net, a
       // host's follower server, hub forwards, a leader's tunnel): turning the experiment on
       // takes none of them away. No daemon.pid: this pid is the server's, never a daemon's to signal.
@@ -256,23 +258,48 @@ export async function stopInProcessDaemon(reason: string, budgetMs?: number, opt
 
 export type InProcessVerdict = { kind: 'in-process'; url: string } | { kind: 'declined'; why: string }
 
+/** The other Walnut server that runs a daemon dir in its own process: its pid, and its data dir and port when it says them. */
+export interface OtherService {
+  pid: number
+  /** Its data dir (its lock banner; an older server's says none). */
+  home?: string
+  /** Its web port (the server lock in that data dir, when it names the same pid). */
+  port?: number
+  /** It is a host's one Walnut service, run by the service launcher. */
+  service?: true
+}
+
 /**
- * One service per machine and daemon dir: another Walnut server already runs the session daemon of
- * this dir in its own process (its lock banner says inProcess). This one refuses, and never stops
- * it the way it stops a daemon program (its door answers on daemon.port, as a program's does).
+ * One server per daemon dir: another Walnut server already runs the session daemon of this dir in
+ * its own process (its lock banner says inProcess). This one refuses, and never stops it the way it
+ * stops a daemon program (its door answers on daemon.port, as a program's does). The message says
+ * which server runs (pid, port, data dir) and the three ways on.
  */
 export class AnotherServiceError extends Error {
-  constructor(readonly dir: string, readonly pid: number) {
-    super(`Another Walnut service (pid ${pid}) runs the session daemon of ${dir}: one service per machine and data dir. `
-      + 'Stop that one first, or give this one its own data and daemon dirs (OPEN_WALNUT_HOME, WALNUT_DAEMON_DIR).')
+  readonly pid: number
+  constructor(readonly dir: string, readonly other: OtherService) {
+    const facts = [`pid ${other.pid}`, ...(other.port ? [`port ${other.port}`] : []), ...(other.home ? [`data dir ${other.home}`] : [])].join(', ')
+    super(`Another Walnut ${other.service ? 'service' : 'server'} (${facts}) already runs the session daemon of ${dir} in its own process: `
+      + 'one Walnut server per daemon dir runs this computer\'s sessions. '
+      + `Use that one${other.port ? ` (http://localhost:${other.port})` : ''}, stop it first, `
+      + 'or start this one with a data dir and a daemon dir of its own (OPEN_WALNUT_HOME and WALNUT_DAEMON_DIR, as a test or sandbox server does).')
     this.name = 'AnotherServiceError'
+    this.pid = other.pid
   }
 }
 
-/** The other service that holds `dir` in its own process, or null (none, a daemon program, or this process). */
-export async function anotherServiceHolds(dir: string, read: (o: { runtimeDir: string; uid: number }) => Promise<DaemonLockOwnerInfo | null> = readDaemonInstanceOwner): Promise<{ pid: number } | null> {
+/** The other server that holds `dir` in its own process, or null (none, a daemon program, or this process). */
+export async function anotherServiceHolds(dir: string, read: (o: { runtimeDir: string; uid: number }) => Promise<DaemonLockOwnerInfo | null> = readDaemonInstanceOwner): Promise<OtherService | null> {
   const owner = await read({ runtimeDir: dir, uid: os.userInfo().uid }).catch(() => null)
-  return owner?.inProcess && owner.pid !== process.pid ? { pid: owner.pid } : null
+  if (!owner?.inProcess || owner.pid === process.pid) return null
+  const other: OtherService = { pid: owner.pid, ...(owner.service ? { service: true as const } : {}) }
+  if (owner.home) {
+    other.home = owner.home
+    const { readInstanceLockAt } = await import('../core/instance-lock.js')
+    const lock = readInstanceLockAt(owner.home)
+    if (lock?.pid === owner.pid && Number.isInteger(lock.port) && lock.port! > 0) other.port = lock.port!
+  }
+  return other
 }
 
 /**
@@ -287,7 +314,7 @@ export async function ensureInProcessDaemon(deps: {
   stopProgram: () => Promise<void>
   env: () => Promise<NodeJS.ProcessEnv>
   /** Who holds the dir's lock (anotherServiceHolds): tests hand their own. */
-  otherService?: () => Promise<{ pid: number } | null>
+  otherService?: () => Promise<OtherService | null>
   /** This process is a host's one Walnut service, the follower of `home` (startInProcessDaemon). */
   service?: { home: string; leads?: string }
   /**
@@ -300,7 +327,7 @@ export async function ensureInProcessDaemon(deps: {
   if (inProcessDaemonRunning()) return { kind: 'in-process', url: IN_PROCESS_DAEMON_URL }
   if (closedForGood) throw new InProcessDaemonClosedError()
   const other = await (deps.otherService ?? (() => anotherServiceHolds(deps.dir)))()
-  if (other) throw new AnotherServiceError(deps.dir, other.pid)
+  if (other) throw new AnotherServiceError(deps.dir, other)
   const port = deps.readPort()
   if (port && await deps.alive(port)) {
     try {

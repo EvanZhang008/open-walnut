@@ -1566,7 +1566,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const other = await localDaemon.otherServiceHolding()
         if (other) {
           releaseInstanceLock()
-          throw new AnotherServiceError(localDaemon.dir, other.pid)
+          const refusal = new AnotherServiceError(localDaemon.dir, other)
+          // The same as a held instance lock: a duplicate the deploy's launchd job started is not relaunched every ~11 s.
+          const { removeOwnLaunchdJob } = await import('../core/launchd-self-remove.js')
+          await removeOwnLaunchdJob(refusal.message)
+          throw refusal
         }
       }
     }

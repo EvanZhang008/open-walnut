@@ -63,7 +63,7 @@ import { daemonLaunch, discardPending, isDaemonScript, keepPendingBinary, keepRu
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
-import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon } from './in-process-daemon.js'
+import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type OtherService } from './in-process-daemon.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
 
 /** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
@@ -431,7 +431,7 @@ export class LocalDaemon {
   get dir(): string { return this.daemonDir }
 
   /** Another Walnut service that runs this dir's daemon in its own process (one service per machine and dir), or null. */
-  otherServiceHolding(): Promise<{ pid: number } | null> {
+  otherServiceHolding(): Promise<OtherService | null> {
     return anotherServiceHolds(this.daemonDir)
   }
 

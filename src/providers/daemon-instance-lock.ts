@@ -25,6 +25,8 @@ export interface DaemonLockBanner {
   inProcess?: true
   /** With inProcess: that server is a host's one Walnut service, run by the service launcher (src/binary/service-entry.ts). */
   service?: true
+  /** With inProcess: that server's data dir, so a second server's refusal can say which one runs (an older banner has none). */
+  home?: string
 }
 
 export interface DaemonLockOwnerInfo {
@@ -35,6 +37,7 @@ export interface DaemonLockOwnerInfo {
   wsPort: number | null
   inProcess?: true
   service?: true
+  home?: string
 }
 
 export type DaemonLockConflictReason = 'foreign' | 'timeout' | 'malformed' | 'oversize' | 'unreachable' | 'listen'
@@ -101,6 +104,8 @@ export interface AcquireDaemonInstanceLockOptions {
   inProcess?: boolean
   /** And that the server is the launcher's service (DaemonLockBanner.service). */
   service?: boolean
+  /** And that server's data dir (DaemonLockBanner.home). */
+  home?: string
 }
 
 export interface DaemonInstanceLockOwner {
@@ -157,7 +162,13 @@ export function buildDaemonLockBanner(info: DaemonLockOwnerInfo): DaemonLockBann
     wsPort: normalizeWsPort(info.wsPort),
     ...(info.inProcess ? { inProcess: true as const } : {}),
     ...(info.inProcess && info.service ? { service: true as const } : {}),
+    ...(info.inProcess && bannerHome(info.home) ? { home: info.home } : {}),
   }
+}
+
+/** A data dir a banner may name: absolute, bounded, no control characters. */
+function bannerHome(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('/') && value.length <= 1024 && !/[\u0000-\u001f]/.test(value)
 }
 
 export function parseDaemonLockBanner(line: string): DaemonLockBanner | null {
@@ -181,6 +192,7 @@ export function parseDaemonLockBanner(line: string): DaemonLockBanner | null {
     wsPort: normalizeWsPort(candidate.wsPort),
     ...(candidate.inProcess === true ? { inProcess: true as const } : {}),
     ...(candidate.inProcess === true && candidate.service === true ? { service: true as const } : {}),
+    ...(candidate.inProcess === true && bannerHome(candidate.home) ? { home: candidate.home } : {}),
   }
 }
 
@@ -245,6 +257,7 @@ async function probeExistingOwner(
     uid: banner.uid, dir: banner.dir, pid: banner.pid, instanceId: banner.instanceId, wsPort: banner.wsPort,
     ...(banner.inProcess ? { inProcess: true as const } : {}),
     ...(banner.service ? { service: true as const } : {}),
+    ...(banner.home ? { home: banner.home } : {}),
   }
 }
 
@@ -293,7 +306,7 @@ export async function acquireDaemonInstanceLock(
     const clear = () => clearTimeout(timer)
     socket.on('error', clear)
     socket.on('close', clear)
-    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined, service: options.service ? true : undefined })
+    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined, service: options.service ? true : undefined, home: options.home })
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 

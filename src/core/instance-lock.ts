@@ -30,7 +30,9 @@ import { log, redactSensitiveText } from '../logging/index.js'
 
 const execFileAsync = promisify(execFile)
 
-const LOCK_FILE = path.join(WALNUT_HOME, 'server.lock.json')
+/** The lock file of the server on data dir `home`. */
+export function instanceLockFileOf(home: string): string { return path.join(home, 'server.lock.json') }
+const LOCK_FILE = instanceLockFileOf(WALNUT_HOME)
 /** The lock file, for a reader that waits on who holds it (core/deploy-switch.ts). */
 export function instanceLockFile(): string { return LOCK_FILE }
 /** Same value as task-db.ts TASK_DB_PATH — computed here to avoid importing the DB module. */
@@ -55,8 +57,13 @@ export class InstanceLockError extends Error {
 }
 
 function readLock(): LockPayload | null {
+  return readInstanceLockAt(WALNUT_HOME)
+}
+
+/** What the server on data dir `home` recorded in its lock (its pid and port), or null: missing or corrupt reads as absent. */
+export function readInstanceLockAt(home: string): LockPayload | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')) as LockPayload
+    const raw = JSON.parse(fs.readFileSync(instanceLockFileOf(home), 'utf8')) as LockPayload
     return typeof raw?.pid === 'number' ? raw : null
   } catch {
     return null // missing or corrupt — treat as absent (corrupt = stale by definition)

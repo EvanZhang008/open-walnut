@@ -6221,6 +6221,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     // one Walnut service says it is the launcher's service, which an update may hand over.
     inProcess: !LISTEN,
     service: SERVICE_MODE && !LISTEN,
+    ...(!LISTEN && options.serverHome ? { home: options.serverHome } : {}),
   })
   let lock = await acquire()
   // A stand-in an update's tail started outside launchd (daemon-update-standin.ts, its pid in

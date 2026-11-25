@@ -56,6 +56,8 @@ export interface DaemonRuntimeOptions {
    * Its host-server supervisor never starts or adopts a follower of that Walnut here.
    */
   leadsWalnut?: string
+  /** With listen false: the data dir of the server this runtime runs in (its lock banner names it: in-process-daemon.ts AnotherServiceError). */
+  serverHome?: string
   /** With listen false: the launcher's facts for hello, from the process that writes its marks (serve-launcher-beat.ts). */
   launcherFacts?: () => unknown
   /** The program that runs this daemon (the `walnut` shim re-runs it): its executable and script (argv[1], '' for none). */
