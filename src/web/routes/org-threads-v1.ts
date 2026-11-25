@@ -9,7 +9,7 @@
  *                                                          the node's answer, read from its chat in the background; each thread's
  *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
- *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
+ *   POST  /api/v1/tasks/:id/threads                        { text, images?, imageRefs?, thread?, ask_id?, key? } -> file one of his messages
  *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, watch?, watch_at?, merge_into? }
  *                                                          (merge_into a thread on a task above or below this one that keeps Threads: this
  *                                                          thread moves there and is merged there, `merged_on` names that task)
@@ -304,7 +304,12 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   const task = await nodeTask(req)
   const b = body(req)
   const text = str(b, 'text') ?? ''
-  const images = Array.isArray(b.images) ? (b.images as unknown[]).filter((x): x is string => typeof x === 'string') : []
+  // Pictures: saved paths (a session's import), or his own uploads (`imageRefs`, the web) and inline
+  // pictures (`images` as { data, mediaType }), saved here as every answer box's are (answer-pictures.ts).
+  const images = [
+    ...(Array.isArray(b.images) ? (b.images as unknown[]).filter((x): x is string => typeof x === 'string') : []),
+    ...(await savedPicturePaths(b)),
+  ]
   if (!text.trim() && !images.length) throw new RouteError(400, 'bad_request', 'text (the user\'s words) is required')
   const thread = str(b, 'thread')
   if (thread && !THREAD_ID_RE.test(thread)) throw new RouteError(400, 'bad_request', `Not a thread id: ${thread}`)
@@ -326,6 +331,25 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   log.task.info('org thread message filed', { taskId: task.id, threadId: out.thread.id, created: out.created, by: await writerOf(req) })
   res.status(out.created ? 201 : 200).json({ task_id: task.id, thread: out.thread, message: out.message, created: out.created, duplicate: out.duplicate })
 }))
+
+/** The paths of the pictures a reply carries as uploads or inline, saved in the images folder. */
+async function savedPicturePaths(b: Record<string, unknown>): Promise<string[]> {
+  const inline = Array.isArray(b.images) ? (b.images as unknown[]).filter((x) => !!x && typeof x === 'object') : []
+  if (!Array.isArray(b.imageRefs) && !inline.length) return []
+  const [{ saveAnswerPictures }, { IMAGES_DIR }, path] = await Promise.all([
+    import('../../core/answer-pictures.js'), import('../../constants.js'), import('node:path'),
+  ])
+  try {
+    const names = await saveAnswerPictures({ ...(Array.isArray(b.imageRefs) ? { imageRefs: b.imageRefs } : {}), ...(inline.length ? { images: inline } : {}) })
+    return names.map((n) => path.join(IMAGES_DIR, n))
+  } catch (err) {
+    // A picture that cannot go is refused with its reason, and nothing is filed: his words and
+    // pictures stay in the box for the next try.
+    const { isImageAttachError } = await import('./images.js')
+    if (isImageAttachError(err)) throw new RouteError(err.status, err.code, err.message)
+    throw err
+  }
+}
 
 /**
  * A Follow up on its way through the companion: the message with this id is his reply in this

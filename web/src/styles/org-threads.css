@@ -70,6 +70,8 @@
 /* A tint, never a bar down one side (no-side-bars.test.ts). */
 .org-thread-sent { margin: 0; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .org-thread-sent-words { margin: 0; font-size: var(--font-size-md); white-space: pre-wrap; overflow-wrap: anywhere; }
+.org-thread-sent-pictures { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
+.org-thread-sent-pictures img { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .org-thread-overdue { margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
 /* The node's summary: what the card is about now, latest first. */
 .org-thread-summary { font-size: var(--font-size-md); line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }

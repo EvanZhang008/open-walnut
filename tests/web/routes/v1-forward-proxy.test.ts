@@ -18,7 +18,10 @@
 import { vi, describe, expect, it } from 'vitest'
 import express from 'express'
 import request from 'supertest'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { createV1Forward, macAnswers, type CallOutcome, type PrimarySnapshot } from '../../../src/web/v1-forward/proxy.js'
+import { IMAGES_DIR } from '../../../src/constants.js'
 
 const NOW = 1_800_000_000_000
 
@@ -126,6 +129,32 @@ describe('the forward middleware', () => {
     expect(h.calls[0].timeoutMs).toBe(25_000)
     expect(p.timeoutMs).toBe(23_000)
     expect(h.fwd.status().forwarded).toBe(1)
+  })
+
+  it('a picture uploaded to this box goes to the Mac inline; one that is not here is refused here, the Mac never asked', async () => {
+    // The console on the companion uploads to its own disk, which the Mac cannot read (2026-11-25).
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4630000000049454e44ae426082', 'hex')
+    const name = `fwd-${process.pid}-${Date.now()}.png`
+    await fs.mkdir(IMAGES_DIR, { recursive: true })
+    await fs.writeFile(path.join(IMAGES_DIR, name), png)
+    try {
+      const h = harness()
+      const res = await request(h.app).post('/api/v1/tasks/t1/threads').send({ text: 'see this', thread: 'th-1', imageRefs: [{ filename: name }] })
+      expect(res.status).toBe(200)
+      const sent = JSON.parse(Buffer.from(String(h.calls[0].params.data), 'base64').toString('utf8'))
+      expect(sent).toEqual({ text: 'see this', thread: 'th-1', images: [{ data: png.toString('base64'), mediaType: 'image/png' }] })
+
+      const gone = await request(h.app).post('/api/v1/tasks/t1/threads').send({ text: 'and this', thread: 'th-1', imageRefs: [{ filename: 'not-here-0000.png' }] })
+      expect(gone.status).toBe(400)
+      expect(gone.body.error.code).toBe('image_not_found')
+      expect(h.calls).toHaveLength(1)
+
+      // No pictures, or the call's own inline ones: the body goes as it came.
+      await request(h.app).post('/api/v1/tasks/t1/threads').send({ text: 'words only' })
+      expect(JSON.parse(Buffer.from(String(h.calls[1].params.data), 'base64').toString('utf8'))).toEqual({ text: 'words only' })
+    } finally {
+      await fs.rm(path.join(IMAGES_DIR, name), { force: true })
+    }
   })
 
   it('a read waits less', async () => {

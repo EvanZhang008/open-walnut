@@ -26,7 +26,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-thread-reply-leaves-needs'))
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { IMAGES_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
@@ -193,6 +193,29 @@ describe('his reply takes the card out of Needs you at once', () => {
     // Listed as the task's move while his reply is on its way, his words with it (ThreadSentWords).
     expect(await groupAt(plan.taskId, t.id)).toMatchObject({ state: 'working', group: 'working' })
     await unread(trays.taskId, t.id, words)
+  })
+
+  it('card box on a thread below: his pictures go with his words (2026-11-25)', async () => {
+    const t = await ask(trays.taskId, 'Which tray label should we print?')
+    await inNeeds(plan.taskId, t.id)
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    const up = await api('POST', '/api/images/upload', { data: png, mediaType: 'image/png' })
+    expect(up.status).toBe(200)
+    const name = (up.json as { filename: string }).filename
+    const words = 'This label, see the picture'
+    // A name that is not his upload (a path out of the folder) is refused, and nothing is filed.
+    const bad = await api('POST', `/tasks/${plan.taskId}/threads`, { text: words, thread: t.id, imageRefs: [{ filename: name }, { filename: '../secrets.png' }] })
+    expect(bad.status).toBe(400)
+    expect((await readThreads(trays.taskId)).threads.find((x) => x.id === t.id)!.messages.some((x) => x.text === words)).toBe(false)
+    const res = await api('POST', `/tasks/${plan.taskId}/threads`, { text: words, thread: t.id, imageRefs: [{ filename: name }] })
+    expect(res.status, JSON.stringify(res.json)).toBe(200)
+    await leftNeeds(plan.taskId, trays.taskId, t.id, words, 'card box on a thread below (web card, choice button, top card)')
+    const m = (await readThreads(trays.taskId)).threads.find((x) => x.id === t.id)!.messages.find((x) => x.text === words)!
+    expect(m.images).toEqual([path.join(IMAGES_DIR, name)])
+    expect(fss.existsSync(m.images![0]!)).toBe(true)
+    // A picture alone is a reply too.
+    const alone = await api('POST', `/tasks/${plan.taskId}/threads`, { text: '', thread: t.id, imageRefs: [{ filename: name }] })
+    expect(alone.status).toBe(200)
   })
 
   it('chat Follow up naming a thread below (quick bar, an older phone)', async () => {

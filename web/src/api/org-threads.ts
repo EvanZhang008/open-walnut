@@ -1,4 +1,5 @@
 import { apiGet, apiPatch, apiPost } from './client';
+import type { ImageRef } from './image-upload';
 import type { AckPlaced, AckWaits } from '@open-walnut/thread-groups';
 
 /** An Org node's Threads: the user's own requests to it (src/core/org/threads-model.ts, the shape the route returns). */
@@ -131,8 +132,9 @@ export async function patchOrgThread(taskId: string, threadId: string, patch: Or
 
 /** His reply on a thread of a task below this node: filed on that task's thread and sent to it.
  *  Answers the thread and his message as filed (its id and its delivery so far). */
-export async function replyOnOrgThread(taskId: string, threadId: string, text: string, askId?: string, key?: string): Promise<{ thread: OrgThread; message?: OrgThreadMessage }> {
-  const res = await apiPost<{ thread: OrgThread; message?: OrgThreadMessage }>(base(taskId), { text, thread: threadId, ...(askId ? { ask_id: askId } : {}), ...(key ? { key } : {}) });
+export async function replyOnOrgThread(taskId: string, threadId: string, text: string, askId?: string, key?: string, pictures?: { imageRefs?: ImageRef[] }): Promise<{ thread: OrgThread; message?: OrgThreadMessage }> {
+  // Pictures ride the same request (uploaded first): the task gets them with his words.
+  const res = await apiPost<{ thread: OrgThread; message?: OrgThreadMessage }>(base(taskId), { text, thread: threadId, ...(askId ? { ask_id: askId } : {}), ...(key ? { key } : {}), ...pictures });
   return { thread: res.thread, ...(res.message ? { message: res.message } : {}) };
 }
 

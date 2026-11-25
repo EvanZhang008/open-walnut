@@ -38,13 +38,27 @@ function note(m: OrgThreadMessage, owner: string): string {
   }
 }
 
+/** The pictures that went with his words, as thumbnails (the server serves its own images folder). */
+function SentPictures({ paths }: { paths: readonly string[] }) {
+  return (
+    <div className="org-thread-sent-pictures" data-testid="org-thread-popped-sent-pictures">
+      {paths.map((p) => {
+        const name = p.split('/').pop() ?? p;
+        // A path outside the images folder (a session's own file) has no copy here: it hides.
+        return <img key={p} src={`/api/images/${encodeURIComponent(name)}`} alt="Picture you sent" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />;
+      })}
+    </div>
+  );
+}
+
 export function ThreadSentWords({ t, owner, justSent }: { t: OrgThread; owner: string; justSent?: OrgThreadMessage | null }) {
   const words = wordsNotAnswered(t, justSent);
   if (!words.length) return null;
   return (<>
     {words.map((m) => (
       <div key={m.id} className="org-thread-sent" data-testid="org-thread-popped-sent" data-message-id={m.id} data-delivery={m.delivery?.state ?? 'none'} data-by={m.delivery?.by && m.delivery.by !== 'human' ? 'agent' : 'him'}>
-        <p className="org-thread-sent-words" data-testid="org-thread-popped-sent-words">{m.text}</p>
+        {m.text && <p className="org-thread-sent-words" data-testid="org-thread-popped-sent-words">{m.text}</p>}
+        {!!m.images?.length && <SentPictures paths={m.images} />}
         <p className="org-thread-stand-in-note" data-testid="org-thread-unread-by-task">{note(m, owner)}</p>
       </div>
     ))}

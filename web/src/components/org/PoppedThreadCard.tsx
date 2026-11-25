@@ -26,6 +26,8 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { replyOnOrgThread, type OrgThread, type OrgThreadMessage } from '@/api/org-threads';
 import { log } from '@/utils/log';
 import { randomId } from '@/utils/random-id';
+import { buildImageRefsPayload, uploadedImageName } from '@/api/image-upload';
+import type { ImageAttachment } from '@/api/chat';
 import { AgentText } from '@/components/common/AgentText';
 import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -63,20 +65,25 @@ export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }:
   const [sent, setSent] = useState<OrgThreadMessage | null>(null);
   const recorded = !!sent && t.messages.some((m) => m.id === sent.id);
   useEffect(() => { if (recorded) setSent(null); }, [recorded]);
-  // His words (typed, or a choice's label clicked) go to the task that owns the thread. A retry of
-  // the same words keeps its key; other words (a click after a failed typed send) take a new one.
-  const reply = async (text: string): Promise<boolean> => {
+  // His words (typed, or a choice's label clicked) go to the task that owns the thread, with the
+  // pictures he put with them in the same request (2026-11-25, the user: "why can't I send
+  // pictures for this thread?"). A retry of the same words and pictures keeps its key; anything
+  // else (a click after a failed typed send, a picture added before the retry) takes a new one, so
+  // the server never answers it with the earlier message. A failed upload sends nothing and keeps both.
+  const reply = async (text: string, images?: ImageAttachment[]): Promise<boolean> => {
     setFailed(null);
     try {
-      if (key.current?.text !== text) key.current = { text, key: `pr-${randomId().replace(/-/g, '').slice(0, 24)}` };
-      const back = await replyOnOrgThread(node, t.id, text, t.ask_id, key.current.key);
+      const what = `${text}\u0000${(images ?? []).map((i) => uploadedImageName(i) ?? `${i.mediaType}:${i.data.length}:${i.data.slice(-32)}`).join('|')}`;
+      if (key.current?.text !== what) key.current = { text: what, key: `pr-${randomId().replace(/-/g, '').slice(0, 24)}` };
+      const pictures = images?.length ? await buildImageRefsPayload(images) : undefined;
+      const back = await replyOnOrgThread(node, t.id, text, t.ask_id, key.current.key, pictures);
       key.current = null;
       if (back.message) setSent(back.message);
       state.heard(t.id, back.thread);
       return true;
     } catch (err) {
       log.warn('org-threads', 'reply below not sent', { taskId: node, threadId: t.id, owner: owner.task_id, error: err instanceof Error ? err.message : String(err) });
-      setFailed('Not sent. Your words are still here.');
+      setFailed(images?.length ? 'Not sent. Your words and pictures are still here.' : 'Not sent. Your words are still here.');
       return false;
     }
   };
@@ -113,12 +120,7 @@ export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }:
             taskId={owner.task_id}
             testId="org-thread-popped-input"
             sendTestId="org-thread-popped-send"
-            onSend={async (text, images) => {
-              setFailed(null);
-              // The reply goes as words: pictures belong in the task's own chat for now.
-              if (images?.length) { setFailed(`Pictures go in ${owner.title}'s own chat: open it to send them.`); return false; }
-              return reply(text);
-            }}
+            onSend={(text, images) => reply(text, images)}
           />
         </>)}
         tools={<OrgThreadSnooze title={t.title} current={until} onSnooze={(until) => void state.update(t.id, { snooze: until })} />}

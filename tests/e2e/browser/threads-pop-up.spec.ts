@@ -502,3 +502,76 @@ test('on, top of the chat: his reply on a card below leaves the top and every co
     await request.put('/api/config', { data: { experimental: { brief_off: was.brief_off === true, top_thread: was.top_thread === true } } })
   }
 })
+
+test('on: a picture pasted in the card below goes to the subtask with his words, and shows on the card', async ({ page, request }) => {
+  // 2026-11-25, the user on a Needs you card from a task below: "why can't I send pictures for
+  // this thread?" (the box took the picture, then refused it).
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  const WORDS = `It is already at 100, see the picture ${STAMP}`
+  // A subtask of its own, with a fresh session: the tests before this one leave long turns queued
+  // on the shared one, and what is read below must be his reply reaching the session.
+  test.setTimeout(240_000)
+  const own = (await post<{ task: { id: string } }>(request, '/api/tasks', { title: `Shed work ${STAMP}`, project: PROJECT, source: 'local', parent_task_id: ids.lead })).task.id
+  made.push(own)
+  const on = await request.patch(`/api/tasks/${own}`, { data: { threads_on: true } })
+  expect(on.ok(), await on.text()).toBe(true)
+  const ownSid = await startSession(request, own, (await discoverBrowserFixture(TEST_PORT)).fixtureRoot)
+  const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${own}/threads/open`, {
+    title: `Shed paint colour ${STAMP}`, text: `Which colour should the shed be painted? ${STAMP}`, state: 'needs', from: 'node',
+    user_kind: 'user_own', user_kind_why: 'It is his own shed.', separate_reason: 'A decision of its own.',
+  }, ownSid)
+  const id = opened.thread.id
+  await flag(request, true)
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  const popped = page.locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
+  await expect(popped).toBeVisible({ timeout: 20_000 })
+  const input = popped.getByTestId('org-thread-popped-input')
+  await input.click()
+  await page.keyboard.type(WORDS, { delay: 10 })
+  // A real paste: a PNG File in the event's clipboardData, as a screenshot arrives.
+  await input.evaluate(async (el) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 240; canvas.height = 120
+    const g = canvas.getContext('2d')!
+    g.fillStyle = '#1f6feb'; g.fillRect(0, 0, 240, 120)
+    g.fillStyle = '#fff'; g.font = 'bold 20px sans-serif'; g.fillText('WEIGHT 100', 20, 66)
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'))
+    const data = new DataTransfer()
+    data.items.add(new File([blob], 'Screenshot.png', { type: 'image/png' }))
+    const ev = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'clipboardData', { value: data })
+    el.dispatchEvent(ev)
+  })
+  await expect(popped.locator('img').first()).toBeVisible({ timeout: 5_000 })
+  await page.waitForTimeout(800)
+  await shot(page, '6-picture-before-send', popped)
+  await popped.getByTestId('org-thread-popped-send').click()
+  // Sent: no refusal, his words and the picture on the card, the box clear.
+  await expect(popped.getByTestId('org-thread-popped-failed')).toHaveCount(0)
+  await openInProgress(page, 5_000)
+  const sent = popped.getByTestId('org-thread-popped-sent')
+  await expect(sent.getByTestId('org-thread-popped-sent-words')).toHaveText(WORDS, { timeout: 5_000 })
+  await expect(sent.getByTestId('org-thread-popped-sent-pictures').locator('img')).toHaveCount(1)
+  await expect.poll(() => sent.getByTestId('org-thread-popped-sent-pictures').locator('img').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+  await page.waitForTimeout(800)
+  await shot(page, '7-picture-sent', popped)
+  // The subtask's thread holds the picture with his words, and its session reads both in one message.
+  type File = { threads: Array<{ id: string; messages: Array<{ text: string; images?: string[]; delivery?: { state: string } }> }> }
+  let images: string[] = []
+  await expect.poll(async () => {
+    const m = ((await (await request.get(`/api/v1/tasks/${own}/threads`)).json()) as File).threads.find((t) => t.id === id)?.messages.find((x) => x.text === WORDS)
+    images = m?.images ?? []
+    return m?.delivery?.state ?? 'none'
+  }, { timeout: 60_000 }).toMatch(/^(claimed|delivered)$/)
+  expect(images).toHaveLength(1)
+  // What the session read: the picture's file and his words, in its own history.
+  const name = images[0]!.split('/').pop()!
+  await expect.poll(async () => {
+    const history = await (await request.get(`/api/v1/sessions/${ownSid}/history?tail=40`)).text()
+    return history.includes(name) && history.includes(WORDS)
+  }, { timeout: 60_000 }).toBe(true)
+  expect(pageErrors).toEqual([])
+})

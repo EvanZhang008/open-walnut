@@ -28,6 +28,7 @@ import { log } from '../../logging/index.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
+import { picturesGoInline } from './inline-pictures.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
 import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
 import { refuseWhenDiskFull } from '../middleware/disk-guard.js'
@@ -225,6 +226,8 @@ export function createV1Forward(deps: ForwardDeps) {
     if (why) return answerHere(why, req, res, next)
     // Order: a task write never overtakes this box's queued ones (they drain first).
     if (taskWrite && deps.taskWritesPending && await deps.taskWritesPending()) return answerHere('queue-first', req, res, next)
+    // Pictures uploaded to this box travel inline: the Mac cannot read this disk.
+    if (!(await picturesGoInline(req, res))) return
     const body = bodyOf(req)
     if (body === 'unsupported') return answerHere('body-kind', req, res, next)
     // A stream has no size cap; the server.http frame keeps its own.

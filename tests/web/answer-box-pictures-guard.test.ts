@@ -9,6 +9,9 @@
  *    TEXT_ONLY_ANSWERS with why its words are not a message to an AI;
  *  - every file drawing a <ChatInput> hands the pictures on (its send names `images`) and refuses
  *    none, except where REFUSES_PICTURES says why;
+ *  - every <ReplyComposer> (the chat's composer, which always offers pictures) hands them on to
+ *    its send and never turns them away (2026-11-25, the user on a Needs you card of a task below:
+ *    "why can't I send pictures for this thread?": the box took the picture, then refused it);
  *  - every composer that keeps its own <textarea> (answer-box-guard.test.ts lists them) takes
  *    pasted and dropped pictures through PictureStrip.tsx, unless TEXT_ONLY_COMPOSERS says why.
  * And the rules are one set: ChatInput and the answer boxes read the same types, limit and paste
@@ -79,6 +82,9 @@ function tagsOf(src: string, tag: string): string[] {
 
 const answerFiles = FILES.filter((f) => f !== 'components/common/AnswerBox.tsx' && /<AnswerBox\b/.test(read(f)))
 const chatFiles = FILES.filter((f) => f !== 'components/chat/ChatInput.tsx' && /<ChatInput\b/.test(read(f)))
+const replyFiles = FILES.filter((f) => f !== 'components/chat/ReplyComposer.tsx' && /<ReplyComposer\b/.test(read(f)))
+/** A send that turns pictures away: a refusal line, or a picture count that ends the send. */
+const TURNS_AWAY = [/Pictures go in/, /if \(images\??\.length[^)]*\)[\s\S]{0,240}?return false/]
 
 describe('every box for an AI takes pictures', () => {
   it('finds the boxes (the scan itself works)', () => {
@@ -105,6 +111,37 @@ describe('every box for an AI takes pictures', () => {
     expect(src, `${rel}: its send must take (text, images) and pass the images on`).toMatch(/\bimages\b/)
     if (REFUSES_PICTURES[rel]) return
     expect(src, `${rel}: refuses a picture; take it, or list it in REFUSES_PICTURES with why`).not.toMatch(/takes text only/)
+  })
+
+  it('finds the ReplyComposer boxes (the scan itself works)', () => {
+    expect(replyFiles).toEqual(expect.arrayContaining(['components/org/PoppedThreadCard.tsx', 'components/inbox/LetterView.tsx']))
+    // The refusal the card shipped with (2026-11-25) is caught, whatever its words.
+    const old = "onSend={async (text, images) => {\n  if (!text.trim()) return false;\n  if (images?.length) { setFailed(`Go to ${owner.title}`); return false; }"
+    expect(TURNS_AWAY.some((p) => p.test(old))).toBe(true)
+  })
+
+  it.each(replyFiles)('%s: the ReplyComposer\'s pictures go with the words', (rel) => {
+    const src = read(rel)
+    for (const tag of tagsOf(src, 'ReplyComposer')) {
+      // Its send is a handler named here or inline: either way the file passes `images` on.
+      expect(tag, `${rel}: a ReplyComposer with no onSend`).toMatch(/\bonSend=/)
+      // An inline send takes the pictures too: `(text) => ...` drops them before anything can send them.
+      const inline = /\bonSend=\{(?:async\s*)?\(([^)]*)\)\s*=>/.exec(tag)
+      if (inline) expect(inline[1].split(',').length, `${rel}: its onSend drops the pictures (${inline[0]})`).toBe(2)
+    }
+    expect(src, `${rel}: its send must take (text, images) and pass the images on`).toMatch(/\bimages\b/)
+    for (const p of TURNS_AWAY) expect(src, `${rel} turns pictures away (${p}): send them with the words`).not.toMatch(p)
+  })
+
+  it('the card of a task below sends its pictures with the reply, all the way to the route', () => {
+    const card = read('components/org/PoppedThreadCard.tsx')
+    expect(card).toMatch(/onSend=\{\(text, images\) => reply\(text, images\)\}/)
+    expect(card).toMatch(/await buildImageRefsPayload\(images\)/)
+    expect(card).toMatch(/replyOnOrgThread\(node, t\.id, text, t\.ask_id, key\.current\.key, pictures\)/)
+    expect(read('api/org-threads.ts')).toMatch(/\.\.\.\(key \? \{ key \} : \{\}\), \.\.\.pictures \}/)
+    const route = fs.readFileSync(path.resolve(WEB_SRC, '../../src/web/routes/org-threads-v1.ts'), 'utf8')
+    expect(route).toMatch(/\.\.\.\(await savedPicturePaths\(b\)\)/)
+    expect(route).toMatch(/replyOnThread\(\{ viewer: task\.id, node: there\.node, threadId: thread!, text, images,/)
   })
 
   it('the Board dock refuses a picture only for a note', () => {
