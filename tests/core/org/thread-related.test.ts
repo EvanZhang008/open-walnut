@@ -202,11 +202,12 @@ describe('only running workers', () => {
   })
 
   it('passage batches go one after another, and stop when the worker goes away', async () => {
-    const e = fakeEmbedder({ passageMs: 30 })
+    const e = fakeEmbedder({ passageMs: 200 })
     const texts = Array.from({ length: 40 }, (_, i) => `rose bed ${i}`)
     const first = passageVectors(e, texts, 5_000)
-    // One batch in flight, not all three at once (three started together would never read 1).
-    await vi.waitFor(() => expect(e.passageCalls).toBe(1))
+    // Wait for the first batch to start, then: one batch in flight, not all three at once.
+    await vi.waitFor(() => expect(e.passageCalls).toBeGreaterThan(0), { interval: 2 })
+    expect(e.passageCalls).toBe(1)
     e.up = { query: true, passage: false }
     expect((await first).size).toBe(16)
     expect(e.batches.map((b) => b.length)).toEqual([16])
