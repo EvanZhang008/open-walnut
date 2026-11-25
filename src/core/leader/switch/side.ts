@@ -35,11 +35,13 @@ const CLEAN_START_KEEP = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'PATH', 
 const CLEAN_START_KEEP_PREFIXES = ['WALNUT_DAEMON_', 'XDG_']
 
 /**
- * The env a long-lived process the switch starts (the old home's standby, which may hold this machine's
- * session runtime) gets from the job's own: only the account's basics. The machine's `env` from
- * leader_switch.machines is laid over it by the caller; nothing of the process that ran the switch
- * (an agent session's WALNUT_SESSION_ID and WALNUT_TASK_DIR, CLAUDECODE, a test's VITEST) reaches the
- * runtime and the CLIs it starts.
+ * The env every server the switch starts (a trial, the new leader, the old leader again, the old home's
+ * standby, which may hold this machine's session runtime for days) gets from the job's own: only the
+ * account's basics and the machine's daemon placement. The machine's `env` from leader_switch.machines is
+ * laid over it by the caller; nothing else of the process that ran the switch (an agent session's
+ * WALNUT_SESSION_ID and WALNUT_TASK_DIR, CLAUDECODE, a test's VITEST) reaches the servers, their runtime
+ * and the CLIs it starts. So what a machine's server needs beyond that (WALNUT_CAPABILITIES,
+ * WALNUT_BIND_ADDRESS, NODE_EXTRA_CA_CERTS, HTTPS_PROXY and NO_PROXY) goes in that `env`.
  */
 export function cleanStartEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -151,9 +153,7 @@ export class LocalSide implements SwitchSide {
     if (running && await confirmStandby(running)) return { ok: true, pid: running.pid }
     // Its output goes beside its pid file, outside the home: a handed-over home stays as its final batch left it.
     const env = { ...process.env, ...this.machine.env }
-    // A clean env (cleanStartEnv): the standby may hold this machine's session runtime for days, and every
-    // CLI it starts inherits its env, never the switch job's (an agent's session id, its task dir, CLAUDECODE).
-    const { exited, logFile, child } = this.spawnServer('leader', undefined, standbyServerFile(this.machine.home, env).replace(/\.json$/, '.log'), undefined, undefined, true)
+    const { exited, logFile, child } = this.spawnServer('leader', undefined, standbyServerFile(this.machine.home, env).replace(/\.json$/, '.log'))
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       if (exited() !== null) return { ok: false, why: `it exited during its start (code ${exited()})`, logTail: tail(logFile) }
@@ -171,13 +171,13 @@ export class LocalSide implements SwitchSide {
   }
 
   /** Spawn this home's server command, detached, its output to `logFile` (default the switch's log of `mode`). */
-  private spawnServer(mode: ServerMode, commitHandover?: number, logTo?: string, switchId?: string, commitUntil?: number, clean = false): { child: ReturnType<typeof spawn>; logFile: string; exited: () => number | null } {
+  private spawnServer(mode: ServerMode, commitHandover?: number, logTo?: string, switchId?: string, commitUntil?: number): { child: ReturnType<typeof spawn>; logFile: string; exited: () => number | null } {
     const m = this.machine
     const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
     const logFile = logTo ?? path.join(switchDir(m.home), `server-${mode}.log`)
     fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 })
     const out = fs.openSync(logFile, 'a', 0o600)
-    const env: NodeJS.ProcessEnv = { ...(clean ? cleanStartEnv(process.env) : process.env), ...m.env, OPEN_WALNUT_HOME: m.home }
+    const env: NodeJS.ProcessEnv = { ...cleanStartEnv(process.env), ...m.env, OPEN_WALNUT_HOME: m.home }
     if (mode === 'trial') env.WALNUT_LEADER_TRIAL = '1'
     else delete env.WALNUT_LEADER_TRIAL
     if (mode === 'leader' && commitHandover) env.WALNUT_LEADER_SWITCH_COMMIT = String(commitHandover)

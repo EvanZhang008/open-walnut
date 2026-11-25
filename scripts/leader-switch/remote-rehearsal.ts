@@ -58,6 +58,26 @@ function cliPidOf(daemonDir: string, sid: string): number | null {
   return found
 }
 /**
+ * The session identity a switch command carries when an agent runs it (an agent session's id and task dir,
+ * CLAUDECODE): the main switch runs with it, and no process the jobs start may inherit it (side.ts cleanStartEnv).
+ */
+const JOB_SESSION_ENV = { WALNUT_SESSION_ID: 'rehearsal-job-session', WALNUT_TASK_DIR: '/rehearsal/job-task-dir', CLAUDECODE: '1' }
+/** A process's env as the kernel holds it (Linux), or null where there is no /proc. */
+function envOfPid(pid: number | null | undefined): Record<string, string> | null {
+  if (!pid) return null
+  try {
+    const env: Record<string, string> = {}
+    for (const kv of fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')) {
+      const i = kv.indexOf('=')
+      if (i > 0) env[kv.slice(0, i)] = kv.slice(i + 1)
+    }
+    return env
+  } catch { return null }
+}
+/** The job's session identity found in a process's env: the names, none when clean. */
+const jobIdentityIn = (env: Record<string, string>): string[] => Object.keys(JOB_SESSION_ENV).filter((k) => k in env)
+
+/**
  * Which daemon shape the servers of one machine ran, from their own logs (every server and standby of a
  * machine logs into its daemon dir): how many times a server started the daemon in its own process, and how
  * many times one used a daemon program (its `local daemon ready` with a port).
@@ -282,7 +302,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   c.add('main: the routine fires on A before the switch', firedA)
   const load = startLoad(w, A)
   await waitFor('the load acknowledged on A', async () => load.acked.length > 0, 60_000, 100).catch(() => {})
-  const sw = await switchCmd(w, A, ['--to', B.id])
+  const sw = await switchCmd(w, A, ['--to', B.id], JOB_SESSION_ENV)
   const acked = await load.stop()
   log(sw.out)
   const tgt = await targetDone(sw.state)
@@ -316,6 +336,15 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const standbyA = (await w.api(A, 'GET', '/api/leader/status').catch(() => null))?.json as { standby?: boolean; sessionRuntime?: { held?: string | false; why?: string } | null } | null
   c.add(`main: A's standby ${inProcess ? 'holds A\'s session runtime in its own process' : 'holds no runtime (A\'s daemon program outlived the server)'}`,
     standbyA?.standby === true && (inProcess ? standbyA.sessionRuntime?.held === 'in-process' : standbyA.sessionRuntime?.held === false), JSON.stringify(standbyA?.sessionRuntime ?? null))
+  // The standby A's source job started booted with a clean env: the switch command carried an agent's session
+  // identity, which the standby's runtime and every CLI it starts must not inherit.
+  if (process.platform === 'linux') {
+    const sbPid = w.side(A).standbyServer()?.pid
+    const sbEnv = envOfPid(sbPid)
+    c.add('main: the standby A\'s source job started boots on a clean env (the switch command\'s session identity is not in it; the machine\'s env is)',
+      standbyA?.standby === true && !!sbEnv && jobIdentityIn(sbEnv).length === 0 && sbEnv.WALNUT_DAEMON_DIR === w.daemons.a.dir && sbEnv.WALNUT_CAPABILITIES === A.env?.WALNUT_CAPABILITIES,
+      `pid ${sbPid}; ${sbEnv ? `job identity found: [${jobIdentityIn(sbEnv).join(', ')}]; WALNUT_DAEMON_DIR ${sbEnv.WALNUT_DAEMON_DIR}` : 'no env read'}`)
+  }
   c.add('main: the switch stop did not kill the CLI of the session on A\'s own daemon (the same process, named by A\'s daemon again)',
     pidAlive(ownPid) && cliPidOf(w.daemons.a.dir, own.sid) === ownPid, `pid ${ownPid} alive ${pidAlive(ownPid)}; the registry names ${cliPidOf(w.daemons.a.dir, own.sid)}`)
   // The session on H: its facts on B with no loss and no doubling, and a message right after the switch answered once.

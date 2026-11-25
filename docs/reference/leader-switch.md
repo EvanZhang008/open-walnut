@@ -765,11 +765,22 @@ standby to end. A target job that rolls back on a machine whose home handed the 
 switch back that did not complete) stopped that home's standby for its trial; once the handed-over
 home is back in place it starts it again (`target-job.ts standbyAfterRollback`), so the witness door
 and the session runtime it held come back, except on a service's machine (the job's env names a
-service install root), whose launcher starts it. The standby the job starts gets a clean env
-(`side.ts cleanStartEnv`): the account basics, the machine's daemon placement (`WALNUT_DAEMON_*`,
+service install root), whose launcher starts it. The same rule holds for the source job's own rollback
+(`start-source`, `source-job.ts oldLeaderRestartedBy`): for a service the job spawns no leader, since
+the service's standby ends once the marker is removed and its launcher starts it again as the leader;
+the job waits for its doors (the take-back time plus 90 s).
+
+Every server a switch job starts (a trial, a leader, a standby) gets a clean env
+(`side.ts cleanStartEnv`): the account basics (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `PATH`,
+`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), the machine's daemon placement (`WALNUT_DAEMON_*`,
 `WALNUT_IN_PROCESS_DAEMON`, `XDG_*`) and the machine's `env` from `leader_switch.machines`, never the
 job's own session identity (an agent session's `WALNUT_SESSION_ID` and `WALNUT_TASK_DIR`,
-`CLAUDECODE`), since every CLI its runtime starts inherits that env, possibly for days.
+`CLAUDECODE`): a standby's runtime may run for days, and every CLI it starts inherits its env. So
+whatever else a machine's server needs goes in its `machines[].env`: `WALNUT_CAPABILITIES` (say
+`witness-door`), `WALNUT_BIND_ADDRESS`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` / `NO_PROXY`, and any
+provider credentials the server reads from its env rather than from files under `HOME`. The remote
+rehearsal runs its main switch with an agent's session identity in the command's env and checks that
+the standby the job started booted without it and with the machine's env.
 
 A standby started while its switch's marker still says `switching` (the job died after the commit,
 or is slower than the new leader's console replica) reads the marker again at each look and keeps
