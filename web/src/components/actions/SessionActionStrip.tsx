@@ -191,7 +191,7 @@ function useTopFloat(ref: RefObject<HTMLDivElement | null>, on: boolean) {
 function SessionTop({ task, sessionId, actions, threadsOpen, float }: { task: Task; sessionId: string; actions: boolean; threadsOpen: boolean; float: boolean }) {
   const threads = useOrgThreads(task.id, true);
   // One list and one clock for both: what the top shows and what the strip leaves to it.
-  const { at, list } = useTopThreads(threads);
+  const { at, list, working } = useTopThreads(threads);
   const cursor = useTopCursor(list);
   // A decision a listed thread holds is drawn there, once (on another thread, the top's bar points to
   // it). Hidden, it stays its thread's: the one line names it (hiddenAsk), and the strip never draws it
@@ -200,7 +200,8 @@ function SessionTop({ task, sessionId, actions, threadsOpen, float }: { task: Ta
   const all = task.user_status?.actions ?? [];
   // What he snoozed leaves the top of his chat until its time (stripItems; its row keeps it greyed).
   const items = actions && task.phase !== 'COMPLETE' ? stripItems(all, list, at) : [];
-  const topShown = list.length > 0 && !threadsOpen;
+  // Threads being worked on keep the top's one line even with none for him (threads_each_question).
+  const topShown = (list.length > 0 || working.length > 0) && !threadsOpen;
   const shown = items.length > 0 || topShown;
   const [hidden, setHidden] = useTopHidden();
   const room = useTopRoom(shown, float);
@@ -211,7 +212,7 @@ function SessionTop({ task, sessionId, actions, threadsOpen, float }: { task: Ta
       {items.length > 0 && (hidden
         ? <StripLine task={task} items={items} onShow={() => setHidden(false)} />
         : <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], list, at).length > 0} onHide={() => setHidden(true)} />)}
-      {topShown && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
+      {topShown && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} working={working} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
     </div>
   );
 }

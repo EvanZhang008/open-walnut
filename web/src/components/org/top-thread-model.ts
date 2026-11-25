@@ -4,7 +4,7 @@
  */
 import type { ActionItem } from '@open-walnut/user-status';
 import { orderedForHim, threadCountLabel } from '@open-walnut/thread-view';
-import { HELD_BY_THREAD, threadsForHim } from '@open-walnut/thread-groups';
+import { HELD_BY_THREAD, groupThreads, threadsForHim } from '@open-walnut/thread-groups';
 import type { OrgThread } from '@/api/org-threads';
 
 /** Where the top's Hide is kept (utils/view-memory.ts): one choice for every chat, kept over a reload and across devices. */
@@ -85,10 +85,31 @@ export function holdingThreads<T extends OrgThread>(list: readonly T[], items: r
   return list.filter((t) => items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t)));
 }
 
-/** The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads". */
-export function hiddenLine(list: readonly Pick<OrgThread, 'state'>[]): string {
+/**
+ * The chat's threads in the Working group (threadGroupOf: the node's move, `new` or `working`), in
+ * the Threads view's order: what the top counts after his own with threads_each_question on
+ * (2026-11-25: a question still being worked on sat in the folded Working group, and the line read
+ * "1 thread (1 needs you)", so he concluded his question had no thread). Never part of any count
+ * of threads for him (threadsForHim). Pure.
+ */
+export function workingThreads(threads: readonly OrgThread[] | null, now: number): OrgThread[] {
+  return threads ? groupThreads(threads, now).working : [];
+}
+
+/** The working part of the top's words: "2 working"; empty with none. Pure. */
+export function workingLabel(working: number): string {
+  return working > 0 ? `${working} working` : '';
+}
+
+/**
+ * The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads", then
+ * how many are being worked on (`working`, workingThreads; 0 while threads_each_question is off):
+ * "3 threads (1 needs you) · 2 working", or "2 working" alone when none is for him. Pure.
+ */
+export function hiddenLine(list: readonly Pick<OrgThread, 'state'>[], working = 0): string {
   const k = list.filter((t) => t.state === 'needs').length;
-  return `${threadCountLabel(list.length)}${k ? ` (${k} ${k === 1 ? 'needs' : 'need'} you)` : ''}`;
+  const forHim = list.length ? `${threadCountLabel(list.length)}${k ? ` (${k} ${k === 1 ? 'needs' : 'need'} you)` : ''}` : '';
+  return [forHim, workingLabel(working)].filter(Boolean).join(' · ');
 }
 
 /**

@@ -16,10 +16,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
-import { threadCounts } from '../../src/core/org/thread-groups.js'
+import { groupThreads, threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, holdingThreads, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, holdingThreads, stripItems, topIndex, topThreads, workingLabel, workingThreads } from '../../web/src/components/org/top-thread-model'
 import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
@@ -297,5 +297,53 @@ describe('Hide is kept', () => {
   it('the component keeps it with usePageView, never in component state', () => {
     const src = fs.readFileSync('web/src/components/org/TopThread.tsx', 'utf8')
     expect(src).toMatch(/usePageView\(TOP_HIDDEN_VIEW\.page, TOP_HIDDEN_VIEW\.name, false, isBoolean\)/)
+  })
+})
+
+// 2026-11-25 (threads_each_question): a question of his still being worked on sat in the folded
+// Working group, the line read "1 thread (1 needs you)", and he concluded it had no thread. The
+// line says how many are worked on after its own words; no count for him changes.
+describe('the top also says how many threads are being worked on', () => {
+  it('the words: none, one and many working, with and without threads for him', () => {
+    const list = topThreads(realNode(), NOW)
+    // None working (and the switch off, which passes none): today's words, exactly.
+    expect(hiddenLine(list, 0)).toBe(hiddenLine(list))
+    expect(hiddenLine(list)).toBe('18 threads (3 need you)')
+    expect(hiddenLine(list, 1)).toBe('18 threads (3 need you) · 1 working')
+    expect(hiddenLine(list, 2)).toBe('18 threads (3 need you) · 2 working')
+    expect(hiddenLine(list.filter((t) => t.state !== 'needs'), 3)).toBe('15 threads · 3 working')
+    // Nothing for him: the working part alone.
+    expect(hiddenLine([], 1)).toBe('1 working')
+    expect(hiddenLine([], 2)).toBe('2 working')
+    expect(hiddenLine([], 0)).toBe('')
+    expect(workingLabel(0)).toBe('')
+    expect(workingLabel(4)).toBe('4 working')
+  })
+
+  it('counts the Threads view\'s Working group, never a thread for him, waiting, snoozed or closed', () => {
+    seq = 600
+    const all = [
+      thread('new', 100), thread('working', 101), thread('needs', 102), thread('answered', 103), thread('pending', 104),
+      thread('working', 105, { snoozed: { until: new Date(NOW + 3600_000).toISOString(), at: at(105), by: 'human' } }),
+      thread('working', 106, { closed: { how: 'acked', at: at(106), by: 'human' } }),
+    ]
+    const working = workingThreads(all, NOW)
+    expect(working.map((t) => t.id)).toEqual(groupThreads(all, NOW).working.map((t) => t.id))
+    expect(working.map((t) => t.state).sort()).toEqual(['new', 'working'])
+    expect(hiddenLine(topThreads(all, NOW), working.length)).toBe('2 threads (1 needs you) · 2 working')
+    // It never enters a count for him (2026-11-21: "It show 1 but there isn't any").
+    expect(threadCounts(all, NOW).shown).toBe(2)
+    expect(workingThreads(null, NOW)).toEqual([])
+    // The user's VP: one of its own working, the task below's finished wait is not.
+    expect(workingThreads(realNode(), NOW).map((t) => t.state)).toEqual(['working'])
+  })
+
+  it('only with threads_each_question on, and the words are built in one place', () => {
+    const top = fs.readFileSync('web/src/components/org/TopThread.tsx', 'utf8')
+    expect(top).toContain("useExperimental('threads_each_question')")
+    expect(top).toContain('eachQuestion ? workingThreads(all, at) : []')
+    for (const f of ['web/src/components/org/TopThread.tsx', 'web/src/components/actions/SessionActionStrip.tsx']) {
+      expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/\} working`/)
+    }
   })
 })

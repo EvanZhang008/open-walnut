@@ -11,7 +11,9 @@
  * below included while his reply is still on its way there (2026-11-21, the user: "i send it, but
  * the thread don't go away ... I have to manually click next"); the Threads view keeps it in Working
  * with his words. Hidden, it is one line that counts them, with Show; that choice is kept
- * (usePageView), for every chat alike.
+ * (usePageView), for every chat alike. With threads_each_question on, the bar and the line also say
+ * how many of the chat's threads are being worked on ("· 2 working"), and with none for him the line
+ * shows alone and opens the Threads view (2026-11-25: his question in Working read as no thread).
  *
  * Its height stays bound, so long words scroll inside their own block; a block cut off fades at its
  * end, and the bar offers "Show all", which opens the thread whole in the Threads view (scrolled to
@@ -30,7 +32,9 @@ import { useNamedTasks } from './useNamedTasks';
 import { askThreadFocus, setTopThreads, useFocusedThread } from './thread-focus';
 import { ReplyThreadContext } from '@/components/sessions/reply-thread-line';
 import type { OrgThreadsState } from './useOrgThreads';
-import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenLine, topIndex, topThreads } from './top-thread-model';
+import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenLine, topIndex, topThreads, workingLabel, workingThreads } from './top-thread-model';
+import { useExperimental } from '@/hooks/useExperimental';
+import { useOpenThread } from './open-thread';
 import type { ActionItem } from '@open-walnut/user-status';
 import type { OrgThread } from '@/api/org-threads';
 import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
@@ -70,14 +74,22 @@ function useClippedWords(root: RefObject<HTMLElement | null>, key: string | unde
   return clipped;
 }
 
-/** The list the top steps through and the clock it was read at, ticking while the chat is open. */
-export function useTopThreads(threads: OrgThreadsState): { at: number; list: OrgThread[] } {
+/**
+ * The list the top steps through and the clock it was read at, ticking while the chat is open, and
+ * the chat's threads being worked on (workingThreads), counted after them with threads_each_question
+ * on (none while it is off: the top as before).
+ */
+export function useTopThreads(threads: OrgThreadsState): { at: number; list: OrgThread[]; working: OrgThread[] } {
   const [now, setNow] = useState(() => Date.now());
   // "3 min ago" stays true, and a thread that comes back by time alone (a snooze's end, an overdue one) shows.
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(id); }, []);
   const all = threads.threads;
+  const eachQuestion = useExperimental('threads_each_question');
   // A re-read at a snooze's end must not wait for the clock's next tick (as OrgThreads).
-  return useMemo(() => { const at = Math.max(now, Date.now()); return { at, list: topThreads(all, at) }; }, [all, now]);
+  return useMemo(() => {
+    const at = Math.max(now, Date.now());
+    return { at, list: topThreads(all, at), working: eachQuestion ? workingThreads(all, at) : [] };
+  }, [all, now, eachQuestion]);
 }
 
 /** Where the top stands in `list`: the thread on show, and how to move to another. */
@@ -106,10 +118,12 @@ export function useTopCursor(list: readonly OrgThread[]): TopCursor {
   };
 }
 
-export function TopThread({ task, sessionId, threads, list, at, cursor, decisions = [] }: {
+export function TopThread({ task, sessionId, threads, list, at, cursor, decisions = [], working = [] }: {
   task: Task; sessionId: string; threads: OrgThreadsState;
   /** useTopThreads: what the top steps through, read at `at`. */
   list: readonly OrgThread[]; at: number;
+  /** useTopThreads: the chat's threads being worked on, counted after `list` (empty: the top as before). */
+  working?: readonly OrgThread[];
   /** useTopCursor over `list`. */
   cursor: TopCursor;
   /** The task's Action needed items the strip leaves to the threads: the bar points to one held elsewhere. */
@@ -131,8 +145,25 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   const tasks = useNamedTasks(t?.tasks);
   // The chat's host brings its own Threads into view (reply-thread-line.tsx): there the card reads whole.
   const host = useContext(ReplyThreadContext);
+  const openThread = useOpenThread();
   const clipped = useClippedWords(rootRef, hidden || !t ? undefined : `${t.id}:${t.updatedAt}`);
-  if (!t) return null;
+  // Nothing for him, some being worked on: the one line alone, shown or hidden alike; with no card
+  // to show, a click opens the Threads view on the first of them (its Working group opens).
+  if (!t) {
+    const first = working[0];
+    if (!first) return null;
+    const openWorking = () => {
+      if (host && host.chat === task.id) { askThreadFocus(task.id, first.id); host.showOwn(); }
+      else openThread(task.id, first.id);
+    };
+    return (
+      <div className="top-thread is-hidden" data-testid="top-thread" data-hidden={hidden ? 'true' : 'false'} data-count={0} data-working={working.length}>
+        <FoldedLine testId="top-thread-show" title="Open the Threads being worked on" needs={false} action="Open" onShow={openWorking}>
+          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list, working.length)}</span>
+        </FoldedLine>
+      </div>
+    );
+  }
   const readWhole = host && host.chat === task.id ? () => { askThreadFocus(task.id, t.id); host.showOwn(); } : undefined;
   const n = list.length;
   const elsewhere = decisionsElsewhere(list, i, decisions);
@@ -142,9 +173,9 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   if (hidden) {
     const asking = hiddenAsk(list, decisions);
     return (
-      <div className="top-thread is-hidden" data-testid="top-thread" data-hidden="true" data-count={n}>
+      <div className="top-thread is-hidden" data-testid="top-thread" data-hidden="true" data-count={n} data-working={working.length}>
         <FoldedLine testId="top-thread-show" title="Show the first thread above the chat" needs={!!asking} onShow={() => setHidden(false)}>
-          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list)}</span>
+          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list, working.length)}</span>
           {/* The question it waits on stays in sight in this one line, never redrawn by the strip. */}
           {asking && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-title" data-testid="top-thread-hidden-title">{asking.title}</span></>}
         </FoldedLine>
@@ -152,12 +183,14 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
     );
   }
   return (
-    <div ref={rootRef} className="top-thread" data-testid="top-thread" data-count={n} data-thread-id={t.id}>
+    <div ref={rootRef} className="top-thread" data-testid="top-thread" data-count={n} data-working={working.length} data-thread-id={t.id}>
       <div className="top-thread-bar">
         <button type="button" className="top-thread-step" data-testid="top-thread-prev" aria-label="Previous thread" disabled={i === 0} onClick={() => step(i - 1)}>{ICON_CHEVRON_LEFT}</button>
         <span className="top-thread-pos" data-testid="top-thread-pos" title={`${i + 1} of ${threadCountLabel(n)} for you`}>{i + 1} / {n}</span>
         <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{ICON_CHEVRON_RIGHT}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
+        {/* The chat's threads being worked on, after the ones for him (threads_each_question). */}
+        {working.length > 0 && <><span className="top-thread-sep" aria-hidden="true">{'·'}</span><span data-testid="top-thread-working">{workingLabel(working.length)}</span></>}
         {elsewhere.length > 0 && (
           <button type="button" className="btn btn-link btn-sm top-thread-elsewhere" data-testid="top-thread-elsewhere" onClick={() => { if (nextDecision !== undefined) step(nextDecision); }}
             title="A decision of this task is on another thread: show it">
@@ -180,15 +213,16 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   );
 }
 
-/** One folded line above the chat, its dot (red when it waits on him), its words and Show: the top's
- *  hidden line and the strip's (actions/SessionActionStrip.tsx) are the same line. */
-export function FoldedLine({ testId, title, needs, onShow, children }: { testId: string; title: string; needs: boolean; onShow: () => void; children: ReactNode }) {
+/** One folded line above the chat, its dot (red when it waits on him), its words and Show (`action`:
+ *  Open when it opens the Threads view instead): the top's hidden line and the strip's
+ *  (actions/SessionActionStrip.tsx) are the same line. */
+export function FoldedLine({ testId, title, needs, onShow, action = 'Show', children }: { testId: string; title: string; needs: boolean; onShow: () => void; action?: 'Show' | 'Open'; children: ReactNode }) {
   return (
     <button type="button" className="top-thread-line" data-testid={testId} aria-expanded={false} onClick={onShow} title={title}>
       <i className={`top-thread-dot${needs ? ' is-needs' : ''}`} aria-hidden="true" />
       {children}
       <span aria-hidden="true">{' · '}</span>
-      <span className="top-thread-show">Show</span>
+      <span className="top-thread-show">{action}</span>
     </button>
   );
 }
