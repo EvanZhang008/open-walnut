@@ -36,7 +36,7 @@
  */
 
 import { foldWidth, tokenize } from './tokenizer.js';
-import type { SearchDb } from './db.js';
+import { docCards, type SearchDb } from './db.js';
 
 /**
  * FTS5 column weights per field. Sub-stream weights are DERIVED at 60% of the
@@ -509,14 +509,46 @@ const STORED_TYPO_MAX_DF = 100;
  *  about 14 ms on a real index, 2026-11-19, so a caller passes a budget and calls again). */
 const STORED_TYPO_MAX_WORDS = 48;
 /** Each word's fix (or none), per index, for an hour: the next call for the same text costs only
- *  its new words, and a word the index learns the right spelling of later is looked at again. */
-const storedFixCache = new WeakMap<SearchDb, Map<string, { fix: string | null; at: number; rare: boolean }>>();
+ *  its new words, and a word the index learns the right spelling of later is looked at again.
+ *  Kept in the index's spelling_fix table too (db.ts), so a restart starts with them. */
+type StoredFix = { fix: string | null; at: number; rare: boolean };
+const storedFixCache = new WeakMap<SearchDb, Map<string, StoredFix>>();
 
 /** A rebuild changes the whole vocabulary: what spellingCorrections learned before means nothing. */
 export function forgetSpellingCorrections(db: SearchDb): void {
   storedFixCache.delete(db);
+  try { db.prepare('DELETE FROM spelling_fix').run(); } catch { /* an index without the table */ }
 }
 const STORED_FIX_CACHE_MAX = 20_000;
+
+/** A best-effort write that never waits for another connection's lock: a wait would hold the loop. */
+function writeWithoutWaiting(db: SearchDb, write: () => void): void {
+  const was = Number(db.pragma('busy_timeout', { simple: true }));
+  db.pragma('busy_timeout = 0');
+  try { write(); } finally { db.pragma(`busy_timeout = ${was}`); }
+}
+
+/** The verdicts the index kept, still within their hour (older ones are dropped from it). */
+function loadStoredFixes(db: SearchDb, now: number): Map<string, StoredFix> {
+  const cache = new Map<string, StoredFix>();
+  try {
+    try {
+      writeWithoutWaiting(db, () => db.prepare('DELETE FROM spelling_fix WHERE at <= ?').run(now - STORED_FIX_TTL_MS));
+    } catch { /* busy: the read below skips them by their time anyway */ }
+    const rows = db.prepare('SELECT word, fix, rare, at FROM spelling_fix LIMIT ?').all(STORED_FIX_CACHE_MAX) as
+      Array<{ word: string; fix: string | null; rare: number; at: number }>;
+    for (const r of rows) if (now - r.at <= STORED_FIX_TTL_MS) cache.set(r.word, { fix: r.fix, at: r.at, rare: r.rare === 1 });
+  } catch { /* an index opened read-only, or without the table: the verdicts live in memory only */ }
+  return cache;
+}
+
+function saveStoredFixes(db: SearchDb, fresh: ReadonlyArray<[string, StoredFix]>): void {
+  if (fresh.length === 0) return;
+  try {
+    const put = db.prepare('INSERT OR REPLACE INTO spelling_fix (word, fix, rare, at) VALUES (?, ?, ?, ?)');
+    writeWithoutWaiting(db, () => db.transaction(() => { for (const [w, v] of fresh) put.run(w, v.fix, v.rare ? 1 : 0, v.at); })());
+  } catch { /* kept in memory; the next restart looks these words up again */ }
+}
 /** Words whose own counts are read in one lookup. */
 const STORED_COUNT_CHUNK = 16;
 const STORED_FIX_TTL_MS = 3_600_000;
@@ -544,9 +576,16 @@ export function spellingCorrections(
     if (w.length >= TYPO_MIN_WORD && !seen.has(w)) { seen.add(w); words.push(w); }
   }
   if (words.length === 0) return none;
-  let cache = storedFixCache.get(db);
-  if (!cache || cache.size > STORED_FIX_CACHE_MAX) { cache = new Map(); storedFixCache.set(db, cache); }
   const now = Date.now();
+  let cache = storedFixCache.get(db);
+  if (!cache) { cache = loadStoredFixes(db, now); storedFixCache.set(db, cache); }
+  if (cache.size > STORED_FIX_CACHE_MAX) {
+    cache = new Map();
+    storedFixCache.set(db, cache);
+    try { writeWithoutWaiting(db, () => db.prepare('DELETE FROM spelling_fix').run()); } catch { /* memory only */ }
+  }
+  const learned: Array<[string, StoredFix]> = [];
+  const remember = (word: string, v: StoredFix) => { cache.set(word, v); learned.push([word, v]); };
   const deadline = performance.now() + (options.budgetMs ?? Infinity);
   try {
     const stale = (w: string) => { const hit = cache.get(w); return !hit || now - hit.at > STORED_FIX_TTL_MS; };
@@ -580,12 +619,13 @@ export function spellingCorrections(
       if (looked > 0 && performance.now() > deadline) { complete = false; break; }
       looked++;
       const n = ownCount(word);
-      if (n > STORED_TYPO_MAX_DF) { cache.set(word, { fix: null, at: now, rare: false }); continue; }
+      if (n > STORED_TYPO_MAX_DF) { remember(word, { fix: null, at: now, rare: false }); continue; }
       const minFix = Math.max(TYPO_MIN_FIX_DF, TYPO_MIN_GAIN * (n + 1));
       const best = [...vocabCounts(db, editsOne(word))].filter(([, c]) => c >= minFix).sort((a, b) => b[1] - a[1])[0];
-      cache.set(word, { fix: best ? best[0] : null, at: now, rare: true });
+      remember(word, { fix: best ? best[0] : null, at: now, rare: true });
       if (++rare >= STORED_TYPO_MAX_WORDS) break;
     }
+    saveStoredFixes(db, learned);
     const fixes: string[] = [];
     for (const word of words) {
       const fix = cache.get(word)?.fix;
@@ -1155,9 +1195,7 @@ export function searchKeyword(
 
   // ── doc rows ──
   const ids = [...candidates.keys()];
-  const docRows = db.prepare(
-    `SELECT id, kind, ref, title, updated_at, summary <> '' AS has_summary FROM doc WHERE id IN (${ids.map(() => '?').join(',')})`,
-  ).all(...ids) as Array<{ id: number; kind: string; ref: string; title: string; updated_at: number; has_summary: number }>;
+  const docRows = docCards(db, ids);
 
   // ── coverage sets, bounded to the candidates ──
   const idList = ids.join(',');

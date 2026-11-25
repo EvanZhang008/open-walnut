@@ -123,7 +123,9 @@ const isContent = (w) => CJK_RE.test(w)
 
 function sampleDocs() {
   const rows = db.prepare(
-    `SELECT id, kind, ref, title, summary, note FROM doc WHERE kind IN (${KINDS.map(() => '?').join(',')})`,
+    // ORDER BY id: without it the order (and so the seeded sample) follows whichever index the
+    // planner picks, and a new index on doc changed the sample under the same seed (2026-11-25).
+    `SELECT id, kind, ref, title, summary, note FROM doc WHERE kind IN (${KINDS.map(() => '?').join(',')}) ORDER BY id`,
   ).all(...KINDS);
   const titleCount = new Map();
   for (const r of rows) titleCount.set(r.title.trim().toLowerCase(), (titleCount.get(r.title.trim().toLowerCase()) ?? 0) + 1);

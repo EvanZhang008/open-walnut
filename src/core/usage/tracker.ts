@@ -12,6 +12,8 @@ import path from 'node:path';
 import { computeCost } from './pricing.js';
 import { log } from '../../logging/index.js';
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js';
+import { ensureLateIndexes, type LateIndex } from '../../lib/sqlite-late-index.js';
+import { lateIndexReport } from '../late-index-report.js';
 import type { RecordParams, UsageRecord, UsageSummary, DailyCost, UsageByGroup, UsagePeriod, UsageFilter, UsageOverview } from './types.js';
 
 /**
@@ -30,6 +32,18 @@ const AGENT_NAME_EXPR = `COALESCE(agent_id, CASE source
 // Usage & Costs reads Walnut's own calls from this table, so its rows are the history:
 // kept for ten years (a year of calls is about 170k rows), not the old 180 days.
 const DEFAULT_PRUNE_DAYS = 3650;
+
+/**
+ * Covers the turn-time reads (getTurnDurationsByDay / BySession, added 2026-11-25): from the table
+ * they read every session row, which this file's other tables scatter across a 2 GB file (0.4 to
+ * 1.6 s of held loop at boot on the Mac). Built after the open: 2.3 s on a cold disk.
+ */
+const USAGE_LATE_INDEXES: LateIndex[] = [{
+  name: 'idx_usage_turn_time',
+  table: 'usage',
+  sql: 'CREATE INDEX IF NOT EXISTS idx_usage_turn_time ON usage(source, date, task_id, session_id, duration_ms)',
+  warm: 'SELECT max(duration_ms) FROM usage',
+}];
 
 export class UsageTracker {
   private db: DatabaseType | null = null;
@@ -92,6 +106,7 @@ export class UsageTracker {
     // output_tokens / generation_ms is the model's decode speed.
     try { db.exec('ALTER TABLE usage ADD COLUMN ttft_ms INTEGER'); } catch { /* column already exists */ }
     try { db.exec('ALTER TABLE usage ADD COLUMN generation_ms INTEGER'); } catch { /* column already exists */ }
+    ensureLateIndexes(db, USAGE_LATE_INDEXES, { report: lateIndexReport(this.dbPath) });
 
     return db;
   }

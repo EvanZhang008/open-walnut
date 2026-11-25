@@ -13,6 +13,8 @@
  *   meta     version stamps; mismatch forces a rebuild
  *   replica_tag  on an index fed from another index (replica.ts): the source's
  *            stamp for each doc as it arrived; empty on a source index
+ *   spelling_fix  each word's stored-typo verdict for its hour (query.ts
+ *            spellingCorrections), so a restart does not look every word up again
  *
  * The FTS tokenizer is unicode61 with `tokenchars '-_.'` so the orig stream's
  * joined tokens (`acme-gateway-dev`, `v1.2.3`) survive as single FTS tokens.
@@ -24,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database, { type Database as DatabaseType } from '../sqlite.js';
+import { ensureLateIndexes, hasIndex, type LateIndex, type LateIndexReport } from '../sqlite-late-index.js';
 import { PASSAGE_POLICY_VERSION } from './chunk.js';
 
 export type SearchDb = DatabaseType;
@@ -48,6 +51,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
   content='', contentless_delete=1,
   tokenize="${FTS_TOKENIZE}"
 );`;
+
+/** The covering index of a doc's short columns by id (DOC_LATE_INDEXES): a read by id names it
+ *  in `INDEXED BY` (docHeadHint), since the planner takes the table's rowid for `id IN (...)`
+ *  and reads every body. */
+export const DOC_HEAD = 'doc_head';
+
+/**
+ * Covering indexes (added 2026-11-25): updated_at and hash sit after note in the row, so reading
+ * them from the table walks every body's overflow pages (a few MB per hundred docs; 40 to 300 ms
+ * a read on a cold 1.2 GB index). doc_head serves the reads by id (replica.ts states, docCards),
+ * doc_kind_ref_updated the file sweep's (ref, updated_at) of one kind. Built after the open
+ * (sqlite-late-index.ts): on the Mac's index each build reads 305 MB, 22 s on a cold disk.
+ */
+const DOC_LATE_INDEXES: LateIndex[] = [
+  { name: DOC_HEAD, table: 'doc', sql: `CREATE INDEX IF NOT EXISTS ${DOC_HEAD} ON doc(id, kind, ref, hash, updated_at, title, (summary <> ''))`, warm: 'SELECT max(length(hash)) FROM doc' },
+  { name: 'doc_kind_ref_updated', table: 'doc', sql: 'CREATE INDEX IF NOT EXISTS doc_kind_ref_updated ON doc(kind, ref, updated_at)', warm: 'SELECT max(updated_at) FROM doc' },
+];
+
+/** ` INDEXED BY doc_head` once the index is there, else nothing (the read works either way). */
+export function docHeadHint(db: SearchDb): string {
+  return hasIndex(db, DOC_HEAD) ? ` INDEXED BY ${DOC_HEAD}` : '';
+}
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS doc (
@@ -85,6 +110,16 @@ CREATE INDEX IF NOT EXISTS ident_doc ON ident(doc_id);
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
+-- Each word's typo verdict (query.ts spellingCorrections), kept for its hour across restarts
+-- (added 2026-11-25): a server that restarts every few minutes looked every word up again,
+-- about 600 vocabulary lookups a rare word, 55 s of the loop in 3.5 hours of stalls.
+CREATE TABLE IF NOT EXISTS spelling_fix (
+  word TEXT PRIMARY KEY,
+  fix  TEXT,
+  rare INTEGER NOT NULL,
+  at   INTEGER NOT NULL
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS replica_tag (
   doc_id INTEGER PRIMARY KEY REFERENCES doc(id) ON DELETE CASCADE,
   tag    TEXT NOT NULL
@@ -99,6 +134,8 @@ export interface OpenOptions {
   /** Embedding model id, once an embedder is configured. Changing it clears
    *  doc_vec (re-embed) but keeps the keyword index. */
   embedModel?: string;
+  /** Told when the indexes built after the open are done (or why not). */
+  lateIndexReport?: LateIndexReport;
   /** Test seam only: override the passage-policy version being gated on.
    *  Production always uses chunk.ts's PASSAGE_POLICY_VERSION. */
   passagePolicyVersion?: number;
@@ -143,6 +180,7 @@ function wipeIndex(db: SearchDb): void {
     DELETE FROM ident;
     DELETE FROM doc_vec;
     DELETE FROM replica_tag;
+    DELETE FROM spelling_fix;
     DELETE FROM doc;
   `);
   db.exec(DDL); // recreate doc_fts
@@ -172,6 +210,7 @@ export function openSearchDb(options: OpenOptions): OpenResult {
   // linger in the file (a caller that must also clear free pages does that itself).
   db.pragma('secure_delete = FAST');
   db.exec(DDL);
+  ensureLateIndexes(db, DOC_LATE_INDEXES, { report: options.lateIndexReport });
 
   let needsRebuild = false;
   let needsReindex = false;
@@ -253,6 +292,33 @@ export function countDocs(db: SearchDb): { docs: number; byKind: Record<string, 
     docs += row.n;
   }
   return { docs, byKind };
+}
+
+export interface DocCard {
+  id: number;
+  kind: string;
+  ref: string;
+  title: string;
+  updated_at: number;
+  /** 1 when the doc has a summary. */
+  has_summary: number;
+}
+
+/** The short columns of these docs (a result list's cards), from the doc_head index once it is
+ *  built: no body is read. An id with no row is left out. */
+export function docCards(db: SearchDb, ids: readonly number[]): DocCard[] {
+  if (ids.length === 0) return [];
+  return db.prepare(
+    `SELECT id, kind, ref, title, updated_at, summary <> '' AS has_summary FROM doc${docHeadHint(db)}
+     WHERE id IN (${ids.map(() => '?').join(',')})`,
+  ).all(...ids) as DocCard[];
+}
+
+/** ref -> updated_at of every doc of one kind (a file sweep's comparison set), from the
+ *  doc_kind_ref_updated index once it is built: no body is read. */
+export function docStampsOfKind(db: SearchDb, kind: string): Map<string, number> {
+  const rows = db.prepare(`SELECT ref, updated_at FROM doc WHERE kind = ?`).all(kind) as Array<{ ref: string; updated_at: number }>;
+  return new Map(rows.map((r) => [r.ref, r.updated_at]));
 }
 
 /** One row read, where COUNT(*) walks the table. Plain prepare().get() with a

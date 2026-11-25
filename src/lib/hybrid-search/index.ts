@@ -19,6 +19,7 @@ import {
   collectStats,
   countDocs,
   deleteMeta,
+  docCards,
   getMeta,
   hasAnyDoc,
   setMeta,
@@ -68,6 +69,7 @@ export type { Doc, DocChangeListener, MissingVecCursor, UpsertResult, IndexStats
 export type { ReplicaDoc, ReplicaImportResult, ReplicaStateRow, ReplicaTagRow, ReplicaVecState } from './replica.js';
 export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD, MISSING_VEC_SCAN_LIMIT };
 export { cosineInt8, createEmbedder } from './embedder.js';
+export { docStampsOfKind } from './db.js';
 export {
   passagesForDoc,
   estimateTokens,
@@ -409,6 +411,10 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     dbPath: options.dbPath,
     tokenizerVersion: TOKENIZER_VERSION,
     embedModel: options.embedder?.modelId,
+    lateIndexReport: (built, error) => {
+      if (error) log('warn', 'hybrid-search: an index built after the open stopped; the next open tries again', { dbPath: options.dbPath, built, error });
+      else log('info', 'hybrid-search: indexes built after the open', { dbPath: options.dbPath, built });
+    },
   });
   if (vectorsWiped) {
     log('warn', 'hybrid-search: doc_vec wiped at open — vectors re-embed in the background', {
@@ -679,10 +685,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         });
         if (recallRank.size > 0) {
           const addIds = [...recallRank.keys()];
-          const rows = db.prepare(
-            `SELECT id, kind, ref, title, updated_at FROM doc
-             WHERE id IN (${addIds.map(() => '?').join(',')})`,
-          ).all(...addIds) as Array<{ id: number; kind: string; ref: string; title: string; updated_at: number }>;
+          const rows = docCards(db, addIds);
           const allowedKinds = searchOptions.kinds?.length ? new Set(searchOptions.kinds) : null;
           const now = Date.now();
           for (const row of rows) {

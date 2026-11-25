@@ -19,6 +19,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { reopenIfWiped } from '../lib/sqlite-wiped.js'
+import { ensureLateIndexes, type LateIndex } from '../lib/sqlite-late-index.js'
+import { lateIndexReport } from './late-index-report.js'
 import { log } from '../logging/index.js'
 import { bootPolicy } from './boot-policy.js'
 import { movedNotePath } from './notes/note-path-moves.js'
@@ -63,6 +65,17 @@ export interface TagEdge {
 
 let db: DatabaseType | null = null
 let initAttempted = false
+
+/**
+ * Covering indexes for the whole-table reads (added 2026-11-25). modified, size and frontmatter
+ * sit after body in the row, so reading them from the table walks every note's body (33 MB for
+ * 9.5k notes; 0.3 to 0.75 s per read on the Mac at boot). listNoteSyncMeta reads the first,
+ * listNotes and every title list the second. Built after the open (sqlite-late-index.ts).
+ */
+const NOTES_LATE_INDEXES: LateIndex[] = [
+  { name: 'idx_notes_sync', table: 'notes', sql: 'CREATE INDEX IF NOT EXISTS idx_notes_sync ON notes(path, modified, size)', warm: 'SELECT max(size) FROM notes' },
+  { name: 'idx_notes_list', table: 'notes', sql: 'CREATE INDEX IF NOT EXISTS idx_notes_list ON notes(title COLLATE NOCASE, id, path, frontmatter)', warm: 'SELECT max(length(frontmatter)) FROM notes' },
+]
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS notes (
@@ -196,6 +209,7 @@ function openNotesIndexDb(): DatabaseType {
     const hasHeadings = (handle.prepare(`PRAGMA table_info(notes)`).all() as Array<{ name: string }>)
       .some((c) => c.name === 'headings')
     if (!hasHeadings) handle.exec(`ALTER TABLE notes ADD COLUMN headings TEXT NOT NULL DEFAULT ''`)
+    ensureLateIndexes(handle, NOTES_LATE_INDEXES, { report: lateIndexReport(NOTES_INDEX_PATH) })
     setMeta(handle, 'schema_version', String(NOTES_INDEX_SCHEMA_VERSION))
     return handle
   } catch (err) {

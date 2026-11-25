@@ -20,7 +20,7 @@
  */
 
 import type { Statement } from '../sqlite.js';
-import type { SearchDb } from './db.js';
+import { docHeadHint, type SearchDb } from './db.js';
 import { buildFtsColumns } from './writer.js';
 import type { DocChangeListener } from './writer.js';
 
@@ -63,13 +63,13 @@ const vecStateSql = `(SELECT CASE WHEN v.vec = zeroblob(length(v.vec)) THEN 'z' 
 
 /**
  * One slice of the source's doc states in id order, after `afterId`. Each row
- * reads the doc's hash (the last column: a long body's overflow pages) and one
- * seq-0 probe, so a caller on a live event loop walks the table in small
- * slices; a cold slice of 64 costs tens of milliseconds.
+ * reads the doc's hash from the doc_head index (in the table it is the last
+ * column, after a long body's overflow pages) and one seq-0 probe; a caller on
+ * a live event loop still walks the table in small slices.
  */
 export function replicaStates(db: SearchDb, afterId: number, limit: number): ReplicaStateRow[] {
   const rows = db.prepare(
-    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d
+    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d${docHeadHint(db)}
      WHERE d.id > ? ORDER BY d.id LIMIT ?`,
   ).all(afterId, limit) as Array<Omit<ReplicaStateRow, 'vec'> & { vec: 'z' | 'v' | null }>;
   return rows.map((r) => ({ ...r, vec: r.vec ?? 'n' }));
@@ -79,7 +79,7 @@ export function replicaStates(db: SearchDb, afterId: number, limit: number): Rep
 export function replicaStatesOf(db: SearchDb, ids: number[]): ReplicaStateRow[] {
   if (ids.length === 0) return [];
   const rows = db.prepare(
-    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d
+    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d${docHeadHint(db)}
      WHERE d.id IN (${ids.map(() => '?').join(',')})`,
   ).all(...ids) as Array<Omit<ReplicaStateRow, 'vec'> & { vec: 'z' | 'v' | null }>;
   return rows.map((r) => ({ ...r, vec: r.vec ?? 'n' }));

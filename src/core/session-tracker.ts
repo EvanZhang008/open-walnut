@@ -17,7 +17,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isFollower, isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -826,11 +826,11 @@ export async function listPendingSessionStops(host?: string): Promise<SessionRec
   await ensureSessionInit();
   const db = getDb();
   if (!db) throw new Error('Session database is unavailable');
+  // json_valid is the condition of the index on the state (session-db.ts): without it the query parses every payload.
+  const where = `json_valid(payload) AND ${PAYLOAD_STOP_REQUEST_STATE} = 'pending'`;
   const rows = (host === undefined
-    ? db.prepare(`SELECT * FROM sessions WHERE json_extract(payload, '$.stopRequest.state') = 'pending'`).all()
-    : db.prepare(`SELECT * FROM sessions
-    WHERE json_extract(payload, '$.stopRequest.state') = 'pending'
-    AND COALESCE(host, '__local__') = ?`).all(host)) as Record<string, any>[];
+    ? db.prepare(`SELECT * FROM sessions WHERE ${where}`).all()
+    : db.prepare(`SELECT * FROM sessions WHERE ${where} AND COALESCE(host, '__local__') = ?`).all(host)) as Record<string, any>[];
   return rows.map(rowToSession);
 }
 
@@ -839,7 +839,7 @@ export async function listTaskCompleteStops(filter: { state: 'turn_end' | 'undel
   await ensureSessionInit();
   const db = getDb();
   if (!db) throw new Error('Session database is unavailable');
-  const where = `payload IS NOT NULL AND json_valid(payload) AND json_extract(payload, '$.taskCompleteStop.state') = ?`;
+  const where = `payload IS NOT NULL AND json_valid(payload) AND ${PAYLOAD_TASK_COMPLETE_STOP_STATE} = ?`;
   const rows = (filter.host === undefined
     ? db.prepare(`SELECT * FROM sessions WHERE ${where}`).all(filter.state)
     : db.prepare(`SELECT * FROM sessions WHERE ${where} AND COALESCE(NULLIF(host, ''), '__local__') = ?`).all(filter.state, filter.host)) as Record<string, any>[];
@@ -1445,7 +1445,7 @@ export async function getSessionByLane(lane: string): Promise<SessionRecord | nu
   const row = db.prepare(`
     SELECT * FROM sessions
     WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
-      AND json_extract(payload, '$.lane') = ?
+      AND ${PAYLOAD_LANE} = ?
       AND (archived IS NULL OR archived = 0)
     ORDER BY started_at DESC
     LIMIT 1
@@ -1478,7 +1478,7 @@ export async function listSessionsByLane(lane: string): Promise<SessionRecord[]>
   const rows = db.prepare(`
     SELECT * FROM sessions
     WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
-      AND json_extract(payload, '$.lane') = ?
+      AND ${PAYLOAD_LANE} = ?
     ORDER BY started_at ASC
   `).all(lane) as Array<Record<string, any>>;
   return rows.map(rowToSession);
@@ -1487,7 +1487,10 @@ export async function listSessionsByLane(lane: string): Promise<SessionRecord[]>
 /**
  * Every session bound to a Personal AI chat lane (`chat:<agent>:<conversation>`),
  * archived included, oldest first: ONE scan for a pass over all chats, where a
- * listSessionsByLane per conversation would scan the table once each.
+ * listSessionsByLane per conversation would scan the table once each. The
+ * range reads the candidates from the lane index (LIKE cannot use an
+ * expression index); LIKE stays the rule. It folds ASCII case, and every case
+ * of 'chat:' sorts inside ['CHAT:', 'chat;'), so the range drops none.
  */
 export async function listChatLaneSessions(): Promise<SessionRecord[]> {
   await ensureSessionInit();
@@ -1496,7 +1499,8 @@ export async function listChatLaneSessions(): Promise<SessionRecord[]> {
   const rows = db.prepare(`
     SELECT * FROM sessions
     WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
-      AND json_extract(payload, '$.lane') LIKE 'chat:%'
+      AND ${PAYLOAD_LANE} >= 'CHAT:' AND ${PAYLOAD_LANE} < 'chat;'
+      AND ${PAYLOAD_LANE} LIKE 'chat:%'
     ORDER BY started_at ASC
   `).all() as Array<Record<string, any>>;
   return rows.map(rowToSession);

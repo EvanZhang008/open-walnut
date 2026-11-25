@@ -8,13 +8,15 @@ import path from 'node:path';
  * code — no logging, no constants, no event bus, no core types. Config comes
  * in through createSearchIndex options instead. SQLite comes through
  * src/lib/sqlite.ts (which imports nothing from Walnut either), never
- * better-sqlite3 directly, which cannot load on bun.
+ * better-sqlite3 directly, which cannot load on bun; indexes built after the
+ * open through src/lib/sqlite-late-index.ts (the same: SQLite only).
  */
 const LIB_DIR = path.resolve(__dirname, '../../src/lib/hybrid-search');
 
 const ALLOWED = [
   /^node:/,
   /^\.\.\/sqlite\.js$/,
+  /^\.\.\/sqlite-late-index\.js$/,
   /^@huggingface\/transformers$/,
   /^\.\/[^/]+\.js$/, // same-directory siblings only
 ];

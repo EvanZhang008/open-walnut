@@ -25,6 +25,8 @@ import { mergeLeaderCopy, rowOwnedHere } from './sessions/session-row-owner.js';
 import { claimStart, isClaimed, releaseClaim } from './sessions/starting-claims.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
+import { ensureLateIndexes, type LateIndex } from '../lib/sqlite-late-index.js';
+import { lateIndexReport } from './late-index-report.js';
 import type { SessionRecord } from './types.js';
 import { lookForHolders } from './blocking-calls.js';
 
@@ -248,7 +250,7 @@ function openShared(): DatabaseType {
     handle.pragma('synchronous = NORMAL');
     handle.pragma('foreign_keys = ON');
 
-    handle.exec(SCHEMA_SQL);
+    initSessionSchema(handle, SESSION_DB_PATH);
     // A host replica's file is the Mac's rows, kept by the follower apply
     // connection (sessions kind, replication/kinds/sessions.ts): its own data
     // fixes and WAL truncation would change the copy behind its hashes, so it
@@ -658,7 +660,7 @@ function companionCopyHandle(dbPath: string): DatabaseType {
   handle.pragma('journal_mode = WAL');
   handle.pragma('busy_timeout = 5000');
   handle.pragma('synchronous = NORMAL');
-  handle.exec(SCHEMA_SQL);
+  initSessionSchema(handle, dbPath);
   // The Mac's rows as they came: missing columns only, no data fixes.
   ensureSessionStatusColumns(handle, undefined, { backfill: false });
   companionCopy = { path: dbPath, handle };
@@ -1131,6 +1133,37 @@ export function sessionToRow(session: Partial<SessionRecord>): Record<string, an
 // Re-export the column list so callers can build prepared statements without
 // duplicating the ordering.
 export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
+
+/**
+ * The payload fields a query filters sessions by, each with its own partial
+ * index (SCHEMA_SQL). A query uses that index only when its WHERE names the
+ * same expression AND `json_valid(payload)` (the index's own condition, which
+ * also keeps a malformed payload from raising on every write); without it the
+ * query parses every payload in the table (7.7k rows, 75 MB on the Mac,
+ * 50-150 ms of held loop each time, 2026-11-25).
+ */
+export const PAYLOAD_LANE = "json_extract(payload, '$.lane')";
+export const PAYLOAD_STOP_REQUEST_STATE = "json_extract(payload, '$.stopRequest.state')";
+export const PAYLOAD_TASK_COMPLETE_STOP_STATE = "json_extract(payload, '$.taskCompleteStop.state')";
+
+/** The index of each payload field above (added 2026-11-25), built after the open
+ *  (sqlite-late-index.ts). An older build keeps them up to date on its own writes and never reads them. */
+const PAYLOAD_LATE_INDEXES: LateIndex[] = ([
+  ['sessions_payload_lane', PAYLOAD_LANE],
+  ['sessions_payload_stop_request', PAYLOAD_STOP_REQUEST_STATE],
+  ['sessions_payload_task_complete_stop', PAYLOAD_TASK_COMPLETE_STOP_STATE],
+] as const).map(([name, expr]) => ({
+  name,
+  table: 'sessions',
+  sql: `CREATE INDEX IF NOT EXISTS ${name} ON sessions(${expr}) WHERE json_valid(payload)`,
+  warm: 'SELECT max(length(payload)) FROM sessions',
+}));
+
+/** SCHEMA_SQL and the indexes built after it, on every handle that opens a sessions file. */
+function initSessionSchema(handle: DatabaseType, file: string): void {
+  handle.exec(SCHEMA_SQL);
+  ensureLateIndexes(handle, PAYLOAD_LATE_INDEXES, { report: lateIndexReport(file) });
+}
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 // Idempotent. Safe to run on every open — matches the pattern in

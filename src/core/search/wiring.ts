@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createSearchIndex,
+  docStampsOfKind,
   MISSING_VEC_SCAN_LIMIT,
   PASSAGE_MAX_CHARS,
   type Doc,
@@ -643,11 +644,7 @@ export async function sweepSearchV2Files(): Promise<{ changed: number; removed: 
     ['note', notesRoot()],
     ['skill', GLOBAL_SKILLS_DIR],
   ] as Array<['memory' | 'note' | 'skill', string]>) {
-    const stored = new Map(
-      (index.db.prepare(`SELECT ref, updated_at FROM doc WHERE kind = ?`)
-        .all(kind) as Array<{ ref: string; updated_at: number }>)
-        .map((r) => [r.ref, r.updated_at]),
-    );
+    const stored = docStampsOfKind(index.db, kind);
     for await (const file of walkMd(root)) {
       if (kind === 'note' && !searchableNote(file.absPath)) continue;
       const prev = stored.get(file.absPath);

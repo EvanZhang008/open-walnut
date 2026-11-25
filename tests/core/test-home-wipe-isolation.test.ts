@@ -223,6 +223,7 @@ const EXEMPT: Record<string, string> = {
   'src/hooks/shared.ts': 'hook helpers: each call opens the file and closes it before returning',
   'src/hooks/session-status-store.ts': 'opens the path it is given and closes it in the same call',
   'src/lib/sqlite.ts': 'the VACUUM INTO and inspect workers: one read-only connection per copy or check, ended with it',
+  'src/lib/sqlite-late-index.ts': 'the late index worker: one connection per build, closed with it; it never makes a file that is gone',
   'src/core/leader/switch/flow.ts': 'the leader switch lists unsettled mail sends in the promoted home: one read-only connection, closed before it returns',
   'src/core/leader/switch/home-path-rules.ts': 'the leader switch rewrites the promoted home\'s ledger once, with no server running on it: opened and closed in one call',
   'src/core/leader/switch/session-hosts.ts': 'the leader switch moves the promoted home\'s session hosts once, with no server running on it: opened and closed in one call',

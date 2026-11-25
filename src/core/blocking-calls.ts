@@ -16,8 +16,10 @@
  *    (ChildProcess.prototype.spawn, which spawn, execFile, exec and fork all go
  *    through). Not timed: spawnSync, execSync, execFileSync and Bun.spawn,
  *    which do not pass there; a hold in one of those shows in the CPU profile.
- * A call of BLOCKING_MIN_MS or more goes into a ring; one of SITE_MIN_MS or
- * more also keeps its caller (the stack at its end is still the caller's).
+ * A call of BLOCKING_MIN_MS or more goes into a ring with its caller (the stack
+ * at its end is still the caller's; reading it costs tens of microseconds, under
+ * 1% of such a call). Callers used to be kept from 100 ms only, and 348
+ * transactions of 20 to 100 ms in a day's stalls (25 s) named none (2026-11-25).
  * Cost per call: two performance.now() reads (about 25 ns each); a write also
  * reads its thread CPU and the process context switches (about 1.3 us).
  */
@@ -30,8 +32,8 @@ import { log } from '../logging/index.js';
 
 /** Calls shorter than this are not kept (ms). */
 export const BLOCKING_MIN_MS = 20;
-/** Calls this long or longer also keep their caller (ms). */
-export const SITE_MIN_MS = 100;
+/** Calls this long or longer also keep their caller (ms): every call kept. */
+export const SITE_MIN_MS = BLOCKING_MIN_MS;
 const RING_SIZE = 512;
 let minMs = BLOCKING_MIN_MS;
 let siteMs = SITE_MIN_MS;
@@ -89,7 +91,7 @@ export function currentCallBuffer(): SharedArrayBuffer {
 
 /** The ledger's own frames and the wrappers it times through, by function name
  *  (a compiled binary has one file, /$bunfs/root/walnut, so names are what tell them apart). */
-const OWN_FRAMES = new Set(['noteTimed', 'timed', 'timedSpawn', 'each', 'guarded', 'transaction', 'run', 'get', 'all', 'exec', 'getNow', 'allNow',
+const OWN_FRAMES = new Set(['noteTimed', 'timed', 'timedSpawn', 'end', 'each', 'guarded', 'transaction', 'run', 'get', 'all', 'exec', 'getNow', 'allNow',
   'transactionWhenFree', 'tryBeginImmediate', 'pragma', 'pragmaNow',
   'spawn', 'execFile', 'fork', 'Promise', 'new Promise', 'ChildProcess']);
 const OWN_FILES = /node:|bun:|\(native\)|\/lib\/sqlite(?:-guards)?\.[cm]?[jt]s|\/core\/blocking-calls\.[cm]?[jt]s/;
@@ -110,7 +112,8 @@ export function callerSite(stack: string | undefined): string | null {
     const fn = m?.[1]?.replace(/^(?:async |Object\.|SqliteStatement\.|SqliteDatabase\.)/, '') ?? '';
     const where = m?.[2] ?? t.slice(3);
     if (OWN_FILES.test(t)) continue;
-    if (frames.length === 0 && (fn === '' || fn === '<anonymous>' || OWN_FRAMES.has(fn))) continue;
+    // A bundle renames a wrapper that shares a name with another function (timed -> timed2).
+    if (frames.length === 0 && (fn === '' || fn === '<anonymous>' || OWN_FRAMES.has(fn.replace(/\d+$/, '')))) continue;
     const file = where.split('/').pop() ?? where;
     const at = m?.[3] ? `${file}:${m[3]}` : file;
     frames.push(fn && fn !== '<anonymous>' ? `${fn} ${at}` : at);

@@ -12,10 +12,12 @@ import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import Database from '../../src/lib/sqlite.js'
 import {
+  BLOCKING_MIN_MS,
   blockingCallsWithin,
   callerSite,
   installBlockingCallTiming,
   noteBlockingCall,
+  SITE_MIN_MS,
   sqlLabel,
   _resetBlockingCallsForTesting,
   _setBlockingThresholdsForTesting,
@@ -52,7 +54,21 @@ describe('blocking-call ledger', () => {
     expect(top.kind).toBe('sqlite')
     expect(top.what).toBe(sqlLabel(SLOW_SQL))
     expect(got!.ms).toBeGreaterThanOrEqual(100)
-    // A site needs a call of SITE_MIN_MS: the next test covers it with the threshold at 1 ms.
+    expect(top.site).toMatch(/readsTheWholeTable/)
+  })
+
+  // 2026-11-25: 348 transactions of 20 to 100 ms held a day's stalls for 25 s, and none named
+  // its caller (callers were kept from 100 ms only).
+  it('names the caller of every call it keeps, a short one too', () => {
+    installBlockingCallTiming()
+    const db = Database(':memory:')
+    const from = performance.now()
+    expect(SITE_MIN_MS).toBe(BLOCKING_MIN_MS)
+    function commitsABatch(): void { db.transaction(() => { holdWithSqlite(db, 25) })() }
+    commitsABatch()
+    const got = blockingCallsWithin(from, performance.now())
+    db.close()
+    expect(got!.calls.find((c) => c.what === 'transaction')?.site).toMatch(/commitsABatch/)
   })
 
   it('names the caller of a call of SITE_MIN_MS or more', () => {
@@ -103,6 +119,12 @@ describe('blocking-call ledger', () => {
   it('reads a caller site from a stack', () => {
     const stack = 'Error\n    at noteTimed (/x/src/core/blocking-calls.ts:1:1)\n    at <anonymous> (/$bunfs/root/walnut:9:9)\n    at run (/x/src/lib/sqlite.ts:2:2)\n    at writeSessionRowSqlite (/x/src/core/session-tracker.ts:1850:7)\n    at /x/src/core/session-tracker.ts:1724:9\n    at upsert (/x/a.ts:3:3)\n    at more (/x/b.ts:4:4)'
     expect(callerSite(stack)).toBe('writeSessionRowSqlite session-tracker.ts:1850 < session-tracker.ts:1724 < upsert a.ts:3')
+  })
+
+  it('skips the wrappers in a compiled file, where the bundle renamed them', () => {
+    // As the Mac's walnut file wrote it (2026-11-25): two of the three frames were the ledger's own.
+    const stack = 'Error\n    at noteTimed (/$bunfs/root/walnut:60:1)\n    at end (/$bunfs/root/walnut:75:3)\n    at timed2 (/$bunfs/root/walnut:22:5)\n    at upsertDoc (/$bunfs/root/walnut:6166:9)\n    at sweep (/$bunfs/root/walnut:6200:3)\n    at tick (/$bunfs/root/walnut:6300:3)'
+    expect(callerSite(stack)).toBe('upsertDoc walnut:6166 < sweep walnut:6200 < tick walnut:6300')
   })
 })
 
