@@ -458,6 +458,9 @@ export async function otherStandbyOf(home: string, env: NodeJS.ProcessEnv = proc
  * standby is gone, so its launcher starts it again by the usual rules. Ending at once instead had a launcher
  * that restarts what it sees stop start it again every few seconds for as long as the other one ran.
  */
+/** Unanswered port asks in a row that end a wait beside another standby (waitForOtherStandby). */
+const WAIT_CONFIRM_MISSES = 3
+
 export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer, o: { env?: NodeJS.ProcessEnv; lookMs?: number; confirm?: (sb: StandbyServer) => Promise<boolean> } = {}): StandbyListener {
   const env = o.env ?? process.env
   let endWith: (line: string) => void = () => {}
@@ -465,6 +468,7 @@ export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer
   let closed = false
   let looks = 0
   let asking = false
+  let misses = 0
   const end = () => {
     closed = true
     clearInterval(look)
@@ -475,10 +479,15 @@ export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer
     const now = readStandbyServer(s.home, env)
     if (!now || now.pid !== running.pid) { end(); return }
     // Every tenth look its port is asked too: a standby killed by SIGKILL leaves its pid file, and a pid used
-    // again by another long-lived process would keep this one waiting for good.
+    // again by another long-lived process would keep this one waiting for good. Only three unanswered asks in a
+    // row end the wait: a standby adopting many sessions in its process can hold its event loop for seconds.
     if (++looks % 10) return
     asking = true
-    void (o.confirm ?? confirmStandby)(now).then((yes) => { asking = false; if (!yes && !closed) end() }, () => { asking = false })
+    void (o.confirm ?? confirmStandby)(now).then((yes) => {
+      asking = false
+      misses = yes ? 0 : misses + 1
+      if (misses >= WAIT_CONFIRM_MISSES && !closed) end()
+    }, () => { asking = false })
   }, o.lookMs ?? 1_000)
   return {
     server: http.createServer(),

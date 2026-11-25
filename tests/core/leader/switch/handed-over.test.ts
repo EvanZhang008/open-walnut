@@ -185,18 +185,20 @@ describe('the standby of a handed-over home', () => {
     }
   })
 
-  it('a waiting start whose standby\'s pid file outlived it (a pid used again, its port no standby) ends at the port check', async () => {
+  it('a waiting start whose standby\'s pid file outlived it (a pid used again, its port no standby) ends after three unanswered port checks in a row', async () => {
     writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', commit: 5, at: new Date().toISOString() })
     const file = standbyServerFile(home, env)
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, JSON.stringify({ pid: process.ppid, port: 1, home }))
     const s = handedOverAtBoot({ home, env })!
-    const asked: number[] = []
-    const wait = waitForOtherStandby(s, { pid: process.ppid, port: 1 }, { env, lookMs: 10, confirm: async (sb) => { asked.push(sb.port); return false } })
+    // Its port answers once in between (a standby busy for a moment), then not at all: three misses in a row end the wait.
+    const answers = [false, false, true, false, false, false]
+    const asked: boolean[] = []
+    const wait = waitForOtherStandby(s, { pid: process.ppid, port: 1 }, { env, lookMs: 5, confirm: async () => { const a = answers[asked.length] ?? false; asked.push(a); return a } })
     try {
-      const line = await Promise.race([wait.ended, new Promise<null>((r) => setTimeout(() => r(null), 2_000))])
+      const line = await Promise.race([wait.ended, new Promise<null>((r) => setTimeout(() => r(null), 5_000))])
       expect(line).toMatch(/is gone; this waiting process ends/)
-      expect(asked).toEqual([1])
+      expect(asked).toEqual([false, false, true, false, false, false])
       expect(fs.existsSync(file)).toBe(true)
     } finally { await wait.close() }
   })
