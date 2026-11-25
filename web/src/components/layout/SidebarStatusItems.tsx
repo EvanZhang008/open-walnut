@@ -140,7 +140,7 @@ export function SidebarStatusItems({ onOpenChange }: { onOpenChange?: (open: boo
           <button
             key={item.key}
             ref={(el) => { if (el) triggers.current.set(item.key, el); else triggers.current.delete(item.key); }}
-            className={`sidebar-link sidebar-status-item${isOpen ? ' is-open' : ''}${busy ? ' is-pending' : ''}`}
+            className={`sidebar-link wn-nav-item sidebar-status-item${isOpen ? ' is-open' : ''}${busy ? ' is-pending' : ''}`}
             data-tone={railTone(item.tone, held)}
             data-status-key={item.key}
             onClick={(e) => {

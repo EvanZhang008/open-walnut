@@ -104,6 +104,8 @@
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     column-gap: 12px;
     row-gap: 4px;
+    /* Every tab of a row is as tall as the tallest, so a one-line detail sits level with two. */
+    align-items: stretch;
     overflow: visible;
     box-shadow: none;
   }
@@ -244,6 +246,13 @@
   padding-top: 6px;
   padding-bottom: 6px;
   align-items: flex-start;
+}
+
+/* Words in two lines keep soft corners, as every row and card with words does; only a one-line tab
+   is round (the user, 2026-11-22: long ones may be square, the small ones round). A tile keeps its
+   card corners. */
+.wn-tabs:not(.wn-tabs-tiles) > .wn-tab.wn-tab-tall {
+  border-radius: var(--radius-md); /* shape: a two-line tab is a block of words, not a key */
 }
 
 .wn-tab-text {

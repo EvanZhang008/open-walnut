@@ -29,7 +29,7 @@
 }
 .sidebar-status-item[data-tone="warning"] .sidebar-label { color: var(--priority-important-text); }
 
-/* Wins over `.sidebar-link svg` (18px) in the collapsed rail: the minutes need 22px. */
+/* Wins over `.sidebar-link svg` (16px) in the collapsed rail: the minutes need 22px. */
 .sidebar-link svg.status-ring,
 .status-ring {
   width: 22px;
@@ -37,11 +37,12 @@
   flex-shrink: 0;
   overflow: visible;
 }
-/* The minutes need 22px, but the row must stay as tall as its 18px-icon neighbours:
+/* The minutes need 22px, but the row must stay as tall as its 16px-icon neighbours:
    the ring overhangs 2px top and bottom instead of growing the row. */
 .sidebar-link svg.status-ring { margin: -2px 0; }
-/* The expanded rail has the words, so the ring shrinks to an icon and drops its number. */
-.sidebar:not(.collapsed) .sidebar-link svg.status-ring { width: 18px; height: 18px; margin: 0; }
+/* The expanded rail has the words, so the ring shrinks to the rows' 16px icon and drops its
+   number: its words start where every other row's do. */
+.sidebar:not(.collapsed) .sidebar-link svg.status-ring { width: 16px; height: 16px; margin: 0; }
 .sidebar:not(.collapsed) .sidebar-status-item .status-ring text,
 .sidebar:not(.collapsed) .sidebar-status-item .status-ring-glyph { display: none; }
 

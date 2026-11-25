@@ -13,7 +13,7 @@ export function QuickBarRailButton() {
     // `sidebar-panel-toggle`: the button reset, and the phone drawer closes on the tap.
     <button
       type="button"
-      className="sidebar-link sidebar-panel-toggle sidebar-quickbar-link"
+      className="sidebar-link wn-nav-item sidebar-panel-toggle sidebar-quickbar-link"
       // The click's own focus would stay on this button: the bar takes it on its next frame.
       onClick={() => openQuickBar()}
       aria-label="Quick bar"

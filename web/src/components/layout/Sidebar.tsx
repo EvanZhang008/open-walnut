@@ -467,7 +467,7 @@ export function Sidebar({
       <div className="sidebar-notification-area">
         {audio.available && audio.recording && (
           <button
-            className="sidebar-link sidebar-recording-btn recording-active"
+            className="sidebar-link wn-nav-item sidebar-recording-btn recording-active"
             onClick={audio.toggleRecording}
             aria-label="Stop recording"
           >
@@ -485,7 +485,7 @@ export function Sidebar({
         {/* A tool, not a page: with the bell, right above it (2026-11-20, the user), never at the top. */}
         <QuickBarRailButton />
         <button
-          className="sidebar-link sidebar-notification-btn"
+          className="sidebar-link wn-nav-item sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}
           // Quiet mode: the one visible trace is a moon on the bell and a tooltip
           // naming who holds quiet; no count or dot until it ends (quiet-model.ts).

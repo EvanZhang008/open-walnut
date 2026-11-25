@@ -203,7 +203,7 @@ describe('quiet attention ratchet: outside a page, quiet means no count, dot, so
 
   it('a plugin ring on the rail drops its "needs you now" look through railTone', () => {
     const text = fs.readFileSync(path.join(repoRoot, 'web/src/components/layout/SidebarStatusItems.tsx'), 'utf8')
-    expect(text).toMatch(/className=\{`sidebar-link sidebar-status-item[\s\S]{0,200}data-tone=\{railTone\(item\.tone, held\)\}/)
+    expect(text).toMatch(/className=\{`sidebar-link wn-nav-item sidebar-status-item[\s\S]{0,200}data-tone=\{railTone\(item\.tone, held\)\}/)
   })
 
   it('every system notification, chime and app icon badge in the console consults quiet', () => {
