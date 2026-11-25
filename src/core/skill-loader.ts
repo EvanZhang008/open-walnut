@@ -274,6 +274,35 @@ export function _resetLenientFrontmatterWarnedForTest(): void {
   lenientFrontmatterWarned.clear();
 }
 
+const LENIENT_MSG = 'skill-loader: frontmatter is not strict YAML; recovered name/description by line';
+
+/**
+ * Read `name` and `description` line by line from frontmatter strict YAML rejected. A
+ * block scalar (`description: >` or `|`) takes its indented lines that follow. A field
+ * left empty is not recovered, so the caller can tell a full recovery from a lossy one.
+ */
+function recoverFrontmatterByLine(fmText: string): SkillFrontmatter {
+  const out: Record<string, string> = {};
+  const lines = fmText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(name|description):\s*(.*)$/);
+    if (!m) continue;
+    let value = m[2].trim();
+    const block = value.match(/^([|>])[-+]?\d*$/);
+    if (block) {
+      const parts: string[] = [];
+      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1]) || lines[i + 1].trim() === '')) {
+        parts.push(lines[++i].trim());
+      }
+      value = parts.join(block[1] === '>' ? ' ' : '\n').trim();
+    } else {
+      value = value.replace(/^(['"])(.*)\1$/, '$2');
+    }
+    if (value) out[m[1]] = value;
+  }
+  return out as SkillFrontmatter;
+}
+
 /** `file` names the SKILL.md in the one warning a lenient file gets. */
 function parseFrontmatter(raw: string, file?: string): { frontmatter: SkillFrontmatter; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -288,23 +317,22 @@ function parseFrontmatter(raw: string, file?: string): { frontmatter: SkillFront
     // hand-written SKILL.md files) — the CLI's own reader is lenient and still
     // lists the skill with its description. Recover name/description by line so
     // the skill neither vanishes nor loses its one-line summary.
-    frontmatter = {};
-    for (const line of fmText.split(/\r?\n/)) {
-      const m = line.match(/^(name|description):\s*(.*)$/);
-      if (m) (frontmatter as Record<string, unknown>)[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
-    }
+    frontmatter = recoverFrontmatterByLine(fmText);
+    const recovered = Object.keys(frontmatter);
     const key = `${file ?? ''}\0${fmText}`;
-    const fields = {
-      file,
-      error: err instanceof Error ? err.message : String(err),
-      recovered: Object.keys(frontmatter),
-    };
+    const fields = { file, error: err instanceof Error ? err.message : String(err), recovered };
+    // A full recovery is what the CLI itself reads, so it is news, not a fault: info, once
+    // per file and text. Only a recovery that lost a field degrades the skill and warns.
+    // (2026-11-25 log.spike: six of the user's own SKILL.md files warned on every restart,
+    // and production restarts on every deploy, so a "warn once" still read as a spike.)
+    const complete = recovered.includes('name') && recovered.includes('description');
     if (lenientFrontmatterWarned.has(key)) {
-      log.task.debug('skill-loader: frontmatter is not strict YAML; recovered name/description by line', fields);
+      log.task.debug(LENIENT_MSG, fields);
     } else {
       if (lenientFrontmatterWarned.size >= LENIENT_WARNED_MAX) lenientFrontmatterWarned.clear();
       lenientFrontmatterWarned.add(key);
-      log.task.warn('skill-loader: frontmatter is not strict YAML; recovered name/description by line', fields);
+      if (complete) log.task.info(LENIENT_MSG, fields);
+      else log.task.warn(LENIENT_MSG, fields);
     }
   }
   return { frontmatter, body };

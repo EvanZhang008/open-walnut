@@ -102,22 +102,48 @@ describe('lenient frontmatter warning', () => {
   beforeEach(() => _resetLenientFrontmatterWarnedForTest());
   afterEach(() => vi.restoreAllMocks());
 
-  it('warns once per file and content, then only at debug level', () => {
+  it('a full recovery logs info once per file and content, then only at debug level, never warn', () => {
+    // 2026-11-25 log.spike: six of the user's own SKILL.md files recovered fully yet warned
+    // on every server start, and production restarts on every deploy.
     const warn = vi.spyOn(log.task, 'warn');
+    const info = vi.spyOn(log.task, 'info');
     const debug = vi.spyOn(log.task, 'debug');
     for (let i = 0; i < 5; i++) {
       const { frontmatter } = parseFrontmatter(lenient('does a: thing'), '/skills/demo/SKILL.md');
       expect(frontmatter.description).toBe('Demo skill: does a: thing');
     }
-    const warns = warn.mock.calls.filter((c) => c[0] === WARN_MSG);
-    expect(warns).toHaveLength(1);
-    expect(warns[0][1]).toMatchObject({ file: '/skills/demo/SKILL.md' });
+    expect(warn.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(0);
+    const infos = info.mock.calls.filter((c) => c[0] === WARN_MSG);
+    expect(infos).toHaveLength(1);
+    expect(infos[0][1]).toMatchObject({ file: '/skills/demo/SKILL.md', recovered: ['name', 'description'] });
     expect(debug.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(4);
 
-    // An edit that changes the frontmatter, or another file, is news: it warns again.
+    // An edit that changes the frontmatter, or another file, is news: it logs again.
     parseFrontmatter(lenient('does b: thing'), '/skills/demo/SKILL.md');
     parseFrontmatter(lenient('does a: thing'), '/skills/other/SKILL.md');
-    expect(warn.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(3);
+    expect(info.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(3);
+    expect(warn.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(0);
+  });
+
+  it('warns once only when the recovery lost name or description', () => {
+    const warn = vi.spyOn(log.task, 'warn');
+    const noName = `---\ndescription: Demo skill: does a thing\n  bad: [indent\n---\nBody`;
+    const emptyDesc = `---\nname: demo\ndescription:\nother: a: b\n---\nBody`;
+    for (let i = 0; i < 3; i++) {
+      expect(parseFrontmatter(noName, '/skills/a/SKILL.md').frontmatter.name).toBeUndefined();
+      expect(parseFrontmatter(emptyDesc, '/skills/b/SKILL.md').frontmatter.description).toBeUndefined();
+    }
+    const warns = warn.mock.calls.filter((c) => c[0] === WARN_MSG);
+    expect(warns.map((c) => (c[1] as { file: string }).file)).toEqual(['/skills/a/SKILL.md', '/skills/b/SKILL.md']);
+  });
+
+  it('recovers a block-scalar description, so a folded one is a full recovery', () => {
+    const warn = vi.spyOn(log.task, 'warn');
+    const folded = `---\nname: demo\ndescription: >\n  Demo skill: does\n  a thing\nother: a: b\n---\nBody`;
+    const literal = `---\nname: demo\ndescription: |-\n  line one: x\n  line two\nother: a: b\n---\nBody`;
+    expect(parseFrontmatter(folded, '/skills/f/SKILL.md').frontmatter).toEqual({ name: 'demo', description: 'Demo skill: does a thing' });
+    expect(parseFrontmatter(literal, '/skills/l/SKILL.md').frontmatter).toEqual({ name: 'demo', description: 'line one: x\nline two' });
+    expect(warn.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(0);
   });
 
   it('every src caller of the skill-loader parser names the file it parsed', async () => {
