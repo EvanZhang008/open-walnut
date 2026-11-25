@@ -746,16 +746,42 @@ host's one Walnut service whose boot turned standby (`serviceRuntime()`, set onl
 entry, `src/binary/service-entry.ts`), and a plain `walnut web` (the Mac's launchd `web --port 3456`,
 a dev box's server; `serviceRuntime()` is null there). A server whose daemon is a program of its own
 holds nothing: that program outlived the stop. `GET /api/leader/status` on the standby says what it
-holds (`sessionRuntime`: `{ held: 'service' | 'in-process', dir }`, or `{ held: false, why }`), and
-the leader's own status says `daemonInProcess`.
+holds (`sessionRuntime`: `{ held: 'service' | 'in-process', dir }`, or `{ held: false, why }`, read
+live: a runtime that ended itself since, as a daemon update's handover ends it, is held no more and the
+standby does not start it again). The leader's own status says `daemonInProcess` (a runtime running now)
+and `daemonShape` (`standby-service.ts daemonShapeNow`): `service` for a host's one Walnut service,
+`in-process` for a plain server whose boot decided to run the daemon in its own process (not declined to
+a program), `program` otherwise. The switch reads the shape, not the running runtime: a runtime that
+ended itself a moment ago starts again at the next dial and is still that server's.
 
 Since the runtime comes back only with the standby, the source job starts the old home as the
-standby after the stop whenever the old leader's server ran the daemon in its own process (its
-preflight read `daemonInProcess`), not only when the old machine keeps a witness; a launcher that
-restarts the home does the same, and the second start waits for the first standby to end. A target job that rolls back on
-a machine whose home handed the leader over before (a switch back that did not complete) stopped that
-home's standby for its trial; once the handed-over home is back in place it starts it again, so the
-witness door and the session runtime it held come back. Between the stop and the
+standby after the stop whenever the old leader is a plain server that ran the daemon in its own
+process (its preflight read `daemonShape: in-process`), not only when the old machine keeps a witness.
+For a service (`daemonShape: service`) the job starts nothing, witness or not: its launcher starts the
+service again, which boots as the standby and holds the runtime itself, and a second process beside it
+would race it for the home and the daemon dir. A launcher that restarts a plain `web` (the Mac's
+launchd) may still start it beside the one the job started: that second start waits for the first
+standby to end. A target job that rolls back on a machine whose home handed the leader over before (a
+switch back that did not complete) stopped that home's standby for its trial; once the handed-over
+home is back in place it starts it again (`target-job.ts standbyAfterRollback`), so the witness door
+and the session runtime it held come back, except on a service's machine (the job's env names a
+service install root), whose launcher starts it. The standby the job starts gets a clean env
+(`side.ts cleanStartEnv`): the account basics, the machine's daemon placement (`WALNUT_DAEMON_*`,
+`WALNUT_IN_PROCESS_DAEMON`, `XDG_*`) and the machine's `env` from `leader_switch.machines`, never the
+job's own session identity (an agent session's `WALNUT_SESSION_ID` and `WALNUT_TASK_DIR`,
+`CLAUDECODE`), since every CLI its runtime starts inherits that env, possibly for days.
+
+A standby started while its switch's marker still says `switching` (the job died after the commit,
+or is slower than the new leader's console replica) reads the marker again at each look and keeps
+serving its own switch at `switching` and at `handed-over`, whether it holds the port or yielded it
+to the console replica: it ends only for another switch or a removed marker, so it keeps the runtime
+while the job is resumed.
+
+With `switchable_leader` off nothing of this runs: a switch needs the flag, the target job and the
+standby exist only during or after one, and `/api/leader/status` answers 404. The changes a machine
+with the flag off still has: `LocalDaemon.ensureRunningOrInProcess` moved its in-process start into a
+private method shared with `holdInProcess` (the same steps in the same order), and a target job's
+rollback on a handed-over home starts its standby (only reachable after a switch with the flag on). Between the stop and the
 standby's hold, and on a switch back between the old machine's standby stop (the trial needs its
 port) and its leader's boot, no process watches that machine's CLIs: they keep running and the next
 holder adopts them. `tests/core/leader/switch/switch-stop-sessions.test.ts` runs these processes one
