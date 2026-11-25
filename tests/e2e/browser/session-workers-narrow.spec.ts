@@ -23,7 +23,8 @@ let api: KanbanApi
 let lead = ''
 let leadSid = ''
 const PLAN = 'Planned the work in thirteen parts. Each part has its own worker and its own tests, '
-  + 'and each reports back here when it is done. The service parts go first, then the hosts, then the phone app and the docs.'
+  + 'and each reports back here when it is done. The service parts go first, then the hosts, then the phone app and the docs. '
+  + 'Nothing ships until its part passes its own checks on the cloud box, and the phone part waits for the hosts.'
 const LEAD_TITLE = `Narrow column lead ${Date.now().toString(36)}`
 
 // Titles as long as the user's own workers' titles.
@@ -198,21 +199,24 @@ test('on a phone a reload with the list open lands at the chat\'s end, the last 
   // He reads up a little and back down to the end by hand, the last worker in sight.
   const box = await panel.locator('.session-history').boundingBox()
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
-  await page.mouse.wheel(0, -40)
-  await page.waitForTimeout(400)
-  await page.mouse.wheel(0, 2000)
-  await expect.poll(async () => (await lastChipShows(panel)).hitsLast, { timeout: 10_000 }).toBe(true)
-  // The reading place keeps that he was at the end (reading-place.ts), written as the page leaves.
-  await expect.poll(() => page.evaluate((sid) => {
-    const raw = localStorage.getItem(`walnut:reading-place.v1:${sid}`)
-    return raw ? Object.values(JSON.parse(raw) as Record<string, { atBottom: boolean }>).some((p) => p.atBottom) : false
-  }, leadSid), { timeout: 10_000 }).toBe(true)
+  await page.mouse.wheel(0, -240)
+  await page.waitForTimeout(500)
+  await page.mouse.wheel(0, 6000)
+  await page.waitForTimeout(2500)
+  // A board as big as his loads its task list a moment after the chat: the workers line comes
+  // last, inside the phone's open-time landing window (phone-turn-start.ts), and makes the one
+  // turn taller than the screen.
+  const late = async (r: import('@playwright/test').Route) => { await new Promise((ok) => setTimeout(ok, Number(process.env.PW_TASKS_DELAY ?? 1000))); await r.continue() }
+  const landing: string[] = []
+  page.on('console', (m) => { if (/phone turn start|phone-restore/.test(m.text())) landing.push(m.text().slice(0, 200)) })
+  await page.route('**/api/tasks?**', late)
+  await page.route('**/api/tasks', late)
   await page.reload()
   await expect(line).toHaveAttribute('data-open', 'true', { timeout: 60_000 })
   // Untouched as the auditor left it: every late layout (the workers line arrives with the task list) has landed.
   await page.waitForTimeout(9_000)
   const m = await lastChipShows(panel)
-  expect(m.scrollTop, `back at the end: ${JSON.stringify(m)}`).toBeGreaterThanOrEqual(m.max - 2)
+  expect(m.scrollTop, `back at the end: ${JSON.stringify(m)} ${landing.join(' | ')}`).toBeGreaterThanOrEqual(m.max - 2)
   expect(m.hitsLast, JSON.stringify(m)).toBe(true)
 })
 

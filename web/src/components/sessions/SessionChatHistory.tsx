@@ -1875,7 +1875,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   });
   // The reading pane never lets go of its place: a send, a bubble or "to the end"
   // below is the chat's, and a release would write "at the bottom" under its key.
-  const { carryRow: carryPlaceRow } = readingPlace;
+  const { carryRow: carryPlaceRow, keepsEnd: placeKeepsEnd } = readingPlace;
   const releasePlace = readerPane ? NOOP_RELEASE : readingPlace.release;
   // The top line stays the top line when the box changes size (fullscreen, the
   // window, the panel's width, the split's divider and its turn): line-anchor.ts.
@@ -2946,6 +2946,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const turnTop = latestTurnStartTop(el);
       const step = phoneTurnStartStep({
         atBottom: isAtBottom.current,
+        keptEnd: placeKeepsEnd(),
         elapsedMs: performance.now() - phoneTurnStartFrom.current,
         opened: phoneTurnStartOpened.current ?? timelineContentNow.current,
         now: timelineContentNow.current,
@@ -2973,7 +2974,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (apply()) return undefined;
     const timers = [60, 180, 400, 800, 1400, PHONE_TURN_START_WINDOW_MS + 1].map((ms) => setTimeout(apply, ms));
     return () => { timers.forEach(clearTimeout); };
-  }, [phase2Pending, messages, scrollLog, sessionId]);
+  }, [phase2Pending, messages, scrollLog, sessionId, placeKeepsEnd]);
 
   // ── Scroll-to-bottom: 2 paths ──
   //

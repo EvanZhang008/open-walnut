@@ -69,6 +69,9 @@ export interface UseReadingPlaceArgs {
 export interface ReadingPlaceApi {
   /** A kept place owns this page's landing now: no forced scroll to the bottom. */
   held: MutableRefObject<boolean>;
+  /** The page showed a kept place at its end and nothing came since (its last row is one the
+   *  reader saw there): the phone's open-time landing keeps that end (phone-turn-start.ts). */
+  keepsEnd: () => boolean;
   /** When `pageKey`'s place was kept, if it has one (the stack landing defers to it). */
   placeAt: (pageKey: string) => number | undefined;
   /** The stack landing puts this page back itself (a pop in this box, to the
@@ -97,6 +100,8 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
   /** The page the DOM shows (set in the same commit that swaps the rows). */
   const keyRef = useRef<string | null>(null);
   const held = useRef(false);
+  /** The kept place this showing started from. */
+  const shownPlace = useRef<ReadingPlace | null>(null);
   const pending = useRef<{ key: string; place: ReadingPlace; until: number; olderAsked?: boolean } | null>(null);
   const hold = useRef<{ stop: () => void } | null>(null);
   const recordTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -259,6 +264,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     const place = switched && drawn(switched.place)
       ? { ...switched.place, atBottom: switched.place.atBottom && switched.from === pageKey }
       : getPlace(sessionId, pageKey);
+    shownPlace.current = place ?? null;
     if (!place) { pending.current = null; held.current = false; return; }
     pending.current = { key: pageKey, place, until: performance.now() + PENDING_MS };
     held.current = !place.atBottom;
@@ -386,5 +392,14 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     };
   }, [containerRef, boxId]);
   const resized = useLeanCallback(() => { if (hold.current) stopHold(); }, [stopHold]);
-  return { held, placeAt, adopt, release, keep, carryRow, resized };
+  const keepsEnd = useCallback((): boolean => {
+    const p = shownPlace.current;
+    if (!p?.atBottom) return false;
+    // The last row the box draws (the timeline's list also holds rows it never draws).
+    const drawn = containerRef.current?.querySelectorAll<HTMLElement>('[data-message-id]');
+    const id = drawn && drawn.length ? drawn[drawn.length - 1]!.dataset.messageId : undefined;
+    return !!id && p.rows.some((r) => r.id === id);
+  }, [containerRef]);
+
+  return { held, keepsEnd, placeAt, adopt, release, keep, carryRow, resized };
 }

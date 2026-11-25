@@ -39,6 +39,11 @@ describe('phoneTurnStartStep', () => {
     expect(phoneTurnStartStep(look({ turnTop: null }))).toEqual({ act: 'wait' })
   })
 
+  it('keeps the end the reader kept, with nothing new since (a reload a moment after reading to the end)', () => {
+    expect(phoneTurnStartStep(look({ keptEnd: true }))).toEqual({ act: 'done', why: 'kept' })
+    expect(phoneTurnStartStep(look({ keptEnd: false }))).toEqual({ act: 'apply' })
+  })
+
   it('stops for the reader, a pending prompt and the end of the window', () => {
     expect(phoneTurnStartStep(look({ atBottom: false }))).toEqual({ act: 'done', why: 'reader' })
     expect(phoneTurnStartStep(look({ pendingPrompt: true }))).toEqual({ act: 'done', why: 'prompt' })
@@ -121,5 +126,16 @@ describe('a timeline moves away from the bottom with no input only where listed'
     const before = src.slice(Math.max(0, at - 2500), at)
     expect(before).toContain('phoneTurnStartStep(')
     expect(before).toContain('timelineContentNow.current')
+  })
+})
+
+describe('the open-time landing keeps an end the reader kept (2026-11-25)', () => {
+  const root = join(__dirname, '..', '..')
+  it('SessionChatHistory asks the reading place, and the reading place reads the rows the box draws', () => {
+    const history = readFileSync(join(root, 'web/src/components/sessions/SessionChatHistory.tsx'), 'utf8')
+    expect(history).toMatch(/phoneTurnStartStep\(\{\s*atBottom: isAtBottom\.current,\s*keptEnd: placeKeepsEnd\(\),/)
+    const place = readFileSync(join(root, 'web/src/components/sessions/useReadingPlace.ts'), 'utf8')
+    // The timeline's list holds rows it never draws: the last drawn one says whether anything came since.
+    expect(place).toMatch(/const keepsEnd = useCallback[\s\S]{0,400}querySelectorAll<HTMLElement>\('\[data-message-id\]'\)/)
   })
 })

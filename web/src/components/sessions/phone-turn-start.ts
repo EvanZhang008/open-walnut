@@ -37,6 +37,11 @@ export function liveOutputSize(blocks: readonly StreamingBlock[]): number {
 export interface TurnStartLook {
   /** Following the bottom (no reader scroll since the open). */
   atBottom: boolean;
+  /** The reader's kept place is this page's end and nothing came since (useReadingPlace
+   *  `keepsEnd`): a reload a moment after reading to the end comes back to the end
+   *  (2026-11-25: the open subtasks list under a short chat made its one turn taller than
+   *  the phone's screen, and the landing took the reader back up to its start). */
+  keptEnd?: boolean;
   elapsedMs: number;
   /** What the timeline held when the window opened, and holds now. */
   opened: TimelineContent;
@@ -52,11 +57,12 @@ export interface TurnStartLook {
 export type TurnStartStep =
   | { act: 'apply' }
   | { act: 'wait' }
-  | { act: 'done'; why: 'reader' | 'late' | 'arrived' | 'prompt' };
+  | { act: 'done'; why: 'reader' | 'late' | 'arrived' | 'prompt' | 'kept' };
 
 /** One check of the landing: land at the turn start, check again later, or stop for good. */
 export function phoneTurnStartStep(look: TurnStartLook): TurnStartStep {
   if (!look.atBottom) return { act: 'done', why: 'reader' };
+  if (look.keptEnd) return { act: 'done', why: 'kept' };
   if (look.now.rows !== look.opened.rows || look.now.live !== look.opened.live) return { act: 'done', why: 'arrived' };
   if (look.elapsedMs > PHONE_TURN_START_WINDOW_MS) return { act: 'done', why: 'late' };
   // R3-01: an unanswered prompt needs the tap, so a timeline that ends in one
