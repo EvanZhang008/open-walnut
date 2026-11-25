@@ -403,22 +403,28 @@ test('a topic stands alone on the Org page: no node pins beside it, named by its
   await expect(chat(page)).toHaveAttribute('data-topic-id', (await first.getAttribute('data-topic-id')) ?? 'none')
 })
 
-test('a topic draws its tasks and VP with the Org page\'s own avatars, a person stays a tile', async ({ page }) => {
+// Only an Org node wears the Org page's picture; a plain task keeps its letter tile (088a4b1675, 2026-11-23).
+test('a topic draws its VP with the Org page\'s own avatar, its plain tasks and a person stay tiles', async ({ page }) => {
   test.skip(!ids.topic, 'the topic was not made')
   await openOrg(page)
   await list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`).click()
   await expect(chat(page)).toHaveAttribute('data-topic-id', ids.topic)
-  // The header's stack (its first three, the host first): the VP and the two tasks are pictures.
+  const tile = '.topic-avatar:not(.is-picture):not(.is-person)'
+  // The header's stack (its first three, the host first): the VP is the picture, the two tasks are tiles.
   const stack = chat(page).getByTestId('topic-head-stack')
-  await expect(stack.getByTestId('org-avatar-picture').first()).toBeVisible({ timeout: 15_000 })
-  expect(await stack.getByTestId('org-avatar-picture').count()).toBeGreaterThanOrEqual(3)
-  // The members panel: the same pictures, and the person by email stays a tile.
+  await expect(stack.locator(':scope > .topic-avatar').first()).toHaveAttribute('data-testid', 'org-avatar-picture', { timeout: 15_000 })
+  await expect(stack.getByTestId('org-avatar-picture')).toHaveCount(1)
+  await expect(stack.locator(tile)).toHaveCount(2)
+  // The members panel: the same, and the person by email stays a person's tile.
   const members = chat(page).getByTestId('topic-members')
-  expect(await members.getByTestId('org-avatar-picture').count()).toBeGreaterThanOrEqual(3)
+  await expect(members.getByTestId('org-avatar-picture')).toHaveCount(1)
+  await expect(members.locator(tile)).toHaveCount(2)
   await expect(members.locator('.topic-avatar.is-person')).toHaveCount(1)
-  // The Org list draws the topic with two of its members' pictures.
+  // The Org list draws the topic with its first two members: the host's picture behind, a task's tile in front.
   const row = list(page).locator(`[data-testid="org-topic"][data-topic-id="${ids.topic}"]`)
-  await expect(row.getByTestId('topic-group-avatar').getByTestId('org-avatar-picture')).toHaveCount(2)
+  const group = row.getByTestId('topic-group-avatar')
+  await expect(group.locator('.topic-group-avatar-slot.is-back').getByTestId('org-avatar-picture')).toHaveCount(1)
+  await expect(group.locator(`.topic-group-avatar-slot.is-front ${tile}`)).toHaveCount(1)
   await shot(page, 'org-avatars')
 })
 
