@@ -128,6 +128,9 @@ async function bootMac(c: Cluster, build: 'old' | 'new', phase: string, seed: bo
     WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_NO_AUTO_UPDATE: '1',
     WALNUT_LEADER_QUIET_MS: String(WINDOWS.quietMs), WALNUT_TRUSTED_CLIENT_BEAT_MS: String(WINDOWS.beatMs), WALNUT_LEADER_TAKEOVER_MS: String(WINDOWS.takeoverMs),
     NODE_ENV: 'production',
+    // Each Mac's daemon is a program in its own dir (md-<phase>), as the old build's always is: never in
+    // the new Mac's process, which the experiment in_process_daemon does by default since 2026-11-24.
+    WALNUT_IN_PROCESS_DAEMON: '0',
   }
   const log = { text: '' }
   const proc = spawn(process.execPath, [file], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })

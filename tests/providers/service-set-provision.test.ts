@@ -44,7 +44,8 @@ describe('provisionWith', () => {
     })
     const p = await provisionWith(EXE, h.io, ask)
     expect(p).toEqual({ set: SET, installed: true, ok: true, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
-    expect(h.lines.find((l) => l.includes(' install '))).toBe(`${EXE} walnut daemon install --yes --executable ${EXE} --walnut ${WALNUT} --walnut-home /home/u/.open-walnut 2>/dev/null || true`)
+    // Under the launcher: the experiment service_launcher is on by default since 2026-11-24.
+    expect(h.lines.find((l) => l.includes(' install '))).toBe(`${EXE} walnut daemon install --yes --executable ${EXE} --launcher --walnut ${WALNUT} --walnut-home /home/u/.open-walnut 2>/dev/null || true`)
   })
 
   it('an own set already installed is left as it is', async () => {

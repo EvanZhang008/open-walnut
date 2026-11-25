@@ -144,6 +144,15 @@ describe('judgeDaemon: the daemon after an update in use', () => {
     expect(() => judgeDaemon({ before, now: { ...before, clis: [] }, expected: OLD, alive: alive([100]) })).toThrow(/lost the CLI process groups 500/)
   })
 
+  // in_process_daemon is on by default since 2026-11-24: the release's server stops the program and
+  // holds the runtime itself (no daemon.pid; daemonOf reads the pid from its instance id).
+  it('a release whose server holds the daemon in its process replaces the program, whatever its version', () => {
+    const now = { version: NEW, pid: 200, inProcess: true, clis: [600] }
+    expect(judgeDaemon({ before, now, expected: NEW, alive: alive([200]), groupAlive: () => false })).toMatch(/\(pid 200, in the server's process\), a new CLI process/)
+    expect(judgeDaemon({ before, now: { ...now, version: OLD }, expected: OLD, alive: alive([200]), groupAlive: () => false })).toMatch(/in the server's process/)
+    expect(() => judgeDaemon({ before, now, expected: NEW, alive: alive([100, 200]) })).toThrow(/old daemon \(pid 100.*still runs/)
+  })
+
   it('with the release\'s daemon version unknown, it still requires a replacement', () => {
     expect(() => judgeDaemon({ before, now: { ...before }, expected: null, alive: alive([100]) })).toThrow(/still pid 100/)
   })

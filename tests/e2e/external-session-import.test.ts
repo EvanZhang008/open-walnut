@@ -5,7 +5,8 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-external-import', { IS_EPHEMERAL: true }));
 vi.mock('../../src/providers/local-daemon.js', () => ({
-  localDaemon: { ensureRunning: async () => {}, stopIfIsolated: async () => {}, port: 0 },
+  // otherServiceHolding: the boot asks it while the daemon runs in process (in_process_daemon, on by default since 2026-11-24).
+  localDaemon: { ensureRunning: async () => {}, stopIfIsolated: async () => {}, otherServiceHolding: async () => null, port: 0 },
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';

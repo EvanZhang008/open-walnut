@@ -165,7 +165,12 @@ export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch,
 /** The install's daemon dir: the running daemon's version and pid. */
 function daemonOf(w) {
   const read = (f) => { try { return fs.readFileSync(path.join(w.daemonDir, f), 'utf8').trim() } catch { return null } }
-  return { version: read('daemon.version'), pid: Number(read('daemon.pid')) || null }
+  const pid = Number(read('daemon.pid')) || null
+  if (pid) return { version: read('daemon.version'), pid }
+  // A runtime in the server's process (experiment in_process_daemon, on by default since 2026-11-24)
+  // writes no daemon.pid: its instance id (`d-<pid>-<rand>`) names the process that holds it.
+  const inProcess = /^d-(\d+)-/.exec(read('daemon.instance') ?? '')
+  return inProcess ? { version: read('daemon.version'), pid: Number(inProcess[1]), inProcess: true } : { version: read('daemon.version'), pid: null }
 }
 
 const alive = (pid) => { if (!pid || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
@@ -418,10 +423,12 @@ function fileDaemonVersion(file, env) {
  * server reuses a daemon of the version it expects (local-daemon.ts), so a restart would
  * only cost every session its process. 2026-10-28: the first compiled nightly updating to
  * the next commit kept its daemon, and the check, written while every start point was the
- * Node package and so had another daemon, read that as a failure.
+ * Node package and so had another daemon, read that as a failure. A release that runs the
+ * daemon in its server's process (`now.inProcess`) always takes the dir over from the
+ * program, whatever its version: the program is replaced.
  */
 export function judgeDaemon({ before, now, expected, alive: isAlive = alive, groupAlive: isGroupAlive = groupAlive }) {
-  if (expected && expected === before.version) {
+  if (expected && expected === before.version && !now.inProcess) {
     if (now.pid !== before.pid || !isAlive(before.pid)) throw new Error(`the release runs the same daemon (${expected}), yet pid ${before.pid} became ${now.pid ?? 'none'}: a daemon of the version the server expects is kept`)
     if (now.version !== expected) throw new Error(`the kept daemon (pid ${now.pid}) reports ${now.version}, the release runs ${expected}`)
     const gone = before.clis.filter((g) => !now.clis.includes(g))
@@ -430,12 +437,12 @@ export function judgeDaemon({ before, now, expected, alive: isAlive = alive, gro
   }
   if (!now.pid || now.pid === before.pid) throw new Error(`the daemon is still pid ${before.pid} (${before.version}) after the update`)
   if (isAlive(before.pid)) throw new Error(`the old daemon (pid ${before.pid}, ${before.version}) still runs beside ${now.version} (pid ${now.pid})`)
-  if (now.version === before.version) throw new Error(`the new daemon reports the old version ${before.version}`)
+  if (now.version === before.version && !(now.inProcess && expected === before.version)) throw new Error(`the new daemon reports the old version ${before.version}`)
   if (expected && now.version !== expected) throw new Error(`the new daemon reports ${now.version}, the release runs ${expected}`)
   const same = now.clis.join(',') === before.clis.join(',')
   const stray = same ? [] : before.clis.filter((g) => !now.clis.includes(g) && isGroupAlive(g))
   if (stray.length) throw new Error(`the old daemon's CLI process groups ${stray.join(', ')} still run beside the new one's`)
-  return `daemon ${before.version} (pid ${before.pid}) -> ${now.version} (pid ${now.pid}), ${same ? 'the same CLI process' : 'a new CLI process'}`
+  return `daemon ${before.version} (pid ${before.pid}) -> ${now.version} (pid ${now.pid}${now.inProcess ? ', in the server\'s process' : ''}), ${same ? 'the same CLI process' : 'a new CLI process'}`
 }
 
 /** The daemon after the update of `work`'s install to the release whose file is `file`. */

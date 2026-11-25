@@ -93,7 +93,8 @@ describe('the host network update io', () => {
     expect(chunks).toEqual([...chunks].sort())
     expect(host.writes.at(-1)).toMatch(/\/update\.sh$/)
     const [update] = calls()
-    expect(update).toMatch(/--scope user --executable \/tmp\/open-walnut-update\.\w+\/daemon$/)
+    // Under the launcher: the experiment service_launcher is on by default since 2026-11-24.
+    expect(update).toMatch(/--scope user --executable \/tmp\/open-walnut-update\.\w+\/daemon --launcher$/)
     // It ran outside every exec job's group, so the group signal did not reach it.
     const pgid = Number(/pgid=(\d+)/.exec(update)![1])
     expect(host.jobGroups).not.toContain(pgid)

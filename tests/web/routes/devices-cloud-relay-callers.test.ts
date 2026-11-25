@@ -62,6 +62,7 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { getConfig, updateConfig } from '../../../src/core/config-manager.js'
 import { localDaemon } from '../../../src/providers/local-daemon.js'
+import { inProcessDaemonRunning } from '../../../src/providers/in-process-daemon.js'
 import { markCloudUnpaired, resetCloudUnpairedForTest } from '../../../src/core/cloud-unpaired.js'
 
 const created = '2026-09-01T00:00:00.000Z'
@@ -151,6 +152,8 @@ function leftoverProcesses(pid: number | null): string[] {
 }
 
 let daemonPid: number | null = null
+/** The daemon runs in the server's process (experiment in_process_daemon, on by default since 2026-11-24): no pid of its own. */
+let daemonInProcess = false
 
 beforeAll(async () => {
   sshIsolation = isolateFromRealSsh()
@@ -161,6 +164,7 @@ beforeAll(async () => {
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as AddressInfo).port
   daemonPid = localDaemon.pid
+  daemonInProcess = inProcessDaemonRunning()
 }, 60_000)
 
 afterAll(async () => {
@@ -171,7 +175,7 @@ afterAll(async () => {
     // restarts). This one is the file's own, in a dir of its own: stop it.
     await localDaemon.stopIfIsolated()
     const left = leftoverProcesses(daemonPid)
-    expect(daemonPid, 'startServer started a local daemon').toBeGreaterThan(1)
+    expect(daemonInProcess || (daemonPid ?? 0) > 1, 'startServer started a local daemon (in process or a program)').toBe(true)
     expect(left, 'nothing of the local daemon survives the file').toEqual([])
   } finally {
     sshIsolation?.restore()

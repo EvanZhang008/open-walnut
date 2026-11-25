@@ -93,7 +93,10 @@ export async function bootLiveServer(procs: LiveProcs, s: LiveServer, input: {
   await fsp.writeFile(input.file, input.script)
   s.server = s.daemon = null
   const [cmd, args] = walled(process.execPath, [input.file], { base: input.base, repo: input.repo })
-  const proc = spawn(cmd, args, { cwd: input.repo, env: input.env, stdio: ['ignore', 'pipe', 'pipe'] })
+  // Each server's daemon is a program this run pins by its daemon.pid (s.daemon below): never in the
+  // server's process, which the experiment in_process_daemon does by default since 2026-11-24.
+  const env = { ...input.env, WALNUT_IN_PROCESS_DAEMON: input.env.WALNUT_IN_PROCESS_DAEMON ?? '0' }
+  const proc = spawn(cmd, args, { cwd: input.repo, env, stdio: ['ignore', 'pipe', 'pipe'] })
   s.proc = proc
   const server = procs.child(`${s.name} server`, proc)
   if (!server) throw new Error(`${s.name}: spawn gave no pid`)

@@ -49,9 +49,10 @@ let cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const c of cleanup) await c(); cleanup = [] })
 
 describe('answersOnline follows the host_call_entry experiment', () => {
-  it('the experiment keeps its id, off by default, and names the same-host delivery while this computer answers', () => {
+  // On by default since 2026-11-24 (the one-service experiments' default flip); a stored false keeps it off.
+  it('the experiment keeps its id, on by default, and names the same-host delivery while this computer answers', () => {
     const f = EXPERIMENTAL_FEATURES.find((x) => x.id === 'host_call_entry')!
-    expect(f.default).toBe(false)
+    expect(f.default).toBe(true)
     expect(f.description).toMatch(/while this computer answers too/)
   })
 

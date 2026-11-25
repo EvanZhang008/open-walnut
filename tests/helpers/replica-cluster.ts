@@ -695,7 +695,12 @@ export function macEnvOf(o: { base: string; macHome: string; macData: string; ma
     ...windowEnv(), NODE_ENV: 'production',
     ...(o.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
     // The Mac offers the host its one Walnut service (service-launcher-flag.ts), so the service is the mode it wants there.
-    ...(o.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
+    // Without hostService the host stays the plain daemon the cluster started, as it did before every host was
+    // offered the service by default (2026-11-24).
+    ...(o.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : { WALNUT_HOST_SERVICE_OFFER: '0' }),
+    // The cluster pins the Mac's own daemon as a program (its daemon.pid, macDaemonPin): never in the
+    // Mac's process, which the experiment in_process_daemon does by default since 2026-11-24.
+    WALNUT_IN_PROCESS_DAEMON: '0',
     ...(o.extra ?? {}),
   }
 }

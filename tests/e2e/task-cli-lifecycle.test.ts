@@ -7,9 +7,13 @@ import { HOST_DAEMON_BINARY } from './fixtures/budget-artifacts.js'
 
 const isolation = vi.hoisted(() => {
   const previous = process.env.WALNUT_DAEMON_DIR
+  const previousInProcess = process.env.WALNUT_IN_PROCESS_DAEMON
   const dir = `/tmp/walnut-task-cli-daemon-${process.pid}-${Date.now()}`
   process.env.WALNUT_DAEMON_DIR = dir
-  return { dir, previous }
+  // The test runs the built daemon binary as a program in that dir: the server must dial it, never
+  // take the dir over in its own process (in_process_daemon, on by default since 2026-11-24).
+  process.env.WALNUT_IN_PROCESS_DAEMON = '0'
+  return { dir, previous, previousInProcess }
 })
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-cli', process.env.WALNUT_VERIFY_DAEMON_DIR
   ? { DAEMON_BINARIES_DIR: process.env.WALNUT_VERIFY_DAEMON_DIR } : {}))
@@ -81,6 +85,8 @@ afterAll(async () => {
   }
   if (isolation.previous === undefined) delete process.env.WALNUT_DAEMON_DIR
   else process.env.WALNUT_DAEMON_DIR = isolation.previous
+  if (isolation.previousInProcess === undefined) delete process.env.WALNUT_IN_PROCESS_DAEMON
+  else process.env.WALNUT_IN_PROCESS_DAEMON = isolation.previousInProcess
 }, 25_000)
 
 describe('task CLI lifecycle through a real server and process transport', () => {

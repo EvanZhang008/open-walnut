@@ -135,7 +135,8 @@ describe.skipIf(!BUN)('host network update over the daemon link (standalone daem
     expect(cmds).toContain('fs.read')
     const updates = fs.readFileSync(path.join(state, 'calls'), 'utf8').trim().split('\n')
     expect(updates).toHaveLength(2)
-    expect(updates[1]).toMatch(/walnut daemon update --yes --scope user --executable \/tmp\/open-walnut-update\.\w+\/daemon$/)
+    // Under the launcher: the experiment service_launcher is on by default since 2026-11-24.
+    expect(updates[1]).toMatch(/walnut daemon update --yes --scope user --executable \/tmp\/open-walnut-update\.\w+\/daemon --launcher$/)
     // The launcher saw the script in a group of its own, and the update ran in that group.
     const launch = sent.find((s) => /walnut-update-started/.test(s.output ?? ''))?.output ?? ''
     const [, group, own] = /group=(\d+) own=(\d+)/.exec(launch) ?? []
