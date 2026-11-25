@@ -370,16 +370,27 @@ function ComposerControlsBarBody({ controls, className, handleRef }: ComposerCon
     // Measured on the next frame, never inside the observer's callback: condensing the
     // row there resizes what it watches and leaves its notifications undelivered.
     let frame = 0;
-    const ro = new ResizeObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); });
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); };
+    const ro = new ResizeObserver(schedule);
     ro.observe(bar);
-    // The row only shrinks when the space around it does, and its own box stops
-    // changing once it has collapsed — watch the whole controls row too.
-    if (bar.parentElement) ro.observe(bar.parentElement);
     for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) ro.observe(el);
-    // A direct button that appears (its control mounted late) takes room the row
-    // has to hear about even when the row's own box does not change.
-    for (const el of rowItems(bar.parentElement, DIRECT_BUTTON)) ro.observe(el);
-    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
+    // The room is read off the whole controls row (the bar, its spacer, the recall line, Note and
+    // btw, the send keys: rowRoom), so every item on it is watched, not only the bar: a condensed
+    // bar's own box does not grow when room comes back, only the spacer beside it does, and the row
+    // kept its short form with the room for the full one free (2026-11-25, the send keys narrowed
+    // past a -12 px squeeze and nothing measured again). An item mounted later is watched too.
+    const row = bar.parentElement;
+    let mo: MutationObserver | null = null;
+    if (row) {
+      ro.observe(row);
+      const watchItems = () => { for (const el of row.children) ro.observe(el); };
+      watchItems();
+      if (typeof MutationObserver !== 'undefined') {
+        mo = new MutationObserver(() => { watchItems(); schedule(); });
+        mo.observe(row, { childList: true });
+      }
+    }
+    return () => { ro.disconnect(); mo?.disconnect(); cancelAnimationFrame(frame); };
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
   }, [measure, ids, routeShown]);
 
