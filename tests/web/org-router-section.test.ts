@@ -534,10 +534,11 @@ describe('router settings', () => {
 })
 
 describe('router settings: which chat messages each chat account takes', () => {
-  const { filterTicks, filterInclude, sourceKey, shownRouterValue, editRouterValue, ROUTER_NO_FILTER_LINE, ROUTER_CHAT_SOURCES_NOTE, CHAT_FILTER_KINDS } = settingsMod
+  const { filterTicks, filterInclude, sourceKey, shownRouterValue, editRouterValue, ROUTER_NO_FILTER_LINE, ROUTER_CHAT_SOURCES_NOTE, CHAT_FILTER_KINDS, chatFilterKinds } = settingsMod
   const SLACK = { kind: 'slack', account: 'T0TEAM' }
   const KEY = sourceKey(SLACK)
   const ALL = CHAT_FILTER_KINDS.map((one) => one.label)
+  const WECHAT_ALL = chatFilterKinds('wechat').map((one) => one.label)
   const base = { name: 'Personal router', links: [], paused: false, folders: ['inbox'] }
 
   it('shows a saved include as ticks (none saved ticks every kind), and saves every kind as [] (takes all)', () => {
@@ -556,18 +557,37 @@ describe('router settings: which chat messages each chat account takes', () => {
     const r = task('r', { router_paused: false })
     expect(routerBaseline(r, [], [{ kind: 'mail', account: 'desk@example.invalid' }])).not.toHaveProperty('filters')
     expect(routerBaseline(r, [], [{ kind: 'mail', account: 'desk@example.invalid' }, { ...SLACK, include: ['dm'] }, { kind: 'wechat', account: 'wx-1' }]).filters)
-      .toEqual({ [KEY]: ['dm'], 'wechat\nwx-1': ALL })
+      .toEqual({ [KEY]: ['dm'], 'wechat\nwx-1': WECHAT_ALL })
+  })
+
+  it('each chat kind ticks its own source\'s labels: WeChat\'s are direct, group, muted and official chats', () => {
+    expect(WECHAT_ALL).toEqual(['dm', 'group', 'muted', 'official'])
+    expect(filterTicks(undefined, 'wechat')).toEqual(WECHAT_ALL)
+    expect(filterInclude(['official', 'muted', 'group', 'dm'], 'wechat')).toEqual([])
+    // Slack's labels on a WeChat account are not "all": they are kept as named.
+    expect(filterInclude(ALL, 'wechat')).toEqual(ALL)
+    // A kind with no list of its own shows Slack's (the chat default).
+    expect(chatFilterKinds('other').map((one) => one.label)).toEqual(ALL)
+  })
+
+  it('every chat kind the router takes has filter boxes of its own (a new chat kind must add its labels)', () => {
+    const kinds = [...read('src/core/router/types.ts').matchAll(/ROUTER_SOURCE_KINDS = \[([^\]]*)\]/g)][0]![1]!
+      .split(',').map((one) => one.trim().replace(/'/g, '')).filter((one) => one && one !== 'mail')
+    expect(kinds.length).toBeGreaterThan(1)
+    expect(Object.keys(settingsMod.CHAT_FILTER_KINDS_BY_SOURCE).sort()).toEqual([...kinds].sort())
   })
 
   it('sends only the accounts whose filter changed, as the saved include, and never an account it does not read', () => {
     const saved = { ...base, filters: { [KEY]: ALL, 'wechat\nwx-1': ['dm'] } }
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'wechat\nwx-1': ['group', 'dm'] } }))
+      .toEqual({ filters: [{ kind: 'wechat', account: 'wx-1', include: ['group', 'dm'] }] })
     expect(routerPatch(saved, { ...saved })).toBeNull()
     // Same set in another order is no change.
     expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, [KEY]: ['watched', 'dm', 'mention'] } })).toBeNull()
     expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, [KEY]: ['dm', 'mention'] } }))
       .toEqual({ filters: [{ kind: 'slack', account: 'T0TEAM', include: ['dm', 'mention'] }] })
     // Ticking every kind again is saved as [] (takes all).
-    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'wechat\nwx-1': ALL } }))
+    expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'wechat\nwx-1': WECHAT_ALL } }))
       .toEqual({ filters: [{ kind: 'wechat', account: 'wx-1', include: [] }] })
     expect(routerPatch(saved, { ...saved, filters: { ...saved.filters, 'slack\nT0GONE': ['dm'] } })).toBeNull()
     expect(routerPatch(saved, { ...saved, paused: true, filters: { ...saved.filters, [KEY]: ['mention'] } }))

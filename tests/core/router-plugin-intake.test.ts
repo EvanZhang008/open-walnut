@@ -115,10 +115,10 @@ describe('the router_chat_sources experiment', () => {
     const home = await homeWith([{ id: 'personal', router: 'r-1' }])
     const f = fakes(home)
     delete f.deps.enabled
-    expect(await chatSourcesEnabled()).toBe(false)
+    expect(await chatSourcesEnabled('slack')).toBe(false)
     expect(await routerIntake('slack', TEAM, [dm(1)], f.deps)).toEqual({ taken: false, reason: 'off' })
     config.experimental = { router_chat_sources: true }
-    expect(await chatSourcesEnabled()).toBe(true)
+    expect(await chatSourcesEnabled('slack')).toBe(true)
     expect(await routerIntake('slack', TEAM, [dm(1)], f.deps)).toMatchObject({ taken: true, entered: 1 })
   })
 })
@@ -232,7 +232,8 @@ describe('a chat account beside the person\'s one mail router (pickArea fallback
     const one = await homeWith([{ id: 'personal', router: 'r-1' }])
     const open = async () => true
     const refuse = async () => { throw new Error('no router may be made here') }
-    expect(await ensureAccountRouter('wechat', 'wx-fixture', { home: one, routerOpen: open, createRouter: refuse }))
+    // Slack here: WeChat has a router of its own and never joins this one (router-own-chat-router.test.ts).
+    expect(await ensureAccountRouter('slack', 'T0OTHER', { home: one, routerOpen: open, createRouter: refuse }))
       .toEqual({ bound: true, areaId: 'personal', created: false, already: false })
     // A remote area is never the fallback.
     const remote = await homeWith([])
@@ -357,12 +358,15 @@ describe('the router wake kick (kickRouterWake)', () => {
   it('runs the area router\'s wake job at once; a burst inside the 30 s gap runs it once more when the gap ends', async () => {
     await areasAtHome()
     const job = await routerWakeJobId('r-1')
-    // The first kick is dated so that the gap ends about 300 ms from now.
-    await kickRouterWake('personal', Date.now() - 29_700)
+    // The first kick is dated so that the gap ends about 300 ms from now. The burst is dated too, 300 ms
+    // before the gap ends: a first kick slowed by a loaded machine (its cold imports) must not let the
+    // burst land after the gap and run at once.
+    const first = Date.now() - 29_700
+    await kickRouterWake('personal', first)
     expect(routines.runs).toEqual([job])
-    await kickRouterWake('personal')
-    await kickRouterWake('personal')
-    await kickRouterWake('personal')
+    await kickRouterWake('personal', first + 29_700)
+    await kickRouterWake('personal', first + 29_700)
+    await kickRouterWake('personal', first + 29_700)
     expect(routines.runs).toEqual([job])
     // One trailing run for the whole burst, when the gap ends.
     await expect.poll(() => routines.runs.length, { timeout: 5_000, interval: 50 }).toBe(2)

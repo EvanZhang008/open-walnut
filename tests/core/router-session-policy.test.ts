@@ -56,7 +56,7 @@ describe('routerAreaProfile', () => {
     const search = prompt.indexOf('1) Search all of the person\'s tasks')
     const check = prompt.indexOf('2) Take the candidates most relevant first and read each with task_get')
     const next = prompt.indexOf('It is not: check the next candidate')
-    const letter = prompt.indexOf('4) Only when no task is this item\'s matter. The mail is already in the person\'s mailbox, so never send it to them again')
+    const letter = prompt.indexOf('4) Only when no task is this item\'s matter. The item is already in the person\'s mailbox or chat app, so never send it to them again')
     expect(search).toBeGreaterThan(0)
     expect(check).toBeGreaterThan(search)
     expect(next).toBeGreaterThan(check)

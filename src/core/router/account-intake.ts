@@ -15,6 +15,7 @@ import {
   type RouterArea, type RouterAreasFile,
 } from './areas.js';
 import type { RouterItem, RouterSource, RouterSourceKind } from './types.js';
+import type { RouterNodeInput } from './nodes.js';
 import type { LetterRecord } from '../human-inbox/types.js';
 import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js';
 import { letterOpKey } from '../human-inbox/walnut-letters/kind.js';
@@ -22,6 +23,27 @@ import { MAIL_NO_ROUTER, mailNoRouterSettled, type MailNoRouterParams } from '..
 
 /** The area the plugin makes when the person has no router area yet. */
 export const ACCOUNT_ROUTER_AREA = { id: 'mail', name: 'Mail', router: 'Mail router' } as const;
+
+interface OwnRouterArea { id: string; name: string; router: string; include?: readonly string[] }
+
+/**
+ * Kinds whose accounts get a router of their own and never join the mail router (2026-11-25, the
+ * WeChat source: "make it another router for the wechat, so that we can route to correct task").
+ * `include` is the filter the new area starts with: direct messages and unmuted groups, not muted
+ * chats or official accounts.
+ */
+export const OWN_ROUTER_AREAS: Partial<Record<RouterSourceKind, OwnRouterArea>> = {
+  wechat: { id: 'wechat', name: 'WeChat', router: 'WeChat router', include: ['dm', 'group'] },
+};
+
+/** The kind an area is kept for: a kind's own area by id, or one whose accounts are all of one such kind. */
+export function areaKeptFor(area: Pick<RouterArea, 'id' | 'sources'>): RouterSourceKind | undefined {
+  for (const [kind, own] of Object.entries(OWN_ROUTER_AREAS) as Array<[RouterSourceKind, OwnRouterArea]>) {
+    if (area.id === own.id) return kind;
+  }
+  const first = area.sources[0]?.kind;
+  return first && OWN_ROUTER_AREAS[first] && area.sources.every((one) => one.kind === first) ? first : undefined;
+}
 
 export type AccountRouterOutcome =
   | { bound: true; areaId: string; created: boolean; already: boolean }
@@ -57,13 +79,20 @@ async function defaultRouterOpen(taskId: string): Promise<boolean> {
   return !!task && task.id === taskId && task.org_role === 'router' && task.phase !== 'COMPLETE';
 }
 
+/** The router an account's first arrival makes: its kind's own (WeChat) or the Mail router. */
+export function accountRouterSetup(kind: RouterSourceKind, account: string, now = Date.now()): RouterNodeInput {
+  const own = OWN_ROUTER_AREAS[kind];
+  const spec = own ?? ACCOUNT_ROUTER_AREA;
+  return {
+    name: spec.router, areaId: spec.id, areaName: spec.name, host: '__local__', links: [],
+    sources: [{ kind, account, ...(own?.include ? { include: [...own.include], includeAt: now } : {}) }],
+  };
+}
+
 async function defaultCreateRouter(kind: RouterSourceKind, account: string): Promise<string> {
   const { createRouterNode, updateRouterNode } = await import('./nodes.js');
-  const { task } = await createRouterNode({
-    name: ACCOUNT_ROUTER_AREA.router, areaId: ACCOUNT_ROUTER_AREA.id, areaName: ACCOUNT_ROUTER_AREA.name,
-    host: '__local__', links: [], sources: [{ kind, account }],
-  });
-  // A router the plugin makes works from the start: its whole point is to read each new mail.
+  const { task } = await createRouterNode(accountRouterSetup(kind, account));
+  // A router the plugin makes works from the start: its whole point is to read each new item.
   if (task.router_paused !== false) await updateRouterNode(task.id, { paused: false });
   return task.id;
 }
@@ -88,9 +117,24 @@ async function pickArea(file: RouterAreasFile, kind: RouterSourceKind, routerOpe
     const area = file.areas.find((one) => one.id === [...boundAreas][0]);
     if (area && await openRouter(area)) return area;
   }
+  // A kind with a router of its own looks only at areas kept for it, and makes its own when there is none.
+  const own = OWN_ROUTER_AREAS[kind];
+  if (own) {
+    const kept: RouterArea[] = [];
+    for (const area of file.areas) {
+      if (area.host === '__local__' && areaKeptFor(area) === kind && await openRouter(area)) kept.push(area);
+    }
+    if (kept.length === 1) return kept[0];
+    const ownArea = file.areas.find((one) => one.id === own.id);
+    if (kept.length > 1) return ownArea && kept.includes(ownArea) ? ownArea : 'choose';
+    // Its own area with its router closed is the person's choice: never a router made beside it.
+    return ownArea || file.areas.some((area) => areaKeptFor(area) === kind) ? 'choose' : 'none';
+  }
+  // Another kind's own area never takes this kind.
+  const shared = (area: RouterArea) => { const keptFor = areaKeptFor(area); return !keptFor || keptFor === kind; };
   const candidates: RouterArea[] = [];
   for (const area of file.areas) {
-    if (area.host !== '__local__') continue;
+    if (area.host !== '__local__' || !shared(area)) continue;
     if (area.sources.length && !area.sources.some((one) => one.kind === kind)) continue;
     if (await openRouter(area)) candidates.push(area);
   }
@@ -99,7 +143,7 @@ async function pickArea(file: RouterAreasFile, kind: RouterSourceKind, routerOpe
   // exactly one: one router for every inbound channel (2026-11-16, the Slack source), never a second.
   if (boundAreas.size === 0 && candidates.length === 0) {
     const open: RouterArea[] = [];
-    for (const area of file.areas) if (area.host === '__local__' && await openRouter(area)) open.push(area);
+    for (const area of file.areas) if (area.host === '__local__' && shared(area) && await openRouter(area)) open.push(area);
     if (open.length === 1) return open[0];
   }
   // Several routers could take it, or none: the Mail router's own area takes the rest.
@@ -133,7 +177,8 @@ async function ensureOne(kind: RouterSourceKind, account: string, deps: AccountR
     await (deps.createRouter ?? defaultCreateRouter)(kind, account);
     created = true;
     file = await readAreas(home);
-    picked = file.areas.find((one) => one.id === ACCOUNT_ROUTER_AREA.id) ?? 'choose';
+    const madeId = OWN_ROUTER_AREAS[kind]?.id ?? ACCOUNT_ROUTER_AREA.id;
+    picked = file.areas.find((one) => one.id === madeId) ?? 'choose';
   }
   if (picked === 'choose') return { bound: false, reason: 'choose' };
   const areaId = picked.id;

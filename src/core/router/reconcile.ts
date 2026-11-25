@@ -62,8 +62,8 @@ export interface RouterReconcileDeps {
   routesFor?: (areaId: string, sources: readonly RouterSource[]) => Promise<Map<string, unknown>>;
   enter?: (sources: readonly RouterSource[], home: string) => Promise<readonly RouterSource[]>;
   kick?: (areaId: string) => Promise<void>;
-  /** Whether the check runs at all; absent = the chat-source experiment and the auto-router switch. */
-  enabled?: () => Promise<boolean>;
+  /** Whether one kind is checked (its intake switch); absent = that kind's experiment. */
+  enabled?: (kind: RouterSourceKind) => Promise<boolean>;
 }
 
 const LOOKUP_BATCH = 200;
@@ -143,10 +143,11 @@ export async function reconcileArea(areaId: string, deps: RouterReconcileDeps = 
 
 const running = new Set<string>();
 
-async function reconcileEnabled(): Promise<boolean> {
+async function reconcileEnabled(kind: RouterSourceKind): Promise<boolean> {
   // The intake's own switches: what the intake would refuse, the check never enters behind its back.
   if (process.env.WALNUT_MAIL_AUTO_ROUTER === '0') return false;
-  return await chatSourcesEnabled();
+  // Mail enters through its own intake and has no recent(): a chat kind's own switch decides.
+  return kind !== 'mail' && await chatSourcesEnabled(kind);
 }
 
 /**
@@ -158,15 +159,18 @@ export async function reconcileIfDue(areaId: string, deps: RouterReconcileDeps =
   if (running.has(areaId)) return;
   running.add(areaId);
   try {
-    if (!(await (deps.enabled ?? reconcileEnabled)())) return;
+    const enabled = deps.enabled ?? reconcileEnabled;
     const home = deps.home ?? WALNUT_HOME;
     const now = (deps.now ?? Date.now)();
     const last = await readReconcileReport(areaId, home);
     if (last && now - last.at < ROUTER_RECONCILE_EVERY_MS && last.at <= now) return;
     const file = await (deps.readAreas ?? readRouterAreas)(home);
     const hasRecent = deps.hasRecent ?? hasRouterRecent;
-    if (!(file.accountBindings ?? []).some((one) => one.areaId === areaId && hasRecent(one.kind))) return;
-    await reconcileArea(areaId, deps);
+    const kinds = new Set((file.accountBindings ?? []).filter((one) => one.areaId === areaId && hasRecent(one.kind)).map((one) => one.kind));
+    const on = new Set<RouterSourceKind>();
+    for (const kind of kinds) if (await enabled(kind)) on.add(kind);
+    if (!on.size) return;
+    await reconcileArea(areaId, { ...deps, hasRecent: (kind) => on.has(kind) && hasRecent(kind) });
   } catch (error) {
     log.web.warn('router reconcile: the check failed', { areaId, error: String(error) });
   } finally { running.delete(areaId); }

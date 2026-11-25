@@ -55,25 +55,44 @@ export interface RouterSettingsPatch {
   filters?: Array<{ kind: string; account: string; include: string[] }>;
 }
 
-/** The kinds of chat arrival a filter ticks, by the label the chat source gives each. */
-export const CHAT_FILTER_KINDS: ReadonlyArray<{ label: string; words: string }> = [
+type ChatFilterKind = { label: string; words: string };
+
+/** The kinds of chat arrival a filter ticks, by the label the chat source gives each (Slack's). */
+export const CHAT_FILTER_KINDS: ReadonlyArray<ChatFilterKind> = [
   { label: 'dm', words: 'Direct messages' },
   { label: 'mention', words: 'Mentions of you' },
   { label: 'watched', words: 'Watched channels' },
 ];
-const CHAT_LABELS = CHAT_FILTER_KINDS.map((one) => one.label);
+
+/** Each chat kind's own labels (the WeChat plugin gives exactly one of these to each message). */
+export const CHAT_FILTER_KINDS_BY_SOURCE: Record<string, ReadonlyArray<ChatFilterKind>> = {
+  slack: CHAT_FILTER_KINDS,
+  wechat: [
+    { label: 'dm', words: 'Direct messages' },
+    { label: 'group', words: 'Group chats' },
+    { label: 'muted', words: 'Muted chats' },
+    { label: 'official', words: 'Official accounts' },
+  ],
+};
+
+/** The boxes one chat kind's filter shows. */
+export function chatFilterKinds(kind = 'slack'): ReadonlyArray<ChatFilterKind> {
+  return CHAT_FILTER_KINDS_BY_SOURCE[kind] ?? CHAT_FILTER_KINDS;
+}
+const chatLabels = (kind?: string) => chatFilterKinds(kind).map((one) => one.label);
 
 export const sourceKey = (src: { kind: string; account: string }) => `${src.kind}\n${src.account}`;
 
 /** A saved `include` as the boxes show it: unset ticks every kind. */
-export function filterTicks(include: readonly string[] | undefined): string[] {
-  return include?.length ? [...new Set(include)] : [...CHAT_LABELS];
+export function filterTicks(include: readonly string[] | undefined, kind?: string): string[] {
+  return include?.length ? [...new Set(include)] : chatLabels(kind);
 }
 
 /** The ticks as the saved `include`: every kind and nothing else is [] (takes all). */
-export function filterInclude(ticks: readonly string[]): string[] {
+export function filterInclude(ticks: readonly string[], kind?: string): string[] {
   const set = [...new Set(ticks)];
-  return CHAT_LABELS.every((label) => set.includes(label)) && set.every((label) => CHAT_LABELS.includes(label)) ? [] : set;
+  const all = chatLabels(kind);
+  return all.every((label) => set.includes(label)) && set.every((label) => all.includes(label)) ? [] : set;
 }
 
 const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((one, i) => one === [...b].sort()[i]);
@@ -97,6 +116,8 @@ export const ROUTER_SETTINGS_OPEN_EVENT = 'org:router-settings-open';
 export const ROUTER_SOURCES_NOTE = 'It reads every new mail of these accounts in the folders it watches.';
 /** With a chat account among them: what each one's ticks mean. */
 export const ROUTER_CHAT_SOURCES_NOTE = 'It reads every new mail of these accounts in the folders it watches, and the ticked kinds of message of each chat account.';
+/** Chat accounts only (the WeChat router): no mail, no folders. */
+export const ROUTER_CHAT_ONLY_NOTE = 'It reads the ticked kinds of message of each chat account. It never replies.';
 const SOURCE_KIND_WORDS: Record<string, string> = { mail: 'Mail', slack: 'Slack', wechat: 'WeChat' };
 
 export const ROUTER_NO_FILTER_LINE = 'Tick at least one kind of message for each chat account, or pause the router.';
@@ -112,7 +133,7 @@ export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_l
   const chats = sources.filter((src) => src.kind !== 'mail');
   return {
     name: task.org_name || task.title, links: [...(task.router_links ?? [])], paused: task.router_paused !== false, folders: folders.length ? folderList(folders) : ['inbox'],
-    ...(chats.length ? { filters: Object.fromEntries(chats.map((src) => [sourceKey(src), filterTicks(src.include)])) } : {}),
+    ...(chats.length ? { filters: Object.fromEntries(chats.map((src) => [sourceKey(src), filterTicks(src.include, src.kind)])) } : {}),
   };
 }
 
@@ -128,9 +149,9 @@ export function routerPatch(saved: RouterSettingsValue, edited: RouterSettingsVa
   if (!sameFolders(folderList(saved.folders ?? []), folderList(edited.folders ?? []))) patch.folders = folderList(edited.folders ?? []);
   const filters = Object.entries(edited.filters ?? {}).flatMap(([key, ticks]) => {
     const before = saved.filters?.[key];
-    if (!before || sameList(filterInclude(before), filterInclude(ticks))) return [];
     const [kind, ...rest] = key.split('\n');
-    return [{ kind: kind!, account: rest.join('\n'), include: filterInclude(ticks) }];
+    if (!before || sameList(filterInclude(before, kind), filterInclude(ticks, kind))) return [];
+    return [{ kind: kind!, account: rest.join('\n'), include: filterInclude(ticks, kind) }];
   });
   if (filters.length) patch.filters = filters;
   return Object.keys(patch).length ? patch : null;
@@ -336,7 +357,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
                 {(src.kind === 'mail' && sourceNames[src.account]) || src.account} <span className="org-router-kind">{SOURCE_KIND_WORDS[src.kind] ?? src.kind}</span>
                 {src.kind !== 'mail' && value.filters?.[sourceKey(src)] && (
                   <span className="org-router-filter" role="group" aria-label={`Messages it takes from ${src.account}`} data-testid="org-router-filter">
-                    {CHAT_FILTER_KINDS.map((one) => {
+                    {chatFilterKinds(src.kind).map((one) => {
                       const ticks = value.filters![sourceKey(src)]!;
                       return (
                         <label key={one.label} className="org-router-check" data-label={one.label}>
@@ -348,7 +369,7 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
                                 return { ...v, filters: { ...(v.filters ?? {}), [sourceKey(src)]: next } };
                               });
                             }} />
-                          {one.label === 'dm' ? 'Direct messages' : one.label === 'mention' ? 'Mentions of you' : 'Watched channels'}
+                          {one.words}
                         </label>
                       );
                     })}
@@ -357,7 +378,8 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
               </li>
             ))}</ul>
             : <EmptyState size="row" title="No account yet" hint="The Mail plugin adds each mailbox here." />}
-          <span className="org-router-hint">{sources.some((src) => src.kind !== 'mail') ? ROUTER_CHAT_SOURCES_NOTE : ROUTER_SOURCES_NOTE}</span>
+          <span className="org-router-hint">{!sources.some((src) => src.kind !== 'mail') ? ROUTER_SOURCES_NOTE
+            : sources.some((src) => src.kind === 'mail') ? ROUTER_CHAT_SOURCES_NOTE : ROUTER_CHAT_ONLY_NOTE}</span>
         </div>
       </div>
       {sources.some((src) => src.kind === 'mail') && (

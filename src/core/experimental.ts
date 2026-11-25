@@ -68,6 +68,13 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'router_wechat_source',
+    name: 'WeChat router',
+    description: 'On: new WeChat messages from a WeChat plugin go to a WeChat router of their own (it appears under Routers on the Org page), which passes each one to the task or VP that owns its subject. Direct messages and unmuted groups count by default; Router settings can change which chats it reads. It only reads: it never replies for you. Off: WeChat messages stay in WeChat, as before.',
+    summary: 'New WeChat messages go to a WeChat router, which passes each to the task or VP that owns it. It never replies.',
+    default: false,
+  },
+  {
     id: 'plugin_ai_configure',
     name: 'Configure plugins with AI',
     description: 'A "Configure with AI" button on each plugin\'s page in Apps opens a chat beside it: say what to change and Walnut changes the plugin\'s settings, which the page shows at once. Any chat can configure a plugin the same way, with this switch on or off.',

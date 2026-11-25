@@ -1799,6 +1799,9 @@ export interface RouterService {
   /**
    * Enter one account's new arrivals into the person's router (the one that reads mail), bound on
    * the first call. Walnut resolves and reads each through your registry.routerSource adapter.
+   * WeChat is the exception: its accounts get a WeChat router of their own, made by the first call
+   * (an empty list too), never the mail router. Each kind has its own switch in Settings ›
+   * Experimental; `off` while that one is off.
    * `taken: false` with `none`: there is no router to join, keep your own handling. Register
    * `registry.routerSource` for the kind first: only the plugin serving a kind may enter it.
    */

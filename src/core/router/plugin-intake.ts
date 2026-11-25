@@ -8,17 +8,20 @@
  * those its account's `include` list names (areas.ts `sourceTakes`), every one when it has none.
  * Unlike a mailbox, a chat account never makes a router of its own: with no router to join, its
  * arrivals are not taken (`reason: 'none'`, or `closed` when its router's task is closed), and the
- * plugin keeps its own letters as before. The arrivals the filter leaves out are named in
+ * plugin keeps its own letters as before. The exception is a kind with a router of its own
+ * (account-intake.ts OWN_ROUTER_AREAS, WeChat): its first arrival makes that router, and it never
+ * joins the mail router. The arrivals the filter leaves out are named in
  * `skipped`, so the plugin handles those its old way too: a filter says what the router takes, it
  * never drops a message.
  *
- * Behind the `router_chat_sources` experiment (src/core/experimental.ts): off, nothing is taken.
+ * Each kind is behind its own experiment (src/core/experimental.ts, CHAT_SOURCE_SWITCH): Slack behind
+ * `router_chat_sources`, WeChat behind `router_wechat_source`. Off, nothing of that kind is taken.
  */
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { accountBinding, readRouterAreas, ROUTER_ACCOUNT_MAX, ROUTER_MESSAGE_MAX, sourceTakes, type RouterAreasFile } from './areas.js';
 import {
-  accountRouterState, confirmAccountArrivals, ensureAccountRouter, type AccountArrivalDeps, type AccountRouterDeps,
+  accountRouterState, confirmAccountArrivals, ensureAccountRouter, OWN_ROUTER_AREAS, type AccountArrivalDeps, type AccountRouterDeps,
 } from './account-intake.js';
 import { ROUTER_SOURCE_KINDS, type RouterSource, type RouterSourceKind } from './types.js';
 
@@ -47,14 +50,19 @@ export interface RouterIntakeDeps extends AccountArrivalDeps {
   kick?: (areaId: string) => Promise<void>;
   /** Whether a router task is open; absent = the task store's answer. */
   routerOpen?: (taskId: string) => Promise<boolean>;
-  /** The experiment switch; absent = config.experimental.router_chat_sources. */
-  enabled?: () => Promise<boolean>;
+  /** The experiment switch of the kind; absent = its CHAT_SOURCE_SWITCH in config.experimental. */
+  enabled?: (kind: ChatSourceKind) => Promise<boolean>;
 }
 
-/** Whether chat sources enter the router at all (the `router_chat_sources` experiment). */
-export async function chatSourcesEnabled(): Promise<boolean> {
+export type ChatSourceKind = Exclude<RouterSourceKind, 'mail'>;
+
+/** Each chat kind's own experiment: turning one on never turns on another. */
+export const CHAT_SOURCE_SWITCH = { slack: 'router_chat_sources', wechat: 'router_wechat_source' } as const satisfies Record<ChatSourceKind, string>;
+
+/** Whether this chat kind enters the router at all (its CHAT_SOURCE_SWITCH experiment). */
+export async function chatSourcesEnabled(kind: ChatSourceKind): Promise<boolean> {
   const [{ getConfig }, { experimentalEnabled }] = await Promise.all([import('../config-manager.js'), import('../experimental.js')]);
-  return experimentalEnabled((await getConfig().catch(() => undefined))?.experimental, 'router_chat_sources');
+  return experimentalEnabled((await getConfig().catch(() => undefined))?.experimental, CHAT_SOURCE_SWITCH[kind]);
 }
 
 /**
@@ -99,19 +107,21 @@ export async function routerIntake(kind: RouterSourceKind, account: string, arri
   if (kind === 'mail') throw new TypeError('Mail enters the router through the mail plugin\'s own intake.');
   if (!plain(account, ROUTER_ACCOUNT_MAX)) throw new TypeError('router.intake needs the exact account id.');
   const asked = checkedArrivals(arrivals);
-  if (!(await (deps.enabled ?? chatSourcesEnabled)())) return { taken: false, reason: 'off' };
+  if (!(await (deps.enabled ?? chatSourcesEnabled)(kind))) return { taken: false, reason: 'off' };
   const home = deps.home ?? WALNUT_HOME;
   const readAreas = deps.readAreas ?? readRouterAreas;
-  // A chat account joins a router that exists; it never makes one.
+  // A chat account joins a router that exists; it never makes one, unless its kind has a router of its own.
+  const ownRouter = !!OWN_ROUTER_AREAS[kind];
   const before = await readAreas(home);
-  if (!accountBinding(before, kind, account) && !before.routers.length) return { taken: false, reason: 'none' };
+  if (!ownRouter && !accountBinding(before, kind, account) && !before.routers.length) return { taken: false, reason: 'none' };
   // Bound to a router whose task is closed: nobody would wake for it, so the plugin keeps them.
   if (accountBinding(before, kind, account) && await accountRouterState(before, kind, account, deps.routerOpen) === 'closed') {
     return { taken: false, reason: 'closed' };
   }
   // The same open check as above, so the binding never reads a router as open that the check read as closed.
   const bound = await (deps.ensure ?? ensureAccountRouter)(kind, account, {
-    home, readAreas, ...(deps.routerOpen ? { routerOpen: deps.routerOpen } : {}), createRouter: async () => { throw new Error('no router'); },
+    home, readAreas, ...(deps.routerOpen ? { routerOpen: deps.routerOpen } : {}),
+    ...(ownRouter ? {} : { createRouter: async () => { throw new Error('no router'); } }),
   })
     .catch(() => ({ bound: false as const, reason: 'none' as const }));
   if (!bound.bound) return { taken: false, reason: bound.reason };
