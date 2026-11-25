@@ -96,20 +96,28 @@ export function workingThreads(threads: readonly OrgThread[] | null, now: number
   return threads ? groupThreads(threads, now).working : [];
 }
 
-/** The working part of the top's words: "2 working"; empty with none. Pure. */
+/** The working part of the bar's words, after its pager ("1 / 2 › 1 more · 2 working"); empty with none. Pure. */
 export function workingLabel(working: number): string {
   return working > 0 ? `${working} working` : '';
 }
 
 /**
- * The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads", then
- * how many are being worked on (`working`, workingThreads; 0 while threads_each_question is off):
- * "3 threads (1 needs you) · 2 working", or "2 working" alone when none is for him. Pure.
+ * The hidden line's parts, in order: the threads for him ("16 threads (1 needs you)", "3 threads
+ * (2 need you)", "2 threads"; none with none), then how many are being worked on (`working`,
+ * workingThreads; 0 while threads_each_question is off). After threads for him they are "2 more
+ * working", so the count before them never reads as their total ("1 thread · 1 working" read as
+ * one thread in all; a review, 2026-11-25); alone they are "2 threads working". Pure.
  */
-export function hiddenLine(list: readonly Pick<OrgThread, 'state'>[], working = 0): string {
+export function hiddenParts(list: readonly Pick<OrgThread, 'state'>[], working = 0): string[] {
   const k = list.filter((t) => t.state === 'needs').length;
   const forHim = list.length ? `${threadCountLabel(list.length)}${k ? ` (${k} ${k === 1 ? 'needs' : 'need'} you)` : ''}` : '';
-  return [forHim, workingLabel(working)].filter(Boolean).join(' · ');
+  const worked = working > 0 ? (forHim ? `${working} more working` : `${threadCountLabel(working)} working`) : '';
+  return [forHim, worked].filter(Boolean);
+}
+
+/** The hidden line's words as one string (hiddenParts): "3 threads (1 needs you) · 2 more working". Pure. */
+export function hiddenLine(list: readonly Pick<OrgThread, 'state'>[], working = 0): string {
+  return hiddenParts(list, working).join(' · ');
 }
 
 /**

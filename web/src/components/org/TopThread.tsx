@@ -20,7 +20,7 @@
  * it and marked, thread-focus.ts), as a click on its title does (2026-11-21, a review on his data:
  * the words stopped mid-line, and the title only folded the card in a room too small to show it).
  */
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { sharedAnswers, threadCountLabel } from '@open-walnut/thread-view';
@@ -32,7 +32,7 @@ import { useNamedTasks } from './useNamedTasks';
 import { askThreadFocus, setTopThreads, useFocusedThread } from './thread-focus';
 import { ReplyThreadContext } from '@/components/sessions/reply-thread-line';
 import type { OrgThreadsState } from './useOrgThreads';
-import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenLine, topIndex, topThreads, workingLabel, workingThreads } from './top-thread-model';
+import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenParts, topIndex, topThreads, workingLabel, workingThreads } from './top-thread-model';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useOpenThread } from './open-thread';
 import type { ActionItem } from '@open-walnut/user-status';
@@ -159,7 +159,7 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
     return (
       <div className="top-thread is-hidden" data-testid="top-thread" data-hidden={hidden ? 'true' : 'false'} data-count={0} data-working={working.length}>
         <FoldedLine testId="top-thread-show" title="Open the Threads being worked on" needs={false} action="Open" onShow={openWorking}>
-          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list, working.length)}</span>
+          <LineCount list={list} working={working.length} />
         </FoldedLine>
       </div>
     );
@@ -175,7 +175,7 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
     return (
       <div className="top-thread is-hidden" data-testid="top-thread" data-hidden="true" data-count={n} data-working={working.length}>
         <FoldedLine testId="top-thread-show" title="Show the first thread above the chat" needs={!!asking} onShow={() => setHidden(false)}>
-          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list, working.length)}</span>
+          <LineCount list={list} working={working.length} />
           {/* The question it waits on stays in sight in this one line, never redrawn by the strip. */}
           {asking && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-title" data-testid="top-thread-hidden-title">{asking.title}</span></>}
         </FoldedLine>
@@ -190,7 +190,7 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
         <button type="button" className="top-thread-step" data-testid="top-thread-next" aria-label="Next thread" disabled={i === n - 1} onClick={() => step(i + 1)}>{ICON_CHEVRON_RIGHT}</button>
         {n - i - 1 > 0 && <span className="top-thread-left" data-testid="top-thread-left">{n - i - 1} more</span>}
         {/* The chat's threads being worked on, after the ones for him (threads_each_question). */}
-        {working.length > 0 && <><span className="top-thread-sep" aria-hidden="true">{'·'}</span><span data-testid="top-thread-working">{workingLabel(working.length)}</span></>}
+        {working.length > 0 && <>{n - i - 1 > 0 && <span className="top-thread-sep" aria-hidden="true">{'·'}</span>}<span className={n - i - 1 > 0 ? undefined : 'top-thread-left'} data-testid="top-thread-working">{workingLabel(working.length)}</span></>}
         {elsewhere.length > 0 && (
           <button type="button" className="btn btn-link btn-sm top-thread-elsewhere" data-testid="top-thread-elsewhere" onClick={() => { if (nextDecision !== undefined) step(nextDecision); }}
             title="A decision of this task is on another thread: show it">
@@ -213,12 +213,23 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   );
 }
 
+/** The folded line's count: its parts (hiddenParts) with the line's own separator between them, so every dot of the line has the same room. */
+function LineCount({ list, working }: { list: readonly OrgThread[]; working: number }) {
+  return (
+    <span className="top-thread-line-count" data-testid="top-thread-count">
+      {hiddenParts(list, working).map((words, k) => (
+        <Fragment key={words}>{k > 0 && <span aria-hidden="true">{' · '}</span>}<span>{words}</span></Fragment>
+      ))}
+    </span>
+  );
+}
+
 /** One folded line above the chat, its dot (red when it waits on him), its words and Show (`action`:
  *  Open when it opens the Threads view instead): the top's hidden line and the strip's
  *  (actions/SessionActionStrip.tsx) are the same line. */
 export function FoldedLine({ testId, title, needs, onShow, action = 'Show', children }: { testId: string; title: string; needs: boolean; onShow: () => void; action?: 'Show' | 'Open'; children: ReactNode }) {
   return (
-    <button type="button" className="top-thread-line" data-testid={testId} aria-expanded={false} onClick={onShow} title={title}>
+    <button type="button" className="top-thread-line" data-testid={testId} {...(action === 'Show' ? { 'aria-expanded': false } : {})} onClick={onShow} title={title}>
       <i className={`top-thread-dot${needs ? ' is-needs' : ''}`} aria-hidden="true" />
       {children}
       <span aria-hidden="true">{' · '}</span>

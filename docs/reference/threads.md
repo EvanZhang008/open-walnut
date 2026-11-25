@@ -67,7 +67,7 @@ Guard tests for the wording: `tests/core/org/thread-rules-guard.test.ts`,
 | Known or closed only after his reaction | `threads-model.ts` `checkReacted` | `tests/core/org/threads-model.test.ts` |
 | A card handed to him (`needs`) is clear: options, no bare opening, user_kind | `src/core/org/ask-clarity.ts`, `user-kind.ts` | `tests/core/org/ask-clarity-doors.test.ts` |
 | One question is drawn once at the top of a chat and in the Threads view; a task row always draws the full card | `src/core/org/thread-holds.ts`, `web/src/components/org/top-thread-model.ts` | `tests/web/top-thread.test.ts`, `tests/core/action-needed-ratchet.test.ts` |
-| The top of a chat counts the threads for him (`threadsForHim`: "16 threads (1 needs you)"); with `threads_each_question` on it also says how many are being worked on ("· 2 working", or "2 working" alone), never in any count for him | `web/src/components/org/top-thread-model.ts` (`hiddenLine`, `workingThreads`) | `tests/web/top-thread.test.ts`, `tests/e2e/browser/top-thread-working.spec.ts` |
+| The top of a chat counts the threads for him (`threadsForHim`: "16 threads (1 needs you)"); with `threads_each_question` on it also says how many are being worked on ("· 2 more working", or "2 threads working" alone), never in any count for him | `web/src/components/org/top-thread-model.ts` (`hiddenParts`, `workingThreads`) | `tests/web/top-thread.test.ts`, `tests/e2e/browser/top-thread-working.spec.ts` |
 
 ## Experiments that change Threads
 
@@ -509,9 +509,10 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   no longer tell a node to merge it.
 - **The top of the chat says how many are being worked on** (2026-11-25: a question of his still
   being worked on sat in the folded Working group, the line read "1 thread (1 needs you)", and he
-  concluded it had no thread). After its own words the line and the bar read "· 2 working", the
-  Working group's count (`top-thread-model.ts` `workingThreads`, `hiddenLine`, the one place the
-  words are built); with nothing for him the line shows alone ("2 working · Open", a click opens the
+  concluded it had no thread). After its own words the line reads "· 2 more working" (never "1 thread · 1 working",
+  which read as one thread in all) and the bar "2 working" after its pager, the
+  Working group's count (`top-thread-model.ts` `workingThreads`, `hiddenParts`, the one place the
+  words are built); with nothing for him the line shows alone ("2 threads working · Open", a click opens the
   Threads on the first of them, Working open). One line of text, no card; a thread moving between
   working and answered changes only its words, never its height or the chat's scroll. Every count
   for him (badges, the red line, Org rows, the tab, `user_status.threads`, the phone) stays

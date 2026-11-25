@@ -19,7 +19,7 @@ import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
 import { groupThreads, threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, holdingThreads, stripItems, topIndex, topThreads, workingLabel, workingThreads } from '../../web/src/components/org/top-thread-model'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, hiddenParts, holdingThreads, stripItems, topIndex, topThreads, workingLabel, workingThreads } from '../../web/src/components/org/top-thread-model'
 import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
@@ -309,15 +309,20 @@ describe('the top also says how many threads are being worked on', () => {
     // None working (and the switch off, which passes none): today's words, exactly.
     expect(hiddenLine(list, 0)).toBe(hiddenLine(list))
     expect(hiddenLine(list)).toBe('18 threads (3 need you)')
-    expect(hiddenLine(list, 1)).toBe('18 threads (3 need you) · 1 working')
-    expect(hiddenLine(list, 2)).toBe('18 threads (3 need you) · 2 working')
-    expect(hiddenLine(list.filter((t) => t.state !== 'needs'), 3)).toBe('15 threads · 3 working')
+    expect(hiddenLine(list, 1)).toBe('18 threads (3 need you) · 1 more working')
+    expect(hiddenLine(list, 2)).toBe('18 threads (3 need you) · 2 more working')
+    expect(hiddenLine(list.filter((t) => t.state !== 'needs'), 3)).toBe('15 threads · 3 more working')
     // Nothing for him: the working part alone.
-    expect(hiddenLine([], 1)).toBe('1 working')
-    expect(hiddenLine([], 2)).toBe('2 working')
+    expect(hiddenLine([], 1)).toBe('1 thread working')
+    expect(hiddenLine([], 2)).toBe('2 threads working')
     expect(hiddenLine([], 0)).toBe('')
+    // The bar, after its pager, says only how many.
     expect(workingLabel(0)).toBe('')
     expect(workingLabel(4)).toBe('4 working')
+    // The line draws the same words part by part (its own dot between them).
+    expect(hiddenParts(list, 2)).toEqual(['18 threads (3 need you)', '2 more working'])
+    expect(hiddenParts([], 1)).toEqual(['1 thread working'])
+    expect(hiddenParts([], 0)).toEqual([])
   })
 
   it('counts the Threads view\'s Working group, never a thread for him, waiting, snoozed or closed', () => {
@@ -330,7 +335,7 @@ describe('the top also says how many threads are being worked on', () => {
     const working = workingThreads(all, NOW)
     expect(working.map((t) => t.id)).toEqual(groupThreads(all, NOW).working.map((t) => t.id))
     expect(working.map((t) => t.state).sort()).toEqual(['new', 'working'])
-    expect(hiddenLine(topThreads(all, NOW), working.length)).toBe('2 threads (1 needs you) · 2 working')
+    expect(hiddenLine(topThreads(all, NOW), working.length)).toBe('2 threads (1 needs you) · 2 more working')
     // It never enters a count for him (2026-11-21: "It show 1 but there isn't any").
     expect(threadCounts(all, NOW).shown).toBe(2)
     expect(workingThreads(null, NOW)).toEqual([])
@@ -343,7 +348,11 @@ describe('the top also says how many threads are being worked on', () => {
     expect(top).toContain("useExperimental('threads_each_question')")
     expect(top).toContain('eachQuestion ? workingThreads(all, at) : []')
     for (const f of ['web/src/components/org/TopThread.tsx', 'web/src/components/actions/SessionActionStrip.tsx']) {
-      expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/\} working`/)
+      expect(fs.readFileSync(f, 'utf8'), f).not.toMatch(/\} (?:more )?working`/)
     }
+    // The bar's dot stands only between "N more" and the working count, never after the pager alone.
+    expect(top).toMatch(/n - i - 1 > 0 && <span className="top-thread-sep"/)
+    // Open goes to the Threads view: it is no disclosure.
+    expect(top).toContain("action === 'Show' ? { 'aria-expanded': false } : {}")
   })
 })

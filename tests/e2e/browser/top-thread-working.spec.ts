@@ -5,10 +5,10 @@
  * line read "1 thread (1 needs you)", and he concluded his question had no thread.
  *
  *  A. A lead on the Org page, 1280 x 800, every switch he runs on: one thread that needs him and two
- *     being worked on. The bar reads "1 / 1 · 2 working"; hidden, the line reads
- *     "1 thread (1 needs you) · 2 working". The one that needs him closes: "2 working" alone (today the
+ *     being worked on. The bar reads "1 / 1  2 working"; hidden, the line reads
+ *     "1 thread (1 needs you) · 2 more working". The one that needs him closes: "2 threads working" alone (today the
  *     top showed nothing), and its click opens the Threads beside the chat with Working open. One of
- *     them is answered: "1 thread · 1 working". Each change swaps only the words: the line keeps its
+ *     them is answered: "1 thread · 1 more working". Each change swaps only the words: the line keeps its
  *     height and the chat its scroll position.
  *  B. The same chat in a Home column about 400 px wide, light and dark: the bar and the line fit.
  *  C. The switch off: today's words, and no line for a chat whose threads are all being worked on.
@@ -204,10 +204,10 @@ test('on: the line says how many are being worked on, and changes only its words
   await video.hold()
   await frame(page, chat, '1-bar-1280')
 
-  await video.caption('Hidden: "1 thread (1 needs you) · 2 working"')
+  await video.caption('Hidden: "1 thread (1 needs you) · 2 more working"')
   await top.getByTestId('top-thread-hide').click()
   const count = top.getByTestId('top-thread-count')
-  await expect(count).toHaveText('1 thread (1 needs you) · 2 working')
+  await expect(count).toHaveText('1 thread (1 needs you) · 2 more working')
   await fits(top)
   await video.hold()
   await frame(page, chat, '2-hidden-needs-and-working-1280', 160)
@@ -215,9 +215,9 @@ test('on: the line says how many are being worked on, and changes only its words
   // The one that needs him is closed: the working ones keep the line, its words alone change.
   await readMiddle(chat)
   const before = await still(chat)
-  await video.caption('He closes the one that needs him: "2 working" stays, nothing moves')
+  await video.caption('He closes the one that needs him: "2 threads working" stays, nothing moves')
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.needs}`, { close: 'acked' })
-  await expect(count).toHaveText('2 working', { timeout: 30_000 })
+  await expect(count).toHaveText('2 threads working', { timeout: 30_000 })
   await expect(top.getByTestId('top-thread-show')).toContainText('Open')
   await page.waitForTimeout(600)
   const alone = await still(chat)
@@ -239,14 +239,14 @@ test('on: the line says how many are being worked on, and changes only its words
   await video.hold()
   await frame(page, page.getByTestId('org-detail'), '4-threads-working-open', 520)
 
-  // Back to the chat: one is answered, "1 thread · 1 working", the line and the chat still.
+  // Back to the chat: one is answered, "1 thread · 1 more working", the line and the chat still.
   await toggle.click()
-  await expect(count).toHaveText('2 working', { timeout: 15_000 })
+  await expect(count).toHaveText('2 threads working', { timeout: 15_000 })
   await readMiddle(chat)
   const mid = await still(chat)
-  await video.caption('One is answered: "1 thread · 1 working", nothing moves')
+  await video.caption('One is answered: "1 thread · 1 more working", nothing moves')
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${ids.work[0]}`, { title: `Cedar drying ${STAMP}`, reply: 'Two weeks in the shed, turned once.', state: 'answered' })
-  await expect(count).toHaveText('1 thread · 1 working', { timeout: 30_000 })
+  await expect(count).toHaveText('1 thread · 1 more working', { timeout: 30_000 })
   await expect(top.getByTestId('top-thread-show')).toContainText('Show')
   await page.waitForTimeout(600)
   const answered = await still(chat)
@@ -288,7 +288,7 @@ test('on, in a Home column about 400 px wide, light and dark: the bar and the li
     await expect(top.getByTestId('top-thread-pos')).toHaveText('1 / 2')
     await fits(top)
     await top.getByTestId('top-thread-hide').click()
-    await expect(top.getByTestId('top-thread-count')).toHaveText('2 threads (1 needs you) · 1 working')
+    await expect(top.getByTestId('top-thread-count')).toHaveText('2 threads (1 needs you) · 1 more working')
     await fits(top)
     await frame(page, panel, `6-narrow-hidden-${scheme}`, 200)
     await top.getByTestId('top-thread-show').click()
