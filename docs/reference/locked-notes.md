@@ -95,12 +95,17 @@ plain text as in `vault.json`. No machine wrap, no recovery wrap, no other item.
 the master password and the Secret Key, as the vault does. It is written after every vault write
 while a key item exists, only when its bytes change, so a new master password rewraps it.
 
-On a new computer, or a vault set up again, a locked note's Show finds no key. The person restores
-it with the old vault's master password and Secret Key (from its recovery kit): `GET
-/api/v1/vault/notes/key-backup` answers the vault id, KDF and hint; `POST
-/api/v1/vault/notes/restore-key {passwordKey | password, secretKey}` (person, vault session, the
-wrong-password brake) adds each key it holds to this vault, unless an item already holds the same
-key. The git history keeps earlier copies of the file: anyone with an earlier master password and
+On a new computer, or a vault set up again, a locked note's Show finds no key (410
+`locked_key_missing`), and the Notes page shows "Restore the key" in its place
+(`web/src/components/notes/LockedNoteKeyRestore.tsx`): the backup's hint, the master password and
+the Secret Key of the vault that locked the note (from its recovery kit), and with backups of more
+than one vault a pick of which. `GET /api/v1/vault/notes/key-backup` answers each backup's vault
+id, KDF and hint, the newest first (`earlier` holds the vaults a restore replaced); `POST
+/api/v1/vault/notes/restore-key {passwordKey | password, secretKey, vaultId?}` (person, vault
+session, the wrong-password brake) adds each key that backup holds to this vault, unless an item
+already holds the same key, and the note opens. The page sends the password as its derived key,
+as an unlock does. With no backup in the data folder the card says so and points to a Passwords
+backup or its trash. The git history keeps earlier copies of the file: anyone with an earlier master password and
 the Secret Key could open one of those, and the key itself never changes, so after a leak of both,
 locking notes again under a new key is the only cure.
 

@@ -9,8 +9,8 @@
  */
 import { test, expect, type APIRequestContext, type BrowserContext, type Page, type Route } from '@playwright/test'
 import { VAULT_MASTER, vaultSession } from './vault-session-helper'
+import { API, boot, editorOf, lockMenu, nameIn, openNoteIn, putNotes, stamp, typeAtEnd } from './protected-notes-helper'
 
-const API = 'http://localhost:3457'
 const SECRET = 'quokkamarmalade'
 const TEXT = `# Week\n\nMonday: ${SECRET} is the word I keep.\n\nTuesday: a walk by the river.\n`
 const VAULT = (token: string) => ({ 'x-walnut-vault-session': token })
@@ -22,14 +22,10 @@ async function seed(name: string) {
   tag = name
   note = `LockedTest/Week ${tag}.md`
   other = `LockedTest/Other ${tag}.md`
-  for (const [p, content] of [[note, TEXT], [other, '# Other\n\nA plain note.\n']]) {
-    const r = await fetch(`${API}/api/notes-v2/content/${p}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) })
-    expect(r.ok).toBe(true)
-  }
+  await putNotes([[note, TEXT], [other, '# Other\n\nA plain note.\n']])
 }
-const stamp = (info: { repeatEachIndex: number }) => `${info.repeatEachIndex}-${Date.now() % 100000}`
 const onDisk = async () => (await (await fetch(`${API}/api/notes-v2/content/${note}`)).json()) as { content: string; locked?: boolean }
-const nameOf = (p: string) => p.slice('LockedTest/'.length, -'.md'.length)
+const nameOf = (p: string) => nameIn('LockedTest', p)
 
 /** The locked note's text as Walnut holds it sealed (read with a Passwords unlock). */
 async function sealedText(request: APIRequestContext, token: string, p = note): Promise<string> {
@@ -45,37 +41,12 @@ async function unlockWindows(context: BrowserContext, token: string) {
   await context.addInitScript((t) => { try { localStorage.setItem('walnut.vault.session', t) } catch { /* no storage here */ } }, token)
 }
 
-async function boot(page: Page) {
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.goto('/notes')
-  await page.waitForLoadState('networkidle')
-}
-const editorOf = (page: Page) => page.locator('.notes-editor-pane .notes-editor .tiptap').first()
-
-async function openNote(page: Page, p: string) {
-  const folder = page.locator('.notes-tree-folder', { hasText: 'LockedTest' })
-  await folder.waitFor({ state: 'visible', timeout: 60_000 })
-  const file = page.locator('.notes-tree-file', { hasText: nameOf(p) }).first()
-  if (!(await file.isVisible().catch(() => false))) await folder.click()
-  await file.click()
-}
+const openNote = (page: Page, p: string) => openNoteIn(page, 'LockedTest', p)
 async function openAndShow(page: Page, p = note) {
   await openNote(page, p)
   await page.getByTestId('locked-note-show').click()
   await expect(editorOf(page)).toContainText(SECRET, { timeout: 15_000 })
 }
-async function typeAtEnd(page: Page, line: string, words: string) {
-  await editorOf(page).locator('p', { hasText: line }).click()
-  await page.keyboard.press('End')
-  await page.keyboard.type(words)
-}
-
-/** The header's Lock control: its menu, then one of its rows (Hide from AI, Encrypt, Unhide). */
-async function lockMenu(page: Page, row: 'Hide from AI' | 'Encrypt' | 'Unhide') {
-  await page.getByTestId('note-lock').click()
-  await page.getByTestId('note-protect-menu').getByRole('menuitem', { name: row }).click()
-}
-
 async function unlockInSheet(page: Page) {
   const sheet = page.getByTestId('pw-unlock-sheet')
   await expect(sheet).toBeVisible()

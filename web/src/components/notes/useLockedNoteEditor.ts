@@ -26,7 +26,7 @@ import {
 import { withPasswordsUnlock } from '@/components/passwords/with-passwords-unlock';
 import { SHEET_BUSY_WORDS, unlockSheetBusy } from '@/components/passwords/unlock-sheet-busy';
 import { lockedNotesApi, type LockedNoteText } from '@/api/locked-notes';
-import { onVaultSessionChange, vaultSession } from '@/api/vault';
+import { onVaultSessionChange, vaultSession, VaultApiError } from '@/api/vault';
 // A Lock anywhere (another window, the extension, Lock all) reaches this window at once.
 import '@/api/vault-live';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -63,6 +63,8 @@ export function useLockedNoteEditor(notePath: string) {
   const [opening, setOpening] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Show found the key gone from Passwords: its backup can bring it back (LockedNoteKeyRestore). */
+  const [keyMissing, setKeyMissing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<LockedSaveStatus>('idle');
   const [conflict, setConflictState] = useState<LockedConflict | null>(null);
 
@@ -207,6 +209,7 @@ export function useLockedNoteEditor(notePath: string) {
     if (path == null) return;
     const epoch = epochRef.current;
     setError(null);
+    setKeyMissing(false);
     setOpening(true);
     try {
       const r = await withPasswordsUnlock(SHOW_SUB, () => lockedNotesApi.read(path));
@@ -225,6 +228,7 @@ export function useLockedNoteEditor(notePath: string) {
       mount(merged, r);
       if (merged !== r.content) void flush({ text: merged, base: r.content, hash: r.contentHash });
     } catch (err) {
+      if (err instanceof VaultApiError && err.code === 'locked_key_missing') { setKeyMissing(true); return; }
       setError(words(err));
     } finally {
       setOpening(false);
@@ -314,7 +318,11 @@ export function useLockedNoteEditor(notePath: string) {
   });
 
   // Passwords locked (Lock, another window, Lock all, the unlock running out): hidden at once.
-  useEffect(() => onVaultSessionChange(() => { if (!vaultSession() && diskRef.current) hide(); }), [hide]);
+  useEffect(() => onVaultSessionChange(() => {
+    if (vaultSession()) return;
+    setKeyMissing(false); // the key's restore needs an unlock too: back to Show
+    if (diskRef.current) hide();
+  }), [hide]);
   // Renamed or moved: saves go to the new path. Deleted: nothing more is kept.
   useEffect(() => onLockedNotePathChange((c) => {
     const p = pathRef.current;
@@ -335,7 +343,7 @@ export function useLockedNoteEditor(notePath: string) {
   const comesBackHidden = () => isHiddenNote(diskRef.current?.frontmatter);
 
   return {
-    editorDoc, updatedAt, opening, removing, error, setError, saveStatus, conflict,
+    editorDoc, updatedAt, opening, removing, error, setError, keyMissing, saveStatus, conflict,
     show, hide, hideIfSaved, removeLock, onEditorUpdate, keepMine, takeTheirs, comesBackHidden,
   };
 }

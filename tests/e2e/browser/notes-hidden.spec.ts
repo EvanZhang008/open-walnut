@@ -12,8 +12,8 @@
 import { test, expect, type Page } from '@playwright/test'
 import path from 'node:path'
 import { vaultSession } from './vault-session-helper'
+import { API, boot, editorOf, lockMenu, nameIn, openNoteIn, putNotes, stamp, typeAtEnd } from './protected-notes-helper'
 
-const API = 'http://localhost:3457'
 const SECRET = 'wombatlantern'
 const TEXT = `# Diary\n\nMonday: ${SECRET} is what I wrote.\n\nTuesday: rain all day.\n`
 const MARK = 'walnut_hidden: 1'
@@ -24,47 +24,19 @@ let other = ''
 async function seed(tag: string) {
   note = `HiddenTest/Diary ${tag}.md`
   other = `HiddenTest/Plain ${tag}.md`
-  for (const [p, content] of [[note, TEXT], [other, '# Plain\n\nAn ordinary note.\n']]) {
-    const r = await fetch(`${API}/api/notes-v2/content/${p}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) })
-    expect(r.ok).toBe(true)
-  }
+  await putNotes([[note, TEXT], [other, '# Plain\n\nAn ordinary note.\n']])
 }
-const stamp = (info: { repeatEachIndex: number }) => `${info.repeatEachIndex}-${Date.now() % 100000}`
 /** What the file holds (this fixture server answers its own test calls as the person, so the whole text). */
 const onDisk = async (p = note) => (await (await fetch(`${API}/api/notes-v2/content/${p}`)).json()) as { content: string; hidden?: boolean; locked?: boolean }
-const nameOf = (p: string) => p.slice('HiddenTest/'.length, -'.md'.length)
+const nameOf = (p: string) => nameIn('HiddenTest', p)
 async function hideByApi(p: string) {
   const r = await fetch(`${API}/api/v1/notes/hide`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) })
   expect(r.ok, await r.text()).toBe(true)
 }
 
-async function boot(page: Page) {
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.goto('/notes')
-  await page.waitForLoadState('networkidle')
-}
-const editorOf = (page: Page) => page.locator('.notes-editor-pane .notes-editor .tiptap').first()
 const cover = (page: Page) => page.getByTestId('hidden-note-cover')
 
-async function openNote(page: Page, p: string) {
-  const folder = page.locator('.notes-tree-folder', { hasText: 'HiddenTest' })
-  await folder.waitFor({ state: 'visible', timeout: 60_000 })
-  const file = page.locator('.notes-tree-file', { hasText: nameOf(p) }).first()
-  if (!(await file.isVisible().catch(() => false))) await folder.click()
-  await file.click()
-}
-async function lockMenu(page: Page, row: 'Hide from AI' | 'Encrypt' | 'Unhide', expectRows?: string[]) {
-  await page.getByTestId('note-lock').click()
-  const menu = page.getByTestId('note-protect-menu')
-  await expect(menu).toBeVisible()
-  if (expectRows) await expect(menu.getByRole('menuitem')).toHaveText(expectRows)
-  await menu.getByRole('menuitem', { name: row }).click()
-}
-async function typeAtEnd(page: Page, line: string, words: string) {
-  await editorOf(page).locator('p', { hasText: line }).click()
-  await page.keyboard.press('End')
-  await page.keyboard.type(words)
-}
+const openNote = (page: Page, p: string) => openNoteIn(page, 'HiddenTest', p)
 async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${name}.png`) })
 }

@@ -1962,9 +1962,10 @@ describe('the shared fixture vault is opened through one helper', () => {
   // those answers out, and a spec reaches those routes only through it. A spec may still watch
   // the unlock UI's own requests (waitForResponse, route).
   const HELPER = 'vault-session-helper.ts'
-  const routesSrc = fs.readFileSync(path.resolve(__dirname, '../../src/web/routes/vault-v1.ts'), 'utf8')
-  const checkedRoutes = (src: string): string[] => src.split(/\n(?=vaultV1Router\.)/)
-    .map((part) => ({ m: /^vaultV1Router\.(?:post|put|patch|delete)\('([^']+)'/.exec(part), part }))
+  // vault-notes-v1.ts too: the locked notes key's restore checks a master password the same way.
+  const routesSrc = ['vault-v1.ts', 'vault-notes-v1.ts'].map((f) => fs.readFileSync(path.resolve(__dirname, '../../src/web/routes', f), 'utf8')).join('\n')
+  const checkedRoutes = (src: string): string[] => src.split(/\n(?=vault(?:Notes)?V1Router\.)/)
+    .map((part) => ({ m: /^vault(?:Notes)?V1Router\.(?:post|put|patch|delete)\('([^']+)'/.exec(part), part }))
     .filter(({ m, part }) => m && /\battempt\(/.test(part))
     .map(({ m }) => m![1]!)
   const CHECKED = checkedRoutes(routesSrc)
@@ -1978,7 +1979,7 @@ describe('the shared fixture vault is opened through one helper', () => {
   })
 
   it('reads the password-checked routes from vault-v1.ts', () => {
-    expect(CHECKED).toEqual(expect.arrayContaining(['/vault/setup', '/vault/unlock', '/vault/hint']))
+    expect(CHECKED).toEqual(expect.arrayContaining(['/vault/setup', '/vault/unlock', '/vault/hint', '/vault/notes/restore-key']))
     expect(CHECKED).not.toContain('/vault/items')
     expect(CHECKED).not.toContain('/vault/lock')
   })

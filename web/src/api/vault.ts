@@ -205,7 +205,8 @@ const canDerive = () => typeof globalThis.crypto?.subtle?.deriveBits === 'functi
  * itself, and that only over a link the server calls private (it refuses one anyway; this
  * keeps the password from leaving the page at all).
  */
-async function proof(password: string, kdf: KdfParams | undefined, field: 'password' | 'oldPassword' | 'newPassword' = 'password'): Promise<Record<string, string>> {
+/** The master password as the server takes it: its key, derived here when this browser can, else the password on a private link. */
+export async function proof(password: string, kdf: KdfParams | undefined, field: 'password' | 'oldPassword' | 'newPassword' = 'password'): Promise<Record<string, string>> {
   const keyField = field === 'password' ? 'passwordKey' : field === 'oldPassword' ? 'oldPasswordKey' : 'newPasswordKey'
   if (kdf && canDerive()) return { [keyField]: toB64(await derivePasswordKey(password, kdf)) }
   if (!(await vaultCall<VaultStatus>('GET', '/vault/status')).privateLink) {

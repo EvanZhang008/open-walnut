@@ -7,6 +7,7 @@ import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { EmptyState } from '@/components/common/EmptyState';
 import { NoticeCard } from '@/components/common/NoticeCard';
 import { CoverButton } from './HiddenNoteCover';
+import { LockedNoteKeyRestore } from './LockedNoteKeyRestore';
 import { noteName } from './locked-note';
 
 /**
@@ -56,6 +57,8 @@ export function LockedNotePanel({ notePath, onNavigate, onLocate, onBreadcrumbNa
     });
     if (ok) await note.removeLock();
   }, [confirm]);
+
+  if (!editorDoc && note.keyMissing) return <LockedNoteKeyRestore noteName={noteName(notePath)} onRestored={() => void note.show()} />;
 
   if (!editorDoc) {
     return (

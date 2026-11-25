@@ -352,7 +352,6 @@ approvalsV1Router.post('/approvals/:id/cancel', (req: Request, res: Response, ne
   })
 })
 
-/** Whether this request carries a live Passwords unlock (a vault session the master password bought). */
 /** How recent the master password must be for a yes that needs it (an agent's locked-note ask). */
 const PASSWORD_PROOF_MS = 2 * 60_000
 
