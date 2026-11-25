@@ -10,7 +10,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findBlockRepeat, removeBlockRepeat, blockRepeatLength, type BlockRepeat } from '../../src/lib/audio-block-repeat.js';
-import { shortenLongSilences } from '../../src/core/stt/long-silence.js';
+import { shortenLongSilences, hasSound } from '../../src/core/stt/long-silence.js';
 import { repairWav, repairWavFile } from '../../src/core/stt/wav-repair.js';
 import { speechLike, rng, repeatBlocks as repeated } from '../helpers/speech-pcm.js';
 
@@ -154,6 +154,100 @@ describe('shortenLongSilences', () => {
   it('never cuts soft speech that stays above the noise floor', () => {
     const soft = Float32Array.from(speechLike(10, 3), (x) => x * 0.05);
     expect(shortenLongSilences(toPcm(join2(quiet(0.5), soft, quiet(0.5))), RATE)).toBeNull();
+  });
+
+  // 2026-11-25: a MacBook's built-in mic in the Mac app records about the first 3 s of a
+  // take some 14 dB quieter; the user's words there sat at 0.0005 to 0.0018 RMS over a
+  // 0.00004 floor, under the 0.0015 silence floor, and 1.6 s of "update 吧。现在是还有什么没有
+  // merge" were cut, so the 3 s take came back as four characters.
+  describe('speech in a capture that starts dimmed', () => {
+    const p90Rms = (f: Float32Array) => {
+      const rms: number[] = [];
+      for (let i = 0; i + BLOCK <= f.length; i += BLOCK) {
+        let e = 0;
+        for (let k = i; k < i + BLOCK; k++) e += f[k]! * f[k]!;
+        rms.push(Math.sqrt(e / BLOCK));
+      }
+      rms.sort((a, b) => a - b);
+      return rms[Math.floor(rms.length * 0.9)]!;
+    };
+    /**
+     * `seconds` of words (0.55 s, then 0.25 s between them, as in his take) whose loud
+     * tenth sits at `p90` RMS, over the dimmed floor.
+     */
+    const dimmedSpeech = (seconds: number, seed: number, p90 = 0.0011) => {
+      const s = speechLike(seconds, seed), r = rng(seed + 50);
+      const words = Float32Array.from(s, (x, i) => ((i % (0.8 * RATE)) < 0.55 * RATE ? x : 0));
+      const k = p90 / p90Rms(words);
+      return Float32Array.from(words, (x) => x * k + 0.00006 * r());
+    };
+    const dimmedFloor = (seconds: number) => { const r = rng(9); return Float32Array.from({ length: Math.round(seconds * RATE) }, () => 0.00006 * r()); };
+
+    it('a short take spoken entirely in the dimmed start is heard whole', () => {
+      const take = toPcm(join2(dimmedFloor(0.3), dimmedSpeech(2.7, 11)));
+      expect(shortenLongSilences(take, RATE)).toBeNull();
+      expect(hasSound(take, RATE)).toBe(true);
+    });
+
+    it('a long take keeps its dimmed first words, and its real pauses are still cut', () => {
+      const head = dimmedSpeech(3, 12), words = speechLike(4, 13), rest = speechLike(3, 14);
+      const take = toPcm(join2(head, words, quiet(8), rest));
+      const cut = shortenLongSilences(take, RATE)!;
+      expect(cut).not.toBeNull();
+      expect(cut.removedSec).toBeGreaterThan(7);
+      // The dimmed first 3 s and the words after them come through sample for sample.
+      const kept = head.length + words.length;
+      expect(Array.from(cut.samples.subarray(0, kept))).toEqual(Array.from(take.subarray(0, kept)));
+    });
+
+    for (const p90 of [0.0004, 0.0008, 0.0015, 0.003]) {
+      it(`dimmed speech at ${p90} RMS is never cut, whatever follows it`, () => {
+        const take = toPcm(join2(dimmedSpeech(3, 20, p90), speechLike(6, 21)));
+        expect(shortenLongSilences(take, RATE)).toBeNull();
+      });
+    }
+
+    it('a pause between ordinary words keeps the clip\'s silence level: a breath in it does not stop the cut', () => {
+      const r = rng(30);
+      const pause = Float32Array.from({ length: 6 * RATE }, (_, i) => 0.0005 * r() + (i > 2 * RATE && i < 2.2 * RATE ? 0.002 * r() : 0));
+      const cut = shortenLongSilences(toPcm(join2(speechLike(3, 31), pause, speechLike(3, 32))), RATE)!;
+      expect(cut).not.toBeNull();
+      expect(cut.removedSec).toBeGreaterThan(3);
+    });
+  });
+});
+
+describe('the dimmed start stays the only exception', () => {
+  const noise = (seconds: number, level: number, seed: number) => { const r = rng(seed); return Float32Array.from({ length: Math.round(seconds * RATE) }, () => level * r()); };
+  const zeros = (seconds: number) => new Float32Array(Math.round(seconds * RATE));
+  const cat = (...parts: Float32Array[]) => {
+    const out = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+    let w = 0;
+    for (const p of parts) { out.set(p, w); w += p.length; }
+    return out;
+  };
+  /** A quiet room with a soft click every 200 ms: quiet, and far above its own floor, like speech. */
+  const softClicks = (seconds: number) => { const r = rng(5); return Float32Array.from({ length: Math.round(seconds * RATE) }, (_, i) => 0.0001 * r() + ((i % (0.2 * RATE)) < 0.03 * RATE ? 0.002 * r() : 0)); };
+
+  it('zeros a capture delivered never make a room sound like speech', () => {
+    const take = toPcm(cat(zeros(0.5), noise(2.5, 0.0005, 41)));
+    expect(hasSound(take, RATE)).toBe(false);
+    expect(shortenLongSilences(take, RATE)?.removedSec).toBeGreaterThan(2);
+  });
+
+  it('a dropout of zeros inside a long pause leaves the pause cut', () => {
+    const take = toPcm(cat(speechLike(3, 42), noise(3.75, 0.0005, 43), zeros(0.5), noise(3.75, 0.0005, 44), speechLike(3, 45)));
+    expect(shortenLongSilences(take, RATE)?.removedSec).toBeGreaterThan(7);
+  });
+
+  it('soft clicks in a pause after the first seconds leave the pause cut', () => {
+    const take = toPcm(cat(speechLike(3, 46), softClicks(9), speechLike(3, 47)));
+    expect(shortenLongSilences(take, RATE)?.removedSec).toBeGreaterThan(8);
+  });
+
+  it('is false for a capture that delivered only zeros, and for a room with nobody talking', () => {
+    expect(hasSound(new Int16Array(3 * RATE), RATE)).toBe(false);
+    expect(hasSound(toPcm(noise(3, 0.0005, 40)), RATE)).toBe(false);
   });
 });
 
