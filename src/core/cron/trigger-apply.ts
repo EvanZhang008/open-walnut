@@ -424,9 +424,11 @@ export async function applyTriggerChecked(
  * next run the daemon reported), and every one rewrote cron-state.json (1 MB, both files' texts
  * built to compare) at about one a second: 238 writes in the 100 s after a restart (2026-11-23),
  * one of the largest sources of the server's garbage. Losing the last few seconds of such lines to
- * a crash loses no fire, no notice and no error count: those always write at once.
+ * a crash loses no fire, no notice and no error count: those always write at once. At 10 s it
+ * was still 8 writes of the 1.1 MB file a minute (2026-11-25, 222 triggers checking about once a
+ * second between them), so the checks wait up to 30 s: about 2 a minute.
  */
-export const ROUTINE_WRITE_DELAY_MS = 10_000;
+export const ROUTINE_WRITE_DELAY_MS = 30_000;
 
 /** Record a routine check: `store` holds it now, one write within ROUTINE_WRITE_DELAY_MS carries it. */
 export function persistRoutineCheck(state: CronServiceState): void {
