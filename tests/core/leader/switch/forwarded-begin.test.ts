@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/index.js'
-import { _forgetForwardedBegins, beginForwarded, forwardedBeginOf, forwardedJob, type ForwardedBeginDeps } from '../../../../src/core/leader/switch/leader-relay-door.js'
+import { _forgetForwardedBegins, beginForwarded, dropForwardedBegins, forwardedBeginFile, forwardedBeginOf, forwardedJob, type ForwardedBeginDeps } from '../../../../src/core/leader/switch/leader-relay-door.js'
 import { beginRefusal } from '../../../../src/core/leader/switch/final-stop.js'
 import { runCandidateSwitch, candidateStandbyDir, type LeaderLink } from '../../../../src/core/leader/switch/candidate-command.js'
 import { writeSwitchFile, targetStateName, type CheckReport } from '../../../../src/core/leader/switch/ticket.js'
@@ -150,6 +150,21 @@ describe('the leader takes a forwarded begin only from the machine it goes to', 
     expect((await deps({ underWay: { id: 'S-0', to: 'machine-b', step: 'handover' } }).begin('dev-b', { to: 'machine-b', switchId: 'S-7' })).json.why).toMatch(/switch S-0 to machine-b is under way here/)
     expect((await deps({ leader: false }).begin('dev-b', { to: 'machine-b', switchId: 'S-8' })).status).toBe(409)
     expect((await deps().begin('dev-b', { to: 'machine-b', switchId: '../x' })).status).toBe(400)
+  })
+
+  it('a kept forwarded begin goes once its switch is over: only the current switch\'s stays while it runs', () => {
+    const home = path.join(base, 'kept-home')
+    const keep = (id: string) => { fs.mkdirSync(path.dirname(forwardedBeginFile(home, id)), { recursive: true }); fs.writeFileSync(forwardedBeginFile(home, id), JSON.stringify({ switchId: id, to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' }, hostKey: 'dev-b', at: '' })) }
+    for (const id of ['S-old', 'S-now']) keep(id)
+    expect(dropForwardedBegins(home, { id: 'S-now', ended: false })).toEqual(['S-old'])
+    expect(forwardedBeginOf('S-now', home)?.to).toBe('machine-b')
+    // Its switch ended (done or rolled back), or no switch state at all (a job refused before it wrote one): gone.
+    expect(dropForwardedBegins(home, { id: 'S-now', ended: true })).toEqual(['S-now'])
+    keep('S-refused')
+    expect(dropForwardedBegins(home, null)).toEqual(['S-refused'])
+    expect(fs.readdirSync(path.dirname(forwardedBeginFile(home, 'x'))).filter((n) => n.startsWith('forwarded-begin-'))).toEqual([])
+    // A home with no switch folder: nothing to do.
+    expect(dropForwardedBegins(path.join(base, 'no-home'), null)).toEqual([])
   })
 
   it('the job route gives the started job\'s whole lines from an offset, and its step', async () => {

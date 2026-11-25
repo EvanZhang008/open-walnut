@@ -408,6 +408,17 @@ describe('leaderPermitAtBoot', () => {
     expect((err as LeaderBootRefused).standby?.message).toMatch(/^machine machine-b leads \(permit record \d+\): this machine does not$/)
   })
 
+  it('a forwarded begin kept for a switch whose job died goes at the next boot; a trial start leaves it', async () => {
+    writeConfig()
+    const kept = path.join(home('machine-a'), 'local', 'leader-switch', 'forwarded-begin-S-dead.json')
+    fs.mkdirSync(path.dirname(kept), { recursive: true })
+    fs.writeFileSync(kept, '{}')
+    await expect(leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, trial: true, env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'none') } })).rejects.toThrow(LeaderBootRefused)
+    expect(fs.existsSync(kept)).toBe(true)
+    await expect(leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'none') } })).rejects.toThrow(LeaderBootRefused)
+    expect(fs.existsSync(kept)).toBe(false)
+  })
+
   it('no machine id is no standby: a refusal that names no other leader carries none', async () => {
     writeConfig()
     const err = await leaderPermitAtBoot({ home: home('machine-a'), flagOn: true, isLeaderRole: true, ephemeral: false, env: { WALNUT_MACHINE_ID_FILE: path.join(root, 'none') } }).catch((e: unknown) => e)

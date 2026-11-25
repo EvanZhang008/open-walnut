@@ -11,8 +11,11 @@
  * stream and never answers would hold the caller for good. The bound is IDLE time, `timeoutMs`
  * with nothing moving: it restarts whenever the stream took another piece of the request body
  * (written in 64 KB pieces, each one's write callback: a runtime may report one big write as
- * pending until all of it is gone), the body is all written, or a part of the answer comes. A long upload or answer that keeps moving is never cut; a stalled one is, its stream
- * destroyed.
+ * pending until all of it is gone), the body is all written, or a part of the answer comes. A
+ * long upload or answer that keeps moving is not cut by it; a stalled one is, its stream destroyed.
+ * A second bound holds the whole call to TOTAL_FACTOR times `timeoutMs` (a peer that drips a byte
+ * just inside the idle bound would otherwise hold it for good): ten minutes for the copy target's
+ * 60 s, well past any batch it sends (256 KB at most); 100 s for the relay's 10 s job polls.
  * (tests/host-server/request-over.test.ts, whose guard keeps every such call on this bound.)
  */
 import http from 'node:http'
@@ -20,6 +23,9 @@ import type { Duplex } from 'node:stream'
 
 /** A request body's piece: the unit of movement the idle bound sees. */
 const PIECE = 64 * 1024
+
+/** The whole call's bound, as a multiple of its idle bound. */
+export const TOTAL_FACTOR = 10
 
 /** One HTTP request to the host server over a stream, answered as a fetch Response. */
 export function requestOver(stream: Duplex, method: string, route: string, body: Buffer | null, timeoutMs: number): Promise<Response> {
@@ -30,16 +36,23 @@ export function requestOver(stream: Duplex, method: string, route: string, body:
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      if (whole) clearTimeout(whole)
       fn()
     }
-    const idle = (): void => {
+    const say = (ms: number) => (ms < 1_000 ? `${ms} ms` : `${Math.round(ms / 1000)}s`)
+    const cut = (why: string): void => {
       finish(() => {
-        const err = new Error(`the host server did not answer within ${timeoutMs < 1_000 ? `${timeoutMs} ms` : `${Math.round(timeoutMs / 1000)}s`}`)
+        const err = new Error(why)
         req.destroy(err)
         stream.destroy()
         reject(err)
       })
     }
+    const idle = (): void => cut(`the host server did not answer within ${say(timeoutMs)}`)
+    const whole = Number.isFinite(timeoutMs)
+      ? setTimeout(() => cut(`the host server did not finish its answer within ${say(timeoutMs * TOTAL_FACTOR)}`), Math.max(1, timeoutMs * TOTAL_FACTOR))
+      : null
+    whole?.unref?.()
     function moved(): void {
       if (settled || !Number.isFinite(timeoutMs)) return
       if (timer) clearTimeout(timer)

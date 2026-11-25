@@ -10,7 +10,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { requestOver } from '../../src/core/host-server/request-over.js'
+import { TOTAL_FACTOR, requestOver } from '../../src/core/host-server/request-over.js'
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rq-over-'))
 const servers: net.Server[] = []
@@ -87,6 +87,25 @@ describe('requestOver on a stream that is already connected', () => {
       expect(Date.now() - t0).toBeGreaterThan(300)
     } finally { await new Promise<void>((r) => srv.close(() => r())) }
   }, 30_000)
+})
+
+describe('the whole call\'s bound', () => {
+  it('a peer that drips a byte just inside the idle bound is cut at TOTAL_FACTOR times it', async () => {
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      const t = setInterval(() => { if (!res.writableEnded) res.write('.') }, 100)
+      res.on('close', () => clearInterval(t))
+    })
+    const sock = path.join(base, 'drip.sock')
+    await new Promise<void>((r) => srv.listen(sock, () => r()))
+    try {
+      const t0 = Date.now()
+      await expect(requestOver(await connect(sock), 'GET', '/x', null, 200)).rejects.toThrow(/did not finish its answer within 2s/)
+      const took = Date.now() - t0
+      expect(took).toBeGreaterThanOrEqual(200 * TOTAL_FACTOR - 50)
+      expect(took).toBeLessThan(200 * TOTAL_FACTOR + 2_000)
+    } finally { srv.closeAllConnections(); await new Promise<void>((r) => srv.close(() => r())) }
+  }, 15_000)
 })
 
 describe('no stream goes to http.request with only the socket timeout option', () => {

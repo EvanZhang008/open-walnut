@@ -73,6 +73,12 @@ export async function runSourceJob(o: SourceJobOptions): Promise<SwitchState> {
   try {
     return await runLocked(o, env, out, home, cfg.settings)
   } finally {
+    // A forwarded begin kept for this job's own begin (leader-relay-door.ts) goes once the switch ended or never began.
+    // Never in the way of the release: a file left here goes at the next boot.
+    try {
+      const st = readSwitchState(home)
+      ;(await import('./leader-relay-door.js')).dropForwardedBegins(home, st ? { id: st.id, ended: SOURCE_FINAL.has(st.step) } : null)
+    } catch (err) { out(`kept forwarded begin not removed: ${(err as Error).message}`) }
     release()
   }
 }

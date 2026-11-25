@@ -257,7 +257,9 @@ checks the copy link answers). Both names are read off the DaemonConnection the 
 the request says about where it comes from counts. One forwarded begin at a time: a second one while the
 first is between its checks and its job is refused. The relay door keeps the begin on disk before it starts
 the job (`local/leader-switch/forwarded-begin-<id>.json`), so the job's own begin on loopback reads who began it
-even when the leader's server restarted in between; what that loopback request says is never taken for it. Either way the
+even when the leader's server restarted in between; what that loopback request says is never taken for it. The
+file goes when the source job ends with its switch over (or never begun), and at the next boot of a home that may
+lead for one whose job died first (a handed-over home is left as it was). Either way the
 leader's console (its log) and Walnut Health record who began it on which machine
 (`Started by the switch command on machine-a`, or `Started by machine-b, forwarded by its replica`),
 and the source state keeps it (`startedBy`, shown by `--status`).
@@ -326,7 +328,9 @@ transport does not care how the stream is made). No new key, no new ssh, no publ
 Every request over it is bounded by `requestOver` itself (`src/core/host-server/request-over.ts`): idle time with
 nothing moving, its stream destroyed. http.request's own `timeout` option never fires on a stream handed over
 already connected, so a leader that takes the stream half way through its stop and never answers would hold the
-caller (a target job's wait for the mark, the command's polls) for good.
+caller (a target job's wait for the mark, the command's polls) for good. A second bound covers the whole call,
+10 times the idle one (`TOTAL_FACTOR`), so a peer that drips a byte just inside the idle bound cannot hold it
+either, while a long transfer that keeps moving still has room (10 minutes for a 60 s put).
 A service that cannot serve it (a daemon dir too deep for a unix socket's 103 bytes, say) logs why once per
 reason and writes it beside the socket (`<socket>.why`); the command there reports that reason instead of
 "no relay socket".
@@ -1453,6 +1457,10 @@ witness, above).
   is not moved.
 - **The command on the machine that will lead** is [built](#running-the-command-on-either-machine) and rehearsed with real
   daemons and a real host service on one computer (`--remote`, scenario `forwarded`); not run between two real machines.
+- **The old leader can be without the permission for a long time after a failed trial** (found by review round 3 of
+  step 4, a known availability gap, not fixed here): its boot waits for its own handover to run out at the witnesses,
+  which needs the majority it reaches to agree; with the failed machine's witness door down (its server not started)
+  and the other two disagreeing, the remote rehearsal saw about 17 minutes until that machine's server came back.
 - **A switch back to the Mac** is refused by the preflight in the lead's layout ([The leader relay ends at the stop](#the-leader-relay)).
   The missing segment: at the commit, the candidate needs a path to a second witness that does not depend on the old
   leader's server process. Every path to the leader machine's witness that the Mac has today (the leader relay over its host

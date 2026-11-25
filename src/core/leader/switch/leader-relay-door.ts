@@ -61,6 +61,24 @@ export function forwardedBeginFile(home: string, switchId: string): string {
 }
 
 /**
+ * The kept forwarded begins of `home` that no running switch needs: every one but the current switch's while it has
+ * not ended (its job's loopback begin may still read it). Removed at the job's end (source-job.ts) and at boot, so
+ * none is left in a home. The ids removed.
+ */
+export function dropForwardedBegins(home: string, current: { id: string; ended: boolean } | null): string[] {
+  const dir = path.join(home, 'local', 'leader-switch')
+  const gone: string[] = []
+  let names: string[] = []
+  try { names = fs.readdirSync(dir) } catch { return gone }
+  for (const n of names) {
+    const m = /^forwarded-begin-(.+)\.json$/.exec(n)
+    if (!m || (current && current.id === m[1] && !current.ended)) continue
+    try { fs.unlinkSync(path.join(dir, n)); gone.push(m[1]!) } catch { /* gone already */ }
+  }
+  return gone
+}
+
+/**
  * The forwarded begin of `switchId`, if this server took one (the source job's own begin on loopback reads it): in
  * memory, else (`home` given: a restart of this server since) as kept on disk. Never from anything a request says.
  */

@@ -89,6 +89,14 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
     if (switchStart) throw new LeaderBootRefused(`a leader switch started this server, but its config has no usable leader_switch section (${cfg.problem ?? 'none'}): it would run with no outward door closed`)
     return null
   }
+  // A forwarded begin kept for a switch that is over (its job died before it removed it): gone at this boot. A
+  // handed-over home never gets here (its marker refused it above), so it stays as it was.
+  if (!switchStart) {
+    const [{ dropForwardedBegins }, { readSwitchState, SOURCE_FINAL }] = await Promise.all([import('./leader-relay-door.js'), import('./flow.js')])
+    const st = readSwitchState(input.home)
+    const gone = dropForwardedBegins(input.home, st ? { id: st.id, ended: SOURCE_FINAL.has(st.step) } : null)
+    if (gone.length) input.log?.('info', 'leader switch: kept forwarded begins of switches that are over removed', { switchIds: gone })
+  }
   const { permitHolderId, machineIdFile, leaderInstanceLockPath } = await import('./machine-id.js')
   const id = permitHolderId(env)
   if (!id) throw new LeaderBootRefused(`leader_switch is set up but this machine has no id (${machineIdFile(env)}): without one it cannot hold the write permission`)
