@@ -264,7 +264,7 @@ export interface NetServiceModeDeps {
   read(): Promise<{ due: boolean; serve?: { home: string; on: boolean } }>
   /** An update that ran asked this switch: not asked again with this build (ServiceModeAsk). */
   asked(ask: ServiceModeAsk): void
-  /** This build's walnut file cannot go to the host: no offer with this build, and the build goes without it. */
+  /** This build's walnut file cannot go to the host: no offer with this build (this process only), and the build goes without it. */
   unfit(expected: string, why: string): void
 }
 
@@ -429,8 +429,8 @@ export class NetDaemonUpdater {
     const lookup = (walnutFile: boolean) => (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile })
     // Straight into the service only on a Mac (a Linux set switches after its move, as before), and only as the table allows.
     let serve = opts.serve && target.startsWith('darwin-') ? opts.serve : undefined
-    const systemWhy = serve ? serveSlotWhy(target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() }) : null
-    if (serve && systemWhy) { serve.onUnfit(systemWhy); serve = undefined }
+    // The table's no is the mode decision's own reason (wantedNow): nothing is marked unfit for it.
+    if (serve && serveSlotWhy(target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() })) serve = undefined
     let src = await lookup(!!serve)
     if (serve && 'missing' in src) {
       serve.onUnfit(src.missing.slice(0, 300))
@@ -584,9 +584,8 @@ export class NetDaemonUpdater {
     // `--serve` needs the walnut file (it holds the server), as the SSH path's slot does.
     let serve = mode.serve
     // Only a system the one table lets take it (one-service-targets.ts: a Mac with macos_one_service on).
-    const systemWhy = serve?.on && facts.target ? serveSlotWhy(facts.target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() }) : null
-    if (systemWhy) {
-      this.d.mode?.unfit(expected, systemWhy)
+    // The table's no is the mode decision's own reason (wantedNow): nothing is marked unfit for it.
+    if (serve?.on && facts.target && serveSlotWhy(facts.target, 'net', { macos: await (this.d.macos ?? macosOneServiceWanted)() })) {
       serve = undefined
       facts.modeDue = false
     }

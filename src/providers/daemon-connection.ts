@@ -1911,9 +1911,9 @@ export class DaemonConnection {
     if (!ask?.on) return undefined
     return {
       serve: { home: ask.home, on: true },
-      onUnfit: (why) => {
+      onUnfit: (why, o) => {
         log.session.warn('DaemonConnection: the service set goes in as the session daemon, not the Walnut service', { host: this.hostKey, expected, why })
-        this.markServeUnfit(expected, why)
+        this.markServeUnfit(expected, why, { serviceFailed: o?.serviceFailed === true })
       },
     }
   }
@@ -4631,14 +4631,21 @@ export class DaemonConnection {
     void macosOneServiceWanted().then((on) => {
       if (!on) return
       log.session.warn('DaemonConnection: the host\'s Walnut service fell back to the session daemon', { host: this.hostKey, expected: unfit.expected, why: unfit.why })
-      this.markServeUnfit(unfit.expected, unfit.why)
+      this.markServeUnfit(unfit.expected, unfit.why, { serviceFailed: true })
     })
   }
 
-  /** This build cannot be the service there: kept in memory at once, on disk for a real server's connection (serve-unfit.ts). */
-  private markServeUnfit(expected: string, why: string): void {
+  /**
+   * This build cannot be the service there: kept in memory at once. Only a Mac's service that did not
+   * come up (`serviceFailed`: the role fallback, a boot proof, rollback or probation failure) is kept on
+   * disk too, for a real server's connection (serve-unfit.ts): a walnut file not to be had (often a
+   * passing download or build failure) clears with a leader restart, as before.
+   */
+  private markServeUnfit(expected: string, why: string, o: { serviceFailed?: boolean } = {}): void {
     this._serveUnfit = { expected, why }
-    if (this.isolation.mode === 'shared') void serveUnfits.write(`ssh:${this.hostKey}`, { expected, why, at: Date.now() })
+    if (o.serviceFailed && this.isolation.mode === 'shared') {
+      void this.hostPlatform().then((p) => { if (p === 'darwin') return serveUnfits.write(`ssh:${this.hostKey}`, { expected, why, at: Date.now() }) }).catch(() => {})
+    }
     void this.serviceModeWant()
   }
 
@@ -7496,7 +7503,7 @@ export class DaemonConnection {
   private async refuseSharedMacSlot(): Promise<void> {
     const why = await sharedMacSlotWhy({
       system: this._remoteSystem, isolation: this.isolation.mode, ownSet: !!this._remoteSet, dir: this._remoteDir,
-      serves: this._daemonServes, home: WALNUT_HOME, run: (c, t) => this.sshExec(c, t),
+      serves: this._daemonServes, home: WALNUT_HOME, hostKey: this.hostKey, run: (c, t) => this.sshExec(c, t),
     })
     if (why) throw new Error(`${this.hostKey}: ${why}`)
   }

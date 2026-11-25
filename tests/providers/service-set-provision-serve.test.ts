@@ -83,6 +83,8 @@ describe('a service set straight into the one Walnut service', () => {
     expect(h.installs()[1]).toContain(` --no-serve ${HOME} `)
     expect(s.onUnfit).toHaveBeenCalledTimes(1)
     expect(s.onUnfit.mock.calls[0]![0]).toMatch(/did not serve as the Walnut service.*runs as the session helper/)
+    // A service failure: kept past a leader restart (daemon-connection.ts markServeUnfit, on a Mac).
+    expect(s.onUnfit.mock.calls[0]![1]).toEqual({ serviceFailed: true })
   })
 
   it('an install that fails for another reason (a handover, a timeout, no answer) is not tried again, and nothing is blamed', async () => {
@@ -136,6 +138,7 @@ describe('a service set straight into the one Walnut service', () => {
       expect(await provisionServiceSet(source, 'walnut-daemon-aaaaaaaaaaaa', installed as never, ask, { refresh: true, serve: s.serve })).toMatchObject({ ok: true, refreshed: true })
       expect(updates).toEqual([{ serve: { home: HOME, on: true } }, { serve: { home: HOME, on: false } }])
       expect(s.onUnfit.mock.calls[0]![0]).toMatch(/did not stay.*runs as the session helper/)
+      expect(s.onUnfit.mock.calls[0]![1]).toEqual({ serviceFailed: true })
     })
 
     it('a cut upload changed nothing: a quiet retry later, no try as the daemon, nothing blamed', async () => {

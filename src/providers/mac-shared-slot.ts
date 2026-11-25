@@ -9,7 +9,9 @@
  * (daemon-serves.ts SERVES_FILE). A dir no Walnut ever served (a Mac nobody else uses) is free.
  * Linux keeps today's sharing.
  */
-import { parseServes, SERVES_FILE, SHARED_WINDOW_MS, walnutKeyOf, type DaemonServes } from './daemon-serves.js'
+import { ownFollowerDirs } from '../core/host-server/own-follower-dirs.js'
+import { parseServes, SERVES_FILE, walnutKeyOf, type DaemonServes } from './daemon-serves.js'
+import { otherWalnutKeys } from './daemon-shared.js'
 import { shq } from './remote-sh.js'
 
 export interface SharedMacSlotFacts {
@@ -23,15 +25,15 @@ export interface SharedMacSlotFacts {
   serves: DaemonServes | null
   /** This Walnut's data dir. */
   home: string
+  /** The host's key: this Walnut's own servers' data dirs there are not another Walnut (own-follower-dirs.ts). */
+  hostKey?: string
   run(command: string, timeoutMs?: number): Promise<string>
   now?: number
 }
 
-/** The other Walnuts (their keys, daemon-serves.ts walnutKeyOf) a serves record names within the window (a server that names no home is nobody's). */
-export function otherWalnuts(serves: DaemonServes | null, home: string, now: number): string[] {
-  if (!serves) return []
-  const mine = walnutKeyOf(home)
-  return Object.entries(serves.walnuts).filter(([k, at]) => k !== mine && k !== '-' && now - at < SHARED_WINDOW_MS).map(([k]) => k)
+/** The other Walnuts (their keys) a serves record names, by daemon-shared.ts's one rule. */
+export function otherWalnuts(serves: DaemonServes | null, home: string, now: number, ownFollowerKeys: readonly string[] = []): string[] {
+  return serves ? otherWalnutKeys(serves.walnuts, { ourKey: walnutKeyOf(home), ownFollowerKeys, now }) : []
 }
 
 /** Why nothing of this Walnut goes into that dir's slot now, or null when it may. */
@@ -45,7 +47,9 @@ export async function sharedMacSlotWhy(f: SharedMacSlotFacts): Promise<string | 
     if (text === null) return `the daemon dir on this Mac (${f.dir}) could not be read, so Walnut does not know whether another Walnut uses it, and puts nothing there yet`
     serves = parseServes(text)
   }
-  const others = otherWalnuts(serves, f.home, now)
+  let others = otherWalnuts(serves, f.home, now)
+  // This Walnut's own servers there (a host replica's data dir) are no other Walnut; read only when someone else shows.
+  if (others.length && f.hostKey) others = otherWalnuts(serves, f.home, now, (await ownFollowerDirs(f.hostKey).catch(() => [] as string[])).map(walnutKeyOf))
   if (others.length === 0) return null
   return `the daemon dir on this Mac (${f.dir}) serves ${others.length === 1 ? 'another Walnut' : `${others.length} other Walnuts`}; Walnut puts nothing of its own there and starts nothing from it until this Walnut's own service there is installed`
 }

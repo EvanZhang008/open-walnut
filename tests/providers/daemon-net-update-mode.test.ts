@@ -86,12 +86,13 @@ describe('decideNetUpdate with a switch of the mode due', () => {
 })
 
 describe('NetDaemonUpdater carries the mode', () => {
-  it('a Mac with macos_one_service off: no --serve, the table\'s reason is told; with it on, the switch goes', async () => {
+  it('a Mac with macos_one_service off: no --serve, and nothing marked unfit (the mode decision gives the reason); with it on, the switch goes', async () => {
     const off = mode({ due: true, serve: ON })
     const a = updater({ mode: off, target: async () => 'darwin-arm64', macos: async () => false })
     a.u.schedule(0)
     await vi.waitFor(() => expect(a.u.state).toMatchObject({ phase: 'skipped', skip: 'current' }))
-    expect(off.unfit).toHaveBeenCalledWith(NEW, MACOS_OFF_WHY)
+    expect(off.unfit).not.toHaveBeenCalled()
+    expect(MACOS_OFF_WHY).toMatch(/is a Mac/)
     expect(a.update).not.toHaveBeenCalled()
     a.u.stop()
     // A new build still goes, as the session daemon.

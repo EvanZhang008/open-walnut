@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { constants as FS, type Stats } from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import path from 'node:path'
-import { SERVICE_MODE_FILE } from '../binary/service-mode.js'
+import { readServiceMode, SERVICE_MODE_FILE, serviceRoleOf } from '../binary/service-mode.js'
 
 export const DAEMON_ARTIFACT_NAME = 'daemon'
 export const DAEMON_ARTIFACT_VERSIONS_DIR = 'versions'
@@ -304,16 +304,29 @@ export async function runningExecutables(platform: NodeJS.Platform, execFile?: E
     const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
     if (!m || Number(m[1]) !== uid) continue
     const named = m[2]!
-    // One of this account's processes started by a relative path: where it runs cannot be told.
-    if (!named.startsWith('/')) return null
+    if (!named.startsWith('/')) {
+      // A shell, node or claude by its bare name runs nothing staged here; one named as a staged file
+      // (argv[0] is the caller's to set) may run from a version dir: then what runs cannot be told.
+      if (STAGED_NAMES.has(path.basename(named.replace(/^-/, '')))) return null
+      continue
+    }
     out.push(named, await fsp.realpath(named).catch(() => named))
   }
   return out
 }
 
-/** On macOS the prune runs only where this Walnut asked the one service (its mode file is there, macos_one_service). */
+/** The names a staged file runs under: the version dir's file, and the walnut file it is a copy of. */
+const STAGED_NAMES: ReadonlySet<string> = new Set([DAEMON_ARTIFACT_NAME, 'walnut'])
+
+/**
+ * On macOS the prune runs only where this Walnut asked the one service as a host's follower (its mode
+ * file is there with the replica role: macos_one_service), never on a person's own leading Mac.
+ */
 async function darwinPruneAsked(installRoot: string): Promise<boolean> {
-  return fsp.access(path.join(installRoot, SERVICE_MODE_FILE)).then(() => true, () => false)
+  const text = await fsp.readFile(path.join(installRoot, SERVICE_MODE_FILE), 'utf8').catch(() => null)
+  if (text === null) return false
+  const read = readServiceMode(installRoot, { readFileSync: () => text, readdirSync: () => [], realpathSync: (f) => f, statSync: () => ({ isDirectory: () => false }) })
+  return 'mode' in read && serviceRoleOf(read.mode) === 'replica'
 }
 
 /**

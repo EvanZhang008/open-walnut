@@ -95,7 +95,7 @@ export async function provisionWith(
     // The build did not come up as the service: once more as the session daemon (`--no-serve`, so no
     // mode the first try wrote is carried), the set must not stay uninstalled for the service's sake.
     const plain = await runServiceInstall(executable, io, ask, { home: serve.serve.home, on: false })
-    if (plain.ok) serve.onUnfit(`the install as the Walnut service did not go through (${(done.message ?? done.code ?? 'no answer').slice(0, 300)}); it runs as the session helper`)
+    if (plain.ok) serve.onUnfit(`the install as the Walnut service did not go through (${(done.message ?? done.code ?? 'no answer').slice(0, 300)}); it runs as the session helper`, { serviceFailed: true })
     done = plain
   }
   // The install named another set than the status did (a claim won meanwhile): go by the install's.
@@ -126,7 +126,8 @@ export const SERVE_FAILURE_CODES: readonly string[] = ['bootProof', 'launcherRol
 /** The service's words for a set's install or refresh, and where its failure is told (the header). */
 export interface ProvisionServe {
   serve: { home: string; on: true }
-  onUnfit(why: string): void
+  /** `serviceFailed`: the build did not come up as the service (SERVE_FAILURE_CODES), kept past a restart; else a passing reason. */
+  onUnfit(why: string, o?: { serviceFailed?: boolean }): void
 }
 
 /**
@@ -155,7 +156,7 @@ export async function provisionServiceSet(
       if (!opts.serve || !SERVE_FAILURE_CODES.includes(String((err as { failureCode?: unknown } | null)?.failureCode ?? ''))) throw err
       named = null
       await refresh({ home: opts.serve.serve.home, on: false })
-      opts.serve.onUnfit(`the update as the Walnut service did not go through (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); it runs as the session helper`)
+      opts.serve.onUnfit(`the update as the Walnut service did not go through (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); it runs as the session helper`, { serviceFailed: true })
     }
   } catch (err) {
     const buildFailed = (err as { buildFailed?: unknown } | null)?.buildFailed === true

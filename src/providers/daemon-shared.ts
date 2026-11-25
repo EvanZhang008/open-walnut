@@ -87,10 +87,7 @@ export function sharedDaemonVerdict(args: {
   if (!running) return { keep: false, why: 'the running daemon keeps no record of the Walnuts it serves (an older build)' }
   // A record of another daemon (a stale file a stopped build left) proves nothing about this one.
   if (running.version !== args.runningVersion) return { keep: false, why: `its record is of another build (${running.version || 'none'})` }
-  const window = args.windowMs ?? SHARED_WINDOW_MS
-  const others = Object.entries(running.walnuts)
-    .filter(([k, at]) => k !== args.ourKey && !args.ownFollowerKeys?.includes(k) && args.now - at < window)
-    .map(([k]) => k)
+  const others = otherWalnutKeys(running.walnuts, args)
   if (!others.length) return { keep: false, why: 'only this Walnut uses it' }
   const has = new Set(running.capabilities)
   const ours = ourDaemonCapabilities(running.twin)
@@ -107,6 +104,16 @@ export function sharedDaemonVerdict(args: {
   if (extra.length) return kept(`it has ${extra.join(', ')}, which this build's daemon lacks`)
   if (args.replacedRecently) return kept('this server replaced it lately and another build came back')
   return { keep: false, why: `it lacks ${missing.join(', ')}`, missing, shared: true }
+}
+
+/**
+ * The keys of a serves record that are another Walnut's: not this Walnut's own (`ourKey`), not one of
+ * its own servers' data dirs on that host (`ownFollowerKeys`), and served within the window. The one
+ * rule every check of "another Walnut uses that daemon" reads (mac-shared-slot.ts too).
+ */
+export function otherWalnutKeys(walnuts: Record<string, number>, o: { ourKey: string; ownFollowerKeys?: readonly string[]; now: number; windowMs?: number }): string[] {
+  const window = o.windowMs ?? SHARED_WINDOW_MS
+  return Object.entries(walnuts).filter(([k, at]) => k !== o.ourKey && !o.ownFollowerKeys?.includes(k) && o.now - at < window).map(([k]) => k)
 }
 
 /**

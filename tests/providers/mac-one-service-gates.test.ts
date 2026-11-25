@@ -147,13 +147,14 @@ describe('a follower that fell back, as the leader reads it', () => {
     await vi.waitFor(() => expect(priv(on)._serveUnfit).toMatchObject({ expected: EXPECTED }))
   })
 
-  it('kept on disk per host and build: a new connection (a leader restart) on the same build reads it back', async () => {
+  it('a Mac\'s service failure is kept on disk per host and build: a new connection (a leader restart) on the same build reads it back', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-unfit-'))
     try {
       vi.stubEnv('WALNUT_UPDATE_SERVE_UNFIT_FILE', path.join(dir, 'unfit.json'))
       vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
       const first = fellBack()
-      priv(first).markServeUnfit(EXPECTED, 'the walnut file did not come up as the Walnut service there')
+      vi.spyOn(priv(first), 'hostPlatform').mockResolvedValue('darwin')
+      priv(first).markServeUnfit(EXPECTED, 'the walnut file did not come up as the Walnut service there', { serviceFailed: true })
       await vi.waitFor(async () => expect(await serveUnfits.read('ssh:studio-mac')).toMatchObject({ expected: EXPECTED }))
       const again = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
       vi.spyOn(priv(again), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
@@ -162,6 +163,27 @@ describe('a follower that fell back, as the leader reads it', () => {
       const newer = new DaemonConnection('studio-mac', { hostname: 'studio-mac.example.test', user: 'me' })
       vi.spyOn(priv(newer), 'getExpectedDaemonVersion').mockReturnValue('walnut-daemon-bbbbbbbbbbbb')
       expect(await priv(newer).keptServeUnfit()).toBeNull()
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a walnut file not to be had (Linux or a Mac), or a service failure on Linux, stays in this process only, as before', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-unfit-'))
+    try {
+      vi.stubEnv('WALNUT_UPDATE_SERVE_UNFIT_FILE', path.join(dir, 'unfit.json'))
+      for (const [platform, serviceFailed] of [['linux', false], ['darwin', false], ['linux', true]] as const) {
+        const c = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
+        vi.spyOn(priv(c), 'serviceModeWant').mockResolvedValue({ want: null })
+        const plat = vi.spyOn(priv(c), 'hostPlatform').mockResolvedValue(platform)
+        priv(c).markServeUnfit(EXPECTED, 'no walnut file of this build for linux-x64 (download failed)', { serviceFailed })
+        expect(priv(c)._serveUnfit, `${platform} ${serviceFailed}`).toMatchObject({ expected: EXPECTED })
+        await new Promise((r) => setTimeout(r, 20))
+        if (serviceFailed) expect(plat).toHaveBeenCalled()
+      }
+      expect(await serveUnfits.read('ssh:devbox')).toBeNull()
+      // A leader restart asks again.
+      const again = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
+      vi.spyOn(priv(again), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED)
+      expect(await priv(again).keptServeUnfit()).toBeNull()
     } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })
@@ -179,8 +201,10 @@ describe('a Mac\'s shared daemon dir', () => {
     expect(why).toMatch(/\(\/tmp\/open-walnut\) serves another Walnut; Walnut puts nothing of its own there/)
   })
 
-  it('only this Walnut, a server with no home, or one long gone: allowed', async () => {
-    expect(await sharedMacSlotWhy({ ...base, serves: serves({ [ME]: NOW, '-': NOW }), run: async () => '' })).toBeNull()
+  it('only this Walnut, one of its own servers there, or one long gone: allowed; a server naming no home is not known to be ours', async () => {
+    expect(await sharedMacSlotWhy({ ...base, serves: serves({ [ME]: NOW }), run: async () => '' })).toBeNull()
+    expect(otherWalnuts(serves({ [ME]: NOW, [CHEN]: NOW }), base.home, NOW, [CHEN])).toEqual([])
+    expect(await sharedMacSlotWhy({ ...base, serves: serves({ '-': NOW }), run: async () => '' })).toMatch(/serves another Walnut/)
     expect(otherWalnuts(serves({ [CHEN]: NOW - 4 * 24 * 3600_000 }), base.home, NOW)).toEqual([])
   })
 

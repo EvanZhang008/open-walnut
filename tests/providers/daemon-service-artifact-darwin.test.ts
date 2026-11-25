@@ -64,8 +64,8 @@ describe('pruning old versions on a Mac', () => {
       shas.push(sha)
     }
     await fs.chmod(path.join(l.installRoot, 'versions'), 0o700)
-    // This Walnut asked the one service there (service-mode.ts).
-    await fs.writeFile(path.join(l.installRoot, 'service-mode.json'), '{}\n')
+    // This Walnut asked the one service there as a host's follower (service-mode.ts; no role: replica).
+    await fs.writeFile(path.join(l.installRoot, 'service-mode.json'), JSON.stringify({ v: 1, home: '/Users/u/.open-walnut', exe: '/Users/u/x/daemon' }) + '\n')
     return { ...l, shas, exe: (sha: string) => path.join(l.installRoot, 'versions', sha, 'daemon') }
   }
   const UID = process.getuid!()
@@ -90,10 +90,26 @@ describe('pruning old versions on a Mac', () => {
     expect((await fs.readdir(path.join(v.installRoot, 'versions'))).sort()).toEqual(v.shas)
   })
 
-  it('one of this account\'s processes named by a relative path: nothing is removed', async () => {
+  it('one of this account\'s processes named by a relative staged name (daemon, walnut): nothing is removed', async () => {
     const v = await versions(3)
-    expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: psSays(`${UID} /usr/bin/ssh\n${UID} daemon\n`) })).toEqual([])
+    for (const name of ['daemon', 'walnut', './walnut']) {
+      expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: psSays(`${UID} /usr/bin/ssh\n${UID} ${name}\n`) }), name).toEqual([])
+    }
     expect((await fs.readdir(path.join(v.installRoot, 'versions'))).sort()).toEqual(v.shas)
+  })
+
+  it('shells, node and claude by their bare names do not stop the prune', async () => {
+    const v = await versions(3)
+    const removed = await pruneDaemonServiceVersions(v.installRoot, [v.exe(v.shas[0]!)], { platform: 'darwin', execFile: psSays(`${UID} -zsh\n${UID} zsh\n${UID} node\n${UID} claude\n${UID} ${v.exe(v.shas[1]!)}\n`) })
+    expect(removed.map((d) => path.basename(d))).toEqual([v.shas[2]])
+  })
+
+  it('a person\'s own leading Mac (mode file with the leader role) never prunes', async () => {
+    const v = await versions(3)
+    await fs.writeFile(path.join(v.installRoot, 'service-mode.json'), JSON.stringify({ v: 1, home: '/Users/u/.open-walnut', exe: '/Users/u/x/daemon', role: 'leader' }) + '\n')
+    const ps = vi.fn()
+    expect(await pruneDaemonServiceVersions(v.installRoot, [], { platform: 'darwin', execFile: ps })).toEqual([])
+    expect(ps).not.toHaveBeenCalled()
   })
 
   it('a path ps names through a link counts by where it leads', async () => {
