@@ -112,9 +112,13 @@ export function serveSwitchNote(dir: string, op: { op: 'write'; note: SwitchNote
   }, { timeoutMs: 2_000 })
 }
 
-/** Forget every witness this process loaded (tests: a "restart" of the witnesses). */
-export function forgetLocalWitnesses(): void {
-  cache.clear()
+/**
+ * Forget the witnesses this process loaded (tests: a "restart" of the witnesses): every one, or only those in `dirs`
+ * (one restarted server's own witness: it counts its record from then on, the others keep their time).
+ */
+export function forgetLocalWitnesses(dirs?: readonly string[]): void {
+  if (!dirs) { cache.clear(); return }
+  for (const d of dirs) cache.delete(d)
 }
 
 /**

@@ -79,11 +79,16 @@ export function openPermitClient(id: string, places: WitnessPlace[], params: Per
 
 const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** How long a read waits for the witnesses that have not answered (one that never answers costs a read this much). */
+export const READ_WAIT_MS = 1_500
+/** How long a proposal waits for its outcome by default (a witness that never answers leaves it open that long). */
+export const PROPOSE_WAIT_MS = 3_000
+
 /**
  * Read every witness. `standing` is the record a majority holds (null: none ever), or
  * undefined when no record has a majority among the answers (the outcome is unknown).
  */
-export async function readStanding(h: PermitHandle, waitMs = 1_500, expected = h.places.length): Promise<{ standing: PermitRecord | null | undefined; answered: number; replies: PermitReply[]; absent: string[] }> {
+export async function readStanding(h: PermitHandle, waitMs = READ_WAIT_MS, expected = h.places.length): Promise<{ standing: PermitRecord | null | undefined; answered: number; replies: PermitReply[]; absent: string[] }> {
   const t0 = Date.now()
   h.client.read()
   // `absent`: reached, and no witness there (it never answers this read); every other one that did not answer was not reached.
@@ -106,9 +111,9 @@ export type ProposeResult =
  * refused that it cannot, or `waitMs` passed. Sends again to the witnesses that have not
  * answered every 300 ms. A result that is not 'chosen' is never a yes.
  */
-export async function proposeAndWait(h: PermitHandle, make: (c: PermitClient) => PermitRecord | null, waitMs = 3_000): Promise<ProposeResult | null> {
+export async function proposeAndWait(h: PermitHandle, make: (c: PermitClient) => PermitRecord | null, waitMs = PROPOSE_WAIT_MS): Promise<ProposeResult | null> {
   // Learn the highest number and the witness list in use first, so the record is above it.
-  await readStanding(h, Math.min(waitMs, 1_500))
+  await readStanding(h, Math.min(waitMs, READ_WAIT_MS))
   const record = make(h.client)
   if (!record) return null
   const deadline = Date.now() + waitMs

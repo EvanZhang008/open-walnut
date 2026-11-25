@@ -16,7 +16,7 @@ a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, va
 
 | kind | written by | gives the permission to | a witness takes it when |
 |---|---|---|---|
-| `grant` | the asker | the asker | the record it holds ran out on its own clock, plus `witnessMarginMs`, or is a release |
+| `grant` | the asker | the asker | the record it holds ran out on its own clock, plus `witnessMarginMs`, or is a release, or is a live record of the asker's own incarnation (not a handover: below) |
 | `renew` | the holder | the holder | it still holds the holder's record, written by the same incarnation (or a handover to it) |
 | `handover` | the holder | `to` | it still holds the holder's record of the same incarnation (not a handover) |
 | `cancel` | the old holder | the old holder | it holds that incarnation's handover, or its live record |
@@ -49,6 +49,16 @@ holder, and waits for the permission to run out like any other machine. So two p
 machine can never both hold it (the random schedules run two processes per machine; with one
 shared incarnation they go red). A restarted process therefore waits out its old permission
 before it holds again, unless the old process released it on a planned stop (below).
+
+**A grant on its own process's live record.** A witness that holds a live record of the asker's own
+incarnation (a grant, renew, cancel or list change it wrote; never a handover, never another process of
+the machine) takes its grant as it would take its renew, which replaces that record just the same. Without
+it a process whose grant one witness took alone could not have a later grant taken there until that one ran
+out, while another witness, its own record just run out, took the later grant alone: with the third witness
+out of reach the two stay on two grants of the same process, by turns a hold apart, and nothing stands on
+both (the remote rehearsal's failed trial, 17 minutes without a leader; [Leader switch, Restarts](./leader-switch.md#restarts)).
+It changes nothing for anyone else: the record it replaces is the asker's own, and a witness takes another
+holder's record over it only once it ran out, as before.
 
 A machine acts only on a record of its **own** that a majority of the **fixed** list accepted,
 never a majority of whoever answered. It counts that record for `validMs - holderMarginMs` from
@@ -379,8 +389,12 @@ taken over within 10 s (not vacuous). Negative controls each remove one safety p
 the fsync before the answer, the wall clock in the holder's clock, the fixed-list majority,
 waiting for the registration, the ledger on list changes, the incarnation, the holder writing
 down an outcome it read, the releaser stopping before it sends, a new process waiting for a
-majority after a release, a witness taking a release only on its writer's own live record) and
-must find a violation. The last one goes red rarely in random schedules (1 of 200 split
+majority after a release, a witness taking a release only on its writer's own live record, a
+witness taking a grant on a live record only from the same incarnation) and must find a violation.
+A grant on its own process's live record is counted where a witness took one: in 100 schedules
+with two processes per machine and planned stops, whose candidates ask as the leader server's
+runtime does (a witness holding their own live record counts as free), witnesses took about 230,
+and no two processes acted at once. The last one goes red rarely in random schedules (1 of 200 split
 schedules): a process whose lease ran out stops proposing, so its numbers stay below the next
 holder's record and the number check refuses its release first, unless the next holder never saw
 the witness it kept. A named case builds that schedule and goes red every time. Each wake of a sleeping machine is an event of its own, so the

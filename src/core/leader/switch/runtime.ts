@@ -32,13 +32,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { appendMayAct, markerRefusal, readMarker, readOpOutcomes, recordOpOutcomes, summarize, writeUnresolvedOps } from './records.js'
-import { changeListAndWait, openPermitClient, proposeAndWait, readStanding, type PermitHandle } from './permit-ops.js'
+import { changeListAndWait, openPermitClient, proposeAndWait, readStanding, PROPOSE_WAIT_MS, READ_WAIT_MS, type PermitHandle } from './permit-ops.js'
 import { sightingsOf, type WitnessSighting } from './witness-setup.js'
 import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
 import type { LeaderSwitchSettings, WitnessPlace } from './settings.js'
-import { majorityOf, type PermitRecord, type PermitReply } from '../permit/types.js'
+import { majorityOf, type PermitParams, type PermitRecord, type PermitReply } from '../permit/types.js'
 import { PermitNotHeld } from '../permit/client.js'
 import { generationToJoin } from '../permit/store.js'
+import { witnessHoldMs } from '../permit/rules.js'
 import { acquireInstanceLock, type InstanceLock } from '../permit/instance-lock.js'
 
 export type BootDecision =
@@ -95,6 +96,35 @@ export interface PermitRuntime {
 
 /** How long a planned stop waits for its release to stand; past it the next process waits as after a crash. */
 export const RELEASE_CAP_MS = 3_000
+
+/** The longest pause between two rounds of a runtime that does not lead (shorter with a short renewEveryMs). */
+export const WAITING_ROUND_MS = 5_000
+const waitingRoundMs = (p: PermitParams) => Math.min(WAITING_ROUND_MS, p.renewEveryMs)
+
+/**
+ * How long, at most, a runtime that waits for the permission takes to hold it once it may: every record a majority
+ * of the witnesses it reaches holds for another process (an earlier process of this machine included, its handover
+ * too) ran out there, and every answer leaves the permission to this machine (wantFor, splitOwnRecords). The round
+ * under way ends and the next one runs: its pause, its three reads (each waits READ_WAIT_MS for a witness that never
+ * answers), the grant's back-off (backoffMaxMs at most), and one proposal wait for the answers. A grant is taken
+ * there at once (rules.ts judge: a witness that holds a live record of this very process takes it as it takes a
+ * renew). With the defaults: 5 + 4.5 + 30 + 3 = 42.5 s.
+ */
+export function retakeWithinMs(p: PermitParams): number {
+  return waitingRoundMs(p) + 3 * READ_WAIT_MS + p.backoffMaxMs + PROPOSE_WAIT_MS
+}
+
+/**
+ * How long, at most, a restarted server of the machine that held the permission takes to hold it again from its
+ * first read of the witnesses, when what they hold is only its machine's (its handover after a switch that rolled back
+ * once its server stopped, or an earlier process's record), a majority of them answers, and nobody else asks: every
+ * such record runs out within one witness hold of that read (a witness it keeps itself counts the record from this
+ * server's first read; one elsewhere took it before), the hold measured on witness clocks that may run slow by
+ * maxDriftRate; then retakeWithinMs. With the defaults: 63.3 + 42.5 = 105.8 s.
+ */
+export function retakeAfterRestartMs(p: PermitParams): number {
+  return Math.ceil(witnessHoldMs(p) / (1 - p.maxDriftRate)) + retakeWithinMs(p)
+}
 
 export interface RuntimeOptions {
   home: string
@@ -172,7 +202,9 @@ const tick = (ms: number) => new Promise((r) => { setTimeout(r, ms).unref?.() })
  * Any record of another machine that may have stood (a committed switch, its renews), or a handover to this machine
  * it never led on: null, as before (a switch's to settle). A witness that answered with its list and holds nothing
  * holds nothing for anyone, as after a release. tests/core/leader/switch/split-records-model.test.ts walks every short
- * history of two machines and three witnesses with the witnesses' own rules.
+ * history of two machines and three witnesses with the witnesses' own rules, and every schedule of a restarted old
+ * leader after a failed trial with one witness out of reach (its grant is taken at once where a witness holds this
+ * process's own live record: rules.ts judge).
  */
 function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null | undefined; replies: PermitReply[] }, me: string): ReturnType<typeof wantFor> | null {
   if (read.standing !== undefined) return null
@@ -433,7 +465,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     } catch (err) {
       if (stopped) return
       log('warn', 'leader permit: a round failed; the next one runs in a moment', { state, error: err instanceof Error ? err.stack ?? err.message : String(err) })
-      schedule(Math.min(5_000, settings.params.renewEveryMs))
+      schedule(waitingRoundMs(settings.params))
     }
   }
   const loop = async () => {
@@ -485,7 +517,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
         return
       }
       why = got.why
-      schedule(Math.min(5_000, settings.params.renewEveryMs))
+      schedule(waitingRoundMs(settings.params))
       return
     }
     if (state === 'lost' && cancelOwed) {
@@ -507,7 +539,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   }
 
   if (decision.kind === 'lead') { ledNow(); state = 'leading'; learn(); schedule(settings.params.renewEveryMs) }
-  if (decision.kind === 'waiting') { why = decision.why; schedule(Math.min(5_000, settings.params.renewEveryMs)) }
+  if (decision.kind === 'waiting') { why = decision.why; schedule(waitingRoundMs(settings.params)) }
   if (decision.kind === 'refuse') { state = 'lost'; why = decision.why }
 
   const handover = (to: string) => serial(async (): Promise<{ ok: boolean; record?: PermitRecord; why?: string }> => {

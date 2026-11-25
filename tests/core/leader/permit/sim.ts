@@ -27,8 +27,8 @@ import { hostLinkWitnessCall } from '../../../../src/core/leader/switch/leader-r
 const SIM_LEADER_MACHINE = 'sim-leader-machine'
 import { sha256Hex } from '../../../../src/utils/hmac-proof.js'
 import {
-  bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
-  type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
+  bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored, holdsForHolder,
+  type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness, type WitnessState,
 } from '../../../../src/core/leader/permit/index.js'
 
 export type SimWay = 'link' | 'direct' | 'mixed' | 'host-link'
@@ -548,6 +548,11 @@ export interface PilotOptions {
   backoff?: boolean
   /** Send outward ops from world.outbox while it holds the permission (ops.ts). */
   ops?: OpsDriver
+  /**
+   * A witness that holds a live record of this very process counts as free when it decides to ask (as the leader
+   * server's runtime asks a grant on its own records, runtime.ts splitOwnRecords): its grants land on them.
+   */
+  ownCountsFree?: boolean
 }
 
 /**
@@ -624,8 +629,10 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
     } else if (opts.wantsLead && reads.length > 0 && !asking) {
       const plan = c.changePlan()
       const joint = plan.kind === 'final' || plan.kind === 'pair' ? plan.pair.next : null
+      const ownLive = (r: PermitReply) => r.held?.holder === m.id && r.held.kind !== 'handover' && r.held.nonce === c.incarnation()
+      const reads = () => (opts.ownCountsFree ? c.readBack().map((r) => (ownLive(r) ? { ...r, grantable: true } : r)) : c.readBack())
       const may = (j: string[] | null) => mayAskForTakeover({
-        list: c.witnessList(), cfg: c.config().cfg, joint: j, reads: c.readBack(), standby: { seq: Number.MAX_SAFE_INTEGER },
+        list: c.witnessList(), cfg: c.config().cfg, joint: j, reads: reads(), standby: { seq: Number.MAX_SAFE_INTEGER },
         params: world.params, maxBehindMs: 5 * 60_000,
       }).ok
       const use = joint && may(joint) ? joint : may(null) ? null : undefined
@@ -644,7 +651,8 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
             c.read()
             world.after(400, () => {
               asking = false
-              if (m.c !== c || c.mayAct() || world.now < m.downUntil || m.clock.asleep()) return
+              // Not once it began its planned stop in the meantime (it proposes nothing but its release).
+              if (m.c !== c || c.released() || c.mayAct() || world.now < m.downUntil || m.clock.asleep()) return
               if (use ? may(use) : may(null)) ask()
             })
           })
@@ -750,6 +758,45 @@ export function releaseOnAnyLive(w: PermitWitness): void {
     if (reply.ok) return reply
     x.state = { ...x.state, held: real }
     return handle(req)
+  }
+}
+
+/** A grant a witness holds a live record of the grant's own writer for: same machine; `sameProcess` too, as rules.ts ownLive. */
+function grantOnOwnLive(w: PermitWitness, r: PermitRecord, sameProcess: boolean): boolean {
+  const x = w as unknown as { state: WitnessState; opts: { clock: ElapsedClock; params: PermitParams } }
+  const h = x.state.held
+  return r.kind === 'grant' && !!h && h.kind !== 'handover' && h.holder === r.by && (!sameProcess || h.nonce === r.nonce) && holdsForHolder(x.state, x.opts.clock.now(), x.opts.params)
+}
+
+/**
+ * Counts, in `world.injected`, the grants a witness took on a live record of the grant's own process (rules.ts judge:
+ * taken as that process's renew would be; the retake after a failed trial): the case is reached, not only allowed.
+ */
+export function countOwnLiveGrants(world: World, w: PermitWitness): void {
+  const x = w as unknown as { handle: (req: PermitRequest) => PermitReply }
+  const handle = x.handle.bind(w)
+  x.handle = (req) => {
+    const own = req.type === 'propose' && grantOnOwnLive(w, req.record, true)
+    const reply = handle(req)
+    if (own && reply.ok) world.injected++
+    return reply
+  }
+}
+
+/**
+ * Negative control: a witness that takes a grant on a live record of the grant's machine whatever the process (the
+ * rule takes it only from the same incarnation). A second process of a machine then takes it beside the first.
+ */
+export function grantOnAnyProcess(w: PermitWitness): void {
+  const x = w as unknown as { state: WitnessState; handle: (req: PermitRequest) => PermitReply }
+  const handle = x.handle.bind(w)
+  x.handle = (req) => {
+    if (req.type !== 'propose' || !grantOnOwnLive(w, req.record, false)) return handle(req)
+    const real = x.state.held!
+    x.state = { ...x.state, held: { ...real, nonce: req.record.nonce } }
+    const reply = handle(req)
+    if (!reply.ok) x.state = { ...x.state, held: real }
+    return reply
   }
 }
 

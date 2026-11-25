@@ -68,7 +68,7 @@ lock; `boot.ts`, `runtime.ts`):
 | a majority of witnesses names another machine (its record, a handover between two others, or another machine's release) | **runs as a standby** naming that machine |
 | a handover to this machine it was not told to commit | refuses ("`walnut leader switch --resume` finishes it") |
 | its own record of this process, or none at all (the very first leader) | leads; renews every 15 s |
-| a record an earlier process of this machine wrote (a restart, or the old leader's handover after a switch rolled back once its server had stopped) | **boots with every outward door closed** until that record runs out at the witnesses (up to a minute), then grants itself and leads |
+| a record an earlier process of this machine wrote (a restart, or the old leader's handover after a switch rolled back once its server had stopped) | **boots with every outward door closed** until that record runs out at the witnesses (up to a minute), then grants itself and leads: within 105.8 s of its first read of the witnesses with the default clocks (`retakeAfterRestartMs`, [Restarts](#restarts)) |
 | no majority answers | **boots with every outward door closed** and keeps asking every 5 s |
 
 Why not lead in the first rows and lead in the last: a handed-over home is known not to be the
@@ -232,8 +232,8 @@ from its chunks, removes its claim and writes a `gave-up` note. The source job, 
 leader's server still runs, has it cancel its handover and lead at once (a handover and a cancel
 never both stand). Once it stopped no process can cancel (the record was its process's): the
 marker is removed and the old leader starts again, **with its doors closed until its handover
-runs out at the witnesses (up to a minute)**, then grants itself. Nothing was lost: the old home
-was never changed.
+runs out at the witnesses (up to a minute)**, then grants itself, within 105.8 s of its boot with the
+default clocks ([Restarts](#restarts)). Nothing was lost: the old home was never changed.
 
 Defaults: `commit_window_s: 300` (from the handover to the last moment the new leader may start
 its commit; the final batch and its mark must end inside it, a mark dated after it is refused, no
@@ -939,7 +939,29 @@ majority: the next process of the same machine sees its own release and grants i
 without the back-off. **A crash**, or a release no majority took, leaves the record: the next
 process boots with its doors closed until it runs out at the witnesses (`validMs +
 witnessMarginMs`, 62 s) and grants itself then. Another machine never takes a release over
-(that is a switch, by hand); the rehearsal's `--restarts` measures both cases. Nothing due in
+(that is a switch, by hand); the rehearsal's `--restarts` measures both cases.
+
+**How long the take-back lasts.** Once every record that a majority of the witnesses it reaches holds
+for another process has run out there, and every answer leaves the permission to this machine, a waiting
+server holds within `retakeWithinMs` (`runtime.ts`): the round under way ends, and the next one's pause
+(5 s), its three reads (1.5 s each for a witness that never answers), the grant's back-off (30 s at most)
+and its proposal's wait (3 s): 42.5 s with the default clocks. After a restart those records run out
+within one witness hold of its first read, counted on witness clocks that may run 2% slow (a witness this
+machine keeps counts its record from this server's first read, a reloaded witness; one elsewhere took it
+before): `retakeAfterRestartMs`, 63.3 + 42.5 = 105.8 s. The switch's own wait for the old leader to lead
+again (`takeBackMs`, 122 s) covers it and a server's boot.
+
+That bound needs the grant rule of the permit: a witness takes a grant on a live record of the asker's own
+process as it takes its renew ([Leader write permission](./leader-write-permission.md#when-a-machine-may-act)).
+Before it, the failed trial of the remote rehearsal left machine-b with no leader for 17 minutes: the failed
+machine's witness was out of reach (its door closes with its server), and the two others ran out of the
+handover 55 s apart (machine-b's own witness counted it again from the restart). The first to run out took
+the restarted server's grant alone and refused every later one ('held', its own live grant); the other took
+a later one alone once its handover ran out; and so on by turns, each a hold apart, since a round (5 to 42 s)
+is shorter than a hold (62 s). It ended only when a grant came after both ran out, or the third witness
+came back. `tests/core/leader/switch/retake-after-handover.test.ts` builds that sequence on the real runtime
+(red before: the two witnesses on grants 6 and 7 of the restarted process), and the remote rehearsal's
+`trial-fails` asserts the bound. Nothing due in
 between is lost or repeated: routine slots stay due and run once, trigger fires are replayed,
 an approved mail is sent once by the reconcile.
 
@@ -948,7 +970,8 @@ on three different records: a renew that reached some of them, a switch's handov
 reached only some, a cancel that landed on one. No record has a majority, so no renew or cancel can
 stand, and nothing ends that by waiting. When a majority answered and every answer leaves the
 permission to this machine, the runtime asks for a grant, which each witness takes only once the
-record it holds ran out there (`splitOwnRecords`, `src/core/leader/switch/runtime.ts`). An answer
+record it holds ran out there, or at once where that record is this very process's own (`splitOwnRecords`,
+`src/core/leader/switch/runtime.ts`). An answer
 leaves it to this machine when it is:
 
 - a record this machine leads on (a renew or grant it holds, its cancel of its own handover, its witness list
@@ -980,10 +1003,17 @@ commit stood and one where it did not). A list change left half done is not repa
 model runs it again (`permit-ops.ts changeWitnesses`, an operator's step) before the holder leads again. Its
 red controls: the rule before the cancel case finds states where nobody can lead again, the rule without
 the list change case finds them in the second walk, and a grant whenever no record has a majority takes
-over. The remote
+over. A third walk takes the old leader's restarted server after a failed trial: the failed machine's
+witness out of reach, the two others on the handover or the renew before it, taken at any ages in 5 s
+steps (588 starts), and every schedule of its rounds 5 s to 42.5 s apart. In each it leads within
+`retakeWithinMs` of the last of those records running out (40 s at the latest). Its red controls: with
+the grant rule as it was (refused on any live record), 540 of the 588 starts have a schedule where nobody
+leads for ever, the two witnesses on two grants of the restarted process by turns; a grant rule that
+ignores the incarnation lets a second process of the machine act beside the first. The remote
 rehearsal meets the cases too: `two-down` and `cut-after-commit` (after the switch back, w-k still
 held the handover to A), and `trial-fails` (after the rollback, w-a still held A's handover to B,
-the others two grants of A).
+the others two grants of A; with the grant rule as it was, the two grants could go on by turns
+for many minutes, above).
 
 ## Outward doors
 

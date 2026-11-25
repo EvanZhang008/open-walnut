@@ -213,7 +213,8 @@ function ownLive(h: PermitRecord, r: PermitRecord): boolean {
  * Whether witness `self` in state `s` accepts `r` at time `now` (its clock). The
  * number must be above what it holds, and the record must follow what it holds:
  * the permission changes hands only by a grant once the old record ran out here
- * (plus margin), or by a handover its holder wrote; a cancel stands only on its own
+ * (plus margin), or by a handover its holder wrote; a grant on a live record of its own
+ * writer's process is taken as that process's renew would be; a cancel stands only on its own
  * handover or on its writer's live record. A release, from the same writer as a handover,
  * gives it to nobody: the witness holds nothing for anyone from then on (holdsForHolder), so
  * a grant is taken at once, and a renew, handover or cancel on it is refused.
@@ -253,7 +254,13 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
   const h = s.held
   switch (r.kind) {
     case 'grant':
-      return live ? { ok: false, reason: 'held' } : accept()
+      // Once what it holds ran out; or on a live record of the grant's own writer, same incarnation, which a renew of
+      // that writer would replace just the same (ownLive: never on a handover, never for another process of the
+      // machine). Without that, a process whose grant one witness took alone could never have a later grant taken
+      // there until it ran out, while another witness, its record just run out, took that later grant alone: two
+      // witnesses of a reachable pair each on another grant of the same process, and nothing standing on both
+      // (the remote rehearsal's failed trial, 17 minutes without a leader).
+      return live && !(h && ownLive(h, r)) ? { ok: false, reason: 'held' } : accept()
     case 'renew': {
       // On a handover to it (written by the old holder), any incarnation of the new holder; the
       // first renew a witness takes then fixes which one (ownLive).

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PERMIT_PARAMS, generationToJoin, prepareJoiningWitness, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
-import { SimStore, World, actUntilReleaseStood, pilot, releaseOnAnyLive, takeOnMinorityRelease } from './sim.js'
+import { SimStore, World, actUntilReleaseStood, countOwnLiveGrants, grantOnAnyProcess, pilot, releaseOnAnyLive, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
 const M = ['A', 'B', 'C']
@@ -63,6 +63,12 @@ interface Variant {
   minorityTakes?: boolean
   /** Negative control (releases): a witness takes a release on any live record, whoever holds it. */
   releaseAnyOwner?: boolean
+  /** Count in `injected` the grants a witness took on a live record of the grant's own process (rules.ts judge). */
+  countOwnGrants?: boolean
+  /** Candidates count a witness holding their own process's live record as free, as the runtime does (sim.ts pilot). */
+  ownCountsFree?: boolean
+  /** Negative control: a witness takes a grant on a live record of the grant's machine, whatever the process. */
+  grantAnyProcess?: boolean
   /** The network transport's timeout per request (default: none; the real default is 20 s). */
   transportTimeoutMs?: number
   /** Old replies come back after newer ones (a link or a transport that redelivers): the core must not care. */
@@ -113,6 +119,10 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   if (v.wrongWitnessId) world.wrapDeliver = answerAsWrongWitness(world, r)
   const bound = (v.params?.maxDriftRate === 0 ? DEFAULT_PERMIT_PARAMS.maxDriftRate : params.maxDriftRate) * (v.driftShare ?? 0.99)
   const drift = (side: 1 | -1) => (v.worstDrift ? side : r() * 2 - 1) * bound
+  // Every witness a variant changes: set before the first is added, so restarted ones and the first ones alike.
+  if (v.releaseAnyOwner) world.onNewWitness = (n) => releaseOnAnyLive(n.w!)
+  if (v.countOwnGrants) world.onNewWitness = (n) => countOwnLiveGrants(world, n.w!)
+  if (v.grantAnyProcess) world.onNewWitness = (n) => grantOnAnyProcess(n.w!)
   const extra = v.members ? (v.pool5 ? ['w4', 'w5'] : ['w4']) : []
   const pool = [...W, ...extra]
   for (const id of extra) world.addWitness(id, { drift: drift(1), joinFrom: 0 })
@@ -131,7 +141,6 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     if (v.actUntilStood) actUntilReleaseStood(m.c)
     if (v.minorityTakes) takeOnMinorityRelease(m.c)
   }
-  if (v.releaseAnyOwner) world.onNewWitness = (n) => releaseOnAnyLive(n.w!)
   for (const id of M) {
     world.addMachine(id, W, { drift: drift(-1), wallOffset: (r() * 2 - 1) * 30_000, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
     if (v.twins) world.addMachine(id, W, { key: `${id}#2`, clockOf: id, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
@@ -146,6 +155,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       wantsLead: true,
       tickMs: v.tickMs,
       backoff: !v.noBackoff,
+      ownCountsFree: v.ownCountsFree,
       sparseStamps: v.restarts,
       cancelChance: 0.3,
       onTick: (m) => {
@@ -467,6 +477,15 @@ describe('write permission: random schedules', () => {
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 120_000)
 
+  // A grant on a live record of its own process (the retake after a failed trial: rules.ts judge) is taken as its renew
+  // would be. Counted where a witness took one, so the case is reached, not only allowed; twins and planned stops beside it.
+  it('never lets two processes act at once when grants land on their own process\'s live records (100 seeds, twins, planned stops)', async () => {
+    const r = await sweep(100, { twins: true, releases: true, tickMs: 1_000, ownCountsFree: true, countOwnGrants: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    console.log(`grants taken on their own process's live record: ${r.injected}`)
+    expect(r.injected).toBeGreaterThan(0)
+  }, 120_000)
+
   // A change left between its steps by a holder that restarted is finished by whoever holds next.
   it('keeps working when holders restart in the middle of list changes (60 seeds)', async () => {
     const r = await sweep(60, { members: true, pool5: true, restarts: true, tickMs: 1_000 })
@@ -678,6 +697,11 @@ describe('write permission: random schedules', () => {
 
     it('a new process that takes it on a release seen at a minority: it acts beside the next holder', async () => {
       const r = await sweep(200, { releases: true, tickMs: 1_000, minorityTakes: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a witness that takes a grant on a live record of its machine whatever the process: the second process acts beside the first', async () => {
+      const r = await sweep(100, { twins: true, tickMs: 1_000, ownCountsFree: true, grantAnyProcess: true }, 1, true)
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 

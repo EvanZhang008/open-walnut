@@ -34,6 +34,22 @@ describe('judge: what a witness accepts', () => {
     expect(judge(s, 'w1', rec(2, 'grant', 'B'), 10_000, P)).toEqual({ ok: false, reason: 'held' })
   })
 
+  it('a grant of the holder\'s own process on its live record is taken as its renew would be; another process\'s, or one on a handover, waits', () => {
+    // The retake after a failed trial: one witness took this process's grant alone; its next grant must stand there too.
+    const own = (h: PermitRecord): WitnessState => ({ ...empty, held: h, acceptedAt: 0 })
+    expect(judge(own(rec(1, 'grant', 'A')), 'w1', rec(2, 'grant', 'A'), 10_000, P).ok).toBe(true)
+    expect(judge(own(rec(1, 'renew', 'A')), 'w1', rec(2, 'grant', 'A'), 10_000, P).ok).toBe(true)
+    expect(judge(own(rec(1, 'cancel', 'A', { from: 'A' })), 'w1', rec(2, 'grant', 'A'), 10_000, P).ok).toBe(true)
+    // Another process of the same machine is another holder (the incarnation).
+    expect(judge(own(rec(1, 'grant', 'A')), 'w1', rec(2, 'grant', 'A', { nonce: 'n2' }), 10_000, P)).toEqual({ ok: false, reason: 'held' })
+    // Its own handover: the permission is on its way to the new holder; only a cancel takes it back.
+    expect(judge(own(rec(1, 'handover', 'A', { holder: 'B', from: 'A', to: 'B' })), 'w1', rec(2, 'grant', 'A'), 10_000, P)).toEqual({ ok: false, reason: 'held' })
+    // The new holder of that handover may not grant itself on it either (its commit is a renew).
+    expect(judge(own(rec(1, 'handover', 'A', { holder: 'B', from: 'A', to: 'B' })), 'w1', rec(2, 'grant', 'B'), 10_000, P)).toEqual({ ok: false, reason: 'held' })
+    // A lower number is still refused.
+    expect(judge(own(rec(3, 'grant', 'A')), 'w1', rec(2, 'grant', 'A'), 10_000, P)).toEqual({ ok: false, reason: 'stale-number' })
+  })
+
   it('grants to another machine only once validMs plus the witness margin ran out on its clock', () => {
     const s: WitnessState = { held: rec(1, 'grant', 'A'), acceptedAt: 0, list: W, joint: null, cfg: G, epoch: 0, progress: null, ops: [] }
     const edge = P.validMs + P.witnessMarginMs

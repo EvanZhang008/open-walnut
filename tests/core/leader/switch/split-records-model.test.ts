@@ -22,11 +22,19 @@
  *
  * Red controls: the rule as it was before the cancel case leaves a state where nobody can lead again; a loose
  * rule (a grant whenever no record has a majority) takes over.
+ *
+ * The retake after a failed trial (last describe): the old leader's handover stood, the trial failed, the failed
+ * machine's witness is out of reach, and the two others hold the handover or an earlier record of the old leader's,
+ * taken at any times (its own witness counts from its server's restart). Every schedule of the restarted server's
+ * rounds (5 s to retakeWithinMs apart): it leads within retakeWithinMs of the last of those records running out.
+ * Red control: the grant rule as it was (refused on any live record, its writer's own process's too) can go round
+ * for ever with nobody leading; a grant rule that ignores the process lets a second process of the machine act beside
+ * the first.
  */
 import { describe, expect, it } from 'vitest'
-import { judge, type WitnessState } from '../../../../src/core/leader/permit/rules.js'
+import { holdsForHolder, judge, witnessHoldMs, type WitnessState } from '../../../../src/core/leader/permit/rules.js'
 import { DEFAULT_PERMIT_PARAMS, NO_HOLDER, majorityOf, type PermitRecord, type PermitReply } from '../../../../src/core/leader/permit/types.js'
-import { splitOwnRecordsForTest, wantFor } from '../../../../src/core/leader/switch/runtime.js'
+import { retakeWithinMs, splitOwnRecordsForTest, wantFor } from '../../../../src/core/leader/switch/runtime.js'
 
 const P = DEFAULT_PERMIT_PARAMS
 const LIST = ['w1', 'w2', 'w3']
@@ -329,4 +337,161 @@ describe('the split records rule over every short history of two machines and th
     const r = await explore(loose, 5)
     expect(r.takeovers.length).toBeGreaterThan(0)
   }, 300_000)
+})
+
+type Judge = typeof judge
+/** The grant rule as it was before: refused on any live record, its own writer's process's too. */
+const judgeBefore: Judge = (x, self, r, now, p) => (r.kind === 'grant' && holdsForHolder(x, now, p) ? { ok: false, reason: 'held' } : judge(x, self, r, now, p))
+/** Negative control: a grant taken on a live record of its machine whatever the process (the incarnation ignored). */
+const judgeAnyProcess: Judge = (x, self, r, now, p) => {
+  const h = x.held
+  if (r.kind !== 'grant' || !h || h.kind === 'handover' || h.holder !== r.by || !holdsForHolder(x, now, p)) return judge(x, self, r, now, p)
+  return judge({ ...x, held: { ...h, nonce: r.nonce } }, self, r, now, p)
+}
+
+/**
+ * The restarted old leader (machine B, a new process) after a failed trial: w1 is the failed machine's witness, out of
+ * reach for good (it holds the handover); w2 and w3 answer. Time goes in steps of STEP; the server runs a round (as
+ * runtime.ts acquire: a renew first when it decides one, then a grant) at least one step and at most MAX_GAP steps
+ * after the last. A state is the two witnesses' records (kind, process, which is the same record) and their ages,
+ * and the steps since the last round: the walk is over every schedule, and finds the latest time a schedule can
+ * keep B from leading (Infinity: a schedule goes round for ever with nobody leading).
+ */
+describe('the old leader takes the permission back after a failed trial (one witness out of reach, two that disagree)', () => {
+  const HOLD = witnessHoldMs(P)
+  const STEP = 5_000
+  const BOUND = retakeWithinMs(P)
+  const MAX_GAP = Math.floor(BOUND / STEP)
+  const OLD = 'nonce-B-old'
+  const NEW = 'nonce-B-new'
+  const rec = (kind: PermitRecord['kind'], number: number, nonce: string, extra: Partial<PermitRecord> = {}): PermitRecord =>
+    ({ kind, holder: 'B', by: 'B', number, nonce, validMs: P.validMs, list: LIST, cfg: 'c', epoch: 0, ...extra }) as PermitRecord
+  /** The switch's handover (record 2), and the old leader's renew before it (record 1: where the handover did not reach). */
+  const HANDOVER = rec('handover', 2, OLD, { holder: 'A', from: 'B', to: 'A' })
+  const RENEW = rec('renew', 1, OLD)
+  /** Ages, not times: `now` is always 0 and a witness accepted its record `age` ms ago (capped once it ran out). */
+  interface R { w: WitnessState[]; since: number }
+  const at = (held: PermitRecord, age: number): WitnessState => ({ held, acceptedAt: -Math.min(age, HOLD), list: LIST, joint: null, cfg: 'c', epoch: 0, progress: null, ops: [] })
+  /** w4 of the list change above: not in this walk (set up, waiting to join, never sent anything). */
+  const JOINING: WitnessState = { held: null, acceptedAt: 0, list: null, joint: null, cfg: null, epoch: 0, progress: null, ops: [] }
+  const reached = [1, 2]
+
+  function decideNow(x: R): ReturnType<typeof wantFor> {
+    const rs = reached.map((i) => ({ witness: SLOTS[i]!, re: 'read', ok: true, held: x.w[i]!.held, list: LIST, joint: null, cfg: 'c', epoch: 0, progress: null, ops: [] }) as PermitReply)
+    const standing = standingOf(rs, LIST)
+    return realSplit({ standing, replies: rs, list: LIST }, 'B') ?? wantFor(standing, 'B', NEW, undefined)
+  }
+  /** One round of the restarted server: what it sends reaches both witnesses it reaches; led when a majority holds it. */
+  function round(x0: R, j: Judge): { x: R; led: boolean } {
+    let x = x0
+    const send = (kind: 'renew' | 'grant'): boolean => {
+      const r = rec(kind, Math.max(...x.w.map((v) => v.held?.number ?? 0)) + 1, NEW)
+      x = { ...x, w: x.w.map((v, i) => { if (!reached.includes(i)) return v; const k = j(v, SLOTS[i]!, r, 0, P); return k.ok ? k.next : v }) }
+      return chosen(x.w, r)
+    }
+    const d = decideNow(x)
+    if (d.want === 'none') return { x, led: false }
+    if (d.want === 'renew' && send('renew')) return { x, led: true }
+    if (decideNow(x).want === 'none') return { x, led: false }
+    const led = send('grant')
+    return { x, led }
+  }
+  const age = (v: WitnessState) => Math.min(HOLD, -v.acceptedAt)
+  const keyOf = (x: R) => {
+    const [a, b] = [x.w[1]!.held!, x.w[2]!.held!]
+    const order = a.number === b.number ? (a.nonce === b.nonce ? '=' : '~') : a.number < b.number ? '<' : '>'
+    return `${x.since}|${a.kind}:${a.nonce}:${age(x.w[1]!)}|${b.kind}:${b.nonce}:${age(x.w[2]!)}|${order}`
+  }
+  const older = (x: R): R => ({ since: x.since + 1, w: x.w.map((v, i) => (reached.includes(i) ? { ...v, acceptedAt: -Math.min(HOLD, age(v) + STEP) } : v)) })
+
+  /** The latest a schedule from `x` can leave B without the permission (ms from now), Infinity when one can for ever. */
+  function worst(j: Judge) {
+    const memo = new Map<string, number>()
+    const onPath = new Set<string>()
+    const go = (x: R): number => {
+      const k = keyOf(x)
+      const m = memo.get(k)
+      if (m !== undefined) return m
+      if (onPath.has(k)) return Infinity
+      onPath.add(k)
+      let w = -Infinity
+      if (x.since >= 1) { const r = round(x, j); w = Math.max(w, r.led ? 0 : go({ ...r.x, since: 0 })) }
+      if (x.since < MAX_GAP) w = Math.max(w, STEP + go(older(x)))
+      onPath.delete(k)
+      memo.set(k, w)
+      return w
+    }
+    return go
+  }
+
+  /** Every start: w2 and w3 each hold the handover or the renew before it (the handover stood: w1 and one of them), at any ages. */
+  function starts(): Array<{ x: R; lastRunsOut: number; what: string }> {
+    const out: Array<{ x: R; lastRunsOut: number; what: string }> = []
+    const ages = Array.from({ length: Math.ceil(HOLD / STEP) + 1 }, (_, i) => Math.min(HOLD, i * STEP))
+    for (const r2 of [HANDOVER, RENEW]) for (const r3 of [HANDOVER, RENEW]) {
+      if (r2 === RENEW && r3 === RENEW) continue
+      for (const a2 of ages) for (const a3 of ages) {
+        out.push({ x: { since: 0, w: [at(HANDOVER, 0), at(r2, a2), at(r3, a3), JOINING] }, lastRunsOut: Math.max(HOLD - a2, HOLD - a3), what: `w2 ${r2.kind} ${a2 / 1000} s old, w3 ${r3.kind} ${a3 / 1000} s old` })
+      }
+    }
+    return out
+  }
+
+  it(`in every schedule it leads within retakeWithinMs (${BOUND / 1000} s) of the last of those records running out`, () => {
+    const go = worst(judge)
+    const late: string[] = []
+    let latest = 0
+    const all = starts()
+    for (const s of all) {
+      const w = go(s.x)
+      const after = w - s.lastRunsOut
+      latest = Math.max(latest, after)
+      // The round that may lead comes at most MAX_GAP steps after the last; a step rounds the time up.
+      if (!(after <= BOUND + STEP)) late.push(`${s.what}: ${w === Infinity ? 'never' : `${(after / 1000).toFixed(0)} s after`}`)
+    }
+    console.log(`retake model: ${all.length} starts, latest lead ${(latest / 1000).toFixed(0)} s after the last record ran out (bound ${BOUND / 1000} s + a ${STEP / 1000} s step)`)
+    expect(late.slice(0, 5)).toEqual([])
+  })
+
+  it('red control: with the grant rule as it was, a schedule leaves nobody leading for ever, the two witnesses on two grants of the restarted process', () => {
+    const go = worst(judgeBefore)
+    const all = starts()
+    const stuck = all.filter((s) => go(s.x) === Infinity)
+    console.log(`retake model, the grant rule as it was: ${stuck.length} of ${all.length} starts have a schedule with nobody leading for ever (e.g. ${stuck.slice(0, 2).map((s) => s.what).join('; ')})`)
+    expect(stuck.length).toBeGreaterThan(0)
+    // The rehearsal's start: both on the handover, its own witness counting from the restart (55 s later there).
+    expect(stuck.some((s) => s.what.startsWith('w2 handover') && s.what.includes('w3 handover'))).toBe(true)
+    // The cycle it goes round, on rounds 30 s apart: one witness takes a grant of the new process alone, the other refuses
+    // it (its own record still live), by turns, a hold apart; with the rule as it is the next round leads.
+    const run = (j: Judge, ms: number): { x: R; ledAt: number | null } => {
+      let x: R = { since: 0, w: [at(HANDOVER, 0), at(HANDOVER, 0), at(HANDOVER, 55_000), JOINING] }
+      for (let t = STEP; t <= ms; t += STEP) {
+        x = older(x)
+        if (x.since < 6) continue
+        const r = round(x, j)
+        if (r.led) return { x: r.x, ledAt: t }
+        x = { ...r.x, since: 0 }
+      }
+      return { x, ledAt: null }
+    }
+    const before = run(judgeBefore, 40 * 60_000)
+    expect(before.ledAt).toBeNull()
+    expect(before.x.w.slice(1, 3).map((v) => `${v.held!.kind}:${v.held!.nonce}`)).toEqual([`grant:${NEW}`, `grant:${NEW}`])
+    expect(before.x.w[1]!.held!.number).not.toBe(before.x.w[2]!.held!.number)
+    // w2 runs out at 62 s: the round at 90 s leads.
+    expect(run(judge, 40 * 60_000).ledAt).toBe(90_000)
+  })
+
+  it('red control: a grant rule that ignores the process lets a restarted server act beside the one still running', () => {
+    // The first process of B still runs and renews at all three; a second one starts beside it (runtime.ts wantFor:
+    // "waiting for the record of an earlier process of this machine"), its grant sent to all three.
+    const live = (j: Judge) => {
+      const w = [...[0, 1, 2].map(() => at(rec('renew', 5, OLD), 10_000)), JOINING]
+      const g = rec('grant', 6, NEW)
+      return chosen(w.map((v, i) => { const k = j(v, SLOTS[i]!, g, 0, P); return k.ok ? k.next : v }), g)
+    }
+    expect(wantFor(rec('renew', 5, OLD), 'B', NEW).want).toBe('grant')
+    expect(live(judge)).toBe(false)
+    expect(live(judgeAnyProcess)).toBe(true)
+  })
 })
