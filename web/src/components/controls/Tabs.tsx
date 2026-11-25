@@ -9,8 +9,9 @@
  * large square cards (an icon, a title, a line), for a choice between two kinds of the same
  * thing at the top of a form (the new task draft's Start task / Quick chat); the keys stay.
  */
-import { useCallback, useRef, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useRef, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { useSelectionSlide } from '@/utils/selection-slide'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { segmentIndexForKey } from '../settings/inputs/SegmentedControl'
 import '@/styles/choice-controls.css'
 
@@ -65,7 +66,7 @@ export function TabList({ className, flush, tiles, wrap, children, onKeyDown, re
   // edge, and a strip that wraps onto rows jumps.
   const own = useRef<HTMLDivElement | null>(null)
   useSelectionSlide(own, ':scope > [role="tab"][aria-selected="true"]', !tiles && !wrap)
-  const setRef = useCallback((el: HTMLDivElement | null) => {
+  const setRef = useLeanCallback((el: HTMLDivElement | null) => {
     own.current = el
     if (typeof ref === 'function') ref(el)
     else if (ref) (ref as { current: HTMLDivElement | null }).current = el
