@@ -12,6 +12,7 @@ import { log } from '../../logging/index.js';
 import type { InUseReason } from '../transfer/source-in-use.js';
 import type { Task } from '../types.js';
 import type { StructuredReply } from '../peers/structured-reply.js';
+import { clause } from '../../utils/format.js';
 
 /** Why a task is not to be closed by another session: in use, or its work is unfinished. */
 export interface CompleteBlock { code: InUseReason['code'] | 'unfinished_result' | 'unanswered_requests' | 'turn_running'; text: string }
@@ -82,7 +83,7 @@ export async function admitCompleteOfOther(
     return {
       ok: false,
       reasons,
-      message: `"${task.title}" (${task.id}) is still in use or unfinished: ${why}. Leave it open (tell its session or the user what you found instead). `
+      message: `"${task.title}" (${task.id}) is still in use or unfinished: ${clause(why)}. Leave it open (tell its session or the user what you found instead). `
         + `If it must be closed anyway, call task_complete again with force:true and a reason (${REASON_MIN}+ characters) saying who asked for it and why.`,
     };
   } catch (err) {

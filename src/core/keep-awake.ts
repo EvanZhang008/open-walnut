@@ -32,6 +32,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { accountInfo, knownAccount } from '../lib/account.js';
 import { log } from '../logging/index.js';
+import { clause } from '../utils/format.js';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -437,7 +438,7 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
       ? `battery at ${battery?.pct ?? '?'}% (floor ${cfg.battery_floor_pct ?? DEFAULT_BATTERY_FLOOR_PCT}%)`
       : `offline for ${Math.round(offlineMinutes)} minutes`;
     log.web.warn(`keep-awake released: ${why}`);
-    notify?.('Keep-Awake Released', `The Mac is being allowed to sleep: ${why}. Running sessions may pause until it wakes.`, `keep-awake:${decision.reason}`);
+    notify?.('Keep-Awake Released', `The Mac is being allowed to sleep: ${clause(why)}. Running sessions may pause until it wakes.`, `keep-awake:${decision.reason}`);
   }
 
   state = {

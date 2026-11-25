@@ -38,6 +38,7 @@
 import { log } from '../../logging/index.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import type { CloudChatOutboxEntry } from '../../core/cloud-chat-outbox.js'
+import { clause } from '../../utils/format.js'
 
 /**
  * What a replica tells the phone when it cannot reach the box that answers and
@@ -111,7 +112,7 @@ export async function cloudChatCapability(): Promise<CloudFallbackDecision> {
     import('../../core/sessions/cloud-chat-lane.js'),
   ])
   const cwd = await resolveCloudChatCwd(readCloudExecConfig(await getConfig(), true).cwdRoots)
-  if (!cwd.ok) return refuse('cwd_unusable', `The cloud companion cannot answer: ${cwd.reason}.`)
+  if (!cwd.ok) return refuse('cwd_unusable', `The cloud companion cannot answer: ${clause(cwd.reason)}.`)
   return { kind: 'run', cwd: cwd.cwd }
 }
 

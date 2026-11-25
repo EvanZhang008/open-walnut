@@ -18,6 +18,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
+import { clause } from '../../utils/format.js';
 
 const TOKEN_TIMEOUT_MS = 30_000;
 const EXPIRY_MARGIN_MS = 60_000;
@@ -154,7 +155,7 @@ async function postToken(provider: OAuthProvider, params: Record<string, string>
   if (!resp.ok || !body.access_token) {
     const code = body.error;
     const detail = code ? `${code}${body.error_description ? ` (${body.error_description.split(/\r?\n/)[0].slice(0, 240)})` : ''}` : `${resp.status}`;
-    throw new OAuthTokenError(`${provider.name} sign-in failed: ${detail}.`, code);
+    throw new OAuthTokenError(`${provider.name} sign-in failed: ${clause(detail)}.`, code);
   }
   return body;
 }

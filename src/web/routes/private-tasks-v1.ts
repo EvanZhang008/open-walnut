@@ -31,6 +31,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { clause } from '../../utils/format.js'
 
 export const privateTasksV1Router = Router()
 
@@ -87,7 +88,7 @@ privateTasksV1Router.post('/tasks/:id/make-local', route(async (req, res) => {
         ? `Its copy in ${service} is kept as it was and is no longer updated.`
         : made.outside.done
           ? `Its copy in ${service} was ${made.outside.action === 'archive' ? 'archived' : 'neutralized and archived'}.`
-          : `Its copy in ${service} was not changed: ${made.outside.error}.`}`,
+          : `Its copy in ${service} was not changed: ${clause(made.outside.error)}.`}`,
   })
 }))
 

@@ -16,6 +16,8 @@ const edges = vi.hoisted(() => ({
   writes: [] as Array<{ host: string; path: string; content: string }>,
   failStart: false,
   failBeforeRow: false,
+  /** Set: a start answers before its row is here (a host's session); each entry makes one row. */
+  rowLate: null as null | Array<() => Promise<void>>,
   /** What a failed start throws (default: a plain error). */
   failWith: undefined as unknown,
   /** The setting that refuses a Codex start on the host (codex-engine-source.ts codexStartRefusal); unset: none. */
@@ -91,13 +93,17 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
     if (edges.failBeforeRow) throw new Error('engine would not start');
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     const sid = `new-sid-${++edges.nextSid}`;
-    // A start that fails after its row exists: the restore must clear it.
-    await createSessionRecord(sid, String(params.taskIdPrefix), 'Marina', String(params.cwd ?? '/work/repo'));
-    await updateSessionRecord(sid, {
-      engine: params.engine, process_status: 'idle', messageCount: 1,
-      // An ACP adapter that can load an old session says so at initialize.
-      ...(params.engine !== 'claude' ? { acpCapabilities: { loadSession: params.engine !== 'gemini' } } : {}),
-    } as never);
+    const born = async () => {
+      // A start that fails after its row exists: the restore must clear it.
+      await createSessionRecord(sid, String(params.taskIdPrefix), 'Marina', String(params.cwd ?? '/work/repo'));
+      await updateSessionRecord(sid, {
+        engine: params.engine, process_status: 'idle', messageCount: 1,
+        // An ACP adapter that can load an old session says so at initialize.
+        ...(params.engine !== 'claude' ? { acpCapabilities: { loadSession: params.engine !== 'gemini' } } : {}),
+      } as never);
+    };
+    if (edges.rowLate) { edges.rowLate.push(born); return { started: true, sessionId: sid }; }
+    await born();
     if (edges.failStart) throw edges.failWith ?? new Error('engine would not start');
     return { started: true, sessionId: sid };
   },
@@ -124,7 +130,8 @@ import { linkSession, updateTaskRaw } from '../../../src/core/task-manager.js';
 import { taskConversation } from '../../../src/core/sessions/task-session-claim.js';
 import { createSessionRequest, getSessionRequest } from '../../../src/core/session-requests.js';
 import { getStore, mutateStore, readQueueFileFresh } from '../../../src/core/session-queue-store.js';
-import { takeQueuedRows } from '../../../src/core/sessions/engine-switch-io.js';
+import { takeQueuedRows, _setNewRowWaitForTesting } from '../../../src/core/sessions/engine-switch-io.js';
+import { armHeldMarks, heldMarksOf, _resetHeldMarksForTesting } from '../../../src/core/sessions/held-session-marks.js';
 import { resetTransitState, settleStrandedTransits } from '../../../src/core/session-queue-transit.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { __setOwnerViewForTesting, type OwnerView } from '../../../src/core/sessions/replaced-session.js';
@@ -137,11 +144,12 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.stops.length = 0; edges.writes.length = 0;
-  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failWith = undefined; edges.failBeforeRow = false; edges.failHistory = false; edges.history = {}; edges.outlives.clear(); edges.codexRefusal = undefined;
+  edges.reads.length = 0; edges.stuck.clear(); edges.failStart = false; edges.failWith = undefined; edges.failBeforeRow = false; edges.rowLate = null; edges.failHistory = false; edges.history = {}; edges.outlives.clear(); edges.codexRefusal = undefined;
   // The queue store keeps a copy in memory: a row an earlier test left (no runner consumes it here) must not make this one busy.
   await mutateStore((st) => { st.queues = {}; }, false, true);
   owner.clear();
   __setOwnerViewForTesting(async (rec) => owner.get(rec.claudeSessionId) ?? null);
+  _resetHeldMarksForTesting(); _setNewRowWaitForTesting();
 });
 
 afterEach(async () => {
@@ -414,6 +422,27 @@ describe('engine switch inside a task', () => {
     const res = await run;
     expect(await addressed).toBe(res.sessionId);
     edges.gate = undefined;
+  });
+
+  it('the boot\'s look at cut switches leaves alone a switch this server runs now', async () => {
+    // 2026-11-25: a switch that ran when the boot's look came (15 s after it) was taken for one a
+    // restart cut: its old session was made the task's again under the live run.
+    const { taskId, sid } = await taskOn('claude');
+    let release!: () => void;
+    edges.gate = new Promise<void>((r) => { release = r; });
+    let early: unknown;
+    const run = requestEngineSwitch({ taskId, engine: 'codex', message: 'Go on.', source: 'ui' });
+    run.catch((e: unknown) => { early = e; });
+    await vi.waitFor(() => expect(edges.starts, String(early)).toHaveLength(1), { timeout: 10_000 });
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'switching' });
+    expect(await resumeEngineSwitches()).toBe(0);
+    expect(await getSessionByClaudeId(sid)).toMatchObject({ archived: true, archive_reason: 'engine_switched:codex' });
+    edges.gate = undefined;
+    release();
+    const res = await run;
+    expect(res).toMatchObject({ state: 'done', engine: 'codex' });
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(res.sessionId);
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done', session_id: res.sessionId });
   });
 
   it('two picks queued behind a running switch: only the newest runs, the older is told it was replaced', async () => {
@@ -1226,6 +1255,45 @@ describe('engine switch inside a task', () => {
     expect(row?.archive_reason).toBeUndefined();
     expect(row?.archived).toBeFalsy();
     expect(row?.taskId).toBe(taskId);
+  });
+
+  // 2026-11-25: a host's session whose row reached the leader after the switch's wait lost its
+  // `engineSwitch` mark (the way back started a new session) and its context stash threw (the
+  // switch was recorded failed). The marks wait for the row, on disk, across a restart too.
+  it.each([
+    ['while this server runs', false],
+    ['after a restart', true],
+  ])('a new session whose row comes after the wait still gets its switch marks (%s), and the way back resumes', async (_label, restart) => {
+    const { taskId, sid } = await taskOn('claude');
+    _setNewRowWaitForTesting(60);
+    edges.rowLate = [];
+    // No message: the carried context goes on the new row (the stash that threw before).
+    const first = await requestEngineSwitch({ taskId, engine: 'codex', source: 'ui' });
+    expect(first.state).toBe('done');
+    const codex = first.sessionId!;
+    expect(await getSessionByClaudeId(codex)).toBeFalsy();
+    expect(await heldMarksOf(codex)).toMatchObject({ engineSwitch: { fromSessionId: sid }, switchContext: { switchId: expect.any(String) } });
+    await expect(fsp.stat(`${WALNUT_HOME}/local/held-session-marks.json`)).resolves.toBeTruthy();
+
+    if (restart) _resetHeldMarksForTesting(); // the memory is gone; the file is not
+    const arrive = edges.rowLate.splice(0);
+    edges.rowLate = null;
+    for (const born of arrive) await born();
+    if (restart) await armHeldMarks();
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId(codex))?.engineSwitch?.fromSessionId).toBe(sid);
+    }, { timeout: 3_000, interval: 20 });
+    expect((await getSessionByClaudeId(codex))?.switchContext?.text).toBeTruthy();
+    expect(await heldMarksOf(codex)).toBeUndefined();
+    await expect(fsp.stat(`${WALNUT_HOME}/local/held-session-marks.json`)).rejects.toThrow();
+
+    edges.history[codex] = [
+      { role: 'user', text: 'Run the suite.', timestamp: '2026-10-20T11:00:00Z' },
+      { role: 'assistant', text: 'Codex ran the suite: green.', timestamp: '2026-10-20T11:05:00Z' },
+    ];
+    const back = await requestEngineSwitch({ taskId, engine: 'claude', message: 'Back.', source: 'ui' });
+    expect(back).toMatchObject({ state: 'done', sessionId: sid, resumed: true });
+    expect(edges.starts).toHaveLength(1);
   });
 
   it('a task with no conversation yet just starts on the engine', async () => {

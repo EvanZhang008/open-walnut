@@ -39,6 +39,7 @@ import { managerArgv, notWritableFix, type BinaryInstall, type InstallInfo } fro
 import type { UpdateStop } from '../core/self-update/startup-update.js'
 import type { InstallClaim } from '../core/self-update/background-install.js'
 import { apiBaseUrl } from '../utils/api-client.js'
+import { errClause } from '../utils/format.js'
 
 export interface UpdateOptions {
   /** Report only; never install. */
@@ -253,7 +254,7 @@ export async function runUpdateWith(options: UpdateOptions, globals: GlobalOptio
         deps.err(`Stopped by ${signal}; Open Walnut ${status.current} is unchanged.`)
         return 128 + (os.constants.signals[signal] ?? 0)
       }
-      deps.err(`Could not install ${plan.installFile.version}: ${err instanceof Error ? err.message : String(err)}. Open Walnut ${status.current} is unchanged.`)
+      deps.err(`Could not install ${plan.installFile.version}: ${errClause(err)}. Open Walnut ${status.current} is unchanged.`)
       return 1
     } finally {
       stop?.done()

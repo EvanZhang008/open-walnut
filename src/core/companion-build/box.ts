@@ -25,6 +25,7 @@ import { installScript, parseInstallState, stateScript, type InstallState } from
 import { writePlannedRestart } from '../planned-restart.js'
 import { dirs, errText, exists, knobMs, readJson, readLine, rmFile, sha256File, sizeOf, writeAtomic, type Dirs } from './box-files.js'
 import { smokeBoot } from './box-smoke.js'
+import { clause } from '../../utils/format.js'
 import {
   BUILD_SCHEMA, MAX_CHUNK_BYTES, MAX_PACKAGE_BYTES, MIN_FREE_BYTES, SHA256_RE, buildIdOf, installRequestProblem, validBuildId,
   type BoxBuildStatus, type InstallRequest, type StepReply, type UploadReply,
@@ -448,7 +449,7 @@ export function smokeRuntime(versions: NodeJS.ProcessVersions = process.versions
 
 async function failActivation(d: Dirs, id: string, reason: string, tail: string[], ms: number): Promise<void> {
   const lines = tail.slice(-3).join(' | ')
-  const message = lines ? `${reason}. Last lines: ${lines}` : reason
+  const message = lines ? `${clause(reason)}. Last lines: ${lines}` : reason
   await writeAtomic(d.activateRec, JSON.stringify({ id, state: 'failed', message, at: Date.now() } satisfies ActivateRecord))
   await writeAtomic(path.join(d.failedDir, id), `in a test start, ${reason}\n`)
   log.warn('smoke boot failed: the build is given up', { id, reason, ms })

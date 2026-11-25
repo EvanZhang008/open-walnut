@@ -24,6 +24,7 @@ import { HostRevokedError } from '../core/session-channel/revoked-hosts.js';
 import { thisServer } from '../core/server-self-name.js';
 import { DaemonFrameTooLargeError, FRAME_TOO_LARGE } from './daemon-frame-cap.js';
 import { ENGINE_CONFIG_CODE, isCodexEngineConfigError } from './codex-engine-config.js';
+import { clause } from '../utils/format.js';
 
 export type DeliveryFailureKind = 'permanent' | 'transient';
 
@@ -102,7 +103,7 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (HISTORY_UNAVAILABLE.test(message)) return { kind: 'permanent', code: 'history_unavailable', reason: message.trim().slice(0, HELD_REASON_MAX) };
   // Over the frame cap of the host's daemon: refused before a byte went, the same on every retry.
   if (err instanceof DaemonFrameTooLargeError || FRAME_TOO_LARGE.test(message)) {
-    return { kind: 'permanent', code: 'too_large', reason: `Not sent: ${reason}. Send it in smaller parts.` };
+    return { kind: 'permanent', code: 'too_large', reason: `Not sent: ${clause(reason)}. Send it in smaller parts.` };
   }
 
   return { kind: 'transient', reason };

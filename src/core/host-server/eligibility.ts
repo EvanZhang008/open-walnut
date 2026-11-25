@@ -19,6 +19,7 @@
 
 import { parseHostTarget, targetProbeScript, type HostTarget } from './host-target.js'
 import { checkHostRoot } from './install.js'
+import { clause } from '../../utils/format.js'
 
 export interface HostRoom {
   /** The machine's memory, or the container's limit (its control group) when that is smaller. */
@@ -117,7 +118,7 @@ export function judgeFollowerRoom(out: string, floors: FollowerFloors = FOLLOWER
     target = parseHostTarget(out)
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
-    return { gate: { reason: 'no-build', again: false, message: `No Walnut server runs on this host: ${why}. Its sessions run as before.` } }
+    return { gate: { reason: 'no-build', again: false, message: `No Walnut server runs on this host: ${clause(why)}. Its sessions run as before.` } }
   }
   const room = parseHostRoom(out)
   const it = room.container ? 'its container allows' : 'it has'

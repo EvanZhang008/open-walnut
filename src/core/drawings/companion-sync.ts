@@ -22,6 +22,7 @@ import { companionPathFor, isOwnCompanion, mergeCompanion, retargetCompanion } f
 import { titleOfScenePath } from './paths.js'
 import { isLargeScene, runCodec } from './scene-codec.js'
 import { DrawingInputError } from './scene.js'
+import { clause } from '../../utils/format.js'
 import {
   createExclusively, fileIdentity, moveBesideScene, readOrNull, readSceneFile, replaceAtomically, resolveVaultFile, sameIdentity, type FileIdentity,
 } from './vault-files.js'
@@ -104,7 +105,7 @@ export async function syncDrawingCompanion(sceneRel: string, facts: SceneFacts, 
     if (sceneAbs) synced.delete(sceneAbs)
     const message = err instanceof Error ? err.message : String(err)
     log.memory.warn('drawing companion not updated', { path: sceneRel, error: message })
-    return `The drawing is saved, but its Notes entry (${mdRel}) could not be updated: ${message}. Opening the drawing again retries.`
+    return `The drawing is saved, but its Notes entry (${mdRel}) could not be updated: ${clause(message)}. Opening the drawing again retries.`
   }
 }
 

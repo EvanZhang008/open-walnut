@@ -38,6 +38,11 @@ const terminated: Array<{ sid: string; opts: unknown }> = []
 const claims: string[] = []
 /** The leader's rows a resume's claim was given. */
 const claimRows: unknown[] = []
+/** The leader's rows of a start's task the routes handed the store (start-task-rows.ts), in order with the claims. */
+const leaderRowsTaken: unknown[][] = []
+let leaderRowsFail = false
+/** The store's chain never reaches the rows (a big copy round ahead of them). */
+let leaderRowsHang = false
 /** What the host's at-rest check answers a resume (undefined: the routes take no resume). */
 let notAtRest: string | null | undefined = null
 
@@ -84,6 +89,11 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     },
     owns: async (sid) => sid !== 'sid-leaders',
     claim: { take: (sid, row) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`); if (row) claimRows.push(row) }, release: (sid) => { claims.push(`release:${sid}`) } },
+    leaderRows: async (rows, at) => {
+      if (leaderRowsHang) return new Promise<void>(() => {})
+      if (leaderRowsFail) throw new Error('store busy'); claims.push(`rows:${rows.length}@${at}`); leaderRowsTaken.push(rows)
+    },
+    leaderRowsMs: 150,
     ...(notAtRest === undefined ? {} : { notAtRest: async () => notAtRest ?? null }),
     // Async, as host-boot's (it reads the claimed row): the runner is told only after it finished.
     taken: async (sid) => { await new Promise((r) => setTimeout(r, 20)); emitted.push({ name: 'taken', data: { sid }, source: '' }) },
@@ -105,6 +115,9 @@ beforeEach(async () => {
   terminated.length = 0
   claims.length = 0
   claimRows.length = 0
+  leaderRowsTaken.length = 0
+  leaderRowsFail = false
+  leaderRowsHang = false
   notAtRest = null
   bundles = new StartBundles()
   log = await FactLog.open({ dir: path.join(dir, 'log'), walnutId: 'w1', flushMs: 1, durable: false })
@@ -356,6 +369,44 @@ describe('start, send, interrupt', () => {
     expect(claims).toEqual([`take:${ok}:before`, `take:${failed}:before`, `release:${failed}`, `take:${up}:before`])
   })
 
+  it('a start takes the leader\'s rows of its task before it is claimed or judged; the runner never sees them', async () => {
+    const pre = '50000000-0000-4000-8000-0000000000e1'
+    const old = { claudeSessionId: 'old-1', taskId: 'task-1', archived: true, archive_reason: 'engine_switched:antigravity' }
+    const r = await post('/host-api/sessions/start', {
+      taskId: 'task-1', message: 'hi', preassignedSessionId: pre, taskRowsAt: 77,
+      taskRows: [old, { claudeSessionId: pre, taskId: 'task-1' }, { claudeSessionId: 'other', taskId: 'task-2' }],
+    })
+    expect(r.body).toEqual({ ok: true, sessionId: 'sid-started-1', title: 'Started' })
+    expect(leaderRowsTaken).toEqual([[old]])
+    expect(claims).toEqual(['rows:1@77', `take:${pre}:before`])
+    expect(seenAtStart!.data).not.toHaveProperty('taskRows')
+    expect(seenAtStart!.data).not.toHaveProperty('taskRowsAt')
+  })
+
+  it('a start refused as a bad request takes none of its rows', async () => {
+    const taskRows = [{ claudeSessionId: 'old-1', taskId: 'task-1' }]
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', preassignedSessionId: 'not-a-uuid', taskRows })).status).toBe(400)
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', runtimeId: '../x', taskRows })).status).toBe(400)
+    expect(leaderRowsTaken).toEqual([])
+  })
+
+  it('a start with no rows takes none; one whose rows the store could not take is still judged here', async () => {
+    await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi' })
+    expect(leaderRowsTaken).toEqual([])
+    leaderRowsFail = true
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', taskRows: [{ claudeSessionId: 'old-1', taskId: 'task-1' }] })).body).toMatchObject({ ok: true, sessionId: 'sid-started-1' })
+  })
+
+  it('a start whose rows the store has not reached by the deadline is judged here, not held', async () => {
+    leaderRowsHang = true
+    const pre = '50000000-0000-4000-8000-0000000000e2'
+    const t = Date.now()
+    const r = await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', preassignedSessionId: pre, taskRowsAt: 9, taskRows: [{ claudeSessionId: 'old-1', taskId: 'task-1' }] })
+    expect(r.body).toMatchObject({ ok: true, sessionId: 'sid-started-1' })
+    expect(Date.now() - t).toBeLessThan(2_000)
+    expect(claims).toEqual([`take:${pre}:before`])
+  })
+
   it('a failed start answers why', async () => {
     expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'fail' })).body).toEqual({ ok: false, error: 'no claude here', why: 'cli_missing' })
     expect((await post('/host-api/sessions/start', { message: 'x' })).status).toBe(400)
@@ -403,6 +454,7 @@ describe('a start that resumes a session the leader ran', () => {
     expect((await resume()).body).toEqual({ ok: true, sessionId: sid, title: '' })
     expect(claims).toEqual([`take:${sid}:before`])
     expect(claimRows).toEqual([row])
+    expect(leaderRowsTaken).toEqual([])
     // The runner's objects of it that hold nothing go before its drain (one kept from before this
     // host gave it back would read the journal on from its old place: the leader's turns again).
     expect(emitted).toEqual([
@@ -411,6 +463,15 @@ describe('a start that resumes a session the leader ran', () => {
       { name: 'session:send', data: { sessionId: sid, message: '' }, source: 'ui' },
     ])
     expect(seenAtStart).toBeNull()
+  })
+
+  it('the leader\'s other rows of its task are taken before its row is claimed', async () => {
+    await startDoor(true)
+    const current = { claudeSessionId: 'cur-1', taskId: 'task-1', archived: true, archive_reason: 'engine_switched:claude' }
+    const r = await post('/host-api/sessions/start', { taskId: 'task-1', message: '', resumeSessionId: sid, resumeRow: row, queued: lines, busSource: 'ui', taskRows: [current, row], taskRowsAt: 5 })
+    expect(r.body).toEqual({ ok: true, sessionId: sid, title: '' })
+    expect(leaderRowsTaken).toEqual([[current]])
+    expect(claims).toEqual(['rows:1@5', `take:${sid}:before`])
   })
 
   it('refused while anything of it runs here, with nothing claimed or queued', async () => {

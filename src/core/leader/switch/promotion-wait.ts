@@ -24,6 +24,7 @@ import path from 'node:path'
 import { readPromoted } from './records.js'
 import { readSwitchClaim } from './ticket.js'
 import type { StandbyListener } from './handed-over.js'
+import { clause } from '../../../utils/format.js'
 
 export interface PromotionWait { home: string; switchId: string; why: string }
 
@@ -70,7 +71,7 @@ export function waitForPromotion(w: PromotionWait, o: { env?: NodeJS.ProcessEnv;
   }, o.lookMs ?? 1_000)
   return {
     server: http.createServer(),
-    line: `Walnut waits: ${w.why}. It takes no port and opens nothing until the switch settles`,
+    line: `Walnut waits: ${clause(w.why)}. It takes no port and opens nothing until the switch settles`,
     ended,
     close: async () => { closed = true; clearInterval(look) },
   }

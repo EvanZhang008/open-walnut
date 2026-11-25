@@ -13,6 +13,7 @@ import type { LauncherFacts } from '../../providers/service-launcher-beat.js'
 import { PROBATION_SECONDS } from '../../providers/service-launcher-script.js'
 import type { NewNotification } from '../notifications/store.js'
 import type { FleetLauncher } from './fleet-model.js'
+import { clause } from '../../utils/format.js'
 
 const DAY_S = 24 * 60 * 60
 const told = new Set<string>()
@@ -46,7 +47,7 @@ export function launcherRollbackItem(hostKey: string, label: string, facts: Laun
     kind: 'operation-error',
     severity: 'warning',
     title: `Walnut on ${label} went back to its previous version`,
-    body: `The new ${launcherVersionWords(r.from, r.build)} did not hold: ${r.reason}. The host runs ${back} again, its sessions kept, and Walnut does not install that build there again for a day.`,
+    body: `The new ${launcherVersionWords(r.from, r.build)} did not hold: ${clause(r.reason)}. The host runs ${back} again, its sessions kept, and Walnut does not install that build there again for a day.`,
     detail: `launcher rollback on ${hostKey} at ${new Date(r.at * 1000).toISOString()}: from ${r.from} to ${r.to}: ${r.reason}`,
     dedupKey: `host-launcher-rollback:${hostKey}:${r.at}`,
     category: 'Sessions',

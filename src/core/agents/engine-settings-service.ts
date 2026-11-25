@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import type { SessionEngine } from '../types.js'
 import { engineCaps, isKnownEngine } from './engine-registry.js'
+import { clause } from '../../utils/format.js'
 import {
   CWD_PLACEHOLDER,
   type EngineSettingAppliesOn,
@@ -564,7 +565,7 @@ function planChanges(schema: EngineSettingsSchema, patch: EngineSettingsPatch): 
 /** Apply the planned changes for ONE file to its current text. Returns the new text (may equal the old one). */
 function applyToFile(file: LoadedFile, changes: PlannedChange[]): string {
   if (file.error) {
-    throw new EngineSettingsError(409, `refusing to write ${file.path}: ${file.error}. Fix the file by hand first.`)
+    throw new EngineSettingsError(409, `refusing to write ${file.path}: ${clause(file.error)}. Fix the file by hand first.`)
   }
   if (file.decl.format === 'json') {
     let obj: JsonObject = file.json ?? {}
@@ -583,7 +584,7 @@ function applyToFile(file: LoadedFile, changes: PlannedChange[]): string {
     return editTomlTopLevel(file.text ?? '', set, unset)
   } catch (err) {
     if (err instanceof TomlUnsupportedValueError) {
-      throw new EngineSettingsError(409, `refusing to write ${file.path}: ${err.message}. Edit that line by hand first.`)
+      throw new EngineSettingsError(409, `refusing to write ${file.path}: ${clause(err.message)}. Edit that line by hand first.`)
     }
     throw err
   }

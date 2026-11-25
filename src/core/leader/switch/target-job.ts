@@ -34,6 +34,7 @@ import {
 import { notesAccessOf, writeSwitchNote, type NotesAccess } from './switch-notes.js'
 import { applyServiceRole, serviceLeadRefusalHere, writeSwitchPointer, type SetServiceRole } from './service-role.js'
 import { instanceIdAt } from '../../device-store.js'
+import { clause } from '../../../utils/format.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** The candidate's copy must hold a batch at most this old (its moment by the old leader's clock). */
@@ -341,7 +342,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           if (!side.runningServer()) {
             // Its commit's process is gone (a crash): a new one waits until that record runs out, then grants.
             const started = await side.startServer('leader', 120_000, undefined, s.id)
-            if (!started.ok) throw new SwitchRefused(`committed, but the new leader did not start: ${started.why}. Rerun with --resume; the old home stays handed over.\n${started.logTail ?? ''}`)
+            if (!started.ok) throw new SwitchRefused(`committed, but the new leader did not start: ${clause(started.why)}. Rerun with --resume; the old home stays handed over.\n${started.logTail ?? ''}`)
           }
           const ready = await waitDoorsOpen(side, takeBackMs(settings))
           if (!ready) throw new SwitchRefused('committed, but the new leader has not opened its doors (its permission); rerun with --resume')

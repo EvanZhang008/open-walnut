@@ -1,6 +1,33 @@
 import crypto from 'node:crypto';
 
 /**
+ * Words a sentence period follows ("<what failed>: <why>. <next>"), their own end stop and trailing
+ * space dropped: a message that already ends in a period never reads "id.." (2026-11-25: an engine
+ * switch said "retry task_start with the same id.. The task stays on Claude.").
+ * tests/utils/clause-guard.test.ts keeps every such join in src going through here.
+ */
+export function clause(text: unknown): string {
+  // As `${text}` reads it (undefined, an Error and the rest), then its end stop dropped. A loop from
+  // the end, not /[.\s]+$/: that regex retries from every dot or space, quadratic on a long run of
+  // them in the middle of outside text (100k characters took 14 to 23 s).
+  const s = String(text);
+  let end = s.length;
+  while (end > 0 && isStopOrSpace(s.charCodeAt(end - 1))) end--;
+  return end === s.length ? s : s.slice(0, end);
+}
+
+/** A period, or what /\s/ calls white space. */
+function isStopOrSpace(c: number): boolean {
+  return c === 0x2e || (c >= 0x09 && c <= 0x0d) || c === 0x20 || c === 0xa0 || c === 0x1680
+    || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
+}
+
+/** An error's message as a clause (clause above); a thrown non-Error as its string. */
+export function errClause(err: unknown): string {
+  return clause(err instanceof Error ? err.message : String(err));
+}
+
+/**
  * Generate a short unique ID: base36 timestamp + 4 random chars.
  */
 export function generateId(): string {

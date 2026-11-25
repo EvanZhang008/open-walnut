@@ -51,13 +51,15 @@ import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-r
 import { recordedSessionMode } from './acp-recorded-mode.js';
 import { hostGone } from './host-lost.js';
 import { revokedWhy } from '../session-channel/revoked-hosts.js';
-import { hostPath, landHeldRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
+import { writeMarksWhenHere } from './held-session-marks.js';
+import { hostPath, landHeldRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, untilRowHere, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { engineSignInOf, SIGN_IN_REQUIRED } from '../../providers/delivery-failure.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import { settingPreflight, settingRefusal } from './engine-switch-setting.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
+import { errClause, clause } from '../../utils/format.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
   owedLine, unansweredPersonWords,
@@ -396,7 +398,7 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
   const fromGone = move && !getConnectedDaemonConnection(oldHost) ? await hostGone(oldHost, { target: host }) : null;
   if (fromGone && !fromGone.gone && fromGone.unreachable) {
     // Packing the work needs the old host; say why it may not go on without it (it was a 502).
-    throw new EngineSwitchError(`The task cannot move off ${oldHost} yet: ${fromGone.why}.`, 409, 'host_unreachable');
+    throw new EngineSwitchError(`The task cannot move off ${oldHost} yet: ${clause(fromGone.why)}.`, 409, 'host_unreachable');
   }
   const lost = fromGone?.gone ? { at: new Date().toISOString(), error: fromGone.error } : undefined;
   if (lost && isAcpEngine(old.engine)) {
@@ -699,7 +701,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     } catch (err) {
       await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
       throw await fail(taskId, state, err, new EngineSwitchError(
-        `The session's waiting messages could not be stored for the ${state.move ? 'move' : 'switch'}: ${err instanceof Error ? err.message : String(err)}. The task stays on its session; ask again.`,
+        `The session's waiting messages could not be stored for the ${state.move ? 'move' : 'switch'}: ${errClause(err)}. The task stays on its session; ask again.`,
         503, 'queue_not_stored'));
     }
     try {
@@ -734,7 +736,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     } catch (err) {
       await restore(taskId, old, undefined, new Date().toISOString(), state.id, err);
       throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(
-        `The move to ${host === LOCAL_HOST ? 'this Mac' : host} did not happen: ${err instanceof Error ? err.message : String(err)}. The task stays where it was.`,
+        `The move to ${host === LOCAL_HOST ? 'this Mac' : host} did not happen: ${errClause(err)}. The task stays where it was.`,
         typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 502,
         typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'move_failed'), progress);
     }
@@ -797,18 +799,23 @@ async function handOver(
     const setting = settingRefusal(err, { engine, host }, { engine: old.engine, move: !!state.move, stays }, switchError);
     if (setting) throw await fail(taskId, state, setting.words, setting.as, progress);
     throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
-      ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. ${stays}`
-      : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
+      ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${errClause(err)}. ${stays}`
+      : `The switch to ${engineCaps(engine).displayName} did not start: ${errClause(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
       502, 'start_failed'), progress);
   }
 
+  // Its marks below go on its row: a host's session may answer before its row is here.
+  if (!await untilRowHere(sessionId)) {
+    log.session.warn('engine switch: the new session\'s row did not reach this server in time; its switch marks are held until it arrives', { taskId, sessionId, host });
+  }
   // The held rows show under the new session too until they land there (session-queue-transit.ts).
   if (held.length > 0) {
     const { noteTransitTarget } = await import('../session-queue-transit.js');
     await noteTransitTarget(state.id, sessionId);
   }
   const at = new Date().toISOString();
-  await tracker.updateSessionRecord(sessionId, {
+  // Held, persisted, when the row is still away: a later switch back reads it to resume.
+  await writeMarksWhenHere(sessionId, {
     engineSwitch: {
       fromSessionId: old.claudeSessionId, ...(old.engine ? { fromEngine: old.engine } : {}),
       ...((old.cliModel || old.model || old.acpModel) ? { fromModel: old.cliModel || old.model || old.acpModel } : {}),
@@ -816,7 +823,9 @@ async function handOver(
       compacted: prepared.compacted, ...(prepared.transcriptPath ? { transcriptPath: prepared.transcriptPath } : {}),
       ...(state.move ? { fromHost: normalizeHost(old.host), ...(old.cwd ? { fromCwd: old.cwd } : {}), ...(prepared.leftCopies?.length ? { leftCopies: prepared.leftCopies } : {}) } : {}),
     },
-  }).catch(() => {});
+  }).catch((err: unknown) => {
+    log.session.warn('engine switch: the new session\'s switch mark could not be written', { taskId, sessionId, error: errClause(err) });
+  });
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
   const { retargetRequestsToSession } = await import('../session-requests.js');
   const movedRequests = await retargetRequestsToSession(old.claudeSessionId, sessionId).catch(() => 0);
@@ -835,7 +844,12 @@ async function handOver(
     });
     held = [...held, ...late].map(releaseMoveHeld);
   }
-  const carried = prepared.context ? await stashSwitchContext(sessionId, prepared.context, state.id, held) : held;
+  const carried = prepared.context
+    ? await stashSwitchContext(sessionId, prepared.context, state.id, held).catch((err: unknown) => {
+      log.session.warn('engine switch: the carried context could not be stored; the new session starts without it', { taskId, sessionId, error: errClause(err) });
+      return held;
+    })
+    : held;
   // A put that fails leaves the rows in the transit for the sweep (without the carried context,
   // which then waits on the record for the session's next message).
   if (!await landHeldRows(sessionId, carried, state.id) && prepared.context && carried !== held) {

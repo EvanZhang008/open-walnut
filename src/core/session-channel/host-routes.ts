@@ -34,6 +34,7 @@ import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HAND_ID, HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, NOT_OWN_SESSION, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
+import { taskRowsOf } from './start-task-rows.js'
 import type { SessionRecord } from '../types.js'
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
 import { answerCredentialRoute, answerDoorsRoute, type CredentialRouteOptions } from './host-credential-file.js'
@@ -110,6 +111,14 @@ export interface HostRoutesOptions {
    */
   claim?: { take(sid: string, leaderRow?: SessionRecord): void; release(sid: string): void }
   /**
+   * The leader's rows of a start's task (start-task-rows.ts), taken into this host's store as a copy
+   * round takes them, before the start or resume is judged here (replication/kinds/sessions.ts
+   * applyLeaderSessionRows). Absent (tests): the rows are not taken.
+   */
+  leaderRows?(rows: SessionRecord[], at: number): Promise<unknown>
+  /** How long a start waits for leaderRows before it is judged against this host's copy (LEADER_ROWS_MS; tests). */
+  leaderRowsMs?: number
+  /**
    * Why a session a resume names is not at rest here (a session of it in the runner, its CLI in
    * the runtime, or no word from the runtime), or null when nothing of it runs. Absent: this host
    * takes no resume (it answers `resume_unsupported`).
@@ -185,6 +194,9 @@ function jsonValue(v: unknown): unknown {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** The longest a start waits for the leader's rows of its task to be taken (takeLeaderRows). */
+export const LEADER_ROWS_MS = 3_000
+
 /** A start's own key for its bundle: its preassigned session id, else one made for it (R2-M5). */
 function startIdOf(body: StartBody): string {
   const pre = (body as { preassignedSessionId?: unknown }).preassignedSessionId
@@ -210,6 +222,27 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     return id
   }
 
+  /**
+   * The leader's word on the start's task's rows, taken once the request is valid and before it is
+   * claimed or judged: this host judges it against them, not against a copy that may not have heard
+   * of a switch's archive yet (start-task-rows.ts).
+   */
+  async function takeLeaderRows(body: StartBody): Promise<void> {
+    const { rows, at } = taskRowsOf(body)
+    if (rows.length === 0 || !o.leaderRows) return
+    // Bounded: behind a big copy round on the same chain the start would wait past the leader's
+    // own start timeout. Past the deadline it is judged against this host's copy; the rows still
+    // land when the chain reaches them.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), o.leaderRowsMs ?? LEADER_ROWS_MS) })
+    try {
+      const took = await Promise.race([o.leaderRows(rows, at).then(() => 'took' as const), late])
+      if (took === 'late') o.log?.('warn', 'host sessions: the leader\'s rows of a start\'s task are still waiting to be taken; it is judged against this host\'s copy', { taskId: body.taskId, rows: rows.length, ms: o.leaderRowsMs ?? LEADER_ROWS_MS })
+    } catch (err) {
+      o.log?.('warn', 'host sessions: the leader\'s rows of a start\'s task were not taken; it is judged against this host\'s copy', { taskId: body.taskId, rows: rows.length, error: errText(err) })
+    } finally { clearTimeout(timer) }
+  }
+
   async function start(body: StartBody): Promise<{ status: number; body: unknown }> {
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
     if (body.resumeSessionId !== undefined) return resume(body)
@@ -220,7 +253,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       const v = (body as Record<string, unknown>)[k]
       if (v !== undefined && v !== null && (typeof v !== 'string' || !SAFE_ID.test(v))) return { status: 400, body: { ok: false, error: `${k} is not a session id`, why: 'bad_request' } }
     }
-    const { largePrompt, largePromptPath, startBundle, busSource, startHand, ...rest } = body
+    await takeLeaderRows(body)
+    const { largePrompt, largePromptPath, startBundle, busSource, startHand, taskRows: _rows, taskRowsAt: _rowsAt, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
       await fsp.mkdir(o.spillDir, { recursive: true, mode: 0o700 })
@@ -285,6 +319,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       o.log?.('info', 'host sessions: a resume was refused, the session is not at rest here', { sessionId: sid, why: busy })
       return { status: 200, body: { ok: false, error: `the session is not at rest on this host: ${busy}`, why: 'not_at_rest' } }
     }
+    await takeLeaderRows(body)
     try { o.claim?.take(sid, row) } catch (err) {
       return { status: 200, body: { ok: false, error: `the session's row could not be made this host's: ${errText(err)}`, why: 'resume_failed' } }
     }

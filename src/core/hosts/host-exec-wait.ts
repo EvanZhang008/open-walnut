@@ -18,6 +18,7 @@ import { parseWaitFor, type WaitFor, type WaitedFor } from '../../providers/host
 import { stripAnsi } from '../../providers/host-exec-matcher.js'
 import { HOST_WAIT_MAX_MS, HostExecError, REPLY_MARGIN_MS, budgetLeft, daemonError, hostName, readJob, redact, type Caller, type dial } from './host-exec.js'
 import { isReadStop } from './host-exec-grant.js'
+import { clause } from '../../utils/format.js'
 
 export const WAIT_CAPABILITY = 'host-exec-wait-v1'
 const KILL_GRACE_MS = 3_000
@@ -43,7 +44,7 @@ export function checkWaitFor(raw: unknown, nothing = 'Nothing ran.'): WaitFor | 
   if (raw === undefined || raw === null) return null
   const parsed = parseWaitFor(raw)
   // Said plainly, so a refusal is never read as a run that failed (2026-11-04 usability review).
-  if (!parsed.ok) throw new HostExecError(`${parsed.error}. ${nothing}`, 400, 'bad_request')
+  if (!parsed.ok) throw new HostExecError(`${clause(parsed.error)}. ${nothing}`, 400, 'bad_request')
   return parsed.waitFor
 }
 

@@ -13,6 +13,7 @@ import { localDate, readReflectionState, updateReflectionState } from './state.j
 import crypto from 'node:crypto';
 import { painsFileOf, painsNightlyText, painsReport } from './pains.js';
 import { readGuardRun, readPainsFile } from './pains-store.js';
+import { clause } from '../../../utils/format.js';
 
 /** Minutes after local midnight: before the VPs' 20:00 reflection routines. */
 export const NIGHTLY_AT_MIN = 19 * 60 + 45;
@@ -84,7 +85,7 @@ export async function painsNightly(nodeId: string, nowMs: number): Promise<strin
   if (read.state === 'bad') {
     const { pendingCount } = await import('./pain-record.js');
     const waiting = await pendingCount(nodeId);
-    return `Pain registry (${painsFileOf(nodeId)}): it cannot be read and no complaint is filed until it is fixed: ${read.why}.${waiting ? ` ${waiting} complaint${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to be filed then.` : ''}`;
+    return `Pain registry (${painsFileOf(nodeId)}): it cannot be read and no complaint is filed until it is fixed: ${clause(read.why)}.${waiting ? ` ${waiting} complaint${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} to be filed then.` : ''}`;
   }
   if (!read.entries.length) return '';
   const run = await readGuardRun(nodeId);

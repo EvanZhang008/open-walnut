@@ -39,6 +39,7 @@ import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { HostExecError, budgetLeft, callerOf, grantFor, hostName, type Caller } from './host-exec.js'
 import { checkPath, macPlace, macSide, planTarget, probe, refuseMacPlace, refuseProtected, sourceSize, trimSlashes, type MacSide } from './host-copy-paths.js'
 import { noteFinalAnswer } from './repeat-answers.js'
+import { clause } from '../../utils/format.js'
 
 export const MAX_COPY_BYTES = 2 * 1024 ** 3
 export const MAX_COPIES_PER_TASK = 2
@@ -254,12 +255,12 @@ export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 
       case 'too_large':
         return new HostExecError(`${await hostName(job.toHost)} refused a part as too large (${msg}). ${untouched}`, 413, 'too_large')
       case 'bad_request':
-        return new HostExecError(`${await hostName(err.host)} refused the copy: ${msg}. ${untouched}`, 400, 'bad_request')
+        return new HostExecError(`${await hostName(err.host)} refused the copy: ${clause(msg)}. ${untouched}`, 400, 'bad_request')
       default:
         if (err.command === 'fs.writePart') {
           return new HostExecError(`${await hostName(job.toHost)} could not write ${job.to}${progress} (${msg}). ${untouched}`, 502, 'write_failed')
         }
-        return new HostExecError(`The copy failed${progress}: ${msg}. ${untouched}`, 502, 'copy_failed')
+        return new HostExecError(`The copy failed${progress}: ${clause(msg)}. ${untouched}`, 502, 'copy_failed')
     }
   }
   // The relay already retried each chunk. A link that kept failing is the host away; anything else is the copy.
@@ -270,7 +271,7 @@ export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 
     return new HostExecError(`${name} did not answer about ${where(job.dialog.host, job.dialog.path)}${progress}: macOS is most likely showing a permission dialog for it on ${name}'s screen. ${untouched} Ask the user to answer it there, then copy again.`, 504, 'prompt_timeout', { prompt: where(job.dialog.host, job.dialog.path) })
   }
   if (LINK_TROUBLE.test(msg)) return new HostExecError(`Walnut lost a host during the copy${progress} (${msg}). ${untouched} Copy it again.`, 503, 'host_offline')
-  return new HostExecError(`The copy failed${progress}: ${msg}. ${untouched} Copy it again.`, 502, 'copy_failed')
+  return new HostExecError(`The copy failed${progress}: ${clause(msg)}. ${untouched} Copy it again.`, 502, 'copy_failed')
 }
 
 /** Whether this copy may have staged bytes on the receiver: a write was answered, or one may have arrived. */

@@ -141,9 +141,37 @@ export async function stashSwitchContext(sessionId: string, text: string, switch
   // A slash command row stays as typed (a hint in front would make it a plain prompt).
   const first = rows.findIndex((r) => r.status !== 'parked' && !r.message.trimStart().startsWith('/'));
   if (first >= 0) return rows.map((r, i) => (i === first ? { ...r, message: `${text}\n\n${r.message}` } : r));
-  const { updateSessionRecord } = await import('../session-tracker.js');
-  await updateSessionRecord(sessionId, { switchContext: { text, switchId, at: new Date().toISOString() } });
+  // A row not here yet (a host's session) gets it when it arrives: never a throw that fails a
+  // switch whose new session runs (held-session-marks.ts).
+  const { writeMarksWhenHere } = await import('./held-session-marks.js');
+  await writeMarksWhenHere(sessionId, { switchContext: { text, switchId, at: new Date().toISOString() } });
   return rows;
+}
+
+/** The longest the switch waits for the new session's row to reach this server (untilRowHere). */
+export const NEW_ROW_WAIT_MS = 15_000;
+let newRowWaitMs = NEW_ROW_WAIT_MS;
+/** Tests only: a shorter wait (undefined restores it). */
+export function _setNewRowWaitForTesting(ms?: number): void { newRowWaitMs = ms ?? NEW_ROW_WAIT_MS; }
+
+/**
+ * The new session's row is here, or `ms` passed. A session a host runs and judges answers its start
+ * before its row reaches the leader (its born row comes on the host's channel, maybe after the
+ * answer: host-judged-runner.ts startOnJudgingHost), and the switch's marks on that row
+ * (`engineSwitch`, which a later switch back reads to resume the earlier session: engine-switch-resume.ts
+ * planResume) failed then as "Session not found" (2026-11-25: a switch back to Claude on a host
+ * started a new session in 2 of 3 runs, "a later session did not take over from it"). True once here.
+ * A row that comes later still gets them (held-session-marks.ts); the wait only keeps the common
+ * case in order.
+ */
+export async function untilRowHere(sessionId: string, ms = newRowWaitMs, stepMs = 50): Promise<boolean> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const until = Date.now() + ms;
+  for (;;) {
+    if (await getSessionByClaudeId(sessionId).catch(() => null)) return true;
+    if (Date.now() >= until) return false;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
 }
 
 /** The engine switch's hint blocks a queued message carries (stashSwitchContext put them in front). */

@@ -15,10 +15,16 @@
  * third: a host that still says off is off, and the caller goes on as before (a start fails, a
  * resume is delivered here). The whole wait is bounded by CATCH_UP_MS; it waits on the host's
  * answers, never on a clock of its own.
+ *
+ * Every start and resume a leader hands a host goes through here, so the other copy that can lag it
+ * rides here too: the leader's rows of the start's task (start-task-rows.ts), which the host takes
+ * before it judges (2026-11-25: an engine switch's archive of the old session had not reached the
+ * host, which refused the new one as the task's second session).
  */
 import { log } from '../../logging/index.js'
 import { HOST_SESSIONS_OFF } from './host-api.js'
 import type { HostCallAnswer } from './leader-links.js'
+import { withTaskRows, type TaskRowsReader } from './start-task-rows.js'
 
 /** The longest a refused start waits for the host to catch up before its one more ask. */
 export const CATCH_UP_MS = 15_000
@@ -36,6 +42,9 @@ export interface SwitchCatchUpOptions {
   copyConfigNow?(hostKey: string, ms: number): Promise<boolean>
   budgetMs?: number
   now?(): number
+  /** The leader's rows of a task (start-task-rows.ts leaderTaskRows), and which hosts take them (tests: seams). */
+  taskRows?: TaskRowsReader
+  takesTaskRows?(hostKey: string): boolean
 }
 
 /** Was this answer the host's "the switch is off here"? */
@@ -65,8 +74,10 @@ async function copyConfigToHostNow(hostKey: string, ms: number): Promise<boolean
  * side.startOnHost(hostKey, payload), asked once more after the host caught up with the switch
  * when its first answer was host_runs_sessions_off and this leader's switch is on for it.
  */
-export async function startOnHostCatchingUp(side: SwitchCatchUpSide, hostKey: string, payload: unknown, o: SwitchCatchUpOptions = {}): Promise<HostCallAnswer> {
-  const first = await side.startOnHost(hostKey, payload)
+export async function startOnHostCatchingUp(side: SwitchCatchUpSide, hostKey: string, request: unknown, o: SwitchCatchUpOptions = {}): Promise<HostCallAnswer> {
+  // Read for each ask: the one more ask below may come up to CATCH_UP_MS later.
+  const rowsNow = () => withTaskRows(request, hostKey, { rowsOf: o.taskRows, takes: o.takesTaskRows })
+  const first = await side.startOnHost(hostKey, await rowsNow())
   if (!refusedAsOff(first) || !side.switchOn(hostKey)) return first
   const now = o.now ?? Date.now
   const until = now() + (o.budgetMs ?? CATCH_UP_MS)
@@ -82,7 +93,7 @@ export async function startOnHostCatchingUp(side: SwitchCatchUpSide, hostKey: st
   }
   // Turned off meanwhile: the first refusal stands, no start goes.
   if (!side.switchOn(hostKey)) return first
-  const second = await side.startOnHost(hostKey, payload)
+  const second = await side.startOnHost(hostKey, await rowsNow())
   log.session.info('host start: asked once more after the host caught up with the switch', { host: hostKey, ok: second.ok === true, ...(second.ok === true ? {} : { error: second.error }) })
   return second
 }

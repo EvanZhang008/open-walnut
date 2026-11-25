@@ -26,6 +26,7 @@ import type { TopicMailIncoming, TopicMailTransport } from './topic-mail-port.js
 import type { TopicMailState } from './topic-mail-state.js'
 import { bareAddress, canonicalMessageId, stripQuotedReply } from './topic-mail-text.js'
 import type { Topic, TopicMember } from './topics-model.js'
+import { clause } from '../../utils/format.js'
 
 const AUTOMATIC_PRECEDENCE = new Set(['auto_reply', 'bulk', 'junk', 'list'])
 
@@ -132,7 +133,7 @@ export async function postClaimedMails(
     const topic = await deps.readTopic(claim.topicId).catch(() => null)
     if (topic) {
       const name = topic.members.find((one) => one.id === claim.memberId)?.name || 'a person'
-      await deps.postLine(topic.id, `A mail from ${name} could not be posted: ${why}.`).catch(() => undefined)
+      await deps.postLine(topic.id, `A mail from ${name} could not be posted: ${clause(why)}.`).catch(() => undefined)
     }
     await t.handBack(mail.accountId, [mail.messageId]).catch(() => undefined)
   }

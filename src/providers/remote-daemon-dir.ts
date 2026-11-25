@@ -22,6 +22,7 @@
 import path from 'node:path'
 import { shq } from './remote-sh.js'
 import { DAEMON_PID_SH } from './daemon-live-sh.js'
+import { clause } from '../utils/format.js'
 
 export const PROD_REMOTE_DAEMON_DIR = '/tmp/open-walnut'
 /** Relative to $HOME on the host. Both daemon twins recognise it as a production dir. */
@@ -253,7 +254,7 @@ export function daemonDirWarning(choice: DaemonDirChoice | null | undefined, hom
   const reason = (choice.reason ?? '/tmp is unusable').replace(/(\/tmp\/open-walnut|\/tmp)\b/, '`$1`')
   if (choice.unusable) return `Neither \`/tmp/open-walnut\` nor \`~/${FALLBACK_DAEMON_SUBDIR}\` can hold the session daemon (${reason}, and the home fallback failed too).`
   if (!choice.fallback) return undefined
-  return `Using \`${displayDaemonDir(choice.path, home)}\` for the session daemon because ${reason}.`
+  return `Using \`${displayDaemonDir(choice.path, home)}\` for the session daemon because ${clause(reason)}.`
 }
 
 /**

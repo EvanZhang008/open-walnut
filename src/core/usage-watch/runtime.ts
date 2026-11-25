@@ -9,6 +9,7 @@ import { lastEventLine, routeUsageAlarm, sendDueNotes, type RouteDeps } from './
 import { usageTargetOf } from '../health-monitor/usage-alarms.js'
 import type { RouteAlarmInput, RouteAlarmResult } from '../health-monitor/types.js'
 import { judgeWatch, listWatches, putWatch, type Watch } from './watches.js'
+import { clause } from '../../utils/format.js'
 
 export const NOTE_FROM = 'Walnut: real use'
 
@@ -73,7 +74,7 @@ export async function routeHealthAlarm(input: RouteAlarmInput): Promise<RouteAla
   const detail = lastEventLine(target.kind, target.name, PROBLEM_OF[inst.defId] ?? '')
   return routeUsageAlarm({
     alarmId: inst.id, since: inst.since, title: def.title, kind: target.kind, name: target.name,
-    line: detail ? `${counted}; ${detail}.` : `${counted}.`,
+    line: detail ? `${counted}; ${clause(detail)}.` : `${counted}.`,
   }, routeDeps)
 }
 

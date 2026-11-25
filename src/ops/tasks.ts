@@ -25,6 +25,7 @@ import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '.
 import { routingView } from '../core/task-deliverable.js'
 import { fullTaskRows, TASK_LIST_BINDING } from './task-routing-rows.js'
 import { SEARCH_SEMANTIC_WAIT_MS, type OpCall } from './core.js'
+import { clause } from '../utils/format.js'
 import {
   askedFields, pickTaskFields, TASK_BULK_ANSWER, TASK_COMPLETE_ANSWER, TASK_CREATE_ANSWER, TASK_GET_ANSWER,
   TASK_GET_BULK_ANSWER, TASK_LIST_ANSWER, TASK_NOT_DONE_SETTLE_ANSWER, TASK_RECEIPT, TASK_UPDATE_ANSWER,
@@ -701,7 +702,7 @@ defineOp({
       if (!picked?.pick?.host) throw new Error(`No host was picked for ${launch.host}. Read host_list and name a host.`)
       fields.launch_host_asked = launch.host.trim()
       launch.host = picked.pick.host
-      hostNote = `Host: ${picked.pick.reason}. `
+      hostNote = `Host: ${clause(picked.pick.reason)}. `
     }
     // Where the first start runs also decides what cwd the task records (a task
     // stores no host), so the create hears it too, as hints it never stores raw.

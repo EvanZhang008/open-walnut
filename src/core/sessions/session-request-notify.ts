@@ -25,6 +25,7 @@ import { cutEnd } from '../text-cut.js';
 import { isContextFullText } from './context-full.js';
 import { buildWalnutMessage, escapeBody, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
+import { clause } from '../../utils/format.js';
 import {
   stillReached,
   buildRequestNotification,
@@ -989,7 +990,7 @@ export async function remindSilent(now = Date.now()): Promise<number> {
       kind: 'notification',
       attrs: { from: 'Walnut', about: task.title, 'about-task': task.id, request: r.id, asked: r.preview, outcome: 'error', note: 'automated Walnut status notice' },
       body: [
-        `"${task.title}" (${task.id}) has shown nothing for ${minutes} minutes since you asked (${r.id}): ${why}.`,
+        `"${task.title}" (${task.id}) has shown nothing for ${minutes} minutes since you asked (${r.id}): ${clause(why)}.`,
         'Read task_get for it, then start it again with task_start, send the work again with task_send, or tell the user. This is the only notice for this request.',
       ].join('\n'),
     });

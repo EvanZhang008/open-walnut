@@ -19,7 +19,7 @@ interface Subtask {
   created_at: string;
   updated_at: string;
 }
-import { generateId, routePulledListToProject } from '../utils/format.js';
+import { generateId, routePulledListToProject, clause } from '../utils/format.js';
 import { isInboxProject } from '../core/inbox-project.js';
 import {
   remoteListNameFor,
@@ -298,7 +298,7 @@ function signInRequiredError(code?: string, reason?: string): MsTodoAuthError {
   const why = reason ? ` (${reason.split('\n')[0].slice(0, 160)})` : '';
   return new MsTodoAuthError(
     'sign-in-required',
-    `Microsoft To-Do needs you to sign in again${why}. ${SIGN_IN_HINT}`,
+    `Microsoft To-Do needs you to sign in again${clause(why)}. ${SIGN_IN_HINT}`,
     code,
   );
 }
@@ -307,7 +307,7 @@ function unreachableError(code?: string, reason?: string): MsTodoAuthError {
   const why = reason ? ` (${reason.split('\n')[0].slice(0, 160)})` : '';
   return new MsTodoAuthError(
     'unreachable',
-    `Microsoft's sign-in service did not renew the To-Do credential${why}. Sync retries on its own; nothing to do unless this keeps up.`,
+    `Microsoft's sign-in service did not renew the To-Do credential${clause(why)}. Sync retries on its own; nothing to do unless this keeps up.`,
     code,
   );
 }

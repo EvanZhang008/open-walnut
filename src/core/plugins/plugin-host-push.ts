@@ -38,6 +38,7 @@ import { log } from '../../logging/index.js'
 import { HostExecError } from '../hosts/host-exec-target.js'
 import type { PartSource } from '../transfer/daemon-transfer-client.js'
 import { configuredPluginHost, runCheckedScript, LOCAL_HOST_ALIAS } from './plugin-hosts.js'
+import { clause } from '../../utils/format.js'
 
 export const MAX_PUSH_BYTES = 256 * 1024 * 1024
 export const MAX_PUSHES_PER_PLUGIN = 2
@@ -314,7 +315,7 @@ export async function pushToPluginHost(pluginId: string, dataDir: string, alias:
       staging = null // the script removed it
       const why = done.stderr.replace(/^walnut: /, '').trim() || `exit ${String(done.code)}`
       if (done.code === 3) throw new HostExecError(`hosts.push: ${alias}:${final} is a folder; name the file itself in \`to\`. Nothing was written.`, 409, 'is_directory', { path: final })
-      throw new HostExecError(`hosts.push could not put the file in place at ${alias}:${final}: ${why}. The file there is as it was.`, 409, 'target_unusable', { path: final })
+      throw new HostExecError(`hosts.push could not put the file in place at ${alias}:${final}: ${clause(why)}. The file there is as it was.`, 409, 'target_unusable', { path: final })
     }
     staging = null
     log.session.info('plugin push', { pluginId, host: alias, to: final, bytes: source.size, mode: mode.toString(8), ms: Date.now() - t0 })

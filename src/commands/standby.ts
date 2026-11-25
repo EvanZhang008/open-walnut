@@ -14,6 +14,7 @@
  * Walnut Health.
  */
 import { WALNUT_HOME } from '../constants.js'
+import { clause } from '../utils/format.js'
 
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`
 const fail = (err: unknown) => {
@@ -31,7 +32,7 @@ export async function runStandbySnapshot(options: Record<string, unknown>): Prom
   const s = out.stats
   const timing = `scan ${Math.round(s.scanMs)} ms, hold ${Math.round(s.holdMs)} ms, total ${Math.round(s.totalMs)} ms`
   if (!out.ok) {
-    console.log(`Batch void (nothing changed in ${to}): ${out.reason}. ${timing}`)
+    console.log(`Batch void (nothing changed in ${to}): ${clause(out.reason)}. ${timing}`)
     process.exitCode = 2
     return
   }

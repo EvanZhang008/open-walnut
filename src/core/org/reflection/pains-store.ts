@@ -15,6 +15,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { withUserFileLock } from '../../../utils/user-file-lock.js';
+import { clause } from '../../../utils/format.js';
 import {
   guardRunFileOf, guardRunOf, normalizePain, painsFileOf, painsMarkdownOf, renderPains, resolvePainPath,
   PAIN_KNOWN_KEYS, PAIN_SCHEMA_VERSION, type GuardRun, type PainEntry,
@@ -22,7 +23,7 @@ import {
 
 export class PainsUnwritable extends Error {
   constructor(readonly file: string, why: string) {
-    super(`The pain registry ${file} is not changed: ${why}. Fix or move the file; nothing in it was touched.`);
+    super(`The pain registry ${file} is not changed: ${clause(why)}. Fix or move the file; nothing in it was touched.`);
     this.name = 'PainsUnwritable';
   }
 }

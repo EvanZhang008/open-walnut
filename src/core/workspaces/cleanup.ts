@@ -29,6 +29,7 @@ import {
 import { resumeScriptRuns, scriptRunning, teardownBeforeCleanup } from './scripts.js'
 import { keptOnlyUnmerged, keptPatch } from './merge-recheck.js'
 import { log } from '../../logging/index.js'
+import { clause } from '../../utils/format.js'
 
 /** The longest a deleted task's cleanup waits for a script running in its workspace (the scripts' own cap). */
 const SCRIPT_WAIT_MS = 61 * 60_000
@@ -191,7 +192,7 @@ export async function cleanupForDeletedTask(task: Pick<Task, 'id' | 'title'>, ws
     const still = await deps.stillWorking(task, ws, { requests: false })
     if (!still) break
     if (waited >= DELETE_SESSION_WAIT_MS) {
-      return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} was kept: ${still.why}. Nothing was removed.`)
+      return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} was kept: ${clause(still.why)}. Nothing was removed.`)
     }
     await deps.sleep(DELETE_SESSION_POLL_MS)
   }
@@ -203,7 +204,7 @@ export async function cleanupForDeletedTask(task: Pick<Task, 'id' | 'title'>, ws
   }
   const decision = cleanupDecision(ws, probe, 'delete')
   if (decision.action !== 'remove') {
-    return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} still holds work: ${decision.reason}. Nothing was removed.`)
+    return void await tell(`The task was deleted, but its workspace at ${ws.root} on ${hostLabel(ws.host)} still holds work: ${clause(decision.reason)}. Nothing was removed.`)
   }
   const jobId = deps.jobId()
   try {

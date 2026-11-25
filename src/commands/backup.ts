@@ -19,6 +19,7 @@ import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
 import { WALNUT_HOME } from '../constants.js';
 import type { BackupConfig } from '../core/backup/types.js';
+import { clause } from '../utils/format.js';
 
 /**
  * The encrypted-backup config a command works on: `--type` builds the
@@ -283,7 +284,7 @@ export async function runBackupDrill(options: Record<string, unknown>): Promise<
   const absent = r.notInBackups.filter((e) => e.present === false);
   if (here.length) {
     console.log('Not in backups, by design (reported, not changed):');
-    for (const e of here) console.log(`  ${e.place}: ${e.what}. Why: ${e.why}.`);
+    for (const e of here) console.log(`  ${e.place}: ${e.what}. Why: ${clause(e.why)}.`);
   }
   if (absent.length) console.log(`  ${absent.length} more such places do not exist on this machine (--json lists them).`);
 }

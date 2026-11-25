@@ -21,6 +21,7 @@ import type { StartQueueEntry, Task, TaskPriority } from '../types.js';
 import { log } from '../../logging/index.js';
 import type { SessionStartParams, SessionStartResult } from './task-start.js';
 import type { HostsFullDetail } from './host-admission.js';
+import { clause } from '../../utils/format.js';
 
 export const START_QUEUE_SOURCE = 'start-queue';
 /** The first pass after boot, then one every so often for a team resumed since. */
@@ -130,7 +131,7 @@ export async function clearStartQueue(taskId: string, why: string, queuedAt?: st
   try {
     const res = await updateTaskRaw(taskId, (cur) => {
       if (!cur.start_queue || (queuedAt && cur.start_queue.at !== queuedAt)) return null;
-      const error = `This queued run did not run: ${why}.`;
+      const error = `This queued run did not run: ${clause(why)}.`;
       const patch = droppedRoutine(cur, error);
       const launch = cur.start_queue.routine;
       record = patch.routine_start ?? (launch?.jobId ? { job_id: launch.jobId, job_name: launch.sessionTitle ?? launch.taskTitle ?? 'Trigger',

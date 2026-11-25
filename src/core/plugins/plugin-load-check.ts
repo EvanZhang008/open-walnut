@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { sortedByName } from '../../lib/dir-order.js'
+import { clause } from '../../utils/format.js'
 
 export const PLUGIN_CHECK_REGRESSION = 3
 export const PLUGIN_CHECK_UNDETERMINED = 2
@@ -142,7 +143,7 @@ export async function runPluginLoadCheck(argv: string[]): Promise<number> {
   clearTimeout(deadline)
 
   const verdict = judgePluginLoads(results, prod)
-  for (const w of verdict.warnings) console.log(`Plugin check: warning, ${w.id} fails to load here, not blocking: ${w.why}.`)
+  for (const w of verdict.warnings) console.log(`Plugin check: warning, ${w.id} fails to load here, not blocking: ${clause(w.why)}.`)
   if (verdict.regressions.length > 0) {
     const ids = verdict.regressions.map(r => r.id)
     console.log(`Plugin check: ${ids.join(', ')} ${ids.length === 1 ? 'loads' : 'load'} on the running server but not on this build.`)

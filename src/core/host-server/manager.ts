@@ -81,6 +81,7 @@ import type {
   HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps, WorkingProgram, HostRecord, HostProgram,
 } from './manager-types.js'
 import { HOST_SERVICE_PORT_BASE, HOST_SERVICE_PORT_SPAN } from './service-ports.js'
+import { clause } from '../../utils/format.js'
 
 /** Unpack, check and try the file once: seconds, minutes on a slow disk. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000
@@ -305,7 +306,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
     if (state.state === 'failed' && !retry) {
       set(host.hostKey, { install: state })
-      throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${state.message}. Press Retry to install it again.`, installCannotRun(state.message), installCannotRun(state.message))
+      throw new UntilRetry(`the install of Walnut ${id} on the host failed: ${clause(state.message ?? '')}. Press Retry to install it again.`, installCannotRun(state.message), installCannotRun(state.message))
     }
     // An install made for the default waits its turn: one host at a time, so a flag turned on (or a
     // restart with it) never sends the file to every host at once over links sessions share.

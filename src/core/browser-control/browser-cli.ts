@@ -7,6 +7,7 @@ import { definiteRefusal, waitThroughRestart } from '../../lib/wait-through-rest
 import fs from 'node:fs'
 import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
+import { clause } from '../../utils/format.js'
 
 export const BROWSER_USAGE = [
   'usage: walnut browser <command> [--tab N] [--json]      walnut browser guide: how to use it (guide more: the rest)',
@@ -375,7 +376,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       if (!told) {
         const why = typeof body.error === 'string' ? body.error.replace(/[.\s]+$/, '')
           : request ? 'Waiting for the person to approve the sign-in (a notification on their Mac and phone)' : `Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone)`
-        io.say(`${why}. This command waits up to 10 minutes for their answer...`)
+        io.say(`${clause(why)}. This command waits up to 10 minutes for their answer...`)
       }
       told = true
       if (now() > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }

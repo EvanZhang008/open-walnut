@@ -31,6 +31,7 @@ import {
 } from '../session-target.js';
 import { clearHostGateNotices, noteHostGateRefusal } from '../host-gate-notice.js';
 import { routinePlacementOf } from '../run-placement.js';
+import { clause } from '../../../utils/format.js';
 
 export interface SessionExecutorConfig {
   /** Task the session belongs to. Resolved from `session: 'this'` at create time. */
@@ -292,7 +293,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
         const error = `target ${taskId} is a session with no task; a routine delivers to a task, never to a bare session`;
         await delivery.notify({
           title: `Routine "${job.name}" has nowhere to deliver`,
-          body: `${error}. Edit the routine to name the task it is for.`,
+          body: `${clause(error)}. Edit the routine to name the task it is for.`,
           dedupKey: `trigger-target:${job.id}:taskless`,
           userRoutine: !job.check,
         }).catch(() => { /* the run result already carries the error */ });

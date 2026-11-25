@@ -27,7 +27,7 @@ describe('startOnHostCatchingUp', () => {
   it('off on the host, on here: the config copy goes, the host takes it, and the start goes once more', async () => {
     const { side, asked, waited } = sideOf([OFF, OK])
     const copied: string[] = []
-    const a = await startOnHostCatchingUp(side, 'devbox', { taskId: 't' }, { copyConfigNow: async (h) => { copied.push(h); return true } })
+    const a = await startOnHostCatchingUp(side, 'devbox', { taskId: 't' }, { copyConfigNow: async (h) => { copied.push(h); return true }, takesTaskRows: () => false })
     expect(a).toEqual(OK)
     expect(asked).toEqual(['devbox', 'devbox'])
     expect(copied).toEqual(['devbox'])

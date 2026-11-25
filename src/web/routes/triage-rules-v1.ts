@@ -22,6 +22,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { role as serverRole } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { clause } from '../../utils/format.js'
 import {
   deleteRoutingRule, noteRoutedItem, readRoutingRules, ruleMatchText, RoutingRuleError, setRoutingRule,
   type RoutingRuleAuthor, type RoutingRuleInput, type TriageRoutingRule,
@@ -302,6 +303,6 @@ async function startWithItem(
   } catch (err) {
     const e = err as { statusCode?: number; status?: number; code?: string; message?: string }
     sendError(res, e.statusCode ?? e.status ?? 409, e.code ?? 'start_failed',
-      `The rule's task has not started and could not be started: ${e.message ?? String(err)}. Leave the item for the summary.`)
+      `The rule's task has not started and could not be started: ${clause(e.message ?? String(err))}. Leave the item for the summary.`)
   }
 }

@@ -7,6 +7,7 @@ import { priceReconciledUsage, PRICING_VERSION } from './pricing.js';
 import type { UsageFilter } from './types.js';
 import type { scanHostUsage } from '../../providers/usage-host-core.js';
 import { CostRollup, BILLED_DAY_RESPONSE_CLAUSE } from './cost-rollup.js';
+import { clause } from '../../utils/format.js';
 
 type HostEvidence = Awaited<ReturnType<typeof scanHostUsage>>;
 export type UsageEvidence = HostEvidence & {
@@ -242,7 +243,7 @@ export class ResponseUsageStore {
     try { kept = (JSON.parse(previous?.checks ?? '[]') as SourceCheck[]).filter(c => c.source !== 'Host collection'); } catch { /* unreadable: start over */ }
     const when = now.toISOString();
     const failure: SourceCheck = { source: 'Host collection', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0, failedAt: when,
-      detail: kept.length ? `Could not be read at ${when}: ${detail}. The checks shown are from its last finished pass.` : detail };
+      detail: kept.length ? `Could not be read at ${when}: ${clause(detail)}. The checks shown are from its last finished pass.` : detail };
     this.db.prepare('INSERT OR REPLACE INTO usage_checks VALUES (?,?,?)').run(host, previous?.until ?? '', JSON.stringify([...kept, failure]));
   }
 

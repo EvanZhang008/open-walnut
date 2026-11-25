@@ -8,6 +8,7 @@ import type { EngineFallbackNote } from '../core/types.js'
 import type { WalnutOp } from './registry.js'
 import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.js'
 import { summaryAt } from '../core/user-status.js'
+import { clause } from '../utils/format.js'
 
 type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
 
@@ -159,7 +160,7 @@ export function queuedOutcome(taskId: string, queued: { position?: number; host?
     : Array.isArray(queued.running) ? `${queued.running.length} subtasks of your task are running${typeof queued.cap === 'number' ? ` (at most ${queued.cap} run at once)` : ''}`
     : 'no host has room'
   return [
-    `Task ${taskId} is waiting for a free slot${place}: ${why}. It has not started. Walnut starts it automatically when a host that can run it has room, highest priority first.`,
+    `Task ${taskId} is waiting for a free slot${place}: ${clause(why)}. It has not started. Walnut starts it automatically when a host that can run it has room, highest priority first.`,
     'Do not retry the start, and do not do its work yourself: it runs as its own task. task_get shows execution.state '
       + '"queued", with waiting_for and waits_for_host, until it starts. When the user asked for it to start now, task_start '
       + 'with user_request quoting their words starts it at once.',

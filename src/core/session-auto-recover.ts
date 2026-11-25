@@ -73,6 +73,7 @@ import {
 import { log } from '../logging/index.js'
 import { hasUnreadFirstLine, setStartDeathHandler } from './sessions/start-recovery.js'
 import type { TurnRetrier } from './sessions/turn-run.js'
+import { clause } from '../utils/format.js'
 
 export { AUTO_RECOVER_SOURCE, resolveAutoRecoverConfig }
 export type { AutoRecoverConfig, AutoRecoverDeps, AutoRecoverTask } from './sessions/auto-recover-env.js'
@@ -691,7 +692,7 @@ export class SessionAutoRecover {
       if (parked.length) log.session.info('start recovery: released rows still queued, parked at the give-up', { sessionId: rec.claudeSessionId, messageIds: parked })
     }
     log.session.warn('restart recovery: gave up', { sessionId: rec.claudeSessionId, taskId: rec.taskId, reason })
-    this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${reason}. The task needs you now.`)
+    this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${clause(reason)}. The task needs you now.`)
     // Decided: its own bookkeeping must not hold off the hand-back below (holdsHandBack).
     this.untrack(rec.claudeSessionId)
     if (rec.taskId) {

@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { isProductionWalnutHome, productionWalnutHomes } from '../core/sessions/ephemeral-guard.js'
 import { accountInfo } from '../lib/account.js'
+import { clause } from '../utils/format.js'
 
 export const PROD_RUN_DIR = '/tmp/open-walnut'
 /** The streams dir of the Walnut that owns this machine (daemon stream files, FIFOs). */
@@ -137,7 +138,7 @@ export function replicaBootRefusal(input: ReplicaBootInput): string | null {
 
 export function assertReplicaBootSafe(input: ReplicaBootInput): void {
   const why = replicaBootRefusal(input)
-  if (why) throw new Error(`Host replica refused to start: ${why}.`)
+  if (why) throw new Error(`Host replica refused to start: ${clause(why)}.`)
 }
 
 /** The file that proves a dir is a host replica's own: written by the replica into a dir it found empty. */

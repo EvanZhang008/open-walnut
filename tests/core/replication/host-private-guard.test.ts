@@ -160,6 +160,35 @@ describe('nothing of a task kept local reaches a host: every copy kind', () => {
   })
 })
 
+describe('nothing of a task kept local reaches a host: the session rows a start carries', () => {
+  it('every module that puts session rows on a start or resume for a host (`taskRows`) builds them through host-private.ts', () => {
+    /** Reviewed: modules that name the field without sending rows, with why. */
+    const READERS: Record<string, string> = {
+      'src/core/session-channel/host-api.ts': 'the wire type',
+      'src/core/session-channel/host-routes.ts': 'the host side: it takes the rows, sends none',
+      'src/core/session-channel/switch-catch-up.ts': 'a seam of the reader; the rows are built by start-task-rows.ts withTaskRows',
+    }
+    const files: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.tsx?$/.test(e.name)) files.push(p)
+      }
+    }
+    walk(path.join(ROOT, 'src'))
+    const code = (f: string) => readFileSync(path.join(ROOT, f), 'utf8').replace(/^\s*(\/\/|\*).*$/gm, '')
+    const senders = files.map((f) => path.relative(ROOT, f)).filter((f) => /\btaskRows\??\s*:/.test(code(f)))
+    expect(senders).toEqual(expect.arrayContaining(['src/core/session-channel/start-task-rows.ts']))
+    for (const f of senders) {
+      if (READERS[f]) continue
+      expect(callsFilter(f), `${f} puts session rows on a start for a host: build them through host-private.ts`).toBe(true)
+    }
+    // Its behaviour on a kept task: tests/core/session-channel/start-task-rows.test.ts ("kept fixture: start taskRows").
+    expect(testTexts()).toContain('kept fixture: start taskRows')
+  })
+})
+
 /** The calls of host-private.ts that build what a host takes. */
 const FILTERS = /\b(hostPrivacyNow|hostPrivacyOf|hostManifest|keptOffHost|keptOffHostNow|ownedRowKept|searchKeyKeptFromHosts|keptVaultFolders|textKeptFromHosts)\(/
 

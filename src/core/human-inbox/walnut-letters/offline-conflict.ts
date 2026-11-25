@@ -13,6 +13,7 @@ import {
 } from '../../offline-merge/letter-rules.js';
 import type { ByLang, LetterLang } from './languages.js';
 import { letterKind } from './kind.js';
+import { clause } from '../../../utils/format.js';
 
 export interface ConflictLetter {
   subject: string;
@@ -111,12 +112,12 @@ const WORDS: ByLang<Words> = {
     item: {
       taskField: (f, r, mac, away) => `${f}: kept ${r ? 'the change made while away' : 'the Mac\'s value'}. Mac: "${mac}"; while away: "${away}".`,
       taskDeleted: (f, away) => `the task was deleted on the Mac; a change made while away was dropped (${f}: "${away}").`,
-      refused: (reason) => `the Mac refused a change made while away: ${reason}.`,
-      givenUp: (reason) => `could not apply: ${reason}.`,
+      refused: (reason) => `the Mac refused a change made while away: ${clause(reason)}.`,
+      givenUp: (reason) => `could not apply: ${clause(reason)}.`,
       actorDropped: (reason) => `a change from a device that is no longer paired was not applied${reason ? ` (${reason})` : ''}.`,
-      parentRefused: (reason) => `the parent link was not applied: ${reason}.`,
+      parentRefused: (reason) => `the parent link was not applied: ${clause(reason)}.`,
       createCollision: (reason) => `a task created while away got a new id (${reason}).`,
-      board: (reason) => `a Board edit conflicted; the Mac's page was kept: ${reason}.`,
+      board: (reason) => `a Board edit conflicted; the Mac's page was kept: ${clause(reason)}.`,
       memory: (c) => `${c ? 'both sides changed the same lines; the newer change is in the document' : 'it could not be merged line by line; the newer version is the document'}, the other version is in the full entry.`,
       conversation: (r, mac, away) => `both sides renamed it; kept ${r ? 'the name given while away' : 'the Mac\'s name'}. Mac: "${mac}"; while away: "${away}".`,
     },

@@ -9,6 +9,7 @@ import { HEALTH_ERRORS_ALARM, healthErrorEvidence } from '../notifications/healt
 import { HOST_DOWN_ALARM, hostDownEvidence } from '../hosts/host-down-gauge.js'
 import { HOUR_MS, hourStart, signatureId, type HourBuckets } from './log-alarms.js'
 import type { AlarmDef, AlarmInstanceState, MinuteRow } from './types.js'
+import { clause } from '../../utils/format.js'
 
 export interface BriefInput {
   def: AlarmDef
@@ -28,7 +29,7 @@ function evidence({ def, inst, reason, now, rows, hours, sample }: BriefInput): 
     `What it watches: ${def.description}`,
     inst.signature ? `The log line kind: \`${inst.signature}\`` : `Metric: \`${inst.labels ? fillPattern(def.metric, inst.labels) : def.metric}\``,
     inst.signature && sample ? `A recent line: ${sample}` : '',
-    `Why it is in ALARM: ${reason}.`,
+    `Why it is in ALARM: ${clause(reason)}.`,
     `In ALARM since ${new Date(inst.since).toISOString()}; checked ${new Date(now).toISOString()}.`,
   ]
   if (inst.signature) {

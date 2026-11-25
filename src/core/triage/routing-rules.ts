@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { writeJsonFile } from '../../utils/fs.js';
 import { withFileLock } from '../../utils/file-lock.js';
+import { clause } from '../../utils/format.js';
 
 export const ROUTING_RULES_FILE = path.join('triage', 'routing-rules.json');
 export const MAX_ROUTING_RULES = 200;
@@ -128,7 +129,7 @@ function normalizeRule(raw: unknown): TriageRoutingRule | null {
 
 /** The rules file is there but is not a rules table Walnut can read: never taken for no rules. */
 function unreadable(file: string, why: string): RoutingRuleError {
-  return new RoutingRuleError(`The routing rules at ${file} cannot be read: ${why}. Nothing was changed; fix or remove the file.`, 'rules_unreadable', 503);
+  return new RoutingRuleError(`The routing rules at ${file} cannot be read: ${clause(why)}. Nothing was changed; fix or remove the file.`, 'rules_unreadable', 503);
 }
 
 function parseRulesFile(file: string, content: string): RoutingRulesFile {

@@ -25,6 +25,7 @@ import { WALNUT_INSTALL_DIR, WALNUT_REPO_URL } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { log } from '../../logging/index.js';
 import { isFollower } from '../server-role.js';
+import { clause } from '../../utils/format.js';
 
 export type WalnutSourceKind =
   /** The checkout the running server was built from. */
@@ -182,7 +183,7 @@ async function cloneUpstream(timeoutMs: number): Promise<WalnutSource> {
           if (!err) { resolve(); return; }
           const why = (typeof stderr === 'string' && stderr.trim()) || err.message;
           reject(new WalnutSourceError(
-            `Cloning Walnut's source failed: ${why}. You can clone it yourself: git clone ${WALNUT_REPO_URL} ${target}`,
+            `Cloning Walnut's source failed: ${clause(why)}. You can clone it yourself: git clone ${WALNUT_REPO_URL} ${target}`,
             502,
           ));
         },

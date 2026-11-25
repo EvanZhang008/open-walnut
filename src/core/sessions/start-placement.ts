@@ -20,6 +20,7 @@ import path from 'node:path';
 import { log } from '../../logging/index.js';
 import type { SessionEngine, Task } from '../types.js';
 import type { PackReply } from '../transfer/daemon-transfer-client.js';
+import { clause } from '../../utils/format.js';
 
 export interface StartPlacement {
   /** Where the start runs ('' = this Mac). */
@@ -220,7 +221,7 @@ export async function placeStartByLoad(
     }
     launch.host = decision.host;
     launch.cwd = made.path;
-    launch.message = [`Walnut placed this task on ${name(target)}: ${decision.reason}.`, '', launch.message].join('\n');
+    launch.message = [`Walnut placed this task on ${name(target)}: ${clause(decision.reason)}.`, '', launch.message].join('\n');
     return { host: decision.host, from: decision.from, moved: true, reason: decision.reason, cwd: made.path, setUp: true };
   }
   const p = (await probeSource())!;
@@ -247,7 +248,7 @@ export async function placeStartByLoad(
   launch.cwd = setup.cwd;
   const label = name(target);
   launch.message = [
-    `Walnut placed this task on ${label}: ${decision.reason}.`,
+    `Walnut placed this task on ${label}: ${clause(decision.reason)}.`,
     setup.setUp
       ? `Your working copy of ${p.meta.root} is ${setup.dest} (branch ${p.meta.branch ?? '(detached)'} at ${(p.meta.head ?? '').slice(0, 12)}); work there, never in another checkout.`
       : `Set the repository up first:\n${setup.steps}`,

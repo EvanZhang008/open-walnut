@@ -156,9 +156,14 @@ async function load(): Promise<RowSetState> {
   if (state) return state
   let s: RowSetState = { asOf: 0, at: 0, order: [], hashes: {} }
   try {
-    const raw = JSON.parse(await fsp.readFile(STATE_FILE(), 'utf8')) as Partial<RowSetState> & { v?: number }
+    const raw = JSON.parse(await fsp.readFile(STATE_FILE(), 'utf8')) as Partial<RowSetState> & { v?: number; carried?: unknown }
     if (raw && raw.v === 1 && raw.hashes && typeof raw.hashes === 'object') {
       s = { asOf: Number(raw.asOf) || 0, at: Number(raw.at) || 0, order: [], hashes: raw.hashes }
+      carriedAt.clear()
+      // An older Walnut writes no `carried` and reads past it: the file stays v1 both ways.
+      if (raw.carried && typeof raw.carried === 'object') {
+        for (const [k, at] of Object.entries(raw.carried as Record<string, unknown>)) if (typeof at === 'number' && at > 0) carriedAt.set(k, at)
+      }
     }
   } catch { /* none yet: ask for every row */ }
   state = s
@@ -167,7 +172,12 @@ async function load(): Promise<RowSetState> {
 
 async function save(): Promise<void> {
   // The order of an unordered kind is not kept (5,000 ids rewritten on every step for nothing).
-  if (state) await writeCopyFile(STATE_FILE(), { v: 1, asOf: state.asOf, at: state.at, hashes: state.hashes })
+  if (state) {
+    await writeCopyFile(STATE_FILE(), {
+      v: 1, asOf: state.asOf, at: state.at, hashes: state.hashes,
+      ...(carriedAt.size > 0 ? { carried: Object.fromEntries(carriedAt) } : {}),
+    })
+  }
 }
 
 function isRow(v: unknown): v is SessionRecord {
@@ -233,9 +243,18 @@ export function sessionsFollower(): RowSetFollower {
       const db = await import('../../session-db.js')
       // Projected again here: whatever a leader sends, no stored row names a process.
       const projected = (rows ?? []).map(projectSession)
-      if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), { rows: projected, removeIds })
-      else db.applySessionCopy({ rows: projected.map(forHostStore), removeIds, ownHost: ownHostKey() })
-      return { skipped: [] }
+      if (onCompanion()) { db.applyCompanionSessionCopy(companionCopyFile(), { rows: projected, removeIds }); return { skipped: [] } }
+      // A put of a round whose manifest the leader built before a start's carried rows were read
+      // (their `at`) may hold an older copy of them: those stay as carried, asked for again next
+      // round (a manifest built after the carry). Every other row is read after the manifest.
+      const asOf = state?.asOf ?? 0
+      const skipped = projected.filter((r) => (carriedAt.get(r.claudeSessionId) ?? 0) > asOf).map((r) => r.claudeSessionId)
+      const skip = new Set(skipped)
+      const take = projected.filter((r) => !skip.has(r.claudeSessionId))
+      db.applySessionCopy({ rows: take.map(forHostStore), removeIds, ownHost: ownHostKey() })
+      for (const r of take) { noteLanded(r.claudeSessionId, asOf); carriedAt.delete(r.claudeSessionId) }
+      for (const id of removeIds ?? []) carriedAt.delete(id)
+      return { skipped }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('sessions'),
     changed,
@@ -251,15 +270,85 @@ export function sessionsFollower(): RowSetFollower {
       }
       await markCopyOff('sessions')
       state = null
+      carriedAt.clear()
       return { removed: ids.length }
     },
   })
   return follower
 }
 
+/**
+ * When the leader read each row this host holds, both clocks the leader's own, each a lower bound
+ * (the time is taken before the read; copy-kind.ts takes a manifest's `asOf` before it reads the
+ * rows, as the copies' age needs: never newer than the truth, kind-follower.ts copiesAsOf):
+ *
+ *   landedAt   a round's put: its manifest's `asOf` (its rows are read after it). This process only.
+ *   carriedAt  a start's carried rows: their `taskRowsAt`. Persisted beside the hashes, until a round
+ *              built after it brings the row (the put above), so a restart keeps it.
+ *
+ * A carried row is skipped when a copy here was read at or after it (the newer one stays). Two lower
+ * bounds cannot order two reads that overlap: a carried row taken over a put row read a moment
+ * later is older than the leader's, so its hash differs from the next manifest's and that round
+ * brings the leader's row again; nothing stays stale past one round.
+ *
+ * After a host restart landedAt is empty: a carry is taken over any row a round stored before
+ * (the same one-round heal). carriedAt is read back, so a round that began before a carry still
+ * never writes its older copy over the carried row, and a start reads the rows it just carried
+ * whichever way that goes.
+ */
+const landedAt = new Map<string, number>()
+const carriedAt = new Map<string, number>()
+const LANDED_MAX = 20_000
+const CARRIED_MAX = 2_000
+
+function noteLanded(key: string, at: number): void {
+  if (landedAt.size >= LANDED_MAX && !landedAt.has(key)) landedAt.clear()
+  landedAt.set(key, Math.max(at, landedAt.get(key) ?? 0))
+}
+
+function noteCarried(key: string, at: number): void {
+  if (carriedAt.size >= CARRIED_MAX && !carriedAt.has(key)) {
+    // The oldest go first: a round long since brought the leader's row of each.
+    const oldest = [...carriedAt].sort((a, b) => a[1] - b[1]).slice(0, Math.ceil(CARRIED_MAX / 4))
+    for (const [k] of oldest) carriedAt.delete(k)
+  }
+  carriedAt.set(key, Math.max(at, carriedAt.get(key) ?? 0))
+}
+
+/**
+ * Rows of the leader's store a start or a resume carried (session-channel/start-task-rows.ts), read
+ * by the leader at `at` (its clock), taken here as a round's put takes them: projected, this host's
+ * own rows taking only their leader fields, a row this host holds (its journal's) left as it is, and
+ * a row a copy here was read at or after `at` left as it is too (it is newer). On the kind's serial
+ * chain. Each taken row's hash is noted (what this host now holds), so a later manifest whose hash
+ * differs brings the row again. Only a host replica's live store takes them: anywhere else 0.
+ */
+export async function applyLeaderSessionRows(rows: readonly SessionRecord[], at: number): Promise<number> {
+  if (rows.length === 0 || onCompanion() || !ownHostKey()) return 0
+  if (await copyRefusal()) return 0
+  return serial(async () => {
+    const held = await (await import('../../../replica/journal-overlay.js')).journalHeld('sessions')
+    const s = await load()
+    const readAt = (k: string) => Math.max(landedAt.get(k) ?? -1, carriedAt.get(k) ?? -1)
+    const taken = rows
+      .filter((r) => isRow(r) && !held.has(r.claudeSessionId) && readAt(r.claudeSessionId) < at)
+      .map(projectSession)
+    if (taken.length === 0) return 0
+    ;(await import('../../session-db.js')).applySessionCopy({ rows: taken.map(forHostStore), ownHost: ownHostKey() })
+    for (const r of taken) {
+      s.hashes[r.claudeSessionId] = sessionCopyHash(r)
+      noteCarried(r.claudeSessionId, at)
+    }
+    await save()
+    return taken.length
+  })
+}
+
 /** Tests only. */
 export function _resetSessionsCopyForTesting(): void {
   state = null
+  landedAt.clear()
+  carriedAt.clear()
   follower = null
   serial = serialChain()
 }

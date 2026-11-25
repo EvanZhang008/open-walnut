@@ -61,6 +61,13 @@ export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
    * for the start's answer.
    */
   startHand?: string
+  /**
+   * The leader's rows of the task (start-task-rows.ts), projected as the sessions copy sends them: the
+   * host takes them before it judges the start or resume. A host older than this ignores them.
+   */
+  taskRows?: SessionRecord[]
+  /** The leader's clock when it read `taskRows`: a copy round the host took after it is newer. */
+  taskRowsAt?: number
 } & Partial<ResumeFields>
 
 /**

@@ -17,6 +17,7 @@ import {
 } from './ai-policy.js'
 import { appendTurns, conversationLanes, conversationTurns, forgetConversation, noteConversationLane } from './ai-conversations.js'
 import { runDirect } from './ai-direct.js'
+import { errClause } from '../../utils/format.js'
 import { aiLaneKey, retireLane, runAgent } from './ai-agent.js'
 
 const MAX_PROMPT_CHARS = 200_000
@@ -144,7 +145,7 @@ export async function aiRun(caller: AiCaller, request: AiRunRequest): Promise<Ai
         // One repair on the direct route: the model sees its answer and the problem.
         if (agent) throw error
         const repairHistory = [...history, { role: 'user' as const, text: turnText }, { role: 'assistant' as const, text }]
-        const repairText = `${(error as Error).message}. ${formatInstruction(request.format.schema)}`
+        const repairText = `${errClause(error)}. ${formatInstruction(request.format.schema)}`
         const repaired = await runDirect({
           system, turnText: repairText, history: repairHistory, prompt: buildDirectPrompt(repairText, repairHistory),
           effort, timeoutMs: capTimeout(request.timeoutMs, DIRECT_TIMEOUT_MS, DIRECT_MAX_TIMEOUT_MS),

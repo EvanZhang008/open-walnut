@@ -22,6 +22,7 @@ import { networkCausedAuthError } from './network-cause-core.js'
 import { createRegistryWriter } from './registry-writer-core.js'
 import { armFilePoolDeadline } from './file-pool-deadline.js'
 import { lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineReached, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
+import { clause } from '../utils/format.js'
 
 // ── Shared types ──
 
@@ -2769,7 +2770,7 @@ export function turnRetryGiveUpText(reason: string, errorText: string | null): s
   const why = reason === 'budget-exhausted' ? 'the retry budget is spent'
     : reason === 'attempts-exhausted' ? 'the retry attempt cap is reached'
     : 'the error is not retryable'
-  return `Turn failed (${errorText ?? 'upstream error'}) and Walnut stopped auto-retrying because ${why}. `
+  return `Turn failed (${errorText ?? 'upstream error'}) and Walnut stopped auto-retrying because ${clause(why)}. `
     + 'Send a message to resume this session manually.'
 }
 

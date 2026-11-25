@@ -141,6 +141,10 @@ export async function resumeEngineSwitches(): Promise<number> {
     // way are placed now, and the sweep keeps trying those that do not land.
     const { settleStrandedTransits } = await import('../session-queue-transit.js');
     await settleStrandedTransits({ switches: true }).catch(() => 0);
+    // Marks a switch held for a new session's row that had not come (a host's session): written
+    // for the rows here now, the rest when they arrive (held-session-marks.ts).
+    const { armHeldMarks } = await import('./held-session-marks.js');
+    await armHeldMarks().catch(() => 0);
   }
 }
 
@@ -150,10 +154,15 @@ async function resumeSwitches(): Promise<number> {
   // The running markers an earlier server left: its switches ended with it (the deploy hold).
   const { sweepRunningSwitchMarkers } = await import('./running-switches.js');
   await sweepRunningSwitchMarkers().catch(() => 0);
+  // A switch this server runs now is no restart's: the look comes 15 s after the boot, when a switch
+  // asked since may still be under way (2026-11-25: its old session was made the task's again
+  // under the live run, and the run's resume then met a second active session).
+  const { isSwitching } = await import('./engine-switch.js');
   let n = 0;
   for (const task of await listTasks()) {
     const sw = task.engine_switch;
     if (!sw || (sw.state !== 'pending' && sw.state !== 'switching')) continue;
+    if (isSwitching(task.id)) continue;
     n++;
     if (sw.state === 'switching') {
       // Its held rows wait in the switch's transit in the queue file (session-queue-transit.ts); an

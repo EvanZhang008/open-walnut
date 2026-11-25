@@ -20,6 +20,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { redactSensitiveText, type SubsystemLogger } from '../../logging/index.js'
 import { mcpServerEnv } from './env.js'
+import { clause } from '../../utils/format.js'
 import {
   McpCallError, type McpCallOptions, type McpCallResult, type McpServerDefinition, type McpServerState,
   type McpServerStatus, type McpSessionAccess, type McpToolInfo,
@@ -136,7 +137,7 @@ export class McpConnection {
     const detail = error === undefined ? '' : `: ${messageOf(error)}`
     const lastLine = this.stderrTail.split('\n').map((line) => line.trim()).filter(Boolean).pop() ?? ''
     const said = lastLine ? ` It said: ${lastLine.slice(0, 200)}` : ''
-    return redactSensitiveText(`The MCP server "${this.def.title}" ${what}${detail}.${said}`).slice(0, 400)
+    return redactSensitiveText(`The MCP server "${this.def.title}" ${what}${clause(detail)}.${said}`).slice(0, 400)
   }
 
   private async ensure(): Promise<Client> {

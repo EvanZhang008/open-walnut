@@ -22,6 +22,7 @@ import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
 import { deferTaskStart, requestTaskStartWorkspace, willDeferStart, workspaceCwdOf } from '../workspaces/launch.js';
 import { isLaunchReady } from '../workspaces/decisions.js';
 import { cliHostOf } from './session-row-owner.js';
+import { clause } from '../../utils/format.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
@@ -375,9 +376,9 @@ async function startOrWait(params: SessionStartParams): Promise<SessionStartResu
       const why = `${d.label ?? d.host} has no room (${d.reason})`;
       // On the task, where task_get, the Board and its lead read it (review round 6: the reason
       // reached only the caller, and the task sat in To do saying nothing).
-      await recordStartRefused(d.taskId, `Did not start: ${why}.`, d.host);
+      await recordStartRefused(d.taskId, `Did not start: ${clause(why)}.`, d.host);
       const where = d.placement ? ` ${d.placement.charAt(0).toUpperCase()}${d.placement.slice(1)}.` : '';
-      throw new HostsFullError(`Task ${d.taskId} did not start: ${why}.${where} Retry task_start with this id once one of your running `
+      throw new HostsFullError(`Task ${d.taskId} did not start: ${clause(why)}.${where} Retry task_start with this id once one of your running `
         + `tasks ends; when the user asked for it now, pass user_request with their words, which starts it at once.`, d);
     }
     if (picked.split) await nameSplitPickInFailure(err, picked.split);
@@ -826,12 +827,12 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         // A setting refused it (engines.codex, say): a retry fails the same way until the setting is changed.
         if (classifyDeliveryFailure(err).code === 'engine_config') {
           // The setting's own error rides as the cause: an engine switch says it in its own words (engine-switch-setting.ts).
-          throw Object.assign(new QuickStartError(`Task ${task.id} could not start: ${message}. A setting stops it, so a retry fails the same way until that setting is changed; then retry task_start with the same id.`, 422, { code: 'engine_config' }), { cause: err });
+          throw Object.assign(new QuickStartError(`Task ${task.id} could not start: ${clause(message)}. A setting stops it, so a retry fails the same way until that setting is changed; then retry task_start with the same id.`, 422, { code: 'engine_config' }), { cause: err });
         }
         // An engine's CLI that is not signed in keeps its kind and facts (the body, and the cause):
         // the caller (an engine switch, a route) says it as the sign-in it is.
         const signIn = engineSignInOf(err);
-        const failure = new QuickStartError(`Task ${task.id} could not start: ${message.replace(/[.\s]+$/, '')}. Fix the cause and retry task_start with the same id.`,
+        const failure = new QuickStartError(`Task ${task.id} could not start: ${clause(message)}. Fix the cause and retry task_start with the same id.`,
           502, signIn ? { code: SIGN_IN_REQUIRED, signIn: signIn.signIn } : undefined);
         throw Object.assign(failure, { cause: err });
       } finally {
@@ -898,7 +899,7 @@ export async function moveFromLostHost(task: Task, params: SessionStartParams): 
   if (!gone.gone) {
     if (!gone.unreachable) return null;
     log.session.info('task start: the session host does not answer, but it is not gone', { taskId: task.id, from: anchor.host, why: gone.why });
-    throw new QuickStartError(`This task's session runs on ${anchor.host}, which does not answer, and it cannot move to ${params.host || 'this Mac'} yet: ${gone.why}.`, 409, { code: 'host_unreachable', host: anchor.host });
+    throw new QuickStartError(`This task's session runs on ${anchor.host}, which does not answer, and it cannot move to ${params.host || 'this Mac'} yet: ${clause(gone.why)}.`, 409, { code: 'host_unreachable', host: anchor.host });
   }
   log.session.warn('task start: the task\'s session host is gone; moving it instead', { taskId: task.id, from: anchor.host, to: params.host, error: gone.error });
   const { requestEngineSwitch, EngineSwitchError } = await import('./engine-switch.js');
@@ -1016,7 +1017,7 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
       await updateSessionRecord(record.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
       return;
     }
-    throw new QuickStartError(`Task ${task.id} still has an unconfirmed start: ${String(error)}. Retry task_start with this id after the host reconnects; do not create another task.`, 409);
+    throw new QuickStartError(`Task ${task.id} still has an unconfirmed start: ${clause(String(error))}. Retry task_start with this id after the host reconnects; do not create another task.`, 409);
   } finally {
     if (timer) clearTimeout(timer);
   }

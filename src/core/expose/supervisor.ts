@@ -33,6 +33,7 @@ import os from 'node:os'
 import type { ExposeProviderDefinition, ExposeState, ExposeStatus } from './types.js'
 import { installFailure, shellInstall, type InstallResult } from './install-cli.js'
 import { probeAnswer, type ProbeAnswer } from './probe.js'
+import { clause } from '../../utils/format.js'
 
 export type { InstallResult } from './install-cli.js'
 
@@ -449,7 +450,7 @@ export class ExposeSupervisor {
       this.scheduleRetry(MISSING_RETRY_MS, 'missing')
       return
     }
-    this.lastError = `${run.title} could not start: ${error.code ?? error.message}.`
+    this.lastError = `${run.title} could not start: ${clause(error.code ?? error.message)}.`
     const wait = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)]!
     this.attempt++
     this.scheduleRetry(wait, 'retrying')

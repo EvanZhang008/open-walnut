@@ -219,6 +219,7 @@ import { takeLauncherEnv } from './launcher-env.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, recordLaneWindow } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
 import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
+import { clause } from '../utils/format.js'
 
 /**
  * Who a job turned off by the boot policy is off for, in its skip line: the
@@ -4570,7 +4571,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         log.git.warn('git compaction failed', { error: failure })
         void publishErrorNotification({
           title: 'Data Repo Compaction Failing',
-          body: `Git history compaction failed: ${failure}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
+          body: `Git history compaction failed: ${clause(failure)}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
           dedupScope: `git:compaction:${scope}`,
           recoveryKey: COMPACTION_RECOVERY_KEY,
         })

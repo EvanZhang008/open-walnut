@@ -7,6 +7,7 @@
  * (`Rule 3 (r-7f3a2c): ...`).
  */
 import type { RuleValidationError, RulesError } from './sort-types.js'
+import { clause } from '../../utils/format.js'
 
 interface Block {
   /** 1-based line of the block's key (`rules:` / `groups:`), or 0. */
@@ -109,7 +110,7 @@ export function syntaxErrorOf(error: unknown, since: number): RulesError {
     ?? (error instanceof Error ? error.message : String(error))
   return {
     ...(typeof mark?.line === 'number' ? { line: mark.line + 1 } : {}),
-    message: `The file is not valid YAML: ${reason}.`,
+    message: `The file is not valid YAML: ${clause(reason)}.`,
     since,
   }
 }

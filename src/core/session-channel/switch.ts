@@ -64,6 +64,13 @@ export const SESSION_HISTORY_CAP = 'session-history-v1'
  */
 export const SESSION_COMPLETE_STOP_CAP = 'session-complete-stop-v1'
 
+/**
+ * Capability a host's service names when its start route takes the leader's rows of the start's
+ * task (host-api.ts StartBody `taskRows`, session-channel/start-task-rows.ts) before it judges the
+ * start. A host from before it would pass them on to its runner, so a leader sends none to it.
+ */
+export const SESSION_TASK_ROWS_CAP = 'session-task-rows-v1'
+
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 
 function forced(): boolean | null {

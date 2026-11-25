@@ -30,6 +30,7 @@ import {
 import { log } from '../../logging/index.js';
 import { callerItemLine } from './caller-notice.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
+import { clause } from '../../utils/format.js';
 
 export { FOLD_PARTS_MAX, HOLD_MAX_MS, type DropTell };
 
@@ -236,7 +237,7 @@ export function tellStillWaiting(
 
 /** The words a sender reads about a note of its that still waits past its max hold. */
 export function stillWaitingWords(cause: string, target: string): string {
-  return `not delivered yet: ${cause}. It stays held and rides ${target}'s next message; `
+  return `not delivered yet: ${clause(cause)}. It stays held and rides ${target}'s next message; `
     + 'send it again without wake=false (or task_start that task) to have it read now.';
 }
 
