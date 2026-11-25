@@ -301,6 +301,14 @@ export function askOwnerOf(taskId: string, node: AreaScoped, task: AskTask | und
     throw new Error(`No task ${taskId} in this node's team to point the thread at: name a task above, below or beside yours (its id or a unique prefix), never your own.`);
   }
   const ask = askOf(task);
+  // It asks him on a card of its own Threads: no question of its status to follow, and saying it
+  // "asks nothing" sent a lead away with two cards for one decision (2026-11-25).
+  if (!ask && asksOnThread(task)) {
+    const th = task.user_status?.threads;
+    throw new Error(`Task ${taskId} asks the user on a thread of its own${th?.id ? ` (${th.id}${th.title ? ` "${th.title.slice(0, 80)}"` : ''})` : ''}, and ask_owner follows only a `
+      + 'question in a task\'s status. When that card asks this decision, take this thread off his Needs you instead: thread_update with state pending '
+      + 'and a summary of this thread\'s own result (or have that task write its card with supersedes naming this thread).');
+  }
   if (!ask) throw new Error(`Task ${taskId} asks the user nothing now: the thread stays his own ask.`);
   const decision = decisionOf(task);
   return { task: task.id, ...(decision ? { decision } : {}), ask, at, by };

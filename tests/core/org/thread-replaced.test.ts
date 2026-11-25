@@ -8,9 +8,14 @@
  * Every door a second card for one decision opens is here: the node's own card beside its own (the
  * old rule), beside his request it put in needs for the same task (new), a replaced card left behind
  * (closed when named; the sweep for one left from before). The last test classifies every state.
+ *
+ * And a card named as replaced that is no ask of the writer's own (2026-11-25: a task's card named
+ * its lead's card, the id was dropped without a word, and both asked him): namedVerdict classifies
+ * every state and every place, so a named card either steps aside, asks nothing already, or the
+ * write is refused by name; never a fourth outcome.
  */
 import { describe, expect, it } from 'vitest'
-import { closeReplaced, otherAsksRefusal, ownNeedsThreads } from '../../../src/core/org/thread-supersede.js'
+import { closeReplaced, namedRefusal, namedVerdict, otherAsksRefusal, ownNeedsThreads, stepAsideReplaced } from '../../../src/core/org/thread-supersede.js'
 import { answerUnread, closeWhy, holdsHim, replacedBy, replacedLine } from '../../../src/core/org/thread-ended.js'
 import { THREAD_STATES, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 
@@ -131,5 +136,63 @@ describe('a replaced card left behind (the sweep)', () => {
   it('every state is classified: only answered and pending close as replaced', () => {
     const closes = THREAD_STATES.filter((state) => replacedBy(left({ state }), file(left({ state }), own()), NOW))
     expect(closes.sort()).toEqual(['answered', 'pending'])
+  })
+})
+
+describe('a card named as replaced that is no ask of the writer\'s own', () => {
+  const TASK = 't-task'
+  /** The lead's card for the subject it handed to the task. */
+  const leads = (over: Partial<OrgThread> = {}): OrgThread => his({ id: 'th-lead0001', tasks: [TASK], ...over })
+  const PLACES = [
+    { name: 'the writer\'s own Threads', where: { own: true, below: false }, over: { tasks: [] } },
+    { name: 'a node below the writer', where: { own: false, below: true }, over: { tasks: [] } },
+    { name: 'a card that names the writer', where: { own: false, below: false }, over: { tasks: [TASK] } },
+    { name: 'a card pointed at the writer', where: { own: false, below: false }, over: { tasks: [], askOwner: { task: TASK, at: ago(9), by: BY } } },
+    { name: 'a card the writer opened there', where: { own: false, below: false }, over: { tasks: [], opener: { by: `task:${TASK}`, from: 'task', at: ago(9), text: 'x' } } },
+    { name: 'another task\'s card', where: { own: false, below: false }, over: { tasks: ['t-other'] } },
+  ] as const
+
+  it('every state in every place has one of three outcomes, and only a card in needs is touched', () => {
+    const seen = new Set<string>()
+    for (const p of PLACES) {
+      for (const state of THREAD_STATES) {
+        const v = namedVerdict(leads({ state, ...(p.over as Partial<OrgThread>) }), TASK, p.where)
+        seen.add(v)
+        const want = state !== 'needs' ? 'nothing' : p.name === 'another task\'s card' ? 'refuse' : 'replace'
+        expect(v, `${p.name}, ${state}`).toBe(want)
+      }
+      // Closed or moved, whatever its state: it asks him nothing.
+      expect(namedVerdict(leads({ closed: { how: 'acked', at: ago(5), by: 'human' }, ...(p.over as Partial<OrgThread>) }), TASK, p.where)).toBe('nothing')
+      expect(namedVerdict(leads({ movedTo: { taskId: 't-x', threadId: 'th-x', at: ago(5) }, ...(p.over as Partial<OrgThread>) } as never), TASK, p.where)).toBe('nothing')
+    }
+    expect([...seen].sort()).toEqual(['nothing', 'refuse', 'replace'])
+  })
+
+  it('stepped aside, it leaves his Needs you with where it is asked now, keeps its conversation, and is never closed from outside', () => {
+    const line = replacedLine({ id: 'th-task0001', title: 'Orchard fence: larch or oak posts?' })
+    const r = stepAsideReplaced(file(leads()), 'th-lead0001', line, `task:${TASK}`, ago(0))
+    expect(r.out).toBe('aside')
+    expect(r.changed).toEqual({ kind: 'updated', threadId: 'th-lead0001' })
+    const t = r.file.threads[0]!
+    expect(t).toMatchObject({ state: 'pending', reply: line, reply_by: `task:${TASK}` })
+    expect(t.closed).toBeUndefined()
+    expect(t.options).toBeUndefined()
+    expect(t.messages).toHaveLength(1)
+  })
+
+  it('a card that no longer waits on him is left as it is', () => {
+    for (const over of [{ state: 'answered' }, { state: 'pending' }, { closed: { how: 'acked', at: ago(5), by: 'human' } }] as Array<Partial<OrgThread>>) {
+      const f = file(leads(over))
+      const r = stepAsideReplaced(f, 'th-lead0001', 'x', `task:${TASK}`, ago(0))
+      expect(r.out).toBe('gone')
+      expect(r.file).toBe(f)
+    }
+    expect(stepAsideReplaced(file(), 'th-lead0001', 'x', `task:${TASK}`, ago(0)).out).toBe('gone')
+  })
+
+  it('a refusal names the id and the way on', () => {
+    expect(namedRefusal('th-lead0001', 'not_yours', { node: LEAD, nodeTitle: 'Orchard lead', title: 'Fence posts' })).toMatch(/supersedes names th-lead0001.*waits on the user on "Orchard lead" \(lead-1\) as "Fence posts".*task_send lead-1/)
+    expect(namedRefusal('th-none0001', 'unknown')).toMatch(/supersedes names th-none0001.*no open thread of your task/)
+    expect(namedRefusal('lt-none0001', 'letter')).toMatch(/supersedes names lt-none0001.*no decision letter of your task/)
   })
 })

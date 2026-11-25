@@ -11,9 +11,18 @@
  * line); `separate_reason` says why the others are other decisions. Neither: 409
  * other_open_asks, naming them. Only a task's own asks are read: his own threads and other teams'
  * asks are same-ask.ts's.
+ *
+ * Every id `supersedes` names is acted on or refused, never dropped without a word (2026-11-25, the
+ * user, of two cards asking one decision, a task's and its lead's, "two threads for the same thing"; the task
+ * had named its lead's card as replaced, the id was no ask of its own, so it was ignored and the write
+ * still answered that `supersedes` changed). A thread named beyond the writer's own asks is found on
+ * the Threads around it (namedElsewhere): one that waits on him and is the writer's to take off steps
+ * aside there (stepAsideReplaced: pending, with the line naming where it is asked now); one that asks
+ * him nothing now is left; anything else is a 409 naming it. After a write that named an ask, that
+ * ask does not wait on him.
  */
 import type { OrgThread, ThreadsFile, ThreadWriter } from './threads-model.js';
-import { ThreadError } from './threads-model.js';
+import { movedAway, ThreadError } from './threads-model.js';
 import { answerUnread, holdsHim, replacedLine } from './thread-ended.js';
 
 export const SEPARATE_REASON_MIN = 10;
@@ -109,6 +118,129 @@ export async function refuseOtherOpenAsks(nodeTaskId: string, by: ThreadWriter, 
   const why = otherAsksRefusal(others, input);
   if (why) throw new ThreadError('other_open_asks', 409, why);
   return supersededAsks(others, input.supersedes);
+}
+
+/** A thread `supersedes` names that is no ask of the writer's own in the file it writes: where it lives. */
+export interface ElsewhereAsk { id: string; node: string; title: string }
+
+/** What a thread named in `supersedes`, beyond the writer's own asks, comes to (namedVerdict). */
+export type NamedVerdict = 'replace' | 'nothing' | 'refuse';
+
+/**
+ * What the writer task may do with a thread it names as replaced. Pure.
+ *   replace  it waits on him and is the writer's to take off: on the writer's own Threads (`own`), on
+ *            a node below it (`below`: a lead decides for its team), or naming the writer (its lead
+ *            handed it the subject, pointed the card at it, or the writer opened it there);
+ *   nothing  it asks him nothing now (closed, moved, any state but needs): a retry names it again;
+ *   refuse   it waits on him and is another task's: hiding it would hide an ask he never answered.
+ */
+export function namedVerdict(t: Pick<OrgThread, 'state' | 'closed' | 'movedTo' | 'tasks' | 'askOwner' | 'opener'>, writer: string, where: { own: boolean; below: boolean }): NamedVerdict {
+  if (t.closed || t.movedTo || t.state !== 'needs') return 'nothing';
+  if (where.own || where.below) return 'replace';
+  return (t.tasks ?? []).includes(writer) || t.askOwner?.task === writer || t.opener?.by === `task:${writer}` ? 'replace' : 'refuse';
+}
+
+/** The ids `supersedes` names, each once. */
+function namedIds(supersedes: unknown): string[] {
+  return [...new Set(Array.isArray(supersedes) ? supersedes.filter((x): x is string => typeof x === 'string') : [])];
+}
+
+/** Why a write naming `id` in supersedes was refused. Pure. */
+export function namedRefusal(id: string, why: 'unknown' | 'not_yours' | 'letter', at?: { node: string; nodeTitle?: string; title?: string }): string {
+  const head = `Not written: supersedes names ${id}, which `;
+  if (why === 'letter') return `${head}is no decision letter of your task. Name only letters your task sent, or leave it out.`;
+  if (why === 'unknown') {
+    return `${head}is no open thread of your task, of the tasks above or below it, or of your team: nothing would leave the user's `
+      + 'Needs you. Check the id (thread_list, with task for another node), or leave it out.';
+  }
+  return `${head}waits on the user on "${at?.nodeTitle ?? at?.node}" (${at?.node})${at?.title ? ` as "${at.title.slice(0, 80)}"` : ''} and does not name your task: `
+    + `only that node takes it off. Ask it (task_send ${at?.node}) to step it aside for yours, or leave it out of supersedes.`;
+}
+
+/**
+ * The asks `supersedes` names beyond the writer's own (`own`: thread-supersede.ts otherOpenAsks),
+ * found on the Threads around the writer: the file it writes, its own, the tasks above it, below it
+ * and beside it. Returns the threads to step aside; throws 409 for an id that names nothing there, a
+ * thread that is another task's to take off, or a letter that is not the writer's. `except`: the
+ * thread being written. The user's own writes name none.
+ */
+export async function namedElsewhere(nodeTaskId: string, by: ThreadWriter, supersedes: unknown, own: readonly OpenAsk[], except?: string): Promise<ElsewhereAsk[]> {
+  const writer = writerTask(by);
+  const mine = new Set(own.map((o) => o.id));
+  const ids = namedIds(supersedes).filter((id) => !mine.has(id) && id !== except);
+  if (!writer || !ids.length) return [];
+  const refuse = (id: string, why: Parameters<typeof namedRefusal>[1], at?: Parameters<typeof namedRefusal>[2]): never => {
+    throw new ThreadError('bad_input', 409, namedRefusal(id, why, at));
+  };
+  // A letter beyond the open ones: the writer's own, answered or settled already, asks nothing now.
+  const letters = ids.filter((id) => id.startsWith('lt-'));
+  if (letters.length) {
+    const { getLetter } = await import('../human-inbox/store.js');
+    for (const id of letters) {
+      const l = await getLetter(id).catch(() => null);
+      if (!l || l.sender?.taskId !== writer) refuse(id, 'letter');
+    }
+  }
+  const left = new Set(ids.filter((id) => id.startsWith('th-')));
+  if (!left.size) return [];
+  const [{ readThreads }, { listTasks }, { treeAround }, { keepsThreads }] = await Promise.all([
+    import('./threads-store.js'), import('../task-manager.js'), import('../same-ask-tree.js'), import('./keeps-threads.js'),
+  ]);
+  const everything = await listTasks();
+  const byId = new Map(everything.map((t) => [t.id, t] as const));
+  const self = byId.get(writer);
+  const rank = { ancestor: 0, descendant: 1, team: 2 } as Record<string, number>;
+  const around = treeAround(writer, everything)
+    .filter((a) => keepsThreads(a.task) || !!a.task.org_role)
+    .sort((a, b) => (rank[a.relation] ?? 3) - (rank[b.relation] ?? 3));
+  const places = new Map<string, boolean>([[nodeTaskId, false], [writer, false]]);
+  for (const a of around) if (!places.has(a.task.id)) places.set(a.task.id, a.relation === 'descendant' || (a.relation === 'team' && !!self?.org_role));
+  const out: ElsewhereAsk[] = [];
+  for (const [node, below] of places) {
+    if (!left.size) break;
+    const threads = (await readThreads(node).catch(() => null))?.threads ?? [];
+    for (const t of threads) {
+      if (!left.has(t.id) || movedAway(t)) continue;
+      left.delete(t.id);
+      const verdict = namedVerdict(t, writer, { own: node === writer, below });
+      if (verdict === 'refuse') refuse(t.id, 'not_yours', { node, nodeTitle: byId.get(node)?.title, title: t.title });
+      if (verdict === 'replace') out.push({ id: t.id, node, title: t.title });
+    }
+  }
+  for (const id of left) refuse(id, 'unknown');
+  return out;
+}
+
+/**
+ * The file with a card another card replaced stepped aside: out of his Needs you (pending), its
+ * summary the line naming where it is asked now, its buttons gone: 'aside'. Never closed from here:
+ * its node keeps it and closes it itself (thread-ended.ts closes it once nothing of his holds it).
+ * 'gone' when it no longer waits on him. Pure.
+ */
+export function stepAsideReplaced(file: ThreadsFile, id: string, line: string, by: ThreadWriter, at: string): { file: ThreadsFile; out: 'aside' | 'gone'; changed?: { kind: 'updated'; threadId: string } } {
+  const t = file.threads.find((x) => x.id === id);
+  if (!t || t.closed || t.movedTo || t.state !== 'needs') return { file, out: 'gone' };
+  const { snoozed: _s, options: _o, reply_sid: _sid, reply_host: _host, ...rest } = t;
+  const next: OrgThread = { ...rest, state: 'pending', reply: line, replyAt: at, reply_by: by, updatedAt: at };
+  return { file: { ...file, threads: file.threads.map((x) => (x.id === id ? next : x)) }, out: 'aside', changed: { kind: 'updated', threadId: id } };
+}
+
+/**
+ * Step the asks named elsewhere aside, each on its own node. Throws when one could not be written:
+ * the writer must hear that a card it named still waits on him (never a write that only looks done).
+ */
+export async function applyElsewhere(asks: readonly ElsewhereAsk[], now: { id: string; title: string }, by: ThreadWriter): Promise<void> {
+  if (!asks.length) return;
+  const line = replacedLine(now);
+  const { writeThreadsFor } = await import('./threads-store.js');
+  for (const a of asks) {
+    try {
+      await writeThreadsFor(a.node, (cur) => stepAsideReplaced(cur, a.id, line, by, new Date().toISOString()));
+    } catch (err) {
+      throw new ThreadError('bad_input', 409, `Thread ${now.id} is written, but ${a.id} on ${a.node} could not be stepped aside and still waits on the user `
+        + `(${err instanceof Error ? err.message : String(err)}): ask that node (task_send ${a.node}) to set it pending.`);
+    }
+  }
 }
 
 /**

@@ -27,7 +27,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
-import { readThreads } from '../../src/core/org/threads-store.js'
+import { openNodeThread, readThreads } from '../../src/core/org/threads-store.js'
 import { getLetter } from '../../src/core/human-inbox/store.js'
 import { lettersAsThreadsNow } from '../../src/core/human-inbox/letter-threads.js'
 import { letterThreadId } from '../../src/core/org/letter-thread-model.js'
@@ -39,6 +39,7 @@ let daemon: MockDaemon
 let port = 0
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 let taskId = ''
+let vpId = ''
 let sid = ''
 const KIND = { user_kind: 'permissions', user_kind_why: 'It uses the shared garden key, which needs his approval' }
 
@@ -65,6 +66,7 @@ beforeAll(async () => {
   port = (server.address() as { port: number }).port
   await ensureMainTask()
   const vp = await ensureProjectLead('Triage')
+  vpId = vp.id
   taskId = (await addTask({ title: 'Ticket triage', project: 'Triage', parent_task_id: vp.id })).task.id
   await updateTaskRaw(taskId, { threads_on: true, phase: 'IN_PROGRESS' } as never, { emitEvent: true })
   sid = (await sessionRunner.startSession({ taskId, cwd: WALNUT_HOME, message: 'Ready', project: 'Triage', preassignedSessionId: randomUUID() })).claudeSessionId
@@ -192,5 +194,81 @@ describe('his request in needs, then a card of the node\'s own for the same task
     expect(old.options).toBeUndefined()
     const open = (await readThreads(taskId)).threads.filter((t) => !t.closed && t.state === 'needs' && t.tasks?.includes(fence))
     expect(open.map((t) => t.id)).toEqual([fresh])
+  })
+})
+
+describe('a task\'s card replaces its lead\'s card for the same decision (2026-11-25: two nodes, two cards)', () => {
+  const APART = { separate_reason: 'The hedge is another decision than the sprinkler and the fence.' }
+  const HEDGE = {
+    title: 'Hedge: trim it now or after the frost?', ...KIND,
+    reply: 'Trim the hedge now or after the frost? I recommend after: new cuts suffer in the cold.',
+    options: [{ label: 'After the frost (recommended)', recommended: true }, { label: 'Now' }],
+  }
+  const onLead = async (id: string) => (await readThreads(vpId)).threads.find((t) => t.id === id)!
+  let leads = ''
+  let others = ''
+  let mine = ''
+
+  it('the lead asks him about the hedge on a card naming the task, and about the gate on one that does not', async () => {
+    const by = `task:${vpId}` as const
+    leads = (await openNodeThread(vpId, { ...HEDGE, title: 'Hedge trimming: waiting for your review', text: 'The hedge plan is ready for him.', from: 'task', tasks: [taskId] }, by)).id
+    others = (await openNodeThread(vpId, {
+      title: 'Garden gate: paint it green?', text: 'The gate needs a colour.', from: 'task', ...KIND, separate_reason: 'The gate is another decision than the hedge.',
+      reply: 'Paint the garden gate green or leave it bare? I recommend green: it hides the rust.',
+      options: [{ label: 'Green (recommended)', recommended: true }, { label: 'Bare' }],
+    }, by)).id
+    expect((await onLead(leads)).state).toBe('needs')
+    expect((await onLead(others)).state).toBe('needs')
+  })
+
+  it('a card it may not replace, or an id that names nothing, refuses the whole write by name', async () => {
+    const draft = { ...HEDGE, from: 'task', text: 'Trim the hedge now or after the frost? I recommend after.', ...APART }
+    const notMine = await op('thread_create', { ...draft, supersedes: [leads, others] })
+    expect(notMine.ok).toBe(false)
+    expect((notMine as { message: string }).message).toMatch(new RegExp(`supersedes names ${others}.*does not name your task`))
+    const unknown = await op('thread_create', { ...draft, supersedes: ['th-0123456789ab'] })
+    expect(unknown.ok).toBe(false)
+    expect((unknown as { message: string }).message).toMatch(/supersedes names th-0123456789ab.*no open thread/)
+    // Nothing was written: no hedge card of the task, and the lead's cards still wait on him.
+    expect((await readThreads(taskId)).threads.some((t) => t.title === HEDGE.title)).toBe(false)
+    expect((await onLead(leads)).state).toBe('needs')
+  })
+
+  it('named, the lead\'s card steps aside on the lead\'s Threads and one card asks the decision', async () => {
+    const made = await op('thread_create', { ...HEDGE, from: 'task', text: 'Trim the hedge now or after the frost? I recommend after.', ...APART, supersedes: [leads] })
+    expect(made.ok, JSON.stringify(made)).toBe(true)
+    mine = (made as { result: { thread: { id: string } } }).result.thread.id
+    const old = await onLead(leads)
+    expect(old.state).toBe('pending')
+    expect(old.closed).toBeUndefined()
+    expect(old.options).toBeUndefined()
+    expect(old.reply).toBe(`Asked now in "${HEDGE.title}" (${mine}).`)
+    // The lead's other card is untouched, and across both nodes one card asks about the hedge.
+    expect((await onLead(others)).state).toBe('needs')
+    const asking = [...(await readThreads(vpId)).threads, ...(await readThreads(taskId)).threads].filter((t) => !t.closed && t.state === 'needs' && /hedge/i.test(t.title))
+    expect(asking.map((t) => t.id)).toEqual([mine])
+  })
+
+  it('named again on a later write (a retry, a reworded summary), it is left alone and the write goes through', async () => {
+    const again = await op('thread_update', { id: mine, reply: 'Trim the hedge after the frost? I recommend it: new cuts suffer in the cold, and the birds have left by then.', supersedes: [leads] })
+    expect(again.ok, JSON.stringify(again)).toBe(true)
+    expect((await onLead(leads)).state).toBe('pending')
+  })
+
+  it('a later write of a card already waiting on him still takes a named card off', async () => {
+    const by = `task:${vpId}` as const
+    const second = (await openNodeThread(vpId, { ...HEDGE, title: 'Hedge: your pick, again', text: 'Asked again by the lead.', from: 'task', tasks: [taskId], separate_reason: 'Opened by the test to stand beside the task card.' }, by)).id
+    expect((await onLead(second)).state).toBe('needs')
+    // No state in the patch: the task's card is in needs already.
+    const out = await op('thread_update', { id: mine, supersedes: [second] })
+    expect(out.ok, JSON.stringify(out)).toBe(true)
+    expect((await onLead(second)).state).toBe('pending')
+  })
+
+  it('the lead pointing its card at the task with ask_owner hears that the task asks on a thread, and what to do', async () => {
+    const by = `task:${vpId}` as const
+    await statusOf()
+    const { patchThread } = await import('../../src/core/org/threads-store.js')
+    await expect(patchThread(vpId, others, { ask_owner: taskId }, by)).rejects.toThrow(/asks the user on a thread of its own.*state pending/)
   })
 })

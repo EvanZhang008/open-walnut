@@ -261,8 +261,9 @@ export function reasonCoversTask(reason: unknown, taskId: string): boolean {
 export function sameSubjectAskRefusal(c: SubjectCandidate): string {
   return `Not handed to the user: "${c.taskTitle}" (${c.taskId}) already asks him this subject on its thread ${c.id} "${c.title}", and he sees `
     + 'that card on every node above it. One decision is asked in one place: write your thread without asking (state answered or working, '
-    + `with your own result), or have that task take its ask off (task_send ${c.taskId}). If yours is another decision, send this again with `
-    + 'separate_reason saying how it differs.';
+    + `with your own result), or have that task take its ask off (task_send ${c.taskId}). When yours replaces a card that names your task, `
+    + `send this again with supersedes ["${c.id}"]: it steps aside there. If yours is another decision, send it again with separate_reason `
+    + 'saying how it differs.';
 }
 
 /**
@@ -272,11 +273,13 @@ export function sameSubjectAskRefusal(c: SubjectCandidate): string {
  * another at the read (a pointer could hide an ask he never answered); the second ask is refused at
  * the write, where its writer can say it is another one. The user's own writes are never asked.
  */
-export async function refuseSameSubjectAsk(taskId: string, title: string, tasks: readonly string[], by: ThreadWriter, input: { separate_reason?: unknown }): Promise<void> {
+export async function refuseSameSubjectAsk(taskId: string, title: string, tasks: readonly string[], by: ThreadWriter, input: { separate_reason?: unknown; supersedes?: readonly string[] }): Promise<void> {
   if (by === 'human' || (typeof input.separate_reason === 'string' && input.separate_reason.trim().length >= 10)) return;
+  // A card it names as replaced steps aside with this write (thread-supersede.ts namedElsewhere), or the write is refused there.
+  const replaced = new Set(input.supersedes ?? []);
   const asking = (await treeOpenThreads(taskId, tasks))
     .filter((b) => b.task.id !== taskId)
-    .map((b) => ({ ...b, threads: b.threads.filter((t) => t.state === 'needs') }));
+    .map((b) => ({ ...b, threads: b.threads.filter((t) => t.state === 'needs' && !replaced.has(t.id)) }));
   const hit = strongMatch(sameSubjectCandidates(title, asking, Date.now()));
   if (!hit) return;
   const { ThreadError } = await import('./threads-model.js');
