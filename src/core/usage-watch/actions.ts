@@ -5,6 +5,7 @@
  */
 import { lastShipOf, recordShip } from './ships.js'
 import { readRange, usageReport, targetEvents, type ReportRow } from './report.js'
+import { callerSide, ownFaults } from './agg.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
@@ -75,21 +76,30 @@ function watchView(w: Watch): Record<string, unknown> {
     id: w.id, task: w.taskId, state: w.state, targets: w.targets, checks: w.checks, who: w.who,
     ...(w.triggerId ? { trigger: w.triggerId } : {}), ...(w.exempt ? { exempt: w.exempt } : {}),
     set_at: new Date(w.createdAt).toISOString(), check_at: new Date(w.checkAt).toISOString(),
-    ...(w.result ? { result: w.result.map((r) => ({ target: r.target, uses: r.uses, ok: r.ok, ...(r.notes.length ? { notes: r.notes } : {}) })) } : {}),
+    ...(w.result ? { result: w.result.map((r) => ({ target: r.target, uses: r.uses, ok: r.ok, ...(r.notes.length ? { notes: r.notes } : {}), ...(r.callerSide ? { caller_side: r.callerSide } : {}) })) } : {}),
   }
 }
 
 function rowView(r: ReportRow): Record<string, unknown> {
   const base = { kind: r.kind, name: r.name, calls: r.calls }
   if (r.kind === 'op') {
-    return { ...base, failed: r.fails, refused: r.refused, bad_args: r.badArgs, errors: r.errors + r.timeouts, unreachable: r.unreachable, cut: r.cut, over_limit: r.overLimit, answer_p95: r.sizeP95, largest: r.largest, codes: r.codes }
+    // failed: Walnut's own faults only; caller_side: bad arguments and designed refusals, never failures (agg.ts).
+    return { ...base, failed: ownFaults(r), caller_side: callerSide(r), refused: r.refused, bad_args: r.badArgs, errors: r.errors + r.timeouts, unreachable: r.unreachable, cut: r.cut, over_limit: r.overLimit, answer_p95: r.sizeP95, largest: r.largest, codes: r.codes }
   }
   if (r.kind === 'http') return { ...base, slow: r.slow, server_errors: r.serverErrors, unreachable: r.unreachable, p95_ms: r.msP95, codes: r.codes }
   return base
 }
 
+/** The tools with the most calls on the caller's side (bad arguments, designed refusals), five at most. */
+function callerTop(rows: readonly ReportRow[]): Array<Record<string, unknown>> {
+  return rows.filter((r) => r.kind === 'op' && callerSide(r) > 0)
+    .sort((a, b) => callerSide(b) - callerSide(a) || b.calls - a.calls).slice(0, 5)
+    .map((r) => ({ name: r.name, calls: r.calls, bad_args: r.badArgs, refused: r.refused, pct: Math.round((callerSide(r) / Math.max(1, r.calls)) * 1000) / 10 }))
+}
+
 function problemScore(r: ReportRow): number {
-  return r.cut * 100 + (r.errors + r.timeouts) * 10 + r.serverErrors * 10 + r.badArgs * 3 + r.slow * 3 + r.overLimit * 2 + (r.kind === 'page' ? r.calls * 5 : 0)
+  // The tool's own problems; the caller's side has its own list (callerTop).
+  return r.cut * 100 + (r.errors + r.timeouts) * 10 + r.serverErrors * 10 + r.slow * 3 + r.overLimit * 2 + (r.kind === 'page' ? r.calls * 5 : 0)
 }
 
 /**
@@ -183,6 +193,8 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       return {
         range, from: new Date(rep.from).toISOString(), recorded: rep.recorded,
         rows: rows.map(rowView),
+        // The caller's side, reported apart: the tools agents most often call wrong or a rule refuses.
+        ...(target ? {} : { caller_side: callerTop(rep.rows) }),
         ...(target ? { recent_problems: targetEvents(target, 10).map((e) => ({ at: new Date(e.at).toISOString(), problem: e.problem, ...(e.code ? { code: e.code } : {}), ...(e.chars ? { size: e.chars } : {}), ...(e.ms ? { ms: e.ms } : {}) })) } : {}),
         outcome: `${rep.rows.length} name(s) recorded in ${range}${rep.rows.length > 15 ? '; the 15 with the most problems listed' : ''}.`,
       }

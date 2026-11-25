@@ -5,8 +5,30 @@
 
 export type UsageKind = 'op' | 'http' | 'page'
 
-/** How a call ended: refused and bad_args are the caller's to fix; error, timeout and unreachable are not. */
+/**
+ * How a call ended. Walnut's own faults are `error` and `timeout`: only they make a failure rate.
+ * `bad_args` (the caller sent arguments the tool cannot take) and `refused` (a rule said no by
+ * design: same_ask, reply_language, user_kind, a conflict, a stopped trigger) are the caller's
+ * side, counted and reported apart (2026-11-25: a watch failed task_report_set at 21.7% and
+ * human_inbox_send at 33.3% on agents' wrong arguments alone, with no fault of Walnut's).
+ * `unreachable` (a host or the Mac away, a sleep) is neither.
+ */
 export type OutcomeClass = 'ok' | 'refused' | 'bad_args' | 'error' | 'timeout' | 'unreachable'
+
+/** Whose each failed class is. A new class must say it here before anything counts it. */
+export const OUTCOME_SIDE: Record<Exclude<OutcomeClass, 'ok'>, 'own' | 'caller' | 'neither'> = {
+  error: 'own', timeout: 'own', bad_args: 'caller', refused: 'caller', unreachable: 'neither',
+}
+
+/** Walnut's own faults among the calls: server errors and timeouts. */
+export function ownFaults(a: Pick<Agg, 'errors' | 'timeouts'>): number {
+  return (a.errors ?? 0) + (a.timeouts ?? 0)
+}
+
+/** The caller's side: bad arguments and designed refusals. Never a failure; reported apart. */
+export function callerSide(a: Pick<Agg, 'badArgs' | 'refused'>): number {
+  return (a.badArgs ?? 0) + (a.refused ?? 0)
+}
 
 export interface Agg {
   calls: number
@@ -36,6 +58,10 @@ export interface Agg {
   msHist: Record<string, number>
   /** Error code → count (refusals and errors). */
   codes: Record<string, number>
+  /** The codes of Walnut's own faults (error, timeout) alone, for the new-code check. Older rows have none. */
+  ownCodes: Record<string, number>
+  /** The codes of the caller's side (bad_args, refused) alone. Older rows have none. */
+  callerCodes: Record<string, number>
   /** Requests: server errors (5xx). */
   serverErrors: number
 }
@@ -44,7 +70,7 @@ export const BIG_CHARS = 10_000
 const RATIO = Math.log(1.25)
 
 export function emptyAgg(): Agg {
-  return { calls: 0, fails: 0, refused: 0, badArgs: 0, errors: 0, timeouts: 0, unreachable: 0, over10k: 0, overLimit: 0, cut: 0, spilled: 0, charsSum: 0, charsMax: 0, msSum: 0, msMax: 0, slow: 0, hist: {}, msHist: {}, codes: {}, serverErrors: 0 }
+  return { calls: 0, fails: 0, refused: 0, badArgs: 0, errors: 0, timeouts: 0, unreachable: 0, over10k: 0, overLimit: 0, cut: 0, spilled: 0, charsSum: 0, charsMax: 0, msSum: 0, msMax: 0, slow: 0, hist: {}, msHist: {}, codes: {}, ownCodes: {}, callerCodes: {}, serverErrors: 0 }
 }
 
 export function bucketOf(chars: number): number {
@@ -65,7 +91,9 @@ export function mergeAgg(a: Agg, b: Agg): Agg {
   out.msMax = Math.max(a.msMax ?? 0, b.msMax ?? 0)
   for (const [k, v] of [...Object.entries(a.hist ?? {}), ...Object.entries(b.hist ?? {})]) out.hist[k] = (out.hist[k] ?? 0) + v
   for (const [k, v] of [...Object.entries(a.msHist ?? {}), ...Object.entries(b.msHist ?? {})]) out.msHist[k] = (out.msHist[k] ?? 0) + v
-  for (const [k, v] of [...Object.entries(a.codes ?? {}), ...Object.entries(b.codes ?? {})]) out.codes[k] = (out.codes[k] ?? 0) + v
+  for (const m of ['codes', 'ownCodes', 'callerCodes'] as const) {
+    for (const [k, v] of [...Object.entries(a[m] ?? {}), ...Object.entries(b[m] ?? {})]) out[m][k] = (out[m][k] ?? 0) + v
+  }
   return out
 }
 
@@ -106,7 +134,11 @@ export function addCall(agg: Agg, c: { cls: OutcomeClass; code?: string; chars?:
     else if (c.cls === 'timeout') agg.timeouts++
     else agg.unreachable++
   }
-  if (c.code) agg.codes[c.code] = (agg.codes[c.code] ?? 0) + 1
+  if (c.code) {
+    agg.codes[c.code] = (agg.codes[c.code] ?? 0) + 1
+    const side = c.cls === 'ok' ? null : OUTCOME_SIDE[c.cls] === 'own' ? 'ownCodes' : OUTCOME_SIDE[c.cls] === 'caller' ? 'callerCodes' : null
+    if (side) { agg[side] ??= {}; agg[side][c.code] = (agg[side][c.code] ?? 0) + 1 }
+  }
   if (c.chars !== undefined) {
     if (c.chars > BIG_CHARS) agg.over10k++
     agg.charsSum += c.chars

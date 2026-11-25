@@ -69,7 +69,13 @@ route timing out, which was also a slow read).
 A task that ships (a land, deploy, push to main or publish its session ran, or `usage_watch`
 `ship`) names what real use should show: `usage_watch {"action":"set","targets":[...],"checks":{...}}`.
 At its check time each target is judged (Passed, Failed, Too little use, Unknown) and the verdict
-goes to the task, or to its lead when it is complete. `admitSessionClose` refuses a task's own
+goes to the task, or to its lead when it is complete. A tool's failure rate and its new error codes
+count only Walnut's own faults (errors and timeouts). The caller's side (bad arguments, and a rule's
+refusal by design: `same_ask`, `reply_language`, `user_kind`, a conflict, a stopped trigger) is
+reported apart: `caller_side` on each target and report row, a "not failures" line in the verdict,
+the report's `caller_side` list, and the bad-arguments alarm (`usage-watch/agg.ts` `ownFaults`,
+`callerSide`; 2026-11-25: a watch failed `task_report_set` at 21.7% on agents' wrong arguments
+alone). A host away (`unreachable`, `asleep`) is neither. `admitSessionClose` refuses a task's own
 session closing it after it shipped with no watch and no exemption (`usage-watch/gate.ts`); its
 lead or a person closing it is not held, and such a close with nothing named is recorded as
 `unwatched` on the page (the gap shows; nothing is refused). A ship is a command the session ran (its first word, as

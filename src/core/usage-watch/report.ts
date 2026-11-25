@@ -3,7 +3,7 @@
  * error kind, its totals over the range, its size and time percentiles, its error codes and a
  * line per day. Read from the hourly rows only (no content is in them).
  */
-import { emptyAgg, mergeAgg, msPercentile, sizePercentile, type Agg, type UsageKind } from './agg.js'
+import { emptyAgg, mergeAgg, msPercentile, ownFaults, sizePercentile, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readEvents, readHours, type UsageEvent } from './store.js'
 import { recordedShare, targetCovers } from './watches.js'
 
@@ -51,7 +51,8 @@ export interface UsageReport {
 }
 
 function badOf(kind: UsageKind, a: Agg): number {
-  if (kind === 'op') return a.errors + a.timeouts + a.badArgs + a.cut
+  // Walnut's own faults and cut answers; the caller's side is not a problem of the tool's (agg.ts).
+  if (kind === 'op') return ownFaults(a) + a.cut
   if (kind === 'http') return a.slow + a.serverErrors
   return a.calls
 }

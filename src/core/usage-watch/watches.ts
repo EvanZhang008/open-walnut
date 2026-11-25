@@ -9,7 +9,7 @@
  * While it is armed, an alarm on one of its targets goes to its task (route.ts).
  */
 import { randomUUID } from 'node:crypto'
-import { emptyAgg, mergeAgg, msPercentile, type Agg, type UsageKind } from './agg.js'
+import { callerSide, emptyAgg, mergeAgg, msPercentile, ownFaults, type Agg, type UsageKind } from './agg.js'
 import { readAlive, readHours, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 
@@ -75,6 +75,11 @@ export interface TargetResult {
   p95Ms?: number
   newCodes?: string[]
   cut?: number
+  /**
+   * The caller's side, never a failure (agg.ts callerSide): calls refused for their arguments or by a
+   * rule's design, their share and any codes new since the week before.
+   */
+  callerSide?: { calls: number; pct: number; badArgs: number; refused: number; newCodes?: string[] }
 }
 
 const TARGET_RE = /^(op:[a-z][a-z0-9_]{0,63}|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\/[A-Za-z0-9_\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$/
@@ -192,9 +197,13 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
     if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
     return { target, uses: agg.calls + theirs, ok, notes }
   }
-  const fails = agg.errors + agg.timeouts + agg.badArgs
-  const failPct = agg.calls ? Math.round((fails / agg.calls) * 1000) / 10 : 0
+  // Only Walnut's own faults make the failure rate; the caller's side is reported apart (agg.ts).
+  const pct = (n: number) => (agg.calls ? Math.round((n / agg.calls) * 1000) / 10 : 0)
+  const failPct = pct(ownFaults(agg))
   const out: TargetResult = { target, uses: agg.calls, ok: true, notes, failPct }
+  const caller = callerSide(agg)
+  // A route's 4xx answers stay out of both, as before: a route's caller side is its own client's.
+  if (caller > 0 && target.startsWith('op:')) out.callerSide = { calls: caller, pct: pct(caller), badArgs: agg.badArgs, refused: agg.refused }
   if (target.startsWith('op:')) {
     out.largest = agg.charsMax
     out.cut = agg.cut
@@ -208,8 +217,13 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   if (agg.calls > 0 && failPct > c.max_fail_pct) notes.push(`failures ${failPct}% over ${c.max_fail_pct}%`)
   if (c.no_new_codes) {
     const before = mergedFor(target, since - 7 * 24 * HOUR_MS, since)
-    const fresh = Object.keys(agg.codes).filter((k) => !(k in before.codes) && !k.startsWith('http_4') && k !== 'unreachable' && k !== ASLEEP_CODE)
+    // A code new since the week before, of any class then. Only a new fault of Walnut's fails the
+    // target; a new refusal or argument code is the caller's side, and a host away is neither.
+    const freshOf = (codes: Record<string, number> | undefined) => Object.keys(codes ?? {}).filter((k) => !(k in before.codes) && !k.startsWith('http_4') && k !== 'unreachable' && k !== ASLEEP_CODE)
+    const fresh = freshOf(agg.ownCodes)
     if (fresh.length) { out.newCodes = fresh.slice(0, 10); notes.push(`new error code${fresh.length === 1 ? '' : 's'}: ${fresh.slice(0, 5).join(', ')}`) }
+    const callerFresh = freshOf(agg.callerCodes)
+    if (callerFresh.length && out.callerSide) out.callerSide.newCodes = callerFresh.slice(0, 10)
   }
   out.ok = notes.length === 0
   return out
@@ -230,6 +244,14 @@ export function recordedShare(since: number, until: number): number {
 
 export interface WatchVerdict { state: Exclude<WatchState, 'watching' | 'dropped'> | 'extended'; results: TargetResult[]; summary: string }
 
+/** The caller's side of a target, in the verdict's words: said, never counted as a failure. */
+export function callerLine(r: TargetResult): string {
+  const c = r.callerSide
+  if (!c) return ''
+  const parts = [c.badArgs ? `${c.badArgs} with bad arguments` : '', c.refused ? `${c.refused} refused by design` : ''].filter(Boolean).join(', ')
+  return ` (not failures: ${parts}, ${c.pct}% of uses${c.newCodes?.length ? `; new codes ${c.newCodes.slice(0, 5).join(', ')}` : ''})`
+}
+
 /** The verdict on a watch at its check time. */
 export function judgeWatch(w: Watch, now = Date.now()): WatchVerdict {
   const until = Math.min(now, w.checkAt)
@@ -237,7 +259,7 @@ export function judgeWatch(w: Watch, now = Date.now()): WatchVerdict {
   const min = w.checks.min_uses ?? DEFAULT_CHECKS.min_uses
   const failed = results.filter((r) => !r.ok)
   const short = results.filter((r) => !r.target.startsWith('page:') && r.uses < min)
-  const line = (r: TargetResult) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'}${r.notes.length ? `, ${r.notes.join('; ')}` : ''}`
+  const line = (r: TargetResult) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'}${r.notes.length ? `, ${r.notes.join('; ')}` : ''}${callerLine(r)}`
   if (failed.length) return { state: 'failed', results, summary: `Failed: ${failed.map(line).join(' · ')}` }
   if (short.length) {
     const words = short.map((r) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'} (needs ${min})`).join(' · ')

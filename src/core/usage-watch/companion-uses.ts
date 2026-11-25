@@ -129,8 +129,9 @@ export function _resetCompanionUsesForTesting(): void {
 /** A route name as the recorder writes one (normalize.ts publicTemplate), under /api. */
 const ROUTE_NAME_RE = /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/api\/[A-Za-z0-9_\-/:.*]{1,160}$/
 const COUNTS = Object.keys(emptyAgg()).filter((k) => typeof (emptyAgg() as unknown as Record<string, unknown>)[k] === 'number') as Array<keyof Agg>
-const MAPS = ['hist', 'msHist', 'codes'] as const
-const MAP_KEY_RE: Record<(typeof MAPS)[number], RegExp> = { hist: /^-?\d{1,4}$/, msHist: /^-?\d{1,4}$/, codes: /^[a-z][a-z0-9_]{0,47}$/ }
+const MAPS = ['hist', 'msHist', 'codes', 'ownCodes', 'callerCodes'] as const
+const CODE_RE = /^[a-z][a-z0-9_]{0,47}$/
+const MAP_KEY_RE: Record<(typeof MAPS)[number], RegExp> = { hist: /^-?\d{1,4}$/, msHist: /^-?\d{1,4}$/, codes: CODE_RE, ownCodes: CODE_RE, callerCodes: CODE_RE }
 const MAX_COUNT = 1e12
 
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_COUNT ? v : null)
