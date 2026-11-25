@@ -30,6 +30,10 @@ export type StandbyRuntime = { held: 'service' | 'in-process'; dir: string } | {
 
 let held: StandbyRuntime['held'] = false
 let state: StandbyRuntime | null = null
+/** A hold still starting (its prewarm, its start): a stop meanwhile closes the runtime for good, so it never starts after the stop. */
+let holding: Promise<boolean> | null = null
+/** Counts the stops: a hold that a stop overtook reports nothing held, whatever its start answered. */
+let releases = 0
 
 /** What this standby holds, for its status (handed-over.ts); null before the hold ran. */
 export function standbyRuntimeState(): StandbyRuntime | null { return state }
@@ -40,6 +44,19 @@ export function standbyRuntimeState(): StandbyRuntime | null { return state }
  * its own, or the in-process start declined (logged, and named in the standby's status).
  */
 export async function holdServiceRuntimeInStandby(port: number): Promise<boolean> {
+  const at = releases
+  const hold = holdRuntime(port)
+  holding = hold
+  try {
+    const ok = await hold
+    if (releases === at) return ok
+    held = false
+    state = null
+    return false
+  } finally { if (holding === hold) holding = null }
+}
+
+async function holdRuntime(port: number): Promise<boolean> {
   const rt = serviceRuntime()
   if (!rt) return holdPlainRuntime()
   const { startInProcessDaemon } = await import('../providers/in-process-daemon.js')
@@ -88,7 +105,10 @@ async function holdPlainRuntime(): Promise<boolean> {
  */
 export async function releaseServiceRuntimeInStandby(reason: string, budgetMs: number): Promise<void> {
   const was = held
-  if (!was) return
+  // A hold still starting is stopped too: the stop closes the runtime for good first, so the start that
+  // is under way is refused (InProcessDaemonClosedError, or the stop waits for it and stops what it started).
+  if (!was && !holding) return
+  releases++
   held = false
   state = null
   if (was === 'service') (await import('./serve-launcher-beat.js')).serveLauncherLeaving(reason)
