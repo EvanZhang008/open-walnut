@@ -416,6 +416,9 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/claude-check-core.ts',
   // fs.ls with its per-entry and whole-listing budgets: same rule.
   'src/providers/fs-ls-core.ts',
+  // The gzipped manifest lists of replica.sync, and the trigger checks no server took yet: same rule.
+  'src/providers/replica-sync-gz.ts',
+  'src/providers/trigger-unsent-checks.ts',
   // The claude argv frame of a resume whose spawn record is lost (bridgeResume).
   'src/providers/claude-session-argv.ts',
   // Per-turn snapshots and the rewind guard: same import-or-inline rule.
