@@ -685,6 +685,9 @@ export { shellQuote } from './session-io.js'
 // Exported for testing
 export { outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr }
 
+/** A Walnut mount verdict (init, reconcileMcpMountStatus) that leaves the process without the tools. */
+const MOUNT_NOT_HAD: ReadonlySet<string> = new Set(['blocked', 'failed', 'needs-auth'])
+
 /** The post-death drain respawns a session's worker at most this many times per window. */
 const ACP_DRAIN_MAX_DEATHS = 3
 const ACP_DRAIN_DEATH_WINDOW_MS = 2 * 60_000
@@ -1059,6 +1062,8 @@ export class ClaudeCodeSession {
    *  this object attached to, whose init it may never see (the attach path keeps the
    *  old rule there, read back from lineLifecyclePid). */
   private _initSeenThisProcess = true
+  /** Real use counted this process's Walnut mount (recordMountVerdict): once, on its first settled verdict. */
+  private _mountCountedThisProcess = true
   /** Lines written behind a running turn before this process's init said whether it reports
    *  its queue: tracked until that init decides (provisional, see writeMessage). */
   private _provisionalLines = new Set<string>()
@@ -3224,6 +3229,7 @@ export class ClaudeCodeSession {
     if (this.claudeSessionId) this.handBackAnsweringLines(this.claudeSessionId, unansweredLines(this.claudeSessionId), 'replaced', true)
     this._startedMarks.clear()
     this._initSeenThisProcess = false
+    this._mountCountedThisProcess = false
     this._initAnswerCount = null
     this._startDeathOffered = false
     this._startDeathAsked = false
@@ -7759,8 +7765,11 @@ export class ClaudeCodeSession {
             })
           }
           this._walnutMountVerdict = status.walnut
-          // Real use counts each process's mount, once: never an init read again after a restart.
-          if (status.walnut && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true) {
+          // Real use counts each process's mount once, on the first init that settled it: the CLI
+          // announces itself at every turn's start, and a mount still starting is told by a later one.
+          // Never an init read again after a restart, nor a process this server did not start.
+          if (status.walnut && status.walnut !== 'pending' && !this._mountCountedThisProcess && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true) {
+            this._mountCountedThisProcess = true
             const verdict = { sid: this.claudeSessionId ?? undefined, taskId: this.taskId || undefined, host: this._host && this._host !== '__local__' ? this._host : 'local', status: status.walnut, ms: Date.now() - this._spawnedAtMs }
             void import('../core/usage-watch/record.js').then(({ recordMountVerdict }) => recordMountVerdict(verdict)).catch(() => {})
           }
@@ -10777,8 +10786,11 @@ export class ClaudeCodeSession {
   private ensureLiveWalnutMount(): Promise<void> {
     const pid = this.pid
     // Requested is not had: a process whose init did not list walnut ('blocked') has none,
-    // whatever its record's profile says (2026-11-11: four sessions read so and never got it).
-    const has = this._requestedMcpServers.includes('walnut') && this._walnutMountVerdict !== 'blocked'
+    // whatever its record's profile says (2026-11-11: four sessions read so and never got it);
+    // nor one whose mount did not start ('failed', 'needs-auth': 2026-11-25, Main's named a removed
+    // deploy stage). Claude Code 2.1.322 restarts a failed server given a changed config (it answers
+    // `added: ["walnut"]`, then connected) and answers `added: []` to the same one, so this is one try.
+    const has = this._requestedMcpServers.includes('walnut') && !MOUNT_NOT_HAD.has(this._walnutMountVerdict ?? '')
     if (!this._transport || pid === null || has) return Promise.resolve()
     if (this._liveWalnutMount?.pid !== pid) this._liveWalnutMount = { pid, inFlight: null, tries: 0, done: false }
     const state = this._liveWalnutMount

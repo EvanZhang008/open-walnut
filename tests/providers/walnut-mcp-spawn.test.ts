@@ -483,32 +483,46 @@ describe('a hub mount its record kept names this install at every spawn, and rea
     return (await getSessionByClaudeId(session.sessionId!))?.mcpMountStatus?.walnut
   }
 
-  it('Main\'s resume names this install with its role, its Walnut tools come up, and the start counts as one that worked', async () => {
+  /** Two turns; the CLI announces itself (init) at each one's start, as the real one does. */
+  async function twoTurns(taskId: string, resume: string): Promise<ClaudeCodeSession> {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const { session } = await spawnMcpConfig(taskId, { profile: mainProfile(), resume, message: 'big-context-turn:20000' })
+    await waitUntil(() => results >= 1, 15000, 'first result')
+    expect(await session.writeMessage('big-context-turn:20000')).toBe(true)
+    await waitUntil(() => results >= 2, 15000, 'second result')
+    return session
+  }
+
+  it('Main\'s resume names this install with its role, its Walnut tools come up, and the start counts once', async () => {
     hubNow.server = NOW
     const { config, session } = await spawnMcpConfig('t-main', { profile: mainProfile(), resume: '11111111-2222-4333-8444-777777777777' })
     expect(config?.mcpServers.walnut).toEqual({ ...NOW, env: { WALNUT_MCP_ROLE: 'org' } })
     let verdict: string | undefined
     await waitUntil(() => { void verdictOf(session).then((v) => { verdict = v }); return verdict === 'connected' }, 8000, 'connected mount')
+    await session.gracefulStop(true).catch(() => {})
+    daemon.clearCommandHistory()
+    // Every turn's init says the same of the same process: one start, one call.
+    const again = await twoTurns('t-main-turns', '11111111-2222-4333-8444-999999999999')
     const { flushUsage, MOUNT_OP } = await import('../../src/core/usage-watch/record.js')
     const { readHours } = await import('../../src/core/usage-watch/store.js')
     flushUsage()
     const rows = readHours(0, { kind: 'op', name: MOUNT_OP })
-    expect(rows.reduce((n, r) => n + r.agg.calls, 0)).toBe(1)
+    expect(rows.reduce((n, r) => n + r.agg.calls, 0)).toBe(2)
     expect(rows.reduce((n, r) => n + r.agg.errors, 0)).toBe(0)
-    await session.gracefulStop(true).catch(() => {})
-  })
+    await again.gracefulStop(true).catch(() => {})
+  }, 60_000)
 
-  it('a mount that does not start is Walnut\'s own fault: it rings, and is kept by session', async () => {
+  it('a mount that does not start is Walnut\'s own fault: it rings once a process and is kept by session', async () => {
     // This install names no entry of its own (only the bare command on PATH): the record's is kept.
     const { addObserveTap } = await import('../../src/core/observability/metrics.js')
     const rang: string[] = []
     const off = addObserveTap((name, _v, labels) => { if (name === 'usage.op.mount_failed') rang.push(labels?.op ?? '') })
     try {
-      const { config, session } = await spawnMcpConfig('t-main-gone', { profile: mainProfile(), resume: '11111111-2222-4333-8444-888888888888' })
-      expect(config?.mcpServers.walnut).toEqual(STAGE)
+      const session = await twoTurns('t-main-gone', '11111111-2222-4333-8444-888888888888')
+      expect(daemon.getCommandHistoryFor('start')[0]).toBeTruthy()
       let verdict: string | undefined
-      await waitUntil(() => { void verdictOf(session).then((v) => { verdict = v }); return verdict === 'failed' }, 8000, 'failed mount')
-      await waitUntil(() => rang.length > 0, 4000, 'the mount alarm counter')
+      await waitUntil(() => { void verdictOf(session).then((v) => { verdict = v }); return verdict !== undefined }, 8000, 'a mount verdict')
       const { flushUsage, MOUNT_OP } = await import('../../src/core/usage-watch/record.js')
       const { readToolErrors } = await import('../../src/core/usage-watch/store.js')
       flushUsage()
@@ -516,5 +530,27 @@ describe('a hub mount its record kept names this install at every spawn, and rea
       expect(readToolErrors({ since: 0 })).toEqual([expect.objectContaining({ sid: session.sessionId, taskId: 't-main-gone', op: MOUNT_OP, code: 'mount_failed', client: 'mcp', host: 'local' })])
       await session.gracefulStop(true).catch(() => {})
     } finally { off() }
-  })
+  }, 60_000)
+
+  it('a running process whose mount did not start is given this install\'s before its next turn, with no restart', async () => {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const { config, session } = await spawnMcpConfig('t-main-live', { profile: mainProfile(), resume: '11111111-2222-4333-8444-aaaaaaaaaaaa', message: 'big-context-turn:20000' })
+    expect(config?.mcpServers.walnut).toEqual(STAGE)
+    // A deploy came while it ran: the install that answers now has an entry of its own.
+    hubNow.server = NOW
+    const pid = session.pid
+    await waitUntil(() => results >= 1, 15000, 'first result')
+    const setServers = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_set_servers'))
+    await waitUntil(() => setServers().length > 0, 8000, 'the live mount')
+    expect(setServers()).toHaveLength(1)
+    expect(JSON.stringify(setServers()[0]!.payload)).toContain(NOW.args[0]!)
+    expect(JSON.stringify(setServers()[0]!.payload)).not.toContain('open-walnut-stage')
+    await waitUntil(() => session.requestedMcpServers.includes('walnut'), 8000, 'walnut requested')
+    expect(await session.writeMessage('snapshot-clean-turn:two')).toBe(true)
+    await waitUntil(() => results >= 2, 15000, 'second result')
+    expect(setServers()).toHaveLength(1)
+    expect(session.pid).toBe(pid)
+    await session.gracefulStop(true).catch(() => {})
+  }, 60_000)
 })

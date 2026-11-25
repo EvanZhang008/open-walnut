@@ -196,6 +196,9 @@ let mcpStatusAnswered = false;
 // runtime exiting before it answers): init reports it `failed`. A path inside a compiled file
 // (`/$bunfs/...`) is the binary's own.
 const failedMcpServers = new Set();
+// Each server's config as given, so a changed one restarts it (mcp_set_servers, below).
+const mcpConfigs = new Map();
+const mcpConfigOf = (srv) => { const { type: _type, ...rest } = srv ?? {}; return JSON.stringify(rest); };
 const fileGone = (p) => typeof p === 'string' && p.startsWith('/') && !p.startsWith('/$bunfs/') && !fs.existsSync(p);
 const mcpServerStatuses = () => liveMcpServers.map((name) => ({ name, status: failedMcpServers.has(name) ? 'failed' : 'connected' }));
 let effortFlag = null;
@@ -235,7 +238,10 @@ for (let i = 0; i < args.length; i++) {
         const absent = (process.env.MOCK_CLAUDE_MCP_ABSENT ?? '').split(',').filter(Boolean);
         const servers = JSON.parse(text).mcpServers ?? {};
         liveMcpServers = Object.keys(servers).filter((n) => !absent.includes(n));
-        for (const [n, srv] of Object.entries(servers)) if (fileGone(srv?.command) || fileGone(srv?.args?.[0])) failedMcpServers.add(n);
+        for (const [n, srv] of Object.entries(servers)) {
+          mcpConfigs.set(n, mcpConfigOf(srv));
+          if (fileGone(srv?.command) || fileGone(srv?.args?.[0])) failedMcpServers.add(n);
+        }
       } catch { /* not JSON: none */ }
     }
     // Pre-assigned session id (init-only spawn): adopted like --resume's.
@@ -431,7 +437,11 @@ if (inputFormat === 'stream-json') {
           const errors = {};
           for (const [n, srv] of Object.entries(servers)) if (fileGone(srv?.command) || fileGone(srv?.args?.[0])) errors[n] = 'ENOENT: no such file or directory';
           const names = Object.keys(servers).filter((n) => !errors[n]);
-          const added = names.filter((n) => !liveMcpServers.includes(n));
+          // As Claude Code 2.1.322 answers (probed 2026-11-25): a server given a changed config is
+          // restarted and named in `added` (a failed one then connects); the same config is not.
+          const added = names.filter((n) => !liveMcpServers.includes(n) || mcpConfigs.get(n) !== mcpConfigOf(servers[n]));
+          for (const n of names) mcpConfigs.set(n, mcpConfigOf(servers[n]));
+          for (const n of added) failedMcpServers.delete(n);
           const removed = liveMcpServers.filter((n) => !names.includes(n));
           liveMcpServers = names;
           process.stdout.write(JSON.stringify({
