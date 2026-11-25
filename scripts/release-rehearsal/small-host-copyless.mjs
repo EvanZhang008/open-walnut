@@ -148,11 +148,18 @@ function startLeaderBox(work) {
 let serverLogs = 0
 /** Start `file` as the leader on the run's one data home; returns its log's path. */
 async function leaderUp(work, file, label) {
-  fs.copyFileSync(file, path.join(work, 'bin', 'leader.next'))
-  fs.renameSync(path.join(work, 'bin', 'leader.next'), path.join(work, 'bin', 'leader'))
-  fs.chmodSync(path.join(work, 'bin', 'leader'), 0o755)
+  // Named as build-binary names it, alone in its dir: the file a host gets is this one (host-file.ts siblings).
+  const version = execFileSync(file, ['--version'], { encoding: 'utf8' }).trim().split(/\s/)[0]
+  const dir = path.join(work, 'bin', version)
+  if (!fs.existsSync(path.join(dir, 'walnut-linux-x64'))) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.copyFileSync(file, path.join(dir, 'walnut-linux-x64'))
+    fs.chmodSync(path.join(dir, 'walnut-linux-x64'), 0o755)
+  }
+  fs.rmSync(path.join(work, 'bin', 'leader'), { force: true })
+  fs.symlinkSync(path.join('/work/bin', version, 'walnut-linux-x64'), path.join(work, 'bin', 'leader'))
   const log = `server-${++serverLogs}-${label}.log`
-  inLeader(`cd /work && OPEN_WALNUT_HOME=/work/data WALNUT_NO_UPDATE_CHECK=1 WALNUT_DAEMON_UPDATE_MIN_GAP_MS=${UPDATE_GAP_MS} setsid nohup /work/bin/leader web --port ${PORT} > /work/${log} 2>&1 < /dev/null & echo $! > /work/leader.pid`)
+  inLeader(`cd /work && OPEN_WALNUT_HOME=/work/data WALNUT_NO_UPDATE_CHECK=1 WALNUT_DAEMON_UPDATE_MIN_GAP_MS=${UPDATE_GAP_MS} setsid nohup /work/bin/${version}/walnut-linux-x64 web --port ${PORT} > /work/${log} 2>&1 < /dev/null & echo $! > /work/leader.pid`)
   await until(`the ${label} leader to answer`, () => inLeader(`curl -sf -o /dev/null http://127.0.0.1:${PORT}/api/config && echo up`, { allowFail: true }).includes('up'), 180_000, 1_000)
   return path.join(work, log)
 }
