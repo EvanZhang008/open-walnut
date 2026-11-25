@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { makeWorld, type Machine, type World } from './world.js'
-import { Checks, checkCarried, seed, status, waitFor, waitForBatch, type Check } from './rehearsal.js'
+import { Checks, checkCarried, seed, serverLog, status, waitFor, waitForBatch, type Check } from './rehearsal.js'
 import { readSwitchOutcome as readSwitchState, readTargetState } from '../../src/core/leader/switch/flow.js'
 import { readFinalStopResult, readMarker } from '../../src/core/leader/switch/records.js'
 import { finalMarkName, readSwitchFile, type FinalMark } from '../../src/core/leader/switch/ticket.js'
@@ -30,7 +30,13 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch
 async function switchUntilFirstFinalBatch(w: World, env: Record<string, string>): Promise<{ run: ReturnType<World['cli']>; batch: number; id: string }> {
   const run = w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], env)
   const id = await waitFor('the switch stop', async () => { const s = readSwitchState(w.a.home); return s && (s.step === 'stop-source' || s.step === 'wait-target') ? s.id : null }, 120_000, 100)
-  const batch = await waitForBatch(w.b.standbyDir, Date.now() - 1_000, 60_000)
+  // The final batch is one after the server's own "the switch stop begins": the last look right before the stop
+  // (final-stop route) sends a batch too, and a signal in it is an ordinary stop.
+  const begun = await waitFor('the switch stop begins', async () => {
+    const l = serverLog(w.a).find((x) => x.switchId === id && /the switch stop begins/.test(String(x.message)))
+    return l ? Date.parse(l.time) : null
+  }, 120_000, 100)
+  const batch = await waitForBatch(w.b.standbyDir, begun, 60_000)
   return { run, batch, id }
 }
 

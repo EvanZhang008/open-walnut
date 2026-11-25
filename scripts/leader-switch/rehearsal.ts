@@ -53,6 +53,13 @@ export async function waitForBatch(dir: string, since: number, timeoutMs = 120_0
   }, timeoutMs, 500)
 }
 
+/** A machine's server log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log), parsed. */
+export function serverLog(m: Machine): Array<{ time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }> {
+  const dir = path.join(m.dir, 'daemon')
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort() : []
+  return files.flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
+}
+
 export async function status(w: World, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
   const r = await w.api(m, 'GET', '/api/leader/status').catch(() => null)
   const p = (r?.json as { permit?: { mayAct?: boolean; state?: string } } | null)?.permit

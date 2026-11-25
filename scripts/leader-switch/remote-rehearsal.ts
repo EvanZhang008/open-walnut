@@ -18,7 +18,7 @@ import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/s
 import { readSwitchState, readTargetState, type SwitchState, type TargetState } from '../../src/core/leader/switch/flow.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
-import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
+import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, serverLog, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
 import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
@@ -854,13 +854,6 @@ async function trialFails(x: Ctx): Promise<void> {
   c.add(`failed trial: ${L.id} leads again within ${(bound / 1000).toFixed(1)} s of its server's boot (its handover's hold, then one round)`, took <= bound, `${Number.isFinite(took) ? `${(took / 1000).toFixed(1)} s` : 'no lead seen'}; boot ${boot?.at ?? 'none'} (${boot?.why ?? ''}); lead ${led?.at ?? 'none'}`)
   c.add(`failed trial: ${O.id} runs no leader and its tried home is kept aside`, !w.side(O).runningServer() && fs.readdirSync(path.dirname(O.home)).some((n) => n.startsWith(`${path.basename(O.home)}.trial-failed-`)))
   await checkCarried(c, w, L, L, x.carried, 'failed trial')
-}
-
-/** The old leader's log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log), parsed. */
-function serverLog(m: Machine): Array<{ time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }> {
-  const dir = path.join(m.dir, 'daemon')
-  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort() : []
-  return files.flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
 }
 
 /**
