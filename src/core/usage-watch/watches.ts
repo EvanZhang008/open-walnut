@@ -167,7 +167,11 @@ export function armedWatchesFor(kind: UsageKind, name: string, now = Date.now())
 function mergedFor(target: string, since: number, until: number): Agg {
   const kind: UsageKind = target.startsWith('op:') ? 'op' : target.startsWith('route:') ? 'http' : 'page'
   let out = emptyAgg()
-  const from = Math.floor(since / HOUR_MS) * HOUR_MS
+  // Use is kept by the hour. The hour a window starts in holds calls from before it (a watch armed
+  // at 02:57 was failed for an answer of 02:10, before its fix was live), so a window starts at its
+  // first whole hour; only one too short to hold a whole hour counts the hour it starts in.
+  const next = Math.ceil(since / HOUR_MS) * HOUR_MS
+  const from = next + HOUR_MS <= until ? next : Math.floor(since / HOUR_MS) * HOUR_MS
   for (const r of readHours(from, { kind })) {
     if (r.hour >= until || !targetCovers(target, r.kind, r.name)) continue
     out = mergeAgg(out, r.agg)

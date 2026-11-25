@@ -307,6 +307,21 @@ describe('a watch', () => {
     expect(judgeWatch(w, T0 + 5 * H).state).toBe('passed')
   })
 
+  it('is not failed for an answer from the hour it was armed in, before it was armed', () => {
+    // 2026-11-24: a watch armed at 02:57 on a fix was failed for an 88,422-character answer of 02:10.
+    seed(1, 88_000, T0 + 10 * 60_000)
+    seed(25, 5_000, T0 + 2 * H)
+    const w = newWatch({ taskId: 't1', targets: ['op:thread_update'], checks: {}, who: 'this task', checkAt: T0 + 6 * H, createdAt: T0 + 57 * 60_000 })
+    for (let m = 0; m < 6 * 60; m++) flushUsage(T0 + m * 60_000)
+    expect(judgeWatch(w, T0 + 6 * H).state).toBe('passed')
+    // The same answer inside the window still fails it.
+    seed(1, 88_000, T0 + 3 * H)
+    expect(judgeWatch(w, T0 + 6 * H).state).toBe('failed')
+    // A window too short to hold a whole hour still counts the hour it starts in.
+    const short = newWatch({ taskId: 't1', targets: ['op:thread_update'], checks: { min_uses: 1 }, who: 'this task', checkAt: T0 + 3 * H + 50 * 60_000, createdAt: T0 + 3 * H + 5 * 60_000 })
+    expect(judgeWatch(short, T0 + 3 * H + 50 * 60_000).state).toBe('failed')
+  })
+
   it('fails on a 22,000-character answer against a 20,000 check, though nothing was cut', () => {
     seed(25, 22_000)
     const w = newWatch({ taskId: 't1', targets: ['op:thread_update'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 })
