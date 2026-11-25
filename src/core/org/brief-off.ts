@@ -11,6 +11,7 @@
  */
 import { experimentCache } from '../experimental-cache.js';
 import { threadsKeptNow } from './threads-kept.js';
+import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
 
 /** The switch itself, for the runtime that follows it (boards/choice-threads.ts). */
 export const briefOffFlag = experimentCache('brief_off');
@@ -26,6 +27,6 @@ export const briefOffOn = flag.on;
 export const BRIEF_OFF_NOTE = 'The Brief is turned off here (experiment brief_off): nothing was written and nothing needs to be. '
   + 'The user reads your Threads grouped by state instead: keep each thread current with thread_update. Do not call brief_write again.';
 /** The same with threads_kept_by_walnut on (threads-kept.ts): Walnut writes the threads from the status answer. */
-export const BRIEF_OFF_KEPT_NOTE = 'The Brief is turned off here (experiment brief_off): nothing was written and nothing needs to be. '
-  + 'The user reads your Threads grouped by state instead, and Walnut writes where each stands from your status answer at each turn\'s end. Do not call brief_write again.';
+export const BRIEF_OFF_KEPT_NOTE = 'The Brief is turned off here (experiment brief_off): nothing was written or needs to be. '
+  + `The user reads your Threads by state instead; Walnut keeps them from your lines in ${THREAD_LINE_CHANNEL}. Do not call brief_write again.`;
 export const briefOffNote = (): string => (threadsKeptNow() ? BRIEF_OFF_KEPT_NOTE : BRIEF_OFF_NOTE);

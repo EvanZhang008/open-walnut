@@ -26,6 +26,7 @@ import type { OrgThread, ThreadRecheck } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
 import { threadsKeptNow } from './threads-kept.js';
 import { ANSWERED_THERE_RECHECK } from '../answered-there.js';
+import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
 
 /** The send source of the note (org-enabled.ts ORG_OFF_BLOCKED_SOURCES, task-wait-resume.ts). */
 export const THREAD_RECHECK_SOURCE = 'thread-recheck';
@@ -143,8 +144,8 @@ export function threadRecheckBody(due: readonly DueThread[], nowMs: number): str
     // Walnut keeps the threads from the status answer (threads-kept.ts): the line is the write.
     if (threadsKeptNow()) {
       return o.unanswered
-        ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply on this thread (state ${t.state}). Answer it now; your status line for it at this turn's end gives it its summary and state (waiting if it only went to a team), and a decision he must make is thread_update into needs.`
-        : `- ${t.id} ${q(t.title)}: still ${t.state} with nothing new since ${ago}; he does not see it. Say where it stands in your status line for it at this turn's end: answered with the result, waiting if a team has it, done if finished.`;
+        ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply here (state ${t.state}). Answer it now; its line (in ${THREAD_LINE_CHANNEL}) sets its summary and state (waiting if a team has it); a decision for him is thread_update into needs.`
+        : `- ${t.id} ${q(t.title)}: still ${t.state}, unchanged since ${ago}; he does not see it. Give it a line in ${THREAD_LINE_CHANNEL}: answered with the result, waiting if a team has it, or done.`;
     }
     return o.unanswered
       ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply on this thread (state ${t.state}). Answer it now: thread_update with the summary and answered or needs, or pending if it only went to a team.`

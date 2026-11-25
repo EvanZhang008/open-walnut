@@ -1,8 +1,8 @@
 [
   {
     "label": "the status report after the words (the reply of 2026-11-20)",
-    "text": "两个子 agent 还在跑，完成后我核对、评审、上线。\n\nFOR_USER_STATE: working\nFOR_USER_NOW: 两个子 agent 在实现第一阶段收尾\nFOR_USER_NEXT: 核对、评审并上线",
-    "shown": "两个子 agent 还在跑，完成后我核对、评审、上线。"
+    "text": "\u4e24\u4e2a\u5b50 agent \u8fd8\u5728\u8dd1\uff0c\u5b8c\u6210\u540e\u6211\u6838\u5bf9\u3001\u8bc4\u5ba1\u3001\u4e0a\u7ebf\u3002\n\nFOR_USER_STATE: working\nFOR_USER_NOW: \u4e24\u4e2a\u5b50 agent \u5728\u5b9e\u73b0\u7b2c\u4e00\u9636\u6bb5\u6536\u5c3e\nFOR_USER_NEXT: \u6838\u5bf9\u3001\u8bc4\u5ba1\u5e76\u4e0a\u7ebf",
+    "shown": "\u4e24\u4e2a\u5b50 agent \u8fd8\u5728\u8dd1\uff0c\u5b8c\u6210\u540e\u6211\u6838\u5bf9\u3001\u8bc4\u5ba1\u3001\u4e0a\u7ebf\u3002"
   },
   {
     "label": "any field, a new one with an id included",
@@ -21,7 +21,7 @@
   },
   {
     "label": "a version tag on a report line, a full-width colon, Windows line ends",
-    "text": "Done.\r\n\r\n[v16908844] FOR_USER_STATE: working\r\nFOR_USER_NOW： tests\r\n",
+    "text": "Done.\r\n\r\n[v16908844] FOR_USER_STATE: working\r\nFOR_USER_NOW\uff1a tests\r\n",
     "shown": "Done."
   },
   {
@@ -41,8 +41,8 @@
   },
   {
     "label": "a version tag at the start of a line",
-    "text": "[v16908844] **进度**：好了。\n[v16908844] 第二行",
-    "shown": "**进度**：好了。\n第二行"
+    "text": "[v16908844] **\u8fdb\u5ea6**\uff1a\u597d\u4e86\u3002\n[v16908844] \u7b2c\u4e8c\u884c",
+    "shown": "**\u8fdb\u5ea6**\uff1a\u597d\u4e86\u3002\n\u7b2c\u4e8c\u884c"
   },
   {
     "label": "kept: a field line with words after it",
@@ -91,8 +91,8 @@
   },
   {
     "label": "kept: words that only start like a field",
-    "text": "普通的回复。\nFOR the record: fine.",
-    "shown": "普通的回复。\nFOR the record: fine."
+    "text": "\u666e\u901a\u7684\u56de\u590d\u3002\nFOR the record: fine.",
+    "shown": "\u666e\u901a\u7684\u56de\u590d\u3002\nFOR the record: fine."
   },
   {
     "label": "streaming: the start of a field name is held back",
@@ -164,5 +164,226 @@
     "text": "Done.\n\nFOR_USER_STATE: working\nF",
     "streaming": false,
     "shown": "Done.\n\nFOR_USER_STATE: working\nF"
+  },
+  {
+    "label": "thread lines: id, state and a dot after the answer go",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 the delay is before the upload https://example.com/a\nth-1b2c3d4e5f60: waiting \u00b7 the review is open https://example.com/b",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "thread lines inside a made-up Walnut tag go, the tag with them",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n<walnut-status>\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n</walnut-status>",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "thread lines under a heading go with the heading (Chinese, escaped)",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-2c3d4e5f6071\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5b9a\u3002\n- th-3d4e5f607182\uff1a\u7b49\u4f60\u51b3\u5b9a https://example.com/c",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "a title before the id in brackets, and a title in corner quotes",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n**Thread status:**\n- Garden path lights\uff08th-4e5f60718293\uff09\uff1aanswered\u3002Shipped.\n- th-5f6071829304\u300cSeed list\u300d\uff1aworking\u3002On it.",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "pipes, a dash, Thread with its title in parentheses, a quoted title",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n---\nth-607182930415 | working | runbook drafted\nth-718293041526: working \u2014 two gardens on one plot\nThread th-0a1b2c3d4e5f (watering timer): working. Streaming read.\nth-1b2c3d4e5f60 \"copy change\": working. Rebased.",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "a one-line tag naming a thread goes, the turn marker after it stays",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n<walnut-status thread=\"th-2c3d4e5f6071\" state=\"working\">Both places changed.</walnut-status>\n<walnut-turn status=\"agent-ack\"/>",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n<walnut-turn status=\"agent-ack\"/>"
+  },
+  {
+    "label": "a made-up turn tag wrapping the lines goes",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n<walnut-turn status=\"threads\">\n- th-3d4e5f607182 \u00b7 waiting \u00b7 backups compress\n</walnut-turn>",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "a reply that is only a list of his threads stays: he asked where they stand",
+    "text": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "a thread named in a sentence, and lines in a code block, stay",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nI merged your note into th-0a1b2c3d4e5f, which holds the delay question.\n\n```\nth-0a1b2c3d4e5f: answered \u00b7 posted\n```",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nI merged your note into th-0a1b2c3d4e5f, which holds the delay question.\n\n```\nth-0a1b2c3d4e5f: answered \u00b7 posted\n```"
+  },
+  {
+    "label": "thread lines with the session's words after them stay",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\n\nTell me which one to do first.",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\n\nTell me which one to do first."
+  },
+  {
+    "label": "streaming: a thread line whose state has not come yet is held",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answ",
+    "streaming": true,
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "streaming: a heading over thread lines not come yet is held",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u5404\u7ebf\u7a0b\u72b6\u6001\uff1a",
+    "streaming": true,
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "streaming: the start of a thread id is held",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a",
+    "streaming": true,
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "streaming: the next thread line after one already in is held",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth",
+    "streaming": true,
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
+  },
+  {
+    "label": "the exception: one lead-in line, then the list: the list is the answer and stays",
+    "text": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "the exception: a lead-in line, a heading and the list stay",
+    "text": "Where your threads stand now:\n\n**Thread status:**\n- th-2c3d4e5f6071: working \u00b7 tests run\n- th-3d4e5f607182: answered \u00b7 shipped",
+    "shown": "Where your threads stand now:\n\n**Thread status:**\n- th-2c3d4e5f6071: working \u00b7 tests run\n- th-3d4e5f607182: answered \u00b7 shipped"
+  },
+  {
+    "label": "the exception: a one-sentence answer keeps the block after it (the accepted cost)",
+    "text": "Done.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "the exception: the list alone stays",
+    "text": "th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "a made-up tag around the list goes, even after one line of words",
+    "text": "Here they are:\n<walnut-status>\nth-0a1b2c3d4e5f: answered \u00b7 posted\n</walnut-status>",
+    "shown": "Here they are:"
+  },
+  {
+    "label": "the exception: a tag line of Walnut's is not a line of words",
+    "text": "Done.\n<walnut-about tasks=\"abc-123\"/>\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done.\n<walnut-about tasks=\"abc-123\"/>\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "the exception keeps the list; report fields after it still go",
+    "text": "Here they are:\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n\nFOR_USER_STATE: working",
+    "shown": "Here they are:\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "past the exception: two lines of words, and the block goes",
+    "text": "Done: the report is on the board.\nIt names both delays.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done: the report is on the board.\nIt names both delays."
+  },
+  {
+    "label": "streaming, the exception: one lead-in line and a thread line still coming in stay",
+    "text": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answ",
+    "streaming": true,
+    "shown": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answ"
+  },
+  {
+    "label": "streaming, the exception: a lead-in line and a heading waiting for its lines stay",
+    "text": "Where your threads stand now:\n\n**Thread status:**",
+    "streaming": true,
+    "shown": "Where your threads stand now:\n\n**Thread status:**"
+  },
+  {
+    "label": "streaming, the exception: the start of an id after one line stays",
+    "text": "Done.\n\nth-0a",
+    "streaming": true,
+    "shown": "Done.\n\nth-0a"
+  },
+  {
+    "label": "streaming, the exception: the list alone as it streams in stays",
+    "text": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b",
+    "streaming": true,
+    "shown": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b"
+  },
+  {
+    "label": "sentences, not lines: two sentences on one line, and the block goes",
+    "text": "Done: the report is on the board. It names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done: the report is on the board. It names both delays, with their logs."
+  },
+  {
+    "label": "sentences, not lines: a Chinese sentence end, then more words (escaped)",
+    "text": "\u62a5\u544a\u5df2\u7ecf\u53d1\u5230\u770b\u677f\u4e0a\u3002\u4e24\u4e2a\u5ef6\u8fdf\u90fd\u5199\u4e86\u65e5\u5fd7\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff1a\u5df2\u56de\u7b54\u3002\n- th-1b2c3d4e5f60\uff1a\u5904\u7406\u4e2d\u3002",
+    "shown": "\u62a5\u544a\u5df2\u7ecf\u53d1\u5230\u770b\u677f\u4e0a\u3002\u4e24\u4e2a\u5ef6\u8fdf\u90fd\u5199\u4e86\u65e5\u5fd7"
+  },
+  {
+    "label": "sentences, not lines: a sentence, then a lead-in ending in a colon",
+    "text": "Done. Here they are:\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Here they are:"
+  },
+  {
+    "label": "a version, a file and line, a time and a URL are no sentence ends: one sentence keeps the block",
+    "text": "Shipped 1.0.267.0 to beta; x.test.ts:242 passed at 19:14Z (https://example.com/run?id=7).\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Shipped 1.0.267.0 to beta; x.test.ts:242 passed at 19:14Z (https://example.com/run?id=7).\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "one sentence, no end at all, keeps the block",
+    "text": "Still on it\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Still on it\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+  },
+  {
+    "label": "a made-up tag after one sentence: the block goes",
+    "text": "Done.\n\n<walnut-turn-status>\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n</walnut-turn-status>",
+    "shown": "Done."
+  },
+  {
+    "label": "a tag naming the thread after one sentence: it goes, the turn marker stays",
+    "text": "Done.\n<walnut-status thread=\"th-2c3d4e5f6071\" state=\"working\">Both places changed.</walnut-status>\n<walnut-turn status=\"agent-ack\"/>",
+    "shown": "Done.\n<walnut-turn status=\"agent-ack\"/>"
+  },
+  {
+    "label": "a made-up tag around the list with no words before it: the list is the reply",
+    "text": "<walnut-status>\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n</walnut-status>",
+    "shown": "<walnut-status>\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n</walnut-status>"
+  },
+  {
+    "label": "items with their state in free words, mixed with known ones, under a heading (escaped)",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff1aposts move\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002https://example.com/r/1\n- th-1b2c3d4e5f60\uff08Seed list\uff09\uff1a\u7b49\u4e00\u4eba\u6279\u51c6\u3002\n- th-2c3d4e5f6071\uff08Path lights\uff09\uff1a\u5df2\u56de\u7b54\u3002",
+    "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "a run of items that all say their state in free words goes",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f: waits for your review https://example.com/r/1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval",
+    "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "one item with free words alone is no thread line: it stays",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002",
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002"
+  },
+  {
+    "label": "items naming a thread with no colon after the id stay",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f holds the delay question\n- th-1b2c3d4e5f60 holds the upload question",
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f holds the delay question\n- th-1b2c3d4e5f60 holds the upload question"
+  },
+  {
+    "label": "streaming: a run of free-word items as it comes in is held",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff08Seed",
+    "streaming": true,
+    "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "streaming: a made-up tag after one sentence is held while it comes in",
+    "text": "Done.\n\n<walnut-status>\nth-0a1b2c3d4e5f: answ",
+    "streaming": true,
+    "shown": "Done."
+  },
+  {
+    "label": "streaming: one sentence before a list that comes in stays",
+    "text": "Here is where they stand:\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff1aansw",
+    "streaming": true,
+    "shown": "Here is where they stand:\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff1aansw"
+  },
+  {
+    "label": "the heading words sessions wrote: \"each thread's status\" and \"threads changed this turn\" (escaped)",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u5404 thread \u7684\u72b6\u6001\uff1a\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n\n\u672c\u8f6e\u53d8\u4e86\u7684\u7ebf\u7a0b\uff1a\n- th-3d4e5f607182: done \u00b7 merged",
+    "shown": "Done: the report is on the board. It names both delays."
   }
 ]

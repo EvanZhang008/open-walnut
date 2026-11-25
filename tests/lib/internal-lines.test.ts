@@ -7,8 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { stripInternalLines } from '../../src/lib/internal-lines.js'
-import { NO_ACTION_TAG, readTurnMarker, stripTurnMarker } from '../../src/lib/turn-end-marker.js'
+import { HELD_ELSEWHERE, sentenceCount, stripInternalLines } from '../../src/lib/internal-lines.js'
+import { LEGACY_NO_ACTION_TAG, NO_ACTION_TAG, readTurnMarker, stripTurnMarker } from '../../src/lib/turn-end-marker.js'
 import { parseSessionMessages } from '../../src/core/history-parse.js'
 import { shownAcpMessages } from '../../src/providers/acp-journal-projector.js'
 
@@ -108,10 +108,68 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
     // Once written, a bare field name is a line of the report too; a stray "FOR_" is kept when not streaming.
     expect(stripTurnMarker('Done.\n\nFOR_', false)).toBe('Done.\n\nFOR_')
   })
+
+  // 2026-11-24: replies ended with one line per open thread. Every screen leaves that block out,
+  // unless it would leave the reply one line or none: then the list is the answer (he asked).
+  const BLOCK = 'th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review'
+  const WORDS = 'Done: the report is on the board.\nIt names both delays, with their logs.'
+  const ANSWER = `Here is where they stand:\n\n**Thread status:**\n- ${BLOCK.replace('\n', '\n- ')}`
+  const THREAD_CASES: Array<[string, string, string]> = [
+    ['thread lines after the words go', `${WORDS}\n\n${BLOCK}`, WORDS],
+    ['under a heading, in a made-up tag', `${WORDS}\n\n**Thread status:**\n<walnut-status>\n${BLOCK}\n</walnut-status>`, WORDS],
+    ['one lead-in line, a heading and the list: the list is the answer', ANSWER, ANSWER],
+    ['one sentence, then the block: kept too', `Done.\n\n${BLOCK}`, `Done.\n\n${BLOCK}`],
+  ]
+  for (const [fn, show] of SHOWN) {
+    it.each(THREAD_CASES)(`${fn}: %s`, (_label, text, shown) => expect(show(text)).toBe(shown))
+  }
+
+  it('while a reply streams in, a thread block after the words never flashes up, and a list that is the answer always shows', () => {
+    const ONE_LINE = 'Done: the report is on the board. It names both delays.'
+    const ITEMS = '- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1awaits for your review https://example.com/r/1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval'
+    for (const [words, hidden] of [
+      [WORDS, `${WORDS}\n\n${BLOCK}`],
+      // Two sentences on one line; a tag the session made up around the lines after one sentence;
+      // items whose state is said in free words (2026-11-25, the 834 real replies).
+      [ONE_LINE, `${ONE_LINE}\n\n${BLOCK}`],
+      ['Done.', `Done.\n\n<walnut-turn-status>\n${BLOCK}\n</walnut-turn-status>`],
+      [ONE_LINE, `${ONE_LINE}\n\n${ITEMS}`],
+    ]) {
+      for (let end = words.length; end <= hidden.length; end++) {
+        expect(stripTurnMarker(hidden.slice(0, end), true).replace(/\s+$/, ''), `at ${end}: ${hidden.slice(0, end)}`).toBe(words)
+      }
+      expect(stripTurnMarker(hidden)).toBe(words)
+    }
+    // The tag starts another hold takes are left to it (turn-end-marker.ts keeps them as written).
+    expect(HELD_ELSEWHERE).toEqual([NO_ACTION_TAG, LEGACY_NO_ACTION_TAG])
+    expect(stripTurnMarker(`${ONE_LINE}\n<walnut-turn st`, true)).toBe(ONE_LINE)
+    expect(stripTurnMarker(`${ONE_LINE}\n${NO_ACTION_TAG}`, true)).toBe(ONE_LINE)
+    for (let end = 1; end <= ANSWER.length; end++) {
+      const text = ANSWER.slice(0, end)
+      expect(stripTurnMarker(text, true), `at ${end}`).toBe(text)
+    }
+  })
 })
 
 // The rules as cases both clients run: the phone's port (ios-native/Walnut/Timeline/InternalLines.swift,
 // WalnutTests/InternalLinesTests.swift) reads the same file, so the two never drift apart.
+describe('sentences, not lines (sentenceCount)', () => {
+  // 2026-11-25: on 834 real replies, 149 kept their block when lines were counted: a real answer is
+  // often one line of several sentences. A version, a file and line, a time or a URL never end one.
+  it.each([
+    ['no words', [], 0],
+    ['a lead-in ending in a colon', ['Here is where they stand:'], 1],
+    ['one sentence', ['Done.'], 1],
+    ['words with no end', ['Still on it'], 1],
+    ['two sentences', ['Done. Shipped.'], 2],
+    ['a sentence and a lead-in', ['Done. Here they are:'], 2],
+    // "Is live. Waiting for review": a full-width end, then more words.
+    ['a Chinese sentence end, then more words (escaped)', ['\u5df2\u4e0a\u7ebf\u3002\u7b49\u8bc4\u5ba1'], 2],
+    ['a version, a file and line, a time and a URL in one sentence', ['Shipped 1.0.267.0; x.test.ts:242 passed at 19:14Z (https://example.com/run?id=7).'], 1],
+    ['two lines', ['one', 'two'], 2],
+  ] as Array<[string, string[], number]>)('%s', (_label, lines, n) => expect(sentenceCount(lines)).toBe(n))
+})
+
 describe('the shared cases (tests/fixtures/internal-lines/cases.json)', () => {
   const cases: Array<{ label: string; text: string; streaming?: boolean; shown: string }> =
     JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/internal-lines/cases.json'), 'utf8'))
@@ -168,6 +226,28 @@ describe('no text Walnut gives a session tells it to write the report in a reply
         if (!md && !/(?<![A-Za-z0-9_])FOR_USER_[A-Z]/.test(line)) return
         offenders.push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`)
       })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  // 2026-11-24: the Threads rule said "At the end of each turn the status question lists your open
+  // threads and you answer one line for each", and sessions wrote those lines at the end of their
+  // replies: a Claude Code session never sees that question in its own chat. Every text that asks a
+  // thread's line now says THREAD_LINE_CHANNEL (tests/core/sessions/status-threads-kept.test.ts).
+  it('no string or skill puts a thread\'s line or the status answer at the turn\'s end', () => {
+    const AT_TURN_END = /\bat the end of (?:the|this|each|every|your|its) turn\b|\bat (?:the|this|each|every|your|its) turn(?:\\?'s)? end\b|\bat (?:each|every|the|this) turn end\b/i
+    const NAMES_A_LINE = /\bstatus (?:line|answer|question)|\bline for (?:it|each)\b|\bone line (?:for|per)\b|\bwhere each stands\b/i
+    const offenders: string[] = []
+    for (const file of files('src')) {
+      const rel = file.split(path.sep).join('/')
+      let text = fs.readFileSync(file, 'utf8')
+      if (rel.endsWith('.ts')) {
+        // A comment is for the people who read the code; a string cut over lines is one sentence.
+        text = text.split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l)).join('\n').replace(/(['"`])\s*\n\s*\+\s*\1/g, '')
+      }
+      for (const sentence of text.split(/(?<=[.!?])\s+|\n/)) {
+        if (AT_TURN_END.test(sentence) && NAMES_A_LINE.test(sentence)) offenders.push(`${rel}: ${sentence.trim().slice(0, 160)}`)
+      }
     }
     expect(offenders).toEqual([])
   })

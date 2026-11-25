@@ -5,6 +5,8 @@
  * THREAD_ONE_PLACE_RULE, a thread's news never also a letter, ride the prompt. The `threads` and
  * `threads-tidy` hints (thread-capture.ts) carry only facts, never these rules (2026-11-06).
  * tests/core/org/thread-rules-guard.test.ts fails when one of them loses either.
+ * A thread's line goes in THREAD_LINE_CHANNEL, never "at the turn's end" (2026-11-24: sessions read
+ * that as the end of their reply and wrote the lines there; tests/lib/internal-lines.test.ts).
  *
  * 2026-11-01, the user: "you should proactively clean the thread, make a decision if the user
  * already knows"; "make sure this is a Walnut feature, not just your memory"; then, after a node
@@ -15,22 +17,21 @@
  * chat: the node checks its threads against his words before each turn ends (the Stop hook names
  * the answered ones he wrote after, org/thread-summary-stop.ts answeredBeforeHim).
  */
-
+import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
 
 /**
  * With threads_kept_by_walnut on (threads-kept.ts; 2026-11-22, the user, on a VP that wrote a thread
  * before each reply: "every thread is being updated, every question has to do this ... that's
- * unbelievable, and very wasteful"): the node answers in the chat, and the status question at its
- * turn's end keeps its threads (sessions/status-threads.ts). This replaces the rules above that ask
+ * unbelievable, and very wasteful"): the node answers in the chat, and the status question after
+ * its turn keeps its threads (sessions/status-threads.ts). This replaces the rules above that ask
  * for a write each turn (the summary, its state, the known mark); what a line cannot do stays a call.
  */
 export const THREADS_KEPT_RULE =
   'Walnut keeps your Threads from your chat, in place of the earlier rules that had you write each thread\'s summary, state and '
   + 'known mark with thread_update every turn (those no longer apply): answer him in the chat first and write no thread for each '
-  + 'message. At the end of '
-  + 'each turn the status question lists your open threads and you answer one line for each: its state (working: you are on it '
+  + `message. Your line for each open thread goes in ${THREAD_LINE_CHANNEL}: its state (working: you are on it `
   + 'now; waiting: a team or something outside has it; answered: the result he asked for is in; done: finished) and where it '
-  + 'stands for him, latest first, with the proof\'s path or URL when there is one. Walnut writes that as the thread\'s state and '
+  + 'stands for him, latest first, with the proof\'s path or URL if any. Walnut writes that as the thread\'s state and '
   + 'the summary on his card, gives an untitled thread the title you name, and marks your answer known only where you say he '
   + 'reacted to it in his own words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure is not seen). His '
   + 'Threads view shows a thread only when it needs him or its result is in. Call thread_update yourself only for what a line '
@@ -70,11 +71,11 @@ export const THREAD_ONE_PLACE_RULE =
   + 'never also a letter; a decision about it is that thread\'s needs state (with user_kind), not a letter: Walnut buzzes his phone for it when he is away. His inbox is only for '
   + 'what needs him and has no thread.';
 
-/** The same with threads_kept_by_walnut on: the thread's update is its status line, not a call. */
+/** The same with threads_kept_by_walnut on: the thread's update is its line in the status question, not a call. */
 export const THREAD_ONE_PLACE_KEPT_RULE =
-  'One place per update, the thread first: a result, answer or update about one of his threads goes to that thread only '
-  + '(your status line for it at the turn\'s end; Walnut files your chat reply under his message), whether he is in your chat or away, '
-  + 'never also a letter; a decision about it is that thread\'s needs state (thread_update with user_kind), not a letter: Walnut buzzes his phone for it when he is away. His inbox is only for '
+  'One place per update, the thread first: a result, answer or update on one of his threads goes to that thread only '
+  + `(its line in ${THREAD_LINE_CHANNEL}; Walnut files your chat reply under his message), whether he is here or away, `
+  + 'never also a letter; a decision about it is its needs state (thread_update with user_kind), not a letter: Walnut buzzes his phone when he is away. His inbox is for '
   + 'what needs him and has no thread.';
 
 /**

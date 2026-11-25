@@ -88,6 +88,51 @@ final class InternalLinesTests: XCTestCase {
         }
     }
 
+    /// Thread lines after the words (2026-11-24) never flash up while they stream in, whatever their
+    /// shape: after two lines, after two sentences on one line, in a tag the session made up after one
+    /// sentence, as items whose state is said in free words (2026-11-25, the 834 real replies). A list
+    /// that is the answer (one lead-in line, a heading, the list) shows at every step.
+    func testAThreadBlockNeverFlashesUpAndTheListThatIsTheAnswerShows() {
+        let words = "Done: the report is on the board.\nIt names both delays, with their logs."
+        let oneLine = "Done: the report is on the board. It names both delays."
+        let block = "th-0a1b2c3d4e5f: answered \u{00B7} posted\nth-1b2c3d4e5f60: waiting \u{00B7} in review"
+        let items = "- th-0a1b2c3d4e5f\u{FF08}Fence review\u{FF09}\u{FF1A}waits for your review https://example.com/r/1\n"
+            + "- th-1b2c3d4e5f60 (Seed list): waits for one approval"
+        let shapes: [(String, String)] = [
+            (words, words + "\n\n" + block),
+            (oneLine, oneLine + "\n\n" + block),
+            ("Done.", "Done.\n\n<walnut-turn-status>\n" + block + "\n</walnut-turn-status>"),
+            (oneLine, oneLine + "\n\n" + items),
+        ]
+        for (said, full) in shapes {
+            let hidden = full as NSString
+            for end in (said as NSString).length...hidden.length {
+                let live = TimelineTurnMarker.stripLive(hidden.substring(to: end))
+                XCTAssertEqual(live.trimmingCharacters(in: .whitespacesAndNewlines), said, "at \(end): \(hidden.substring(to: end))")
+            }
+            XCTAssertEqual(TimelineTurnMarker.strip(full), said)
+        }
+        // A tag start the turn marker's own hold takes is left to it.
+        XCTAssertEqual(TimelineTurnMarker.stripLive(oneLine + "\n<walnut-turn st"), oneLine)
+        XCTAssertEqual(TimelineTurnMarker.stripLive(oneLine + "\n" + TimelineTurnMarker.tag), oneLine)
+        let answer = ("Here is where they stand:\n\n**Thread status:**\n- th-0a1b2c3d4e5f: answered \u{00B7} posted\n"
+            + "- th-1b2c3d4e5f60: waiting \u{00B7} in review") as NSString
+        for end in 1...answer.length {
+            let text = answer.substring(to: end)
+            XCTAssertEqual(InternalLines.strip(text, streaming: true), text, "at \(end)")
+        }
+    }
+
+    /// Sentences, not lines: a version, a file and line, a time or a URL never end one.
+    func testSentenceCount() {
+        XCTAssertEqual(InternalLines.sentenceCount([]), 0)
+        XCTAssertEqual(InternalLines.sentenceCount(["Here is where they stand:"]), 1)
+        XCTAssertEqual(InternalLines.sentenceCount(["Done."]), 1)
+        XCTAssertEqual(InternalLines.sentenceCount(["Done. Shipped."]), 2)
+        XCTAssertEqual(InternalLines.sentenceCount(["Shipped 1.0.267.0; x.test.ts:242 passed at 19:14Z (https://example.com/run?id=7)."]), 1)
+        XCTAssertEqual(InternalLines.sentenceCount(["one", "two"]), 2)
+    }
+
     /// The agent-ack line after the report still folds the turn away.
     func testTheAckLineAfterTheReportStillReads() {
         let text = "Nothing for you.\nFOR_USER_STATE: working\n\(TimelineTurnMarker.tag)"
