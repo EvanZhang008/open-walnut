@@ -207,6 +207,9 @@ await serveProbe({
   '/parses': (q) => ({ parses: lpc.lineParsesOf(q.get('sid')) }),
   '/frames': () => lpc.frameParses(),
   '/counts': (q) => counted.get(q.get('sid')) ?? {},
+  // This leader process's start and the slack within which it does not honour an older leader's
+  // mark (leader-apply.ts markOf): what a rehearsal needs to tell which marked facts it acts on.
+  '/process': async () => ({ startedAt: Math.round(performance.timeOrigin), startedSlackMs: (await import(${url('src/core/session-channel/leader-apply.ts')})).STARTED_SLACK_MS }),
   '/loop': (q) => {
     const ms = (ns) => Math.round(ns / 1e4) / 100
     const r = { maxMs: ms(eld.max), p99Ms: ms(eld.percentile(99)), p50Ms: ms(eld.percentile(50)), meanMs: ms(eld.mean), samples: eld.count }

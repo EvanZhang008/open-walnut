@@ -49,6 +49,7 @@ import { installOlder, olderManifest } from './mixed-leader-host.mjs'
 import { NET_HOST_LINES, clusterDirs, startNewLeaderAgain, startOldLeader, stopClusterMac, stopMacDaemon } from './host-judged-leaders.mjs'
 import { rehearseOldHost } from './host-judged-old-host.mjs'
 import { explicitOffKey, rehearseExplicitOff } from './host-judged-explicit-off.mjs'
+import { dumpEvents, dumpFacts, owedOf } from './host-judged-turn-ends.mjs'
 import { errorLines, keepLogs, leaderReads, sessionView, startOn, stopLeftovers, streamCounts, taskView } from './host-judged-reads.mjs'
 
 const SCENARIOS = ['downgrade', 'old-host', 'per-host-off', 'restart-control', 'explicit-off']
@@ -288,14 +289,18 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out, mode }) {
     if (!viaChannel) fail(r2, 'a send after the upgrade was not answered over the channel')
     else if (r2.checks.newSend.history !== 1 || r2.checks.newSend.stream[`echo: ${newWords}`] !== 1) fail(r2, `the send after the upgrade was answered ${r2.checks.newSend.history} times (history), ${r2.checks.newSend.stream[`echo: ${newWords}`]} (host)`)
     // Every host fact written after the stored cursor (the catch-up and the send's turn) that the new
-    // leader has to act on, once and in order, and nothing else: a missing one fails as a doubled one
-    // does. The facts the host kept while it stood down for the old leader (`judgedBy: 'leader'`: that
-    // leader acted on those turns) are applied and never said (leader-apply.ts actedOnAlready), so they
-    // are not owed. The new leader's probe hears only what came after its start.
+    // leader has to hear, once and in order, and nothing else: a missing one fails as a doubled one
+    // does. What it owes is worked out by its own rules (host-judged-turn-ends.mjs): a fact the host
+    // kept while it stood down for the old leader (`judgedBy: 'leader'`) is applied and never said
+    // when it happened more than the leader's STARTED_SLACK_MS before its start (leader-apply.ts
+    // actedOnAlready), and acted on again inside that slack (the second known duplicate); a turn end
+    // the host held while standing down (`standDownHeld`) is never said, its said-again record is.
+    // The new leader's probe hears only what came after its start.
     await untilFactsStill(h).catch((err) => fail(r2, `the host's facts did not settle: ${err.message}`))
     const facts = (await h.host('/facts?after=0')).recs
     const from = r2.checks.cursorAtUpgrade
     if (typeof from !== 'number') fail(r2, 'the leader\'s stored channel cursor could not be read before the upgrade')
+    const leaderProcess = r2.checks.newLeaderProcess = await h.mac('/process')
     const oldLog = (() => { try { return fs.readFileSync(path.join(out, 'downgrade-old-leader.log'), 'utf8') } catch { return '' } })()
     // A fact is its name and a hash of its data, so two turns that ended alike are two equal ids:
     // a duplicate is an id heard more often than the host wrote it, never an id that occurs twice.
@@ -303,15 +308,17 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out, mode }) {
     const over = (a, b) => [...tally(a)].filter(([x, n]) => n > (tally(b).get(x) ?? 0)).map(([x, n]) => `${x} x${n - (tally(b).get(x) ?? 0)}`)
     r2.checks.facts = {}
     r2.checks.turnEndsActedOn = {}
+    r2.dump = { newLeaderProcess: leaderProcess, sessions: {} }
     for (const [k, s1] of [['main', sid], ...Object.entries(windows).map(([k, w]) => [k, w.sid])]) {
       const events = await h.mac(`/events?sid=${s1}`)
+      r2.dump.sessions[k] = { sid: s1, host: dumpFacts(facts, s1), mac: dumpEvents(events) }
       const fa = factsAtBothEnds(facts.filter((x) => typeof from === 'number' && x.seq > from), events, s1)
-      const owedRecs = fa.log.filter((x) => x.judgedBy !== 'leader')
-      const owed = factIds(owedRecs)
-      const seen = seenAsFacts(fa.mac, owedRecs)
+      const o = owedOf(fa.log, leaderProcess)
+      const owed = factIds(o.owedRecs)
+      const seen = seenAsFacts(fa.mac, o.owedRecs)
       const dupes = over(seen, owed)
       const missing = over(owed, seen)
-      const f = r2.checks.facts[k] = { hostRecords: facts.filter((x) => x.sid === s1).length, afterCursor: fa.log.length, judgedByOld: fa.log.length - owedRecs.length, owed: owed.length, leaderChannelEvents: seen.length, duplicates: dupes, missing, inOrder: JSON.stringify(seen) === JSON.stringify(owed), started: fa.started.length }
+      const f = r2.checks.facts[k] = { hostRecords: facts.filter((x) => x.sid === s1).length, afterCursor: fa.log.length, notSaid: fa.log.length - o.owedRecs.length, owed: owed.length, leaderChannelEvents: seen.length, duplicates: dupes, missing, inOrder: JSON.stringify(seen) === JSON.stringify(owed), started: fa.started.length }
       if (!owed.length) fail(r2, `${k}: no host fact after the cursor (${from}) to judge`)
       if (dupes.length) fail(r2, `${k}: the new leader heard ${dupes.length} host facts more often than owed: ${dupes.slice(0, 5).join(', ')}`)
       if (missing.length) fail(r2, `${k}: ${missing.length} host facts after the cursor never reached the new leader: ${missing.slice(0, 5).join(', ')}`)
@@ -320,24 +327,28 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out, mode }) {
       if (fa.started.length > 1) fail(r2, `${k}: the new leader heard session:started ${fa.started.length} times`)
       // Each turn end is acted on exactly once, by one leader: the older one acted on the turns that
       // ended under it (its own log, one "session result received" of its web handler each), and the
-      // host kept the ones of its stand-down with `judgedBy: 'leader'`; the new leader acts on the rest
-      // (its result handler ends the session once per turn end it acts on).
-      const ends = fa.log.filter((x) => x.name === 'session:result' || x.name === 'session:error')
+      // host kept those with `judgedBy: 'leader'`; the new leader acts on the rest (its result handler
+      // ends the session once per turn end it acts on). A held end and its said-again record are one.
       const byOld = oldLog.split('\n').filter((l) => l.includes('[web] session result received') && l.includes(s1)).length
       const byNew = events.filter((e) => e.name === 'session:ended' && e.source === 'session-result').length
-      const marked = ends.filter((x) => x.judgedBy === 'leader').length
-      const t = r2.checks.turnEndsActedOn[k] = { inCatchUp: ends.length, markedJudgedByOld: marked, byOldLeader: byOld, byNewLeader: byNew }
-      if (byNew !== ends.length - marked) fail(r2, `${k}: the new leader acted on ${byNew} turn ends, ${ends.length - marked} were left to it`)
+      const n = o.ends.length
+      const t = r2.checks.turnEndsActedOn[k] = { inCatchUp: n, ends: o.ends, markedJudgedByOld: o.actsOld, slackMarked: o.slackDuplicates, byOldLeader: byOld, byNewLeader: byNew }
+      if (o.unsaidHeld.length) fail(r2, `${k}: the host held turn end(s) ${o.unsaidHeld.join(', ')} while standing down and never said them again after it stood up`)
+      if (byNew !== o.actsNew) fail(r2, `${k}: the new leader acted on ${byNew} turn ends, ${o.actsNew} were left to it`)
       if (k === 'early') {
         // The known duplicate (old-leader-watch.ts): the host judged it before it stood down, so it is
         // unmarked, and the old leader judged it from the transcript too.
-        t.knownDuplicate = byOld + byNew > ends.length
-        if (marked) fail(r2, `early: the turn that ended before the stand-down was marked judged by the old leader`)
+        t.knownDuplicate = byOld + byNew > n ? 'early' : false
+        if (o.actsOld) fail(r2, `early: the turn that ended before the stand-down was marked judged by the old leader`)
         continue
       }
-      if (byOld + byNew !== ends.length) fail(r2, `${k}: ${ends.length} turn ends after the cursor were acted on ${byOld + byNew} times (${byOld} by ${older.version}, ${byNew} by the new leader)`)
-      if (marked !== byOld) fail(r2, `${k}: the host marked ${marked} turn ends as judged by the older leader, which acted on ${byOld}`)
-      if (k !== 'main' && (ends.length !== 1 || byNew !== 1)) fail(r2, `${k}: ${ends.length} turn ends after the cursor, ${byNew} acted on by the new leader (one each expected)`)
+      // The second known duplicate: a marked turn end inside the new leader's start slack is acted on
+      // by both leaders (leader-apply.ts STARTED_SLACK_MS), on purpose.
+      if (o.slackDuplicates) t.knownDuplicate = 'slack'
+      if (k === 'main' && !o.ends.some((e) => e.mark === 'honoured')) fail(r2, `main: no turn end of the old leader's time ended more than ${leaderProcess.startedSlackMs} ms before the new leader started: the run no longer tests that its marks are honoured`)
+      if (byOld + byNew !== n + o.slackDuplicates) fail(r2, `${k}: ${n} turn ends after the cursor (${o.slackDuplicates} inside the new leader's start slack) were acted on ${byOld + byNew} times (${byOld} by ${older.version}, ${byNew} by the new leader)`)
+      if (o.actsOld !== byOld) fail(r2, `${k}: the host marked ${o.actsOld} turn ends as judged by the older leader, which acted on ${byOld}`)
+      if (k !== 'main' && (n !== 1 || byNew !== 1)) fail(r2, `${k}: ${n} turn ends after the cursor, ${byNew} acted on by the new leader (one each expected)`)
     }
     r2.checks.started = r2.checks.facts.main.started
   } catch (err) {
@@ -448,9 +459,9 @@ function readme(results, older, mode) {
     if (r.scenario === 'downgrade') return `old leader up ${c.oldLeaderUp?.upMs ?? '?'} ms (${c.oldLeaderUp?.version ?? 'no health'}); host stood down ${c.standDown?.afterMs ?? 'never'} ms after it (bound ${c.standDown?.boundMs} ms, WALNUT_HOST_OLD_LEADER_MS=${r.oldLeaderMs}; the old leader's host-server install restarted the service ${c.hostService?.restartsForSpec ?? '?'}x); held turn: ${c.turnEnd?.stream?.turns ?? "?"} turns, ${c.turnEnd?.stream?.results ?? "?"} results for 2 messages, history ${c.turnEnd?.historyReleased ?? '?'}x; old-leader send answered ${c.oldSend?.history ?? '?'}x`
     if (r.scenario === 'upgrade') {
       const f = c.facts?.main ?? {}
-      const t = (k) => { const x = c.turnEndsActedOn?.[k]; return x ? `${k} ${x.inCatchUp} end(s): ${r.older} ${x.byOldLeader} (marked ${x.markedJudgedByOld}), new ${x.byNewLeader}${x.knownDuplicate ? ', the known duplicate' : ''}` : `${k} ?` }
+      const t = (k) => { const x = c.turnEndsActedOn?.[k]; return x ? `${k} ${x.inCatchUp} end(s): ${r.older} ${x.byOldLeader} (marked ${x.markedJudgedByOld}), new ${x.byNewLeader}${x.knownDuplicate ? `, the known duplicate (${x.knownDuplicate})` : ''}` : `${k} ?` }
       const win = (k, w) => w ? `${k}: ended ${w.ended}, marked ${w.judgedBy ?? 'no'} (host then: stood down ${w.atRelease?.standsDown}, presence ${w.atRelease?.presence}, channel ${w.atRelease?.live ? 'open' : 'shut'})` : `${k}: not run`
-      return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; main session facts after the cursor ${f.afterCursor ?? '?'} (judged by the older leader, applied unsaid ${f.judgedByOld ?? '?'}), missing ${f.missing?.length ?? '?'}, duplicates ${f.duplicates?.length ?? '?'}, in order ${f.inOrder}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}; ${win('window A', c.windowA)}; ${win('window B', c.windowB)} (links refused while held ${c.channelHold?.refused ?? '?'}); turn ends acted on: ${['main', 'early', 'a', 'b'].map(t).join('; ')}`
+      return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; main session facts after the cursor ${f.afterCursor ?? '?'} (applied unsaid ${f.notSaid ?? '?'}: marks the new leader honours, ends the host held), missing ${f.missing?.length ?? '?'}, duplicates ${f.duplicates?.length ?? '?'}, in order ${f.inOrder}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}; ${win('window A', c.windowA)}; ${win('window B', c.windowB)} (links refused while held ${c.channelHold?.refused ?? '?'}); turn ends acted on: ${['main', 'early', 'a', 'b'].map(t).join('; ')}`
     }
     if (r.scenario === 'old-host') return `host daemon ${c.hostDaemon?.version ?? '?'} (pid ${c.hostDaemon?.pid ?? '?'}, the same at the end: ${c.hostDaemon?.sameAtEnd}); the leader judges there: ${c.leaderJudges}; start judged ${c.start?.judge?.judge ?? '?'}, answered ${c.start?.answered}`
     if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); host's task copy at the send: ${c.hostCopyAtSend ?? '?'}; next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host, ${c.send?.history ?? '?'}x in the history, ${c.send?.channelResults ?? '?'} turn end(s) over the channel`
