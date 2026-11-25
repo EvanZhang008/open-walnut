@@ -19,23 +19,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { guardedPath } from '../../setup/exec-guard.js'
+import { walnutUserShimText } from '../../helpers/walnut-user-shim-text.js'
 
-const ROOT = path.resolve(__dirname, '../../..')
-
-/** The daemon's userWalnutShimText(), evaluated (its TS annotation dropped). */
-function walnutShimText(prodDir = '/tmp/open-walnut'): string {
-  const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-  const fnStart = src.indexOf('function userWalnutShimText(): string {')
-  expect(fnStart).toBeGreaterThan(-1)
-  const fnSrc = src.slice(fnStart, src.indexOf('\n}', fnStart) + 2).replace('userWalnutShimText(): string {', 'userWalnutShimText() {')
-  // The function references PROD_DAEMON_DIR, USER_WALNUT_SHIM_MARKER and USER_WALNUT_SHIM_TAG.
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  const make = new Function(
-    'PROD_DAEMON_DIR', 'USER_WALNUT_SHIM_MARKER', 'USER_WALNUT_SHIM_TAG',
-    fnSrc + '\nreturn userWalnutShimText();',
-  ) as (prodDir: string, marker: string, tag: string) => string
-  return make(prodDir, 'walnut-user-shim v1', 'walnut-user-shim')
-}
+const walnutShimText = walnutUserShimText
 
 let tmp: string
 let A: string   // first shim copy dir

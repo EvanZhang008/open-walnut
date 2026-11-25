@@ -21,17 +21,17 @@ const vitest = process.env.VITEST ? await import('vitest') : null
 /** A gateway answer: `{ok, result}` or `{ok:false, error}`. */
 export type GatewayAnswer = Record<string, any>
 
-/** The request line a session's CLI sends for one tool call (wn-cli.ts). */
-function callLine(sid: string, name: string, args: Record<string, unknown>, callId?: string): Record<string, unknown> {
-  return { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } }
+/** The request line a session's CLI sends for one tool call (wn-cli.ts); `waitMs`: how long it may wait for a server. */
+function callLine(sid: string, name: string, args: Record<string, unknown>, callId?: string, waitMs?: number): Record<string, unknown> {
+  return { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) }, ...(waitMs !== undefined ? { waitMs } : {}) }
 }
 
 /** One `walnut` call on the host daemon's gateway socket, as a session's CLI sends it (the old door). */
-export function gatewayCall(c: ReplicaCluster, sid: string, name: string, args: Record<string, unknown>, callId?: string): Promise<GatewayAnswer> {
+export function gatewayCall(c: ReplicaCluster, sid: string, name: string, args: Record<string, unknown>, callId?: string, opts: { waitMs?: number } = {}): Promise<GatewayAnswer> {
   return new Promise((resolve, reject) => {
     const sock = net.connect(path.join(c.base, 'hd', 'agent-gateway.sock'))
     let buf = ''
-    sock.on('connect', () => sock.write(JSON.stringify(callLine(sid, name, args, callId)) + '\n'))
+    sock.on('connect', () => sock.write(JSON.stringify(callLine(sid, name, args, callId, opts.waitMs)) + '\n'))
     sock.on('data', (d) => {
       buf += d.toString()
       if (buf.includes('\n')) { sock.destroy(); resolve(JSON.parse(buf.slice(0, buf.indexOf('\n')))) }
@@ -77,17 +77,22 @@ export function hostDaemonLog(c: ReplicaCluster): Array<Record<string, any>> {
 /** Lines of the host daemon's log written since `from` (ms). */
 export const logSince = (c: ReplicaCluster, from: number) => hostDaemonLog(c).filter((l) => Date.parse(String(l.ts)) >= from)
 
-/**
- * The env of the mock CLI running session `sid` (its command line names the cluster's copy of the
- * mock and the sid), read from /proc: null when no such process runs, or where /proc is not there.
- */
-export function sessionCliEnv(c: ReplicaCluster, sid: string): Record<string, string> | null {
+/** The pid of the mock CLI running session `sid` (its command line names the cluster's copy of the mock and the sid), or 0. */
+export function sessionCliPid(c: ReplicaCluster, sid: string): number {
   let ps = ''
-  try { ps = execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return null }
+  try { ps = execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return 0 }
   const mock = path.join(c.base, 'bin', 'mock-claude.cjs')
   const row = ps.split('\n').map((l) => l.trim()).find((l) => l.includes(` ${mock} `) && new RegExp(`--(session-id|resume) ${sid}(\\s|$)`).test(l))
-  if (!row) return null
-  const pid = Number(row.slice(0, row.indexOf(' ')))
+  return row ? Number(row.slice(0, row.indexOf(' '))) : 0
+}
+
+/**
+ * The env of the mock CLI running session `sid`, read from /proc: null when no such process runs,
+ * or where /proc is not there.
+ */
+export function sessionCliEnv(c: ReplicaCluster, sid: string): Record<string, string> | null {
+  const pid = sessionCliPid(c, sid)
+  if (!pid) return null
   let raw = ''
   try { raw = fs.readFileSync(`/proc/${pid}/environ`, 'utf8') } catch { return null }
   const env: Record<string, string> = {}

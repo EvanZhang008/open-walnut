@@ -75,7 +75,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from '../../src/lib/sqlite.js'
 import { bunRuntime, testBun } from './bun-runtime.js'
-import { startSilentLinkProxy, type SilentLinkProxy } from './silent-link-proxy.js'
+import { startSilentLinkProxy, type SilentLinkProxy, type SlowLink } from './silent-link-proxy.js'
 import { appendOutput, keepClusterBase, noteTimeline, outputFile, startTimeline } from './cluster-keep.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -204,14 +204,21 @@ export interface ReplicaCluster {
   browserCode(): Promise<string>
   sleepMac(): SignalWindow
   wakeMac(): SignalWindow
-  /** SIGTERM to the replica; its daemon (a launcher's host: its launcher) starts it again. Resolves with the new pid once it answers. */
-  /** `between`: runs once the old process ended, before the new one is waited for (what happens while it is down). */
-  restartReplica(timeoutMs?: number, between?: () => Promise<void> | void): Promise<number>
+  /**
+   * SIGTERM to the replica; its daemon (a launcher's host: its launcher) starts it again. Resolves with the new pid once it answers.
+   * `between`: runs once the old process ended, before the new one is waited for (what happens while it is down).
+   * `ready`: what "it answers" means (default: its public port answers /api/v1/instance; a service without a copy opens none).
+   */
+  restartReplica(timeoutMs?: number, between?: () => Promise<void> | void, ready?: () => Promise<boolean>): Promise<number>
   asleep(): boolean
   /** `linkProxy` only: close the Mac's link to the host daemon (every connection) and hold its redials silent. */
   cutLink(): void
   /** `linkProxy` only: let the Mac's next redial through. */
   mendLink(): void
+  /** `linkProxy` only: the link still carries both ways, every chunk `delayMs` late (silent-link-proxy.ts `slow`); mendLink() ends it. */
+  slowLink(slow: SlowLink): void
+  /** `hostService` only: SIGSTOP / SIGCONT of the host's service (the launcher's entry running now, a direct child), e.g. to hold a call in flight. */
+  holdHostService(hold: boolean): void
   /** SIGSTOP / SIGCONT of the replica's process (refused when none is the one this cluster started). */
   pauseReplica(): void
   resumeReplica(): void
@@ -1033,6 +1040,12 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
     asleep: () => paused,
     cutLink() { if (!link) throw new Error('replica-cluster: cutLink needs linkProxy'); noteTimeline('cutLink'); link.setMode('drop-hold') },
     mendLink() { if (!link) throw new Error('replica-cluster: mendLink needs linkProxy'); noteTimeline('mendLink'); link.setMode('pass') },
+    slowLink(slow) { if (!link) throw new Error('replica-cluster: slowLink needs linkProxy'); noteTimeline('slowLink', { delayMs: slow.delayMs }); link.setMode('slow', slow) },
+    holdHostService(hold) {
+      if (!launcher) throw new Error('replica-cluster: holdHostService needs hostService')
+      noteTimeline(hold ? 'holdHostService' : 'releaseHostService')
+      if (!signalChild(launcher.proc, hold ? 'SIGSTOP' : 'SIGCONT')) throw new Error('replica-cluster: the host\'s service is not running')
+    },
     pauseReplica() { signalReplica('SIGSTOP') },
     resumeReplica() { signalReplica('SIGCONT') },
     async stepReplica(o) {
@@ -1053,7 +1066,8 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
       }
       return steps
     },
-    async restartReplica(timeoutMs = 120_000, between) {
+    async restartReplica(timeoutMs = 120_000, between, ready) {
+      const answers = ready ?? (async () => (await replicaCall('GET', '/api/v1/instance')).status === 200)
       if (launcher) {
         // The replica is the host's service: it ends, and its launcher starts it again.
         const before = launcher.proc
@@ -1061,7 +1075,7 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
         await waitFor(() => before.exitCode !== null || before.signalCode !== null, 30_000, 'the host\'s service to stop')
         await between?.()
         const next = await launcher.next(before, timeoutMs)
-        await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted service to answer')
+        await waitFor(answers, timeoutMs, 'the restarted service to answer')
         return next.pid!
       }
       const before = replicaPins()
@@ -1070,7 +1084,7 @@ export async function startReplicaCluster(opts: { twin?: Twin; app?: ClusterApp;
       await waitFor(() => before.every((p) => !stillPinned(p)), 30_000, 'the replica to stop')
       await between?.()
       const next = await waitFor(() => replicaPins().find((p) => !before.some((b) => b.pid === p.pid)) ?? null, timeoutMs, 'its daemon to start the replica again')
-      await waitFor(async () => (await replicaCall('GET', '/api/v1/instance')).status === 200, timeoutMs, 'the restarted replica to answer')
+      await waitFor(answers, timeoutMs, 'the restarted replica to answer')
       return next.pid
     },
     async waitAway(token, timeoutMs = WINDOWS.quietMs + 30_000) {

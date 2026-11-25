@@ -16,6 +16,10 @@
  *              `queueBytes`: the link pushes back, as TCP does: a sender with
  *              more than this waiting is paused, so its big write stays in
  *              flight for as long as the link needs to carry it.
+ *              `latencyOnly`: every chunk arrives `delayMs` after it was read, in
+ *              order, with no rate and no queue behind it (a far link that keeps
+ *              up): the delay stays the same however long the mode lasts, where
+ *              the default one chunk at a time adds `delayMs` per chunk waiting.
  *   severed    blackhole, and the far side never hears the near side go away: a
  *              client that gives up and closes leaves its upstream socket open.
  *              That is an SSH port forward whose client vanished (a Mac asleep, or
@@ -38,7 +42,7 @@ import net from 'node:net'
 
 export type LinkMode = 'pass' | 'blackhole' | 'drop-hold' | 'slow' | 'severed'
 
-export interface SlowLink { delayMs: number; bytesPerSec: number; shared?: boolean; queueBytes?: number }
+export interface SlowLink { delayMs: number; bytesPerSec: number; shared?: boolean; queueBytes?: number; latencyOnly?: boolean }
 
 export interface SilentLinkProxy {
   port: number
@@ -88,7 +92,12 @@ export async function startSilentLinkProxy(targetPort: number | (() => number), 
     return (chunk: Buffer) => {
       if (!pair.exempt && (silent(mode) || pair.severed)) return
       if (mode !== 'slow' || pair.exempt) { tail = tail.then(() => { if (!to.destroyed) to.write(chunk) }); return }
-      const { delayMs, bytesPerSec, shared, queueBytes } = slow
+      const { delayMs, bytesPerSec, shared, queueBytes, latencyOnly } = slow
+      if (latencyOnly) {
+        const dueAt = Date.now() + delayMs
+        tail = tail.then(() => new Promise<void>((resolve) => setTimeout(() => { if (!to.destroyed) to.write(chunk); resolve() }, Math.max(0, dueAt - Date.now()))))
+        return
+      }
       if (queueBytes !== undefined) {
         waiting += chunk.length
         if (waiting > queueBytes && !from.isPaused()) from.pause()

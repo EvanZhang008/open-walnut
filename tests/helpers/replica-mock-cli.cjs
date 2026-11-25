@@ -23,6 +23,8 @@
  * "please hold until <absolute path>" keeps the turn running until that file exists (a
  * test reads the running turn, then releases it): "echo: released <path>". An interrupt
  * control request (Walnut's Stop) ends such a held turn at once: "echo: interrupted".
+ * "...then exec <script> into <file>" runs the script as this CLI's child once released (a
+ * `walnut` call made inside the session) and writes its exit code and output to the file.
  * "please stream <n> lines at <r> per second" writes a busy turn's output (streamLines, for
  * scripts/bench-host-judged-sessions.mts): "echo: streamed <what it wrote, by kind>". "...then hold
  * until <path>" holds the turn after that output, as above: "echo: streamed <...> then released".
@@ -154,6 +156,27 @@ function runNext() {
   const streamHold = /please stream (\d+) lines at (\d+) per second then hold until (\/\S+)/i.exec(words)
   if (streamHold) {
     streamLines(Number(streamHold[1]), Number(streamHold[2]), (n) => holdUntil(streamHold[3], `echo: streamed ${JSON.stringify(n)} then released`))
+    return
+  }
+  // "please hold until <path> then exec <script> into <file>": held as below, then `/bin/sh <script>` runs as
+  // this CLI's child with its env (a model's Bash tool running `walnut ...` inside the session), and
+  // {code, stdout, stderr, ms} goes to <file> (written aside, then renamed): "echo: executed <file>".
+  const holdExec = /please hold until (\/\S+) then exec (\/\S+) into (\/\S+)/i.exec(words)
+  if (holdExec) {
+    const [, gatePath, script, into] = holdExec
+    const gate = setInterval(() => {
+      if (!fs.existsSync(gatePath)) return
+      clearInterval(gate)
+      stopHeld = null
+      const t0 = Date.now()
+      require('child_process').execFile('/bin/sh', [script], { env: process.env, timeout: 300_000 }, (err, stdout, stderr) => {
+        const code = err ? (typeof err.code === 'number' ? err.code : -1) : 0
+        fs.writeFileSync(`${into}.tmp`, JSON.stringify({ code, stdout: String(stdout), stderr: String(stderr), ms: Date.now() - t0 }))
+        fs.renameSync(`${into}.tmp`, into)
+        finish(`echo: executed ${into}`)
+      })
+    }, 50)
+    stopHeld = () => { clearInterval(gate); stopHeld = null; finish('echo: interrupted') }
     return
   }
   const hold = /please hold until (\/\S+)/i.exec(words)
