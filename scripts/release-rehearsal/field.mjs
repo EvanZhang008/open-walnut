@@ -728,6 +728,32 @@ async function updatedWhileServing({ from, field, work, walnuts, opts, how }) {
 /** The release's platform package for this machine: the one its launcher needs here. */
 const hostPackage = () => `@open-walnut/${hostTarget()}`
 
+/**
+ * A released version's compiled file for `target`, as its launcher installs it
+ * (`node_modules/@open-walnut/<target>/walnut`), from the real registry into `dir`:
+ * the platform package's tarball, unpacked. Returns the file's path.
+ */
+export async function releasedPlatformFile(version, target, dir, { upstream = UPSTREAM } = {}) {
+  const name = `@open-walnut/${target}`
+  const docRes = await outsideFetch(`${upstream}/${name.replace('/', '%2f')}/${encodeURIComponent(version)}`, { headers: { accept: 'application/json' } }, { timeoutMs: 60_000 })
+  if (!docRes.ok) throw new Error(`the registry answered HTTP ${docRes.status} for ${name}@${version}`)
+  const doc = await docRes.json()
+  if (doc?.version !== version || !doc?.dist?.tarball) throw new Error(`the registry's ${name}@${version} has no tarball`)
+  const tgz = await download(doc.dist.tarball)
+  if (!tgz) throw new Error(`${doc.dist.tarball} is not there`)
+  if (doc.dist.integrity?.startsWith('sha512-') && `sha512-${crypto.createHash('sha512').update(tgz).digest('base64')}` !== doc.dist.integrity) {
+    throw new Error(`${name}@${version}'s tarball does not match its integrity`)
+  }
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `${target}-${version}.tgz`)
+  fs.writeFileSync(file, tgz)
+  execFileSync('tar', ['xzf', file, '-C', dir])
+  const walnut = path.join(dir, 'package', 'walnut')
+  if (!fs.existsSync(walnut)) throw new Error(`${name}@${version} has no walnut file`)
+  fs.chmodSync(walnut, 0o755)
+  return walnut
+}
+
 async function lagging({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
     const w = walnutFor(work, `field-lag-${from.version}`, registry, walnuts)
