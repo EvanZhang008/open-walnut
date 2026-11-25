@@ -323,6 +323,13 @@ enum OrgThreadModel {
         }
     }
 
+    /// Whether the page says where a thread went after this action. His own Acknowledge says
+    /// nothing: the card just goes (2026-11-25, the user, of "Moved to Acknowledged" after his
+    /// Acknowledge: "直接消失就好了，不要再显示一个很烦"; the web's thread-moves.ts the same).
+    static func tellsWhereItWent(after edit: OrgThreadEdit) -> Bool {
+        edit != .acknowledge
+    }
+
     /// Where a thread went after an action took it off the cards, said once at the top of the
     /// page; nil while it is still on a card.
     static func movedNotice(_ id: String, threads: [OrgThread], now: Date) -> String? {

@@ -52,3 +52,9 @@ export const ANCHOR_SLOP_PX = 0.5;
  */
 export const SCROLL_HELD_ATTR = 'data-scroll-held';
 export const SCROLL_RELEASED_EVENT = 'walnut-scroll-released';
+/**
+ * Dispatched on the box by an owner whose `reading` row changed with no scroll and no commit (the
+ * pointer went to another row, the focus came in): `useScrollAnchor` picks its row again now, so the
+ * next change above is measured against the row being read.
+ */
+export const SCROLL_REPICK_EVENT = 'walnut-scroll-repick';

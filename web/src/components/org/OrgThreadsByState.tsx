@@ -16,7 +16,7 @@
  *
  * A card that leaves a group on screen leaves a line in its place for a few seconds (thread-moves.ts).
  */
-import { focusUnlessTyping } from '@/utils/focus-unless-typing';
+import { focusUnlessTyping, isTypingField } from '@/utils/focus-unless-typing';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { DisclosureButton } from '@/components/controls';
 import type { Task } from '@open-walnut/core';
@@ -35,6 +35,40 @@ const moveKey = (m: ThreadMove) => `moved-${m.id}-${m.from}-${m.index}`;
 /** A group's head: a heading (open groups take a focus handed to them, never a Tab stop). */
 const headOf = (root: Element | null | undefined, g: ThreadGroup) =>
   root?.querySelector<HTMLElement>(`[data-testid="org-thread-group"][data-group="${g}"] [data-testid="org-thread-group-head"]`) ?? null;
+
+/** The card the focus is in: its id, and its group and place there (null in Watching or a portalled menu). */
+interface FocusPlace { id: string; group: ThreadGroup; index: number }
+function placeOf(el: Element, groups: Record<ThreadGroup, OrgThread[]>): FocusPlace | null {
+  const card = el.closest<HTMLElement>('[data-testid="org-thread"]:not([data-copy])');
+  const group = card?.closest<HTMLElement>('[data-testid="org-thread-group"]')?.dataset.group as ThreadGroup | undefined;
+  const id = card?.dataset.threadId;
+  if (!id || !group || !groups[group]) return null;
+  return { id, group, index: Math.max(0, groups[group].findIndex((t) => t.id === id)) };
+}
+
+/**
+ * The focus dropped to the page because the card it was in left (a move, his Acknowledge, a read
+ * from another screen): the line the card left takes it (its Show; its group's head when he was
+ * typing), and with no line (his own Acknowledge leaves none, thread-moves.ts) the card that took its
+ * place, or the one before it, or its group's head; never the page (2026-11-25).
+ */
+function keepFocusHome(root: HTMLElement | null, at: FocusPlace | null, groups: Record<ThreadGroup, OrgThread[]>, typing: boolean, stillOurs: () => boolean): void {
+  const active = document.activeElement;
+  if (!root || !stillOurs() || (active && active !== document.body)) return;
+  const line = at
+    ? root.querySelector<HTMLElement>(`[data-testid="org-thread-move-note"][data-moved-id="${CSS.escape(at.id)}"]`)
+    : [...root.querySelectorAll<HTMLElement>('[data-testid="org-thread-move-note"]')].at(-1) ?? null;
+  if (line) {
+    const from = at?.group ?? (line.closest<HTMLElement>('[data-testid="org-thread-group"]')?.dataset.group as ThreadGroup | undefined);
+    (typing && from ? headOf(root, from) : line.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
+    return;
+  }
+  if (!at) return;
+  const list = groups[at.group];
+  const next = list[at.index] ?? list[at.index - 1];
+  const card = !typing && next ? root.querySelector<HTMLElement>(`[data-testid="org-thread-group"][data-group="${at.group}"] [data-testid="org-thread"][data-thread-id="${CSS.escape(next.id)}"] [data-testid="org-thread-head"]`) : null;
+  (card ?? headOf(root, at.group) ?? root.querySelector<HTMLElement>('[data-testid="org-thread-group-head"]'))?.focus({ preventScroll: true });
+}
 
 /** The line a card left in its place: where it is now, Show to open that group and bring the card
  *  into view. It goes by itself MOVE_NOTE_MS after it showed: a read that moved the card on out of
@@ -95,17 +129,22 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
   const { moves, dismiss } = useThreadMoves(groups, shown, epoch);
   const rootRef = useRef<HTMLDivElement>(null);
   // The focus was in these Threads (a card's button, its menu portalled out but still its child):
-  // when the card it was on leaves, the focus would drop to the page; the line left there takes it.
+  // when the card it was on leaves, the focus would drop to the page (keepFocusHome).
   const hadFocus = useRef(false);
-  // Typing in a card's box when the node moves the card: the next key must not press Show (a
+  // Typing in a card's box when the card goes: the next key must not press what takes the focus (a
   // review: a space would act on the line), so a text field's focus goes to the group's head.
   const wasTyping = useRef(false);
+  // The card the focus is in and its place, kept current while it is there.
+  const focusAt = useRef<FocusPlace | null>(null);
   useEffect(() => {
-    const last = moves[moves.length - 1];
-    const lost = !document.activeElement || document.activeElement === document.body;
-    if (!last || !hadFocus.current || !lost) return;
-    (wasTyping.current ? headOf(rootRef.current, last.from) : rootRef.current?.querySelector<HTMLElement>(`[data-moved-id="${CSS.escape(last.id)}"] button`))?.focus({ preventScroll: true });
-  }, [moves]);
+    const root = rootRef.current;
+    const active = document.activeElement;
+    if (root && active && root.contains(active)) { focusAt.current = placeOf(active, groups) ?? focusAt.current; return; }
+    if (!hadFocus.current || (active && active !== document.body)) return;
+    // Its line comes a commit later (useThreadMoves): decided once the frame has it.
+    const id = requestAnimationFrame(() => keepFocusHome(rootRef.current, focusAt.current, groups, wasTyping.current, () => hadFocus.current));
+    return () => cancelAnimationFrame(id);
+  }, [moves, groups]);
   if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) return <ThreadsEmpty />;
   // Show opens the card's group, brings the card's top into view and hands the focus to that
   // group's head, so a keyboard keeps its place.
@@ -118,7 +157,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
   return (
     <div
       ref={rootRef} className="org-thread-groups" data-testid="org-thread-groups"
-      onFocus={(e) => { hadFocus.current = true; wasTyping.current = e.target instanceof HTMLElement && (e.target.matches('input, textarea') || e.target.isContentEditable); }}
+      onFocus={(e) => { hadFocus.current = true; wasTyping.current = isTypingField(e.target); focusAt.current = placeOf(e.target, groups) ?? focusAt.current; }}
       onBlur={(e) => { if (!e.relatedTarget || !(e.currentTarget.contains(e.relatedTarget as Node))) hadFocus.current = false; }}
     >
       {watching}

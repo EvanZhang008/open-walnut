@@ -259,7 +259,7 @@ final class OrgThreadsStore {
             return
         }
         await load()
-        tellWhereItWent(threadId)
+        if OrgThreadModel.tellsWhereItWent(after: edit) { tellWhereItWent(threadId) }
     }
 
     private func tellWhereItWent(_ threadId: String) {

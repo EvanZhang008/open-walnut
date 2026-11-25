@@ -4,6 +4,8 @@
  * to read; this takes the page's frames through the DevTools screencast at the device scale
  * factor, draws a pointer dot and a ripple at each press (headless capture has no cursor) and a
  * caption line, and joins the frames with ffmpeg as H.264 CRF 18, by their own timestamps.
+ * In a PW_VIDEO run without PROOF_VIDEO_DIR (`walnut-dev webkit --video`) only the captions are
+ * drawn, for Playwright's own recording (pw-video.ts makes it sharp and adds the pointer).
  *
  *   const video = await startProofVideo(page)   // before or after the first load
  *   await video.caption('Press Record')          // the first caption starts the capture (no loading screen)
@@ -50,9 +52,36 @@ const OVERLAY = `(() => {
 
 const OFF: ProofVideo = { on: false, caption: async () => {}, hold: async () => {}, stop: async () => null }
 
+/** The caption line alone, for Playwright's own recording (PW_VIDEO), which draws its own pointer. */
+const CAPTION_ONLY = `(() => {
+  if (window.__proofCaption) return; window.__proofCaption = true;
+  const add = () => {
+    const style = document.createElement('style');
+    style.textContent = '#proof-caption{position:fixed;z-index:2147483645;left:50%;bottom:28px;transform:translateX(-50%);max-width:80%;padding:10px 18px;border-radius:10px;background:rgba(20,20,20,.86);color:#fff;font:600 17px/1.35 -apple-system,system-ui,sans-serif;pointer-events:none;text-align:center}#proof-caption:empty{display:none}';
+    document.head.appendChild(style);
+    const cap = document.createElement('div'); cap.id = 'proof-caption';
+    document.body.append(cap);
+  };
+  if (document.body) add(); else document.addEventListener('DOMContentLoaded', add);
+})()`
+
+/**
+ * A PW_VIDEO run with no PROOF_VIDEO_DIR (`walnut-dev webkit --video`: WebKit has no DevTools
+ * screencast): the captions are drawn on the page, and Playwright's own recording keeps them.
+ */
+async function captionsOnly(page: Page): Promise<ProofVideo> {
+  await page.addInitScript(CAPTION_ONLY)
+  return {
+    on: true,
+    caption: async (text) => { await page.evaluate((t) => { const c = document.getElementById('proof-caption'); if (c) c.textContent = t }, text).catch(() => {}) },
+    hold: (ms = 1_200) => page.waitForTimeout(ms),
+    stop: async () => null,
+  }
+}
+
 export async function startProofVideo(page: Page): Promise<ProofVideo> {
   const dir = process.env.PROOF_VIDEO_DIR
-  if (!dir) return OFF
+  if (!dir) return process.env.PW_VIDEO ? captionsOnly(page) : OFF
   const frames = fs.mkdtempSync(path.join(dir, '.frames-'))
   const stamps: Array<{ file: string; at: number }> = []
   await page.addInitScript(OVERLAY)

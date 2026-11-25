@@ -468,7 +468,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now: nowGive
   const rootRef = useRef<HTMLDivElement>(null);
   const allGroups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
   const groups = useMemo(() => (allGroups ? origin.onlyGroups(allGroups) : null), [allGroups, origin]);
-  // While he reads, the cards hold their order under the pointer and the one in view its place (useThreadsHold.ts).
+  // While he reads, the cards hold their order and the one he reads its place (useThreadsHold.ts).
   const hold = useThreadsHold(rootRef, open, groups);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
     // The filter leaves it out: every thread shows again, so the asked one can.
@@ -495,7 +495,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now: nowGive
     <OrgThreadsWatching threads={watching} card={(t, copy) => card(t, copy)} onReorder={(writes) => { for (const w of writes) void state.update(w.id, { watch_at: w.watch_at }); }} />
   );
   return (
-    <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick} onPointerEnter={hold.onPointerEnter} onPointerLeave={hold.onPointerLeave}>
+    <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick} {...hold.handlers}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <LoadingState size="section" title="Loading threads…" />}
       {origin.choices && <ThreadOriginFilter choices={origin.choices} pick={origin.pick} onPick={origin.setPick} />}

@@ -244,6 +244,10 @@ final class OrgThreadModelTests: XCTestCase {
         let snoozedRow = threads.first { $0.id == "zz" }!.snoozed!
         XCTAssertEqual(OrgThreadModel.movedNotice("zz", threads: threads, now: Self.now), "Snoozed until \(OrgThreadModel.backAt(snoozedRow.until, now: Self.now))")
         XCTAssertEqual(OrgThreadModel.movedNotice("done", threads: threads, now: Self.now), "Closed. It is under Closed")
+        // His own Acknowledge says nothing: the card just goes. Every other action still says where.
+        XCTAssertFalse(OrgThreadModel.tellsWhereItWent(after: .acknowledge))
+        XCTAssertTrue(OrgThreadModel.tellsWhereItWent(after: .reopen))
+        XCTAssertTrue(OrgThreadModel.tellsWhereItWent(after: .snooze("")))
     }
 
     func testAPreviewCutAtAListMarkerEndsOnTheItemBefore() {

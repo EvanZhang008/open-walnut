@@ -7,13 +7,36 @@
  * every move (his reply, a click, Reopen, Snooze, the node's own change, a snooze's end): the
  * groups are compared from one read to the next (OrgThreadsByState), never told by each action.
  * Pure but for the hook at the bottom.
+ *
+ * His own Acknowledge leaves no line (2026-11-25, the user, of "Moved to Acknowledged ... Show"
+ * under a card he had just acknowledged: "直接消失就好了，不要再显示一个很烦"): he made that move
+ * himself, so the card just goes. Read from the card (its `ackedAt` newer, or closed acked by him),
+ * so his Acknowledge on another screen counts too.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { FOLDED_GROUPS, FOR_HIM_GROUPS, type ThreadGroup } from '@open-walnut/thread-groups';
 
-/** Where a card stood: its group and its place in that group's list. */
-export interface ThreadPlace { group: ThreadGroup; index: number; title: string }
+/** Where a card stood: its group and its place in that group's list, and his last Acknowledge of it. */
+export interface ThreadPlace { group: ThreadGroup; index: number; title: string; acked?: string }
+
+/** A card as the groups hold it: what a place reads of it. */
+export interface PlacedCard { id: string; title: string; ackedAt?: string; closed?: { how?: string; by?: string; at?: string }; choice?: unknown; letter?: unknown }
+
+/**
+ * His last Acknowledge of a card: when it went to Acknowledged, or when his Acknowledge closed it.
+ * A choice's or a letter's card has no Acknowledge (OrgThreads ThreadCard): his answer there closes
+ * it the same way, and that move keeps its line ("Moved to Closed", thread-groups-folds.spec.ts). Pure.
+ */
+export function ackMark(t: PlacedCard): string | undefined {
+  if (t.closed?.how === 'acked' && t.closed.by === 'human' && t.closed.at && !t.choice && !t.letter) return t.closed.at;
+  return t.ackedAt;
+}
+
+/** He acknowledged the card between two reads: a move it made then is his own. Pure. */
+export function ackedBetween(was: ThreadPlace | undefined, now: ThreadPlace | undefined): boolean {
+  return !!now?.acked && now.acked !== was?.acked;
+}
 export type ThreadPlaces = ReadonlyMap<string, ThreadPlace>;
 
 /** A card that left a group he was looking at, and where to. */
@@ -28,22 +51,27 @@ export function shownGroups(opened: ReadonlySet<ThreadGroup>): ReadonlySet<Threa
 }
 
 /** Every card's place, read from the groups as drawn. Pure. */
-export function placesOf(groups: Readonly<Record<ThreadGroup, ReadonlyArray<{ id: string; title: string }>>>): Map<string, ThreadPlace> {
+export function placesOf(groups: Readonly<Record<ThreadGroup, ReadonlyArray<PlacedCard>>>): Map<string, ThreadPlace> {
   const out = new Map<string, ThreadPlace>();
-  for (const g of Object.keys(groups) as ThreadGroup[]) groups[g].forEach((t, index) => out.set(t.id, { group: g, index, title: t.title }));
+  for (const g of Object.keys(groups) as ThreadGroup[]) {
+    groups[g].forEach((t, index) => {
+      const acked = ackMark(t);
+      out.set(t.id, { group: g, index, title: t.title, ...(acked ? { acked } : {}) });
+    });
+  }
   return out;
 }
 
 /**
  * The cards that left a group on screen (`shown`), between two reads of the groups. A card new to
- * the list, one gone from it (deleted) and one moved between two groups he was not looking at leave
- * no line. Pure.
+ * the list, one gone from it (deleted), one moved between two groups he was not looking at, and one
+ * his own Acknowledge moved leave no line. Pure.
  */
 export function movesBetween(prev: ThreadPlaces, next: ThreadPlaces, shown: ReadonlySet<ThreadGroup>): ThreadMove[] {
   const out: ThreadMove[] = [];
   for (const [id, was] of prev) {
     const now = next.get(id);
-    if (!now || now.group === was.group || !shown.has(was.group)) continue;
+    if (!now || now.group === was.group || !shown.has(was.group) || ackedBetween(was, now)) continue;
     out.push({ id, title: now.title, from: was.group, to: now.group, index: was.index });
   }
   return out;
@@ -68,7 +96,7 @@ export function stepMoves(was: MoveBase | null, now: MoveBase, lines: ThreadMove
   const found = was.epoch === now.epoch ? movesBetween(was.places, now.places, both) : [];
   const kept = lines.flatMap((m) => {
     const at = now.places.get(m.id);
-    if (!at || at.group === m.from || !now.shown.has(m.from) || found.some((f) => f.id === m.id)) return [];
+    if (!at || at.group === m.from || !now.shown.has(m.from) || found.some((f) => f.id === m.id) || ackedBetween(was.places.get(m.id), at)) return [];
     return [at.group === m.to && at.title === m.title ? m : { ...m, to: at.group, title: at.title }];
   });
   const same = kept.length === lines.length && kept.every((m, i) => m === lines[i]);
@@ -83,7 +111,7 @@ export function stepMoves(was: MoveBase | null, now: MoveBase, lines: ThreadMove
  * (its first read on opening, a reconnect) brings changes he never saw happen, so it only sets
  * where each card stands (a review: reopening Threads showed a burst of lines for old moves).
  */
-export function useThreadMoves(groups: Readonly<Record<ThreadGroup, ReadonlyArray<{ id: string; title: string }>>>, shown: ReadonlySet<ThreadGroup>, epoch = 0): {
+export function useThreadMoves(groups: Readonly<Record<ThreadGroup, ReadonlyArray<PlacedCard>>>, shown: ReadonlySet<ThreadGroup>, epoch = 0): {
   moves: ThreadMove[]; dismiss: (id: string) => void;
 } {
   const prev = useRef<MoveBase | null>(null);

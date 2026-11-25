@@ -9,15 +9,18 @@
  * `overflow-anchor: none`, so both engines run this one mechanism and never two corrections at once.
  *
  * Held: the row at the top of the view, picked the way the native anchoring picks it (see
- * `pickAnchor`). Corrected on every commit of the owner (before paint) and whenever a direct child
- * of the box changes size (a child's own render, a font, an image). Re-picked on every scroll.
+ * `pickAnchor`). Corrected on every commit of the owner (before paint), whenever a direct child
+ * of the box changes size (a child's own render, a font, an image), and on every scroll before it is
+ * picked again (a scroll event comes a frame late: see `onScroll`).
  * Nothing is held at the very top: a person there is looking at the start of the list, and what
- * lands at the start is what they should see. A correction is a plain `scrollTop` write, so one
+ * lands at the start is what they should see. A box whose owner knows the row being read (`reading`:
+ * the row under the pointer, the one holding the focus) holds THAT row instead, at the very top too
+ * (2026-11-25, the Threads list: a new card above the one he read at the top pushed it down). A correction is a plain `scrollTop` write, so one
  * that lands during a trackpad fling ends the fling, where the native one would adjust it; it only
  * happens when something above really moved.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { anchoredScrollTop, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, type AnchorMark } from './scroll-anchor';
+import { anchoredScrollTop, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, type AnchorMark } from './scroll-anchor';
 
 interface Anchor extends AnchorMark {
   el: Element;
@@ -52,7 +55,9 @@ function firstReaching(list: Element[], edge: number, from: number): number {
  * than the row below it: what opens inside it (a smart row's accounts, below its line) opens in view
  * and nothing scrolls, where anchoring on the next row down would scroll the opened rows out of view.
  */
-function pickAnchor(box: HTMLElement, rows: string, hint: Element | null): Anchor | null {
+function pickAnchor(box: HTMLElement, rows: string, hint: Element | null, reading: Element | null): Anchor | null {
+  const read = reading ? readAnchor(box, rows, reading) : null;
+  if (read) return read;
   if (box.scrollTop <= 0) return null;
   const edge = box.getBoundingClientRect().top;
   const height = box.clientHeight;
@@ -68,6 +73,17 @@ function pickAnchor(box: HTMLElement, rows: string, hint: Element | null): Ancho
     scope = list[i];
   }
   return found ? { el: found.el, top: found.top, scrollTop: box.scrollTop, prev: found.prev, next: found.next } : null;
+}
+
+/** The row being read, held where it is while any of it is in view (null otherwise: the usual pick). */
+function readAnchor(box: HTMLElement, rows: string, el: Element): Anchor | null {
+  if (!box.contains(el) || !hasBox(el)) return null;
+  const edge = box.getBoundingClientRect().top;
+  const r = el.getBoundingClientRect();
+  if (r.bottom <= edge || r.top - edge >= box.clientHeight) return null;
+  const list = Array.from(box.querySelectorAll(rows));
+  const i = list.indexOf(el);
+  return { el, top: r.top - edge, scrollTop: box.scrollTop, prev: i > 0 ? list[i - 1] : null, next: i >= 0 ? list[i + 1] ?? null : null };
 }
 
 /**
@@ -93,16 +109,20 @@ interface Attached {
  * nothing is held or corrected, and the row held after it is picked afresh: a drag moves its rows
  * by transforms, which a correction would read as rows that moved above the view. The same while
  * another keeper holds the box (`SCROLL_HELD_ATTR`, a fold keeping its clicked row in place).
+ * `reading` (read at every pick) names the row the person reads now, or null when they are not at
+ * the box: that row is held, at the very top too.
  */
-export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false): void {
+export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false, reading?: () => Element | null): void {
   const anchor = useRef<Anchor | null>(null);
   const attached = useRef<Attached | null>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const readingRef = useRef(reading);
+  readingRef.current = reading;
   const standsDown = (box: HTMLElement) => pausedRef.current || box.hasAttribute(SCROLL_HELD_ATTR);
-  const pick = (box: HTMLElement) => (standsDown(box) ? null : pickAnchor(box, rowsRef.current, anchor.current?.el ?? null));
+  const pick = (box: HTMLElement) => (standsDown(box) ? null : pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, readingRef.current?.() ?? null));
 
   // A ref, not a dependency: it is called from the observers attached once per box.
   const keep = useRef((box: HTMLElement) => {
@@ -134,10 +154,17 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   }, []);
 
   function attach(box: HTMLElement): Attached {
-    const onScroll = () => { anchor.current = pick(box); };
+    // A scroll event is dispatched a frame after the scroll, and a commit that moved the rows in
+    // between (a child's own render: a Threads move line) would be taken as where the row stands
+    // now, its move never put back (2026-11-25: every "Moved to ..." line above the card he read
+    // pushed it 38px). So the row is put back first: the person's own scroll since the mark is
+    // taken out of the drift (anchorDrift), only what the layout moved is corrected.
+    const onScroll = () => keep(box);
     box.addEventListener('scroll', onScroll, { passive: true });
     // The keeper that held the box let go: hold the row on screen from here.
     box.addEventListener(SCROLL_RELEASED_EVENT, onScroll);
+    // The row being read changed with nothing scrolled or drawn (its owner says so).
+    box.addEventListener(SCROLL_REPICK_EVENT, onScroll);
     // Fires after layout and before paint, so a correction from here is never drawn as a jump. A
     // scroll changes no size, so the correction cannot feed this observer back.
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => keep(box));
@@ -165,6 +192,7 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       stop: () => {
         box.removeEventListener('scroll', onScroll);
         box.removeEventListener(SCROLL_RELEASED_EVENT, onScroll);
+        box.removeEventListener(SCROLL_REPICK_EVENT, onScroll);
         ro?.disconnect();
         watched.clear();
       },

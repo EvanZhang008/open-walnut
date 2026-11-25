@@ -9,14 +9,16 @@
  *  - opening a fold keeps the lines on show; folding the group a line stands in takes it away;
  *  - a read that caught the pane up (opened again, a reconnect) draws no line: he never saw those moves;
  *  - a line on show always names where its card is now: a card that moves on out of sight renames
- *    it, one back where it left or gone from the list takes it away.
+ *    it, one back where it left or gone from the list takes it away;
+ *  - his own Acknowledge leaves no line, from any screen (2026-11-25, the user: "直接消失就好了"):
+ *    read from the card (ackedAt, or closed acked by him), so every way he acknowledges is covered.
  * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts.
  */
 import { describe, expect, it } from 'vitest'
 import type { ThreadGroup } from '../../src/core/org/thread-groups.js'
-import { movesBetween, placesOf, shownGroups, stepMoves } from '../../web/src/components/org/thread-moves'
+import { movesBetween, placesOf, shownGroups, stepMoves, type PlacedCard } from '../../web/src/components/org/thread-moves'
 
-type G = Record<ThreadGroup, Array<{ id: string; title: string }>>
+type G = Record<ThreadGroup, PlacedCard[]>
 const empty = (): G => ({ needs: [], read: [], working: [], waiting: [], known: [], done: [], archived: [] })
 const c = (id: string) => ({ id, title: `Card ${id}` })
 function groups(parts: Partial<G>): G { return { ...empty(), ...parts } }
@@ -110,5 +112,30 @@ describe('the line a moved card leaves', () => {
     // A card that moved out of a group in the same read it was opened gives no line.
     const c2 = { ...a, places: placesOf(groups({ needs: [c('a'), c('b')], done: [c('w')] })), shown: on('working') }
     expect(stepMoves(a, c2, [])).toEqual([])
+  })
+  it('his own Acknowledge leaves no line, from any screen; a move the node makes still does', () => {
+    const at = '2026-11-25T02:00:00.000Z'
+    const before = placesOf(groups({ read: [c('a'), c('b'), c('n')] }))
+    // a: he acknowledged it (to Acknowledged); b: a second Acknowledge closed it; n: the node moved it to Working.
+    const after = placesOf(groups({ read: [], known: [{ ...c('a'), ackedAt: at }], done: [{ ...c('b'), closed: { how: 'acked', by: 'human', at } }], working: [c('n')] }))
+    expect(movesBetween(before, after, on()).map((m) => [m.id, m.to])).toEqual([['n', 'working']])
+    // The node closing a card leaves its line: he did not make that move.
+    const nodeClosed = placesOf(groups({ done: [{ ...c('a'), closed: { how: 'acked', by: 'agent', at } }] }))
+    expect(movesBetween(placesOf(groups({ read: [c('a')] })), nodeClosed, on()).map((m) => m.id)).toEqual(['a'])
+    // His answer to a Board choice or a letter closes its card the same way: not an Acknowledge, its line stays.
+    const answered = placesOf(groups({ done: [{ ...c('a'), choice: { id: 'net-when' }, closed: { how: 'acked', by: 'human', at } }, { ...c('b'), letter: { id: 'l1' }, closed: { how: 'acked', by: 'human', at } }] }))
+    expect(movesBetween(placesOf(groups({ needs: [c('a'), c('b')] })), answered, on()).map((m) => m.id)).toEqual(['a', 'b'])
+    // An older Acknowledge of the card does not hide a later move the node makes.
+    const old = placesOf(groups({ read: [{ ...c('a'), ackedAt: at }] }))
+    expect(movesBetween(old, placesOf(groups({ working: [{ ...c('a'), ackedAt: at }] })), on()).map((m) => m.id)).toEqual(['a'])
+  })
+
+  it('a line on show goes once he acknowledges its card', () => {
+    const a = { places: placesOf(groups({ read: [c('a')] })), shown: on('working'), epoch: 0 }
+    const b = { ...a, places: placesOf(groups({ working: [c('a')] })) }
+    const lines = stepMoves(a, b, [])
+    expect(lines.map((m) => m.id)).toEqual(['a'])
+    const acked = { ...b, places: placesOf(groups({ known: [{ ...c('a'), ackedAt: '2026-11-25T02:01:00.000Z' }] })) }
+    expect(stepMoves(b, acked, lines)).toEqual([])
   })
 })
