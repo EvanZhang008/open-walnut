@@ -412,9 +412,12 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       // A send's lines are queued here first, as the leader's send route queues them for its own
       // runner: the SESSION_SEND only tells the runner to drain.
       if (op === 'send') {
+        // A send with no queued lines carries words no queue framed yet: framed here as a send of
+        // its source, so the host's queueing (which keeps a handed row's envelopes) never trusts them.
+        const { frameForSource } = await import('../sessions/send-frame.js')
         const lines = Array.isArray(queued)
           ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
-          : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
+          : typeof payload.message === 'string' && payload.message ? [{ message: frameForSource(payload.message, source) }] : []
         if (lines.length > 0) await o.enqueue(b.sessionId, lines, source)
         // Held rows handed over with their hold (sessions/handed-holds.ts): queued, nothing delivered.
         if (holdOnly === true) return { status: 200, body: { ok: true } }

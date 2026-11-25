@@ -749,14 +749,18 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         const { frameAsWalnut, readsAsPerson, framingCallerOf } = await import('./send-frame.js');
         // An engine switch attributes its own first line (engine-switch.ts prepare): the person's words as
         // theirs, an agent's framed, and Walnut's carried context as a hint block a display takes off.
-        let firstMessage = params.source === 'engine-switch' ? startBody : frameStartText(startBody, {
+        const framedStart = params.source === 'engine-switch' ? startBody : frameStartText(startBody, {
           source: params.message?.trim() ? params.source : 'task-description', ...(params.callerSid ? { callerSid: params.callerSid } : {}),
           // A plugin job its host vouched for: its App's job starts the task (send-frame.ts), never "Walnut (caller:external)".
           ...(caller?.kind === 'external' && !caller.app && params.callerJob ? { job: params.callerJob } : {}),
           ...(caller?.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}), ...(requestId ? { requestId } : {}),
-        }) + (replyTrailer ? `\n${replyTrailer}` : '');
-        // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
-        if (replyTrailer && readsAsPerson(firstMessage)) firstMessage = frameAsWalnut(firstMessage, params.source);
+        });
+        let firstMessage = framedStart + (replyTrailer ? `\n${replyTrailer}` : '');
+        // The reply trailer after an envelope that is not the request's own reads as typed words: it is
+        // framed on its own, and an envelope already there is never wrapped a second time (send-frame.ts).
+        if (replyTrailer && readsAsPerson(firstMessage)) {
+          firstMessage = readsAsPerson(framedStart) ? frameAsWalnut(firstMessage, params.source) : `${framedStart}\n\n${frameAsWalnut(replyTrailer, params.source)}`;
+        }
         // The first message carries what an App gave the task (its state, an AI-only brief) as every
         // later one does: it does not pass the queue (app-state.ts; the brief leads the line). A
         // provider-issued id (an ACP engine) is known only once it started: told under it then. A

@@ -24,6 +24,10 @@ import { getQueue, resetCache } from '../../../src/core/session-message-queue.js
 import { queueLinesOnHost } from '../../../src/core/sessions/handed-holds.js'
 import { startQueueAfterTurn, stopQueueAfterTurn } from '../../../src/core/sessions/queue-after-turn.js'
 import { AFTER_TURN_REASON, COLD_HOLD_REASON, STOP_PARKED_REASON } from '../../../src/core/relay-fates.js'
+import { buildPeerWrapper } from '../../../src/core/peers/peer-wrapper.js'
+import { buildWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js'
+import { renderHintBlock } from '../../../src/core/hints/hint-format.js'
+import { frameForSource } from '../../../src/core/sessions/send-frame.js'
 
 const KEY = 'devbox'
 const OWN = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
@@ -76,6 +80,33 @@ const until = async (fn: () => Promise<boolean> | boolean, ms = 8_000) => {
 }
 
 describe('a host keeps and releases the holds its leader handed it', () => {
+  it('a leader\'s queue row (its envelopes, then notes and hints) is queued here as it is, never wrapped again', async () => {
+    // 2026-11-24: rows whose hints sat after their envelopes read as typed words here, so this host
+    // wrapped each whole as "Walnut (peer)" and the sender's envelope became escaped words.
+    running.add(OWN)
+    const reply = buildPeerWrapper('Done: the fix is on main.', { title: 'Review C8', shortId: '11111111', sessionId: '11111111-2222-4333-8444-555555555555', taskId: 't-review', host: 'local' })
+    const notice = buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'status', note: 'status changes of tasks you follow, not a work request' }, body: 'A task you follow completed.' })
+    const row = `${notice}\n\n${reply}\n\n${renderHintBlock('team-guidance', 'Team guidance from Walnut VP: lessons.')}`
+    for (const [id, sentBy] of [['qm-row-agent', 'agent'], ['qm-row-unmarked', undefined]] as const) {
+      await queueLinesOnHost(OWN, [{ id, message: row, ...(sentBy ? { sentBy } : {}), held: { reason: AFTER_TURN_REASON } }], 'peer')
+      const queued = (await getQueue(OWN)).find((m) => m.id === id)!
+      expect(queued.message).toBe(row)
+      expect(queued.message).not.toContain('&lt;walnut-message')
+    }
+    // The same row framed as a fresh send would have been wrapped whole: the case this guards.
+    expect(frameForSource(row, 'peer')).toContain('&lt;walnut-message')
+    // Loose words in a handed row are framed on their own; its envelopes stay as they are.
+    await queueLinesOnHost(OWN, [{ id: 'qm-row-loose', message: `${reply}\nand one loose line`, sentBy: 'agent', held: { reason: AFTER_TURN_REASON } }], 'peer')
+    const loose = (await getQueue(OWN)).find((m) => m.id === 'qm-row-loose')!.message
+    expect(loose.startsWith(reply)).toBe(true)
+    expect(loose).toContain('and one loose line')
+    expect(loose).not.toContain('&lt;walnut-message')
+    // Plain words an agent sent still read as an agent's, never a person's.
+    await queueLinesOnHost(OWN, [{ id: 'qm-row-plain', message: 'deploy it', sentBy: 'agent', held: { reason: AFTER_TURN_REASON } }], 'peer')
+    expect((await getQueue(OWN)).find((m) => m.id === 'qm-row-plain')!.message).toMatch(/^<walnut-message kind="peer-note" from="Walnut \(peer\)"/)
+    running.delete(OWN)
+  })
+
   it('a line held for the turn\'s end waits here and goes out when this host\'s turn ends', async () => {
     running.add(OWN)
     await tracker.updateSessionRecord(OWN, { process_status: 'running' })

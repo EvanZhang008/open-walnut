@@ -61,7 +61,7 @@ export function heldEnqueueOptions(line: Pick<QueuedLine, 'held'>): { heldReason
  * (session-message-queue.ts sendMessageToSession); the holds the lines brought are watched here.
  */
 export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[], source: string): Promise<void> {
-  const [{ enqueueMessage, getQueue, withdrawQueuedLines }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('./send-frame.js')])
+  const [{ enqueueMessage, getQueue, withdrawQueuedLines }, { frameQueuedRow }, { isPersonSource }] = await Promise.all([import('../session-message-queue.js'), import('./send-frame.js'), import('./send-sent-by.js')])
   const reasons = new Set<string>()
   // All or nothing: the rows queued here before one failed are taken back, so a failure the leader
   // answers by delivering the lines itself (a resume it falls back from) leaves none to run here too.
@@ -78,7 +78,9 @@ export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[]
         log.session.info('host queue: a second copy of a user line it already holds is not queued again', { sessionId: sid, messageId: l.id, heldAs: same })
         continue
       }
-      const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
+      // The leader's queue row, framed there already: never framed whole a second time (send-frame.ts frameQueuedRow).
+      const asTyped = l.sentBy === 'person' || (l.sentBy !== 'agent' && isPersonSource(source))
+      const text = asTyped ? l.message : frameQueuedRow(l.message, source)
       const held = heldEnqueueOptions(l)
       if (held.heldReason) reasons.add(held.heldReason)
       await enqueueMessage(sid, text, {

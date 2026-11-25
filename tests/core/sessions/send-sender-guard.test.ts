@@ -234,7 +234,8 @@ describe('every way a line reaches a session', () => {
       const text = fs.readFileSync(path.join(ROOT, s.file), 'utf8');
       // The ACP first line is framed by the start that made it (task-start.ts, quick-start.ts).
       if (s.file === 'src/providers/claude-code-session.ts') continue;
-      expect(text, `${s.file} enqueues raw text`).toMatch(/frameForSource\(/);
+      // A row another queue framed already (the leader's, handed to the host) is framed for its loose words only.
+      expect(text, `${s.file} enqueues raw text`).toMatch(/frameForSource\(|frameQueuedRow\(/);
     }
   });
 

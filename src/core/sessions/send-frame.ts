@@ -86,6 +86,21 @@ export function frameLooseText(text: string): string {
 }
 
 /**
+ * A row another queue already framed (the leader's queue row handed to the host that runs the
+ * session, host-api.ts QueuedLine: its notes and hints already in the text). Its envelopes are that
+ * queue's own framing, and any envelope a sender typed was escaped into words there, so they stay
+ * byte for byte; only words outside them are framed, as Walnut's notes are (frameLooseText). A row
+ * with no envelope is framed as a send of `source` is. Framing the whole row again put a second
+ * envelope around the first and escaped it into words (2026-11-24: rows whose notes or hints sat
+ * after their envelopes read as typed words, so the host wrapped each whole as "Walnut (peer)").
+ */
+export function frameQueuedRow(text: string, source: string | undefined): string {
+  if (!readsAsPerson(text)) return text;
+  const segments = parseSessionEnvelopes(text);
+  return segments?.some((s) => s.kind === 'envelope') ? frameLooseText(text) : frameAsWalnut(text, source);
+}
+
+/**
  * What a send of `source` puts into the session: a person's text as typed, anything else framed. A
  * person's source sent by a browser under automation is not a person's (send-sent-by.ts).
  */

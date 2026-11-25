@@ -27,7 +27,7 @@ import { appSenderName, buildPeerWrapper } from '../peers/peer-wrapper.js';
 import { jobAppSender, pluginCallerName } from '../plugins/plugin-caller.js';
 import { senderTitleOf } from '../peers/sender-name.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
-import { sessionHandle } from '../peers/walnut-message-tag.js';
+import { addToEnvelopeBody, buildWalnutNote, sessionHandle } from '../peers/walnut-message-tag.js';
 import { PeerThrottle, PEER_PENDING_CAP } from '../peers/peer-throttle.js';
 import { isSideThreadLane } from './side-thread-fork.js';
 import {
@@ -1466,9 +1466,11 @@ async function performReply(
       host: displayHost(caller.record.host),
     }, replyBody, { title: input.title });
     // The asker's other requests it answers, named once (performReplies): no separate line for each.
-    return many.covers?.length
-      ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
-      : wrapped;
+    if (!many.covers?.length) return wrapped;
+    // Inside the answer's envelope: loose words after it read as typed, and the send's framing then
+    // wrapped the whole answer a second time, its envelope escaped into words (send-frame.ts).
+    const settles = `This one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`;
+    return addToEnvelopeBody(wrapped, settles) ?? `${wrapped}\n\n${buildWalnutNote(settles)}`;
   };
   const fromLeader = await callerLeads(caller, origin.taskId);
   // The queue row the answer goes out as: the same id when the outbox delivers it again.

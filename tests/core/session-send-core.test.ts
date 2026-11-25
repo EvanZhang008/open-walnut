@@ -1094,6 +1094,11 @@ describe('performSessionSend — in_reply_to', () => {
       expect(sendMessageToSession).toHaveBeenCalledTimes(1);
       expect(dispatched(0).sid).toBe(ASKER);
       expect(deliveredText(0)).toContain(`also settles your requests ${b.id}, ${c.id}`);
+      // The line sits inside the answer's envelope: words after it read as typed, and the send's
+      // framing then wrapped the whole answer a second time (2026-11-21..24, ten such rows).
+      const { readsAsPerson, frameForSource } = await import('../../src/core/sessions/send-frame.js');
+      expect(readsAsPerson(deliveredText(0))).toBe(false);
+      expect(frameForSource(deliveredText(0), 'peer')).toBe(deliveredText(0));
       for (const r of [a, b, c]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
       const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
       expect(pendingStatusNote(ASKER)?.text ?? '').not.toContain(b.id);

@@ -101,6 +101,20 @@ describe('task start confirmation and reply contract', () => {
       + ` handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });
 
+  it('a first message that is an envelope already keeps it, and its reply trailer is framed on its own', async () => {
+    // 2026-11-24: the trailer after such an envelope read as typed words, so the whole start was
+    // wrapped again and the envelope became escaped words (send-frame.ts frameQueuedRow, the class).
+    const { buildWalnutMessage } = await import('../../src/core/peers/walnut-message-tag.js');
+    const { readsAsPerson } = await import('../../src/core/sessions/send-frame.js');
+    const envelope = buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'status' }, body: 'Fix the flake.' });
+    const result = await startSessionForTask({ ...params, message: envelope });
+    const first = mocks.startSession.mock.calls[0][0].message as string;
+    expect(first.startsWith(`${envelope}\n\n`)).toBe(true);
+    expect(first).not.toContain('&lt;walnut-message');
+    expect(first).toContain(`"in_reply_to":"${result.requestId}"`);
+    expect(readsAsPerson(first)).toBe(false);
+  });
+
   it.each(['human', 'external'])('does not request a reply from an untracked %s caller', async (kind) => {
     mocks.resolveCaller.mockResolvedValue({ kind });
     const result = await startSessionForTask(params);
