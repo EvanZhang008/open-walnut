@@ -87,13 +87,22 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
     return s;
   }, [run, engine, host, onStatus]);
 
+  /** Install the engine on the host: its button, and a link that asked for it. The run is followed below. */
+  const install = useLeanCallback(async () => {
+    const st = await run('install', () => startEngineInstall(engine, host));
+    if (st?.state === 'running') setBusy('install');
+    else if (st) void check();
+  }, [run, engine, host, check]);
+
   // The chat asked to sign this host in: land here and open its sign-in (a host never asked yet is checked first).
   useEffect(() => {
     if (!request || !takeSignInRequest(status)) return;
     log.info('settings', 'engine sign-in opened from a link', { ...ctx, state: status.state, connected: status.connected !== false });
     void (async () => {
       const s = status.state === 'unknown' ? await check() : status;
-      if (s?.state === 'not_signed_in' && !s.signIn) await startGoogle();
+      // Not on the host yet (the picker's "Install" on a locked engine): the install starts here.
+      if (s?.state === 'not_installed' && s.install?.canInstall) await install();
+      else if (s?.state === 'not_signed_in' && !s.signIn) await startGoogle();
       else if (s?.signIn) { setLink(s.signIn); setOpen(true); }
     })();
   }, [request?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -183,11 +192,7 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
       if (r && alive.current) { log.info('settings', 'engine signed out', ctx); onStatus(r.status); }
       return;
     }
-    if (view.action === 'install') {
-      const st = await run('install', () => startEngineInstall(engine, host));
-      if (st?.state === 'running') setBusy('install');
-      else if (st) void check();
-    }
+    if (view.action === 'install') await install();
   };
 
   const view = rowView(status, engine);

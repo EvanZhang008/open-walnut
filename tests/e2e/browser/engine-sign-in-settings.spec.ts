@@ -22,6 +22,7 @@ import { test, expect, type Page, type APIRequestContext } from '@playwright/tes
 import { startProofVideo, type ProofVideo } from './proof-video'
 import { notSignedInSentence } from '../../../src/core/agents/engine-sign-in-words'
 import { reinstallFakeAgy, uninstallFakeAgy } from './fake-agy-fixture'
+import { draftEngineButton, openDraft } from './draft-helpers'
 
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
@@ -178,6 +179,45 @@ test('a host without the CLI: Not installed with the installer line, and Install
 })
 
 /** A host's answer as the server gives it, for the stubbed list of every state. */
+test("the picker's locked Antigravity on a host without it: Install goes to that host's row and starts the install", async ({ page }) => {
+  uninstallFakeAgy()
+  // Antigravity on the rail, whatever this server's picker list says (it is not one of the default four),
+  await page.route('**/api/engines', async (route) => {
+    const response = await route.fetch()
+    const body = await response.json() as { engines: Array<{ id: string; inPicker?: boolean; availability?: unknown }> }
+    // ...and read as this machine without it now (the catalog's probe is cached; Settings reads the host again).
+    for (const e of body.engines) {
+      if (e.id === 'antigravity') Object.assign(e, { inPicker: true, availability: { installed: false, version: null, reason: 'agy is not installed' } })
+    }
+    await route.fulfill({ response, json: body })
+  })
+  video = await startProofVideo(page)
+  await home(page)
+  await video.caption('A new task on this computer, which has no Antigravity: its engine is locked')
+  const panel = await openDraft(page)
+  const button = await draftEngineButton(page, panel, 'antigravity')
+  await expect(button).toHaveClass(/provider-rail-item-locked/)
+  // A locked row is aria-disabled, which Playwright reads as "not enabled"; a person can still press
+  // it, and the press is what shows the note.
+  await button.click({ force: true })
+  const note = page.getByTestId('model-picker-locked-note')
+  await expect(note).toContainText('Antigravity: Not installed here')
+  const setup = note.getByTestId('model-picker-locked-setup')
+  await expect(setup).toHaveText('Install Antigravity')
+  await video.hold(HOLD)
+  await setup.click()
+  await video.caption("Install: Settings opens on this computer's row, and the install runs")
+  const row = localRow(page)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  await expect(row.locator('.wn-notice-status')).toHaveText('Installing', { timeout: 20_000 })
+  await video.hold(HOLD)
+  await expect(row.locator('.wn-notice-status')).toHaveText('Not signed in', { timeout: 60_000 })
+  await expect(row.getByTestId('engine-sign-in-action')).toHaveText('Sign in with Google')
+  await video.caption('Installed: the next step is its sign-in')
+  await video.hold(HOLD * 1.5)
+  await video.stop('engine-sign-in-from-picker')
+})
+
 function hostStatus(host: string, hostName: string, over: Record<string, unknown>): Record<string, unknown> {
   return {
     engine: 'antigravity', host, hostName, state: 'not_signed_in', installed: true, version: '1.5.14', reason: null, method: null, google: false,

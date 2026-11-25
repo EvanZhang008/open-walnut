@@ -33,6 +33,7 @@ import { useSessionCost } from '@/hooks/useSessionCost';
 import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
 import { Tab, TabList } from '@/components/controls';
 import { PickerRow } from './PickerRow';
+import { LockedEngineNote, type LockedPick } from './LockedEngineNote';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
@@ -196,7 +197,7 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose, onLockedPi
   active: ProviderId;
   /** A locked engine was pressed: gets "<engine>: <why>", so a touch (no hover, no focus ring)
    *  still reads the reason the widened rail and the tooltip give. */
-  onLockedPick?: (note: string) => void;
+  onLockedPick?: (pick: LockedPick) => void;
   /** Closes the picker before "More engines" opens Settings (a Home column stays mounted): the
    *  cancel path, so an engine picked but not yet switched to is dropped, never started. */
   onClose?: () => void;
@@ -263,7 +264,7 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose, onLockedPi
             title={locked ? `${label}: ${reason}` : activeUnavailable ? `${label}: ${activeUnavailable}` : label}
             data-provider={id}
             onClick={() => {
-              if (locked) onLockedPick?.(`${label}: ${why}`);
+              if (locked) onLockedPick?.({ text: `${label}: ${why}`, engine: id, why: why ?? '' });
               else if (!isActive) onSwitch?.(id);
             }}
           >
@@ -467,7 +468,7 @@ export function ModelPicker({
   // The selected engine on a host that cannot run it: said at the top of the pane, in the lock's words.
   const activeEngineUnavailable = providerLockReason?.(engine) ?? null;
   // Why the locked engine the user just pressed cannot be picked; cleared when the engine changes.
-  const [lockedNote, setLockedNote] = React.useState<string | null>(null);
+  const [lockedNote, setLockedNote] = React.useState<LockedPick | null>(null);
   React.useEffect(() => { setLockedNote(null); }, [engine]);
   const engineUi = engineCaps(engine, engineCatalog);
   const isAcpPane = engineUi.providerModelCatalog;
@@ -1260,7 +1261,7 @@ export function ModelPicker({
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
-      {lockedNote && <div className="model-picker-locked-note" role="status" data-testid="model-picker-locked-note">{lockedNote}</div>}
+      {lockedNote && <LockedEngineNote pick={lockedNote} host={host} onClose={onClose} />}
       {/* In place (not a popout), one × closes the picker; a popout closes on Escape or an outside click. */}
       {!popped && (
         <div className="model-picker-header model-picker-header-bare">

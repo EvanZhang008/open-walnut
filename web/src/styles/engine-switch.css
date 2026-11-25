@@ -62,6 +62,11 @@
   font-size: var(--font-size-sm);
   line-height: 1.4;
 }
+/* An engine Walnut can set up there: its one button, under the reason (LockedEngineNote.tsx). */
+.model-picker-locked-setup {
+  display: block;
+  margin-top: 6px;
+}
 
 /* A session an engine switch started idle: one line under the earlier conversation. */
 .session-switch-ready {
