@@ -768,6 +768,9 @@ async function runRemove(task: Task, ws: TaskWorkspace): Promise<void> {
     const keptWhy = branchKept && typeof outcome.result.branchKeptReason === 'string' ? outcome.result.branchKeptReason.slice(0, 300) : undefined
     log.web.info('workspace removed', { taskId: task.id, root: ws.root, trigger, branchKept, branchKeptReason: keptWhy })
     await settle({ state: 'removed', branch_kept: branchKept || undefined, branch_kept_reason: keptWhy, error: undefined, kept_reason: undefined, kept_at: undefined, merge_recheck: undefined, launch_error: undefined, pending_start: undefined })
+    // A trigger whose check ran in the folder can never run again: pause it now, not after five errors.
+    const { onWorkspaceRemoved } = await import('../routines/trigger-completion-pause.js')
+    if (ws.root) await onWorkspaceRemoved(task.id, ws.root).catch((err) => log.web.warn('pausing the triggers of a removed workspace failed', { taskId: task.id, error: err instanceof Error ? err.message : String(err) }))
     return
   }
   await refuse(outcome.error, outcome.state === 'failed' ? outcome.code : 'lost')

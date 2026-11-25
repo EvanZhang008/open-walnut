@@ -211,6 +211,52 @@ export function sweepTriggerCompletionPauses(nowMs = Date.now()): Promise<{ paus
   });
 }
 
+/** `cwd` is `root` or a folder inside it. */
+function within(cwd: string | undefined, root: string): boolean {
+  const r = path.posix.normalize(root || '.').replace(/\/+$/, '');
+  // A root of "/" or "." would match every check: a workspace is never that.
+  if (!cwd || !r || r === '.') return false;
+  const c = path.posix.normalize(cwd).replace(/\/+$/, '');
+  return c === r || c.startsWith(`${r}/`);
+}
+
+/**
+ * A task's workspace was removed: pause its armed triggers whose check runs in that folder, since
+ * none of them can run again (2026-11-25: a deploy watch armed on a task that had already completed
+ * kept its default cwd, the task's worktree; the completion cleanup removed the worktree two minutes
+ * later and every check failed with "cwd does not exist" until its lead was told). The completion
+ * pause above misses that case on purpose (a trigger armed on a done task is wanted), and a manual
+ * removal moves no phase at all. On a COMPLETE task they join its completion record, so a reopen
+ * resumes them; on an open one they stay paused, as a person's pause would. Exported for tests.
+ */
+export function onWorkspaceRemoved(taskId: string, root: string): Promise<PausedTrigger[]> {
+  return serial(async () => {
+    const jobs = (await allJobs()).filter((j) => j.enabled && within(j.check?.cwd, root));
+    const mine = triggersOf(jobs, taskId);
+    if (!mine.length) return [];
+    const { patchRoutine } = await import('./routines-core.js');
+    const paused: PausedTrigger[] = [];
+    for (const job of mine) {
+      try {
+        const { job: after } = await patchRoutine(job.id, { enabled: false }, PAUSE_ORIGIN) as { job: CronJob };
+        const stamp = after?.state?.pausedAtMs;
+        if (typeof stamp === 'number') paused.push({ id: job.id, pausedAtMs: stamp });
+      } catch (err) {
+        log.cron.warn('trigger in a removed workspace not paused', { taskId, jobId: job.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    const { getTask } = await import('../task-manager.js');
+    if ((await getTask(taskId).catch(() => null))?.phase === 'COMPLETE' && paused.length) {
+      const file = await readRecord();
+      const was = file.tasks[taskId]?.triggers ?? [];
+      file.tasks[taskId] = { atMs: Date.now(), triggers: [...was.filter((t) => !paused.some((p) => p.id === t.id)), ...paused] };
+      await writeJsonFile(recordPath(), file);
+    }
+    log.cron.info('triggers paused: their workspace was removed', { taskId, root, jobIds: paused.map((p) => p.id) });
+    return paused;
+  });
+}
+
 /** What a reopen would resume, for tests and diagnostics. */
 export async function completionPausesOf(taskId: string): Promise<PausedTrigger[]> {
   return (await readRecord()).tasks[taskId]?.triggers ?? [];

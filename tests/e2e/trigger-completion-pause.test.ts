@@ -21,7 +21,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setTriggerDaemonLookupForTest, type TriggerDaemon } from '../../src/core/routines/trigger-daemon.js'
 import {
-  completionPausesOf, startTriggerCompletionPause, stopTriggerCompletionPause, sweepTriggerCompletionPauses,
+  completionPausesOf, onWorkspaceRemoved, startTriggerCompletionPause, stopTriggerCompletionPause, sweepTriggerCompletionPauses,
 } from '../../src/core/routines/trigger-completion-pause.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
@@ -68,11 +68,11 @@ async function newTask(title: string): Promise<string> {
   return r.json.id ?? r.json.task?.id
 }
 
-async function newTrigger(name: string, taskId: string): Promise<string> {
+async function newTrigger(name: string, taskId: string, cwd?: string): Promise<string> {
   const r = await req('POST', '/api/routines', {
     name,
     schedule: { kind: 'every', everyMs: 5 * MIN },
-    check: { run: `bash ~/.open-walnut/triggers/${name.replace(/\W+/g, '-')}/check.sh` },
+    check: { run: `bash ~/.open-walnut/triggers/${name.replace(/\W+/g, '-')}/check.sh`, ...(cwd ? { cwd } : {}) },
     executor: { type: 'session', config: { target: taskId, prompt: 'Check it.' } },
   })
   expect(r.status).toBe(201)
@@ -137,7 +137,9 @@ describe('a task completing pauses its triggers', () => {
     // A plain timed routine stays as its maker set it, and another task's trigger is not touched.
     expect(await enabled(timed)).toBe(true)
     expect(await enabled(elsewhere)).toBe(true)
-    expect((await completionPausesOf(taskId)).map((t) => t.id).sort()).toEqual([armed, second].sort())
+    // The record is written after the last pause, so a check that sees the pauses can still be early.
+    const recorded = await waitFor(async () => (await completionPausesOf(taskId)).map((t) => t.id).sort(), (ids) => ids.length === 2)
+    expect(recorded).toEqual([armed, second].sort())
 
     await reopen(taskId)
     expect(await waitFor(() => enabled(armed), (on) => on)).toBe(true)
@@ -145,7 +147,7 @@ describe('a task completing pauses its triggers', () => {
     // Paused by the user before the completion: not Walnut's to resume.
     expect(await enabled(userPaused)).toBe(false)
     expect((await job(userPaused)).state.pausedAtMs).toBe(userPausedAt)
-    expect(await completionPausesOf(taskId)).toEqual([])
+    expect(await waitFor(() => completionPausesOf(taskId), (r) => r.length === 0)).toEqual([])
 
     // A second round goes the same way.
     await complete(taskId)
@@ -235,5 +237,67 @@ describe('a task completing pauses its triggers', () => {
     expect(stop?.members.find((m) => m.id === taskId)?.triggers).toEqual([id])
     // Still paused while the team is stopped.
     expect(await enabled(id)).toBe(false)
+  })
+})
+
+describe('a removed workspace pauses the triggers whose check ran in it', () => {
+  const ROOT = '/home/dev/.open-walnut-worktrees/repo/walnut-task-x'
+
+  it('a deploy watch armed on a task after it completed is paused when its worktree goes, and a reopen resumes it', async () => {
+    const taskId = await newTask('deploy watch after done')
+    const otherId = await newTask('another task in the same folder')
+    await complete(taskId)
+    await settle()
+    // Armed on the done task with the session's cwd (the worktree), as a land's deploy watch is.
+    const inTree = await newTrigger('deploy watch in tree', taskId, ROOT)
+    const deeper = await newTrigger('deploy watch deeper', taskId, `${ROOT}/web`)
+    const atHome = await newTrigger('deploy watch at home', taskId, '/home/dev')
+    const sibling = await newTrigger('deploy watch sibling', taskId, `${ROOT}-2`)
+    const other = await newTrigger('other task watch', otherId, ROOT)
+    const dotted = await newTrigger('deploy watch dotted', taskId, `${ROOT}/web/../`)
+
+    expect((await onWorkspaceRemoved(taskId, `${ROOT}/`)).map((p) => p.id).sort()).toEqual([inTree, deeper, dotted].sort())
+    expect(await enabled(inTree)).toBe(false)
+    expect(await enabled(deeper)).toBe(false)
+    // A check elsewhere, a folder that only shares the prefix, and another task's trigger stay on.
+    expect(await enabled(atHome)).toBe(true)
+    expect(await enabled(sibling)).toBe(true)
+    expect(await enabled(other)).toBe(true)
+    expect((await completionPausesOf(taskId)).map((t) => t.id).sort()).toEqual([inTree, deeper, dotted].sort())
+    // A root of "/" never matches every check.
+    expect(await onWorkspaceRemoved(taskId, '/')).toEqual([])
+    expect(await enabled(atHome)).toBe(true)
+    // Run again (a second removal pass): nothing left to pause.
+    expect(await onWorkspaceRemoved(taskId, ROOT)).toEqual([])
+
+    await reopen(taskId)
+    expect(await waitFor(() => enabled(inTree), (on) => on)).toBe(true)
+    expect(await waitFor(() => enabled(deeper), (on) => on)).toBe(true)
+  })
+
+  it('on an open task (a removal by hand) the trigger is paused and not resumed by the boot pass', async () => {
+    const taskId = await newTask('hand removal watch')
+    const id = await newTrigger('hand removal trigger', taskId, ROOT)
+    expect((await onWorkspaceRemoved(taskId, ROOT)).map((p) => p.id)).toEqual([id])
+    expect(await enabled(id)).toBe(false)
+    expect(await completionPausesOf(taskId)).toEqual([])
+    await sweepTriggerCompletionPauses()
+    expect(await enabled(id)).toBe(false)
+  })
+
+  it('every way a workspace is written removed either pauses its triggers or makes the folder again', async () => {
+    // Class guard: a new path that marks a workspace removed must pause the triggers that ran in it.
+    const dir = path.resolve(import.meta.dirname, '../../src/core/workspaces')
+    const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts'))
+    const writers: string[] = []
+    for (const f of files) {
+      const src = await fs.readFile(path.join(dir, f), 'utf8')
+      if (!/state: 'removed'/.test(src)) continue
+      writers.push(f)
+      // remake.ts marks a folder gone behind Walnut's back and makes it again at once.
+      if (f === 'remake.ts') { expect(src).toMatch(/making it again/); continue }
+      expect(src, `${f} writes a workspace removed without pausing its triggers`).toMatch(/onWorkspaceRemoved\(/)
+    }
+    expect(writers.sort()).toEqual(['manager.ts', 'remake.ts'])
   })
 })
