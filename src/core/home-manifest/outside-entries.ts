@@ -50,6 +50,7 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'daemon-dir', 'daemon-dir.images', 'images', 'dir', 'Images pasted or attached in sessions on this machine'),
   outside('machine', 'daemon-dir', 'daemon-dir.pastes', 'pastes', 'dir', 'Oversized pastes spilled to disk'),
   outside('machine', 'daemon-dir', 'daemon-dir.net', 'net', 'dir', 'Host network identity of a throwaway daemon'),
+  outside('rebuildable', 'daemon-dir', 'daemon-dir.external-scan-verdicts', 'external-scan-verdicts.json', 'file', 'What the outside-session scan found in each engine transcript; lost, it reads their heads once'),
   // The account's home.
   outside('machine', 'user-home', 'home.machine-hold', '.config/walnut', 'dir', 'Machine holds that stop test runs here'),
   outside('machine', 'user-home', 'home.session-host-launch', 'Library/Application Support/Open Walnut', 'dir', 'How the Mac app launches the session host'),

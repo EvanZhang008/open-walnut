@@ -19,6 +19,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 const slices = vi.hoisted(() => ({ next: null as null | (() => Record<string, unknown>) }))
 vi.mock('../../src/core/host-slice.js', () => ({
   ensureHostSliceSync: () => {},
+  hostSliceJson: (slice: unknown) => JSON.stringify(slice),
   buildHostSlice: async () => slices.next!(),
 }))
 // These tests pace one link's copies; which aliases share its daemon is not read from disk here.

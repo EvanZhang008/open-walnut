@@ -55,7 +55,60 @@ type Send = (cmd: string, params: Record<string, unknown>, timeoutMs?: number) =
 export interface AttachmentTarget { hostKey: string; send: Send; moves?: boolean }
 export interface AttachmentKeep { on: boolean; exclude: string[] }
 
-const statCache = new Map<string, { mtimeMs: number; size: number; h: string }>()
+/** A file's hash and the stat it was read at: any write, copy or swap moves size, mtime, ctime or inode. */
+interface HashedFile { size: number; mtimeMs: number; ctimeMs: number; ino: number; h: string }
+const statCache = new Map<string, HashedFile>()
+/** The same bytes as when hashed: a copy that keeps the mtime (cp -p, rsync -t, a restore) or a
+ *  rename over the file still moves ctime or the inode. */
+const sameStat = (row: HashedFile, st: { size: number; mtimeMs: number; ctimeMs: number; ino: number }) =>
+  row.size === st.size && row.mtimeMs === st.mtimeMs && row.ctimeMs === st.ctimeMs && row.ino === st.ino
+
+/**
+ * The stat cache, kept across restarts in cache/ (not synced, not backed up). Held in memory
+ * only, every restart hashed the whole vault again on the first walk (1.5 GB measured), and the
+ * Mac restarts for every land: in the live stall profiles of 2026-11-25 that sha256 was 4.3 s of
+ * 395 s of loop CPU. A file is hashed again only when its stat moved (sameStat). Version 1 of
+ * the file keyed by size and mtime alone and is not read.
+ */
+const hashesFile = () => path.join(WALNUT_HOME, 'cache', 'attachment-hashes.json')
+let hashesLoaded: Promise<void> | null = null
+let hashesDirty = false
+
+function loadHashes(): Promise<void> {
+  return hashesLoaded ??= (async () => {
+    try {
+      const parsed = JSON.parse(await fsp.readFile(hashesFile(), 'utf8')) as { v?: number; files?: Record<string, unknown> }
+      if (parsed?.v !== 2 || !parsed.files || typeof parsed.files !== 'object') return
+      const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+      for (const [abs, row] of Object.entries(parsed.files)) {
+        if (statCache.has(abs) || !Array.isArray(row) || row.length !== 5) continue
+        const [size, mtimeMs, ctimeMs, ino, h] = row as unknown[]
+        if (!num(size) || !num(mtimeMs) || !num(ctimeMs) || !num(ino) || typeof h !== 'string' || !/^[0-9a-f]{64}$/.test(h)) continue
+        statCache.set(abs, { size, mtimeMs, ctimeMs, ino, h })
+      }
+    } catch { /* none kept yet, or unreadable: the walk hashes what it finds */ }
+  })()
+}
+
+/** Saves in turn: walks for targets with other folder rules may end together. */
+let saving: Promise<void> = Promise.resolve()
+function saveHashes(): Promise<void> {
+  if (!hashesDirty) return saving
+  hashesDirty = false
+  const file = hashesFile()
+  const body = JSON.stringify({ v: 2, files: Object.fromEntries([...statCache].map(([abs, r]) => [abs, [r.size, r.mtimeMs, r.ctimeMs, r.ino, r.h]])) })
+  saving = saving.then(async () => {
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true })
+      const tmp = `${file}.tmp-${process.pid}`
+      await fsp.writeFile(tmp, body)
+      await fsp.rename(tmp, file)
+    } catch (err) {
+      log.session.debug('attachments copy: file hashes not kept', { error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+  return saving
+}
 
 async function hashFile(abs: string): Promise<string> {
   const hash = crypto.createHash('sha256')
@@ -85,6 +138,7 @@ async function walkAttachments(exclude: string[], root: string): Promise<Attachm
   const { isServedAttachment } = await import('../web/routes/notes-v2.js')
   const out: AttachmentEntry[] = []
   const seen = new Set<string>()
+  await loadHashes()
   const walk = async (dir: string, relDir: string): Promise<void> => {
     let names: fs.Dirent[]
     try { names = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
@@ -100,9 +154,10 @@ async function walkAttachments(exclude: string[], root: string): Promise<Attachm
       if (st.size > MAX_FILE_BYTES) continue
       seen.add(abs)
       let row = statCache.get(abs)
-      if (!row || row.mtimeMs !== st.mtimeMs || row.size !== st.size) {
-        try { row = { mtimeMs: st.mtimeMs, size: st.size, h: await hashFile(abs) } } catch { continue }
+      if (!row || !sameStat(row, st)) {
+        try { row = { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, h: await hashFile(abs) } } catch { continue }
         statCache.set(abs, row)
+        hashesDirty = true
       }
       out.push({ k: rel, h: row.h, n: row.size, mtimeMs: row.mtimeMs })
     }
@@ -111,8 +166,9 @@ async function walkAttachments(exclude: string[], root: string): Promise<Attachm
   // A file gone since the last walk leaves the cache; one in a folder this walk left out stays (another target keeps it).
   for (const abs of statCache.keys()) {
     if (!abs.startsWith(root + path.sep) || seen.has(abs)) continue
-    if (!inFolder(path.relative(root, abs).split(path.sep).join('/'), exclude)) statCache.delete(abs)
+    if (!inFolder(path.relative(root, abs).split(path.sep).join('/'), exclude)) { statCache.delete(abs); hashesDirty = true }
   }
+  await saveHashes()
   out.sort((a, b) => b.mtimeMs - a.mtimeMs || a.k.localeCompare(b.k))
   const kept: AttachmentEntry[] = []
   let bytes = 0
@@ -304,4 +360,6 @@ export function _resetAttachmentReplicaForTesting(): void {
   states.clear()
   statCache.clear()
   walking.clear()
+  hashesLoaded = null
+  hashesDirty = false
 }

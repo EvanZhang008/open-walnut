@@ -2704,7 +2704,7 @@ export class DaemonConnection {
       try {
         do {
           this.hostSlicePushRerun = false
-          const [{ runOfflineHandover }, { buildHostSlice, ensureHostSliceSync }] = await Promise.all([
+          const [{ runOfflineHandover }, { buildHostSlice, ensureHostSliceSync, hostSliceJson }] = await Promise.all([
             import('../core/offline-handover.js'),
             import('../core/host-slice.js'),
           ])
@@ -2734,7 +2734,7 @@ export class DaemonConnection {
               this.hostSliceSids = new Set(slice.sessions.map((s) => s.sid))
               // Paced like a copy sent now: the next change waits behind it.
               this.hostSliceSentAt = Date.now()
-              this.hostSliceSentBytes = JSON.stringify(slice).length
+              this.hostSliceSentBytes = hostSliceJson(slice).length
               log.session.info('DaemonConnection: host slice already held, not sent', { host: this.hostKey, hash: slice.hash })
               if (probe.pendingHandover === true) { this.offlineDrainDue = true; this.hostSlicePushRerun = true }
               continue
@@ -2765,7 +2765,8 @@ export class DaemonConnection {
           }
           // Gzipped where the daemon reads it (host-slice-gz-v1): the bytes on the shared link
           // are what pacing and the relay count. Compressed off the event loop.
-          const json = JSON.stringify(slice)
+          // Written out once, with the hash (host-slice.ts hostSliceJson).
+          const json = hostSliceJson(slice)
           // The Mac's own daemon takes it plain, unless plain would be over the frame cap.
           const sliceGz = (this.hostKey !== '__local__' || json.length * 3 > DAEMON_FRAME_MAX_BYTES) && this.hasCapability('host-slice-gz-v1')
             ? (await gzipAsync(Buffer.from(json))).toString('base64') : null

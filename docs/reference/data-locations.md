@@ -197,6 +197,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/cache/history/` | rebuildable | no | Session history cache, rebuilt from transcripts |
 | `~/.open-walnut/cache/history-archive-due.json` | rebuildable | no | When the transcript archive sweep is next due |
 | `~/.open-walnut/cache/change-watch-due.json` | rebuildable | no | When the change watcher reads each change next; lost, it reads them all once |
+| `~/.open-walnut/cache/attachment-hashes.json` | rebuildable | no | File hashes of the notes' pictures and files the attachments copy sends; lost, it hashes them all once |
 | `~/.open-walnut/cache/projections/` | rebuildable | no | Session and task list snapshots |
 | `~/.open-walnut/cache/transcripts/` | rebuildable | no | Transcript tails |
 | `~/.open-walnut/cache/session-changes/` | rebuildable | no | File change snapshots per session |
@@ -356,6 +357,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `<runtime dir>/images/` | machine | no | Images pasted or attached in sessions on this machine |
 | `<runtime dir>/pastes/` | machine | no | Oversized pastes spilled to disk |
 | `<runtime dir>/net/` | machine | no | Host network identity of a throwaway daemon |
+| `<runtime dir>/external-scan-verdicts.json` | rebuildable | no | What the outside-session scan found in each engine transcript; lost, it reads their heads once |
 | `~/.config/walnut/` | machine | no | Machine holds that stop test runs here |
 | `~/Library/Application Support/Open Walnut/` | machine | no | How the Mac app launches the session host |
 | `~/.config/systemd/user/` | machine | no | The daemon's login service unit on Linux |

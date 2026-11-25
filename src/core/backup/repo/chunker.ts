@@ -8,6 +8,9 @@
  *
  * Sizes: chunks are 128 KiB to 2 MiB, about 512 KiB on average. Files at or
  * below SMALL_FILE_BYTES are one blob as they are, with no scan.
+ *
+ * A run cuts and ids a big file off the event loop (chunk-worker.ts, which holds the same cut
+ * rule as a worker's source: tests/core/backup/repo-chunk-worker.test.ts holds the two equal).
  */
 import type { Readable } from 'node:stream';
 
@@ -17,7 +20,7 @@ export const MAX_CHUNK = 2 * 1024 * 1024;
 export const SMALL_FILE_BYTES = 1024 * 1024;
 
 /** Fixed pseudo-random gear table: every Walnut must cut the same file the same way. */
-const GEAR: Uint32Array = (() => {
+export const GEAR: Uint32Array = (() => {
   const table = new Uint32Array(256);
   let x = 0x9e3779b9;
   for (let i = 0; i < 256; i++) {
@@ -31,8 +34,8 @@ const GEAR: Uint32Array = (() => {
 })();
 
 /** Normalized chunking: a stricter mask before the average size, a looser one after. */
-const MASK_STRICT = 0xfffff800 >>> 0; // 21 high bits
-const MASK_LOOSE = 0xffff8000 >>> 0; // 17 high bits
+export const MASK_STRICT = 0xfffff800 >>> 0; // 21 high bits
+export const MASK_LOOSE = 0xffff8000 >>> 0; // 17 high bits
 
 /** Length of the next chunk at the start of `buf` (all of it when shorter than MIN_CHUNK). */
 export function findCut(buf: Buffer, end = buf.length): number {

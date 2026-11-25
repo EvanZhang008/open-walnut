@@ -32,8 +32,14 @@
  */
 
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { createHash } from 'node:crypto'
+import {
+  _forgetLoadedVerdictFilesForTesting, loadKeptVerdicts, sameStamp, saveKeptVerdicts, stampOf,
+  type ClaudeVerdict, type ClaudeVerdicts, type CodexHeads, type FileStamp,
+} from './external-scan-verdicts.js'
 
 export interface ExternalSessionCandidate {
   /** Provider session id (claude session UUID / codex session id). */
@@ -103,6 +109,13 @@ export interface ScanExternalSessionsOptions {
   homeDir?: string
   /** Test seam: override the spawn journal path. */
   spawnJournal?: string
+  /**
+   * Where the verdicts outlive a restart (the daemon's own dir). Without it a restart read every
+   * transcript head in the window again: on the Mac, whose daemon runs in the server and restarts
+   * with every land, that was most of the scan's 14 s of 395 s of loop CPU in the stall profiles
+   * of 2026-11-25.
+   */
+  verdictFile?: string
 }
 
 export interface ScanExternalSessionsResult {
@@ -273,20 +286,20 @@ const MAX_HEAD_BYTES = 2 * 1024 * 1024
 const TAIL_BYTES = 131072
 const MAX_TITLE_LEN = 120
 
-function readChunk(filePath: string, size: number, bytes: number, fromEnd: boolean): string {
+async function readChunk(filePath: string, size: number, bytes: number, fromEnd: boolean): Promise<string> {
   const length = Math.min(bytes, size)
   if (length <= 0) return ''
   const position = fromEnd ? Math.max(0, size - length) : 0
-  let fd: number | null = null
+  let fh: fsp.FileHandle | null = null
   try {
-    fd = fs.openSync(filePath, 'r')
+    fh = await fsp.open(filePath, 'r')
     const buf = Buffer.alloc(length)
-    const read = fs.readSync(fd, buf, 0, length, position)
-    return buf.subarray(0, read).toString('utf8')
+    const { bytesRead } = await fh.read(buf, 0, length, position)
+    return buf.subarray(0, bytesRead).toString('utf8')
   } catch {
     return ''
   } finally {
-    if (fd !== null) { try { fs.closeSync(fd) } catch { /* ignore */ } }
+    await fh?.close().catch(() => { /* ignore */ })
   }
 }
 
@@ -296,21 +309,21 @@ function readChunk(filePath: string, size: number, bytes: number, fromEnd: boole
  * they are carried into the next chunk — so a value can't be lost at a chunk
  * boundary. False when the file could not be opened or read.
  */
-function walkHeadLines(
+async function walkHeadLines(
   filePath: string,
   size: number,
   onEntry: (entry: Record<string, unknown>) => boolean,
-): boolean {
-  let fd: number | null = null
+): Promise<boolean> {
+  let fh: fsp.FileHandle | null = null
   try {
-    fd = fs.openSync(filePath, 'r')
+    fh = await fsp.open(filePath, 'r')
     const buf = Buffer.alloc(Math.min(CHUNK_BYTES, size))
     let position = 0
     let carry = ''
     const budget = Math.min(size, MAX_HEAD_BYTES)
     while (position < budget) {
       const want = Math.min(buf.length, budget - position)
-      const read = fs.readSync(fd, buf, 0, want, position)
+      const { bytesRead: read } = await fh.read(buf, 0, want, position)
       if (read <= 0) break
       position += read
       const text = carry + buf.subarray(0, read).toString('utf8')
@@ -334,7 +347,7 @@ function walkHeadLines(
     // Unreadable file: the caller treats it as unclassifiable, this time.
     return false
   } finally {
-    if (fd !== null) { try { fs.closeSync(fd) } catch { /* ignore */ } }
+    await fh?.close().catch(() => { /* ignore */ })
   }
 }
 
@@ -572,14 +585,14 @@ function isRealReply(entry: Record<string, unknown>): boolean {
 
 /** humanOnly (the scan): stop as soon as the file shows a program started it,
  *  since nothing else on it matters then. Describe reads on, to say why. */
-function parseClaudeHead(filePath: string, size: number, humanOnly: boolean): ClaudeHead {
+async function parseClaudeHead(filePath: string, size: number, humanOnly: boolean): Promise<ClaudeHead> {
   const out: ClaudeHead = {
     messageCount: 0, isSidechain: false, walnutDriven: false, forked: false, replied: false,
     readWhole: size <= MAX_HEAD_BYTES,
   }
   let latestBeforeFirstMessage = 0
   let sawMessage = false
-  const readable = walkHeadLines(filePath, size, (entry) => {
+  const readable = await walkHeadLines(filePath, size, (entry) => {
     const type = entry.type
     const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
     if (!sawMessage && Number.isFinite(at)) {
@@ -639,7 +652,10 @@ function parseClaudeHead(filePath: string, size: number, humanOnly: boolean): Cl
  * Done in one synchronous pass over ~16,000 transcripts (1.6 GB of heads on one
  * host) it held that loop for 17 to 75 s every ten minutes (2026-09-29): a send
  * timed out, the server fell back to a resume and the daemon stopped the live
- * CLI to make room for it. The walk now hands the loop back every SLICE_MS.
+ * CLI to make room for it. The walk now hands the loop back every SLICE_MS, and
+ * reads, stats and lists with async I/O: the Mac's daemon runs inside the server,
+ * and its sync stat, readdir and read calls (about 6,000 a scan) were the loop
+ * thread's own time (2026-11-25 stall profiles: 6 s of 395 s of loop CPU).
  */
 const SLICE_MS = 8
 
@@ -653,45 +669,70 @@ function createPause(): () => Promise<void> {
   }
 }
 
-/** What a stat says about a file's bytes: any write moves size, mtime or ctime
- *  (ctime also moves on utimes, which is how a copy can fake an mtime). */
-interface FileStamp { size: number; mtimeMs: number; ctimeMs: number; ino: number }
-
-function stampOf(stat: FileStamp): FileStamp {
-  return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino }
-}
-
-function sameStamp(a: FileStamp, b: FileStamp): boolean {
-  return a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.ino === b.ino
-}
-
 /**
  * Last scan's verdict per transcript path. A verdict depends only on the
  * file's own bytes (the window, known ids and excluded cwds are applied around
  * it), so an unchanged file keeps it and a steady-state scan is one stat per
  * file: on the host above every one of the 16,000 files was rejected, head
  * read and all, every ten minutes. Each scan rebuilds the map from the files it
- * visits, so it never outgrows the directory.
+ * visits, so it never outgrows the directory, and a restart starts from the kept
+ * file (external-scan-verdicts.ts).
+ *
+ * `final`: a program's transcript or a subagent's (its first user line says so), which no later
+ * line can make a person's session: a later scan takes the verdict without a stat while the
+ * file is still listed, and stats it again only on a full pass (FULL_STAT_EVERY), which also
+ * sees a file replaced under the same name. On the Mac about half of the 13,000 transcripts
+ * are such runs, each a stat on every scan.
  */
-type ClaudeVerdict = { candidate: ExternalSessionCandidate | null }
-const claudeVerdicts = new Map<string, FileStamp & ClaudeVerdict>()
-const codexHeads = new Map<string, FileStamp & { head: CodexHead }>()
+/** Every this many scans (about an hour) the final verdicts are stat'ed again too. */
+const FULL_STAT_EVERY = 6
+let scansSinceFullStat = 0
+const claudeVerdicts: ClaudeVerdicts = new Map()
+const codexHeads: CodexHeads = new Map()
 
 interface ScanTally { scanned: number; parsed: number }
 
+/**
+ * The rules a kept verdict was made by: the source of every function and constant a verdict
+ * depends on, so a Walnut that reads a transcript another way never trusts a verdict an older
+ * one wrote (the file is dropped whole and every head read again).
+ */
+let rulesKey: string | null = null
+function verdictRules(): string {
+  return rulesKey ??= createHash('sha256').update([
+    parseClaudeHead, classifyClaude, claudeNotExternal, claudeCandidate, pickClaudeTitle, findTitleLines,
+    isTitleBearingUserLine, titleFromMessage, titleFromText, isHumanStartedClaude, isWalnutEnvelopeText,
+    isSyntheticUserText, isRealReply, messageTexts, walnutEnvelopeBody, extractTag, isLegacyPreamble, toTitle,
+    parseCodexHead, walkHeadLines, readChunk,
+  ].map(String).join('\n') + JSON.stringify([
+    [...HUMAN_CLAUDE_ENTRYPOINTS], [...HUMAN_CODEX_ORIGINATORS], [...BUILTIN_CLI_COMMANDS], String(SKIP_FIRST_PROMPT_PATTERN),
+    WALNUT_ENVELOPE_MARKERS, COMPACT_SUMMARY_PREFIX, FORK_COPY_GAP_MS, CHUNK_BYTES, MAX_HEAD_BYTES, TAIL_BYTES, MAX_TITLE_LEN,
+  ])).digest('hex').slice(0, 16)
+}
+
+/** For tests: forget the verdicts in memory, as a restart does. */
+export function _forgetScanVerdictsForTesting(): void {
+  claudeVerdicts.clear()
+  codexHeads.clear()
+  _forgetLoadedVerdictFilesForTesting()
+  scansSinceFullStat = 0
+}
+
 /** One claude transcript's verdict from its bytes: its descriptor or null, and
  *  whether the bytes could be read at all (a failed read is not a verdict). */
-function classifyClaude(
+async function classifyClaude(
   sessionId: string,
   filePath: string,
   stat: fs.Stats,
-): ClaudeVerdict & { readable: boolean } {
-  const head = parseClaudeHead(filePath, stat.size, true)
-  const reject = { candidate: null, readable: !head.readFailed }
+): Promise<ClaudeVerdict & { readable: boolean }> {
+  const head = await parseClaudeHead(filePath, stat.size, true)
+  // The first user line decides these for good: appended lines never change them.
+  const final = head.isSidechain || (!!head.entrypoint && !isHumanStartedClaude(head.entrypoint, head.promptSource))
+  const reject = { candidate: null, readable: !head.readFailed, ...(final ? { final: true as const } : {}) }
   // A sidechain file is a subagent transcript, not a session someone opened.
   if (!head.entrypoint || head.isSidechain) return reject
   if (claudeNotExternal(head)) return reject
-  return { candidate: claudeCandidate(sessionId, filePath, stat, head), readable: true }
+  return { candidate: await claudeCandidate(sessionId, filePath, stat, head), readable: true }
 }
 
 async function scanClaude(
@@ -705,16 +746,18 @@ async function scanClaude(
 ): Promise<void> {
   const root = path.join(homeDir, '.claude', 'projects')
   let dirs: string[]
-  try { dirs = fs.readdirSync(root) } catch { return }
+  try { dirs = await fsp.readdir(root) } catch { return }
   const verdicts = new Map<string, FileStamp & ClaudeVerdict>()
+  const fullStat = ++scansSinceFullStat >= FULL_STAT_EVERY
+  if (fullStat) scansSinceFullStat = 0
 
   for (const dirName of dirs) {
     await pause()
     const dir = path.join(root, dirName)
     let files: string[]
     try {
-      if (!fs.statSync(dir).isDirectory()) continue
-      files = fs.readdirSync(dir)
+      if (!(await fsp.stat(dir)).isDirectory()) continue
+      files = await fsp.readdir(dir)
     } catch { continue }
 
     for (const fileName of files) {
@@ -723,8 +766,15 @@ async function scanClaude(
       if (known.has(sessionId)) continue
       await pause()
       const filePath = path.join(dir, fileName)
+      const kept = claudeVerdicts.get(filePath)
+      if (kept?.final && !fullStat) {
+        // Its mtime only grows: one older than the window then may be in it now, never the reverse.
+        verdicts.set(filePath, kept)
+        if (kept.mtimeMs >= cutoff) tally.scanned++
+        continue
+      }
       let stat: fs.Stats
-      try { stat = fs.statSync(filePath) } catch { continue }
+      try { stat = await fsp.stat(filePath) } catch { continue }
       if (!stat.isFile() || stat.mtimeMs < cutoff || stat.size === 0) continue
       tally.scanned++
 
@@ -736,9 +786,9 @@ async function scanClaude(
         verdicts.set(filePath, prev)
       } else {
         tally.parsed++
-        const fresh = classifyClaude(sessionId, filePath, stat)
+        const fresh = await classifyClaude(sessionId, filePath, stat)
         candidate = fresh.candidate
-        if (fresh.readable) verdicts.set(filePath, { ...stamp, candidate })
+        if (fresh.readable) verdicts.set(filePath, { ...stamp, candidate, ...(fresh.final ? { final: true as const } : {}) })
       }
       if (candidate && !isExcludedExternalCwd(candidate.cwd, excludedCwds)) out.push({ ...candidate })
     }
@@ -748,8 +798,8 @@ async function scanClaude(
 }
 
 /** The descriptor for one claude transcript whose head is already parsed. */
-function claudeCandidate(sessionId: string, filePath: string, stat: fs.Stats, head: ClaudeHead): ExternalSessionCandidate {
-  const tail = findTitleLines(readChunk(filePath, stat.size, TAIL_BYTES, true))
+async function claudeCandidate(sessionId: string, filePath: string, stat: fs.Stats, head: ClaudeHead): Promise<ExternalSessionCandidate> {
+  const tail = findTitleLines(await readChunk(filePath, stat.size, TAIL_BYTES, true))
   return {
     sessionId,
     engine: 'claude',
@@ -763,7 +813,7 @@ function claudeCandidate(sessionId: string, filePath: string, stat: fs.Stats, he
   }
 }
 
-interface CodexHead {
+export interface CodexHead {
   sessionId?: string
   originator?: string
   cwd?: string
@@ -775,9 +825,9 @@ interface CodexHead {
 }
 
 /** humanOnly (the scan): stop at session_meta when another surface started it. */
-function parseCodexHead(filePath: string, size: number, humanOnly: boolean): CodexHead {
+async function parseCodexHead(filePath: string, size: number, humanOnly: boolean): Promise<CodexHead> {
   const out: CodexHead = { messageCount: 0 }
-  const readable = walkHeadLines(filePath, size, (entry) => {
+  const readable = await walkHeadLines(filePath, size, (entry) => {
     const payload = (entry.payload ?? {}) as Record<string, unknown>
     if (entry.type === 'session_meta') {
       const id = payload.session_id ?? payload.id
@@ -835,7 +885,7 @@ async function listCodexRollouts(homeDir: string, pause: () => Promise<void>): P
   const files: RolloutFile[] = []
   const walk = async (dir: string, depth: number): Promise<void> => {
     let entries: fs.Dirent[]
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
       await pause()
       const full = path.join(dir, entry.name)
@@ -845,7 +895,7 @@ async function listCodexRollouts(homeDir: string, pause: () => Promise<void>): P
       }
       if (!entry.name.endsWith('.jsonl')) continue
       let stat: fs.Stats
-      try { stat = fs.statSync(full) } catch { continue }
+      try { stat = await fsp.stat(full) } catch { continue }
       if (!stat.isFile() || stat.size === 0) continue
       files.push({ filePath: full, ...stampOf(stat) })
     }
@@ -879,7 +929,7 @@ async function scanCodex(
       heads.set(file.filePath, remembered)
     } else {
       tally.parsed++
-      head = parseCodexHead(file.filePath, file.size, true)
+      head = await parseCodexHead(file.filePath, file.size, true)
       if (!head.readFailed) heads.set(file.filePath, { ...stampOf(file), head })
     }
     if (!head.sessionId || !head.originator) continue
@@ -938,19 +988,19 @@ async function locateTranscripts(
   const root = path.join(homeDir, '.claude', 'projects')
   let dirs: string[] = []
   // Sorted: the first dir holding an id wins, and bun lists in file system order.
-  try { dirs = fs.readdirSync(root).sort() } catch { dirs = [] }
+  try { dirs = (await fsp.readdir(root)).sort() } catch { dirs = [] }
   for (const dirName of dirs) {
     if (wanted.size === 0) break
     await pause()
     let names: string[]
-    try { names = fs.readdirSync(path.join(root, dirName)) } catch { continue }
+    try { names = await fsp.readdir(path.join(root, dirName)) } catch { continue }
     for (const name of names) {
       if (!name.endsWith('.jsonl')) continue
       const sessionId = name.slice(0, -'.jsonl'.length)
       if (!wanted.has(sessionId)) continue
       const filePath = path.join(root, dirName, name)
       let stat: fs.Stats
-      try { stat = fs.statSync(filePath) } catch { continue }
+      try { stat = await fsp.stat(filePath) } catch { continue }
       if (!stat.isFile() || stat.size === 0) continue
       found.set(sessionId, { engine: 'claude', file: { filePath, size: stat.size, mtimeMs: stat.mtimeMs } })
       wanted.delete(sessionId)
@@ -999,16 +1049,16 @@ export async function describeExternalSessions(
       continue
     }
     if (hit.engine === 'claude') {
-      const head = parseClaudeHead(hit.file.filePath, hit.file.size, false)
+      const head = await parseClaudeHead(hit.file.filePath, hit.file.size, false)
       if (head.isSidechain) continue
       let stat: fs.Stats
-      try { stat = fs.statSync(hit.file.filePath) } catch { continue }
-      const candidate = claudeCandidate(sessionId, hit.file.filePath, stat, head)
+      try { stat = await fsp.stat(hit.file.filePath) } catch { continue }
+      const candidate = await claudeCandidate(sessionId, hit.file.filePath, stat, head)
       candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : (claudeNotExternal(head) ?? null)
       if (spawned.has(sessionId)) candidate.spawnedBy = spawned.get(sessionId)
       candidates.push(candidate)
     } else {
-      const head = parseCodexHead(hit.file.filePath, hit.file.size, false)
+      const head = await parseCodexHead(hit.file.filePath, hit.file.size, false)
       const candidate = codexCandidate(sessionId, hit.file, head)
       candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned'
         : head.originator && HUMAN_CODEX_ORIGINATORS.has(head.originator) ? null : 'programmatic'
@@ -1036,8 +1086,12 @@ export async function scanExternalSessions(
 
   const tally: ScanTally = { scanned: 0, parsed: 0 }
   const pause = createPause()
+  await loadKeptVerdicts(options.verdictFile, verdictRules(), claudeVerdicts, codexHeads)
+  const heldBefore = claudeVerdicts.size + codexHeads.size
   await scanClaude(homeDir, cutoff, known, options.excludedCwds ?? [], candidates, tally, pause)
   await scanCodex(homeDir, cutoff, known, options.excludedCwds ?? [], candidates, tally, pause)
+  // Written only when a head was read or a file left: a quiet scan writes nothing.
+  if (tally.parsed > 0 || claudeVerdicts.size + codexHeads.size !== heldBefore) await saveKeptVerdicts(options.verdictFile, verdictRules(), claudeVerdicts, codexHeads)
 
   candidates.sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt))
   const limit = options.limit ?? 200

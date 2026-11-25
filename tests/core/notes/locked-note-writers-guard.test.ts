@@ -67,6 +67,8 @@ const CLIENT_PATH_MODULES = ['src/web/routes/file-content.ts', 'src/web/routes/f
 
 /** `<file>#<function>` of each vault writer with no lock check of its own, and why it needs none. */
 const VAULT_WRITERS_OK: Record<string, string> = {
+  'src/core/attachment-replica.ts#attachmentEntries': 'only reads the vault; what it writes is its hash cache, cache/attachment-hashes.json in the Walnut home',
+  'src/core/attachment-replica.ts#syncAttachments': 'only reads the vault (attachmentEntries) and sends copies to a replica; its one write is the hash cache in the Walnut home',
   'src/core/init.ts#initDirectories': 'only makes the vault folder; the file it moves (migrateLegacyMemoryFile) is MEMORY.md in the Walnut home',
   'src/core/search/wiring.ts#sweepSearchV2Files': 'only reads the vault; what it changes is the search index (getSearchV2Index)',
   'src/core/notes-migration.ts#migrateGlobalNotes': 'a boot step from before global-notes.md existed, run only while global-notes.md is missing',

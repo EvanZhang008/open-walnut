@@ -26,7 +26,28 @@
 
 import { createHash } from 'node:crypto';
 
-export const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+const sha = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+/**
+ * The hashes of the long texts last asked about (spawn prompts, the current instructions): the
+ * host slice asks for every active session's prompt hash six times or so per build, and builds
+ * run every few seconds for every connected host. sha256 of a 15 KB prompt is about 60 us, of a
+ * 60 KB one about 220 us, and a Map hit on a string is well under a microsecond (2026-11-25: in
+ * a production-sized home, sha256 was 39% of buildHostSlice's loop CPU). Short texts (lines) are
+ * hashed as they come.
+ */
+const LONG_TEXT_CHARS = 2_048;
+const LONG_HASHES_MAX = 128;
+const longHashes = new Map<string, string>();
+export function hash(text: string): string {
+  if (text.length < LONG_TEXT_CHARS) return sha(text);
+  const hit = longHashes.get(text);
+  if (hit !== undefined) return hit;
+  const h = sha(text);
+  if (longHashes.size >= LONG_HASHES_MAX) longHashes.delete(longHashes.keys().next().value as string);
+  longHashes.set(text, h);
+  return h;
+}
 
 /**
  * How a block's head ends: the version, named once. Its lines carry no tag of their own

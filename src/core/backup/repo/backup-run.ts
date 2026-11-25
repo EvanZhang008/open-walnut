@@ -20,8 +20,12 @@ import type { ManifestEntry } from '../types.js';
 import type { BackupStore } from '../stores/types.js';
 import type { WriterIdentity } from '../local-state.js';
 import { chunkStream, SMALL_FILE_BYTES } from './chunker.js';
+import { chunkMapOffLoop } from './chunk-worker.js';
 import { packIdFromKey, type PackInfo, type Snapshot, type TreeEntry } from './format.js';
 import { PackCache, PackWriter, RepoError, Repository, shouldCompress, treeChunks, type LoadedIndex } from './repository.js';
+
+/** A file whose bytes no longer match the chunk map its worker made (it changed while read). */
+class FileMovedError extends Error {}
 
 /** Uploaded data written to an index while a run goes on (about 16 packs). */
 export const CHECKPOINT_BYTES = 256 * 1024 * 1024;
@@ -123,6 +127,40 @@ export async function runRepoBackup(
       await repo.writeIndex(packs);
     };
 
+    /**
+     * A big file through its chunk map (chunk-worker.ts): the cuts and ids are worked out off the
+     * event loop, and only the chunks the repository lacks are read here, each checked against
+     * its id. False when there is no map or the file changed under it (nothing was taken then
+     * that the caller keeps: it starts the file again).
+     */
+    const takeFromMap = async (
+      local: string, bytes: number,
+      takeId: (id: string, len: number, read: () => Promise<Buffer>) => Promise<void>,
+    ): Promise<boolean> => {
+      const map = await chunkMapOffLoop(local, repo.keys.mac, bytes);
+      if (!map || map.size !== bytes) return false;
+      const fh = await fs.open(local, 'r');
+      try {
+        let offset = 0;
+        for (const [len, id] of map.chunks) {
+          const at = offset;
+          await takeId(id, len, async () => {
+            const buf = Buffer.alloc(len);
+            const { bytesRead } = await fh.read(buf, 0, len, at);
+            if (bytesRead !== len || repo.blobId(buf) !== id) throw new FileMovedError();
+            return buf;
+          });
+          offset += len;
+        }
+        return true;
+      } catch (err) {
+        if (err instanceof FileMovedError) return false;
+        throw err;
+      } finally {
+        await fh.close().catch(() => {});
+      }
+    };
+
     let sinceYield = 0;
     for (const file of all) {
       const prev = prevByPath.get(file.path);
@@ -144,25 +182,30 @@ export async function runRepoBackup(
       const compress = shouldCompress(file.path);
       try {
         const st = await fs.stat(local);
-        const blobs: string[] = [];
+        let blobs: string[] = [];
         let size = 0;
-        const take = async (chunk: Buffer): Promise<void> => {
-          size += chunk.length;
+        /** One chunk, by id; its bytes are needed only when the repository lacks it. */
+        const takeId = async (id: string, len: number, bytes: () => Promise<Buffer>): Promise<void> => {
+          size += len;
           // A large file moves the count as it goes, not only when it ends.
           opts.onProgress?.(doneBytes + Math.min(size, file.size), totalBytes);
-          const id = repo.blobId(chunk);
           blobs.push(id);
           if (!known.has(id)) {
+            const chunk = await bytes();
             known.add(id);
             newBlobs++;
             await data.add(id, await repo.sealBlob(id, chunk, compress), chunk.length);
             await checkpoint();
           }
         };
+        const take = (chunk: Buffer): Promise<void> => takeId(repo.blobId(chunk), chunk.length, async () => chunk);
         if (st.size <= SMALL_FILE_BYTES) {
           const buf = await fs.readFile(local);
           if (buf.length > 0) await take(buf);
-        } else {
+        } else if (!await takeFromMap(local, st.size, takeId)) {
+          // The worker could not tell, or the file moved under it: cut it here, from the start.
+          blobs = [];
+          size = 0;
           for await (const chunk of chunkStream(createReadStream(local, { highWaterMark: 1024 * 1024 }))) await take(chunk);
         }
         entries.push({ p: file.path, s: size, m: Math.floor(st.mtimeMs), b: blobs, ...(st.mode & 0o111 ? { x: 1 as const } : {}) });

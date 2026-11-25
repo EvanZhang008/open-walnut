@@ -161,6 +161,7 @@ SOURCES=(
   src/core/usage/price-resolve.ts
   src/core/usage/session-cost-pricing.ts
   src/providers/external-session-scan-core.ts
+  src/providers/external-scan-verdicts.ts
   src/providers/path-resolve-core.ts
   src/providers/port-scan-core.ts
   src/providers/task-dir-core.ts

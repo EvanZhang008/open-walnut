@@ -27,6 +27,7 @@ const state = vi.hoisted(() => ({ sliceVersion: 0, replicaMemo: new Set<string>(
 
 vi.mock('../../src/core/host-slice.js', () => ({
   ensureHostSliceSync: () => {},
+  hostSliceJson: (slice: unknown) => JSON.stringify(slice),
   // Task churn: every build is a changed copy, so a fresh link's probe misses.
   buildHostSlice: async () => {
     state.sliceVersion++

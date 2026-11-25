@@ -222,7 +222,9 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
       const t0 = Date.now()
       const excludedCwds = Array.isArray(cmd.excludedCwds)
         ? cmd.excludedCwds.filter((value): value is string => typeof value === 'string') : []
-      const result = await scanExternalSessions({ sinceMs, knownSessionIds, excludedCwds, limit })
+      // Verdicts kept in the daemon's dir: a restart reads only the heads that changed.
+      const verdictFile = path.join(DAEMON_DIR, 'external-scan-verdicts.json')
+      const result = await scanExternalSessions({ sinceMs, knownSessionIds, excludedCwds, limit, verdictFile })
       logMsg('info', 'external session scan', {
         scanned: result.scanned,
         parsed: result.parsed,

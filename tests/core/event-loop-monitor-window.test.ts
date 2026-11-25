@@ -80,7 +80,7 @@ describe('histogram stall line', () => {
     pass(5_000)
     const [line] = histogramLines()
     expect(line.suspectSection).toBeNull()
-    expect(line.closedSections).toEqual(['change-watch wall=300ms cpu=290ms'])
+    expect(line.closedSections).toEqual(['change-watch wall=300ms loopCpu=290ms'])
   })
 
   it('a section that ended before the window is not listed', () => {
@@ -120,6 +120,6 @@ describe('histogram stall line', () => {
     const line = histogramLines().at(-1)!
     expect(line.suspectSection).toBe('change-watch')
     expect(line.sectionAwaiting).toBe(true)
-    expect((line.openSections as string[])[0]).toBe('change-watch wall=15000ms cpu=100ms')
+    expect((line.openSections as string[])[0]).toBe('change-watch wall=15000ms loopCpu=100ms')
   })
 })

@@ -64,17 +64,59 @@ export async function statFileId(file: string): Promise<ConfigFileId | null> {
  * The last text parsed and its mapping. Every getConfig reads config.yaml, and on the live
  * server that was many YAML parses a second (2026-11-23: 1.9 s of a 30 s CPU profile during
  * the 22 GB climb); the file changes a few times a day. A copy of the kept mapping is handed
- * out, so a caller that edits what it got never changes the next caller's (a clone is about a
- * fifth of a parse).
+ * out, so a caller that edits what it got never changes the next caller's.
+ *
+ * The copy is cloneYamlData, not structuredClone: on a 24 KB config Bun's structuredClone
+ * costs about 250 us, nine times a plain walk, and getConfig runs some 20 times a second on
+ * the live server (2026-11-25 stall profiles: 8.9 s of 395 s of loop CPU was this one clone).
  */
 let lastParsed: { content: string; doc: Record<string, unknown> } | null = null
 
+/**
+ * A deep copy of what js-yaml loads: plain mappings, lists, scalars and Dates (a YAML
+ * timestamp). Anything else (a `!!binary` buffer) goes through structuredClone, as before.
+ * A `__proto__` key stays an own key, as in the loaded mapping, never the copy's prototype.
+ * Like structuredClone, a value reached twice is copied once: an alias (`*x`) stays one shared
+ * object in the copy, and an anchor that names itself (`a: &x {b: *x}`) stays a cycle, never a
+ * stack overflow (which read a valid file as unparseable) nor an alias bomb expanded.
+ */
+export function cloneYamlData<T>(value: T, seen: Map<object, unknown> = new Map()): T {
+  if (value === null || typeof value !== 'object') return value
+  const held = seen.get(value)
+  if (held !== undefined) return held as T
+  if (value instanceof Date) {
+    const copy = new Date(value.getTime())
+    seen.set(value, copy)
+    return copy as T
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = new Array(value.length)
+    seen.set(value, out)
+    for (let i = 0; i < value.length; i++) out[i] = cloneYamlData(value[i], seen)
+    return out as T
+  }
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) {
+    const copy = structuredClone(value)
+    seen.set(value, copy)
+    return copy
+  }
+  const out: Record<string, unknown> = {}
+  seen.set(value, out)
+  for (const key of Object.keys(value)) {
+    const v = cloneYamlData((value as Record<string, unknown>)[key], seen)
+    if (key === '__proto__') Object.defineProperty(out, key, { value: v, enumerable: true, writable: true, configurable: true })
+    else out[key] = v
+  }
+  return out as T
+}
+
 export function parseConfigMapping(content: string): { doc: Record<string, unknown> | null; error?: string } {
-  if (lastParsed && lastParsed.content === content) return { doc: structuredClone(lastParsed.doc) }
+  if (lastParsed && lastParsed.content === content) return { doc: cloneYamlData(lastParsed.doc) }
   try {
     const parsed = yaml.load(content)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      lastParsed = { content, doc: structuredClone(parsed as Record<string, unknown>) }
+      lastParsed = { content, doc: cloneYamlData(parsed as Record<string, unknown>) }
       return { doc: parsed as Record<string, unknown> }
     }
     return { doc: null, error: 'not a YAML mapping' }

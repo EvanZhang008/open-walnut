@@ -6,11 +6,18 @@
  * is attributed instead of guessed.
  *
  * Every open section is tracked, not one slot: overlapping sections (the health monitor and git
- * sync both run on ~30 s cadences) used to blame whichever started first. Each section's CPU is the
- * LOOP THREAD's (process.threadCpuUsage), not the process's: Bun's other threads (GC helpers, the
- * HTTP and SQLite workers) ran up "cpu" for a section that only waited, so a tick parked on a 30 s
- * gh read read as one burning the loop (2026-11-23: change-watch was "not awaiting" in 182 of 426
- * stalls while its median section was open 10 s waiting on reads).
+ * sync both run on ~30 s cadences) used to blame whichever started first. Each section's
+ * `loopCpu` is the LOOP THREAD's CPU (process.threadCpuUsage) while the section was open, not the
+ * process's: Bun's other threads (GC helpers, the HTTP and SQLite workers) ran up "cpu" for a
+ * section that only waited (2026-11-23: change-watch was "not awaiting" in 182 of 426 stalls
+ * while its median section was open 10 s waiting on reads).
+ *
+ * It is still not the section's OWN CPU: everything else the loop ran while the section was open
+ * counts too, so a section that awaits for 14 s on a loop busy half the time shows 7 s. Read it
+ * as "how busy the loop was meanwhile"; what used the CPU is in the stall profiles
+ * (stall-recorder.ts). 2026-11-25: the field was named `cpu`, and a pass read change-watch's
+ * 4.7 s per run as its own work; the kept profiles of the same windows held about 10 ms of
+ * change-watch code per run (and about 40 ms of git-pull-walnut's).
  *
  * Two things a stall report could not say before (2026-11-23: 650 of 1,207 stalls named nothing):
  *  - a section that opened and CLOSED inside the 5 s window: kept in a small ring of the last
@@ -74,13 +81,14 @@ export function markCriticalSection(name: string): () => void {
   }
 }
 
-const fmt = (name: string, wallMs: number, cpuMs: number): string => `${name} wall=${Math.round(wallMs)}ms cpu=${Math.round(cpuMs)}ms`
+const fmt = (name: string, wallMs: number, cpuMs: number): string => `${name} wall=${Math.round(wallMs)}ms loopCpu=${Math.round(cpuMs)}ms`
 
 /**
  * Sections open right now, longest-running first, each with the loop thread's CPU since it began.
  * `section` is the suspect: the longest-running open section; with none open in the boot window,
- * `boot`. `awaiting` flags the suspect as wait-dominated (its loop CPU under half its wall time),
- * so a reader (or scripts/walnut-logs.sh) can discount it.
+ * `boot`. `awaiting` flags the suspect as wait-dominated (the loop's CPU under half its wall time),
+ * so a reader (or scripts/walnut-logs.sh) can discount it; false does not prove the suspect did
+ * the work, only that the loop was busy while it was open.
  */
 export function describeOpenSections(): { section: string | null; detail: string[]; awaiting: boolean } {
   const now = nowFn()

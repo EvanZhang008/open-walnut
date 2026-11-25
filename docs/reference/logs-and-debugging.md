@@ -115,7 +115,9 @@ lines, one per 5 s window (`src/core/event-loop-monitor.ts`). `suspectSection` i
 critical section, or `boot` when none is open in the first two minutes after start (`sinceStartS`);
 an open section only means the stall fell while it ran, so read `openSections` (wall vs the loop
 thread's CPU; `sectionAwaiting` when it mostly waited) and `closedSections` (those that ended inside
-the window). `loopCpuMs` is the loop thread's CPU in the window: `offCpu: true` (under half the
+the window). A section's `loopCpu` is everything the loop ran while it was open, not its own work:
+a section that awaits 14 s on a loop busy half the time shows 7 s (2026-11-25: change-watch showed
+4.7 s a run, about 10 ms of it its own). What used the CPU is in the kept profiles. `loopCpuMs` is the loop thread's CPU in the window: `offCpu: true` (under half the
 stall) means no Walnut code can have held it that long, so it is the machine (`invCtxSwitches`) or a
 blocking call (`blocking`: the synchronous SQLite and child-process calls of 20 ms or more, with
 their call sites). `stalls` counts the `offCpu` windows.

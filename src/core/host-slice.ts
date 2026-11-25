@@ -85,6 +85,19 @@ async function teamBoards(sessionTaskIds: string[], boardKept: (taskId: string) 
   return { boards, boardOf };
 }
 
+/**
+ * A session's row with its spawn prompt, per row: the store replaces a row on every write and
+ * never edits one, so the same row object has the same prompt. Every build read each active
+ * session's whole row from SQLite again (2026-11-25: a third of a build's loop CPU in a
+ * production-sized home), and builds run every few seconds for every connected host.
+ */
+const heavyRows = new WeakMap<SessionRecord, SessionRecord>();
+function heavyOf(row: SessionRecord, read: (r: SessionRecord) => SessionRecord): SessionRecord {
+  let heavy = heavyRows.get(row);
+  if (!heavy) heavyRows.set(row, heavy = read(row));
+  return heavy;
+}
+
 /** '__local__', 'local' and '' all mean this machine. */
 export function normalizeHostKey(host: string | undefined | null): string {
   return !host || host === 'local' || host === '__local__' ? '__local__' : host;
@@ -197,8 +210,9 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
   // A notice the server already has on its way into a session: the host must not add a second.
   const { getStore } = await import('./session-queue-store.js');
   const queues = (await getStore()).queues;
+  // The host first: a string test, where inHostCopy parses a date for each of ~7.5k rows.
   const records = allSessions
-    .filter((s) => inHostCopy(s, now) && keys.has(normalizeHostKey(s.host)))
+    .filter((s) => keys.has(normalizeHostKey(s.host)) && inHostCopy(s, now))
     .sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || ''))
     .slice(0, MAX_SESSIONS);
 
@@ -315,7 +329,7 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
         const busy = noticeDelivering(sid) || noticeInFlight(queues[sid] ?? []);
         // The notice reads the spawn prompt, which the list leaves out of a stopped session.
         // Its spawn prompt is a SQLite read and parse: only for a session that may take the notice.
-        const routing = task && !busy && hostNoticeActive(s, now) ? instructionNoticeForHost(withHeavyFields(s), task, now) : null;
+        const routing = task && !busy && hostNoticeActive(s, now) ? instructionNoticeForHost(heavyOf(s, withHeavyFields), task, now) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {
@@ -334,8 +348,23 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
     boards,
     boardOf,
   };
-  const hash = createHash('sha1').update(JSON.stringify(body)).digest('hex').slice(0, 16);
-  return { v: 1, ...body, hash, asOf: now };
+  const bodyJson = JSON.stringify(body);
+  const hash = createHash('sha1').update(bodyJson).digest('hex').slice(0, 16);
+  const slice: HostSlice = { v: 1, ...body, hash, asOf: now };
+  // The wire text of this very object, from the text the hash already read (key order: v, the
+  // body's keys, hash, asOf, as JSON.stringify(slice) writes them).
+  sliceJson.set(slice, `{"v":1,${bodyJson.slice(1, -1)},"hash":${JSON.stringify(hash)},"asOf":${JSON.stringify(now)}}`);
+  return slice;
+}
+
+/**
+ * The slice as JSON: what the push sends and paces by. A copy is about 0.5 to 0.9 MB, and a
+ * push wrote it out once for the hash and again for the send (2026-11-25: stringify was a sixth
+ * of buildHostSlice's loop CPU in the live server's stall profiles).
+ */
+const sliceJson = new WeakMap<object, string>();
+export function hostSliceJson(slice: HostSlice): string {
+  return sliceJson.get(slice) ?? JSON.stringify(slice);
 }
 
 // ── keep the copy fresh: re-push on task/session/request changes ──

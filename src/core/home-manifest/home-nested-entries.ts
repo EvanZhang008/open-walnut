@@ -61,6 +61,7 @@ const CACHE_ENTRIES: readonly HomeEntry[] = [
   rebuild('cache.history', 'cache/history', 'dir', 'Session history cache, rebuilt from transcripts'),
   rebuild('cache.history-archive-due', 'cache/history-archive-due.json', 'file', 'When the transcript archive sweep is next due'),
   rebuild('cache.change-watch-due', 'cache/change-watch-due.json', 'file', 'When the change watcher reads each change next; lost, it reads them all once'),
+  rebuild('cache.attachment-hashes', 'cache/attachment-hashes.json', 'file', 'File hashes of the notes\' pictures and files the attachments copy sends; lost, it hashes them all once'),
   rebuild('cache.projections', 'cache/projections', 'dir', 'Session and task list snapshots'),
   rebuild('cache.transcripts', 'cache/transcripts', 'dir', 'Transcript tails'),
   rebuild('cache.session-changes', 'cache/session-changes', 'dir', 'File change snapshots per session'),

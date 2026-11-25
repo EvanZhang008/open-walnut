@@ -163,7 +163,7 @@ describe('event-loop monitor multi-section attribution', () => {
     expect(warns).toHaveLength(1)
     expect(warns[0].sectionAwaiting).toBe(true)
     // wall vs cpu must be legible in the log, which is what makes it discountable.
-    expect((warns[0].openSections as string[])[0]).toMatch(/wall=\d+ms cpu=\d+ms/)
+    expect((warns[0].openSections as string[])[0]).toMatch(/wall=\d+ms loopCpu=\d+ms/)
   })
 
   it('reports no section when none is open (past the boot window)', () => {

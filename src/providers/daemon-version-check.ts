@@ -191,6 +191,8 @@ export const DAEMON_SOURCE_FILES = [
   // this list once: a classifier edit produced an identical version, no
   // daemon self-upgraded, and the new scan rules silently never ran.
   'src/providers/external-session-scan-core.ts',
+  // Its kept verdicts (external-scan-verdicts.ts): a format edit must move the version too.
+  'src/providers/external-scan-verdicts.ts',
   // Host-local path resolution (fs.resolvePath) — bundled into the binary AND
   // shipped as the path-resolve-core.cjs sidecar. Was missing from this list
   // (same failure mode as the scan-core note above); keep in lockstep with
