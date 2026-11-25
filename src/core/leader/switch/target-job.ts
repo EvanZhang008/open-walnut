@@ -13,7 +13,7 @@ import path from 'node:path'
 import { getVersion } from '../../version.js'
 import { verifyStandby, StandbyTarget, standbyStatus } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
-import { appendHistory, lockHolder, promotedFile, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
+import { appendHistory, lockHolder, promotedFile, readMarker, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
 import { SESSION_HOSTS_FILE, SESSION_HOSTS_MARK_TABLE, sessionHostsMarked } from './session-hosts.js'
 import { homePathRules } from './home-path-rules.js'
@@ -386,7 +386,14 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           dropPromotionMark(path.join(o.standbyDir, 'copy'), s.id)
           if (fs.existsSync(o.standbyDir)) await verifyStandby(o.standbyDir).catch(() => null)
           removeSwitchClaim(s.targetHome, s.id, env)
-          save('rolled-back', `${s.rollbackWhy ?? ''}${d.keptAt ? `; the tried home is kept at ${d.keptAt}` : ''}`)
+          // This machine's home handed the leader over before (a switch back that rolled back): it runs as its
+          // standby again, as its launcher would start it. The stop above stopped that standby, and with it what
+          // it held: this machine's witness door, and its session runtime when its server ran the daemon in its
+          // own process (web/standby-service.ts). Without it the old leader's copy link and this machine's
+          // sessions would have no daemon here.
+          const standby = readMarker(s.targetHome)?.state === 'handed-over' ? await side.startStandby().catch((err: Error) => ({ ok: false, why: err.message })) : null
+          if (standby && !standby.ok) out(`the handed-over home here did not start again as the standby (${standby.why}): its witness door and its sessions' daemon are down until it does`)
+          save('rolled-back', `${s.rollbackWhy ?? ''}${d.keptAt ? `; the tried home is kept at ${d.keptAt}` : ''}${standby ? (standby.ok ? '; the handed-over home here runs as the standby again' : `; its standby did not start (${standby.why})`) : ''}`)
           await note('gave-up', s.rollbackWhy)
           return s
         }

@@ -749,7 +749,10 @@ the leader's own status says `daemonInProcess`.
 Since the runtime comes back only with the standby, the source job starts the old home as the
 standby after the stop whenever the old leader's server ran the daemon in its own process (its
 preflight read `daemonInProcess`), not only when the old machine keeps a witness; a launcher that
-restarts the home does the same, and the second standby starts nothing. Between the stop and the
+restarts the home does the same, and the second standby starts nothing. A target job that rolls back on
+a machine whose home handed the leader over before (a switch back that did not complete) stopped that
+home's standby for its trial; once the handed-over home is back in place it starts it again, so the
+witness door and the session runtime it held come back. Between the stop and the
 standby's hold, and on a switch back between the old machine's standby stop (the trial needs its
 port) and its leader's boot, no process watches that machine's CLIs: they keep running and the next
 holder adopts them. `tests/core/leader/switch/switch-stop-sessions.test.ts` runs these processes one
