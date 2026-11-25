@@ -360,11 +360,11 @@ struct PermissionRequestCard: View {
         // A typed note goes only with the deny: an allow would drop it unsaid.
         if choice.allow && PermissionNote.message(note) != nil { return }
         // A rule kept in a file outlives the session: a stray tap never writes it.
-        if choice.savedTo != nil && !(armed == choice.id && Date().timeIntervalSince(armedAt) < 5) {
+        if choice.savedTo != nil && !(armed == choice.id && Date().timeIntervalSince(armedAt) < NoticeTiming.seconds(5)) {
             armed = choice.id
             armedAt = Date()
             let id = choice.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { if armed == id { armed = nil } }
+            NoticeTiming.after(5) { if armed == id { armed = nil } }
             return
         }
         armed = nil

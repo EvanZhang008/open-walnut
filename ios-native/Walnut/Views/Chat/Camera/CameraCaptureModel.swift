@@ -440,10 +440,6 @@ final class CameraCaptureModel {
     private func say(_ text: String) {
         notice = text
         noticeClear?.cancel()
-        noticeClear = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard !Task.isCancelled else { return }
-            self?.notice = nil
-        }
+        noticeClear = NoticeTiming.after(2.5) { [weak self] in self?.notice = nil }
     }
 }

@@ -230,10 +230,7 @@ struct DiffReviewSheet: View {
                                 removed = (comment, index)
                             }
                             let id = removed?.comment.id
-                            Task {
-                                try? await Task.sleep(for: .seconds(5))
-                                if removed?.comment.id == id { removed = nil }
-                            }
+                            NoticeTiming.after(5) { if removed?.comment.id == id { removed = nil } }
                         }
                     } footer: {
                         Text("Sent together as one message, in this order. Swipe a comment to remove it.")

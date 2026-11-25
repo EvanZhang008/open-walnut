@@ -383,11 +383,7 @@ final class SessionQueueModel {
             id: row.id, text: row.message, followers: followers, wasSetAside: row.status == "parked",
             enqueuedAt: row.enqueuedAt, earlier: before.map(\.flattened)
         )
-        withdrawnClear = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.undoWindow))
-            guard !Task.isCancelled else { return }
-            self?.withdrawn = nil
-        }
+        withdrawnClear = NoticeTiming.after(Self.undoWindow) { [weak self] in self?.withdrawn = nil }
     }
 
     /// The offer ends: it was taken, or the page moved on.

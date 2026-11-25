@@ -1068,7 +1068,7 @@ struct RoutinesView: View {
                 runNotes[id] = settled
                 showOutcome(id)
                 guard settled.ok else { return }
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(NoticeTiming.seconds(4)))
                 if runNotes[id] == settled { runNotes[id] = nil }
                 return
             }

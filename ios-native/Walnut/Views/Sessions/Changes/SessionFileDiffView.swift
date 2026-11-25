@@ -380,10 +380,7 @@ struct SessionFileDiffView: View {
                                         removed = (card, index)
                                         review.remove(card.id)
                                         let id = card.id
-                                        Task {
-                                            try? await Task.sleep(for: .seconds(5))
-                                            if removed?.comment.id == id { removed = nil }
-                                        }
+                                        NoticeTiming.after(5) { if removed?.comment.id == id { removed = nil } }
                                     }
                                 })
                                 .frame(width: pinnedWidth, alignment: .leading)
@@ -526,10 +523,7 @@ struct SessionFileDiffView: View {
 
     private func flash(_ text: String) {
         notice = text
-        Task {
-            try? await Task.sleep(for: .seconds(NoticeTiming.seconds(2.5)))
-            if notice == text { notice = nil }
-        }
+        NoticeTiming.after(2.5) { if notice == text { notice = nil } }
     }
 
     /// The diff: this phone's copy at once when there is one, then the server's.

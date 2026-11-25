@@ -23,4 +23,17 @@ final class NoticeTimingTests: XCTestCase {
         XCTAssertEqual(NoticeTiming.seconds(2.5, defaults: defaults(uiTest: true)), 2.5)
         #endif
     }
+
+    /// `after` takes the thing away once its time is up, and never once its task was cancelled.
+    @MainActor
+    func testAfterTakesItAwayUnlessCancelled() async {
+        var shown = true
+        var kept = true
+        NoticeTiming.after(0.05) { shown = false }
+        let cancelled = NoticeTiming.after(0.05) { kept = false }
+        cancelled.cancel()
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertFalse(shown, "the notice stayed past its time")
+        XCTAssertTrue(kept, "a cancelled take-away still ran")
+    }
 }

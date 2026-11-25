@@ -284,7 +284,7 @@ struct MarkdownCodeBlockView: View {
                     UIPasteboard.general.string = text
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                    NoticeTiming.after(1.6) { copied = false }
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .labelStyle(.titleAndIcon)
