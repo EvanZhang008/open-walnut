@@ -674,7 +674,8 @@ describe('NetDaemonUpdater', () => {
       resetBusyRetryForTest()
       resetDaemonUpdateClaims()
       u.schedule(0)
-      await vi.waitFor(() => expect(u.state.phase).not.toBe('checking'))
+      // Every phase a decision ends in (an automatic try never sets 'running' without a swap).
+      await vi.waitFor(() => expect(['skipped', 'postponed', 'updated', 'running', 'failed']).toContain(u.state.phase))
       await new Promise((r) => setTimeout(r, 20))
     }
 
