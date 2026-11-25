@@ -102,7 +102,7 @@ const STOPS: Record<string, [Kind, string]> = {
   stopHealthMonitor: ['none', 'timers; reads'],
   stopHealthErrorWatch: ['none', 'a log subscriber'],
   stopHostDownWatch: ['none', 'a gauge in memory'],
-  stopRealUse: ['none', 'writes local/usage-watch.sqlite (machine data)'],
+  stopRealUse: ['short', 'its stop flushes once into local/usage-watch.sqlite (leader data, home-nested-entries.ts local.usage-watch)'],
   stopBoardReminders: ['none', 'its subscriber and timer; a reminder goes out through a door, which is closed'],
   stopBoardKanbanWatch: ['none', 'a watcher'],
   'routineWakeHandle.stop': ['none', 'a timer'],
@@ -126,6 +126,7 @@ const STOPS: Record<string, [Kind, string]> = {
   'humanInboxQueueFlushHandle.stop': ['none', 'the companion\'s queue (machine)'],
   'companionJournalDueHandle.stop': ['none', 'the companion\'s'],
   'companionCardsHandle.stop': ['none', 'the companion\'s'],
+  'companionUsesHandle.stop': ['none', 'the companion\'s real-use sends (cloud companion only, never a leader)'],
   stopMobileEventsFeed: ['none', 'a feed in memory'],
   stopQuiet: ['none', 'in memory'],
   stopOverviewMaintainer: ['none', 'in memory'],
@@ -209,6 +210,7 @@ const GIT_CHILDREN: Record<string, [number, string]> = {
   'src/web/routes/git-bundle-push.ts': [2, 'the companion\'s hub repo, never a leader\'s home'],
   'src/core/self-repair/walnut-source.ts': [2, '`git --version`, and Walnut\'s own source checkout (self-repair), never the home'],
   'src/hooks/on-stop.ts': [1, 'a session\'s Stop hook: its own process, in the session\'s work dir'],
+  'src/core/data-copy-compact.ts': [1, '`git check-ignore` of a copy it may compact: reads the index, takes no lock, writes nothing'],
   'src/integrations/git-bundle-client.ts': [1, 'a bundle of the home\'s repo: refused in a quiet home and tracked for the stop (git-children.ts)'],
 }
 
