@@ -15,6 +15,7 @@
 
 import { z } from 'zod'
 import type { GlobalOptions } from '../core/types.js'
+import { noteSessionAnswered, noteSessionFailure } from '../providers/session-no-answer.js'
 import {
   fieldType,
   formatOpHelp,
@@ -335,9 +336,12 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
         await recordCardedCallViaDaemon(name, parsed, argForm, argPath, resp)
         if (resp.ok) {
           console.log(JSON.stringify(resp.result, null, 2))
+          await noteSessionAnswered()
           return
         }
         const lost = resp.error.code === 'hub_timeout'
+        // The code printed below: kept when no Walnut answered (providers/session-no-answer.ts).
+        noteSessionFailure(name, gatewayFailureCode(resp.error.code, resp.error.message))
         // A lost answer: the call's id and how to read it ride the one error (its notes and its detail); stdout stays empty.
         const lostDetail = lost && resp.error.detail === undefined ? lostCallDetail(name, callId) : undefined
         fail(gatewayFailureCode(resp.error.code, resp.error.message), resp.error.message, errorToExitCode(resp.error.code), {
@@ -403,6 +407,9 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       // A lost answer: the call's id and how to read it ride the one error (its notes and its detail); stdout stays empty.
       const lostDetail = lost ? lostCallDetail(name, callId) : undefined
       const notes = lost ? lostLines().split('\n') : r.unreachable ? awayLines(name, parsed) : []
+      // No Walnut answered (the server and the daemon inside it restarting): the code printed below is
+      // kept for the real-use monitor, told with the session's next answered call (providers/session-no-answer.ts).
+      noteSessionFailure(name, opFailureCode(r.message))
       // An op's partial result keeps its place on stdout (with --json, it is the error's detail).
       fail(opFailureCode(r.message), r.message, 1, { notes, detail: lostDetail, partial: r.result })
       return
@@ -416,6 +423,8 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     }
     console.log(JSON.stringify(r.result, null, 2))
     await record(true, r.result)
+    // A call a server answered tells what the session kept of calls no Walnut answered.
+    await noteSessionAnswered()
     return
   }
 

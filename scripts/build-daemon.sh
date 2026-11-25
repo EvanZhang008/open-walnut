@@ -103,6 +103,7 @@ SOURCES=(
   src/lib/tool-answer-fit.ts
   src/lib/tool-answer-size.ts
   src/lib/op-call-id.ts
+  src/lib/no-answer-report.ts
   src/providers/acp-daemon.ts
   src/providers/acp-survive.ts
   src/providers/acp-thread-restore.ts
@@ -403,6 +404,19 @@ SOURCES=(
   src/core/notes/locked-note.ts
   src/core/notes/locked-note-format.ts
   src/utils/format.ts
+  src/core/approvals/cli-core.ts
+  src/core/approvals/cli-token.ts
+  src/core/approvals/digest.ts
+  src/core/approvals/types.ts
+  src/core/browser-control/browser-cli.ts
+  src/core/browser-control/gone-words.ts
+  src/core/op-cards.ts
+  src/core/vault/pass-cli.ts
+  src/lib/tool-use-id.ts
+  src/lib/wait-through-restart.ts
+  src/providers/replica-sync-gz.ts
+  src/providers/tool-call-output.ts
+  src/providers/trigger-unsent-checks.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

@@ -115,6 +115,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/lib/tool-answer-fit.ts',
   'src/lib/tool-answer-size.ts',
   'src/lib/op-call-id.ts',
+  // Where the CLI and the MCP server keep the calls no Walnut answered, imported by both.
+  'src/lib/no-answer-report.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
@@ -556,6 +558,21 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/notes/locked-note.ts',
   'src/core/notes/locked-note-format.ts',
   'src/utils/format.ts',
+  // What the daemon and its CLI load with await import(): bundled all the same (2026-11-25: none of
+  // these moved the version, so an edit to one of them, as to the no-answer spool, reached no host).
+  'src/core/approvals/cli-core.ts',
+  'src/core/approvals/cli-token.ts',
+  'src/core/approvals/digest.ts',
+  'src/core/approvals/types.ts',
+  'src/core/browser-control/browser-cli.ts',
+  'src/core/browser-control/gone-words.ts',
+  'src/core/op-cards.ts',
+  'src/core/vault/pass-cli.ts',
+  'src/lib/tool-use-id.ts',
+  'src/lib/wait-through-restart.ts',
+  'src/providers/replica-sync-gz.ts',
+  'src/providers/tool-call-output.ts',
+  'src/providers/trigger-unsent-checks.ts',
 ] as const
 
 /**

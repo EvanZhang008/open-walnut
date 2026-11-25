@@ -32,7 +32,7 @@ import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { withToolUseId } from '../lib/tool-use-id.js'
-import { NoAnswerLog } from '../lib/no-answer-report.js'
+import { NoAnswerLog, hubAnswered, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers } from '../lib/no-answer-report.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -103,6 +103,12 @@ export interface WalnutMcpDeps {
   listCache?: ToolListCache
   /** Overrides mcpListAnswerMs() (tests). */
   listAnswerMs?: number
+  /**
+   * The session's no-answer spool (lib/no-answer-report.ts noAnswerSpoolFile), shared with its CLI
+   * and its later processes: a call no Walnut answered is kept there, and whichever of them gets the
+   * next call through tells it. Left out (an outside caller), they are kept in this process only.
+   */
+  noAnswerSpool?: string | null
 }
 
 type McpTool = Record<string, unknown>
@@ -371,14 +377,19 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   // with the next call that gets through (lib/no-answer-report.ts): the session hook counts a failed
   // call only while the server reads the session live, and these fail exactly while it does not.
   const noAnswers = new NoAnswerLog()
-  const noAnswer = (op: string, code: string) => noAnswers.note(op, code, 'mcp')
+  const spool = deps.noAnswerSpool ?? null
+  const noAnswer = (op: string, code: string) => { if (!spoolNoAnswer(spool, op, code, 'mcp')) noAnswers.note(op, code, 'mcp') }
   const tellNoAnswers = () => {
-    if (!noAnswers.size) return
-    const { report, putBack } = noAnswers.take()
+    if (!noAnswers.size && !spoolHoldsNoAnswers(spool)) return
+    const here = noAnswers.take()
+    const kept = takeSpooledNoAnswers(spool)
+    const report = [...kept.report, ...here.report]
+    const putBack = () => { kept.putBack(); here.putBack() }
+    // Nothing left to tell (each one past its age): dropped, never kept again.
     if (!report.length) return
     // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
     void deps.request('tools.list', { report: { no_answer: report } }, MCP_SHORT_REPORT_MS)
-      .then((r) => { if (!r.ok) putBack() }, () => putBack())
+      .then((r) => { if (!hubAnswered(r)) putBack() }, () => putBack())
   }
 
   // Calls still running, by the client's request id: `notifications/cancelled` aborts one.
@@ -427,7 +438,11 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
         resp = await deps.request('tools.call', { name, args, callId, client: 'mcp' }, undefined, signal)
       }
       // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
-      if (resp.ok) { tellNoAnswers(); return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] } }
+      if (resp.ok) {
+        // Only after an answer of a server: one this host's daemon gave while its Walnut is away would take no report.
+        if (hubAnswered(resp)) tellNoAnswers()
+        return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }
+      }
       const message = deps.formatError(resp.error).join('\n')
       if (resp.error.code === 'hub_timeout') {
         // The call may have run: what it did is the answer, a success included.

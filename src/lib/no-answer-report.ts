@@ -8,12 +8,23 @@
  * and hands them to the hub with the next call that gets through, as `tools.list` with
  * `report.no_answer` (capability-router.ts), the way it reports a short tool list. Only op names,
  * codes, the client and how long ago: never an argument or a word of the answer.
+ *
+ * Every client of a session keeps them in the session's one spool (noAnswerSpoolFile), and any of
+ * them tells it with its next call that gets through (2026-11-25 audit: 7 of 11 such failures
+ * missed. The Mac's `walnut tools call`, which reaches its server over HTTP, kept none of its 5: with
+ * the server and its in-process daemon both restarting, it had nowhere to say it. And a session whose
+ * failed call was its MCP server's and whose next working call was its CLI's, or a later process's,
+ * never told the first.)
  */
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** The codes of a call no Walnut answered: the daemon gone or unreachable, the server down or silent. */
-export const NO_ANSWER_CODES: ReadonlySet<string> = new Set(['no_daemon', 'daemon_unreachable', 'hub_unreachable', 'hub_timeout'])
+/**
+ * The codes of a call no Walnut answered: the daemon gone or unreachable, the server down or silent,
+ * or its answer broken off (`request_failed`, the Mac CLI's: a reset while the server restarts). The
+ * code is the one the agent read, so the session hook's row of the same failure matches it (record.ts).
+ */
+export const NO_ANSWER_CODES: ReadonlySet<string> = new Set(['no_daemon', 'daemon_unreachable', 'hub_unreachable', 'hub_timeout', 'request_failed'])
 
 export interface NoAnswer {
   op: string
@@ -39,9 +50,13 @@ function keptOf(v: unknown): Kept | null {
   return { at: r.at, op: r.op, code: r.code, client: r.client }
 }
 
-function told(items: readonly Kept[], now: number): NoAnswer[] {
+/** What is still told: within its age, the last NO_ANSWER_MAX. Only these are ever kept again. */
+function fresh(items: readonly Kept[], now: number): Kept[] {
   return items.filter((k) => now - k.at <= NO_ANSWER_MAX_AGE_MS).slice(-NO_ANSWER_MAX)
-    .map((k) => ({ op: k.op, code: k.code, client: k.client, ms: Math.max(0, now - k.at) }))
+}
+
+function told(items: readonly Kept[], now: number): NoAnswer[] {
+  return items.map((k) => ({ op: k.op, code: k.code, client: k.client, ms: Math.max(0, now - k.at) }))
 }
 
 /** A long-lived client's failures (the MCP server), held in memory until a call gets through. */
@@ -59,7 +74,7 @@ export class NoAnswerLog {
 
   /** The report to send now (empty: nothing to tell), and a way to keep them when it did not go. */
   take(now = Date.now()): { report: NoAnswer[]; putBack: () => void } {
-    const taken = this.items
+    const taken = fresh(this.items, now)
     this.items = []
     return {
       report: told(taken, now),
@@ -100,19 +115,20 @@ function ownPrivateDir(dir: string): boolean {
   } catch { return false }
 }
 
-/** Keep one failure in the session's spool. Never throws: counting never fails a call. */
-export function spoolNoAnswer(file: string | null, op: string, code: string, client: 'mcp' | 'cli' = 'cli', now = Date.now()): void {
+/** Keep one failure in the session's spool; true when it was kept. Never throws: counting never fails a call. */
+export function spoolNoAnswer(file: string | null, op: string, code: string, client: 'mcp' | 'cli' = 'cli', now = Date.now()): boolean {
   const k = keptOf({ at: now, op, code, client })
-  if (!file || !k) return
+  if (!file || !k) return false
   let fd: number | undefined
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-    if (!ownPrivateDir(path.dirname(file))) return
+    if (!ownPrivateDir(path.dirname(file))) return false
     const c = fs.constants
     fd = fs.openSync(file, c.O_WRONLY | c.O_APPEND | c.O_CREAT | (c.O_NOFOLLOW ?? 0), 0o600)
-    if (!ownRegularFile(fd)) return
+    if (!ownRegularFile(fd)) return false
     fs.writeSync(fd, `${JSON.stringify(k)}\n`)
-  } catch { /* a count only */ } finally {
+    return true
+  } catch { return false /* a count only */ } finally {
     if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
   }
 }
@@ -139,9 +155,11 @@ export function takeSpooledNoAnswers(file: string | null, now = Date.now()): { r
     if (fd !== undefined) { try { fs.closeSync(fd) } catch { /* closed */ } }
     try { fs.rmSync(taking, { force: true }) } catch { /* gone */ }
   }
+  // Only what is still told goes back: a spool that only ever grew would pass its size and be lost whole.
+  const kept = fresh(items, now)
   return {
-    report: told(items, now),
-    putBack: () => { for (const k of items) spoolNoAnswer(file, k.op, k.code, k.client, k.at) },
+    report: told(kept, now),
+    putBack: () => { for (const k of kept) spoolNoAnswer(file, k.op, k.code, k.client, k.at) },
   }
 }
 
@@ -149,6 +167,16 @@ export function takeSpooledNoAnswers(file: string | null, now = Date.now()): { r
 export function spoolHoldsNoAnswers(file: string | null): boolean {
   if (!file) return false
   try { return fs.lstatSync(file).isFile() } catch { return false }
+}
+
+/**
+ * Whether a Walnut server gave this answer: it is ok, and not this host's daemon's own while its
+ * Walnut is away (offline-host-core.ts answers a read or a `tools.list` itself then, `offline: true`).
+ * A call answered so is no sign the hub is back, and a report answered so went nowhere: it is kept
+ * for the next call a server answers.
+ */
+export function hubAnswered(r: { ok: boolean; result?: unknown }): boolean {
+  return r.ok && (r.result as { offline?: unknown } | null | undefined)?.offline !== true
 }
 
 /** The no-answer failures a client's report names (hub side), or [] when it names none. */

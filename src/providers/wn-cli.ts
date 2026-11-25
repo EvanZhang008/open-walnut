@@ -42,7 +42,7 @@ import {
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
 import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
-import { NO_ANSWER_CODES, noAnswerSpoolFile, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers } from '../lib/no-answer-report.js'
+import { NO_ANSWER_CODES, hubAnswered, noAnswerSpoolFile, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers } from '../lib/no-answer-report.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
@@ -1142,8 +1142,9 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   }
   // A call that got through tells the calls of this session no Walnut answered; one that got none is kept.
   if (parsed.kind === 'tools.call') {
-    if (resp.ok) await tellKeptNoAnswers(socketPath, sid)
-    else keepNoAnswer(socketPath, sid, parsed.name, resp.error.code)
+    // Only after an answer of a server: one this host's daemon gave while its Walnut is away would take no report.
+    if (!resp.ok) keepNoAnswer(socketPath, sid, parsed.name, resp.error.code)
+    else if (hubAnswered(resp)) await tellKeptNoAnswers(socketPath, sid)
   }
 
   if (!resp.ok && parsed.kind === 'tools.call') {
@@ -1226,7 +1227,7 @@ function keepNoAnswer(socketPath: string, sid: string, op: string, code: string)
 }
 
 /** Tell the hub what keepNoAnswer kept, within RECORD_TIMEOUT_MS; kept again when it did not go. */
-async function tellKeptNoAnswers(socketPath: string, sid: string): Promise<void> {
+export async function tellKeptNoAnswers(socketPath: string, sid: string): Promise<void> {
   if (!sid || sid === EXTERNAL_CALLER_SID) return
   const file = noAnswerSpoolFile(socketPath, sid)
   if (!spoolHoldsNoAnswers(file)) return
@@ -1234,7 +1235,7 @@ async function tellKeptNoAnswers(socketPath: string, sid: string): Promise<void>
   if (!report.length) return
   try {
     const r = await requestOverSocket(socketPath, gatewayListLine('tools.list', sid, { report: { no_answer: report } }, RECORD_TIMEOUT_MS))
-    if (!r.ok) putBack()
+    if (!hubAnswered(r)) putBack()
   } catch { putBack() }
 }
 
@@ -1297,6 +1298,8 @@ async function runMcpServer(argv: string[]): Promise<number> {
     // while the hub was away or loading its plugins answers with, instead of none. Only a session's:
     // an external caller's sid is shared, or a trigger check's token, which is never kept on disk.
     ...(endpoint.external ? {} : { listCache: fileToolListCache(path.join(path.dirname(socketPath), 'mcp-tool-lists'), sid) }),
+    // The session's one no-answer spool, shared with its CLI and its next processes (lib/no-answer-report.ts).
+    ...(endpoint.external ? {} : { noAnswerSpool: noAnswerSpoolFile(socketPath, sid) }),
     // A call carries WALNUT_TEST_RUN the way `walnut tools call` does, so a test run through
     // the tools makes test objects too.
     request: mcpGatewayRequest(socketPath, sid),

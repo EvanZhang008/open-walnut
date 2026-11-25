@@ -183,8 +183,15 @@ describe('daemon version hash: the two source lists agree', () => {
       for (const m of src.matchAll(/^(?:import|export)\s+(?!type\b)[\s\S]*?\s+from\s+'(\.{1,2}\/[^']+)\.js'/gm)) {
         todo.push(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]!)) + '.ts')
       }
+      // A module loaded with await import() is bundled too (2026-11-25: the CLI, reached that way,
+      // and the no-answer spool it imports were never hashed, so their edits reached no host).
+      // Only a runtime load (`await import`): `typeof import(...)` in a type is erased.
+      for (const m of src.matchAll(/\bawait import\('(\.{1,2}\/[^']+)\.js'\)/g)) {
+        todo.push(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]!)) + '.ts')
+      }
     }
     expect(bundled).toContain('src/providers/net-binary.ts')
+    expect(bundled).toContain('src/lib/no-answer-report.ts')
     const shell = shellSourceList()
     const ts = tsSourceList()
     const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))

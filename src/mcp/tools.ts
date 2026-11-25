@@ -24,6 +24,7 @@ import { inGroup } from '../ops/op-help.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
 import { callIdFor, lostCallLines } from '../lib/op-call-id.js'
 import { fitToolAnswer } from '../lib/tool-answer-fit.js'
+import { noteSessionAnswered, noteSessionFailure } from '../providers/session-no-answer.js'
 
 export { resolveApiBase }
 
@@ -132,9 +133,17 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
   const { callId, bad } = callIdFor(args)
   if (bad) return fail(bad)
   const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim(), forAgent: 'mcp' })
-  if (r.ok) return ok(r.result, name)
+  if (r.ok) {
+    // A call a server answered tells what the session kept of calls no Walnut answered.
+    await noteSessionAnswered()
+    return ok(r.result, name)
+  }
   if (r.result !== undefined) return { ...ok(r.result, name), isError: true }
-  return fail(r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message)
+  const text = r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message
+  // Kept, with the code its agent reads in this text, when no Walnut answered (providers/session-no-answer.ts).
+  const { toolErrorCode } = await import('../core/usage-watch/normalize.js')
+  noteSessionFailure(name, toolErrorCode(text), 'mcp')
+  return fail(text)
 }
 
 /**

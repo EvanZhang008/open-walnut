@@ -236,9 +236,11 @@ describe('daemon version guard: hash source lists stay in lockstep', () => {
     // read (2026-09-01). Comments are not data.
     const tsList = [...tsBlock.replace(/\/\/[^\n]*/g, '').matchAll(/'([^']+)'/g)].map(m => m[1])
 
+    // The list ends at its own line ")": a comment in it may hold one too (2026-11-25: "(host replica
+    // and offline host copies read it)" ended the list there, and every entry after it went unchecked).
     const shBlock = shSrc.slice(
       shSrc.indexOf('SOURCES=('),
-      shSrc.indexOf(')', shSrc.indexOf('SOURCES=(')),
+      shSrc.indexOf('\n)', shSrc.indexOf('SOURCES=(')),
     )
     const shList = shBlock
       .split('\n')

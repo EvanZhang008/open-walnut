@@ -18,6 +18,13 @@ export async function runGuide(globals: GlobalOptions): Promise<void> {
   // last line names the call that reads on (ops/answer.ts). A person's terminal prints all of it.
   const inSession = !!process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN
   const outcome = await executeOp('skill_read', { dirName: 'walnut' }, { origin: LOCAL_ORIGIN, ...(inSession ? { forAgent: 'cli' as const } : {}), ...cliOpCaller() })
+  // A session's read no Walnut answered is counted, as `walnut tools call`'s is (providers/session-no-answer.ts).
+  const noAnswer = await import('../providers/session-no-answer.js')
+  if (outcome.ok) await noAnswer.noteSessionAnswered()
+  else {
+    const { toolErrorCode } = await import('../core/usage-watch/normalize.js')
+    noAnswer.noteSessionFailure('skill_read', toolErrorCode(`walnut: ${outcome.message}`))
+  }
   if (!outcome.ok) {
     console.error(`walnut: ${outcome.message}`)
     process.exitCode = 1
