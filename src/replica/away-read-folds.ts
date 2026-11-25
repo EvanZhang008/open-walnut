@@ -20,14 +20,18 @@ type Row = Record<string, unknown> & { id: string }
 type LiveSessions = HostSessionsNow
 
 /** What walnut_status adds for this host's own call while the leader is away. */
-export function awayStatus(deps: { overlay: Pick<Overlay, 'entries'>; hostKey?: string | null }): Record<string, unknown> {
+export function awayStatus(deps: { overlay: Pick<Overlay, 'entries'>; hostKey?: string | null; noCopy?: boolean }): Record<string, unknown> {
   const queued = deps.overlay.entries().filter((e) => e.state === 'pending').length
   return {
     leader: 'away',
     ...(deps.hostKey ? { host: deps.hostKey } : {}),
     queuedForLeader: queued,
     answersHere: opsAnsweredHere(),
-    note: 'Your Mac is away: this host\'s Walnut answers the ops in answersHere (writes are kept and reach the Mac when it is back); any other op answers needs_leader.',
+    // A service that keeps no copy (kinds/gate.ts keepsNoCopy): reads answer only for this host's sessions' rows.
+    ...(deps.noCopy ? { copy: 'none' } : {}),
+    note: deps.noCopy
+      ? 'Your Mac is away and this host keeps no copy of your data: it answers the ops in answersHere for the tasks, Boards and requests of its own sessions (writes are kept and reach the Mac when it is back); a read of anything else answers needs_leader (no_copy).'
+      : 'Your Mac is away: this host\'s Walnut answers the ops in answersHere (writes are kept and reach the Mac when it is back); any other op answers needs_leader.',
   }
 }
 

@@ -65,6 +65,7 @@ import { classify, isRead, type AwayRule, type RouteDecision } from './route-tab
 import { HELPER_SCOPE_REFUSAL, helperCallAllowed } from '../lib/self-api-root.js'
 import { closeAtFrame, closeFrame, FrameCursor } from './ws-frames.js'
 import { LEADER_READ_DEADLINE_MS, LEADER_READ_MAX_TRIES, mayTryLeaderReadAgain } from '../core/leader-read-recovery.js'
+import { NO_COPY_MESSAGE } from '../core/replication/needs-leader.js'
 
 /** The shortest budget of a write that says its wait, and a WebSocket handshake's budget. */
 export const WRITE_BUDGET_MS = 15_000
@@ -205,6 +206,11 @@ export interface DispatchDeps {
    * the shared failure bucket a phone's refusals use. Absent: no request is one.
    */
   helperCall?(req: IncomingMessage): boolean
+  /**
+   * Whether an away read can be answered here (copyless-reads.ts on a service that keeps no copy);
+   * false: 503 `needs_leader {why:'no_copy'}` at once, never a route on empty stores. Absent: every one.
+   */
+  awayReadHere?(req: IncomingMessage): boolean
 }
 
 export interface Dispatcher {
@@ -449,6 +455,13 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     })
   }
 
+  /** A read of a row this service keeps no copy of (copyless-reads.ts): the caller's final answer, at once. */
+  function noCopy(req: IncomingMessage, res: ServerResponse): void {
+    sendJson(res, 503, { error: { code: 'needs_leader', why: 'no_copy', retryAfter: 5, message: NO_COPY_MESSAGE } }, {
+      ...offlineHeader(req), [ANSWERED_VIA_HEADER]: 'replica', 'retry-after': '5',
+    })
+  }
+
   /** A caller with no known token, before any byte of its body is read; the connection closes after. */
   function refuse(req: IncomingMessage, res: ServerResponse): void {
     const fallback = { status: 401, body: { error: 'Invalid or revoked token', code: 'token_refused' } }
@@ -562,6 +575,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     deps.log('info', 'replica away answer', { route: decision.row?.pattern ?? pathOf(req), path: pathOf(req), method: req.method, cls: decision.cls, away: decision.away, why })
     if (decision.away === 'read') {
       if (deps.answerAlone && isNavigation(req, pathOf(req))) return deps.answerAlone(req, res, why)
+      if (deps.awayReadHere && !deps.awayReadHere(req)) return noCopy(req, res)
       // The auth middleware's 401 to a caller with no token carries no copy age.
       for (const [k, v] of Object.entries(offlineHeader(req))) res.setHeader(k, v)
       res.setHeader(ANSWERED_VIA_HEADER, 'replica')

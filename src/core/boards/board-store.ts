@@ -27,6 +27,7 @@ import { isCompanion } from '../server-role.js';
 import { NeedsLeaderError } from '../replication/needs-leader.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { readJsonFileKept } from '../../utils/json-kept.js';
+import { unstoredBoard } from '../unstored-rows.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
@@ -508,7 +509,13 @@ export function requireBoard(current: BoardFile | null): BoardFile {
 }
 
 export async function getBoard(taskId: string): Promise<BoardFile | null> {
-  return normalize(await readJsonFile<BoardFile | null>(await readBoardFile(taskId), null), taskId);
+  return normalize(await readJsonFile<BoardFile | null>(await readBoardFile(taskId), null), taskId) ?? slicedBoard(taskId);
+}
+
+/** A service with no copy: the Board its slice holds for `taskId` (core/unstored-rows.ts), a fresh copy for a caller that edits. */
+function slicedBoard(taskId: string): BoardFile | null {
+  const b = unstoredBoard(taskId);
+  return b ? normalize(structuredClone(b), taskId) : null;
 }
 
 const boardViews = new WeakMap<object, BoardFile | null>();
@@ -520,7 +527,7 @@ const boardViews = new WeakMap<object, BoardFile | null>();
  * lookups) for a file written 9 times. A caller that edits a board reads it with getBoard.
  */
 export async function getBoardView(taskId: string): Promise<Readonly<BoardFile> | null> {
-  const raw = await readJsonFileKept<BoardFile | null>(await readBoardFile(taskId), null);
+  const raw = await readJsonFileKept<BoardFile | null>(await readBoardFile(taskId), null) ?? unstoredBoard(taskId);
   if (!raw || typeof raw !== 'object') return null;
   let view = boardViews.get(raw);
   if (view === undefined) {

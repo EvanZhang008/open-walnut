@@ -8,6 +8,12 @@
 
 export const NEEDS_LEADER_MESSAGE = 'This needs your Mac, which is not answering right now.'
 
+/**
+ * A host's Walnut service that keeps no copy of the leader's data (WALNUT_COPIES=none), asked
+ * while the leader is away for a row that is not in its slice: the caller's final answer.
+ */
+export const NO_COPY_MESSAGE = 'The leader is away and this host keeps no copy of your data, so this cannot be read now. What you write is saved here and applied when the leader is back. Go on with what you have; do not retry.'
+
 export class NeedsLeaderError extends Error {
   readonly code = 'needs_leader'
   readonly status = 503

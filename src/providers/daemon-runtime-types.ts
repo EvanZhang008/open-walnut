@@ -106,7 +106,7 @@ export interface DaemonClient {
  * `home` with no `follower.hello` and no socket. Only the home the service serves is seated.
  */
 export type FollowerSeatCalls = Pick<FollowerEntry,
-  'view' | 'sessions' | 'send' | 'permission' | 'peer' | 'op' | 'triggers' | 'triggerTest' | 'pending' | 'start'>
+  'view' | 'sessions' | 'slice' | 'send' | 'permission' | 'peer' | 'op' | 'triggers' | 'triggerTest' | 'pending' | 'start'>
 export interface FollowerSeat extends FollowerSeatCalls {
   /**
    * The server follows `home` from now on: the client below is its one in-process link (the same

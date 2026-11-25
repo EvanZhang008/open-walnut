@@ -1,5 +1,6 @@
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { hasUnstoredRows, unstoredGeneration, unstoredTasks } from './unstored-rows.js';
 import { INBOX_PROJECT, isInboxProject, projectOrInbox, sameProject } from './inbox-project.js';
 import { migrateInboxProject } from './inbox-migration.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -195,6 +196,23 @@ registerMemoryHolder({
   budgetBytes: 160 * 1024 * 1024,
   read: () => ({ entries: taskStoreCache?.tasks.length ?? 0, chars: sampledStringChars(taskStoreCache?.tasks) }),
 });
+
+/**
+ * The rows a service with no copy shows beneath its store (core/unstored-rows.ts, the slice): the
+ * ids the cached view added and the generation it read them at. A new slice rebuilds the view's
+ * task list from it, with no scan; nothing of it is ever written (the store's handle is read only
+ * on a host replica, replica/copy-guard.ts).
+ */
+let cacheUnstoredIds: ReadonlySet<string> = new Set();
+let cacheUnstoredGen = -1;
+function withUnstored(store: TaskStore): TaskStore {
+  cacheUnstoredGen = unstoredGeneration();
+  if (!hasUnstoredRows() && cacheUnstoredIds.size === 0) return store;
+  const own = cacheUnstoredIds.size ? store.tasks.filter((t) => !cacheUnstoredIds.has(t.id)) : store.tasks;
+  const added = unstoredTasks(new Set(own.map((t) => t.id)));
+  cacheUnstoredIds = new Set(added.map((t) => t.id));
+  return added.length || own !== store.tasks ? { ...store, tasks: own.concat(added) } : store;
+}
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateTaskStoreCache(): void {
@@ -820,7 +838,9 @@ function peekStoreView(): TaskStore | null {
   const db = getDb();
   if (!db) return null;
   const current = readDataVersion(db);
-  return current !== null && current === taskStoreCacheDataVersion ? taskStoreCache : null;
+  if (current === null || current !== taskStoreCacheDataVersion) return null;
+  if (cacheUnstoredGen !== unstoredGeneration()) { taskStoreCache = withUnstored(taskStoreCache); taskStoreIndex = null; taskStoreGen += 1; }
+  return taskStoreCache;
 }
 
 /** The canonical store: the cache while it is current, else a fresh scan that re-seeds it. */
@@ -831,6 +851,7 @@ async function loadStore(): Promise<TaskStore> {
     // filled (same trust boundary as rowShadowIfCurrent — see the cache decl).
     const current = readDataVersion(getDb()!);
     if (current !== null && current === taskStoreCacheDataVersion) {
+      if (cacheUnstoredGen !== unstoredGeneration()) { taskStoreCache = withUnstored(taskStoreCache); taskStoreIndex = null; taskStoreGen += 1; }
       return taskStoreCache;
     }
     log.task.warn('task store cache dropped: another connection wrote the DB, or it was reopened', {
@@ -876,12 +897,13 @@ async function loadStore(): Promise<TaskStore> {
     .all() as { id: string; label: string }[];
   const customTiers: CustomTierRecord[] = tierRows.map((row) => ({ id: row.id, label: row.label }));
 
-  const store: TaskStore = {
+  cacheUnstoredIds = new Set();
+  const store: TaskStore = withUnstored({
     tasks,
     ...(Object.keys(projects).length > 0 ? { projects } : {}),
     ...(Object.keys(taskGroups).length > 0 ? { task_groups: taskGroups } : {}),
     ...(customTiers.length > 0 ? { custom_tiers: customTiers } : {}),
-  };
+  });
   if (STORE_CACHE_ENABLED) {
     taskStoreCache = store;
     taskStoreCacheDataVersion = readDataVersion(db);
@@ -3976,7 +3998,8 @@ async function runTaskQuery(
   const sort: TaskQuerySort = normalized.sort ?? 'updated_desc';
 
   let candidates: Task[];
-  const view = peekStoreView();
+  // A service with no copy shows its slice beneath the store: never the SQL path, which does not hold it.
+  const view = peekStoreView() ?? (hasUnstoredRows() ? await loadStore() : null);
   if (view) {
     // The canonical cache is current: every row is already a parsed Task, so the
     // candidate set is the whole list projected in JS. The home list
@@ -4074,7 +4097,8 @@ export async function queryTasksSlim(
  */
 export async function listOpenTaskViews(max: number, opts: { completedSince?: string } = {}): Promise<ReadonlyArray<Readonly<Task>>> {
   await ensureInit();
-  const view = peekStoreView();
+  // A service with no copy shows its slice beneath the store: never the SQL path, which does not hold it.
+  const view = peekStoreView() ?? (hasUnstoredRows() ? await loadStore() : null);
   // `completedSince`: COMPLETE tasks closed since then come too (a watcher that follows a closed
   // task's deploy, changes/watch.ts).
   const since = opts.completedSince;

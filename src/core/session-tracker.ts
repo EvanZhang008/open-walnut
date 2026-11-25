@@ -61,6 +61,7 @@ import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSna
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { OrgError } from './org/org-store.js';
+import { hasUnstoredRows, unstoredSessions } from './unstored-rows.js';
 import { copyCallerCounter, registerBurstContext, registerMemoryHolder, registerSampleNote, sampledStringChars } from './observability/memory-ledger.js';
 import {
   assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
@@ -744,8 +745,22 @@ function awayRows(): SessionRecord[] {
   if (!awaySessionRows) return [];
   try { return awaySessionRows(); } catch { return []; }
 }
+// Sessions a host's Walnut service with no copy reads from its slice (core/unstored-rows.ts): its
+// stored rows, as a sessions copy would hold them. Never an away start: awaySessionsOfTask and
+// isAwaySession read only the rows above.
+/** Rows beyond the store are installed: started here, or read from the slice. */
+function extraInstalled(): boolean {
+  return awaySessionRows !== null || hasUnstoredRows();
+}
+function extraRows(): SessionRecord[] {
+  const away = awayRows();
+  const slice = unstoredSessions();
+  if (!slice.length) return away;
+  const have = new Set(away.map((r) => r.claudeSessionId));
+  return away.concat(slice.filter((r) => !have.has(r.claudeSessionId)));
+}
 function withAway(rows: SessionRecord[], keep: (s: SessionRecord) => boolean = () => true): SessionRecord[] {
-  const extra = awayRows();
+  const extra = extraRows();
   if (!extra.length) return rows;
   const have = new Set(rows.map((r) => r.claudeSessionId));
   return rows.concat(extra.filter((r) => !have.has(r.claudeSessionId) && keep(r)).map((r) => ({ ...r })));
@@ -774,7 +789,7 @@ export function isAwaySession(sid: string): boolean {
 
 export async function listSessions(): Promise<SessionRecord[]> {
   const store = await readStore();
-  return awaySessionRows ? withAway(store.sessions) : store.sessions;
+  return extraInstalled() ? withAway(store.sessions) : store.sessions;
 }
 
 /**
@@ -786,7 +801,7 @@ export async function listSessions(): Promise<SessionRecord[]> {
  */
 export async function sessionStoreView(): Promise<readonly SessionRecord[]> {
   const view = await readStoreView();
-  return awaySessionRows ? withAway(view as SessionRecord[]) : view;
+  return extraInstalled() ? withAway(view as SessionRecord[]) : view;
 }
 
 /**
@@ -803,7 +818,7 @@ export async function listSessionsForTasks(
   for (const s of view) {
     if ((s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) linked.push(cloneSession(s));
   }
-  return awaySessionRows ? withAway(linked, (s) => (!!s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) : linked;
+  return extraInstalled() ? withAway(linked, (s) => (!!s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) : linked;
 }
 
 /** The sessions whose stop waits for its host's confirmation: on `host`, or on every host. */
@@ -1386,7 +1401,7 @@ export function getSessionByClaudeIdSync(claudeSessionId: string): SessionRecord
     | Record<string, any>
     | undefined;
   if (row) return rowToSession(row);
-  const away = awaySessionRows ? awayRows().find((r) => r.claudeSessionId === claudeSessionId) : undefined;
+  const away = extraInstalled() ? extraRows().find((r) => r.claudeSessionId === claudeSessionId) : undefined;
   return away ? { ...away } : null;
 }
 
@@ -1596,7 +1611,7 @@ export function getSessionsForTaskSync(taskId: string): SessionRecord[] {
   if (!db) return [];
   const rows = db.prepare('SELECT * FROM sessions WHERE task_id = ?').all(taskId) as Record<string, any>[];
   const found = rows.map(rowToSession);
-  return awaySessionRows ? withAway(found, (r) => r.taskId === taskId) : found;
+  return extraInstalled() ? withAway(found, (r) => r.taskId === taskId) : found;
 }
 
 // ── Health-scan active-set queries (I1: periodic work = O(active), never O(history)) ──

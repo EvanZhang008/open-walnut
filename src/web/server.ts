@@ -2248,6 +2248,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Writes while the Mac is away (WP10): the overlay of this host's journal over
     // the copies, the write port, its routes, and the /ws RPC writes.
     const replicaDevices = (await import('../replica/auth.js')).replicaDeviceCopy()
+    // A service that keeps no copy reads and writes its sessions' rows from the slice (slice-source.ts).
+    const { keepsNoCopy } = await import('../core/replication/kinds/gate.js')
+    const rowSource = keepsNoCopy()
+      ? (await import('../replica/slice-source.js')).createSliceSource({
+          request: (cmd, params, timeoutMs) => front.link.request(cmd, params, timeoutMs),
+          hostKey, log: (level, msg, data) => log.web[level](msg, data),
+        })
+      : undefined
     const away = await (await import('../replica/away-wiring.js')).wireAwayWrites({
       link: front.link,
       devices: replicaDevices,
@@ -2256,6 +2264,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       setRpcAnswer: (fn) => wsHandlerForReplica.setRpcAnswer(fn),
       macAnswers: () => front.presence().answers,
       localCalls: () => hasCapability('host-local-calls'),
+      ...(rowSource ? { source: rowSource } : {}),
     })
     hostReplicaAway = away
     app.use('/api', away.reads)
@@ -3639,7 +3648,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
   // A host replica on a machine that handed the leader over serves that machine's console too, at
   // the address its leader served (replica/console-door.ts): opened once that console stands.
-  if (isHostReplica()) {
+  // A service that keeps no copy has no console (core/replication/kinds/gate.ts keepsNoCopy).
+  if (isHostReplica() && !(await import('../core/replication/kinds/gate.js')).keepsNoCopy()) {
     const bound = httpServer.address()
     const [{ startConsoleDoor }, { verifyReplicaToken }] = await Promise.all([import('../replica/console-door.js'), import('../replica/auth.js')])
     hostConsoleDoor = startConsoleDoor({

@@ -139,11 +139,11 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
   // The row every write reads (the write port's bases, the away routes' checks): the journal's
   // values only, never the session a reader is shown (overlay.ts taskForReaders).
   const shownTask = async (id: string): Promise<TaskRow | null> => {
-    await overlay.refresh(500)
+    await Promise.all([overlay.refresh(500), source.refresh?.(500)])
     return overlay.task(id, await source.task(id)) as TaskRow | null
   }
   const shownBoard = async (taskId: string): Promise<BoardBase | null> => {
-    await overlay.refresh(500)
+    await Promise.all([overlay.refresh(500), source.refresh?.(500)])
     const b = await source.board(taskId)
     const body = overlayBoard(taskId, {
       board: b ? { html: b.html, version: b.version, updated_by: b.updated_by, updated_session_id: b.updated_session_id, html_sources: b.html_sources } : null,
@@ -229,6 +229,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     taskSessions: async (task) => (await import('../web/routes/engine-switch-v1.js')).taskSessionsAnswer(task as never),
     // The tasks whose sessions this host runs and judges read the status derived now, not the copy's.
     ...(opts.hostKey ? { shownStatus: hostAwayStatus(opts.hostKey).current } : {}),
+    ...(source.kind === 'slice' ? { noCopy: true } : {}),
   })
   opts.setRpcAnswer(wsWrites({
     port, sessionHere, linked,
@@ -256,6 +257,7 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
     setSessionLooks(l) { looks = l },
     stop() {
       clearInterval(watch)
+      source.stop?.()
       setCopyWatcher(null)
       installJournalOverlay(null)
       installAwayRequests(null)

@@ -85,7 +85,7 @@ const NOT_SESSION: Record<string, string> = {
   'companion-and-follower': `session.control session.launch session.message session.permission control-result
     launch-result message-result gateway-result leader.control leader.deliver leader.settings follower.gateway
     follower.hello follower.op follower.peer follower.pending follower.permission follower.report follower.send
-    follower.sessions follower.start follower.status follower.trigger.deliver follower.triggers follower.trigger.test`,
+    follower.sessions follower.slice follower.start follower.status follower.trigger.deliver follower.triggers follower.trigger.test`,
 }
 
 type Way = 'gated' | 'legacy-only' | 'host-side' | 'maintenance'

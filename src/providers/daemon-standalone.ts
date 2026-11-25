@@ -817,6 +817,8 @@ const FOLLOWER_ALLOWED_COMMANDS = new Set([
   // sessions here, a message to a running one, the answer to its prompt.
   // Each checks the leader and the session's owner itself.
   'follower.sessions', 'follower.send', 'follower.permission',
+  // The slice of its Walnut, for a service that keeps no copy ('copyless-service-v1'): read only, own Walnut only.
+  'follower.slice',
   // Journal v2 ('journal-v2', 'replica-ops-v1'): the replica's writes while the Mac is
   // away, and its read of what is pending (its overlay). Each is scoped to the follower's
   // own Walnut and checks the leader itself.
@@ -1866,6 +1868,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'follower.status': return cmdFollowerStatus(ws, id as number)
     case 'follower.report': return cmdFollowerReport(ws, cmd)
     case 'follower.sessions': return cmdFollowerSessions(ws, id as number)
+    case 'follower.slice': return cmdFollowerSlice(ws, id as number)
     case 'follower.send': return daemonCommands.run(() => cmdFollowerSend(ws, id as number, cmd))
     case 'follower.permission': return daemonCommands.run(() => cmdFollowerPermission(ws, id as number, cmd))
     case 'follower.op': return daemonCommands.run(() => cmdFollowerOp(ws, id as number, cmd))
@@ -3552,6 +3555,13 @@ function cmdFollowerSessions(ws: ServerWebSocket<WsData>, id: number) {
   const home = followerHomeOf(ws)
   if (!home) return sendError(ws, id, 'follower.sessions: send follower.hello first')
   sendOk(ws, id, followerEntry.sessions(home))
+}
+
+/** The slice of the follower's Walnut, for a service that keeps no copy (follower-entry-core.ts slice). */
+function cmdFollowerSlice(ws: ServerWebSocket<WsData>, id: number) {
+  const home = followerHomeOf(ws)
+  if (!home) return sendError(ws, id, 'follower.slice: send follower.hello first')
+  sendOk(ws, id, followerEntry.slice(home))
 }
 
 /**
@@ -6764,6 +6774,7 @@ const followerSeat: FollowerSeat = (() => {
   return {
     view: admitted(entry.view),
     sessions: admitted(entry.sessions),
+    slice: admitted(entry.slice),
     triggers: admitted(entry.triggers),
     triggerTest: admitted(entry.triggerTest),
     pending: admitted(entry.pending),

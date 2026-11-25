@@ -3724,6 +3724,21 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return !!home && journal.drainableCount(home, drainsOf(home)) > 0
   }
 
+  /**
+   * The slice of `home` as the leader pushed it, for a host's Walnut service that keeps no copy
+   * (`follower.slice`, 'copyless-service-v1'; replica/slice-source.ts): its rows as they came,
+   * never folded with the journal (the service folds `follower.pending` over them, as over a
+   * copy). Lane and environment sessions stay out, as in `sessionsOf`. Null: no slice yet.
+   */
+  function sliceRowsOf(home: string): { host: string; asOf: number; tasks: OfflineSliceTask[]; sessions: OfflineSliceSession[]; requests: OfflineSliceRequest[]; boards: OfflineSliceBoard[]; boardOf: Record<string, string> } | null {
+    const slice = slices.get(home)
+    if (!slice) return null
+    return {
+      host: slice.host, asOf: slice.asOf, tasks: slice.tasks, sessions: slice.sessions.filter((s) => !s.aside),
+      requests: slice.requests, boards: slice.boards ?? [], boardOf: slice.boardOf ?? {},
+    }
+  }
+
   /** The replica's overlay (`follower.pending`): pending records past `sinceSeq` and their blobs. */
   function pendingFor(home: string, sinceSeq: unknown) {
     const out = journal.pending(home, typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq : 0)
@@ -3977,7 +3992,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     /** noteRoutineTask, waiting out another process's journal lock: a routine run's task (clock-host-start-v1). */
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
-    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverTriggerTo, liveSessionsOf, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession, checkTaskStart,
+    pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverTriggerTo, liveSessionsOf, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, sliceRowsOf, noteSession, checkSession, checkTaskStart,
     triggerHolds, triggerHoldsByHome, applyTriggerHolds, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS, CLOSE_NEEDS_SERVER,
     /** The follower's read of this Walnut's triggers here (follower.triggers, follower-triggers-v1). */
     followerTriggers,

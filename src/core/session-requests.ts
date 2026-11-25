@@ -31,6 +31,7 @@ export { REPLY_TO_STATUS, answersLate, type LateAnswerFrom } from './session-req
 // The cap and the retention prune keeps live beside how a copy reads them.
 import { MAX_REQUESTS, SETTLED_RETENTION_MS } from './session-request-retention.js';
 import { DEFAULT_REPLY_TIMEOUT_SECS, IMPLICIT_REPLY_TIMEOUT_SECS, MIN_REPLY_TIMEOUT_SECS, MAX_REPLY_TIMEOUT_SECS, REPLY_TIMEOUT_BY_KIND, clampReplyTimeoutSecs, type ReplyKind } from './sessions/send-rules.js';
+import { unstoredRequests } from './unstored-rows.js';
 
 const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 
@@ -402,7 +403,10 @@ export function installAwayRequests(fn: ((rows: SessionRequest[]) => Promise<Ses
   awayRequests = fn;
 }
 async function readRows(): Promise<SessionRequest[]> {
-  const rows = (await readRequestStore()).requests ?? [];
+  const stored = (await readRequestStore()).requests ?? [];
+  // A service with no copy: the slice's requests are its stored rows (core/unstored-rows.ts).
+  const sliced = unstoredRequests(new Set(stored.map((r) => r.id)));
+  const rows = sliced.length ? stored.concat(sliced) : stored;
   if (!awayRequests) return rows;
   try { return await awayRequests(rows); } catch { return rows; }
 }

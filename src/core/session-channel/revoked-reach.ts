@@ -174,7 +174,7 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   ...rows(ANSWER, words(`control-result launch-result message-result stt-result gateway-result feature.result`), 'cmd:'),
   ...rows(LOCAL_ONLY, words(`mobile-event fill_login fill_code tabs feature.request`), 'cmd:'),
   ...rows(STREAM, words(`stream.lane stream.accept stream.data stream.ack stream.end stream.close stream.resize client.role`), 'cmd:'),
-  ...rows(NOT_THIS_LINK, words(`follower.hello follower.status follower.report follower.sessions follower.send follower.permission
+  ...rows(NOT_THIS_LINK, words(`follower.hello follower.status follower.report follower.sessions follower.slice follower.send follower.permission
     follower.op follower.peer follower.pending follower.triggers follower.trigger.test follower.gateway
     follower.trigger.deliver follower.start session.launch session.control session.permission
     session.message stt bridge.peer leader.witness leader.deliver leader.settings leader.control`), 'cmd:'),

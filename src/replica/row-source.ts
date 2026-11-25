@@ -3,14 +3,17 @@
  * here, so a read and the write it is followed by never see two different tasks.
  *
  *   copy   the copy stores the leader's rounds keep on this host (task store, Board store):
- *          what every host replica with a copy answers from. Its routes read the stores
- *          themselves, so it holds no row a route does not already see (`unstored` is empty).
+ *          what every host replica with a copy answers from, its routes and its write port alike.
+ *   slice  a service that keeps no copy (slice-source.ts): the slice the leader pushed for this
+ *          host's sessions, installed beneath the same stores (core/unstored-rows.ts), so it is
+ *          read by the same code; a task outside it answers `no_copy`.
  *
  * The source gives rows as they are kept; the overlay (overlay.ts) folds this host's pending
  * journal records over them for every reader (away-wiring.ts shownTask, away-reads.ts).
  *
  * `missing` is the source's answer for a write on a task it does not hold: the copy holds every
- * task of the Walnut, so such a task does not exist (`not_found`).
+ * task of the Walnut, so such a task does not exist (`not_found`); the slice holds only this
+ * host's, so such a task needs the leader (`no_copy`).
  */
 import { refusalAnswer, type PortAnswer, type TaskRow } from './write-port.js'
 
@@ -29,15 +32,17 @@ export interface BoardDoc {
 }
 
 export interface RowSource {
-  readonly kind: 'copy'
+  readonly kind: 'copy' | 'slice'
+  /** Read the source again when its rows are older than `maxAgeMs` (the copy is always current). */
+  refresh?(maxAgeMs?: number): Promise<void>
   /** A task as the source keeps it (exact id), or null. */
   task(id: string): Promise<TaskRow | null>
   /** The Board document kept for `taskId`, or null when it has none. */
   board(taskId: string): Promise<BoardDoc | null>
-  /** Rows a read shows that the stores here do not hold. */
-  unstored(): Promise<TaskRow[]>
   /** A write's answer for a task this source does not hold. */
   missing(id: string): PortAnswer
+  /** Stops reading it (the server stops). */
+  stop?(): void
 }
 
 async function copyTask(id: string): Promise<TaskRow | null> {
@@ -65,7 +70,6 @@ export function copyRowSource(): RowSource {
     kind: 'copy',
     task: copyTask,
     board: copyBoard,
-    unstored: async () => [],
     missing: (id) => refusalAnswer('not_found', `Task ${id} not found`),
   }
 }

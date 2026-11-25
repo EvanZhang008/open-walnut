@@ -364,7 +364,8 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   server_delivers: 'Your Mac delivers this message.',
   sessions_unread: 'This host could not read its sessions just now; try again in a moment.',
   not_held: 'This host cannot keep this message for your Mac.',
-  no_copy: 'This host keeps no copy of this Walnut yet.',
+  // Also a host's service that keeps no copy at all (replica/copyless-reads.ts): only its own sessions' rows answer.
+  no_copy: 'This host keeps no copy of your data, so only its own sessions\' tasks answer here.',
   not_running_here: 'That session is not running on this host.',
   companion_leads: 'The cloud companion leads now and routes this message.',
   // A read of a task made on this host while the Mac is away that only the Mac's store answers (away-reads.ts).

@@ -40,7 +40,7 @@ export interface FollowerEntryDeps<L> {
   fs: { statSync(p: string): { mtime: Date } }
   leaderBook: Pick<LeaderBook, 'recordOf' | 'primaryAgeMs' | 'heardSinceBoot' | 'backupLead'>
   offline: Pick<OfflineHost,
-    | 'journalStats' | 'sessionsOf' | 'ownerOf' | 'pendingHandover' | 'deliverHuman' | 'handleFollowerPeer'
+    | 'journalStats' | 'sessionsOf' | 'sliceRowsOf' | 'ownerOf' | 'pendingHandover' | 'deliverHuman' | 'handleFollowerPeer'
     | 'handleFollowerWaiting' | 'followerTriggers' | 'followerTriggerTest' | 'pendingFor' | 'checkTaskStart'
     | 'checkSession' | 'noteSessionWaiting' | 'noteSession' | 'noteRoutineTask'>
   hostStart: HostStart
@@ -179,6 +179,14 @@ export function createFollowerEntry<L>(deps: FollowerEntryDeps<L>) {
       return { ...s, state: !running ? 'stopped' : live!.foldState?.turnActive ? 'working' : 'idle', ...(prompt ? { prompt } : {}), ...(lastActiveAt ? { lastActiveAt } : {}) }
     })
     return { host: copy.host, asOf: copy.asOf, sessions: list }
+  }
+
+  /**
+   * The slice of its Walnut as the leader pushed it, for a service that keeps no copy
+   * ('copyless-service-v1', replica/slice-source.ts): the rows its reads and writes take.
+   */
+  function slice(home: string): Record<string, unknown> {
+    return offline.sliceRowsOf(home) ?? { host: '', asOf: null, tasks: [], sessions: [], requests: [], boards: [], boardOf: {} }
   }
 
   /** A follower's write is for a session of its Walnut, while no server answers that Walnut. */
@@ -394,7 +402,7 @@ export function createFollowerEntry<L>(deps: FollowerEntryDeps<L>) {
   }
 
   return {
-    view, report, sessions, send, permission, triggerDeliver, peer, op, triggers, triggerTest, pending, start, recoverPendingAsks,
+    view, report, sessions, slice, send, permission, triggerDeliver, peer, op, triggers, triggerTest, pending, start, recoverPendingAsks,
     primaryAnswers, quietWithFollower, mayWrite, followerQuietMs,
   }
 }

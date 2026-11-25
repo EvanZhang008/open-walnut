@@ -4,7 +4,8 @@
  *
  *   keepsCopies(kind)  the full replica program on a host (D13's per-host
  *                      opt-in, server-role.ts isHostReplicaProgram) keeps every
- *                      kind; the companion keeps COMPANION_COPY_KINDS
+ *                      kind, unless its spec says it keeps none (keepsNoCopy);
+ *                      the companion keeps COMPANION_COPY_KINDS
  *                      (docs/plan/walnut-companion-unified-replica.md, stage 2).
  *                      The plain host server (the default program and the
  *                      daemon's crash-loop fallback) and the leader answer every
@@ -38,8 +39,22 @@ export const COMPANION_COPY_KINDS: ReadonlySet<string> = new Set([
   'requests', 'routines', 'prefs', 'personas', 'boards', 'config', 'inbox', 'inbox-bodies', 'sessions',
   'conversations', 'conversation-bodies', 'model-catalogs', 'stt-vocab', 'notifications'])
 
+/**
+ * The follower spec's word that this host's Walnut service keeps no copy of the leader's data
+ * (host-server/manager.ts writes it for a host too small for one, or turned off): the leader sends
+ * it no copies, its reads take the slice (replica/slice-source.ts), and every other read while the
+ * leader is away answers `needs_leader {why:'no_copy'}` (replica/copyless-reads.ts).
+ */
+export const COPIES_ENV = 'WALNUT_COPIES'
+
+/** This host replica keeps no copy at all (its spec said WALNUT_COPIES=none). */
+export function keepsNoCopy(): boolean {
+  return process.env[COPIES_ENV] === 'none' && isHostReplicaProgram()
+}
+
 /** This server keeps copies (no kind), or the copy of `kind`. */
 export function keepsCopies(kind?: string): boolean {
+  if (keepsNoCopy()) return false
   if (isHostReplicaProgram()) return true
   if (followerKind() !== 'companion') return false
   return kind === undefined || COMPANION_COPY_KINDS.has(kind)

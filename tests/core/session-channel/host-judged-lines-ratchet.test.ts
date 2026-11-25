@@ -38,6 +38,7 @@ const FOLLOWER_COMMANDS: Record<string, { writes: boolean; why: string }> = {
   'read-history': { writes: false, why: 'a read' },
   'markers.find': { writes: false, why: 'a read' },
   'follower.sessions': { writes: false, why: 'a read of this Walnut\'s sessions here' },
+  'follower.slice': { writes: false, why: 'a read of the slice the leader pushed for this Walnut' },
   'follower.send': { writes: true, why: 'a plain note into a running session' },
   'follower.permission': { writes: true, why: 'the answer to a prompt: the turn goes on' },
   'follower.op': { writes: false, why: 'a journaled write of the Walnut\'s data, never a CLI line' },

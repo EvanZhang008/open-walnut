@@ -1232,6 +1232,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // caller, into the record's `placement.inheritedProject`, which this host's readers show and every
   // drain ignores (the leader files the task under its caller where the caller is then). Optional: without it the follower journals no inherited project, as before.
   'follower-create-inherited-v1',
+  // 'copyless-service-v1' (follower-entry-core.ts slice, replica/slice-source.ts): `follower.slice`
+  // answers the slice the leader pushed for the follower's Walnut (its sessions here, their tasks,
+  // Boards and requests) as it came, never folded with the journal, so a Walnut service that keeps
+  // no copy of the leader's data (WALNUT_COPIES=none) reads and writes its own sessions' rows from
+  // it. Optional: without it the leader keeps such a host as it is (a daemon, its gate shown).
+  'copyless-service-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

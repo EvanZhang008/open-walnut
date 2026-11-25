@@ -57,6 +57,7 @@ function rig(over: Partial<Record<keyof FollowerSeat, (...a: never[]) => unknown
   const seat = {
     view: vi.fn(fn('view', () => set.view)),
     sessions: vi.fn(fn('sessions', () => ({ host: 'devbox', asOf: 5, sessions: [] }))),
+    slice: vi.fn(fn('slice', () => ({ host: 'devbox', asOf: 5, tasks: [], sessions: [], requests: [], boards: [], boardOf: {} }))),
     triggers: vi.fn(fn('triggers', () => ({ triggers: [] }))),
     pending: vi.fn(fn('pending', () => ({ records: [], seq: 0 }))),
     triggerTest: vi.fn(fn('triggerTest', () => ({ ok: true, result: { tested: true } }))),
@@ -178,7 +179,7 @@ describe('the states', () => {
 
 describe('request(): the follower\'s own commands are calls of the seat', () => {
   const CASES: Array<[string, keyof FollowerSeat]> = [
-    ['follower.status', 'view'], ['follower.sessions', 'sessions'], ['follower.triggers', 'triggers'], ['follower.pending', 'pending'],
+    ['follower.status', 'view'], ['follower.sessions', 'sessions'], ['follower.slice', 'slice'], ['follower.triggers', 'triggers'], ['follower.pending', 'pending'],
     ['follower.send', 'send'], ['follower.permission', 'permission'], ['follower.peer', 'peer'], ['follower.op', 'op'],
     ['follower.trigger.test', 'triggerTest'], ['follower.start', 'start'],
   ]
@@ -189,7 +190,7 @@ describe('request(): the follower\'s own commands are calls of the seat', () => 
     expect(reply.ok).toBe(true)
     const call = (r.seat[fn] as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)!
     expect(call[0]).toBe(HOME)
-    if (fn !== 'view' && fn !== 'sessions') expect(call[1]).toEqual({ sid: 's1', args: { a: [1, { b: 2 }] }, cmd })
+    if (fn !== 'view' && fn !== 'sessions' && fn !== 'slice') expect(call[1]).toEqual({ sid: 's1', args: { a: [1, { b: 2 }] }, cmd })
     expect(r.client.sent).toEqual([])
     expect(r.client.asked.length).toBe(asked)
   })

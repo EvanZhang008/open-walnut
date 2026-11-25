@@ -77,7 +77,12 @@ export interface AwayReadsDeps {
   hostSessions?(): Promise<HostSessionsNow | null>
   /** The user status shown now for the tasks whose sessions this host runs (away-status.ts); absent: as the copy says. */
   shownStatus?(): Promise<ReadonlyMap<string, UserStatus>>
+  /** A service that keeps no copy (kinds/gate.ts keepsNoCopy): its status says so, and a task list says whose tasks it holds. */
+  noCopy?: boolean
 }
+
+/** What a task list answered without a copy says of its rows (task_list shows it as `visibility_note`). */
+export const NO_COPY_LIST_NOTE = 'Your Mac is away and this host keeps no copy of your data: only the tasks of the sessions on this host (with their parents and children) are listed.'
 
 type Row = Record<string, unknown> & { id: string }
 
@@ -436,6 +441,7 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
             return json(out)
           }
           if (Array.isArray(out.tasks)) {
+            if (deps.noCopy && LIST_PATHS.has(path)) out.visibility_note = typeof out.visibility_note === 'string' && out.visibility_note ? `${out.visibility_note} ${NO_COPY_LIST_NOTE}` : NO_COPY_LIST_NOTE
             const fromCopy = new Set((out.tasks as Row[]).map((r) => r?.id))
             const tasks = overlayList(req, out.tasks as Row[], deps.overlay).map((r) => (r && typeof r.id === 'string' ? withShownStatus(r, shown) : r))
             out.tasks = tasks

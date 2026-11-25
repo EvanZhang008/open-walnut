@@ -51,6 +51,7 @@ type Called = { ok: true; result: Params } | { ok: false; error: string; extra?:
 export const FOLLOWER_CALLS: Record<string, { answer: boolean; call: (seat: FollowerSeat, home: string, cmd: Params) => Called | Promise<Called> }> = {
   'follower.status': { answer: false, call: (seat, home) => seat.view(home) },
   'follower.sessions': { answer: false, call: (seat, home) => seat.sessions(home) },
+  'follower.slice': { answer: false, call: (seat, home) => seat.slice(home) },
   'follower.triggers': { answer: false, call: (seat, home, cmd) => seat.triggers(home, cmd) },
   'follower.pending': { answer: false, call: (seat, home, cmd) => seat.pending(home, cmd) },
   'follower.send': { answer: true, call: (seat, home, cmd) => seat.send(home, cmd) },
