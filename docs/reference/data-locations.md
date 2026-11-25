@@ -146,7 +146,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/.walnut-obsidian-search/` | rebuildable | no | Semantic index of the notes, rebuilt from the notes |
 | `~/.open-walnut/.smart-env/` | rebuildable | no | A notes app plugin's embeddings, rebuilt by it |
 | `~/.open-walnut/.git/` | leader-data | no | Git sync's history of the synced files: the only history when no data remote is configured |
-| `~/.open-walnut/.gitignore` | leader-data | no | Git sync's ignore list: the template plus any rule of the user's, so it moves with .git (a boot writes back a missing one from HEAD, else the template) |
+| `~/.open-walnut/.gitignore` | leader-data | no | Git sync's ignore list: the template plus any rule of the user's, so it moves with .git (a missing one is written back from the git sync template at boot and before every add) |
 | `~/.open-walnut/logs/` | rebuildable | no | Log files left in the home |
 | `~/.open-walnut/hook-errors.log` | rebuildable | no | Hook error log |
 | `~/.open-walnut/cache/applied-ops.sqlite` | leader-data | no | Offline-merge ledger of ops already applied, so none applies twice |

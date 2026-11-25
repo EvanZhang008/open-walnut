@@ -401,18 +401,38 @@ preflight passed, the final batch was cut at the deadline, and nobody led for 6 
 
 So the preflight's last step (`POST /api/leader/switch/catch-up`, `catch-up.ts`) has the leader, still serving,
 take its own standby batches back to back (the standby runner's: one under way is joined) until one takes at
-most **a quarter of the commit window** (75 s of 300 s). That batch's time is about what the final batch will
+most **the budget B** the switch's timeline leaves a batch. That batch's time is about what the final batch will
 take: the runner keeps batching meanwhile, so the final batch carries the writes of about one batch and its
-interval. A batch that found nothing changed counts by its time too: the final batch ends on such a pass. The rest of the window is for the stop's teardown and the writers' settle (up to 30 s), the final
-batch's verify and mark, the promotion and the trial start (about 20 s on a 20 GB home), and a final batch up
-to three times the steady one. Refused, with the batches' times and sizes, when:
+interval. A batch that found nothing changed counts by its time too: the final batch ends on such a pass.
+
+The commit window W runs from the handover to the new leader's commit, and the final batch's deadline is that
+commit deadline, so every step after the handover is in it:
+
+| Term | Time | Where |
+|---|---|---|
+| the new leader's job says it sees the handover | up to 30 s | `source-job.ts` |
+| the last look before the stop (below) | at most B | `catch-up.ts` `lastLook` |
+| the stop's teardown before its final batch | 10 s (bounded by its shutdown steps, 7 s; measured 0.1 to 1.3 s at a load of 70) | `server.ts` `stopServer` |
+| this server's writers settle | up to 30 s (at most W / 10) | `server.ts` `SWITCH_STOP_SETTLE_MS` |
+| the final batch: a pass with what came, one for a late writer's last write, the unchanged pass | 3 B | `final-stop.ts` |
+| the new leader's promote, trial and commit | 30 s (about 15 s at 20 GB between machines) | `target-job.ts` |
+
+So B = (W - 100 s) / 4: **50 s of 300 s**. A window of 100 s or less leaves no batch any time, and every switch
+is refused here. Refused, with the batches' times and sizes, when:
 
 - no batch takes at most the budget within one commit window of catching up (a batch still running then is not
   waited for: it goes on in the background, the leader keeps serving);
-- two batches in a row are over the budget and the later one is not shorter (the writes outpace the link);
+- two batches in a row are over the budget and the later one grew by a tenth or more (the writes outpace the
+  link), or both found nothing changed (the walk of the home alone is over it);
 - three rounds in a row are void (each the runner's batch with its own retries; a second apart);
 - the leader takes no standby batches, or a history rewrite or gc of the data repo runs (minutes; the stop
   would end it part way).
+
+**The last look.** The leader may still write between the catch-up and its stop (a large recording, an import,
+while the new leader's job gets ready). So the switch stop (`POST /api/leader/switch/final-stop`) takes the same
+rule again, within one budget, before it answers: a standby that fell behind refuses the stop with nothing
+stopped and the doors never closed, and the source job takes the handover back (the old leader leads again at
+once). Without it, a final batch past the window would roll back only at the commit deadline.
 
 A refusal here stops nothing: no handover record, the doors stay open; run the switch again once the copy is
 current (the periodic batches keep sending).
@@ -449,13 +469,30 @@ ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
    already past its check), which the final batch's next pass carries:
    `tests/core/leader/switch/switch-stop-writers-ratchet.test.ts` classifies each stop of `stopServer`
    that is not awaited and pins every git child and fork outside `git-sync.ts`, and fails on a new one.
+   The leader's clocks and event writers that no stop of `stopServer` reaches (started with their handle
+   thrown away, `void import(...).then(m => m.startX())`, or run on a host link's events) stop as one at
+   the same moment: `stopWritersForSwitch` first calls `stopLeaderClocks()` (`src/lib/leader-clocks.ts`),
+   and each of them asks `homeWritesStopped()` at the top of its tick or handler. Among them: the
+   delivery retry (the session queue, every 60 s), the session requests sweep (every 60 s), the PR watch
+   (tasks, every 30 s while CI runs), usage collect, the held and coalesced notices, the user asks, the
+   offline journal's handover and every unsolicited event of a host link (replies to this server's own
+   commands and the copy link's streams still come in). A host keeps what it sent (its journal, its
+   retries) for the next leader. The same ratchet finds every `setInterval` and `runPeriodic` under
+   `src/` and every module `web/server.ts` starts with a `start*` function, wherever they are
+   (`tests/core/leader/switch/clock-table.ts`): each is gated, stopped before the final batch, or writes
+   no leader data, and a new one fails until it is classified.
+   `tests/core/leader/switch/final-batch-live-writers.test.ts` runs the real delivery retry (a row whose
+   delivery keeps failing) and the real PR watch (a running CI) beside real final batches: with the gate
+   off the home changes at every batch and the window ends in a refusal; with it the second batch finds
+   nothing changed.
 3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
    void batch is tried again after 250 ms; one the target refuses while it applies this server's last
    periodic batch, after 1 s), bounded by the commit deadline, then a verify pass. A writer that lands
    after one batch is in the next: the mark names only a batch that found nothing changed. Out of time,
    its reason says which: the final batch did not finish within the window (what it had to carry was too
    much for the link), or the home still changed at the deadline, by this server's own writer named
-   (past its budget) or else by a writer this server does not run.
+   (past its budget) or else by a writer the stop did not end (a write already past its gate, or
+   another process on this machine).
 4. **The final mark** goes over the copy link into the target's `standby_dir/switch/` (the
    batch number, `stoppedAt`); the result also goes beside the old home's switch state
    (`local/leader-switch/final-stop.json`, machine data, never batched), for the source job.
