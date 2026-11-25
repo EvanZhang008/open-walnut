@@ -17,6 +17,7 @@ import type {
   TurnSnapshotListResult, TurnSnapshotDiffResult, TurnSnapshotRestoreResult,
 } from '../../providers/turn-snapshot-core.js'
 import type { TurnGuardResult, TurnGuardSibling } from '../../providers/turn-guard-core.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const TURN_SNAPSHOT_CAPABILITY = 'turn-snapshot-v1'
 
@@ -69,7 +70,7 @@ async function capableConnection(record: SessionRecord): Promise<{ conn: Conn | 
     if (conns.length === 0 && dialed && dialed.connected !== false) conns = [dialed]
   }
   if (conns.length === 0) return { conn: null, reason: 'no_daemon' }
-  const able = conns.find((c) => c.hasCapability(TURN_SNAPSHOT_CAPABILITY))
+  const able = conns.find((c) => needCapability(c, TURN_SNAPSHOT_CAPABILITY))
   return able ? { conn: able } : { conn: null, reason: 'daemon_upgrade' }
 }
 

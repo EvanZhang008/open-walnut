@@ -13,10 +13,11 @@
  * (DaemonConnection.shouldUpgradeDaemon) and the host network (decideNetUpdate), whether
  * the host runs the daemon or its one Walnut service. Not held by it:
  *   - a host with no daemon (that is a start, not a replacement);
- *   - an update someone asked for (host_daemon_update, on either path);
+ *   - an update someone asked for (host_daemon_update, on either path), until that build runs there;
  *   - an update past the 3 h bound (daemon-update-behind.ts), which every hold gives way to;
- *   - a capability this server asked the connection for that this build's daemon has and the
- *     running one lacks (UpdateGapHold.need): the held update is decided again at once.
+ *   - a capability a feature here needs and refuses or degrades without (needCapability,
+ *     daemon-capability-need.ts; a missing required one at the handshake), which this build's
+ *     daemon has and the running one lacks: the held update is decided again at once.
  * One build is held one gap at most in all: a daemon that keeps restarting (a crash loop)
  * always looks young, and the build that would fix it must still go out.
  * WALNUT_DAEMON_UPDATE_MIN_GAP_MS sets the gap; 0 turns the hold off.
@@ -68,7 +69,7 @@ export function daemonUpdateGapWhy(ageMs: number, waitMs: number, o: { host: str
 
 /** The words for an update the gap no longer holds because this server needs `cap`. */
 export function capabilityNeedWhy(cap: string): string {
-  return `this server needs ${cap}, which this build's daemon has and the running one lacks, so the update no longer waits for the gap`
+  return `a feature here needs ${cap}, which this build's daemon has and the running one lacks, so the update no longer waits for the gap`
 }
 
 /**
@@ -94,14 +95,16 @@ export interface GapFacts {
   heldForMs?: number
   /** Past the 3 h bound (daemon-update-behind.ts). */
   overdue?: boolean
-  /** A capability this server asked for that the running daemon lacks (UpdateGapHold.need). */
+  /** A capability a feature here needs that the running daemon lacks (needCapability, a missing required one). */
   needs?: string | null
+  /** Someone asked for this build (host_daemon_update): the gap no longer holds it. */
+  asked?: boolean
   now?: number
 }
 
 /** Whether the gap holds this update now: how long, until when, and its words; null = it goes. Pure. */
 export function daemonUpdateGapHold(f: GapFacts): { waitMs: number; until: number; why: string } | null {
-  if (f.overdue || f.needs) return null
+  if (f.overdue || f.needs || f.asked) return null
   const waitMs = daemonUpdateWaitMs(f.ageMs, f.gapMs, f.heldForMs ?? 0)
   if (waitMs <= 0) return null
   const now = f.now ?? Date.now()
@@ -110,18 +113,21 @@ export function daemonUpdateGapHold(f: GapFacts): { waitMs: number; until: numbe
 
 /**
  * The gap's state on one connection, for both paths (DaemonConnection owns one and hands it to
- * its NetDaemonUpdater): since when a build has been held (one gap at most in all, kept for
- * that build once it passed), whether the gap holds it now, and a capability need noted once.
+ * its NetDaemonUpdater): since when a build has been held (one gap at most in all, kept for that
+ * build once it passed), whether the gap holds it now, the build someone asked for (it goes past
+ * the gap until it runs there or another build is expected), and a capability a feature needs
+ * that the running daemon lacks (noted once per running build).
  */
 export class UpdateGapHold {
   private build: { expected: string; since: number } | null = null
   private holding: { expected: string; until: number } | null = null
-  private needed: { expected: string; cap: string } | null = null
+  private needed: { running: string; cap: string } | null = null
+  private askedFor: string | null = null
 
-  /** Decide the gap for `expected` (the pure rule above, with this build's held time and need). */
-  decide(expected: string, f: Omit<GapFacts, 'heldForMs' | 'needs'>): { waitMs: number; until: number; why: string } | null {
+  /** Decide the gap for `expected`, with this build's held time, its ask, and the running build's need. */
+  decide(expected: string, f: Omit<GapFacts, 'heldForMs' | 'needs' | 'asked'> & { running: string | null }): { waitMs: number; until: number; why: string } | null {
     const now = f.now ?? Date.now()
-    const hold = daemonUpdateGapHold({ ...f, now, heldForMs: this.heldForMs(expected, now), needs: this.needs(expected) })
+    const hold = daemonUpdateGapHold({ ...f, now, heldForMs: this.heldForMs(expected, now), needs: this.needs(f.running), asked: this.asked(expected) })
     if (hold) this.held(expected, hold.until, now)
     else this.release()
     return hold
@@ -141,26 +147,31 @@ export class UpdateGapHold {
   /** The gap no longer holds it (the update went, the host runs this build, or another hold decides now). */
   release(): void { this.holding = null }
 
-  /** Whether the gap holds an update now; read on every capability miss, so fields only. */
+  /** Whether the gap holds an update now; fields only. */
   get holds(): boolean { return this.holding !== null }
 
   /** Until when the gap holds it (ms epoch); null when it does not. */
   get until(): number | null { return this.holding?.until ?? null }
 
-  /** The capability noted for `expected`, if any. */
-  needs(expected: string): string | null {
-    return this.needed?.expected === expected ? this.needed.cap : null
+  /**
+   * Someone asked for `expected` (host_daemon_update): every later decision of that build goes past
+   * the gap, so an ask a safety hold put off (an open ACP turn) is not then held for up to 2 h.
+   */
+  ask(expected: string): void { this.askedFor = expected }
+  asked(expected: string): boolean { return this.askedFor === expected }
+
+  /** The capability noted while `running` runs there, if any. */
+  needs(running: string | null | undefined): string | null {
+    return running && this.needed?.running === running ? this.needed.cap : null
   }
 
   /**
-   * The connection was asked for `cap` and its daemon lacks it. True once per held build when
-   * this build's daemon has it: the caller decides the update again now. Cheap: a capability
-   * check runs on many paths, often each time.
+   * A feature here needs `cap` and the daemon running `running` lacks it. True the first time per
+   * running build when this build's daemon has it: the caller decides a held update again now.
    */
-  need(cap: string): boolean {
-    const held = this.holding
-    if (!held || this.needed?.expected === held.expected || !capabilityByBuild(cap)) return false
-    this.needed = { expected: held.expected, cap }
+  need(cap: string, running: string | null | undefined): boolean {
+    if (!running || this.needed?.running === running || !capabilityByBuild(cap)) return false
+    this.needed = { running, cap }
     return true
   }
 }

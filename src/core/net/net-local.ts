@@ -9,6 +9,7 @@ import crypto from 'node:crypto'
 import { NetError } from './net-error.js'
 import { newInviteCode } from './net-store.js'
 import { encodeTicket, ticketCommand, ticketWindowsCommand } from './join-ticket.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 const TTL_MS = 10 * 60_000
 const HOME_RELAY_WAIT_MS = 8_000
@@ -58,7 +59,7 @@ function pushInvites(local: Daemon): Promise<void> {
 }
 
 export async function makeLocalInvite(local: Daemon, input: { macId: string; relayMode: 'public' | 'none'; name?: string }): Promise<{ id: string; link: string; command: string; windowsCommand?: string; expiresAt: number }> {
-  if (!local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon cannot take machines in without a companion yet; restart Walnut to update it.")
+  if (!needCapability(local, 'net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon cannot take machines in without a companion yet; restart Walnut to update it.")
   // walnut-net holds at most MAX_OPEN; one more would show a link that can never work.
   if ([...pending.values()].filter((p) => Date.now() <= p.expiresAt + KEEP_AFTER_MS).length >= MAX_OPEN) {
     throw new NetError(429, 'too_many_invites', 'Too many links are open; wait until one is used or ends (10 minutes).')

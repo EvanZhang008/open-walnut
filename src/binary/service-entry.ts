@@ -236,6 +236,8 @@ export interface StopFollowerDeps {
   killGroup?: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void
   exists?: (pid: number) => boolean
   unknownRetryMs?: number
+  /** Who stops them and whose followers they are, for the stderr line (default: a service start, an older daemon's). */
+  says?: { by: string; whose: string }
 }
 
 /**
@@ -258,7 +260,7 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
     })
     if (stopped !== 'none') {
       const what = stopped === 'stays' ? 'did not stop' : stopped === 'unknown' ? 'may still run (its start time did not read); its pid file is kept' : 'was stopped'
-      process.stderr.write(`walnut --service: the follower an older daemon started ${what}\n`)
+      process.stderr.write(`${deps.says?.by ?? 'walnut --service'}: the follower ${deps.says?.whose ?? 'an older daemon'} started ${what}\n`)
     }
     if (stopped === 'stays' || stopped === 'unknown') return false
   }

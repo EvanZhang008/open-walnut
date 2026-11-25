@@ -56,8 +56,10 @@ export interface NetUpdateFacts {
   gapHeldForMs?: number
   /** Past the 3 h bound (daemon-update-behind.ts): the gap gives way, as every hold does. */
   overdue?: boolean
-  /** A capability this server asked for that the running daemon lacks (UpdateGapHold.need): the gap gives way. */
+  /** A capability a feature here needs that the running daemon lacks (UpdateGapHold.need): the gap gives way. */
   capNeeded?: string | null
+  /** Someone asked for this build earlier (UpdateGapHold.ask): an automatic try of it goes past the gap too. */
+  gapAsked?: boolean
   /** A switch of the host's mode alone is due (one-service-mode.ts serviceModeDue): an update on the current build. */
   modeDue?: boolean
   /** Looked up only when everything above allows an update: undefined = not yet. */
@@ -109,7 +111,7 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
   }
   // The gap is between builds (as on the SSH path): a switch of the mode alone does not wait for it.
   const gap = f.requested || f.running === f.expected ? null : daemonUpdateGapHold({
-    host: f.host, ageMs: f.daemonAgeMs, gapMs: f.minGapMs ?? 0, heldForMs: f.gapHeldForMs ?? 0, overdue: f.overdue, needs: f.capNeeded, now: f.now,
+    host: f.host, ageMs: f.daemonAgeMs, gapMs: f.minGapMs ?? 0, heldForMs: f.gapHeldForMs ?? 0, overdue: f.overdue, needs: f.capNeeded, asked: f.gapAsked, now: f.now,
   })
   if (gap) return { go: false, skip: 'recent', why: gap.why, retryInMs: gap.waitMs, until: gap.until }
   if (f.target === undefined || f.source === undefined) return { go: 'lookup' }

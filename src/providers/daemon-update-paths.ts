@@ -131,7 +131,8 @@ export function netDaemonUpdateTurnedOff(env: Record<string, string | undefined>
  */
 export function daemonUpdateHowSentence(
   kind: DaemonLinkKind, name: string,
-  opts: { env?: Record<string, string | undefined> } = {},
+  /** `host`: the host's alias, for the op that updates it now (host_daemon_update takes the alias, not the label). */
+  opts: { env?: Record<string, string | undefined>; host?: string } = {},
 ): string {
   switch (kind) {
     case 'local': return 'Walnut updates this machine\'s daemon itself when it starts: restart Walnut to update it'
@@ -142,6 +143,6 @@ export function daemonUpdateHowSentence(
       return `Walnut updates the daemon on ${name} by itself after a deploy (unless its automatic fixes are off), or ${ask} to do it now`
     }
     case 'direct-url': return 'This is a test daemon reached by its URL: the test that started it owns its build'
-    case 'ssh': return `Walnut updates the daemon on ${name} by itself over SSH, and a feature that needs the newer daemon starts that update`
+    case 'ssh': return `Walnut updates the daemon on ${name} by itself over SSH (at most once every 2 hours; a feature that needs the newer daemon starts it sooner), or host_daemon_update ${opts.host ?? name} does it now`
   }
 }

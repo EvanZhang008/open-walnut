@@ -769,8 +769,10 @@ SSH and the host network, whether the host runs the daemon or its one Walnut ser
 host's status and `host_get` (the daemon row's `expected` and `update`) say why and until when. One build
 is held one gap at most in all (a crash loop always looks young), and a held update is decided again every
 15 minutes so the 3 hour bound below keeps its clock. Not held: a host with no daemon (a start); an update
-past the 3 hour bound; a capability this server asks the connection for that this build's daemon has and
-the running one lacks (decided again at once, once per build); and an update someone asks for.
+past the 3 hour bound; a capability a feature refuses or degrades without (`needCapability`,
+`src/providers/daemon-capability-need.ts`; a plain `hasCapability` is only a read) or a required one the
+handshake misses, which this build's daemon has and the running one lacks (decided again at once, once per
+running build); and an update someone asked for, which stays asked for its build until it runs there.
 
 To have it now (a task that just fixed host-side code): `host_daemon_update <host>` (POST
 `/api/v1/hosts/:host/daemon-update`), for an SSH host and a host network machine alike. It goes past the

@@ -226,12 +226,28 @@ describe('NetDaemonUpdater', () => {
     expect(u.state.at).toBeGreaterThan(at)
     expect(u.state.skip).toBe('recent')
     // This server asks for something the running daemon lacks: decided now, past the gap.
-    expect(gap.need('snapshot-v1')).toBe(true)
+    expect(gap.need('snapshot-v1', conn.daemonVersion)).toBe(true)
     u.schedule(0)
     await vi.advanceTimersByTimeAsync(100)
     expect(u.state.phase).toBe('updated')
     expect(update).toHaveBeenCalledTimes(1)
     expect(gap.holds).toBe(false)
+    u.stop()
+  })
+
+  // Review r1, high 1: an ask an open ACP turn put off is not then held by the gap.
+  it('asked, put off by an open turn on a young daemon, goes by itself once the turn ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    let busy: string | null = 'ACP turns are open'
+    const conn = link({ daemonStartedAt: Date.now() - 10 * 60_000 })
+    const { u, update } = updater({ minGapMs: 2 * 3600_000, busy: async () => busy }, conn)
+    const answer = u.request(1_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await answer).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open' })
+    busy = null
+    await vi.advanceTimersByTimeAsync(60)
+    expect(u.state.phase).toBe('updated')
+    expect(update).toHaveBeenCalledTimes(1)
     u.stop()
   })
 

@@ -33,6 +33,7 @@ import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { createGitStatus, type GitRepoStatus } from '../providers/git-diff-core.js';
 import { memoryPressureShedding } from './memory-pressure.js';
+import { needCapability } from '../providers/daemon-capability-need.js'
 
 export type { GitRepoStatus } from '../providers/git-diff-core.js';
 
@@ -192,7 +193,7 @@ const defaultDeps: Deps = {
       }
     } catch { conn = null; }
     if (!conn) return 'host_offline';
-    if (!conn.hasCapability('git-status-v1')) return 'daemon_needs_upgrade';
+    if (!needCapability(conn, 'git-status-v1')) return 'daemon_needs_upgrade';
     const res = await conn.send('git.status', { dirs }, RPC_TIMEOUT_MS);
     if (!res.ok || !Array.isArray(res.repos)) throw new Error(typeof res.error === 'string' ? res.error : 'git.status failed');
     return res.repos as GitRepoStatus[];

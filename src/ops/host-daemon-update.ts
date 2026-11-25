@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { sinceTime } from '../providers/daemon-update-wait.js';
 
 const NEXT: Record<string, string> = {
   running: 'Call host_daemon_update again in a few minutes to see how it went; the host reconnects on the new build by itself.',
@@ -37,7 +38,8 @@ defineOp({
     const b = (body ?? {}) as Record<string, unknown>
     const phase = typeof b.phase === 'string' ? b.phase : 'unknown'
     const builds = typeof b.expected === 'string' && b.running !== b.expected ? ` [runs ${typeof b.running === 'string' ? b.running : 'unknown'}, this server's build ${b.expected}]` : ''
-    const until = typeof b.until === 'number' ? ` until ${new Date(b.until).toISOString()}` : ''
+    // The head in this server's own time (as every update wait says it); `until` stays ms epoch in the data.
+    const until = typeof b.until === 'number' ? ` until ${sinceTime(b.until)}` : ''
     const head = `${String(b.host)}: ${phase}${until}${typeof b.message === 'string' && b.message ? ` (${b.message})` : ''}${builds}.`
     return withOutcome(b, head, NEXT[phase] ?? 'Ask again to see how it went.')
   },

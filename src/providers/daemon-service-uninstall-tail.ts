@@ -40,13 +40,18 @@ export interface UninstallTailInput {
   stopFollowers?: (pidFiles: string[]) => Promise<boolean>
 }
 
-/** Stop the followers the service's pid files name; a line on stderr when one may still run. */
+/**
+ * Stop the followers the service's pid files name; a line on stderr when one may still run. On the
+ * default set this also stops the followers of other Walnut homes the same daemon service started
+ * (their pid files share its state dir): that daemon is being uninstalled anyway, and they would run
+ * on with no parent.
+ */
 async function stopFollowersOf(root: string, o: UninstallTailInput): Promise<void> {
   const dir = path.join(root, HOST_SERVER_STATE_DIR)
   const names = await fs.readdir(dir).catch(() => [] as string[])
   const pidFiles = names.filter((n) => /^server-.*\.pid$/.test(n)).map((n) => path.join(dir, n))
   if (!pidFiles.length) return
-  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files))
+  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files, { says: { by: 'walnut daemon uninstall', whose: 'the service' } }))
   const stopped = await stop(pidFiles).catch(() => false)
   if (!stopped) o.say(`walnut daemon: a follower of the service may still run (its pid file in ${dir} is kept)\n`)
 }

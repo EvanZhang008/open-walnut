@@ -15,6 +15,7 @@
 import { workspaceProviderCatalog, GIT_WORKTREE_ID } from './registry.js'
 import { log } from '../../logging/index.js'
 import { WALNUT_HOME } from '../../constants.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const WORKSPACE_CAPABILITY = 'workspace-v1'
 /** Project scripts: `workspace.scriptsFile` and `workspace.runScript` (scripts.ts). */
@@ -74,7 +75,7 @@ export function __setWorkspaceConnectionForTesting(fn: ((host: string) => Promis
 
 async function connect(host: string): Promise<WorkspaceConn> {
   const conn = await connectionFor(host)
-  if (!conn.hasCapability(WORKSPACE_CAPABILITY)) {
+  if (!needCapability(conn, WORKSPACE_CAPABILITY)) {
     throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can make workspaces.`, 409, 'daemon-upgrade')
   }
   return conn
@@ -101,11 +102,11 @@ async function push(conn: WorkspaceConn, host: string): Promise<string> {
  */
 export async function workspaceRpc(host: string, cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
   const conn = await connect(host)
-  if (SCRIPT_COMMANDS.has(cmd) && !conn.hasCapability(WORKSPACE_SCRIPTS_CAPABILITY)) {
+  if (SCRIPT_COMMANDS.has(cmd) && !needCapability(conn, WORKSPACE_SCRIPTS_CAPABILITY)) {
     throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can run project scripts.`, 409, 'daemon-upgrade')
   }
   // An older daemon ignores `recheck` and would answer by ancestry alone: never send it there.
-  if (params.recheck === true && !conn.hasCapability(WORKSPACE_RECHECK_CAPABILITY)) {
+  if (params.recheck === true && !needCapability(conn, WORKSPACE_RECHECK_CAPABILITY)) {
     throw new WorkspaceError(`The Walnut daemon on ${hostLabel(host)} needs an update before it can check again whether a kept workspace was merged.`, 409, 'daemon-upgrade')
   }
   const provider = typeof params.provider === 'string' ? params.provider : undefined

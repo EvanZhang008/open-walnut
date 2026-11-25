@@ -20,6 +20,7 @@ import { descriptorAdapterEnv } from '../../providers/acp-worker/adapter-env.js'
 import { hostDisplayName } from '../hosts/host-display-name.js'
 import { notSignedInSentence } from './engine-sign-in-words.js'
 import { log } from '../../logging/index.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const ENGINE_SIGN_IN_CAPABILITY = 'engine-sign-in-v1'
 const LOCAL_HOST = '__local__'
@@ -103,7 +104,7 @@ async function ask(host: string, op: string, params: Record<string, unknown>, ms
       throw new EngineSignInError(`could not reach ${name}: ${err instanceof Error ? err.message : String(err)}`, 502, 'host_unreachable')
     }
   }
-  if (!conn.hasCapability(ENGINE_SIGN_IN_CAPABILITY)) {
+  if (!needCapability(conn, ENGINE_SIGN_IN_CAPABILITY)) {
     throw new EngineSignInError(`the Walnut daemon on ${name} is older than this Walnut and cannot sign engines in; it updates on its next connect`, 501, 'daemon_needs_upgrade')
   }
   const resp = await withDeadline(conn.send('engine.signIn', { op, ...params }, ms), ms + 2_000, `the daemon on ${name}`)

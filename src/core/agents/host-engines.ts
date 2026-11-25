@@ -15,6 +15,7 @@ import { probeEngines, type EngineAvailability } from './engine-probe.js';
 import { hostAdapterSpec } from './host-adapter-spec.js';
 import { engineHostBlocker, LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { log } from '../../logging/index.js';
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 const TTL_MS = 60_000;
 /** A host that did not answer is asked again after this, not at every picker mount. */
@@ -56,7 +57,7 @@ async function askRemote(host: string, dial: boolean): Promise<HostAnswer | null
   }
   const out: HostAnswer = { claude: { installed: true, version: null, reason: null } };
   const acpIds = [...ENGINE_REGISTRY.keys()].filter((id) => isAcpEngine(id));
-  if (!conn.hasCapability('acp-host-v1')) {
+  if (!needCapability(conn, 'acp-host-v1')) {
     for (const id of acpIds) {
       const rule = engineHostBlocker(id, host);
       out[id] = { installed: false, version: null, reason: rule ?? `the daemon on ${host} does not run ACP engines (it is older than this Walnut, or runs without bun)` };

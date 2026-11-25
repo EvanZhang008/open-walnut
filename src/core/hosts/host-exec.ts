@@ -47,6 +47,7 @@ import { INPUT_PREFIX, refusalAdvice } from '../../providers/sound-rules.js'
 export { redact }
 import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
 import { HostExecError, callerOf, hostName, normHost, targetHost, type Caller } from './host-exec-target.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 // Who asks and where it goes (host-exec-target.ts), for every host_exec-family call.
 export { HostExecError, callerOf, hostName, sameMachineAs, sameMachineNote, targetHost, type Caller } from './host-exec-target.js'
@@ -172,7 +173,7 @@ export async function dial(host: string, within = DIAL_MS, capability = 'host-ex
       link(host),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('dial timeout')), Math.max(1, Math.min(within, DIAL_MS))) }),
     ])
-    if (!conn.hasCapability(capability)) {
+    if (!needCapability(conn, capability)) {
       throw new HostExecError(`The Walnut daemon on ${await hostName(host)} needs an update before it can ${what} for other hosts (it updates on its next connect).`, 409, 'daemon_upgrade')
     }
     // A link that has said nothing for a while is asked first: it may have died where this side

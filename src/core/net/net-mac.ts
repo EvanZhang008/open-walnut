@@ -24,6 +24,7 @@ import { clearLeftovers, leftoverJoins, type Daemon } from './net-local.js'
 import { cutOffByNoRelay, relayChoice, relaysOfChoice, type RelayChoice } from './net-relay.js'
 import { machineLinks, noteSeen, runningChoice, waitForModes } from './net-seen.js'
 import { keepWhere, noteWhere, withWhere } from './net-where.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 /** Why a throwaway server (a developer's test server, or the Demo) takes no part in the host network. */
 async function notOnThisServer(): Promise<string> {
@@ -115,7 +116,7 @@ export function errorOf(body: Record<string, unknown>): { code: string; message:
 export async function localDaemon() {
   const { link } = await import('../hosts/link.js')
   const local = await link('__local__')
-  if (!local.hasCapability('net-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon has no host network yet; restart Walnut to update it.")
+  if (!needCapability(local, 'net-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon has no host network yet; restart Walnut to update it.")
   return local
 }
 
@@ -276,7 +277,7 @@ async function pushToHost(name: string, endpoint: string, s: NetState, relayMove
   // companion's relay it has until it is updated.
   const { walnutNetOfAnother } = await import('./net-shared-host.js')
   let out: NetPushOutcome
-  if (s.relay !== 'own' && !conn.hasCapability('net-join-v1')) {
+  if (s.relay !== 'own' && !needCapability(conn, 'net-join-v1')) {
     log.session.warn('net: a machine is too old for this relay choice; it keeps the one it has', { host: name, relay: s.relay })
     out = { host: name, endpoint, told: false, why: 'too old for this relay choice' }
   } else if (await walnutNetOfAnother(name, conn, { relayMoved })) {
@@ -412,7 +413,7 @@ function runSync(opts: { enable?: boolean; adopt?: string[] }, report: SyncRepor
       if (!await netActive()) throw new NetError(409, 'test_server', await notOnThisServer())
       const local = await localDaemon()
       // An older daemon drops the relay mode, so its walnut-net would run with no relay at all.
-      if (state.relay !== 'own' && !local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon is too old for public relays or no relay; restart Walnut to update it.")
+      if (state.relay !== 'own' && !needCapability(local, 'net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon is too old for public relays or no relay; restart Walnut to update it.")
       const ident = await local.send('net.identity', {}, 20_000) as { ok?: boolean; endpointId?: string; error?: string }
       if (!ident.ok || !ident.endpointId) throw new NetError(500, 'no_identity', `This machine's network key: ${ident.error ?? 'none'}`)
       state.macId = ident.endpointId

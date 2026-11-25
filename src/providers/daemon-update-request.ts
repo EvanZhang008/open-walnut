@@ -44,16 +44,21 @@ export class RequestedUpdate {
     // Refused before anything runs: the route answers the refusal itself.
     gate?.()
     this.set('checking', 'checking the host\'s daemon')
+    const before = this.d.running()
     const run = this.d.run(expected, gate)
-      .then((went) => this.settle(went, expected), (err) => this.set('failed', err instanceof Error ? err.message : String(err)))
+      .then((went) => this.settle(went, expected, before), (err) => this.set('failed', err instanceof Error ? err.message : String(err)))
       .finally(() => { this.inFlight = null })
     this.inFlight = run
     await within(run, waitMs)
     return this.state
   }
 
-  private settle(went: boolean, expected: string): NetUpdateState {
-    if (went) return this.set('running', `the old daemon was replaced by ${expected}; the host reconnects on the new build`)
+  private settle(went: boolean, expected: string, before: string | null): NetUpdateState {
+    const swapping = `the old daemon was replaced by ${expected}; the host reconnects on the new build`
+    if (went) return this.set('running', swapping)
+    if (this.d.running() === expected) return this.set('updated', `its daemon is this build (${expected})`)
+    // Another decision swapped it while this one waited for it (the link dropped, or came back on another build).
+    if (!this.d.connected() || this.d.running() !== before) return this.set('running', swapping)
     const wait = this.d.wait()
     if (wait && wait.expected === expected) {
       const skip: NetUpdateSkip | undefined = wait.kind === 'postponed' ? undefined : wait.kind
@@ -61,7 +66,6 @@ export class RequestedUpdate {
         ? this.set('skipped', wait.why, { skip })
         : this.set('postponed', `waiting: ${wait.why}`, wait.until ? { until: wait.until } : {})
     }
-    if (this.d.running() === expected) return this.set('updated', `its daemon is this build (${expected})`)
     return this.set('skipped', 'nothing was changed on the host')
   }
 

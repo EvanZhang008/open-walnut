@@ -283,6 +283,9 @@ export class NetDaemonUpdater {
       if (this.busy() || ['running', 'updated', 'failed'].includes(this.state.phase)) return this.state
     }
     gate?.()
+    // The ask stays with its build: a hold that puts it off now does not hand it to the gap after.
+    const expected = this.d.expectedVersion()
+    if (expected) this.gap.ask(expected)
     const run = this.check('request', gate)
     const started = new Promise<void>((r) => { this.waiters.push(r) })
     await this.within(Promise.race([run, started]), Math.max(0, until - now()))
@@ -388,7 +391,7 @@ export class NetDaemonUpdater {
       daemonAgeMs: c.daemonStartedAt ? (this.d.now ?? Date.now)() - c.daemonStartedAt : null,
       minGapMs: this.d.minGapMs ?? daemonUpdateMinGapMs(env),
       gapHeldForMs: expected ? this.gap.heldForMs(expected, (this.d.now ?? Date.now)()) : 0,
-      overdue, capNeeded: expected ? this.gap.needs(expected) : null,
+      overdue, capNeeded: this.gap.needs(c.daemonVersion), gapAsked: !!expected && this.gap.asked(expected),
     }
   }
 

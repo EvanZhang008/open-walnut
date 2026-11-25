@@ -10,6 +10,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { taskDirPath, taskDirRoot } from '../../lib/task-dir.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 const isLocal = (host: string | null | undefined) => !host || host === '__local__'
 
@@ -61,7 +62,7 @@ export async function ensureTaskDirOnHost(taskId: string, host?: string | null):
   const { boundHostRead } = await import('../hosts/remote-read-bound.js')
   return boundHostRead(host!, async () => {
     const conn = await link(host!)
-    if (!conn.hasCapability?.('task-dir-v1')) return { error: `the daemon on ${host} is too old for task directories; it upgrades on the next session start`, status: 409 }
+    if (!conn.hasCapability || !needCapability(conn as Parameters<typeof needCapability>[0], 'task-dir-v1')) return { error: `the daemon on ${host} is too old for task directories; it upgrades on the next session start`, status: 409 }
     const { WALNUT_HOME } = await import('../../constants.js')
     const res = await conn.send('taskdir.ensure', { taskId, home: WALNUT_HOME }) as { ok?: boolean; path?: unknown; error?: string }
     return res?.ok !== false && typeof res?.path === 'string'

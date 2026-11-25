@@ -25,6 +25,9 @@ import {
 import { HOST_DEPENDENT_CAPABILITIES } from '../../src/providers/daemon-shared.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, DAEMON_UPDATE_BEHIND_STALE_MS } from '../../src/providers/daemon-update-behind.js'
 import { UPGRADE_RECHECK_DELAYS_MS } from '../../src/providers/daemon-connection.js'
+import { needCapability } from '../../src/providers/daemon-capability-need.js'
+import { MANAGED } from '../helpers/daemon-connection-update-stubs.js'
+import { REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 
 const GAP = DAEMON_UPDATE_MIN_GAP_MS
@@ -85,18 +88,34 @@ describe('the gap rule', () => {
     expect(DAEMON_UPDATE_GAP_RECHECK_MS).toBeLessThan(DAEMON_UPDATE_BEHIND_STALE_MS)
   })
 
-  it('counts a missing capability once per held build, and only one a newer daemon brings', () => {
+  it('counts a missing capability once per running build, and only one a newer daemon brings', () => {
     const g = new UpdateGapHold()
-    expect(g.need('snapshot-v1')).toBe(false) // nothing held
-    expect(g.decide(EXPECTED, { host: 'devbox', ageMs: 60_000, gapMs: GAP, now: 0 })).not.toBeNull()
+    const young = { host: 'devbox', ageMs: 60_000, gapMs: GAP, running: OLD }
+    expect(g.decide(EXPECTED, { ...young, now: 0 })).not.toBeNull()
     expect(g.holds).toBe(true)
     // Said by where a daemon runs, never by its build: no update brings these.
-    for (const cap of ['net-v1', 'service-update-v1', 'acp-host-v1', 'not-a-capability']) expect(g.need(cap), cap).toBe(false)
-    expect(g.need('snapshot-v1')).toBe(true)
-    expect(g.need('usage-scan-v1')).toBe(false) // once per build
-    expect(g.needs(EXPECTED)).toBe('snapshot-v1')
-    expect(g.decide(EXPECTED, { host: 'devbox', ageMs: 60_000, gapMs: GAP, now: 1 })).toBeNull()
+    for (const cap of ['net-v1', 'service-update-v1', 'acp-host-v1', 'not-a-capability']) expect(g.need(cap, OLD), cap).toBe(false)
+    expect(g.need('snapshot-v1', null)).toBe(false) // a daemon that named no build
+    expect(g.need('snapshot-v1', OLD)).toBe(true)
+    expect(g.need('usage-scan-v1', OLD)).toBe(false) // once per running build
+    expect(g.needs(OLD)).toBe('snapshot-v1')
+    expect(g.decide(EXPECTED, { ...young, now: 1 })).toBeNull()
     expect(g.holds).toBe(false)
+    // Another build running there: the need was the old one's.
+    expect(g.needs('walnut-daemon-other0')).toBeNull()
+  })
+
+  it('keeps an ask with its build: every decision of it goes past the gap, another build waits again', () => {
+    const g = new UpdateGapHold()
+    const young = { host: 'devbox', ageMs: 60_000, gapMs: GAP, running: OLD, now: 0 }
+    g.ask(EXPECTED)
+    expect(g.decide(EXPECTED, young)).toBeNull()
+    expect(g.decide(EXPECTED, { ...young, now: 15 * 60_000 })).toBeNull()
+    expect(g.decide('walnut-daemon-newer0', young)).not.toBeNull()
+  })
+
+  it('every required capability is one a newer daemon brings, so a daemon that lacks one is updated past the gap', () => {
+    for (const cap of REQUIRED_DAEMON_CAPABILITIES) expect(capabilityByBuild(cap), cap).toBe(true)
   })
 
   // The door's capabilities (daemon-standalone.ts) are claimed by where the daemon runs: the two lists stay one.
@@ -111,7 +130,7 @@ describe('the gap rule', () => {
 })
 
 /** An unmanaged SSH host running `version`, whose daemon has run `etime` (the probe's tail). */
-function host(conn: DaemonConnection, version: string, etime: string | null): string[] {
+function host(conn: DaemonConnection, version: string, etime: string | null, serviceProbe?: string): string[] {
   const seen: string[] = []
   // What runs the daemon, as a hello says it: with none known no copy can be kept, and nothing is stopped.
   ;(conn as unknown as { _runtime: unknown })._runtime = 'node'
@@ -124,7 +143,7 @@ function host(conn: DaemonConnection, version: string, etime: string | null): st
     // The staged daemon's trial run and the kept previous daemon (daemon-trial-cmd.ts): it serves, and the files were kept.
     if (cmd.includes('walnut-trial-ok')) return 'walnut-trial-ok'
     if (cmd.includes('walnut-previous-kept')) return 'walnut-previous-kept'
-    if (cmd.includes('walnut-service-probe-done')) return [...remoteServiceProbePaths().map((p) => `absent ${p}`), 'walnut-service-probe-done'].join('\n')
+    if (cmd.includes('walnut-service-probe-done')) return serviceProbe ?? [...remoteServiceProbePaths().map((p) => `absent ${p}`), 'walnut-service-probe-done'].join('\n')
     if (cmd.includes('uname -m')) return 'x86_64'
     if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed\n'
     if (cmd.includes('daemon.version')) {
@@ -178,7 +197,7 @@ describe('an SSH host\'s daemon', () => {
     expect(stops(seen)).toHaveLength(1)
   })
 
-  it('held, a capability this server asks for and the daemon lacks decides it again now, once', async () => {
+  it('held, a capability a feature needs and the daemon lacks decides it again now, once; a plain read does not', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     vi.useFakeTimers()
     try {
@@ -186,13 +205,15 @@ describe('an SSH host\'s daemon', () => {
       const seen = host(c, OLD, '00:30')
       ;(c as unknown as { _capabilities: string[] })._capabilities = ['attach-v1']
       const recheck = vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockResolvedValue(false)
-      expect(c.hasCapability('snapshot-v1')).toBe(false) // nothing held yet: no decision
+      ;(c as unknown as { _daemonVersion: string })._daemonVersion = OLD
+      await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+      // hasCapability is a read: an optional probe with a fallback decides nothing.
+      expect(c.hasCapability('snapshot-v1')).toBe(false)
+      expect(needCapability(c, 'net-v1')).toBe(false) // a door capability: no build brings it
       await vi.advanceTimersByTimeAsync(0)
       expect(recheck).not.toHaveBeenCalled()
-      await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
-      expect(c.hasCapability('net-v1')).toBe(false) // a door capability: no build brings it
-      expect(c.hasCapability('snapshot-v1')).toBe(false)
-      expect(c.hasCapability('snapshot-v1')).toBe(false)
+      expect(needCapability(c, 'snapshot-v1')).toBe(false)
+      expect(needCapability(c, 'snapshot-v1')).toBe(false)
       await vi.advanceTimersByTimeAsync(0)
       expect(recheck).toHaveBeenCalledTimes(1)
       // The decision it starts goes past the gap.
@@ -230,6 +251,21 @@ describe('an SSH host\'s daemon', () => {
     const seen = host(c, version, etime)
     await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
     expect(stops(seen)).toHaveLength(1)
+  })
+
+  // Review r1, high 2: a daemon that refuses this server's handshake (a required capability missing)
+  // cannot serve it at all; upgradeBeforeServing's decision must not wait for the gap.
+  it.each([[true], [false]])('managed and young, missing a required capability (%s), is updated at once; with them all it waits', async (missing) => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    host(c, OLD, '00:30', MANAGED)
+    vi.spyOn(priv(c), '_sendHandshake').mockResolvedValue({ ok: true, version: OLD, capabilities: missing ? [] : [...REQUIRED_DAEMON_CAPABILITIES] })
+    vi.spyOn(priv(c), 'announceProbeRole').mockImplementation(() => {})
+    await priv(c).verifyCapabilities()
+    const managed = vi.spyOn(priv(c), 'updateManagedDaemon').mockResolvedValue(true)
+    vi.spyOn(priv(c), 'serviceModeNow').mockResolvedValue({ due: false })
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(missing)
+    expect(managed).toHaveBeenCalledTimes(missing ? 1 : 0)
   })
 
   it('missing (a start, not a replacement) is never held', async () => {
@@ -275,7 +311,7 @@ describe('an SSH host\'s daemon asked for now', () => {
   it('still waits for the host\'s work, and says why', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     const c = make()
-    const seen = host(c, OLD, '02:05:00')
+    const seen = host(c, OLD, '00:30')
     live(c)
     vi.spyOn(priv(c), 'acpTurnsOpen').mockImplementation(async (...a: unknown[]) => {
       priv(c).postponeUpgrade('ACP turns are open', a[0], a[1], { steady: true })
@@ -294,16 +330,48 @@ describe('an SSH host\'s daemon asked for now', () => {
     expect(seen).toEqual([])
   })
 
-  it('an automatic decision after it holds again for the gap', async () => {
+  // Review r1, high 1: an ask an ACP turn put off was then held by the gap for up to 2 h.
+  it('asked and put off by an open ACP turn, goes once the turn ends, without being asked again', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '00:30')
+    live(c)
+    let open = true
+    vi.spyOn(priv(c), 'acpTurnsOpen').mockImplementation(async (...a: unknown[]) => {
+      if (!open) return false
+      priv(c).postponeUpgrade('ACP turns are open', a[0], a[1], { steady: true })
+      return true
+    })
+    expect(await c.requestDaemonUpdate()).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open' })
+    open = false
+    // The automatic decision the postpone's timer runs (no ask, no soft holds lifted but the gap's).
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
+    expect(stops(seen)).toHaveLength(1)
+  })
+
+  it('the ask is its build\'s: a newer build expected after it waits for the gap again', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     const c = make()
     host(c, OLD, '00:30')
     live(c)
     vi.spyOn(priv(c), 'acpTurnsOpen').mockResolvedValue(true)
     await c.requestDaemonUpdate()
+    vi.spyOn(priv(c), 'getExpectedDaemonVersion').mockReturnValue('walnut-daemon-newer0')
     const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
     await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
     expect(String(postpone.mock.calls[0]?.[0])).toMatch(/at most once every 2 h/)
+  })
+
+  // Review r1, low 5: a run that found the daemon already swapped by another decision says so.
+  it('answers running when another decision swapped the daemon while it waited', async () => {
+    const c = make()
+    host(c, OLD, '02:05:00')
+    live(c)
+    vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockImplementation(async () => {
+      ;(c as unknown as { _connected: boolean })._connected = false
+      return false
+    })
+    expect(await c.requestDaemonUpdate()).toMatchObject({ phase: 'running', message: expect.stringContaining('reconnects on the new build') })
   })
 })
 

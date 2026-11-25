@@ -22,6 +22,7 @@ import type { FileGitCommit } from './file-history-git.js'
 // which re-exports the same values, so a mocked module carries every export.
 import { DaemonNeedsUpgradeError, STREAM_EVIDENCE_MAX_BYTES, streamTextHeldConversation } from './daemon-file-reader-shared.js'
 import { MANIFEST_SUFFIX as ARCHIVE_MANIFEST_SUFFIX } from '../providers/transcript-archive-names.js'
+import { needCapability } from '../providers/daemon-capability-need.js'
 export { DaemonNeedsUpgradeError, streamTextHeldConversation }
 
 /** A file as one stat saw it: which file (epoch, when the daemon says), its size and mtime. */
@@ -305,7 +306,7 @@ export class DaemonFileReader implements SessionFileReader {
     if (!conn.capabilitiesKnown) {
       throw new Error(`The Walnut daemon on ${this.host} has not finished its handshake yet. Try again in a moment.`)
     }
-    if (!conn.hasCapability('fs-write-atomic-v1')) {
+    if (!needCapability(conn, 'fs-write-atomic-v1')) {
       throw new DaemonNeedsUpgradeError(this.host, 'fs-write-atomic-v1')
     }
     const result = await conn.send('fs.write', {
@@ -367,7 +368,7 @@ export class DaemonFileReader implements SessionFileReader {
   private async mutateConnection() {
     await this.resolve()
     const conn = await link(this.host)
-    if (conn.capabilitiesKnown && !conn.hasCapability('fs-mutate-v1')) {
+    if (conn.capabilitiesKnown && !needCapability(conn, 'fs-mutate-v1')) {
       throw new DaemonNeedsUpgradeError(this.host)
     }
     return conn
@@ -494,7 +495,7 @@ export class DaemonFileReader implements SessionFileReader {
   private async gitHistoryConnection() {
     await this.resolve()
     const conn = await link(this.host)
-    if (conn.capabilitiesKnown && !conn.hasCapability('git-file-history-v1')) {
+    if (conn.capabilitiesKnown && !needCapability(conn, 'git-file-history-v1')) {
       throw new DaemonNeedsUpgradeError(this.host, 'git-file-history-v1')
     }
     return conn

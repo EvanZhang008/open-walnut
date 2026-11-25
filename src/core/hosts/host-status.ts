@@ -304,7 +304,7 @@ export function buildHostStatus(
   foldDaemonUpdate(status, state, label)
   const terminal = hostTerminalNow(hostDef, state, label)
   if (terminal !== true) { status.terminal = false; status.terminalWhy = terminal }
-  status.daemonUpdateHow = daemonUpdateHowSentence(hostDaemonLinkKind(hostKey, hostDef), label)
+  status.daemonUpdateHow = daemonUpdateHowSentence(hostDaemonLinkKind(hostKey, hostDef), label, { host: hostKey })
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
   if (readiness && state.connected) {

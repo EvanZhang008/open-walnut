@@ -121,6 +121,7 @@ import { ACP_SURVIVE_CAPABILITY, workSurvives } from '../core/hosts/work-survive
 import { askOnce, untilAdopted, WorkerAdoptingError } from './acp-ask-once.js'
 import { revokedAs } from '../core/session-channel/revoked-hosts.js'
 import { inPersonCall } from '../core/session-channel/person-call.js'
+import { needCapability } from './daemon-capability-need.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -1864,7 +1865,7 @@ export class AcpSession {
       this.ensureConn(),
     ])
     stage('mountsMs')
-    if ('hostAdapter' in artifacts && !conn.hasCapability('acp-host-v1')) {
+    if ('hostAdapter' in artifacts && !needCapability(conn, 'acp-host-v1')) {
       throw new Error(`${engineCaps(this.engineId).displayName} cannot run on ${this.host}: its daemon does not run ACP engines (it is older than this Walnut, or runs without bun)`)
     }
     // A test server's copied records name production's ACP workers, and an ACP start

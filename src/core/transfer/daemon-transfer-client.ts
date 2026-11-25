@@ -56,6 +56,7 @@ export interface TransferConn {
 // The errors a command answers, and the commands sent again on a lost link (transfer-errors.ts).
 export { RESEND_ON_LOST, TransferCommandError, TransferHostOfflineError, TransferServerStoppingError } from './transfer-errors.js'
 import { RESEND_ON_LOST, TransferCommandError, TransferHostOfflineError, TransferServerStoppingError } from './transfer-errors.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 /** Every connected daemon of a host (a host can hold more than one link). */
 export type TransferConnectionResolver = (host: string) => Promise<TransferConn[]>
@@ -104,7 +105,7 @@ async function connectionFor(host: string, capability: string): Promise<Transfer
   const wait = currentLinkWait()
   if (conns.length === 0 && wait) conns = await awaitLink(host, wait.ms, resolver, () => new TransferServerStoppingError(host))
   if (conns.length === 0) throw noLink(host, wait?.ms ?? 0)
-  const able = conns.find((c) => c.hasCapability(capability))
+  const able = conns.find((c) => needCapability(c, capability))
   if (!able) throw new DaemonNeedsUpgradeError(host, capability)
   return able
 }

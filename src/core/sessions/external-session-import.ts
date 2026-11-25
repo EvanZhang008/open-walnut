@@ -66,6 +66,7 @@ import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG, isExterna
 import { readMarkerForPhase } from '../phase.js';
 import type { DirectoryUse } from '../frequent-dirs.js';
 import { placeNewImportProject, projectRegistered } from './import-project-vp.js';
+import { needCapability } from '../../providers/daemon-capability-need.js';
 
 /** Daemon capability gating the scan RPC. */
 const SCAN_CAPABILITY = 'external-scan-v1';
@@ -1327,7 +1328,8 @@ async function runImportById(asked: string, sessionIds: readonly string[]): Prom
   const host = asked === '__local__' ? asked : (await joinedTwinRows()).find((t) => t.alias === asked)?.joined ?? asked;
   if (host !== asked) log.session.info('import by id: a found row of a joined machine imports under the joined row', { asked, host });
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
-  if (!getConnectedDaemonConnection(host)?.hasCapability(DESCRIBE_CAPABILITY)) {
+  const described = getConnectedDaemonConnection(host);
+  if (!described || !needCapability(described, DESCRIBE_CAPABILITY)) {
     const named = host === asked ? host : `${host} (the same machine as ${asked})`;
     throw new Error(`Host ${named} is not connected, or its daemon is too old to look sessions up by id.`);
   }
