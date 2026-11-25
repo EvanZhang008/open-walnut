@@ -693,6 +693,17 @@ const codexHeads: CodexHeads = new Map()
 interface ScanTally { scanned: number; parsed: number }
 
 /**
+ * A function's source as the rules see it: without the numbers a bundler adds to a name another
+ * module also uses (`fs189`, `CHUNK_BYTES3`, `readChunk2`). Those numbers move whenever any module
+ * of the build adds or drops such a name, so every land made a new key, dropped every kept verdict
+ * and read all 10k transcript heads again after each restart (2026-11-25 on the Mac: each first
+ * scan parsed 10,166 of 10,166, one of the server's largest bursts after a restart).
+ */
+export function withoutBundlerSuffixes(source: string): string {
+  return source.replace(/\b([A-Za-z_$][\w$]*?[A-Za-z_$])\d+\b/g, '$1')
+}
+
+/**
  * The rules a kept verdict was made by: the source of every function and constant a verdict
  * depends on, so a Walnut that reads a transcript another way never trusts a verdict an older
  * one wrote (the file is dropped whole and every head read again).
@@ -704,7 +715,7 @@ function verdictRules(): string {
     isTitleBearingUserLine, titleFromMessage, titleFromText, isHumanStartedClaude, isWalnutEnvelopeText,
     isSyntheticUserText, isRealReply, messageTexts, walnutEnvelopeBody, extractTag, isLegacyPreamble, toTitle,
     parseCodexHead, walkHeadLines, readChunk,
-  ].map(String).join('\n') + JSON.stringify([
+  ].map((fn) => withoutBundlerSuffixes(String(fn))).join('\n') + JSON.stringify([
     [...HUMAN_CLAUDE_ENTRYPOINTS], [...HUMAN_CODEX_ORIGINATORS], [...BUILTIN_CLI_COMMANDS], String(SKIP_FIRST_PROMPT_PATTERN),
     WALNUT_ENVELOPE_MARKERS, COMPACT_SUMMARY_PREFIX, FORK_COPY_GAP_MS, CHUNK_BYTES, MAX_HEAD_BYTES, TAIL_BYTES, MAX_TITLE_LEN,
   ])).digest('hex').slice(0, 16)
