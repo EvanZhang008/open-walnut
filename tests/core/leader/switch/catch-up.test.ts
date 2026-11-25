@@ -7,7 +7,9 @@
  * leader. Here the batches come from a fake runner with the shapes the real one answers (BatchOutcome stats).
  */
 import { describe, expect, it } from 'vitest'
-import { catchUpBudgetMs, catchUpStandby, standbyBusy, whenStandbyIdle } from '../../../../src/core/leader/switch/catch-up.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { FINAL_PASSES, HANDOVER_SEEN_MS, PROMOTE_TRIAL_MS, STOP_TEARDOWN_MS, SWITCH_SETTLE_MS, catchUpBudgetMs, catchUpStandby, standbyBusy, switchSettleMs, whenStandbyIdle } from '../../../../src/core/leader/switch/catch-up.js'
 import type { BatchOutcome } from '../../../../src/core/standby/index.js'
 
 const WINDOW = 300_000
@@ -32,8 +34,28 @@ function runner(list: Array<BatchOutcome | null>) {
 }
 
 describe('the standby caught up before the handover', () => {
-  it('the budget is a quarter of the commit window (75 s of the default 300 s)', () => {
-    expect(catchUpBudgetMs(WINDOW)).toBe(75_000)
+  it('the budget is what the switch\'s timeline leaves a batch: 50 s of the default 300 s', () => {
+    const b = catchUpBudgetMs(WINDOW)
+    expect(b).toBe(50_000)
+    // The whole timeline fits the window: the handover seen, the last look, the teardown, the settle, three final
+    // passes (with what came, a late writer's, the unchanged one), the new leader's promote, trial and commit.
+    expect(HANDOVER_SEEN_MS + b + STOP_TEARDOWN_MS + switchSettleMs(WINDOW) + FINAL_PASSES * b + PROMOTE_TRIAL_MS).toBeLessThanOrEqual(WINDOW)
+    // A window too short for the fixed terms leaves no batch any time: every switch is refused before the handover.
+    expect(catchUpBudgetMs(60_000)).toBe(0)
+  })
+
+  it('the timeline\'s terms are the ones the code uses (the settle in server.ts, the handover wait in source-job.ts)', () => {
+    const src = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../..', rel), 'utf8')
+    expect(src('src/web/server.ts')).toContain(`const SWITCH_STOP_SETTLE_MS = ${SWITCH_SETTLE_MS.toLocaleString('en-US').replace(/,/g, '_')}`)
+    expect(src('src/web/server.ts')).toMatch(/Math\.min\(SWITCH_STOP_SETTLE_MS, Math\.floor\(finalStop\.windowMs \/ 10\)\)/)
+    expect(src('src/core/leader/switch/source-job.ts')).toContain(`o.targetReadyMs ?? ${HANDOVER_SEEN_MS.toLocaleString('en-US').replace(/,/g, '_')}`)
+  })
+
+  it('near the budget, a second batch about as long is not refused: it may come down in the next', async () => {
+    const r = runner([batch(56_000, 1), batch(57_000, 1), batch(40_000, 1)])
+    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
+    expect(out.ok).toBe(true)
+    expect(r.calls()).toBe(3)
   })
 
   it('a batch within the budget is caught up at once; one that found nothing changed only when it is within it too', async () => {
@@ -100,6 +122,13 @@ describe('the standby caught up before the handover', () => {
 
 describe('the leader\'s own batch applying on the standby', () => {
   const busy = new Error('standby receive verify on the host: the target is busy: an apply of batch 5 runs there since 2026-11-24T20:22:13.908Z')
+
+  it('the words it waits on are the ones the target says (apply-status.ts): a change there turns this red, not the wait silently off', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../../src/core/standby/apply-status.ts'), 'utf8')
+    const said = /throw new Error\(`(the target is busy: an apply)\$\{/.exec(src)
+    expect(said?.[1]).toBe('the target is busy: an apply')
+    expect(standbyBusy(`standby receive init on the host: ${said![1]} of batch 3 runs there since x`)).toBe(true)
+  })
 
   it('the rehearsal\'s refusal is the target applying a batch', () => {
     expect(standbyBusy(busy.message)).toBe(true)

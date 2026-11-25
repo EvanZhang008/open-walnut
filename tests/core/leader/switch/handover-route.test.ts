@@ -144,9 +144,9 @@ describe('the switch stop\'s last look', () => {
     const { noteHandedOver, handedOverSwitch, beginTakeBack } = await import('../../../../src/core/leader/switch/final-stop.js')
     state = 'handed-over'
     noteHandedOver({ switchId: '20261124T000000-ffffff', to: 'machine-b', peer: peer as never, commitDeadline: Date.now() + 120_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
-    // 1.2 GB written after the catch-up, at 2.5 MB/s: 480 s, then still 450 s.
+    // 1.2 GB written after the catch-up, at 2.5 MB/s: 480 s, then 540 s with what came meanwhile.
     const slow = (ms: number) => ({ ...caughtUp, stats: { totalMs: ms, sentBytes: 1_200_000_000 } })
-    looks = [slow(480_000), slow(480_000)]
+    looks = [slow(480_000), slow(540_000)]
     const r = await fetch(`${base}/api/leader/switch/final-stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ switchId: '20261124T000000-ffffff' }) })
     expect(r.status).toBe(409)
     expect(((await r.json()) as { why: string }).why).toMatch(/^the standby fell behind after its catch-up, so the final batch would not fit in the commit window \(nothing stopped; the handover is taken back\): .*falls further behind/)

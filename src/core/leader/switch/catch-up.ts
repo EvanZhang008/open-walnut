@@ -5,29 +5,53 @@
  * is behind (a large write the copy link has not carried yet, a writer faster than the link) would make it run
  * past the window: the switch rolls back after minutes without a leader. So before anything stops, the leader
  * takes its own standby batches back to back (the standby runner's, core/standby/runner.ts) until one takes at
- * most a quarter of the commit window, which is what the final batch will then carry about. One that does not
+ * most the budget below, which is what the final batch will then carry about. One that does not
  * come within the catch-up's time, or batches that grow over the budget (the writes outpace the link), refuse
  * the switch here: nothing was handed over, the leader never stopped.
  *
- * Why a quarter: the commit window (commit_window_s, 300 s) runs from the handover to the new leader's commit
- * start. After the final batch come its verify pass and mark, the promotion and the trial start (about 20 s on a
- * 20 GB home), and before it the stop's teardown and the writers' settle (up to 30 s). A batch of at most 75 s
- * leaves the rest of the window for those and for a final batch up to three times the steady one.
+ * The budget, from the switch's timeline inside the commit window W (commit_window_s, 300 s), which runs from the
+ * handover to the new leader's commit (the final batch's deadline is that commit deadline, final-stop.ts, and the
+ * new leader's promote, trial and commit come after it):
+ *
+ *   W = HANDOVER_SEEN_MS      the new leader's job says it sees the handover (source-job.ts, up to 30 s)
+ *     + B                     the last look before the stop (lastLook below, at most one budget)
+ *     + STOP_TEARDOWN_MS      stopServer's teardown before its final batch (bounded by its shutdown steps, 7 s;
+ *                             measured 0.1 to 1.3 s at a load of 70, 2026-11-25)
+ *     + settle(W)             this server's writers settle (server.ts SWITCH_STOP_SETTLE_MS: 30 s, at most W / 10)
+ *     + FINAL_PASSES x B      the final batch: a pass with what came meanwhile, one more for a late writer's
+ *                             last store write, and the pass that finds nothing changed
+ *     + PROMOTE_TRIAL_MS      the new leader's promote, trial and commit (about 15 s at 20 GB between machines,
+ *                             24 s on one machine)
+ *
+ * so B = (W - the fixed terms) / (FINAL_PASSES + 1): 50 s of the default 300 s. A batch that does not fit it here,
+ * before the handover, is refused, so a borderline switch never starts.
  */
 import type { BatchOutcome } from '../../standby/index.js'
 import { withDeadline } from '../../../lib/with-deadline.js'
 
-/** The share of the commit window a caught-up batch may take at most. */
-export const CATCH_UP_SHARE = 4
+export const HANDOVER_SEEN_MS = 30_000
+export const STOP_TEARDOWN_MS = 10_000
+/** server.ts SWITCH_STOP_SETTLE_MS, and its cap of a tenth of the window (a ratchet keeps the two the same). */
+export const SWITCH_SETTLE_MS = 30_000
+export const PROMOTE_TRIAL_MS = 30_000
+export const FINAL_PASSES = 3
 
+export function switchSettleMs(commitWindowMs: number): number {
+  return Math.min(SWITCH_SETTLE_MS, Math.floor(commitWindowMs / 10))
+}
+
+/** The longest a caught-up batch may take: the share of the commit window the timeline above leaves for each. */
 export function catchUpBudgetMs(commitWindowMs: number): number {
-  return Math.floor(commitWindowMs / CATCH_UP_SHARE)
+  const fixed = HANDOVER_SEEN_MS + STOP_TEARDOWN_MS + switchSettleMs(commitWindowMs) + PROMOTE_TRIAL_MS
+  return Math.max(0, Math.floor((commitWindowMs - fixed) / (FINAL_PASSES + 1)))
 }
 
 /** Void rounds in a row (each the runner's batch with its own retries) after which the catch-up gives up. */
 export const CATCH_UP_VOIDS = 3
 /** Between a void round and the next: a host out of reach answers at once, and each round walks the home. */
 const VOID_PAUSE_MS = 1_000
+/** A batch over the budget this much longer than the one before: the standby falls further behind. */
+const GROWS = 1.1
 
 export interface CatchUpBatch {
   ok: boolean
@@ -67,14 +91,14 @@ export async function catchUpStandby(o: {
   const refuse = (why: string): CatchUpOutcome => ({ ok: false, why, batches, ms: now() - start, budgetMs })
   for (;;) {
     const left = start + maxMs - now()
-    if (left <= 0) return refuse(`no standby batch took at most ${s(budgetMs)} (a quarter of the commit window) within ${s(maxMs)}; the last: ${batches.length ? said(batches.at(-1)!) : 'none'}`)
+    if (left <= 0) return refuse(`no standby batch took at most ${s(budgetMs)} (the budget the commit window leaves a batch) within ${s(maxMs)}; the last: ${batches.length ? said(batches.at(-1)!) : 'none'}`)
     const t0 = now()
     const out = await withDeadline<BatchOutcome | null | 'late'>(
       o.runOnce().catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err), stats: {} as never })),
       left, () => 'late',
     )
     // The batch under way goes on in the background (the runner's own): the leader keeps serving either way.
-    if (out === 'late') return refuse(`a standby batch still ran after ${s(maxMs)} of catching up (the final batch must fit in a quarter of the commit window, ${s(budgetMs)}); the last that ended: ${batches.length ? said(batches.at(-1)!) : 'none'}`)
+    if (out === 'late') return refuse(`a standby batch still ran after ${s(maxMs)} of catching up (each pass of the final batch must fit the budget the commit window leaves it, ${s(budgetMs)}); the last that ended: ${batches.length ? said(batches.at(-1)!) : 'none'}`)
     if (out === null) return refuse('this leader takes no standby batches now (standby.dir, the experiment): nothing keeps the copy there current')
     const st = (out.stats ?? {}) as Partial<{ totalMs: number; sentBytes: number }>
     const b: CatchUpBatch = {
@@ -94,10 +118,11 @@ export async function catchUpStandby(o: {
       await new Promise((r) => setTimeout(r, o.voidPauseMs ?? VOID_PAUSE_MS))
       continue
     }
-    // Two batches over the budget in a row, the later not shorter: what is written meanwhile is more than the link carries.
+    // Two batches over the budget in a row. Nothing to send in either: the walk of the home alone is over it.
+    // Else refused only when the later one grew by a tenth or more (what is written meanwhile is more than the link
+    // carries); one about as long may come down in the next, so it goes on, within the catch-up's time.
     const prev = batches.at(-2)
-    if (b.ok && prev?.ok && prev.ms > budgetMs && b.ms >= prev.ms) {
-      // Nothing to send in either: the walk of the home alone is over the budget.
+    if (b.ok && prev?.ok && prev.ms > budgetMs && (b.unchanged && prev.unchanged || b.ms >= prev.ms * GROWS)) {
       if (b.unchanged && prev.unchanged) return refuse(`a walk of the home alone takes ${s(b.ms)} (then ${s(prev.ms)} before it), over the budget of ${s(budgetMs)}: the final batch ends on such a walk`)
       return refuse(`the standby falls further behind: batches over the budget of ${s(budgetMs)} took ${said(prev)}, then ${said(b)} (the writes outpace the copy link)`)
     }
