@@ -7,17 +7,20 @@ it runs, so a new test class lands on some shard with no list to edit:
   - every XCTestCase subclass in ios-native/WalnutUITests/*.swift that holds a test method,
     its own or inherited from a base class in the same directory (tests in an extension of
     the class count too), except the classes IOS_CI_SKIP_UI leaves out whole;
-  - weighed by the seconds its tests took on CI (ci-shard-times.tsv: seconds per test of the
-    class there, times its tests now), else DEFAULT_SECONDS_PER_TEST per test;
+  - weighed by the seconds its tests took on CI (ci-shard-times.tsv: each test's own time,
+    else the class's mean per test there), else DEFAULT_SECONDS_PER_TEST per test;
+  - a class heavier than one shard's even share is dealt by its tests instead (each its own
+    -only-testing:WalnutUITests/<Class>/<test>), so no class outgrows a shard's step
+    (2026-11-25, run 45516750632: RoutinesUITests alone took 29 minutes on CI);
   - dealt heaviest first to the lightest shard (ties: by name, then the lowest shard), so the
     split is the same on every machine.
 
 Usage (python3, stdlib only, the runner's or any Mac's):
   ci-shard.py <shard> <shards> [-skip-testing:WalnutUITests/<Class> ...]
-      prints the shard's -only-testing:WalnutUITests/<Class> arguments, one per line, and exits
+      prints the shard's -only-testing:WalnutUITests/<Class>[/<test>] arguments, one per line, and exits
       1 (printing nothing) when the shard has no class, since no -only-testing would run all.
   ci-shard.py plan <shards> [-skip-testing:...]
-      prints the whole split as JSON: each shard's classes and estimated seconds.
+      prints the whole split as JSON: each shard's classes (or <Class>/<test>) and estimated seconds.
   ci-shard.py record <job log> [<job log> ...]
       updates ci-shard-times.tsv from the "Test Case ... (N seconds)" lines of CI job logs
       (gh api repos/<owner>/<repo>/actions/jobs/<id>/logs); classes not in a log keep theirs.
@@ -108,18 +111,22 @@ def test_classes(ui_dir=UI_DIR):
 
 def skipped_classes(args):
     """The classes a skip list leaves out whole; a method skip leaves its class on a shard."""
-    out = set()
+    return {cls for cls, test in parse_skips(args) if test is None}
+
+
+def parse_skips(args):
+    """(class, test or None) for each -skip-testing argument."""
+    out = []
     for arg in args:
-        m = re.match(r"^-skip-testing:%s/(\w+)(/\w+)?$" % TARGET, arg)
+        m = re.match(r"^-skip-testing:%s/(\w+)(?:/(\w+))?$" % TARGET, arg)
         if not m:
             raise SystemExit("not a %s skip: %s" % (TARGET, arg))
-        if not m.group(2):
-            out.add(m.group(1))
+        out.append((m.group(1), m.group(2)))
     return out
 
 
 def read_times(path=TIMES):
-    """{class: (seconds, tests timed)} from the times file."""
+    """{name: (seconds, tests timed)} from the times file: a class, or <Class>/<test>."""
     times = {}
     if not os.path.exists(path):
         return times
@@ -128,25 +135,46 @@ def read_times(path=TIMES):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            cls, seconds, count = line.split("\t")
-            times[cls] = (float(seconds), int(count))
+            name, seconds, count = line.split("\t")
+            times[name] = (float(seconds), int(count))
     return times
 
 
-def weight(cls, tests, times):
+def test_seconds(cls, test, times):
+    """One test's weight: its own time on CI, else its class's mean, else the default."""
+    own = times.get("%s/%s" % (cls, test))
+    if own and own[1] > 0:
+        return own[0] / own[1]
     if cls in times and times[cls][1] > 0:
         seconds, count = times[cls]
-        return seconds / count * len(tests)
-    return DEFAULT_SECONDS_PER_TEST * len(tests)
+        return seconds / count
+    return DEFAULT_SECONDS_PER_TEST
+
+
+def weight(cls, tests, times):
+    return sum(test_seconds(cls, t, times) for t in tests)
 
 
 def plan(shards, skip_args, ui_dir=UI_DIR, times_path=TIMES):
     if shards < 1:
         raise SystemExit("shards must be 1 or more")
-    skip = skipped_classes(skip_args)
+    skips = parse_skips(skip_args)
+    skip = {cls for cls, test in skips if test is None}
+    skipped_tests = {(cls, test) for cls, test in skips if test is not None}
     times = read_times(times_path)
     classes = {c: t for c, t in test_classes(ui_dir).items() if c not in skip}
-    weighed = sorted(((weight(c, t, times), c) for c, t in classes.items()), key=lambda x: (-x[0], x[1]))
+    share = sum(weight(c, t, times) for c, t in classes.items()) / shards
+    units = []
+    for c, tests in classes.items():
+        w = weight(c, tests, times)
+        if w <= share or len(tests) < 2:
+            units.append((w, c))
+            continue
+        # Too heavy for one shard: deal its tests, leaving out the ones the skip list names.
+        for t in tests:
+            if (c, t) not in skipped_tests:
+                units.append((test_seconds(c, t, times), "%s/%s" % (c, t)))
+    weighed = sorted(units, key=lambda x: (-x[0], x[1]))
     legs = [{"shard": i + 1, "seconds": 0.0, "classes": []} for i in range(shards)]
     for w, c in weighed:
         leg = min(legs, key=lambda l: (l["seconds"], l["shard"]))
@@ -171,16 +199,20 @@ def record(logs, times_path=TIMES):
                 if m:
                     seen[(m.group(1), m.group(2))] = float(m.group(3))
     fresh = {}
-    for (cls, _), seconds in seen.items():
+    for (cls, test), seconds in seen.items():
         total, count = fresh.get(cls, (0.0, 0))
         fresh[cls] = (total + seconds, count + 1)
+        fresh["%s/%s" % (cls, test)] = (seconds, 1)
+    # A class timed again drops its old test rows: a test since renamed or removed leaves none.
+    for name in [n for n in times if "/" in n and n.split("/")[0] in fresh]:
+        del times[name]
     times.update(fresh)
     with open(times_path, "w", encoding="utf-8") as f:
-        f.write("# Seconds the WalnutUITests classes took on CI, read by ci-shard.py to balance the UI shards.\n")
-        f.write("# class<TAB>seconds of its timed tests<TAB>tests timed. Refresh: ci-shard.py record <job log>.\n")
-        for cls in sorted(times):
-            f.write("%s\t%.1f\t%d\n" % (cls, times[cls][0], times[cls][1]))
-    print("recorded %d classes (%d tests) into %s" % (len(fresh), len(seen), times_path))
+        f.write("# Seconds the WalnutUITests classes and tests took on CI, read by ci-shard.py to balance the UI shards.\n")
+        f.write("# <Class> or <Class>/<test><TAB>seconds<TAB>tests timed. Refresh: ci-shard.py record <job log>.\n")
+        for name in sorted(times):
+            f.write("%s\t%.1f\t%d\n" % (name, times[name][0], times[name][1]))
+    print("recorded %d classes (%d tests) into %s" % (len({c for c, _ in seen}), len(seen), times_path))
 
 
 def main(argv):

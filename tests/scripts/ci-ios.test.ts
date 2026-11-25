@@ -344,11 +344,15 @@ describe('the UI shards of the iOS job', () => {
     expect(plan.shards).toBe(uiShards())
     expect(plan.legs).toHaveLength(uiShards())
     const placed = plan.legs.flatMap((l) => l.classes)
-    expect(new Set(placed).size, 'a class on two shards').toBe(placed.length)
+    expect(new Set(placed).size, 'a class or a test on two shards').toBe(placed.length)
+    // A class too heavy for one shard is dealt by its tests (<Class>/<test>), never also whole.
+    const whole = placed.filter((c) => !c.includes('/'))
+    const split = [...new Set(placed.filter((c) => c.includes('/')).map((c) => c.split('/')[0]!))]
+    for (const c of split) expect(whole, `${c} is dealt whole and by its tests`).not.toContain(c)
     const all = uiClassesWithTests()
     expect(all.length).toBeGreaterThan(30)
     const expected = all.filter((c) => !skips().includes(c))
-    expect([...placed].sort(), 'a UI class with tests is on no shard and not in IOS_CI_SKIP_UI').toEqual(expected)
+    expect([...whole, ...split].sort(), 'a UI class with tests is on no shard and not in IOS_CI_SKIP_UI').toEqual(expected)
     for (const leg of plan.legs) expect(leg.classes.length, `shard ${leg.shard} runs no class`).toBeGreaterThan(0)
     // Inherited tests count: these hold none of their own beyond what ThreadPushUITestCase shares.
     expect(placed).toEqual(expect.arrayContaining(['ThreadPushHoldUITests', 'ThreadPushNavigationUITests']))
@@ -369,7 +373,7 @@ describe('the UI shards of the iOS job', () => {
     }
   })
 
-  it('weighs classes by the time CI measured, else by their tests, and deals them heaviest first', () => {
+  it('weighs classes by the time CI measured, else by their tests, deals them heaviest first, and a class heavier than a shard\'s share by its tests', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-shard-'))
     const ui = path.join(dir, 'ui')
     fs.mkdirSync(ui)
@@ -389,17 +393,30 @@ describe('the UI shards of the iOS job', () => {
     const plan = shardPlan(2, env, skip)
     expect(plan.skipped).toEqual(['SkippedTests'])
     // BigTests: 4 tests x 60 s; SharedCase and KidTests 60 s each (the method skip keeps KidTests); TimedTests 2 x 10 s.
-    expect(plan.legs).toEqual([
-      { shard: 1, seconds: 240, classes: ['BigTests'] },
-      { shard: 2, seconds: 140, classes: ['KidTests', 'SharedCase', 'TimedTests'] },
+    // One shard holds them all whole.
+    expect(shardPlan(1, env, skip).legs).toEqual([
+      { shard: 1, seconds: 380, classes: ['BigTests', 'KidTests', 'SharedCase', 'TimedTests'] },
     ])
+    // On two, BigTests (240 s) outweighs a shard's share (190 s), so its tests are dealt one by one
+    // (2026-11-25: RoutinesUITests alone took 29 minutes on CI, more than any shard's step holds).
+    expect(plan.legs).toEqual([
+      { shard: 1, seconds: 200, classes: ['BigTests/testA', 'BigTests/testC', 'KidTests', 'TimedTests'] },
+      { shard: 2, seconds: 180, classes: ['BigTests/testB', 'BigTests/testD', 'SharedCase'] },
+    ])
+    const two = execFileSync('python3', [SHARD_SCRIPT, '2', '2', ...skip], { encoding: 'utf8', env: { ...process.env, ...env } })
+    expect(two.trim().split('\n')).toEqual(['-only-testing:WalnutUITests/BigTests/testB', '-only-testing:WalnutUITests/BigTests/testD', '-only-testing:WalnutUITests/SharedCase'])
+    // A split class leaves out a test the skip list names.
+    const lessD = shardPlan(2, env, [...skip, '-skip-testing:WalnutUITests/BigTests/testD']).legs.flatMap((l) => l.classes)
+    expect(lessD).not.toContain('BigTests/testD')
+    expect(lessD).toEqual(expect.arrayContaining(['BigTests/testA', 'BigTests/testB', 'BigTests/testC']))
     // A shard with no class prints nothing and fails: no -only-testing would run the whole target.
-    const empty = spawnSync('python3', [SHARD_SCRIPT, '5', '5', ...skip], { encoding: 'utf8', env: { ...process.env, ...env } })
+    const empty = spawnSync('python3', [SHARD_SCRIPT, '9', '9', ...skip], { encoding: 'utf8', env: { ...process.env, ...env } })
     expect(empty).toMatchObject({ status: 1, stdout: '' })
-    expect(empty.stderr).toContain('shard 5 of 5 has no class')
+    expect(empty.stderr).toContain('shard 9 of 9 has no class')
     expect(spawnSync('python3', [SHARD_SCRIPT, '4', '3'], { encoding: 'utf8', env: { ...process.env, ...env } }).status).not.toBe(0)
     expect(spawnSync('python3', [SHARD_SCRIPT, '1', '2', '-skip-testing:Other/X'], { encoding: 'utf8', env: { ...process.env, ...env } }).status).not.toBe(0)
-    // record reads a job log's case lines into the times file, keeping classes the log lacks.
+    // record reads a job log's case lines into the times file, each class and each test,
+    // keeping classes the log lacks; a test's own time then weighs it.
     const log = path.join(dir, 'job.log')
     fs.writeFileSync(log, [
       "2026-11-10T03:17:42Z Test Case '-[WalnutUITests.BigTests testA]' passed (30.500 seconds).",
@@ -409,14 +426,16 @@ describe('the UI shards of the iOS job', () => {
     ].join('\n'))
     execFileSync('python3', [SHARD_SCRIPT, 'record', log], { encoding: 'utf8', env: { ...process.env, ...env } })
     const rows = fs.readFileSync(times, 'utf8').split('\n').filter((l) => l && !l.startsWith('#'))
-    expect(rows).toEqual(['BigTests\t40.0\t2', 'KidTests\t0.2\t1', 'TimedTests\t10.0\t1'])
+    expect(rows).toEqual(['BigTests\t40.0\t2', 'BigTests/testA\t30.5\t1', 'BigTests/testB\t9.5\t1', 'KidTests\t0.2\t1', 'KidTests/testShared\t0.2\t1', 'TimedTests\t10.0\t1'])
+    // testA 30.5 s and testB 9.5 s their own; testC and testD the class's mean, 20 s.
+    expect(shardPlan(1, env, skip).legs[0]!.seconds).toBeCloseTo(160.2, 1)
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
   it('has a measured time for most of the classes it runs', () => {
     const timed = new Set(fs.readFileSync(path.join(ROOT, 'ios-native/tests/ui/ci-shard-times.tsv'), 'utf8')
       .split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split('\t')[0]))
-    const placed = shardPlan(uiShards()).legs.flatMap((l) => l.classes)
+    const placed = [...new Set(shardPlan(uiShards()).legs.flatMap((l) => l.classes).map((c) => c.split('/')[0]!))]
     // An untimed class counts 60 s a test; refresh with `ci-shard.py record <job log>`.
     expect(placed.filter((c) => timed.has(c)).length / placed.length).toBeGreaterThan(0.6)
   })

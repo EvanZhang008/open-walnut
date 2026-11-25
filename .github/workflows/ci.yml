@@ -1000,16 +1000,18 @@ jobs:
     continue-on-error: ${{ matrix.layer == 'ui' }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.event_name == 'push' && 2 || 7 }}
+      max-parallel: ${{ github.event_name == 'push' && 2 || 9 }}
       matrix:
         include:
           - layer: unit
-          - { layer: ui, shard: 1, shards: 6 }
-          - { layer: ui, shard: 2, shards: 6 }
-          - { layer: ui, shard: 3, shards: 6 }
-          - { layer: ui, shard: 4, shards: 6 }
-          - { layer: ui, shard: 5, shards: 6 }
-          - { layer: ui, shard: 6, shards: 6 }
+          - { layer: ui, shard: 1, shards: 8 }
+          - { layer: ui, shard: 2, shards: 8 }
+          - { layer: ui, shard: 3, shards: 8 }
+          - { layer: ui, shard: 4, shards: 8 }
+          - { layer: ui, shard: 5, shards: 8 }
+          - { layer: ui, shard: 6, shards: 8 }
+          - { layer: ui, shard: 7, shards: 8 }
+          - { layer: ui, shard: 8, shards: 8 }
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
     # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
     # one whose other tests count work), which a shared runner misses by up to
