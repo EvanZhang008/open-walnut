@@ -10,6 +10,7 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { normalizeForQuote } from './judge.js';
 import { droppedLessons } from './guidance-merge.js';
+import { gatedByWords } from './step-gate.js';
 import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, nearlySame, readGuidance } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
@@ -68,7 +69,7 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const done = new Set([...(state.backfilled ?? []).filter((k) => !gaveUp.has(k)), ...state.removed, ...merged]);
   // Counted once each: a lesson a line already says, or one said again in other words, is not waiting
   // (2026-11-24 audit: "80 wait" counted the same lesson from several tasks and days).
-  const waiting = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text))).map((l) => l.text), texts);
+  const waiting = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !gatedByWords(l.text)).map((l) => l.text), texts);
   if (!waiting.length) return false;
   // Asked when little room is left, or when none of the waiting lessons fits in what is left
   // (2026-11-23: 276 characters left, every waiting lesson longer, and the node was never asked).

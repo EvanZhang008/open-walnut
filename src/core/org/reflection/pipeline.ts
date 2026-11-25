@@ -16,7 +16,7 @@ import { judge, callModelDefault, normalizeForQuote, PRODUCT_DEFECT_KINDS, type 
 import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, turnsSince, type TurnText } from './context.js';
 import { parseCardAnswer, type ReflectionSignal, type SpokenMessage } from './signals.js';
 import { addGuidance, appendDayEntry, appendDayNote, dayNoteSaid, deletedSince, nearlySame, recordDayPass, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
-import { claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
+import { CARD_CORRECTION_GAP_MS, claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { managedTasks } from './team.js';
 import { collectCandidates, sessionNowOf, type Candidate, type CandidateDeps } from './candidates.js';
@@ -32,7 +32,8 @@ export { ANSWER_GRACE_MS, MOMENT_MAX_AGE_MS, type Candidate } from './candidates
 export { nearlySame } from './records.js';
 import { MOMENT_MAX_AGE_MS } from './candidates.js';
 import { askTidy } from './guidance-tidy.js';
-import { heldPoint, holdCorrection, sendHeld } from './held-corrections.js';
+import { gatedPoint, heldPoint, holdCorrection, sendHeld } from './held-corrections.js';
+import { checkStepOf, findingInstruction, gatedNote, gateText, stepWords, type StepCheck } from './step-gate.js';
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
 const TURNS_BEFORE: Record<ReflectionSignal, number> = {
@@ -60,6 +61,8 @@ export interface ReflectDeps extends CandidateDeps {
   rulesText: (node: Task) => Promise<string>;
   /** The user's standing rules alone (USER.md): the guidance is kept in line with them (guidance-align.ts). */
   userRules?: () => Promise<string>;
+  /** The step check's model layer (step-gate.ts); without it only its fixed words hold a text. defaultDeps always sets it. */
+  checkStep?: StepCheck;
 }
 
 export interface ReflectResult {
@@ -75,11 +78,11 @@ function unsafeText(f: Finding): string | null {
   return screenSkillWrite([f.correction, f.guidance, f.skill?.description ?? '', f.skill?.text ?? ''].join('\n\n'), 'reflection finding');
 }
 
-function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, earlier = false): string {
+function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, where: 'recent' | 'earlier' | 'task' = 'recent'): string {
   // A thread's title is free text someone wrote: it rides a correction only when the injection screen passes it.
   const title = c.thread && !screenSkillWrite(c.thread.title, 'reflection thread title') ? c.thread.title : '';
   return [
-    `${nodeName}'s reflection looked at ${earlier ? 'a turn of an earlier session of this task' : 'your recent turn'}${c.messages.length ? ' and the user\'s answer to it' : ''}${title ? ` in the thread "${title}"` : c.thread ? ' in a thread' : ''} and found a decision to fix.`,
+    `${nodeName}'s reflection looked at ${where === 'earlier' ? 'a turn of an earlier session of this task' : where === 'task' ? 'a turn of this task' : 'your recent turn'}${c.messages.length ? ' and the user\'s answer to it' : ''}${title ? ` in the thread "${title}"` : c.thread ? ' in a thread' : ''} and found a decision to fix.`,
     '',
     f.correction,
     '',
@@ -198,57 +201,80 @@ export async function reflectOnCandidate(
   const unsafe = unsafeText(f);
   if (unsafe) return { verdict: { verdict: 'unverified', why: `the finding's text was refused: ${unsafe.slice(0, 160)}` } };
   const now = deps.nowMs();
+  // The step check, in code (step-gate.ts): an instruction to use his browser, accounts or name, or to write
+  // in production or a cloud account, never goes as written; the session gets a note to ask the person its
+  // rules name instead, and the lesson that says so is not written (2026-11-25 audit).
+  const willSend = !f.already_fixed && !!f.correction;
+  const stepCheck = (text: string) => checkStepOf(deps)(text, node.id);
+  const gate = willSend ? await stepCheck(findingInstruction(f)) : null;
+  const gated = gate?.steps.length ? gate : null;
+  const lessonText = f.guidance || f.skill?.name || '';
+  const lessonGate = gated ?? (lessonText && !f.same_as ? await stepCheck([f.guidance, f.skill?.description ?? '', f.skill?.text ?? ''].filter(Boolean).join('\n\n')) : null);
+  const lessonHeld = lessonGate?.steps.length ? lessonGate : null;
   let corrected: DayEntry['corrected'] = 'already_fixed';
   let held: DayEntry['held'];
   let notSent: DayEntry['notSent'];
   let earlierSession = false;
-  if (!f.already_fixed && f.correction) {
-    // Held, recorded and in the nightly note only: no known session to send to (an ask whose asking
-    // session, or a thread message whose session, is unknown: never the task's current one by
-    // default); a session that already got one this pass; past a Main or lead chat's few a day
-    // (the user's own chat).
+  if (willSend) {
     const chat = c.task.org_role === 'main' || c.task.org_role === 'lead';
-    if (c.hold) { corrected = 'held'; held = c.hold; }
+    const cardKey = c.signal === 'needs_ask' ? `${c.task.id}:${c.thread?.id ?? c.ask?.decisionId ?? 'ask'}` : '';
+    const lastCard = cardKey ? (await readReflectionState(node.id, now)).cardCorrected?.[cardKey] : undefined;
+    const heSince = (c.evidence ?? []).some((m) => lastCard && m.at > lastCard);
+    // No known asking session: the task's current one reads it, told it is about a turn of the task
+    // (2026-11-25 audit: two such corrections were never sent nor held, both tasks had live sessions).
+    const sessionId = c.sessionId || (c.hold ? await sessionNowOf(c.task, deps).catch(() => '') : '');
+    // The same card corrected a short while ago, with nothing from him since: not again (2026-11-25 audit).
+    if (lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS && !heSince) { corrected = 'off'; notSent = 'card_corrected'; }
+    else if (!sessionId) { corrected = 'held'; held = c.hold ?? 'no_session'; }
     // One a pass per task: a task's old session and its current one are the same reader now.
     else if (thisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
     else {
-      const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
+      const check = sendCheckOf(await deps.confirmSend(node, c.task, sessionId).catch(() => false));
       if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
       else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
       else {
         thisPass.add(c.task.id);
-        corrected = await deps.send(c.task, correctionText(node, nodeName, c, f, check === 'session_changed'), `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`)
-          .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
+        const where = check === 'session_changed' ? 'earlier' : c.sessionId ? 'recent' : 'task';
+        const text = gated ? gatedNote(nodeName, gated.steps, f.session_quote) : correctionText(node, nodeName, c, f, where);
+        const title = gated ? `${nodeName}'s reflection: a step to ask about, not to take` : `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`;
+        corrected = await deps.send(c.task, text, title).then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
         if (check === 'session_changed') notSent = undefined, earlierSession = true;
+        if (corrected === 'sent' && cardKey) await updateReflectionState(node.id, (s) => { (s.cardCorrected ??= {})[cardKey] = new Date(now).toISOString(); }, now);
       }
     }
   }
   // A lesson this pass already kept for this task and kind, said again in other words, is not written
   // twice: his several messages about one thing are one lesson (2026-11-23 audit: one complaint judged
   // 4 times wrote 4 nearly equal lessons). A different lesson of the same kind is kept as usual.
-  const lessonText = f.guidance || f.skill?.name || '';
   const lessonPrefix = `lesson:${c.task.id}:${f.kind}:`;
   const twin = lessonText ? [...thisPass].find((k) => k.startsWith(lessonPrefix) && nearlySame(k.slice(lessonPrefix.length), lessonText)) : undefined;
-  const rule: DayRule = twin
-    ? { kind: 'none', text: `not added (same lesson as an earlier finding on this task this pass): ${lessonText}` }
-    : await keepRule(node, nodeName, c, f, guidance, now, deps);
-  if (lessonText) thisPass.add(lessonPrefix + lessonText);
+  const rule: DayRule = lessonHeld && lessonText
+    ? { kind: 'none', text: `not added (the step check held it: it would have sessions ${stepWords(lessonHeld.steps)})` }
+    : twin
+      ? { kind: 'none', text: `not added (same lesson as an earlier finding on this task this pass): ${lessonText}` }
+      : await keepRule(node, nodeName, c, f, guidance, now, deps);
+  if (lessonText && !lessonHeld) thisPass.add(lessonPrefix + lessonText);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
-    finding: f, corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
+    finding: f, corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}),
+    ...(gated ? { gated: { steps: [...gated.steps], why: gated.why, by: gated.by } } : {}),
+    rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
   };
   // His complaint goes to the pain registry too (pains.ts): never for an ask he has not answered.
   if (f.user_quote && c.messages.length) {
-    const pain = await recordPain(node, nodeName, c, f, rule, now).catch((err) => {
+    // A held one's cause is not copied: it says the step the check held back.
+    const painOf = gated ? { ...f, what_went_wrong: `(held back by the step check: the fix it saw would have the session ${stepWords(gated.steps)})` } : f;
+    const pain = await recordPain(node, nodeName, c, painOf, rule, now).catch((err) => {
       log.task.warn('reflection: pain not recorded', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) });
       return undefined;
     });
     if (pain) entry.pain = pain;
   }
   await appendDayEntry(node.id, nodeName, localDate(now), entry);
-  // One a pass or a chat's spacing: it waits for the task's next send, with the others held for it.
-  if (held === 'one_per_pass' || held === 'own_cap') {
-    await holdCorrection(node, nodeName, c.task.title, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text: heldPoint(f) }, now)
+  // Every hold waits for the task's next send, with the others held for it; a held one keeps only the
+  // step check's note when the check held its instruction.
+  if (held) {
+    await holdCorrection(node, nodeName, c.task.title, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text: gated ? gatedPoint(gated.steps) : heldPoint(f), checked: true }, now)
       .catch((err) => log.task.warn('reflection: a held correction was not kept', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) }));
   }
   return { verdict, entry };
@@ -382,6 +408,7 @@ export function defaultDeps(): ReflectDeps {
   return {
     readTranscript: readTranscriptDefault,
     callModel: callModelDefault(),
+    checkStep: (text, nodeId) => gateText(text, callModelDefault(), nodeId),
     send: async (task, text, title) => {
       const { performSessionSend } = await import('../../sessions/session-send-core.js');
       const { getTask } = await import('../../task-manager.js');

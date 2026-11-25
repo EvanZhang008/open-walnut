@@ -60,6 +60,8 @@ export interface ReflectionState {
   held?: HeldCorrection[];
   /** On a Main or lead task's own state: when a reflection's correction last went to its chat. */
   lastChatSendAt?: string;
+  /** When an ask or card correction last went to a task, by `<task>:<thread, decision or 'ask'>` (CARD_CORRECTION_GAP_MS). */
+  cardCorrected?: Record<string, string>;
 }
 
 /** One correction held for a later send: its task, its day entry (date and time) and the point it makes. */
@@ -67,6 +69,8 @@ export interface HeldCorrection {
   taskId: string; at: string; date: string; entryAt: string; text: string;
   /** Entries whose point this one makes too (the same point held again): marked with it. */
   merged?: Array<{ date: string; entryAt: string }>;
+  /** Its text passed the step check already (step-gate.ts); one kept before the check is checked at its send. */
+  checked?: true;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */
@@ -100,6 +104,11 @@ export const DAILY_CALLS_RESERVED = 15;
  */
 export const CHAT_SENDS_PER_DAY_MAX = 12;
 export const CHAT_SEND_GAP_MS = 60 * 60_000;
+/**
+ * One ask or card corrected again only after this long, unless he wrote about it since (2026-11-25 audit:
+ * one card was corrected 7 times in 7 hours for the same missing parts, most of them there by then).
+ */
+export const CARD_CORRECTION_GAP_MS = 6 * 3600_000;
 /** Keys of `budgetLeft` kept; past it a pass that meets one counts it again. */
 export const BUDGET_LEFT_KEPT = 200;
 
@@ -137,6 +146,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),
     ...(Array.isArray(r.held) ? { held: r.held.filter((h): h is HeldCorrection => !!h && typeof h.taskId === 'string' && typeof h.at === 'string' && typeof h.text === 'string' && typeof h.date === 'string' && typeof h.entryAt === 'string').slice(-100) } : {}),
     ...(typeof r.lastChatSendAt === 'string' ? { lastChatSendAt: r.lastChatSendAt } : {}),
+    ...(r.cardCorrected && typeof r.cardCorrected === 'object' ? { cardCorrected: Object.fromEntries(Object.entries(r.cardCorrected as Record<string, unknown>)
+      .filter((e): e is [string, string] => typeof e[1] === 'string' && nowMs - Date.parse(e[1]) < CARD_CORRECTION_GAP_MS * 4)) } : {}),
     ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),
   };
 }

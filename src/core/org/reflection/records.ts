@@ -33,6 +33,7 @@ export const reflectionDayFileOf = (nodeId: string, date: string): string => pat
 const NOT_SENT_WHY: Record<NonNullable<DayEntry['notSent']>, string> = {
   no_session: 'no known session to send to', task_done: 'the task is complete', not_managed: 'the task is not in this node\'s team now',
   duty_off: 'the node\'s reflection switch is off', org_off: 'the org is off', gone: 'the task or the node is gone', off: 'cause not recorded',
+  card_corrected: 'the same ask or card got a correction a short while ago, and he wrote nothing about it since',
 };
 
 export interface GuidanceLine { text: string; from?: string; date?: string }
@@ -170,10 +171,16 @@ export interface DayEntry {
   /** A held correction never sent (it waited too long, or more waited for its task): when it was dropped. */
   heldDropped?: string;
   /** With `off`: why it was not sent (pipeline.ts SendCheck). */
-  notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off';
+  notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off' | 'card_corrected';
   /** Sent to the task's session now, about a turn of an earlier one. */
   earlierSession?: boolean;
   rule: DayRule;
+  /**
+   * The step check (step-gate.ts) held the finding's instruction back: it would have the session use the
+   * user's browser, accounts or name, or write in production or a cloud account. The session got the
+   * fixed note instead, and its lesson was not written.
+   */
+  gated?: { steps: string[]; why: string; by: 'words' | 'model' | 'failed' };
   /** The task its correction was sent to; absent when none was sent. */
   handedTo?: { taskId: string; title: string };
   /** The pain registry entry his complaint went to (pains.ts), and whether it opened it. */
@@ -225,6 +232,7 @@ export function renderDayEntry(e: DayEntry): string {
     ...(f.rule_quote ? [`- Rule quoted: "${f.rule_quote}"`] : []),
     `- What went wrong: ${f.what_went_wrong}`,
     `- The right way: ${f.correct_action}`,
+    ...(e.gated ? [`- Step check: the instruction above was held back and never sent (it would have the session ${e.gated.steps.join(', ')}: ${e.gated.why}); the session got a note to ask the person its rules name instead.`] : []),
     `- Correction: ${e.corrected === 'sent' ? (e.earlierSession ? 'sent to the task\'s current session (the turn was in an earlier one)' : 'sent to the session') : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : `not sent (${NOT_SENT_WHY[e.notSent ?? 'off']})`}`,
     `- Rule: ${ruleLine(e.rule)}`,
     `- Handed to: ${handedToLine(e)}`,

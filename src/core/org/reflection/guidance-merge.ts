@@ -20,9 +20,10 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { normalizeForQuote, type CallModel } from './judge.js';
 import { screenSkillWrite } from '../../memory-safety.js';
-import { addGuidance, readDayEntries, readGuidance, reflectionDayFileOf, replaceGuidanceLine, type GuidanceLine } from './records.js';
+import { addGuidance, appendDayNote, dayNoteSaid, readDayEntries, readGuidance, reflectionDayFileOf, replaceGuidanceLine, type GuidanceLine } from './records.js';
 import { localDate, readReflectionState, updateReflectionState, type ReflectionState } from './state.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
+import { checkStepOf, type StepCheck } from './step-gate.js';
 
 /** Merge calls a node may spend a day (apart from the judge's budget), and the backfill's share of them. */
 export const MERGE_CALLS_PER_DAY_MAX = 12;
@@ -31,6 +32,12 @@ export const BACKFILL_CALLS_PER_DAY_MAX = 6;
 export const MERGED_LINE_MAX = 300;
 /** Days of records the backfill reads, lessons it takes up a pass, and tries one lesson gets. */
 export const BACKFILL_DAYS = 7;
+/**
+ * A lesson that holds the user's own words waits this long (2026-11-25 audit: at the day's rate the backlog
+ * only grows, and from the 7th day lessons of his own words would have fallen out unplaced, unsaid). They
+ * are taken up first.
+ */
+export const BACKFILL_OWN_WORDS_DAYS = 30;
 export const BACKFILL_PER_PASS = 4;
 export const BACKFILL_TRIES_MAX = 2;
 /** Shares of the old line's and the lesson's words the rewrite keeps, at least (2026-11-21, a real model's 16 good merges of a VP's lessons kept 0.79 to 1 of the old line and 0.38 to 0.89 of the lesson; one that lost one of the old line's two conditions kept 0.64). */
@@ -125,7 +132,11 @@ export function readMerge(raw: string, lines: readonly GuidanceLine[], lesson: s
   return { kind: 'merged', line: n, text, was: old.text };
 }
 
-export interface MergeDeps { callModel: CallModel; replyLanguage: () => Promise<string | null> }
+export interface MergeDeps {
+  callModel: CallModel; replyLanguage: () => Promise<string | null>;
+  /** The step check (step-gate.ts): a lesson kept before it existed passes it before the backfill writes it. */
+  checkStep?: StepCheck;
+}
 
 /** The line a lesson merged before now sits in (its number), or 0 when none holds it any more. */
 function mergedLineOf(s: ReflectionState, key: string, lines: readonly GuidanceLine[]): number {
@@ -189,28 +200,50 @@ export async function mergeGuidance(
 const DROPPED_TEXT_RE = /^not added \((?:day_full|file_full)\b/;
 const DROPPED_MD_RE = /^- Rule: none \(not added \((?:day_full|file_full)(?:; not merged: .*?)?\): (.+)\)\s*$/;
 
-/** The lessons a full day or file dropped in the day records of the last BACKFILL_DAYS days, oldest first. */
-export async function droppedLessons(nodeId: string, nowMs: number): Promise<Array<{ text: string; date: string }>> {
-  const out: Array<{ text: string; date: string }> = [];
-  const push = (text: string, date: string) => {
+/**
+ * The lessons a full day or file dropped: those of the last BACKFILL_DAYS days, and those holding his own
+ * words (the finding quoted him) of the last BACKFILL_OWN_WORDS_DAYS; his own first, each oldest first.
+ */
+export async function droppedLessons(nodeId: string, nowMs: number): Promise<Array<{ text: string; date: string; own: boolean }>> {
+  const out: Array<{ text: string; date: string; own: boolean }> = [];
+  const push = (text: string, date: string, own: boolean) => {
     const t = text.trim();
-    if (t && !out.some((x) => normalizeForQuote(x.text) === normalizeForQuote(t))) out.push({ text: t, date });
+    const at = out.findIndex((x) => normalizeForQuote(x.text) === normalizeForQuote(t));
+    if (!t) return;
+    if (at < 0) out.push({ text: t, date, own });
+    else if (own) out[at].own = true;
   };
-  for (let i = BACKFILL_DAYS - 1; i >= 0; i--) {
+  for (let i = BACKFILL_OWN_WORDS_DAYS - 1; i >= 0; i--) {
     const date = localDate(nowMs - i * 24 * 3600_000);
+    const recent = i < BACKFILL_DAYS;
     // The day's JSON holds the lesson whole; the Markdown is read only for a day without one.
     const entries = await readDayEntries(nodeId, date);
     if (entries) {
-      for (const e of entries) if (e.rule.kind === 'none' && DROPPED_TEXT_RE.test(e.rule.text) && e.finding?.guidance) push(e.finding.guidance, date);
+      for (const e of entries) {
+        if (e.rule.kind !== 'none' || !DROPPED_TEXT_RE.test(e.rule.text) || !e.finding?.guidance) continue;
+        const own = !!e.finding.user_quote?.trim();
+        if (own || recent) push(e.finding.guidance, date, own);
+      }
       continue;
     }
+    if (!recent) continue;
     const md = await fsp.readFile(reflectionDayFileOf(nodeId, date), 'utf-8').catch(() => '');
     for (const raw of md.split('\n')) {
       const m = DROPPED_MD_RE.exec(raw.trim());
-      if (m) push(m[1], date);
+      if (m) push(m[1], date, false);
     }
   }
-  return out;
+  return [...out.filter((l) => l.own), ...out.filter((l) => !l.own)];
+}
+
+/** Once a day, the lessons that leave the backlog tomorrow unplaced, said in the day's record. */
+async function noteLeaving(node: Task, nodeName: string, todo: ReadonlyArray<{ text: string; date: string; own: boolean }>, nowMs: number): Promise<void> {
+  const date = localDate(nowMs);
+  const edge = (days: number) => localDate(nowMs - (days - 1) * 24 * 3600_000);
+  const leaving = todo.filter((l) => l.date === (l.own ? edge(BACKFILL_OWN_WORDS_DAYS) : edge(BACKFILL_DAYS)));
+  if (!leaving.length || await dayNoteSaid(node.id, date, 'Lessons leaving the backlog')) return;
+  const own = leaving.filter((l) => l.own).length;
+  await appendDayNote(node.id, nodeName, date, `Lessons leaving the backlog tomorrow unplaced: ${leaving.length}${own ? ` (${own} with the user's own words)` : ''}; the guidance has no room for them: ${leaving.map((l) => l.text.slice(0, 80)).join(' | ')}`, nowMs).catch(() => {});
 }
 
 /**
@@ -223,9 +256,19 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
   const done = new Set(state.backfilled ?? []);
   const todo = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !state.removed.includes(normalizeForQuote(l.text)));
   const date = localDate(nowMs);
+  await noteLeaving(node, nodeName, todo, nowMs);
+  const check = checkStepOf(deps);
   let taken = 0;
   for (const l of todo.slice(0, BACKFILL_PER_PASS)) {
     const key = normalizeForQuote(l.text);
+    // A lesson that would have sessions use his browser, accounts or name, or write in production or a
+    // cloud account, is never written: settled as given up, said in the day's record.
+    const g = await check(l.text, node.id);
+    if (g.steps.length) {
+      await updateReflectionState(node.id, (s) => { s.backfilled = [...(s.backfilled ?? []), key].slice(-500); }, nowMs);
+      await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')}): ${l.text.slice(0, 200)}`, nowMs).catch(() => {});
+      continue;
+    }
     const addedToday = (await readGuidance(node.id)).filter((x) => x.date === date).length;
     const line = { text: l.text, from: `reflection of ${l.date}`, date };
     const added = await addGuidance(node.id, nodeName, line, { removed: state.removed, addedToday });

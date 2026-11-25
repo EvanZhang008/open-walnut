@@ -100,11 +100,27 @@ describe('sends to a Main or lead chat', () => {
     expect(entries.filter((e) => e.held === 'one_per_pass')).toHaveLength(2)
   })
 
-  it('never go to the owner\'s current session for a thread message with no session of its own', async () => {
+  // 2026-11-25 audit: such corrections were never sent nor held while the task had a live session.
+  it('a thread message with no session of its own goes to the owner\'s current session, told it is a turn of the task', async () => {
     const { d, sent } = deps({ threads: threadOf(1, 'Pier page', () => undefined) })
     const r = await reflectForNode(vp, 'Marina VP', [vp], d)
+    expect(r.findings[0].entry?.corrected).toBe('sent')
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('looked at a turn of this task')
+  })
+
+  it('with no session at all it is held, and goes with the next send once a session is there', async () => {
+    let current = ''
+    const { d, sent } = deps({ threads: threadOf(1, 'Pier page', () => undefined) })
+    const dd = { ...d, currentSession: async () => current, confirmSend: async (_n: Task, _t: Task, sid: string) => (sid ? 'ok' as const : 'no_session' as const) }
+    const r = await reflectForNode(vp, 'Marina VP', [vp], dd)
     expect(r.findings[0].entry?.held).toBe('no_session')
     expect(sent).toEqual([])
+    expect((await readReflectionState(vp.id, NOW)).held).toHaveLength(1)
+    current = 'sess-new'
+    await reflectForNode(vp, 'Marina VP', [vp], { ...dd, nowMs: () => NOW + 10 * 60_000 })
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('held 1 correction')
   })
 
   it('never carry a thread title the injection screen refuses', async () => {

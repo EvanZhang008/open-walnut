@@ -27,7 +27,9 @@ const oneLine = (l: string): string => (l.length > LINE_MAX ? `${l.slice(0, LINE
 
 /** One finding as the note lists it: kind, what went wrong, the rule it became, the task it went to. Pure. */
 export function nightlyLine(e: DayEntry): string {
-  return oneLine(`- ${e.at.slice(11, 16)} ${e.finding.kind} in ${e.task.title}: ${e.finding.what_went_wrong} Rule: ${ruleLine(e.rule)}. Handed to: ${handedToLine(e)}.`);
+  // A finding the step check held back is named without its words, which carry the step (step-gate.ts).
+  const what = e.gated ? `its fix was held back by the step check (it would have the session ${e.gated.steps.join(', ')}); the session was told to ask the person its rules name.` : e.finding.what_went_wrong;
+  return oneLine(`- ${e.at.slice(11, 16)} ${e.finding.kind} in ${e.task.title}: ${what} Rule: ${ruleLine(e.rule)}. Handed to: ${handedToLine(e)}.`);
 }
 
 /** The one-line findings of a day's Markdown (a day, or the part of one, written before its JSON). Pure. */

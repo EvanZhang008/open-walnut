@@ -13,7 +13,9 @@
  */
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
-import type { Finding } from './judge.js';
+import type { CallModel, Finding } from './judge.js';
+import { renderTurns, turnsSince, type ReadTranscript } from './context.js';
+import { checkStepOf, stepWords, type GatedStep, type StepCheck } from './step-gate.js';
 import { appendDayNote, markHeld, nearlySame } from './records.js';
 import { sessionNowOf } from './candidates.js';
 import { giveBackChatSend, localDate, readReflectionState, takeChatSend, updateReflectionState, type HeldCorrection } from './state.js';
@@ -27,6 +29,45 @@ export interface HeldDeps {
   send: (task: Task, text: string, title: string) => Promise<boolean>;
   confirmSend: (node: Task, task: Task, sessionId: string) => Promise<boolean | string>;
   currentSession?: (task: Task) => Promise<string>;
+  /** The step check (step-gate.ts): a held text kept before the check existed passes it at its send. */
+  checkStep?: StepCheck;
+  /** For the check that the session has not taken them up since (stillNeeded). */
+  readTranscript?: ReadTranscript;
+  callModel?: CallModel;
+}
+
+/** A held correction the step check held back: only that a step is not to be taken on its word. Pure. */
+export function gatedPoint(steps: readonly GatedStep[]): string {
+  return `A fix that would have you ${stepWords(steps)}. The reflection never tells a session to take such a step: if it is still needed, ask the person your rules name for it, and take it only on their word.`;
+}
+
+export const STILL_NEEDED_SYSTEM = [
+  'An automated reviewer held some corrections for an AI agent session and is about to send them. LATER is what the session wrote since they were judged.',
+  'Name the corrections LATER shows the session already took up in full (it did the right way, or answered what was missing). A correction LATER does not touch is still needed.',
+  'Answer only JSON: {"done": [the numbers of the corrections already taken up]}',
+].join('\n');
+
+/**
+ * The held items the session has not taken up since they were judged (2026-11-25 audit: one sent an
+ * hour later was out of date; the session had answered within minutes). One call; when it cannot be
+ * read, all of them go (each says one already taken up needs nothing more).
+ */
+export async function stillNeeded(items: readonly HeldCorrection[], sessionId: string, deps: Pick<HeldDeps, 'readTranscript' | 'callModel'>, nodeId: string): Promise<{ keep: HeldCorrection[]; done: HeldCorrection[] }> {
+  if (!items.length || !sessionId || !deps.readTranscript || !deps.callModel) return { keep: [...items], done: [] };
+  const oldest = items.map((h) => h.entryAt).sort()[0];
+  const later = await turnsSince(sessionId, oldest, deps.readTranscript, 4).catch(() => []);
+  if (!later.length) return { keep: [...items], done: [] };
+  let raw = '';
+  try {
+    raw = await deps.callModel(STILL_NEEDED_SYSTEM, ['CORRECTIONS:', ...items.map((h, i) => `${i + 1}. [judged ${h.entryAt}] ${h.text}`), '', 'LATER:', renderTurns(later)].join('\n'), nodeId);
+  } catch { return { keep: [...items], done: [] }; }
+  let done: number[] = [];
+  try {
+    const a = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { done?: unknown };
+    done = Array.isArray(a.done) ? a.done.filter((n): n is number => Number.isInteger(n)) : [];
+  } catch { return { keep: [...items], done: [] }; }
+  const gone = new Set(done.map((n) => n - 1));
+  return { keep: items.filter((_, i) => !gone.has(i)), done: items.filter((_, i) => gone.has(i)) };
 }
 
 /** The point a held correction makes, short: the correction, the right way, his words. Pure. */
@@ -120,8 +161,22 @@ export async function sendHeld(
       continue;
     }
     if (isChat(task!) && !(await takeChatSend(task!.id, nowMs))) continue;
-    const items = await takeOut(node.id, (h) => h.taskId === taskId, nowMs);
-    if (!items.length) continue;
+    const taken = await takeOut(node.id, (h) => h.taskId === taskId, nowMs);
+    if (!taken.length) continue;
+    // Each held text passes the step check (one kept before it existed included), then the ones the
+    // session took up since are settled, not sent.
+    const stepCheck = checkStepOf(deps);
+    const checked = await Promise.all(taken.map(async (h) => {
+      if (h.checked) return h;
+      const g = await stepCheck(h.text, node.id);
+      return { ...h, checked: true as const, ...(g.steps.length ? { text: gatedPoint(g.steps) } : {}) };
+    }));
+    const { keep: items, done } = await stillNeeded(checked, await sessionNowOf(task!, deps).catch(() => ''), deps, node.id);
+    if (done.length) await settle(node, nodeName, taskId, done, 'heldDropped', (n) => `Held corrections dropped: ${n} for ${task!.title} (${taskId}), the session took ${n === 1 ? 'it' : 'them'} up since.`, nowMs);
+    if (!items.length) {
+      if (isChat(task!)) await giveBackChatSend(task!.id, nowMs);
+      continue;
+    }
     const went = await deps.send(task!, heldText(node.id, nodeName, items), `${nodeName}'s reflection: ${items.length} held correction${items.length === 1 ? '' : 's'}`).catch(() => false);
     if (!went) {
       await putBack(node.id, items, nowMs);

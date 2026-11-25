@@ -323,9 +323,10 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   // the ask is judged as that card shows it. A card about several tasks is not this ask's.
   const card = (await Promise.all(holders.map((id) => p.threadsOf(id)))).flat()
     .find((th) => th.state === 'needs' && !th.closed && th.tasks?.length === 1 && th.tasks[0] === task.id);
-  // A card of its own judged now is the one judgment of this ask: the same words twice would spend two calls
-  // and send two corrections (2026-11-24 review). Judged already, or not judged now, the ask borrows its words.
-  if (card && !card.cardOfOther) { const j = cardJudgedNow(card, p); if (j && !p.seen.has(j.key)) return null; }
+  // A card of its own is the one judgment of this ask, judged on its own (threadCardCandidates) whenever it
+  // changes: the task's status line is not what he reads then (2026-11-25 audit: 6 of 15 wrong "not done"
+  // findings judged a stale status line as his card, one card 7 times in 7 hours).
+  if (card && !card.cardOfOther) return null;
   const inThreads = (await Promise.all(holders.map(async (id) => (await p.threadsOf(id))
     .filter((th) => th.tasks?.includes(task.id))
     .flatMap((th) => th.messages.filter((m) => m.at > since).map((m) => ({ id: m.id, at: m.at, text: `[in the thread "${th.title}"] ${m.text}` })))))).flat();

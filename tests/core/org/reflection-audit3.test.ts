@@ -84,9 +84,11 @@ beforeEach(async () => {
 })
 
 describe('what the judge is told', () => {
-  it('a step the rules give to a person is asked for, never done; one the rules let agents take stays theirs', () => {
-    expect(JUDGE_SYSTEM).toContain('never tell the session to take a step its RULES give to a person or forbid an agent')
-    expect(JUDGE_SYSTEM).toContain('A step the RULES let agents take (a sign-in or a command on his own machine) stays the agent')
+  // 2026-11-25 audit: the looser wording let two corrections send sessions to his Chrome and sign-ins.
+  it('a step that is not an agent\'s on a reviewer\'s word is asked for, never done, whatever the rules let agents do', () => {
+    expect(JUDGE_SYSTEM).toContain('never tell the session to take a step that is not an agent\'s to take on a reviewer\'s word')
+    expect(JUDGE_SYSTEM).toContain('using the user\'s own browser, accounts or sign-ins')
+    expect(JUDGE_SYSTEM).not.toContain('stays the agent')
   })
 
   it('a thread\'s later answers are each read once, the first after his message kept before the newest', async () => {
@@ -268,14 +270,14 @@ describe('an ask is judged where he reads it', () => {
     currentSession: currentSessionOfTask, sessionAt: (t, at) => sessionOfTaskAt(t.id, at), nowMs: () => NOW, replyLanguage: async () => null,
   } as never)).candidates.filter((c) => c.key.startsWith('card:') || c.key.startsWith('ask:'))
 
-  it('an ask with a card of its own is judged once, as the card; a card that shows the ask, or one judged already, lends it its buttons', async () => {
+  // 2026-11-25 audit: an ask whose card was judged already was judged again on the task's stale status line.
+  it('an ask with a card of its own is judged only as the card, never on its status line; a card that shows the ask lends it its buttons', async () => {
     expect((await collect([thread()])).map((c) => c.key)).toEqual(['card:th-1:after:tm-1'])
-    for (const [th, seen] of [[thread({ cardOfOther: true }), []], [thread(), ['card:th-1:after:tm-1']]] as const) {
-      const cs = await collect([th], [...seen])
-      expect(cs.map((c) => c.key.split(':')[0])).toEqual(['ask'])
-      expect(cs[0].ask!.text).toContain('Thread card: Pick the dock layout')
-      expect(cs[0].ask!.text).not.toContain('Buttons: none')
-    }
+    expect(await collect([thread()], ['card:th-1:after:tm-1'])).toEqual([])
+    const cs = await collect([thread({ cardOfOther: true })])
+    expect(cs.map((c) => c.key.split(':')[0])).toEqual(['ask'])
+    expect(cs[0].ask!.text).toContain('Thread card: Pick the dock layout')
+    expect(cs[0].ask!.text).not.toContain('Buttons: none')
   })
 
   it('a card about several tasks lends no task its buttons: each ask is still judged', async () => {
