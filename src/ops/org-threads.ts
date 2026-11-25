@@ -83,7 +83,7 @@ const ASK_INPUT = {
   same_ask_reason: z.string().max(300).optional().describe('After a 409 same_ask: why this is another decision (10+ characters)'),
 }
 /** Every thread op that hands a thread to the user while its task asks him something else (thread-supersede.ts). */
-const SUPERSEDES_ARG = z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe('The asks (th-..., lt-...) this one replaces: your own, or a card above or below that names your task. Each leaves his Needs you, or the write is refused by name')
+const SUPERSEDES_ARG = z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe('The asks (th-, lt-) it replaces: yours, or a card that names your task')
 const SEPARATE_REASON_ARG = z.string().max(300).optional().describe('After 409 other_open_asks or same_subject: why it is apart (10+)')
 
 const THREAD_ID = z.string().regex(/^th-[a-f0-9]{6,32}$/)
