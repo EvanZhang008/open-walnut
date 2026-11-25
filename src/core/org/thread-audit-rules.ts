@@ -20,6 +20,7 @@ import { snoozedNow } from './thread-view.js';
 import { firstSentence } from './ask-clarity.js';
 import { agoWords } from '../user-status.js';
 import { STATUS_QUESTION } from '../../lib/internal-lines.js';
+import { clause } from '../../utils/format.js';
 
 export const AUDIT_KINDS = ['repeat', 'unasked', 'stale', 'thin'] as const;
 export type AuditKind = typeof AUDIT_KINDS[number];
@@ -272,9 +273,9 @@ export function findingLine(f: AuditFinding, kept: boolean): string {
         + `Merge: thread_update {${task}"id":"${t.id}","merge_into":"${o.id}"}; if they are two matters, say how in each summary.`;
     }
     case 'unasked':
-      return `- unasked: ${t.id} ${q(t.title)}: ${why}. Hand it to him: thread_update {"id":"${t.id}","state":"needs","options":[...],"user_kind":"...","user_kind_why":"..."}; or write only the result and ask nothing.`;
+      return `- unasked: ${t.id} ${q(t.title)}: ${clause(why)}. Hand it to him: thread_update {"id":"${t.id}","state":"needs","options":[...],"user_kind":"...","user_kind_why":"..."}; or write only the result and ask nothing.`;
     case 'stale':
-      return `- stale: ${t.id} ${q(t.title)}: ${why}. Check where it stands, then ${line('answered with the result, waiting if a team has it, or done')}.`;
+      return `- stale: ${t.id} ${q(t.title)}: ${clause(why)}. Check where it stands, then ${line('answered with the result, waiting if a team has it, or done')}.`;
     case 'thin':
       // A card that waits on him says what he decides; any other says its result (review 2026-11-25).
       return `- thin: ${t.id} ${q(t.title)}: ${why}; his card shows only the title and summary. `
