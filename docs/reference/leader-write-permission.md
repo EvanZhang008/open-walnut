@@ -395,11 +395,15 @@ the fsync before the answer, the wall clock in the holder's clock, the fixed-lis
 waiting for the registration, the ledger on list changes, the incarnation, the holder writing
 down an outcome it read, the releaser stopping before it sends, a new process waiting for a
 majority after a release, a witness taking a release only on its writer's own live record, a
-witness taking a grant on a live record only from the same incarnation) and must find a violation.
+witness taking a grant on a live record only from the same incarnation, a frozen process acting
+again only once its grant stood) and must find a violation.
 A grant on its own process's live record is counted where a witness took one: in 100 schedules
 with two processes per machine and planned stops, whose candidates ask as the leader server's
 runtime does (a witness holding their own live record counts as free), witnesses took about 230,
-and no two processes acted at once. The last one goes red rarely in random schedules (1 of 200 split
+and no two processes acted at once. In 200 more, a process whose handover is open asks a grant 30% of
+its ticks (as the runtime does with its cancel owed): about 85 such grants stood, ended the freeze and
+the process acted, never beside another; its negative control (the freeze ends when the grant is asked,
+not once a majority took it) goes red. The last one goes red rarely in random schedules (1 of 200 split
 schedules): a process whose lease ran out stops proposing, so its numbers stay below the next
 holder's record and the number check refuses its release first, unless the next holder never saw
 the witness it kept. A named case builds that schedule and goes red every time. Each wake of a sleeping machine is an event of its own, so the

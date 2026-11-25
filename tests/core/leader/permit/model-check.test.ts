@@ -69,6 +69,13 @@ interface Variant {
   ownCountsFree?: boolean
   /** Negative control: a witness takes a grant on a live record of the grant's machine, whatever the process. */
   grantAnyProcess?: boolean
+  /**
+   * A process whose handover is open asks a grant 30% of its ticks (runtime.ts: lost with its cancel owed, and cancel()
+   * once only a grant can stand); `injected` counts the freezes such a grant ended where the process then acted.
+   */
+  frozenGrants?: boolean
+  /** Negative control (frozenGrants): the process ends its freeze the moment it asks, before a majority took the grant. */
+  unfreezeOnAsk?: boolean
   /** The network transport's timeout per request (default: none; the real default is 20 s). */
   transportTimeoutMs?: number
   /** Old replies come back after newer ones (a link or a transport that redelivers): the core must not care. */
@@ -156,6 +163,8 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       tickMs: v.tickMs,
       backoff: !v.noBackoff,
       ownCountsFree: v.ownCountsFree,
+      frozenGrantChance: v.frozenGrants ? 0.3 : 0,
+      unfreezeOnAsk: v.unfreezeOnAsk,
       sparseStamps: v.restarts,
       cancelChance: 0.3,
       onTick: (m) => {
@@ -486,6 +495,15 @@ describe('write permission: random schedules', () => {
     expect(r.injected).toBeGreaterThan(0)
   }, 120_000)
 
+  // A process whose handover is open takes the permission back by a grant (permit/client.ts: a grant of its own that
+  // stood ends the freeze); counted where one did and the process then acted.
+  it('never lets two processes act at once when a process with an open handover takes it back by a grant (200 seeds, twins, planned stops)', async () => {
+    const r = await sweep(200, { twins: true, releases: true, tickMs: 1_000, ownCountsFree: true, frozenGrants: true })
+    console.log(`freezes ended by a grant that stood, the process acting after: ${r.injected}`)
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.injected).toBeGreaterThan(0)
+  }, 300_000)
+
   // A change left between its steps by a holder that restarted is finished by whoever holds next.
   it('keeps working when holders restart in the middle of list changes (60 seeds)', async () => {
     const r = await sweep(60, { members: true, pool5: true, restarts: true, tickMs: 1_000 })
@@ -704,6 +722,11 @@ describe('write permission: random schedules', () => {
       const r = await sweep(100, { twins: true, tickMs: 1_000, ownCountsFree: true, grantAnyProcess: true }, 1, true)
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
+
+    it('a process with an open handover that ends its freeze when it asks a grant, not once a majority took it: it acts beside the new holder', async () => {
+      const r = await sweep(200, { tickMs: 1_000, ownCountsFree: true, frozenGrants: true, unfreezeOnAsk: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 300_000)
 
     it('a transport that answers as another witness too: one machine counts as two and the majority is not one', async () => {
       const r = await sweep(300, { wrongWitnessId: true })

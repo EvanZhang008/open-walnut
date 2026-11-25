@@ -104,23 +104,25 @@ const waitingRoundMs = (p: PermitParams) => Math.min(WAITING_ROUND_MS, p.renewEv
 /**
  * How long, at most, a runtime that waits for the permission takes to hold it once it may: every record a majority
  * of the witnesses it reaches holds for another process (an earlier process of this machine included, its handover
- * too) ran out there, and every answer leaves the permission to this machine (wantFor, splitOwnRecords). The round
- * under way ends and the next one runs: its pause, its three reads (each waits READ_WAIT_MS for a witness that never
- * answers), the grant's back-off (backoffMaxMs at most), and one proposal wait for the answers. A grant is taken
- * there at once (rules.ts judge: a witness that holds a live record of this very process takes it as it takes a
- * renew). With the defaults: 5 + 4.5 + 30 + 3 = 42.5 s.
+ * too) ran out there, and every answer leaves the permission to this machine (wantFor, splitOwnRecords). Counted from
+ * a round as it really runs (acquire), each read waiting READ_WAIT_MS for a witness that never answers and each
+ * proposal PROPOSE_WAIT_MS when one witness refuses and another never answers: the proposal wait of the round under
+ * way (its grant left just before), the pause, the first read, a renew when it decides one (its read and its wait),
+ * the back-off (backoffMaxMs at most), the read again, and the grant's own read. That grant is taken at once (rules.ts
+ * judge: a witness that holds a live record of this very process takes it as it takes a renew). With the defaults:
+ * 3 + 5 + 4 x 1.5 + 3 + 30 + 3 (allowance for the grant's answers) = 50 s.
  */
 export function retakeWithinMs(p: PermitParams): number {
-  return waitingRoundMs(p) + 3 * READ_WAIT_MS + p.backoffMaxMs + PROPOSE_WAIT_MS
+  return waitingRoundMs(p) + 4 * READ_WAIT_MS + 3 * PROPOSE_WAIT_MS + p.backoffMaxMs
 }
 
 /**
- * How long, at most, a restarted server of the machine that held the permission takes to hold it again from its
- * first read of the witnesses, when what they hold is only its machine's (its handover after a switch that rolled back
- * once its server stopped, or an earlier process's record), a majority of them answers, and nobody else asks: every
- * such record runs out within one witness hold of that read (a witness it keeps itself counts the record from this
- * server's first read; one elsewhere took it before), the hold measured on witness clocks that may run slow by
- * maxDriftRate; then retakeWithinMs. With the defaults: 63.3 + 42.5 = 105.8 s.
+ * How long, at most, a restarted server of the machine that held the permission takes to hold it again from its boot
+ * (its first read of the witnesses, before it listens), when what they hold is only its machine's (its handover after
+ * a switch that rolled back once its server stopped, or an earlier process's record), a majority of them answers, and
+ * nobody else asks: every such record runs out within one witness hold of that read (a witness it keeps itself counts
+ * the record from this server's first read; one elsewhere took it before), the hold measured on witness clocks that
+ * may run slow by maxDriftRate; then retakeWithinMs. With the defaults: 63.3 + 50 = 113.3 s.
  */
 export function retakeAfterRestartMs(p: PermitParams): number {
   return Math.ceil(witnessHoldMs(p) / (1 - p.maxDriftRate)) + retakeWithinMs(p)

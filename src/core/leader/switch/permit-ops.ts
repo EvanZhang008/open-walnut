@@ -121,7 +121,12 @@ export async function proposeAndWait(h: PermitHandle, make: (c: PermitClient) =>
   while (Date.now() < deadline) {
     await tick(20)
     const pending = h.client.pendingRecord()
-    // Chosen: onChosen cleared it (or a later proposal replaced it).
+    // Chosen: onChosen cleared it. A pending record that is another one (a later proposal replaced it) reads as chosen
+    // too, which holds only because nothing proposes on this client while this wait runs: the leader server's runtime
+    // sends every proposal through its one queue (runtime.ts serial), and the reader commands propose nothing. The one
+    // proposal outside that queue is a planned stop's release (runtime.ts stop), sent after `stopped` is set, which each
+    // step checks after its wait, so the false "chosen" is never acted on. A caller that proposes beside a running wait
+    // must not use this.
     if (!pending || pending.number !== record.number || pending.nonce !== record.nonce) return { outcome: 'chosen', record }
     if (h.client.outcome() === 'short') break
     if (Date.now() - last > 300) { h.client.retransmit(); last = Date.now() }

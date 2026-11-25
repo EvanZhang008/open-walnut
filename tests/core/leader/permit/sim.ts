@@ -553,6 +553,10 @@ export interface PilotOptions {
    * server's runtime asks a grant on its own records, runtime.ts splitOwnRecords): its grants land on them.
    */
   ownCountsFree?: boolean
+  /** A frozen process (its handover open) asks a grant this often, as runtime.ts acquire does when lost with a cancel owed. */
+  frozenGrantChance?: number
+  /** Negative control: the frozen process stops being frozen the moment it asks that grant, before any majority took it. */
+  unfreezeOnAsk?: boolean
 }
 
 /**
@@ -583,6 +587,7 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
   let lastRenew = -Infinity
   let asking = false
   let lastLook = -Infinity
+  let frozenAsk: number | null = null
   const stamp = (m: MachineNode) => ({ seq: world.writeSeq, writtenAt: opts.sparseStamps ? world.writeSeq : m.clock.wall() })
   const step = (): void => {
     const m = world.machines.get(key)!
@@ -592,7 +597,14 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
     const c = m.c
     // A process in its planned stop does nothing more (World.plannedStop drives its release).
     if (c.released()) return
+    // A grant it asked while frozen ended the freeze (it stood) and the process acts: counted (the case is reached).
+    if (frozenAsk !== null && !c.isFrozen() && m.c === c) { if (c.mayAct()) world.injected++; frozenAsk = null }
     if (c.isFrozen()) {
+      if (opts.frozenGrantChance && world.rand() < opts.frozenGrantChance) {
+        frozenAsk = c.requestGrant().number
+        if (opts.unfreezeOnAsk) (c as unknown as { frozen: boolean }).frozen = false
+        return
+      }
       if (opts.cancelChance && world.rand() < opts.cancelChance) c.cancelHandover()
       else if (c.outcome() === 'open') c.retransmit()
       else c.read()

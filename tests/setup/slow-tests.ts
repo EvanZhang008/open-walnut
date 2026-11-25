@@ -82,7 +82,7 @@ export const SLOW_TEST_FILES = [
   'tests/core/leader/switch/witness-transport.test.ts', // three witness machines on loopback sockets: a permit client over real HTTP, the renew round trip measured
   'tests/core/leader/switch/witness-door.test.ts', // three direct witness doors behind TLS on loopback: a permit client over them, every refusal, the renew round trip measured
   'tests/core/leader/switch/witness-ways.test.ts', // three witness machines on loopback sockets: way a and way c on one record
-  'tests/core/leader/switch/retake-after-handover.test.ts', // ~60s: a real permit runtime waits out a handover's 20 s holds at two witnesses, one out of reach; a handover and its cancel that did not stand
+  'tests/core/leader/switch/retake-after-handover.test.ts', // ~70s: a real permit runtime waits out a handover's 30 s holds at two witnesses, one out of reach; a handover and its cancel that did not stand
   'tests/core/leader/permit/change-repair.test.ts', // ~4s: 35 ten-minute schedules of candidates racing for the permission (back-off)
   'tests/core/offline-merge/notes.test.ts', // ~3s: two 1 MB merges in a worker thread under the stall recorder, one waits out the 2 s deadline (WP11)
   'tests/integration/replica-ask-twins.test.ts', // the daemon as a process, mock CLIs spawned from the spawn template, a resume, ten asks an hour

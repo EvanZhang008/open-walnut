@@ -31,12 +31,16 @@ let settings: LeaderSwitchSettings & { witnesses: LocalWitnessPlace[] }
 const runtimes: PermitRuntime[] = []
 const home = (m: string) => path.join(root, m, 'home')
 
-/** A 20 s permit (margins scaled as settings.ts permitParamsFor does), rounds a second apart, a short back-off. */
+/**
+ * A 30 s permit (margins scaled as settings.ts permitParamsFor does), rounds a second apart, a short back-off. Long
+ * enough that the old rule's first possible lead (a hold after the remote witness took its grant alone, 22 s after the
+ * last hold ran out here) comes after the bound (retakeWithinMs, 16.1 s here): the test can only pass with the rule.
+ */
 const PARAMS: PermitParams = (() => {
-  const f = 20_000 / DEFAULT_PERMIT_PARAMS.validMs
+  const f = 30_000 / DEFAULT_PERMIT_PARAMS.validMs
   const d = DEFAULT_PERMIT_PARAMS
   return {
-    ...d, validMs: 20_000, renewEveryMs: 1_000, holderMarginMs: Math.round(d.holderMarginMs * f), witnessMarginMs: Math.round(d.witnessMarginMs * f),
+    ...d, validMs: 30_000, renewEveryMs: 1_000, holderMarginMs: Math.round(d.holderMarginMs * f), witnessMarginMs: Math.round(d.witnessMarginMs * f),
     minSendRemainingMs: Math.round(d.minSendRemainingMs * f), backoffBaseMs: 50, backoffMaxMs: 100,
   }
 })()
@@ -112,8 +116,10 @@ describe('the old leader after a failed trial, one witness out of reach and two 
     expect(again.status().state === 'leading' || again.mayAct()).toBe(true)
   }, 90_000)
 
-  it('a handover that did not stand and could not be cancelled: the server takes the permission back by a grant and acts again', async () => {
-    // Short records (the runtime tests' clocks): the handover's and the cancel's waits outlast them.
+  it('a handover and its cancel that did not stand: the grant that takes it back ends the client\'s freeze, and the server acts again', async () => {
+    // What this tests is the freeze (permit/client.ts onChosen), not the grant rule: with short records (the runtime
+    // tests' clocks) the handover's and the cancel's waits outlast them, so the grant lands where they ran out, under the
+    // rule as it was too. Before the freeze ended on a grant, the server read 'leading' and never acted.
     settings = { ...settings, params: { ...DEFAULT_PERMIT_PARAMS, validMs: 3_000, renewEveryMs: 750, holderMarginMs: 200, witnessMarginMs: 200, minSendRemainingMs: 500, backoffBaseMs: 100, backoffMaxMs: 200 } }
     const [, w2, w3] = settings.witnesses as [LocalWitnessPlace, LocalWitnessPlace, LocalWitnessPlace]
     const r = await start('machine-b')
@@ -125,21 +131,23 @@ describe('the old leader after a failed trial, one witness out of reach and two 
     expect(h.ok).toBe(false)
     expect(r.status().state).toBe('lost')
     for (const w of [w2, w3]) fs.renameSync(`${w.dir}.off`, w.dir)
-    // Every answer leaves it to this machine (its handover at w1, its own records at w2 and w3): a grant takes it back,
-    // and the process that wrote the handover acts again (its client was frozen by the handover: permit/client.ts).
+    // Every answer leaves it to this machine (its handover at w1, its own run-out records at w2 and w3): a grant takes it
+    // back, and the process that wrote the handover acts again (its client was frozen by the handover).
     const end = Date.now() + 20_000
     while (!(r.mayAct() && r.status().state === 'leading') && Date.now() < end) await sleep(100)
     expect({ mayAct: r.mayAct(), state: r.status().state }).toEqual({ mayAct: true, state: 'leading' })
   }, 90_000)
 
-  it('the bounds in seconds: 42.5 s after the last hold ran out, 105.8 s after the restart; the switch waits longer than that for it', () => {
-    expect(retakeWithinMs(DEFAULT_PERMIT_PARAMS)).toBe(42_500)
-    expect(retakeAfterRestartMs(DEFAULT_PERMIT_PARAMS)).toBe(105_766)
-    // source-job.ts start-source waits takeBackMs for the restarted old leader's doors to open: that covers the
-    // retake and a server's boot (well under 15 s) before it, with the default clocks and the scaled ones of the tests.
+  it('the bounds in seconds: 50 s after the last hold ran out, 113.3 s after the restart\'s boot; the switch waits longer than that for it', () => {
+    expect(retakeWithinMs(DEFAULT_PERMIT_PARAMS)).toBe(50_000)
+    expect(retakeAfterRestartMs(DEFAULT_PERMIT_PARAMS)).toBe(113_266)
+    // source-job.ts start-source waits takeBackMs for the restarted old leader's doors to open, from when side.ts
+    // startServer returned: the server answers /api/health only once it listens, after its boot read of the witnesses
+    // (server.ts leaderPermitAtBoot), so the wait covers the retake from that read, with 5 s to spare (8.7 s with the
+    // default clocks), with the scaled clocks of the tests too.
     const witnesses = [{ id: 'w1', dir: '/x/w1' }, { id: 'w2', dir: '/x/w2' }, { id: 'w3', dir: '/x/w3' }]
     for (const params of [DEFAULT_PERMIT_PARAMS, permitParamsFor({ WALNUT_LEADER_PERMIT_VALID_MS: '15000' }, witnesses), permitParamsFor({ WALNUT_LEADER_PERMIT_VALID_MS: '6000' }, witnesses)]) {
-      expect(takeBackMs({ params } as never)).toBeGreaterThanOrEqual(retakeAfterRestartMs(params) + 15_000)
+      expect(takeBackMs({ params } as never)).toBeGreaterThanOrEqual(retakeAfterRestartMs(params) + 5_000)
     }
   })
 })
