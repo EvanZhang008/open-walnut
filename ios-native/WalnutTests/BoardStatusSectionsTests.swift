@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 import SwiftUI
 @testable import Walnut
@@ -631,6 +632,28 @@ final class BoardWatchWriteTests: XCTestCase {
 
     private func waitFor(_ condition: () -> Bool) async {
         for _ in 0..<200 where !condition() { try? await Task.sleep(nanoseconds: 10_000_000) }
+    }
+
+    /// A read of the list that brings what is shown writes nothing the board observes: an equal
+    /// array assigned still redraws every row, and a row redrawn under a finger loses the
+    /// long-press menu it was about to show (TaskPageLargeTypeUITests' Details item).
+    func testAReadThatBringsTheSameListRedrawsNoRow() async {
+        let mock = MockTaskTransport()
+        mock.tasksResponse = TasksResponse(tasks: [row("t1"), row("t2")], syncedAt: "2026-08-16T00:00:00Z")
+        let store = TasksStore(transport: mock)
+        await store.loadTasks()
+        XCTAssertEqual(store.tasks.map(\.id), ["t1", "t2"])
+
+        var redrawn = false
+        withObservationTracking { _ = store.tasks } onChange: { redrawn = true }
+        await store.loadTasks()
+        XCTAssertFalse(redrawn, "the same list again redrew the board's rows")
+
+        mock.tasksResponse = TasksResponse(tasks: [row("t1"), row("t2", watched: "2026-08-27T12:00:00Z")],
+                                           syncedAt: "2026-08-16T00:01:00Z")
+        await store.loadTasks()
+        XCTAssertTrue(redrawn, "a row that changed did not redraw")
+        XCTAssertEqual(store.tasks[1].watchedAt, "2026-08-27T12:00:00Z")
     }
 
     func testWatchAppliesAtOnceAndSendsTheTime() async {

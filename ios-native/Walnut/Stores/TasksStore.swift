@@ -778,7 +778,12 @@ final class TasksStore {
                         inFlightEdits[row.id].map { Self.applyEdit($0, to: row) } ?? row
                     }
                 }
-                tasks = merged
+                // A read that brings the list as shown writes nothing: an equal array assigned
+                // still invalidates every reader (ObservationSemanticsProbeTests) and bumps the
+                // board's inputs, which redraws each row, and a row redrawn under a finger
+                // loses the long-press menu it was about to show (TaskPageLargeTypeUITests).
+                // The feed's upserts and every other board read are gated the same way.
+                if merged != tasks { tasks = merged }
             }
             dropUnansweredPredictions(readStartedAt: readStartedAt)
             postStatusMoves(from: before, to: response.tasks)
@@ -811,7 +816,7 @@ final class TasksStore {
             let response = try await api.sessions()
             guard isActive, !Task.isCancelled, seq == sessionLoadSeq else { return }
             MainWork.track("tasks.loadSessions", count: response.sessions.count) {
-                sessions = response.sessions
+                if response.sessions != sessions { sessions = response.sessions }
             }
             sessionsSyncedAt = WalnutTask.parseISO(response.syncedAt)
             sessionsNotSyncedYet = false
