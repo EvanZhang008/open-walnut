@@ -9,6 +9,7 @@ import {
   parsePreset, presetId, presetSvg, type AvatarTask,
 } from '../../../src/core/org/avatars/index.js'
 import { avatarValue, checkAvatarSvg, svgsInReply } from '../../../src/core/org/avatars/avatar-store.js'
+import { buildOrgTree, type OrgTaskLike } from '../../../src/core/org/org-tree.js'
 
 const human = { by: 'human' as const }
 
@@ -106,6 +107,26 @@ describe('who wears which', () => {
     // An editor's preview of a plain task still never takes a pair a node wears.
     const worn = new Set(orgAvatarNodes(tasks).map((n) => a.of(tasks.find((t) => t.id === n.id)!).preset))
     expect(worn.has(a.of(tasks.find((t) => t.id === 'worker')!).preset)).toBe(false)
+  })
+
+  it('every row the Org tree lists (the CEO, each VP, each router) wears one, a project with no VP yet included', () => {
+    // 2026-11-25: a new project with no VP had its row among the VPs, talking to its only task,
+    // a plain task, so the row drew no avatar. Every row's task is read from the tree itself, so a
+    // new kind of row that wears none fails here.
+    const tasks = org([
+      { id: 'lone', title: 'Capabilities onboarding', project: 'Context service', phase: 'NEED_ACTION', created_at: '2026-01-10' },
+      { id: 'lone-kid', title: 'A step of it', project: 'Context service', parent_task_id: 'lone', created_at: '2026-01-11' },
+      { id: 'w-team', title: 'Walnut work', project: 'Walnut', created_at: '2026-01-12' },
+    ])
+    const a = orgAvatars(tasks)
+    const tree = buildOrgTree(tasks as unknown as OrgTaskLike[])
+    const rows = [tree.main?.id, ...(tree.routers ?? []).map((r) => r.id), ...tree.projects.map((p) => p.contactId)]
+    expect(tree.projects.some((p) => !p.lead && p.contactId === 'lone')).toBe(true)
+    for (const id of rows) expect(id && a.wears(id), String(id)).toBe(true)
+    // The stand-in is picked by its project's name, and a plain task of a project that has a VP wears none.
+    expect(orgAvatarNodes(tasks).find((n) => n.id === 'lone')?.name).toBe('Context service')
+    expect(a.wears('w-team')).toBe(false)
+    expect(a.wears('lone-kid')).toBe(false)
   })
 
   it('even past every pair, each node still gets an avatar', () => {
