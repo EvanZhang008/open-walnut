@@ -48,7 +48,7 @@ import {
   createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
-import type { SessionOutputMode } from '../../../src/core/types.js'
+import type { OutwardLanguageSetting, SessionOutputMode } from '../../../src/core/types.js'
 import {
   RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER, REPLY_LANGUAGE_MARKER, REPLY_LANGUAGE_MAX_CHARS,
   replyLanguageText,
@@ -90,7 +90,7 @@ async function newSession(): Promise<string> {
   return sid
 }
 
-async function setSession(session: { output_mode?: SessionOutputMode; reply_language?: string }): Promise<void> {
+async function setSession(session: { output_mode?: SessionOutputMode; reply_language?: string; outward_language?: OutwardLanguageSetting }): Promise<void> {
   await updateConfig({ session })
 }
 
@@ -173,6 +173,25 @@ describe('the system prompt carries it', () => {
     const prompt = (await buildSessionContext('')).systemPrompt
     expect(parseInstructions(prompt).blocks.get('reply-language')?.words).toEqual(['Answer in French. Code stays English.'])
     expect(prompt).toContain('is the lines below, up to the next blank line:\nAnswer in French. Code stays English.\n\n')
+  })
+})
+
+// Its other direction (lib/outward-language.ts): 2026-11-22, a session wrote a ticket's closing note
+// in the user's language, the only language its prompt named.
+describe('the system prompt names the language for other people', () => {
+  it('a block of its own while set, said again in new words, gone when cleared', async () => {
+    await setSession({ reply_language: RULE, outward_language: { language: 'English' } })
+    const prompt = (await buildSessionContext('')).systemPrompt
+    const blocks = parseInstructions(prompt).blocks
+    const own = [...blocks.entries()].find(([, b]) => b.words.some((w) => w.startsWith('Words other people read are in English')))
+    expect(own, [...blocks.keys()].join(', ')).toBeTruthy()
+    expect(own![0]).not.toBe('reply-language')
+    expect(own![1].words.join(' ')).toContain('never translate them into it')
+    expect(defaultInstructions({ project: 'Walnut' })).toContain('Words other people read are in English')
+    await setSession({ outward_language: { language: 'English', commands: ['\\bgh pr create\\b'] } })
+    expect((await buildSessionContext('')).systemPrompt).toContain('Walnut refuses a listed step whose words are in another language.')
+    await setSession({ outward_language: {} })
+    expect((await buildSessionContext('')).systemPrompt).not.toContain('Words other people read')
   })
 })
 

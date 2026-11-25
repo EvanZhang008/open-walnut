@@ -33,6 +33,21 @@ prompt is denied the same way (`src/providers/reply-language-hook.ts`). The sess
 nothing is noted on a send that went out, and a chat reply is never judged. The same guard test
 pins that boundary.
 
+Its other direction since 2026-11-25 (Main for the user, after a code review guide, a ticket's
+closing note and a text he was to approve came out in his language): `session.outward_language`
+names the language words for other people are in (`language`, e.g. "English") and, as the user's
+own list, the steps whose words they read (`tools`: Claude Code tool names; `commands`: patterns on
+a Bash command). The language alone adds a block to every session's prompt; a listed step whose
+words hold another script is denied by the same PreToolUse hook (`src/lib/outward-language.ts`,
+through `reply_language_check`), Walnut's own command and MCP runners (`host_exec`, `mcp_call`,
+`host_mcp_call`) included. A Bash call asks Walnut only when its input matches one of the command
+patterns. Words in a file a command reads them from (`--body-file x`, `-F x`, `@x`, `$(cat x)`,
+`< x`: `COMMAND_FILE_RE`) are read by the hook's shell on the session's own machine (python3, at most
+five files of 200 KB) and judged with the command. Limits: the hook is built when a session's CLI
+starts, so a running session sees a changed tool list only after its CLI restarts; a machine with no
+python3 (or a Mac without its command line tools) judges the command alone, as does a file named after a `cd` in the same command or read from a pipe (`--body-file -`); a replica answers with no setting (as for the reply language);
+and an engine without Claude Code's hooks gets only the prompt block.
+
 Every hint costs every session that gets it on every message it rides. Add one only
 when nothing else can carry it, never restate a rule the prompt already has, keep it
 to a line or two, and measure its bytes per message first. The 2026-11-06 audit found

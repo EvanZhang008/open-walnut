@@ -1988,6 +1988,14 @@ export interface Config {
      *  nothing said about language. Walnut's own letters follow it too. */
     reply_language?: string;
 
+    /** Words other people read (code reviews, tickets, chat and mail to colleagues, commits): the
+     *  language they go out in, and where Walnut holds that at the send step
+     *  (src/lib/outward-language.ts). `language` alone adds a line to every session's prompt;
+     *  `tools` (Claude Code tool names, as regular expressions) and `commands` (regular expressions
+     *  on a Bash command) name the steps whose words others read, and a hook refuses one whose words
+     *  are in another language. Unset = nothing said or held. */
+    outward_language?: OutwardLanguageSetting;
+
     /** Message hints (src/core/hints/): per kind, the user's or an agent's change to a
      *  built-in hint (question, rich-output, voice-reply, ...), or a whole
      *  custom hint (a kind that is not built in, with `text`). Read and written through
@@ -4359,4 +4367,14 @@ export interface SessionRecord {
    *  record; the leader keeps a copy and writes only its own fields
    *  (sessions/session-row-owner.ts). Absent: the leader runs it (every session today). */
   judge?: 'host';
+}
+
+/** config.session.outward_language (see there). */
+export interface OutwardLanguageSetting {
+  /** The language words for other people are written in ("English"). */
+  language?: string;
+  /** Tool names whose input other people read, as regular expressions (`mcp__chat__post_message`). */
+  tools?: string[];
+  /** Bash commands whose words other people read, as regular expressions (`\\bgh pr (create|comment)\\b`). */
+  commands?: string[];
 }

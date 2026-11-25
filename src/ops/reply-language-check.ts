@@ -5,12 +5,17 @@
  * another language is denied, with the reason, so the session asks it again in his language before
  * he sees it. The send gate holds the other words for the user the same way (reply-language-gate.ts).
  * Never a Stop hook: a chat reply is never judged (tests/core/hints/no-reply-language-reminder.test.ts).
+ *
+ * The other direction rides the same hook: a tool call the user listed as one other people read
+ * (config session.outward_language, lib/outward-language.ts) whose words are in another language
+ * than the one he set for them is denied the same way.
  */
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { askUserQuestionText } from '../lib/missing-links.js'
 import { gateRefusal, measureScript, readsOffScript } from '../lib/reply-language.js'
 import { GATE_SETTING_PATH, gateSettingOf } from './reply-language-gate.js'
+import { outwardCall, outwardOffScript, outwardRefusal, outwardSettingOf } from '../lib/outward-language.js'
 
 export const ASK_WHAT = 'Your question to the user (AskUserQuestion)'
 
@@ -24,12 +29,20 @@ defineOp({
   input: {
     text: z.string().max(200000).optional().describe('The text to check (Markdown or HTML)'),
     hook_input: z.record(z.string(), z.unknown()).optional().describe('Set by Walnut\'s AskUserQuestion hook: the hook\'s own input; the answer is then the hook\'s output'),
+    files: z.record(z.string(), z.string().max(200_000)).optional().describe('Set by Walnut\'s outward hook: the text of the files a command reads its words from, by the path the command names'),
   },
   handler: async (args, call) => {
     const hook = args.hook_input as { tool_name?: unknown; tool_input?: unknown } | undefined
-    if (hook && hook.tool_name !== 'AskUserQuestion') return {}
+    const body = await call('GET', GATE_SETTING_PATH).catch(() => null)
+    if (hook && hook.tool_name !== 'AskUserQuestion') {
+      // Words other people read: an older server names no outward setting, and the call runs.
+      const outward = outwardSettingOf((body as { outward?: unknown } | null)?.outward)
+      const c = outward ? outwardCall(hook.tool_name, hook.tool_input, outward, args.files as Record<string, string> | undefined) : null
+      const m = c ? outwardOffScript(c.text, outward!.script, { shell: c.shell }) : null
+      return m ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: outwardRefusal(c!, outward!, m) } } : {}
+    }
     const text = hook ? askUserQuestionText(hook.tool_input) : String(args.text ?? '')
-    const setting = gateSettingOf(await call('GET', GATE_SETTING_PATH).catch(() => null))
+    const setting = gateSettingOf(body)
     const m = setting ? readsOffScript(text, setting.script) : null
     if (hook) {
       return m ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: gateRefusal(ASK_WHAT, setting!.rule, m, 'Ask it again in that language.') } } : {}

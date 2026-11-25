@@ -152,6 +152,7 @@ import { isSubagentLane } from '../core/subagents/types.js'
 import { hasRunningLightSubagents } from '../core/subagents/registry.js'
 import { buildClaudeArgv } from './claude-session-argv.js'
 import { buildSessionSettings } from './claude-session-settings.js'
+import { currentOutwardLanguage } from '../core/sessions/reply-language-context.js'
 import { orgRoleOfPrompt } from '../core/org/org-prompt-role.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
@@ -3097,7 +3098,8 @@ export class ClaudeCodeSession {
     const sessionSettings = buildSessionSettings({
       env: process.env, slim, overrides: slimOverrides ? JSON.parse(slimOverrides) as Record<string, unknown> : undefined,
       sessionEnv: { ...slimEnv, ...walnutEnv, ...tagEnv },
-      hooks: { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt, subagent: isSubagentLane(this._lane) },
+      // The outward hook (lib/outward-language.ts) watches the steps the user listed as ones others read.
+      hooks: { orgRole: orgRoleOfPrompt(hookPrompt), prompt: hookPrompt, subagent: isSubagentLane(this._lane), outward: currentOutwardLanguage() },
     })
 
     // The permission prompt tool intercepts sensitive-file and AskUserQuestion checks. Controlled by

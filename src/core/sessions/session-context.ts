@@ -113,7 +113,7 @@ import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMI
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, userProfileLine } from './user-profile-context.js'
 import { refreshPromptInputs } from './prompt-inputs.js'
-import { approvalsLine, currentApprovalsAsk, currentRealUseWatch, currentReplyLanguage, realUseLine, replyLanguageLine } from './reply-language-context.js'
+import { approvalsLine, currentApprovalsAsk, currentOutwardLanguage, currentRealUseWatch, currentReplyLanguage, outwardLanguageLine, realUseLine, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
@@ -740,6 +740,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
     // message (reply-language-context.ts).
     + replyLanguageLine(currentReplyLanguage())
+    // Its other direction: the language of words other people read (lib/outward-language.ts).
+    + outwardLanguageLine(currentOutwardLanguage())
     // The Approvals switch, off by default: it changes what Walnut stops, never whose decision a step is.
     + approvalsLine(currentApprovalsAsk())
     // The real-use watch (usage-watch/gate.ts): a worker that ships names what real use should show.

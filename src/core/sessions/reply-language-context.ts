@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { versionedBlock } from './instruction-diff.js'
 import { STILL_THE_USERS } from '../approval-kinds.js'
 import { replyLanguageText } from './output-mode.js'
+import { outwardSettingOf, type OutwardSetting } from '../../lib/outward-language.js'
 
 const SYNC_STALE_MS = 5_000
 
@@ -21,6 +22,8 @@ let cached: string | null = null
 let askMe = true
 /** The real-use watch experiment (core/usage-watch/gate.ts), read with them: its rule is in the prompt only while on. */
 let realUse = false
+/** Words for other people (lib/outward-language.ts), read with them: a prompt line and the outward hook. */
+let outward: OutwardSetting | null = null
 let checkedAt = 0
 /** A read of the config succeeded at least once (block-sources.ts: before that the language is unknown, not gone). */
 let readOnce = false
@@ -43,6 +46,7 @@ export function refreshReplyLanguage(): Promise<string | null> {
       // A fallback config (the file unreadable) says nothing of the user's setting.
       const { isFallbackConfig } = await import('../config-manager.js')
       if (!isFallbackConfig(config)) readOnce = true
+      outward = outwardSettingOf(config.session?.outward_language)
     } catch { /* keep the last copy */ }
     checkedAt = Date.now()
     return cached
@@ -119,9 +123,31 @@ export function realUseLine(on: boolean): string {
     + 'An alarm on your targets comes to this task until the check time: fix it there.\n\n'
 }
 
+/** The last outward setting read, for the sync prompt and hook builders (null until one is read). */
+export function currentOutwardLanguage(): OutwardSetting | null {
+  if (Date.now() - checkedAt > SYNC_STALE_MS) void refreshReplyLanguage()
+  return outward
+}
+
+/**
+ * The prompt's block for words other people read, or '' while the setting names no language. A
+ * versioned block, as the reply language's: a running session hears a change. 2026-11-22: a session
+ * wrote a ticket's closing note in the user's language, the only language its prompt named.
+ */
+export function outwardLanguageLine(s: OutwardSetting | null): string {
+  if (!s) return ''
+  const rule = `Words other people read are in ${s.language}: code reviews and their descriptions, tickets and their comments, `
+    + 'chat messages and mail to anyone but the user, and commit messages. Never write the user\'s own language into them and '
+    + 'never translate them into it; when you show him one, quote it as written and talk about it in his language.'
+    + (s.tools.length || s.commands.length ? ' Walnut refuses a listed step whose words are in another language.' : '')
+  const version = `v${createHash('sha1').update(rule).digest('hex').slice(0, 8)}`
+  return versionedBlock(`Language for other people, the user's setting (${version}): what colleagues and anyone outside read.`, version, rule)
+}
+
 /** Tests: forget the copy. */
-export function _resetReplyLanguageForTesting(value: string | null = null): void {
+export function _resetReplyLanguageForTesting(value: string | null = null, outwardSetting: OutwardSetting | null = null): void {
   cached = value
+  outward = outwardSetting
   askMe = true
   realUse = false
   checkedAt = value === null ? 0 : Date.now()

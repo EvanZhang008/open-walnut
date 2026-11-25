@@ -193,6 +193,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     // instruction notice adds it (as the hint did before, 2026-11-06); the companion never tells a
     // session the line is gone (sessions/instruction-notice.ts).
     reply_language: 'the reply language every session\'s prompt carries, built on the Mac',
+    outward_language: 'the language of words for other people, a line and a hook every session gets, built on the Mac',
     idle_compaction: 'the idle compaction runs on the Mac only (sessions/idle-compaction.ts)',
     local_idle_exit_minutes: 'the idle exit of the Mac\'s own sessions, sized for that machine (sessions/live-sessions.ts)',
     local_live_limit: 'the live session limit of the Mac\'s own machine (sessions/live-sessions.ts)',

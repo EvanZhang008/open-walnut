@@ -21,6 +21,7 @@ import { subagentWaitHooks } from './subagent-wait-hook.js'
 import { askLinksHooks } from './ask-links-hook.js'
 import { replyLanguageHooks } from './reply-language-hook.js'
 import type { OrgRole } from '../core/types.js'
+import type { OutwardSetting } from '../lib/outward-language.js'
 
 /**
  * `orgRole`: the session is Main's or a VP's (core/org/org-prompt-role.ts), which adds the hooks that
@@ -30,14 +31,14 @@ import type { OrgRole } from '../core/types.js'
  * The host spawn template starts asks only, never an org node, so it passes none.
  * `subagent`: the session is a subagent's (its lane), which reads no open items of its own.
  */
-export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole; prompt?: string; subagent?: boolean } = {}): Record<string, unknown> | null {
+export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole; prompt?: string; subagent?: boolean; outward?: OutwardSetting | null } = {}): Record<string, unknown> | null {
   const hooks: Record<string, unknown[]> = {}
   // A subagent's session (subagent_run host, core/subagents/on-host.ts) acts as its caller: what is
   // open "for it" (open_items) is its caller's, so the hooks that read that are not its own. Its
   // guards (git, /tmp, sound, approvals, ...) are the same as every session's.
   const own = !opts.subagent
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [own ? compactOpenItemsHooks(env) : null, gitTmpGuardHooks(env), approvalsGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), typecheckGuardHooks(env), codexProviderGuardHooks(env), own ? stopUnansweredHooks(env) : null, subagentWaitHooks(env), askLinksHooks(env), replyLanguageHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
+  for (const part of [own ? compactOpenItemsHooks(env) : null, gitTmpGuardHooks(env), approvalsGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), typecheckGuardHooks(env), codexProviderGuardHooks(env), own ? stopUnansweredHooks(env) : null, subagentWaitHooks(env), askLinksHooks(env), replyLanguageHooks(env, opts.outward ?? null), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null

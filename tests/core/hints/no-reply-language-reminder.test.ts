@@ -61,6 +61,7 @@ describe('no reply-language reminder', () => {
       'src/ops/reply-language-gate.ts': 'refuses a session\'s words for the user before they are sent',
       'src/ops/reply-language-check.ts': 'denies an AskUserQuestion before it is asked; checks a draft on request',
       'src/core/reply-language-gate-setting.ts': 'says which script the gate holds words to (its route and the approval dialog read it)',
+      'src/lib/outward-language.ts': 'the other direction: words other people read, refused at the send step by the same hook (never a note)',
       'src/core/approvals/asker-context.ts': 'an approval reason in another language is not shown as his summary: Walnut writes one in his (display, never a note)',
       'src/core/human-inbox/walnut-letters/languages.ts': 'the language of Walnut\'s own letters (no judging)',
       'src/core/org/reflection/language.ts': 'the daily reflection\'s wrong_language finding',

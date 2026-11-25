@@ -24,7 +24,8 @@ import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
 import { _resetGateSettingCache } from '../../../src/ops/reply-language-gate.js'
 import { handleGatewayCapability } from '../../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
-import { REPLY_LANGUAGE_HOOK_COMMAND, replyLanguageHooks } from '../../../src/providers/reply-language-hook.js'
+import { REPLY_LANGUAGE_HOOK_COMMAND, outwardHookCommand, replyLanguageHooks } from '../../../src/providers/reply-language-hook.js'
+import { outwardCommandPrefilter, outwardSettingOf } from '../../../src/lib/outward-language.js'
 import { sessionSettingsHooks } from '../../../src/providers/session-settings-hooks.js'
 import { gatewayFailureCode } from '../../../src/providers/tool-call-output.js'
 import { toolErrorCode } from '../../../src/core/usage-watch/normalize.js'
@@ -63,11 +64,11 @@ const refused = (r: { ok: boolean; message?: string }) => !r.ok && /was not sent
 describe('the route', () => {
   it('names the script while the setting names a language and the experiment is on', async () => {
     await setting(RULE, true)
-    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: RULE, script: 'han', on: true })
+    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: RULE, script: 'han', on: true, outward: null })
     await setting(RULE, false)
-    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: RULE, script: null, on: false })
+    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: RULE, script: null, on: false, outward: null })
     await setting(null, true)
-    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: null, script: null, on: true })
+    expect(await (await fetch(`${base}/me/reply-language`)).json()).toEqual({ rule: null, script: null, on: true, outward: null })
   })
 })
 
@@ -193,3 +194,74 @@ describe('the AskUserQuestion hook', () => {
     expect(replyLanguageHooks({ WALNUT_REPLY_LANGUAGE_GATE: '0' })).toBeNull()
   })
 })
+
+// The other direction (lib/outward-language.ts): words colleagues read go out in the language the
+// user set for them. 2026-11-22: a session wrote a ticket's closing note in his language.
+describe('words other people read', () => {
+  const OUTWARD = { language: 'English', tools: ['mcp__chat__post_message'], commands: ['\\bgh (pr|issue) (create|comment)\\b'] }
+  const hookCall = (tool_name: string, tool_input: unknown) => executeOp('reply_language_check', { hook_input: { hook_event_name: 'PreToolUse', tool_name, tool_input } }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: SID }) as Promise<{ result: { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } }>
+  const denied = async (tool: string, input: unknown) => (await hookCall(tool, input)).result.hookSpecificOutput?.permissionDecision === 'deny'
+
+  it('the route names the setting, and the check denies a listed step whose words are not in it', async () => {
+    await setting(RULE, true)
+    await updateConfig({ session: { outward_language: OUTWARD } } as never)
+    expect((await (await fetch(`${base}/me/reply-language`)).json() as { outward: unknown }).outward).toEqual({ ...OUTWARD, script: 'latin' })
+    expect(await denied('Bash', { command: `gh pr create --title "Fix" --body "${CN}"`, description: CN })).toBe(true)
+    const r = await hookCall('mcp__chat__post_message', { channel: '#team', text: CN })
+    expect(r.result.hookSpecificOutput?.permissionDecisionReason).toMatch(/^Your call of mcp__chat__post_message was not run: other people read its words.*in English/)
+    // English goes out; a step not listed, and the user's own progress line, are never judged.
+    expect(await denied('Bash', { command: `gh pr create --title "Fix" --body "${EN}"`, description: CN })).toBe(false)
+    expect(await denied('Bash', { command: `echo "${CN}"` })).toBe(false)
+    // The text of a file the command reads its words from, handed in by the hook, is judged too.
+    const withFile = await executeOp('reply_language_check', { hook_input: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr create --title Fix --body-file ./pr.md' } }, files: { './pr.md': CN } }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: SID }) as { result: { hookSpecificOutput?: { permissionDecision?: string } } }
+    expect(withFile.result.hookSpecificOutput?.permissionDecision).toBe('deny')
+    expect(await denied('mcp__chat__read_channel', { channel: CN })).toBe(false)
+    // A question to the user still follows his own language.
+    expect((await hookCall('AskUserQuestion', { questions: [{ question: CN, header: 'Ship', options: [{ label: 'Yes' }, { label: 'No' }] }] })).result).toEqual({})
+  })
+
+  it('holds nothing while the setting is unset', async () => {
+    await updateConfig({ session: { outward_language: {} } } as never)
+    expect(await denied('Bash', { command: `gh pr create --body "${CN}"` })).toBe(false)
+  })
+
+  it('rides a session\'s hooks only for the steps listed, and its shell asks Walnut only about a listed command', () => {
+    const groups = (h: Record<string, unknown> | null) => (h?.PreToolUse as Array<{ matcher: string; hooks: Array<{ command: string }> }>)
+    const checks = (h: Record<string, unknown> | null) => groups(h).filter((g) => g.hooks.some((x) => x.command.includes('reply_language_check')))
+    expect(checks(sessionSettingsHooks({})).map((g) => g.matcher)).toEqual(['AskUserQuestion'])
+    const set = outwardSettingOf(OUTWARD)!
+    const own = checks(sessionSettingsHooks({}, { outward: set }))
+    expect(own.map((g) => g.matcher)).toEqual(['AskUserQuestion', '^(?:(?:mcp__chat__post_message)|Bash|mcp__walnut__host_exec|mcp__walnut__host_exec_pinned|mcp__walnut__host_mcp_call|mcp__walnut__mcp_call)$'])
+    expect(own[1]!.hooks[0]!.command).toBe(outwardHookCommand(outwardCommandPrefilter(set)))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'outward-hook-'))
+    try {
+      fs.mkdirSync(path.join(root, 'bin'))
+      const got = path.join(root, 'stdin.json')
+      fs.writeFileSync(path.join(root, 'bin', 'walnut'), `#!/bin/sh\ncat > '${got}'\nprintf '%s\\n' '{"hookSpecificOutput":{"permissionDecision":"deny"}}'\n`, { mode: 0o755 })
+      const asked = (command: string, tool_name = 'Bash', prefilter = outwardCommandPrefilter(set)) => {
+        fs.rmSync(got, { force: true })
+        const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name, tool_input: tool_name === 'Bash' ? { command, description: CN } : { text: command } })
+        const r = spawnSync('/bin/sh', ['-c', outwardHookCommand(prefilter)], { input, encoding: 'utf8', env: { PATH: guardedPath([], `${path.join(root, 'bin')}:/usr/bin:/bin`), HOME: root } })
+        expect(r.status, r.stderr).toBe(0)
+        return fs.existsSync(got)
+      }
+      expect(asked(`gh pr create --body "${CN}"`)).toBe(true)
+      expect(asked(`ls -la "${CN}"`)).toBe(false)
+      expect(asked(CN, 'mcp__chat__post_message')).toBe(true)
+      // A pattern this grep cannot read asks Walnut rather than let the command through.
+      expect(asked('ls', 'Bash', '(')).toBe(true)
+      // A runner on another host is always asked: its argv is no line grep can read.
+      expect(asked('x', 'mcp__walnut__host_exec')).toBe(true)
+      // A listed command hands in the text of the file it reads its words from, read here.
+      fs.writeFileSync(path.join(root, 'pr.md'), CN)
+      fs.rmSync(got, { force: true })
+      const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd: root, tool_input: { command: 'gh pr create --title Fix --body-file ./pr.md' } })
+      const r = spawnSync('/bin/sh', ['-c', outwardHookCommand(outwardCommandPrefilter(set))], { input, encoding: 'utf8', env: { PATH: guardedPath([], `${path.join(root, 'bin')}:/usr/bin:/bin`), HOME: root } })
+      expect(r.status, r.stderr).toBe(0)
+      const sent = JSON.parse(fs.readFileSync(got, 'utf8')) as { hook_input: { tool_name: string }; files?: Record<string, string> }
+      expect(sent.hook_input.tool_name).toBe('Bash')
+      expect(sent.files).toEqual({ './pr.md': CN })
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
