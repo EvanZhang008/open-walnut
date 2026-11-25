@@ -13,11 +13,13 @@
  *   × what changes above     every entry of CHANGES (a new card in a group above, in his card's own
  *                            group, in Watching; a card above grows, leaves, moves to another group;
  *                            a folded group above gets its first card; a move line shows or fades;
- *                            the list read again after a reconnect)
+ *                            the list read again after a reconnect; the card he reads itself moves to
+ *                            another group, as a Needs you card he answers does)
  *
  * and passes when the card he reads (the one under the pointer, the one right above it below every
  * card, the one right below it between cards, the one he types in, or, away, the one at the top of
- * the view) stays where it was on screen to under 1 px in EVERY frame of the
+ * the view; when that card itself moves away, the card that stood right before it, else right after
+ * it) stays where it was on screen to under 1 px in EVERY frame of the
  * change (sampled after each frame's paint, so a move put back a frame later still fails), and the
  * box he types in keeps the focus and the caret. Away at the very top nothing is held (new cards
  * show at the top, as before): those cells are recorded, not judged. What stands above got shorter
@@ -26,20 +28,24 @@
  * as well: begun at the very top, the list goes back to the top and what arrived shows; elsewhere
  * nothing on screen moves.
  *
- * A new kind of change above a card is one more entry of CHANGES, and so a new column of cells.
+ * A new kind of change above a card is one more entry of CHANGES (threads-hold-changes.ts, with the
+ * writes that make each change), and so a new column of cells; the page probes (which card he reads,
+ * the card's top in every frame) are in threads-hold-page.ts.
  * The table is written to $WALNUT_TASK_DIR/hold-matrix-<surface>-<engine>.json and the log.
  * Run in WebKit too (no CSS scroll anchoring there): `walnut-dev webkit tests/e2e/browser/threads-hold-matrix.spec.ts`.
  *
  * Every run takes the cells of what he reported (inRun: at the list at the very top, the pointer on
- * a card in the middle, and the pointer on a folded group's head under the cards at the end), about
- * three minutes; THREADS_HOLD_MATRIX=1 runs the whole matrix,
+ * a card in the middle, the pointer on a folded group's head under the cards at the end, and on a
+ * group's head at the top and a little down), about four minutes; THREADS_HOLD_MATRIX=1 runs the whole matrix,
  * about six minutes a browser, after any change to the hold, the anchor or what a Threads list
  * draws (tests/web/threads-hold.test.ts fails when the list draws something the matrix has no
  * column for). The flags are the server's own and other Threads specs put theirs back while this
  * one runs, so the page reads his flags whatever the server says meanwhile (pinHisFlags).
  */
 import fs from 'node:fs'
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { CHANGES, STAMP, call, nodeThread, patchThread, sel, selRef, toOtherGroup, type Change, type Ctx, type Node } from './threads-hold-changes'
+import { keepSocket, pickReading, setPosition, settled, startSampling, stopSampling, typingState, type Pos, type Presence } from './threads-hold-page'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -47,12 +53,8 @@ import { startProofVideo } from './proof-video'
 import { pinPageFlags } from './page-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
-const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Orchard hold ${STAMP}`
 const OUT = process.env.WALNUT_TASK_DIR ?? 'test-results'
-const WHY = { user_kind: 'user_own', user_kind_why: 'It is his own garden.' }
-/** Each row is its own decision (the server folds one matter asked twice). */
-const SEPARATE = { separate_reason: 'Each garden row is its own decision.' }
 /** His Threads flags (the view he uses: the groups on the Org page, the one card, Watching, ...). */
 const HIS_FLAGS = ['task_threads', 'threads_pop_up', 'letters_as_threads', 'top_thread', 'reply_thread_line', 'ack_means_known', 'threads_one_card', 'brief_off', 'org_leaders', 'quiet_rail', 'topics'] as const
 const made: string[] = []
@@ -67,359 +69,56 @@ const ids = { task: '', sid: '', lead: '', leadSid: '' }
  */
 const SERVER_FLAGS = ['task_threads', 'letters_as_threads', 'reply_thread_line', 'org_leaders']
 let flagsWere: Record<string, boolean> = {}
-let n = 0
 
 // One worker: the flags are the server's own, set for the whole file and put back at its end.
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(45 * 60_000)
 test.use({ viewport: { width: 1280, height: 1000 } })
 
-type Pos = 'top' | 'little' | 'middle' | 'end'
-/** The pointer on a card, on a fold's head below every card (`head`), between two cards (`gap`); typing; away. */
-type Presence = 'pointer' | 'head' | 'gap' | 'typing' | 'away'
 const POSITIONS: Pos[] = ['top', 'little', 'middle', 'end']
 const PRESENCES: Presence[] = ['pointer', 'head', 'gap', 'typing', 'away']
 /**
  * The whole matrix, or in every run the cells of what he reported: at the list at the very top, the
- * pointer on a card in the middle, and (2026-11-25, a review) the pointer on a folded group's head
- * under the cards at the end, where the list itself was held and a new card above pushed everything.
+ * pointer on a card in the middle, (2026-11-25, a review) the pointer on a folded group's head under
+ * the cards at the end, where the list itself was held and a new card above pushed everything, and
+ * (2026-11-25, the next review) the pointer on a group's head at the top and a little down: a
+ * card above changing group was read there to push his card 186px, which was his own card changing
+ * group (the pointer had come to rest on it), now its own column.
  */
 const WHOLE = !!process.env.THREADS_HOLD_MATRIX
-const inRun = (pos: Pos, presence: Presence) => WHOLE || (pos === 'top' ? presence === 'pointer' || presence === 'typing' : pos === 'middle' ? presence === 'pointer' : pos === 'end' && presence === 'head')
+const inRun = (pos: Pos, presence: Presence) => WHOLE || (pos === 'top' ? presence === 'pointer' || presence === 'typing' || presence === 'gap' : pos === 'little' ? presence === 'gap' : pos === 'middle' ? presence === 'pointer' : pos === 'end' && presence === 'head')
 
-interface Node { task: string; sid: string }
-interface Ctx { page: Page; request: APIRequestContext; node: Node; target: string | null; targetGroup: string | null; box: string }
-interface Run {
-  done: () => Promise<boolean>
-  cleanup?: () => Promise<void>
-  /** After the change he leaves the list (the pointer goes, the box is left): a failure says what is wrong. */
-  leave?: (at: { pos: Pos; y0: number }) => Promise<string | null>
-}
-interface Change {
-  name: string
-  /** Which surface draws it: the plain list has no groups, folds or lines. */
-  on: ReadonlyArray<'pane' | 'rail'>
-  /** It acts on the card right above the one he reads. */
-  target?: boolean
-  /** He reads a card of this group (the rail): a folded group's head only stands above an opened fold's cards. */
-  readIn?: string
-  /** Not at the very top: nothing of the kind can stand above a card there. */
-  scrolledOnly?: boolean
-  run: (c: Ctx) => Promise<Run>
-}
 interface Cell { surface: string; pos: Pos; presence: Presence; change: string; verdict: 'PASS' | 'FAIL' | 'INFO' | 'NA'; maxDev: number; final: number; frames: number; focus?: boolean; caret?: boolean; note?: string; scroll?: string; reading?: string }
 
-async function call<T>(request: APIRequestContext, method: 'post' | 'put' | 'patch', url: string, data: unknown, sid?: string): Promise<T> {
-  const res = await request[method](url, { data, ...(sid ? { headers: { 'x-walnut-caller-sid': sid } } : {}) })
-  expect(res.ok(), `${url}: ${await res.text()}`).toBe(true)
-  return (await res.json()) as T
-}
-
-const longReply = (k: number, lines = 4) => Array.from({ length: lines }, (_, i) => `Row ${k}, check ${i + 1}: the soil is moist, the seedlings are up and the netting holds against the birds.`).join('\n')
-
-/** The node opens a thread for him: answered (Done), needs (Needs you) or working. */
-async function nodeThread(request: APIRequestContext, node: Node, state: 'answered' | 'needs' | 'working' = 'answered', title = `Row ${++n} ${STAMP}`): Promise<string> {
-  const { thread } = await call<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${node.task}/threads/open`, { title, text: `${title}: where it stands.`, from: 'node', state: state === 'working' ? 'answered' : state, ...(state === 'needs' ? { ...WHY, ...SEPARATE } : {}) }, node.sid)
-  const reply = state === 'needs' ? `Net the row now or in May? ${STAMP}` : longReply(n, state === 'answered' ? 4 : 1)
-  await call(request, 'patch', `/api/v1/tasks/${node.task}/threads/${thread.id}`, { reply, state, ...(state === 'needs' ? { ...WHY, ...SEPARATE } : {}) }, node.sid)
-  return thread.id
-}
-const patchThread = (c: Ctx, id: string, data: Record<string, unknown>, asHim = false) =>
-  call(c.request, 'patch', `/api/v1/tasks/${c.node.task}/threads/${id}`, data, asHim ? undefined : c.node.sid)
-/** His own Acknowledge: the card leaves with no line (thread-moves.ts), so a cleanup leaves nothing to fade. */
-const ack = (c: Ctx, id: string) => patchThread(c, id, { close: 'acked' }, true)
-const sel = (box: string, id: string) => `${box} [data-testid="org-thread"][data-thread-id="${id}"]:not([data-copy])`
-const present = (c: Ctx, id: string) => async () => (await c.page.locator(sel(c.box, id)).count()) === 1
-const gone = (c: Ctx, id: string) => async () => (await c.page.locator(sel(c.box, id)).count()) === 0
-/** The card a change moved away back in its own group, so the next cells read a list of the same density (the whole matrix drained Done). */
-const restore = async (c: Ctx, id: string) => {
-  const own = c.targetGroup === 'needs' ? { state: 'needs', ...WHY, ...SEPARATE, reply: `Net the row now or in May? ${STAMP}` } : { state: 'answered', reply: longReply(n) }
-  await patchThread(c, id, own)
-  const group = c.targetGroup === 'needs' ? 'needs' : 'read'
-  const back = c.page.locator(`${c.box} [data-testid="org-thread"][data-thread-id="${id}"]:not([data-copy])`)
-  await expect.poll(async () => (await back.count()) === 1 && (c.targetGroup === null || (await back.evaluate((el, g) => !el.closest('[data-testid="org-thread-group"]') || el.closest<HTMLElement>('[data-testid="org-thread-group"]')!.dataset.group === g, group))), { timeout: 15_000 }).toBe(true)
-}
-
-/** Where a card stands in the box: in view or not, and the box's scroll. */
-const placeIn = (c: Ctx, id: string) => c.page.evaluate(({ box, s }) => {
-  const b = document.querySelector<HTMLElement>(box)!
-  const el = document.querySelector(s)
-  const r = el?.getBoundingClientRect()
-  const br = b.getBoundingClientRect()
-  return { scrollTop: b.scrollTop, inView: !!r && r.bottom > br.top + 1 && r.top < br.bottom - 1, top: r?.top ?? NaN }
-}, { box: c.box, s: sel(c.box, id) })
-
-const CHANGES: Change[] = [
-  {
-    name: 'new card in a group above', on: ['pane', 'rail'],
-    run: async (c) => { const id = await nodeThread(c.request, c.node, 'needs'); return { done: present(c, id), cleanup: () => ack(c, id) } },
-  },
-  {
-    // The reviewer's case: held out of view above while he read at the very top, it stayed hidden once he left.
-    name: 'a new card above, then he leaves', on: ['pane', 'rail'],
-    run: async (c) => {
-      const id = await nodeThread(c.request, c.node, 'needs')
-      return {
-        done: present(c, id),
-        cleanup: () => ack(c, id),
-        leave: async ({ pos }) => {
-          const at = await placeIn(c, id)
-          if (pos === 'top') return at.scrollTop < 1 && at.inView ? null : `back at the top with the new card in view (scrollTop ${at.scrollTop}, in view ${at.inView})`
-          return null
-        },
-      }
-    },
-  },
-  {
-    name: 'new card in his group', on: ['pane', 'rail'],
-    run: async (c) => { const id = await nodeThread(c.request, c.node, 'answered'); return { done: present(c, id) } },
-  },
-  {
-    name: 'a card is watched (Watching, above all)', on: ['pane', 'rail'], target: true,
-    run: async (c) => {
-      await patchThread(c, c.target!, { watch: true })
-      return {
-        done: async () => (await c.page.locator(`${c.box} [data-testid="org-thread"][data-copy="watching"][data-thread-id="${c.target}"]`).count()) === 1,
-        cleanup: async () => { await patchThread(c, c.target!, { watch: false }) },
-      }
-    },
-  },
-  {
-    name: 'a card above grows', on: ['pane', 'rail'], target: true,
-    run: async (c) => {
-      const words = `Grown ${++n} ${STAMP}`
-      const keep = c.targetGroup === 'needs' ? { state: 'needs', ...WHY, ...SEPARATE } : { state: 'answered' }
-      await patchThread(c, c.target!, { reply: `${words}\n${longReply(n, 6)}`, ...keep })
-      return {
-        done: async () => (await c.page.locator(`${sel(c.box, c.target!)} [data-testid="org-thread-reply"]`).textContent({ timeout: 2_000 }).catch(() => ''))?.includes(words) ?? false,
-        // Short again, so the next cells read a list of the same density.
-        cleanup: async () => { await patchThread(c, c.target!, { reply: c.targetGroup === 'needs' ? `Net the row now or in May? ${STAMP}` : longReply(n), ...keep }) },
-      }
-    },
-  },
-  {
-    // Out of the open list (the pane) or into a fold with a line in its place (the rail).
-    name: 'a card above leaves', on: ['pane', 'rail'], target: true,
-    run: async (c) => { await patchThread(c, c.target!, { state: 'pending' }); return { done: gone(c, c.target!), cleanup: () => restore(c, c.target!) } },
-  },
-  {
-    name: 'its move line fades', on: ['rail'], target: true,
-    run: async (c) => {
-      const line = c.page.locator(`${c.box} [data-testid="org-thread-move-note"]`)
-      // runCell moved it out first (its line is what fades).
-      return { done: async () => (await line.count()) === 0, cleanup: () => restore(c, c.target!) }
-    },
-  },
-  {
-    name: 'a card above moves to another group', on: ['rail'], target: true,
-    run: async (c) => {
-      const to = c.targetGroup === 'needs' ? 'answered' : 'needs'
-      await patchThread(c, c.target!, { state: to, ...(to === 'needs' ? { ...WHY, ...SEPARATE, reply: `Net it now or in May? ${STAMP}` } : { reply: longReply(n) }) })
-      const now = to === 'needs' ? 'needs' : 'read'
-      return {
-        done: async () => (await c.page.locator(`${c.box} [data-testid="org-thread-group"][data-group="${now}"] [data-thread-id="${c.target}"]:not([data-copy])`).count()) === 1,
-        cleanup: () => restore(c, c.target!),
-      }
-    },
-  },
-  {
-    name: 'a folded group above gets its first card', on: ['rail'], readIn: 'waiting', scrolledOnly: true,
-    run: async (c) => {
-      const id = await nodeThread(c.request, c.node, 'working')
-      return {
-        done: async () => (await c.page.locator(`${c.box} [data-testid="org-thread-group"][data-group="working"]`).count()) === 1,
-        cleanup: () => ack(c, id),
-      }
-    },
-  },
-  {
-    // The read after a reconnect brings what changed while the link was down (a new card, a grown one).
-    name: 'the list is read again after a reconnect', on: ['pane', 'rail'], target: true,
-    run: async (c) => {
-      const url = `/api/v1/tasks/${c.node.task}/threads`
-      const stale = await (await c.request.get(url)).text()
-      const route = `**${url}`
-      await c.page.route(route, (r) => (r.request().method() === 'GET' ? r.fulfill({ status: 200, contentType: 'application/json', body: stale }) : r.continue()))
-      const id = await nodeThread(c.request, c.node, 'needs')
-      const fresh = await nodeThread(c.request, c.node, 'answered')
-      await patchThread(c, c.target!, { reply: `Reconnected ${STAMP}\n${longReply(n, 7)}`, state: c.targetGroup === 'needs' ? 'needs' : 'answered', ...(c.targetGroup === 'needs' ? { ...WHY, ...SEPARATE } : {}) })
-      await c.page.waitForTimeout(800)
-      await c.page.unroute(route)
-      await c.page.evaluate(() => {
-        const s = (window as Window & { holdTestSocket?: WebSocket }).holdTestSocket
-        s?.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: '_ws:reconnected', data: {} }) }))
-      })
-      return { done: async () => (await present(c, id)()) && (await present(c, fresh)()), cleanup: () => ack(c, id) }
-    },
-  },
-]
-
-/**
- * Everything a Threads list draws that can stand above a card, and the change of CHANGES that moves
- * it there. tests/web/threads-hold.test.ts reads these two tables: a new element kind drawn by
- * OrgThreadsByState or OrgThreadsWatching, or a new group, fails it until it has a row here, and
- * its row names a change below (a new kind of change is a new entry of CHANGES: a new column).
- */
-const ABOVE_A_CARD: Record<string, string> = {
-  'org-thread': 'new card in his group',
-  'org-thread-head': 'a card above grows',
-  'org-thread-list': 'new card in a group above',
-  'org-thread-group': 'new card in a group above',
-  'org-thread-group-head': 'a folded group above gets its first card',
-  'org-thread-group-count': 'a folded group above gets its first card',
-  'org-thread-move-note': 'a card above leaves',
-  'org-thread-move-show': 'its move line fades',
-  'org-thread-groups': 'the list is read again after a reconnect',
-  'org-threads-empty-row': 'none: drawn only when there is no card',
-  'org-threads-empty': 'none: drawn only when there is no card',
-}
-/** Every group, and the change that brings one above a card (a fold's head shows the same for each). */
-const GROUPS_ABOVE: Record<string, string> = {
-  watching: 'a card is watched (Watching, above all)',
-  needs: 'new card in a group above',
-  read: 'new card in his group',
-  working: 'a folded group above gets its first card',
-  waiting: 'a folded group above gets its first card',
-  known: 'a folded group above gets its first card',
-  done: 'a folded group above gets its first card',
-  archived: 'a folded group above gets its first card',
-}
-void ABOVE_A_CARD
-void GROUPS_ABOVE
-
-/**
- * Page side: the card he reads, the card right above it (not a Watching copy), and for the pointer
- * off the cards (`head`, `gap`) the point it rests on.
- */
-function pickReading(page: Page, a: { box: string; presence: Presence; group: string | null; scope: string | null }) {
-  return page.evaluate((a) => {
-    const box = document.querySelector<HTMLElement>(a.box)!
-    const br = box.getBoundingClientRect()
-    const cards = [...box.querySelectorAll<HTMLElement>('[data-testid="org-thread"]:not([data-copy])')]
-    const groupOf = (el: Element) => el.closest<HTMLElement>('[data-testid="org-thread-group"]')?.dataset.group ?? null
-    let pick = -1
-    let at: { x: number; y: number } | null = null
-    const shown = (el: Element) => el.getClientRects().length > 0
-    const inView = (r: DOMRect) => r.top >= br.top + 2 && r.bottom <= br.bottom - 2
-    // Every card the list draws (Watching's copies too): the pointer is off them all.
-    const anyCard = [...box.querySelectorAll<HTMLElement>('[data-testid="org-thread"]')].filter(shown)
-    const root = box.querySelector('.org-threads')
-    const onList = (x: number, y: number) => { const hit = document.elementFromPoint(x, y); return hit && root?.contains(hit) && !hit.closest('[data-testid="org-thread"]') ? hit : null }
-    if (a.presence === 'head') {
-      // A fold's head (a group's, Closed's) under every card, the card right above it in view: it holds that card.
-      for (const h of box.querySelectorAll<HTMLElement>('[data-testid="org-thread-group-head"], .org-threads-closed-toggle')) {
-        const hr = h.getBoundingClientRect()
-        if (!shown(h) || !inView(hr) || anyCard.some((c) => c.getBoundingClientRect().top >= hr.bottom - 0.5)) continue
-        const p = { x: hr.left + 20, y: (hr.top + hr.bottom) / 2 }
-        if (!onList(p.x, p.y)) continue
-        const i = cards.map((c, k) => (shown(c) && c.getBoundingClientRect().bottom <= hr.top + 0.5 ? k : -1)).reduce((m, k) => Math.max(m, k), -1)
-        if (i < 1 || !inView(cards[i].getBoundingClientRect())) continue
-        pick = i
-        at = p
-        break
-      }
-    } else if (a.presence === 'gap') {
-      // A point off every card in the upper part of the view (a group's head first, else a gap), the card right below it the one he reads.
-      const want = br.top + br.height * 0.4
-      const x = (cards.find(shown)?.getBoundingClientRect().left ?? br.left) + 12
-      let best = Infinity
-      for (const heads of [true, false]) {
-        for (let y = Math.ceil(br.top + 30); y < br.bottom - 80; y += 2) {
-          const hit = onList(x, y)
-          if (!hit || (heads && !hit.closest('[data-testid="org-thread-group-head"]'))) continue
-          const below = anyCard.find((c) => c.getBoundingClientRect().bottom > y)
-          const i = below ? cards.indexOf(below) : -1
-          if (i < 1 || below!.getBoundingClientRect().top > br.bottom - 80) continue
-          const d = Math.abs(y - want) + (heads ? 0 : 1000)
-          if (d < best) { best = d; pick = i; at = { x, y } }
-        }
-        if (pick >= 0) break
-      }
-    } else if (a.presence === 'away') {
-      // Away: the card at the top of the view, the one the list holds.
-      pick = cards.findIndex((el) => el.getBoundingClientRect().bottom > br.top + 0.5)
-    } else {
-      // At the list: a card in the upper half of the view with a card above it (its group's when
-      // one asked; any other when none of that group is there), the box he types in in view.
-      const want = br.top + br.height * 0.4
-      const fits = (el: HTMLElement, i: number) => {
-        if (i < 1) return false
-        const r = el.getBoundingClientRect()
-        const input = el.querySelector('[data-testid="org-thread-follow-input"]')?.getBoundingClientRect()
-        if (r.top < br.top + 2 || r.top > br.bottom - 80) return false
-        return a.presence !== 'typing' || (!!input && input.top >= br.top && input.bottom <= br.bottom)
-      }
-      for (const only of a.group ? [a.group, null] : [null]) {
-        let best = Infinity
-        cards.forEach((el, i) => {
-          if (only && groupOf(el) !== only) return
-          if (!fits(el, i)) return
-          const d = Math.abs(el.getBoundingClientRect().top - want)
-          if (d < best) { best = d; pick = i }
-        })
-        if (pick >= 0) break
-      }
-    }
-    if (pick < 0) return null
-    const above = pick > 0 ? cards[pick - 1] : null
-    return { id: cards[pick].dataset.threadId!, above: above?.dataset.threadId ?? null, aboveGroup: above ? groupOf(above) : null, at }
-  }, a)
-}
-
-/**
- * The card's top as each frame paints it: read in the frame's rAF, then read again in a
- * ResizeObserver made after the page's own (callbacks run in the order they were made, after
- * layout and before paint), so a frame whose size change the page puts right in its observer
- * counts as what it painted.
- */
-const startSampling = (page: Page, box: string, cardSel: string) => page.evaluate(({ box, s }) => {
-  const w = window as Window & { holdSampler?: { on: boolean; ys: number[]; ro: ResizeObserver } }
-  const read = () => { const el = document.querySelector(s); return el ? el.getBoundingClientRect().top : NaN }
-  const ro = new ResizeObserver(() => { if (st.on && st.ys.length) st.ys[st.ys.length - 1] = read() })
-  const st = w.holdSampler = { on: true, ys: [] as number[], ro }
-  for (const c of Array.from(document.querySelector(box)?.children ?? [])) ro.observe(c)
-  const tick = () => requestAnimationFrame(() => { if (!st.on) return; st.ys.push(read()); tick() })
-  tick()
-}, { box, s: cardSel })
-const stopSampling = (page: Page) => page.evaluate(() => {
-  const w = window as Window & { holdSampler?: { on: boolean; ys: number[]; ro: ResizeObserver } }
-  w.holdSampler!.on = false
-  w.holdSampler!.ro.disconnect()
-  return w.holdSampler!.ys
-})
-
-async function setPosition(page: Page, box: string, pos: Pos): Promise<void> {
-  await page.evaluate(({ box, pos }) => {
-    const el = document.querySelector<HTMLElement>(box)!
-    el.scrollTop = pos === 'top' ? 0 : pos === 'little' ? 60 : pos === 'end' ? el.scrollHeight : Math.round((el.scrollHeight - el.clientHeight) / 2)
-  }, { box, pos })
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
-}
-
 const inputOf = (box: string, id: string) => `${sel(box, id)} [data-testid="org-thread-follow-input"]`
-const typingState = (page: Page, inputSel: string) => page.evaluate((s) => {
-  const el = document.querySelector<HTMLTextAreaElement | HTMLInputElement>(s)
-  const a = document.activeElement
-  return { focus: !!el && (a === el || el.contains(a)), caret: (a as HTMLTextAreaElement | null)?.selectionStart ?? null }
-}, inputSel)
-
 async function runCell(page: Page, request: APIRequestContext, surface: 'pane' | 'rail', node: Node, box: string, pos: Pos, presence: Presence, ch: Change): Promise<Cell> {
   const cell: Cell = { surface, pos, presence, change: ch.name, verdict: 'NA', maxDev: 0, final: 0, frames: 0 }
   if (ch.scrolledOnly && pos === 'top') return { ...cell, note: 'nothing of the kind stands above a card at the very top' }
+  if (ch.self && (presence === 'typing' || presence === 'away')) return { ...cell, note: 'his own card moving is judged where he reads by the pointer' }
   await page.mouse.move(5, 5)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
   await page.waitForTimeout(250)
+  // A move line from the last cell fades first (its own cell judges that): fading after the point
+  // was picked, it moved the list under it, and the pointer rested on another card than the cell names.
+  if (ch.name !== 'its move line fades') await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 10_000 })
+  // The last cell's cleanup drawn (a grown card short again) before the point is picked, for the same reason.
+  await settled(page, box)
   await setPosition(page, box, pos)
   const r = await pickReading(page, { box, presence, group: ch.readIn ?? (surface === 'rail' ? 'read' : null), scope: null })
-  if (!r || (ch.target && !r.above)) return { ...cell, note: 'no card to read here with a card above it' }
-  const ctx: Ctx = { page, request, node, target: r.above, targetGroup: r.aboveGroup, box }
+  if (!r || (ch.target && !r.above) || (ch.self && !r.stand)) return { ...cell, note: 'no card to read here with a card above it' }
+  const ctx: Ctx = ch.self ? { page, request, node, target: r.id, targetGroup: r.group, box } : { page, request, node, target: r.above, targetGroup: r.aboveGroup, box }
   const card = page.locator(sel(box, r.id))
+  // The card judged: the one he reads, or, when that one moves away, the place he read it.
+  const judgedCard = ch.self ? page.locator(selRef(box, r.stand!)) : card
   const input = inputOf(box, r.id)
   if (presence === 'pointer') {
     const b = (await card.boundingBox())!
     await page.mouse.move(b.x + 6, b.y + Math.min(48, b.height / 2), { steps: 4 })
   } else if (r.at) {
     await page.mouse.move(r.at.x, r.at.y, { steps: 4 })
+    // The cell is about a pointer off the cards: one that came to rest on a card tests another cell.
+    const on = await page.evaluate((p) => !!document.elementFromPoint(p.x, p.y)?.closest('[data-testid="org-thread"]'), r.at)
+    if (on) return { ...cell, verdict: 'FAIL', note: 'the pointer came to rest on a card, not off them' }
   } else if (presence === 'typing') {
     await page.evaluate((s) => document.querySelector<HTMLElement>(s)?.focus({ preventScroll: true }), input)
     // Keys typed anywhere else would be the page's shortcuts.
@@ -427,9 +126,7 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
     await page.keyboard.type('net it', { delay: 5 })
     await page.evaluate((s) => { const el = document.querySelector<HTMLTextAreaElement>(s); el?.setSelectionRange?.(3, 3) }, input)
   }
-  // A move line from the last cell fades first (its own cell judges that).
-  if (ch.name !== 'its move line fades') await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 10_000 })
-  else {
+  if (ch.name === 'its move line fades') {
     // Its line first, untimed: a card above leaves for a fold.
     await patchThread(ctx, r.above!, { state: 'pending' })
     await expect(page.locator(`${box} [data-testid="org-thread-move-note"][data-moved-id="${r.above}"]`)).toHaveCount(1, { timeout: 15_000 })
@@ -437,13 +134,13 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
   await page.waitForTimeout(300)
   const before = presence === 'typing' ? await typingState(page, input) : null
   const startTop = await page.evaluate((b) => document.querySelector<HTMLElement>(b)!.scrollTop, box)
-  const y0 = (await card.boundingBox())!.y
-  await startSampling(page, box, sel(box, r.id))
+  const y0 = (await judgedCard.boundingBox())!.y
+  await startSampling(page, box, ch.self ? selRef(box, r.stand!) : sel(box, r.id))
   const run = await ch.run(ctx)
   await expect.poll(run.done, { timeout: 20_000, message: `${surface} ${pos} ${presence}: ${ch.name}` }).toBe(true)
   await page.waitForTimeout(600)
   const ys = await stopSampling(page)
-  const yEnd = (await card.boundingBox())?.y ?? NaN
+  const yEnd = (await judgedCard.boundingBox())?.y ?? NaN
   const after = presence === 'typing' ? await typingState(page, input) : null
   const endTop = await page.evaluate((b) => document.querySelector<HTMLElement>(b)!.scrollTop, box)
   const devs = [...ys, yEnd].map((y) => (Number.isNaN(y) ? Infinity : y - y0))
@@ -467,7 +164,7 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
     const fail = wrong ?? (moved !== null && !(moved < 1) ? `the card moved ${Math.round(moved)}px when he left` : null)
     if (fail) { cell.verdict = 'FAIL'; cell.note = fail }
   }
-  cell.reading = `${r.id}${r.above ? ` under ${r.above} (${r.aboveGroup})` : ''}`
+  cell.reading = `${r.id}${r.above ? ` under ${r.above} (${r.aboveGroup})` : ''}${ch.self ? `, judged ${r.stand!.id}` : ''}`
   await page.mouse.move(5, 5)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
   await run.cleanup?.()
@@ -485,7 +182,7 @@ async function runMatrix(page: Page, request: APIRequestContext, surface: 'pane'
     }
     for (const pos of POSITIONS) {
       for (const presence of PRESENCES) {
-        if (!inRun(pos, presence)) continue
+        if (!inRun(pos, presence) || (!WHOLE && ch.self && pos === 'end')) continue
         const c = await runCell(page, request, surface, node, box, pos, presence, ch)
         console.log(`[cell] ${surface} ${c.verdict} ${pos} ${presence} ${ch.name}: dev ${c.maxDev} scroll ${c.scroll ?? ''} ${c.reading ?? ''} ${c.note ?? ''}`)
         cells.push(c)
@@ -537,21 +234,6 @@ test.afterAll(async ({ request }) => {
     await request.delete(`/api/tasks/${id}?force=true`)
   }
 })
-
-/** The page's own socket, so a reconnect can be told to it (file-live-edit.spec.ts does the same). */
-async function keepSocket(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const Native = window.WebSocket
-    class Kept extends Native {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols)
-        if (new URL(String(url), location.href).pathname === '/ws') (window as Window & { holdTestSocket?: WebSocket }).holdTestSocket = this
-      }
-    }
-    for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'] as const) Object.defineProperty(Kept, k, { value: Native[k] })
-    window.WebSocket = Kept
-  })
-}
 
 /** His flags as this page reads them, whatever the server says meanwhile (page-flags.ts). */
 const pinHisFlags = (page: Page) => pinPageFlags(page, HIS_FLAGS)
@@ -702,4 +384,84 @@ test('a new card that came above while he read at the very top shows once he lea
   await video.caption('He left the list: it went back to the top, and the new card shows')
   await video.hold(2500)
   await video.stop('threads-hold-new-card-shows-after')
+})
+
+/** The pointer away, every move line faded and the list drawn, then at `pos`: a clean start for each step of a proof. */
+async function freshAt(page: Page, box: string, pos: Pos) {
+  await page.mouse.move(5, 5, { steps: 6 })
+  await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 15_000 })
+  await settled(page, box)
+  await setPosition(page, box, pos)
+}
+
+/**
+ * 2026-11-25, the review's item a: the pointer resting off the cards (a group's head) while a card
+ * above changes group, and the pointer on a Needs you card he answers, which goes to Done; then the
+ * earlier report, the pointer on a folded group's head under every card while a new card arrives.
+ */
+test('a card changing group, or a new one, moves nothing he sees while the pointer rests on a group head', async ({ page, request }) => {
+  const video = await startProofVideo(page)
+  await isolateUiPrefs(page)
+  await pinHisFlags(page)
+  const box = await openRail(page)
+  const lead = { task: ids.lead, sid: ids.leadSid }
+  const ctx = (target: string, targetGroup: string | null): Ctx => ({ page, request, node: lead, target, targetGroup, box })
+  const still = async (s: string, y0: number) => expect(Math.abs((await page.locator(s).boundingBox())!.y - y0)).toBeLessThan(1)
+
+  // The pointer on the head of Done, a Needs you card right above it: the list scrolled so that head
+  // stands at 40% of the view (Needs you can be taller than the view after the matrix ran).
+  await freshAt(page, box, 'top')
+  await page.evaluate((b) => {
+    const el = document.querySelector<HTMLElement>(b)!
+    const head = el.querySelector('[data-testid="org-thread-group"][data-group="read"] [data-testid="org-thread-group-head"]')!
+    el.scrollTop += head.getBoundingClientRect().top - el.getBoundingClientRect().top - el.clientHeight * 0.4
+  }, box)
+  await settled(page, box)
+  const a = (await pickReading(page, { box, presence: 'gap', group: null, scope: null }))!
+  expect(a.aboveGroup).toBe('needs')
+  await page.mouse.move(a.at!.x, a.at!.y, { steps: 10 })
+  // The pointer rests on Done's own head, no card and no other line.
+  expect(await page.evaluate((p) => document.elementFromPoint(p.x, p.y)?.closest<HTMLElement>('[data-testid="org-thread-group"]')?.dataset.group === 'read' && !!document.elementFromPoint(p.x, p.y)?.closest('[data-testid="org-thread-group-head"]'), a.at!)).toBe(true)
+  await video.caption('The pointer rests on the head of Done, under a Needs you card')
+  await video.hold(1500)
+  const ya = (await page.locator(sel(box, a.id)).boundingBox())!.y
+  const moved = await toOtherGroup(ctx(a.above!, 'needs'))
+  await expect.poll(moved.done, { timeout: 20_000 }).toBe(true)
+  await page.waitForTimeout(600)
+  await still(sel(box, a.id), ya)
+  await video.caption('That card went to Done, right under the head: the card he reads did not move')
+  await video.hold(2500)
+  await moved.cleanup!()
+
+  // The pointer on a Needs you card he answers: it goes to Done, the card before it keeps his place.
+  await freshAt(page, box, 'top')
+  const b = (await pickReading(page, { box, presence: 'pointer', group: 'needs', scope: null }))!
+  expect(b.group).toBe('needs')
+  const bb = (await page.locator(sel(box, b.id)).boundingBox())!
+  await page.mouse.move(bb.x + 6, bb.y + Math.min(48, bb.height / 2), { steps: 10 })
+  await video.caption('The pointer on a Needs you card, which he answers')
+  await video.hold(1500)
+  const yb = (await page.locator(selRef(box, b.stand!)).boundingBox())!.y
+  const answered = await toOtherGroup(ctx(b.id, 'needs'))
+  await expect.poll(answered.done, { timeout: 20_000 }).toBe(true)
+  await page.waitForTimeout(600)
+  await still(selRef(box, b.stand!), yb)
+  await video.caption('It went to Done and left its line in its place: the cards above did not move')
+  await video.hold(2500)
+  await answered.cleanup!()
+
+  // The earlier report: at the end, the pointer on a folded group's head under every card.
+  await freshAt(page, box, 'end')
+  const c = (await pickReading(page, { box, presence: 'head', group: null, scope: null }))!
+  await page.mouse.move(c.at!.x, c.at!.y, { steps: 10 })
+  await video.caption('At the end, the pointer on a folded group\'s head under every card')
+  await video.hold(1500)
+  const yc = (await page.locator(sel(box, c.id)).boundingBox())!.y
+  const fresh = await nodeThread(request, lead, 'needs')
+  await expect(page.locator(sel(box, fresh))).toHaveCount(1, { timeout: 15_000 })
+  await page.waitForTimeout(600)
+  await still(sel(box, c.id), yc)
+  await video.caption('A new card arrived in Needs you above: nothing he sees moved')
+  await video.hold(2500)
+  await video.stop('threads-hold-group-head')
 })

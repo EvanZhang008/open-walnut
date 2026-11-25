@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { inHeldOrder, readCard, THREAD_CARD_ROWS } from '../../web/src/components/org/useThreadsHold'
 import { stepHold } from '../../web/src/components/org/hold-order'
-import { anchoredScrollTop, enginePull, holdsRows, releaseScrollTop, slackStep } from '../../web/src/hooks/scroll-anchor'
+import { anchoredScrollTop, enginePull, heldPlace, holdsRows, releaseScrollTop, SCROLL_INPUT_EVENTS, slackStep, stepScrollInput, type ScrollInput } from '../../web/src/hooks/scroll-anchor'
 import { THREAD_GROUPS } from '../../src/core/org/thread-groups'
 import type { OrgThread } from '../../web/src/api/org-threads'
 
@@ -156,6 +156,76 @@ describe('a pull at the end of the range that no input made', () => {
   })
 })
 
+// 2026-11-25, a review: a press with no release (a ctrl-click's context menu, a native drag on macOS)
+// left the pointer down, and the engine's pull was never taken out again until his next click.
+describe('a pointer held down, and what lets it go', () => {
+  const step = (events: Array<string | [string, number]>, from: ScrollInput = { at: 0, down: false }) =>
+    events.reduce((input, e, i) => stepScrollInput(input, typeof e === 'string' ? { type: e } : { type: e[0], buttons: e[1] }, 100 * (i + 1)), from)
+  it('a press holds it down until it goes up, is cancelled, or a native drag ends', () => {
+    expect(step(['pointerdown'])).toEqual({ at: 100, down: true })
+    expect(step(['pointerdown', 'pointerup'])).toEqual({ at: 100, down: false })
+    expect(step(['pointerdown', 'pointercancel'])).toEqual({ at: 100, down: false })
+    expect(step(['pointerdown', 'dragend'])).toEqual({ at: 100, down: false })
+  })
+  it('a press with no release lets go at the next move with no button, wheel or key', () => {
+    expect(step(['pointerdown', ['pointermove', 0]]).down).toBe(false)
+    expect(step(['pointerdown', 'wheel'])).toEqual({ at: 200, down: false })
+    expect(step(['pointerdown', 'keydown'])).toEqual({ at: 200, down: false })
+    // A move with a button pressed is a drag: still down.
+    expect(step(['pointerdown', ['pointermove', 1]]).down).toBe(true)
+  })
+  it('a letter typed in a text field is no scroll; a key that moves its caret by lines is, and so is any key elsewhere', () => {
+    const typed = stepScrollInput({ at: 0, down: false }, { type: 'keydown', key: 'n', inField: true }, 500)
+    expect(typed).toEqual({ at: 0, down: false })
+    expect(stepScrollInput({ at: 0, down: true }, { type: 'keydown', key: 'n', inField: true }, 500)).toEqual({ at: 0, down: false })
+    expect(stepScrollInput({ at: 0, down: false }, { type: 'keydown', key: 'PageDown', inField: true }, 500)).toEqual({ at: 500, down: false })
+    expect(stepScrollInput({ at: 0, down: false }, { type: 'keydown', key: ' ' }, 500)).toEqual({ at: 500, down: false })
+    // So the engine's pull, at the end of the list, is still put back while he types.
+    expect(enginePull({ atEnd: true, at: 100 }, 5056, 4670, typed)).toBe(386)
+  })
+  it('a move stamps no time (it scrolls nothing), a touch does and keeps the press', () => {
+    expect(step([['pointermove', 0]])).toEqual({ at: 0, down: false })
+    expect(step(['pointerdown', 'touchmove'])).toEqual({ at: 200, down: true })
+  })
+  it('after a context menu\'s press, the engine\'s pull is put back again once the pointer moves', () => {
+    const mark = { atEnd: true, at: 1000 }
+    const pressed = step(['pointerdown'])
+    expect(enginePull(mark, 5056, 4670, pressed)).toBe(0)
+    expect(enginePull(mark, 5056, 4670, stepScrollInput(pressed, { type: 'pointermove', buttons: 0 }, 900))).toBe(386)
+  })
+  it('the hook steps its input on every one of these events, on the window', () => {
+    const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
+    expect(hook).toContain('for (const t of SCROLL_INPUT_EVENTS) window.addEventListener(t, onInput, { capture: true, passive: true })')
+    expect(hook).toContain('stepScrollInput(input.current,')
+    expect([...SCROLL_INPUT_EVENTS]).toEqual(expect.arrayContaining(['wheel', 'keydown', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'dragend', 'touchstart', 'touchmove']))
+  })
+})
+
+// 2026-11-25, a review: the card he reads (a Needs you card he answers) went to another group and was
+// drawn again there; the hold let go with no correction, and every card he saw moved by 186px.
+describe('the place of the card he reads, once that card leaves it', () => {
+  const at = (el: string | null, top: number | undefined, ok: boolean) => ({ el, top, ok })
+  it('is the card itself while it is there and in its order', () => {
+    expect(heldPlace([at('his', 200, true), at('next', 400, true), at('prev', 50, true)])).toEqual({ el: 'his', top: 200 })
+  })
+  it('is the card drawn right before it once it left, else the one right after it', () => {
+    expect(heldPlace([at('his', 200, false), at('prev', 50, true), at('next', 400, true)])).toEqual({ el: 'prev', top: 50 })
+    expect(heldPlace([at('his', 200, false), at(null, undefined, false), at('next', 400, true)])).toEqual({ el: 'next', top: 400 })
+    // A neighbour with no box when it was picked (inside a fold) was never measured: not a place.
+    expect(heldPlace([at('his', 200, false), at('prev', undefined, true), at('next', 400, true)])).toEqual({ el: 'next', top: 400 })
+  })
+  it('is nothing when none of them is still there: a row is picked afresh', () => {
+    expect(heldPlace([at('his', 200, false), at('next', 400, false), at('prev', 50, false)])).toBeNull()
+    expect(heldPlace([])).toBeNull()
+  })
+  // 2026-11-25: holding the card after a tall one pushed the cards above it down, with room at the top.
+  it('the hook asks for it for the row being read only, the card before it first, and keeps it until he moves or scrolls', () => {
+    const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
+    expect(hook).toMatch(/\.\.\.\(held\.read \? \[\{ el: held\.prev, top: held\.prevTop[^\n]*\{ el: held\.next, top: held\.nextTop/)
+    expect(hook).toContain('if (!mine && anchor.current) anchor.current.stand = false;')
+  })
+})
+
 describe('the reasons a list is held', () => {
   const none = { pointer: false, focus: false }
   it('the first reason takes the order, a second keeps it, the last to go lets it follow', () => {
@@ -176,7 +246,8 @@ describe('the reasons a list is held', () => {
 // every kind of element the list draws, and every group, must be a change it runs above a card.
 describe('the hold-still matrix covers everything that can stand above a card', () => {
   const root = process.cwd()
-  const spec = fs.readFileSync(`${root}/tests/e2e/browser/threads-hold-matrix.spec.ts`, 'utf8')
+  // Its columns (CHANGES) and the tables naming one for every element and group live beside it.
+  const spec = fs.readFileSync(`${root}/tests/e2e/browser/threads-hold-changes.ts`, 'utf8')
   const table = (name: string) => {
     const body = spec.slice(spec.indexOf(`const ${name}`), spec.indexOf('\n}\n', spec.indexOf(`const ${name}`)))
     return new Map([...body.matchAll(/^\s+'?([\w-]+)'?: '([^']+)',$/gm)].map((m) => [m[1], m[2]]))

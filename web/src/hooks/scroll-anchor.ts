@@ -71,6 +71,34 @@ export function releaseScrollTop(session: ReadSession, slack: number, scrollTop:
 /** What the person did that scrolls (a wheel, a key, a pointer or a touch): when last, and a pointer held down now. */
 export interface ScrollInput { at: number; down: boolean }
 
+/** The window events that step the ScrollInput (stepScrollInput). */
+export const SCROLL_INPUT_EVENTS = ['wheel', 'keydown', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'dragend', 'touchstart', 'touchmove'] as const;
+
+/** Keys that move a text field's caret by lines or pages, which can scroll the box around it. */
+const SCROLLING_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End']);
+
+/**
+ * The person's scroll input after one event at `now`. A wheel, a key, a press or a touch scrolls, so
+ * its time is stamped; a pointer move scrolls nothing, and neither does a letter typed in a text field
+ * (`inField`; 2026-11-25: a word typed in a card's Follow up box counted as his scroll, and WebKit's
+ * pull at the end of the list stayed in, 376px). A press holds the pointer down until it goes up or
+ * is cancelled, and also until a native drag ends, the pointer moves with no button pressed, or a
+ * wheel or a key comes: a press with no release (a ctrl-click's context menu, a native drag on macOS)
+ * left it down, and the engine's pull was never taken out again until his next click (2026-11-25, a
+ * review). Pure; an event that changes nothing returns `input` itself.
+ */
+export function stepScrollInput(input: ScrollInput, e: { type: string; buttons?: number; key?: string; inField?: boolean }, now: number): ScrollInput {
+  const up = input.down ? { ...input, down: false } : input;
+  switch (e.type) {
+    case 'pointerdown': return { at: now, down: true };
+    case 'pointerup': case 'pointercancel': case 'dragend': return up;
+    case 'pointermove': return e.buttons ? input : up;
+    case 'keydown': return e.inField && !SCROLLING_KEYS.has(e.key ?? '') ? up : { at: now, down: false };
+    case 'wheel': return { at: now, down: false };
+    default: return { ...input, at: now };
+  }
+}
+
 /**
  * How far the engine pulled the box up during one commit (px, 0 for none): the mark sat at the end of
  * the range (`atEnd`, taken at `at`), the box is higher now than as the commit's render began
@@ -84,6 +112,21 @@ export function enginePull(mark: { atEnd?: boolean; at?: number }, before: numbe
   if (!mark.atEnd || before === null || input.down || input.at > (mark.at ?? 0)) return 0;
   const pull = before - scrollTop;
   return pull > ANCHOR_SLOP_PX ? pull : 0;
+}
+
+/**
+ * Where the row being read stands for the next correction: the first of `places` still there (`ok`)
+ * and measured when the row was picked (`top`). The hook passes the row itself (there and in its
+ * order), then the row drawn right before it, then the one right after it: a row that left its place
+ * (a card he answers goes to another group and is drawn again there) leaves its neighbour to hold
+ * the place he read, where holding nothing moved every card he saw by its new height (2026-11-25, a
+ * review: 186px). The row before it first: nothing above the pointer moves, and what was below closes
+ * up under its line (holding the row after a tall card pushed the rows above it down, with room at
+ * the top). Null when none is: a row is picked afresh. Pure.
+ */
+export function heldPlace<T>(places: ReadonlyArray<{ el: T | null; top?: number; ok: boolean }>): { el: T; top: number } | null {
+  for (const p of places) if (p.el && p.ok && p.top !== undefined) return { el: p.el, top: p.top };
+  return null;
 }
 
 /**

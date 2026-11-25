@@ -20,7 +20,8 @@
  * happens when something above really moved.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { ANCHOR_SLOP_PX, anchoredScrollTop, enginePull, holdsRows, releaseScrollTop, slackStep, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, type AnchorMark, type ReadSession, type ScrollInput } from './scroll-anchor';
+import { ANCHOR_SLOP_PX, anchoredScrollTop, enginePull, heldPlace, holdsRows, releaseScrollTop, slackStep, SCROLL_HELD_ATTR, SCROLL_INPUT_EVENTS, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, stepScrollInput, type AnchorMark, type ReadSession, type ScrollInput } from './scroll-anchor';
+import { isTypingField } from '@/utils/focus-unless-typing';
 
 interface Anchor extends AnchorMark {
   el: Element;
@@ -29,15 +30,19 @@ interface Anchor extends AnchorMark {
   /** The rows right before and after it when it was picked (see `stillInOrder`). */
   prev: Element | null;
   next: Element | null;
+  /** For the row being read: where those two stood then (a row with a box), to hold its place should it leave (heldPlace). */
+  prevTop?: number;
+  nextTop?: number;
+  /** A neighbour holding the place of the row being read, which left it: kept until the person moves or scrolls. */
+  stand?: boolean;
   /** The box sat at the end of its range when it was picked, at `at` (enginePull). */
   atEnd?: boolean;
   at?: number;
 }
 
-/** What scrolls a box by the person's hand: each one stamps the time (enginePull). */
-const SCROLL_INPUT = ['wheel', 'keydown', 'pointerdown', 'touchstart', 'touchmove'] as const;
-
 const hasBox = (el: Element) => el.getClientRects().length > 0;
+/** A row still drawn: in the document, with a box. */
+const drawn = (el: Element | null): el is Element => !!el && el.isConnected && hasBox(el);
 
 /**
  * The index of the first row in `list` (document order) whose box reaches below the top edge, or -1.
@@ -94,7 +99,10 @@ function readAnchor(box: HTMLElement, rows: string, el: Element): Anchor | null 
   if (r.bottom <= edge || r.top - edge >= box.clientHeight) return null;
   const list = Array.from(box.querySelectorAll(rows));
   const i = list.indexOf(el);
-  return { el, read: true, top: r.top - edge, scrollTop: box.scrollTop, prev: i > 0 ? list[i - 1] : null, next: i >= 0 ? list[i + 1] ?? null : null };
+  const prev = i > 0 ? list[i - 1] : null;
+  const next = i >= 0 ? list[i + 1] ?? null : null;
+  const topOf = (row: Element | null) => (row && hasBox(row) ? row.getBoundingClientRect().top - edge : undefined);
+  return { el, read: true, top: r.top - edge, scrollTop: box.scrollTop, prev, next, prevTop: topOf(prev), nextTop: topOf(next) };
 }
 
 /**
@@ -124,7 +132,9 @@ interface Attached {
  * the box: that row is held, at the very top too, and when what stands above it got shorter than
  * the box can scroll up, the box keeps the missing height as room at its top (slackStep) until they
  * leave; leaving goes back to the very top when they were there as the hold began and did not
- * scroll themselves (releaseScrollTop). A box with no `reading` is held exactly as before.
+ * scroll themselves (releaseScrollTop). Should that row itself leave its place (a card he answers
+ * goes to another group), the row drawn right before it, else right after it, holds the place
+ * (heldPlace) until they move or scroll. A box with no `reading` is held exactly as before.
  */
 export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false, reading?: () => Element | null): void {
   const anchor = useRef<Anchor | null>(null);
@@ -171,25 +181,39 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     setSlack(box, 0);
     write(box, to);
   };
+  // Whether the box sat at the end of its range as `a` was picked, and when (enginePull).
+  const stampEnd = (box: HTMLElement, a: Anchor | null) => {
+    if (a && readingRef.current) { a.atEnd = box.scrollTop >= box.scrollHeight - box.clientHeight - ANCHOR_SLOP_PX; a.at = performance.now(); }
+    return a;
+  };
   const pick = (box: HTMLElement) => {
     if (standsDown(box)) return null;
     const reading = readingRef.current?.() ?? null;
     if (readingRef.current) presence(box, reading !== null);
-    const a = pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, reading);
-    if (a && readingRef.current) { a.atEnd = box.scrollTop >= box.scrollHeight - box.clientHeight - ANCHOR_SLOP_PX; a.at = performance.now(); }
-    return a;
+    return stampEnd(box, pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, reading));
+  };
+  // The neighbour that holds the place of the row being read, held as that row from here (`stand`).
+  const standIn = (box: HTMLElement, el: Element) => {
+    const a = readAnchor(box, rowsRef.current, el);
+    if (a) a.stand = true;
+    return stampEnd(box, a);
   };
 
   // A ref, not a dependency: it is called from the observers attached once per box. `commit`: from
   // the owner's commit, where a box with `reading` puts back the engine's own pull (enginePull).
   const keep = useRef((box: HTMLElement, commit = false) => {
     const held = standsDown(box) ? null : anchor.current;
-    if (held && held.el.isConnected && held.el.getClientRects().length > 0 && stillInOrder(held)) {
-      const top = held.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    // The held row; for the row being read that left its place, the row that stood before it, or after.
+    const place = held ? heldPlace([
+      { el: held.el, top: held.top, ok: drawn(held.el) && stillInOrder(held) },
+      ...(held.read ? [{ el: held.prev, top: held.prevTop, ok: drawn(held.prev) }, { el: held.next, top: held.nextTop, ok: drawn(held.next) }] : []),
+    ]) : null;
+    if (held && place) {
+      const top = place.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
       const max = box.scrollHeight - box.clientHeight;
       // The engine's pull is no scroll of the person's: it is taken out of the mark's scroll.
       const pull = commit && readingRef.current ? enginePull(held, before.current, box.scrollTop, input.current) : 0;
-      const mark = pull ? { ...held, scrollTop: held.scrollTop - pull } : held;
+      const mark = { top: place.top, scrollTop: held.scrollTop - pull };
       if (held.read) {
         // The row being read: what no scroll can do, room at the top does.
         const step = slackStep(slack.current, anchoredScrollTop(mark, top, box.scrollTop, max, -Infinity));
@@ -199,7 +223,9 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
         write(box, anchoredScrollTop(mark, top, box.scrollTop, max));
       }
     }
-    anchor.current = pick(box);
+    // A neighbour holding his row's place keeps it, with no pick: what is under the pointer now is not
+    // what he read, and the move's line, drawn a commit later above it, would push the place.
+    anchor.current = held && place && (held.stand || place.el !== held.el) ? standIn(box, place.el) ?? pick(box) : pick(box);
   }).current;
 
   useLayoutEffect(() => {
@@ -232,19 +258,22 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       const mine = own.current !== null && Math.abs(box.scrollTop - own.current) < 1;
       own.current = null;
       if (!mine && session.current) session.current.scrolled = true;
+      // His own scroll ends a neighbour's standing in: the row is picked afresh.
+      if (!mine && anchor.current) anchor.current.stand = false;
       keep(box);
     };
-    const pickAgain = () => keep(box);
-    const stamp = (e: Event) => {
-      input.current.at = performance.now();
-      if (e.type === 'pointerdown') input.current.down = true;
+    // Picked again because the row being read changed (or the keeper let go): no neighbour stands in.
+    const pickAgain = () => {
+      if (anchor.current) anchor.current.stand = false;
+      keep(box);
     };
-    const up = () => { input.current.down = false; };
+    const onInput = (e: Event) => {
+      const inField = e.type === 'keydown' && e.target instanceof Element && isTypingField(e.target);
+      input.current = stepScrollInput(input.current, { type: e.type, buttons: (e as MouseEvent).buttons, key: (e as KeyboardEvent).key, inField }, performance.now());
+    };
     // Only a box that knows the row being read looks for the engine's pull (the others keep as before).
     if (readingRef.current) {
-      for (const t of SCROLL_INPUT) window.addEventListener(t, stamp, { capture: true, passive: true });
-      window.addEventListener('pointerup', up, true);
-      window.addEventListener('pointercancel', up, true);
+      for (const t of SCROLL_INPUT_EVENTS) window.addEventListener(t, onInput, { capture: true, passive: true });
     }
     box.addEventListener('scroll', onScroll, { passive: true });
     // The keeper that held the box let go: hold the row on screen from here.
@@ -279,9 +308,7 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
         box.removeEventListener('scroll', onScroll);
         box.removeEventListener(SCROLL_RELEASED_EVENT, pickAgain);
         box.removeEventListener(SCROLL_REPICK_EVENT, pickAgain);
-        for (const t of SCROLL_INPUT) window.removeEventListener(t, stamp, true);
-        window.removeEventListener('pointerup', up, true);
-        window.removeEventListener('pointercancel', up, true);
+        for (const t of SCROLL_INPUT_EVENTS) window.removeEventListener(t, onInput, true);
         ro?.disconnect();
         setSlack(box, 0);
         session.current = null;

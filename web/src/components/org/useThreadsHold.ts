@@ -11,7 +11,9 @@
  *    or changes height (a card, a group's head, Watching, a move's note, a read after a reconnect):
  *    at the list, the card under the pointer or holding the focus, at the very top too (2026-11-25,
  *    the user: a new card above "still pushes my page out"; the top of the view was held, and at
- *    the very top nothing); away from it, the card at the top of the view, and at the very top
+ *    the very top nothing); when that card itself goes (a Needs you card he answers moves to Done),
+ *    the card that stood before it holds his place (2026-11-25, a review: every card moved 186px);
+ *    away from it, the card at the top of the view, and at the very top
  *    nothing, so new cards show there. useScrollAnchor, on the box that scrolls the list, in both
  *    engines: WebKit has no CSS scroll anchoring, org-threads.css turns Chromium's own off there.
  *
