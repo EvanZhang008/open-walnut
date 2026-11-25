@@ -463,6 +463,23 @@ export function appendToolCall(
   ev: ToolUseEvent,
 ): StreamingBlock[] {
   const { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId } = ev;
+  // One block per tool call: the same toolUseId again (a host's re-read, a reconnect replay) is
+  // the call already held. It fills only what the first event lacked; status and result stay.
+  const at = blocks.findIndex((b) => b.type === 'tool_call' && b.toolUseId === toolUseId);
+  if (at >= 0) {
+    const held = blocks[at] as StreamingToolCallBlock;
+    const fill: Partial<StreamingToolCallBlock> = {
+      ...(input && !held.input ? { input } : {}),
+      ...(planContent && !held.planContent ? { planContent } : {}),
+      ...(subagentType && !held.subagentType ? { subagentType } : {}),
+      ...(taskDescription && !held.taskDescription ? { taskDescription } : {}),
+      ...(msgId && !held.msgId ? { msgId } : {}),
+    };
+    if (Object.keys(fill).length === 0) return blocks as StreamingBlock[];
+    const next = blocks.slice();
+    next[at] = { ...held, ...fill };
+    return next;
+  }
   return [
     ...blocks,
     {

@@ -19,6 +19,7 @@ import {
   appendLaneText,
   appendLaneThinking,
   appendToolCall,
+  findToolCall,
   backfillToolResult,
   appendSystemBlock,
   appendUserLineBlock,
@@ -388,7 +389,8 @@ function registerGlobalListeners(): void {
     state.isStreaming = true;
     // Main-lane tool call interrupts main text flow; a subagent tool call
     // (parentToolUseId set) lives in its own lane and must not cut main text.
-    if (!parentToolUseId) {
+    // A tool call the blocks already hold (a replay) is no interruption: its text stays whole.
+    if (!parentToolUseId && !findToolCall(state.blocks, toolUseId)) {
       interruptText(state);
     }
     state.blocks = appendToolCall(state.blocks, {

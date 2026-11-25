@@ -22,6 +22,12 @@
  *                    was told of (fact-log.ts toldLine; attach-evidence.ts judgedReplayFloor), so what
  *                    the CLI wrote while no runner read it (the restart itself, a writer the daemon runs
  *                    alone) is said once, and nothing the leader already heard is said again
+ *   said lines       the told line can sit before lines whose facts were said (a withheld result
+ *                    holds it at its start, claude-code-session.ts readOffset), so the attach also
+ *                    takes the furthest line a fact was read from (fact-log.ts saidLine), and each
+ *                    line of its read below it is handled inside `readingLine(sid, v, true)`: the host
+ *                    emitter keeps no transcript detail said in it (host-emitter.ts). Only while the
+ *                    line is handled: what its handling says later (a promise, a timer) is new.
  *
  * Installed by the host's session side (host-boot.ts installOwnAttach), cleared when it stops.
  */
@@ -31,6 +37,9 @@ import type { ToldLine } from './fact-log.js'
 type Attach = (sid: string, path: string) => Promise<void>
 let attach: Attach | null = null
 let told: ((sid: string) => ToldLine | undefined) | null = null
+let said: ((sid: string) => ToldLine | undefined) | null = null
+/** The line a runner handles right now (JavaScript runs one at a time: set and cleared around it). */
+let reading: { sid: string; v: number; said: boolean } | null = null
 
 /** The host's session side installs how its runner attaches an own session (null: none runs here). */
 export function setJudgeAttach(fn: Attach | null): void {
@@ -40,6 +49,51 @@ export function setJudgeAttach(fn: Attach | null): void {
 /** The host's session side installs its fact log's toldLine (null: none runs here). */
 export function setToldLines(fn: ((sid: string) => ToldLine | undefined) | null): void {
   told = fn
+}
+
+/** The host's session side installs its fact log's saidLine (null: none runs here). */
+export function setSaidLines(fn: ((sid: string) => ToldLine | undefined) | null): void {
+  said = fn
+}
+
+/** The furthest CLI line of `sid` a durable fact was read from on this host, or undefined (attachToExisting reads it). */
+export function saidLineOf(sid: string): ToldLine | undefined {
+  try { return said?.(sid) } catch { return undefined }
+}
+
+/** An attach's read of lines an earlier read said: each line below `upTo`, after `last`. */
+export interface SaidWindow { upTo: number; last: number }
+
+/**
+ * The said window of an attach reading on from the told line `floor` in the stream file `file`, or
+ * undefined: only a said line of that very file (its epoch, and within its size: a line not written
+ * yet was never said), past the floor.
+ */
+export function openSaidWindow(said: ToldLine | undefined, file: { epoch?: string; size: number } | undefined, floor: number): SaidWindow | undefined {
+  if (!said || !file?.epoch || said.epoch !== file.epoch || !Number.isSafeInteger(file.size)) return undefined
+  return said.v > floor && said.v <= file.size ? { upTo: said.v, last: floor } : undefined
+}
+
+/**
+ * Is line `v` (its end offset) in the window? Moves the window on; false ends it for good: a line at
+ * or past `upTo`, or one that went back (another file).
+ */
+export function lineInSaidWindow(w: SaidWindow | undefined, v: number): boolean {
+  if (!w || v >= w.upTo || v <= w.last) return false
+  w.last = v
+  return true
+}
+
+/** Handle line `v` of `sid` (its end offset); `alreadySaid`: an earlier read said its facts. */
+export function readingLine<T>(sid: string, v: number, alreadySaid: boolean, fn: () => T): T {
+  const before = reading
+  reading = { sid, v, said: alreadySaid }
+  try { return fn() } finally { reading = before }
+}
+
+/** The line of `sid` being handled right now, or undefined (the host emitter reads it). */
+export function lineBeingRead(sid: string): { v: number; said: boolean } | undefined {
+  return reading && reading.sid === sid ? { v: reading.v, said: reading.said } : undefined
 }
 
 /** The furthest CLI line of `sid` a durable fact came from on this host, or undefined (attachToExisting reads it). */
@@ -184,6 +238,8 @@ export interface OwnAttachWiring {
   liveSids?: OwnAttachDeps['liveSids']
   /** The fact log's furthest told line of a session (fact-log.ts toldLine). */
   toldLine(sid: string): ToldLine | undefined
+  /** The fact log's furthest line a fact of a session was read from (fact-log.ts saidLine). */
+  saidLine?(sid: string): ToldLine | undefined
   /** Settles once the runner's own startup (its queue read, its recovery) is done: the boot passes wait for it. */
   runnerReady?: Promise<unknown>
   /** Can this host read its own sessions' streams now (its follower link up)? An attach before that has no place to read on from. */
@@ -204,6 +260,7 @@ export async function installOwnAttach(w: OwnAttachWiring): Promise<() => void> 
   let stopped = false
   const sleeper = napper()
   setToldLines(w.toldLine)
+  setSaidLines(w.saidLine ?? null)
   setJudgeAttach(async (sid, path) => {
     if (w.holds(sid) || !judgedHere(sid) || isAcpEngine(await w.engineOf(sid))) return
     // Not readable yet: the boot passes attach it once it is, reading on from the told line.
@@ -243,6 +300,7 @@ export async function installOwnAttach(w: OwnAttachWiring): Promise<() => void> 
     sleeper.wake()
     setJudgeAttach(null)
     setToldLines(null)
+    setSaidLines(null)
     boot?.stop()
   }
 }

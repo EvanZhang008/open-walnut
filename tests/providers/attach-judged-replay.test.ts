@@ -28,7 +28,7 @@ vi.mock('../../src/core/sessions/session-row-owner.js', async (orig) => ({
 }))
 
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
-import { setToldLines } from '../../src/core/session-channel/host-judged-lines.js'
+import { lineBeingRead, setSaidLines, setToldLines } from '../../src/core/session-channel/host-judged-lines.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
@@ -60,6 +60,7 @@ afterEach(async () => {
   bus.clear()
   own.hostKey = ''
   setToldLines(null)
+  setSaidLines(null)
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 
@@ -259,6 +260,52 @@ describe.each(PHASES)('attaching a session this host judges (its task copy at %s
     expect(lastAttach(sid)).toBe(Number.MAX_SAFE_INTEGER)
     await settle(300)
     expect(results).toEqual([])
+    session.detach()
+  })
+})
+
+/**
+ * 2026-11-25: a result withheld for background work held the told line at its start while the turn's
+ * tool calls went on; after a daemon update the attach read them all again from there and the leader
+ * heard 119 tool calls twice. The attach takes the furthest line a fact was read from (saidLine): each
+ * line below it is handled as said (host-judged-lines.ts readingLine), so the host emitter keeps none
+ * of their detail, while the withheld result is still judged once, and a line past it is new.
+ */
+describe('an attach that reads again tool calls the leader already heard', () => {
+  it('handles them as said, still ends the held turn once, and a line past the said line as new', async () => {
+    own.hostKey = '__local__'
+    const sid = 'jr-held-said'
+    const started = JSON.stringify({ type: 'system', subtype: 'task_started', session_id: sid, task_id: 'agent-a', task_type: 'local_agent', description: 'agent-a' })
+    const failed = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, num_turns: 1, result: 'held: rate limit', session_id: sid, total_cost_usd: 0.02 })
+    const done = JSON.stringify({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'agent-a', status: 'completed' })
+    const lines = [user('ROUND one'), result(sid, 'echo: ROUND one'), idle(), user('ROUND held'), started, failed, toolUse('toolu_a'), toolUse('toolu_b'), toolUse('toolu_new'), done, idle()]
+    const ends: number[] = []
+    let at = 0
+    for (const l of lines) { at += Buffer.byteLength(l) + 1; ends.push(at) }
+    const file = path.join(streams, `${sid}.jsonl`)
+    fs.writeFileSync(file, lines.map((l) => l + '\n').join(''))
+    daemon.seedSession(sid, { pid: 6120, alive: true })
+    const st = fs.statSync(file)
+    const epoch = `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`
+    // Told: held at the agent's start. Said: the line of toolu_b, the last fact the leader heard.
+    setToldLines((s) => (s === sid ? { epoch, v: ends[4]! } : undefined))
+    setSaidLines((s) => (s === sid ? { epoch, v: ends[7]! } : undefined))
+    const seen: Array<[string, boolean | undefined]> = []
+    const outcomes: string[] = []
+    bus.subscribe(`judged-replay-said-${sid}`, (e) => {
+      const d = e.data as { sessionId?: string; toolUseId?: string; result?: unknown }
+      if (d.sessionId !== sid) return
+      if (e.name === EventNames.SESSION_TOOL_USE) seen.push([String(d.toolUseId), lineBeingRead(sid)?.said])
+      if (e.name === EventNames.SESSION_RESULT) outcomes.push(String(d.result))
+    }, { global: true })
+    const session = await attach(sid, 6120, ends[1]!, 'IN_PROGRESS')
+    expect(lastAttach(sid)).toBe(ends[4])
+    await vi.waitFor(() => expect(outcomes.length).toBeGreaterThan(0), { timeout: 5_000 })
+    await settle(300)
+    // toolu_a's line is below the said line: said. toolu_b's is the said line itself (its facts go
+    // again: never one lost). toolu_new's is past it: new.
+    expect(seen).toEqual([['toolu_a', true], ['toolu_b', false], ['toolu_new', false]])
+    expect(outcomes).toEqual(['held: rate limit'])
     session.detach()
   })
 })

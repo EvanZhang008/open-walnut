@@ -39,6 +39,13 @@
  *     It is derived from the durable records, not written with them: folded in after each batch's
  *     fsync, rebuilt from the records at open, and saved in the state before every compaction (which
  *     drops records, never it), so it is never ahead of what a crash could lose, nor behind it.
+ *   - `saidLine(sid)`: the furthest CLI output line any fact of the session came from, as read,
+ *     where the told line stops at the start of a result its runner withholds while background work
+ *     runs (claude-code-session.ts readOffset). An attach reads on from the told line, so it reads
+ *     again lines whose facts the leader already heard; the host emitter keeps their transcript
+ *     detail from being said twice (host-emitter.ts). Kept like the told line: folded in after each
+ *     batch's fsync (a record whose line stopped short names the line in `src`), rebuilt at open,
+ *     saved with the state.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -62,6 +69,8 @@ export interface FactRecord {
   data: unknown
   /** The CLI output line the fact came from (its stream epoch and end offset). */
   line?: { epoch?: string; v: number }
+  /** On disk only: the line the fact was read from, when `line` stopped short of it (`saidLine`). */
+  src?: number
   /** Fields cut to the inline cap on disk, by their path in `data` ('a.b.0'). */
   refs?: Record<string, FactRef>
   /** The destinations the host's own emit named, so the leader says it to the same subscribers. */
@@ -91,7 +100,7 @@ export interface FactLogOptions {
  * epoch in `permit` (the field an older build wrote and reads: its one number was the epoch) and
  * its permit number beside it (absent in an older file: 0).
  */
-interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number>; told?: Record<string, ToldLine> }
+interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number>; told?: Record<string, ToldLine>; said?: Record<string, ToldLine> }
 
 /** A CLI output line a fact came from: its stream file's epoch (when known) and its end offset; `end`: a turn end came from it. */
 export interface ToldLine { epoch?: string; v: number; end?: true }
@@ -107,6 +116,15 @@ export function foldTold(seen: ToldLine | undefined, line: ToldLine | undefined,
   if (!seen || (line.epoch && seen.epoch && line.epoch !== seen.epoch) || line.v > seen.v) return make(end)
   // Another fact of the same line: a turn end from it stays one.
   if (line.v === seen.v && end && !seen.end) return { ...seen, end: true }
+  return seen
+}
+
+/** `seen` with a durable fact's source line folded in (`saidLine`): its `src`, else its `line`. */
+export function foldSaid(seen: ToldLine | undefined, r: { line?: { epoch?: string; v: number }; src?: number }): ToldLine | undefined {
+  if (!r.line) return seen
+  const v = typeof r.src === 'number' && Number.isSafeInteger(r.src) && r.src > r.line.v ? r.src : r.line.v
+  if (!Number.isSafeInteger(v) || v < 0) return seen
+  if (!seen || (r.line.epoch && seen.epoch && r.line.epoch !== seen.epoch) || v > seen.v) return { ...(r.line.epoch ? { epoch: r.line.epoch } : {}), v }
   return seen
 }
 
@@ -131,7 +149,7 @@ export const FACT_FLUSH_MS = 50
 export class FactLog {
   private state: LogState
   private nextSeq: number
-  private buffered: { full: FactRecord; line: string }[] = []
+  private buffered: { full: FactRecord; line: string; src?: number }[] = []
   private timer: ReturnType<typeof setTimeout> | null = null
   private chain: Promise<void> = Promise.resolve()
   private listeners = new Set<(recs: FactRecord[]) => void>()
@@ -163,7 +181,7 @@ export class FactLog {
       const raw = JSON.parse(await fsp.readFile(stateFile, 'utf8')) as Partial<LogState>
       if (raw?.v === 1 && typeof raw.logId === 'string') {
         const permitNumber = Number(raw.permitNumber) || 0
-        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, ...(permitNumber > 0 ? { permitNumber } : {}), sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {}, told: toldOf(raw.told) }
+        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, ...(permitNumber > 0 ? { permitNumber } : {}), sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {}, told: toldOf(raw.told), said: toldOf(raw.said) }
       }
     } catch { /* a new log */ }
     const { records, validBytes, totalBytes } = await readRecords(file)
@@ -172,14 +190,17 @@ export class FactLog {
       await fsp.truncate(file, validBytes)
       o.log?.('warn', 'fact log: cut a torn last line', { walnutId: o.walnutId, cut: totalBytes - validBytes })
     }
-    if (!state) state = { v: 1, logId: crypto.randomBytes(8).toString('hex'), acked: 0, permit: 0, sseq: {}, told: {} }
+    if (!state) state = { v: 1, logId: crypto.randomBytes(8).toString('hex'), acked: 0, permit: 0, sseq: {}, told: {}, said: {} }
     const told = state.told ??= {}
+    const said = state.said ??= {}
     let head = state.acked
     for (const r of records) {
       head = Math.max(head, r.seq)
       state.sseq[r.sid] = Math.max(state.sseq[r.sid] ?? 0, r.sseq)
       const t = foldTold(told[r.sid], r.line, r.name)
       if (t) told[r.sid] = t
+      const d = foldSaid(said[r.sid], r)
+      if (d) said[r.sid] = d
     }
     const log = new FactLog(o, state, head, records[0]?.seq ?? head + 1, validBytes)
     await log.saveState()
@@ -212,6 +233,12 @@ export class FactLog {
     return t ? { ...t } : undefined
   }
 
+  /** The furthest CLI output line a durable fact of `sid` was read from (see the header), or undefined. */
+  saidLine(sid: string): ToldLine | undefined {
+    const t = this.state.said?.[sid]
+    return t ? { ...t } : undefined
+  }
+
   /** The next sseq this session's next fact takes, without taking it. */
   nextSseq(sid: string): number { return (this.state.sseq[sid] ?? 0) + 1 }
 
@@ -220,7 +247,7 @@ export class FactLog {
    * the next flush. `continueFrom`: a session id that replaced another (a rename) continues the
    * old id's sseq instead of starting from 1.
    */
-  append(sid: string, name: string, data: unknown, opts: { line?: { epoch?: string; v: number }; at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader' } = {}): FactRecord {
+  append(sid: string, name: string, data: unknown, opts: { line?: { epoch?: string; v: number }; src?: number; at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader' } = {}): FactRecord {
     if (this.closed) throw new Error('fact log closed')
     if (!SAFE_ID.test(sid)) throw new Error(`fact log: bad session id ${JSON.stringify(sid)}`)
     if (opts.continueFrom && this.state.sseq[opts.continueFrom] && !this.state.sseq[sid]) this.state.sseq[sid] = this.state.sseq[opts.continueFrom]
@@ -233,8 +260,9 @@ export class FactLog {
       ...(opts.to ? { to: [...opts.to] } : {}),
       ...(opts.judgedBy ? { judgedBy: opts.judgedBy } : {}),
     }
-    const disk = capRecord(full, this.o.inlineCap)
-    this.buffered.push({ full, line: JSON.stringify(disk) + '\n' })
+    const disk: FactRecord = opts.line && typeof opts.src === 'number' && Number.isSafeInteger(opts.src) && opts.src > opts.line.v
+      ? { ...capRecord(full, this.o.inlineCap), src: opts.src } : capRecord(full, this.o.inlineCap)
+    this.buffered.push({ full, line: JSON.stringify(disk) + '\n', ...(disk.src !== undefined ? { src: disk.src } : {}) })
     this.schedule()
     return full
   }
@@ -326,9 +354,13 @@ export class FactLog {
     this.durableHead = batch[batch.length - 1].full.seq
     const recs = batch.map((b) => b.full)
     const told = this.state.told ??= {}
-    for (const r of recs) {
+    const said = this.state.said ??= {}
+    for (const b of batch) {
+      const r = b.full
       const t = foldTold(told[r.sid], r.line, r.name)
       if (t) told[r.sid] = t
+      const d = foldSaid(said[r.sid], { ...(r.line ? { line: r.line } : {}), ...(b.src !== undefined ? { src: b.src } : {}) })
+      if (d) said[r.sid] = d
     }
     for (const cb of this.listeners) {
       try { cb(recs) } catch (err) {

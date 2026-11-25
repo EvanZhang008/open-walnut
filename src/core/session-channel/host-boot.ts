@@ -46,7 +46,7 @@ import { startStandDownSide, type StandDownSide } from './stand-down-held.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
-import type { LiveCli } from './host-judged-lines.js'
+import { lineBeingRead, type LiveCli } from './host-judged-lines.js'
 import { noteSessionRowWritten } from './row-hook.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
 import { WALNUT_HOME } from '../../constants.js'
@@ -174,6 +174,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     // The line the runner has read up to: the fact log keeps the furthest one told (fact-log.ts toldLine),
     // where an attach after a restart reads on from (host-judged-lines.ts).
     offsetOf: (sid) => { const at = (runner.findSessionByClaudeId(sid) as { readOffset?: number } | undefined)?.readOffset; return typeof at === 'number' && at >= 0 ? at : undefined },
+    // The line the runner handles right now, and whether an earlier read said its facts (host-judged-lines.ts readingLine).
+    lineOf: (sid) => lineBeingRead(sid),
     onOwnRow: (sid) => gone.forget(sid),
     handOf: (row) => bundles.handFor(row.taskId),
     onLog: say,
@@ -315,7 +317,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   up.ownAttach = await (await import('./host-judged-lines.js')).installOwnAttach({
     runner: sessionRunner, holds: runnerHolds, ownRows: () => ownRows(o.hostKey), runnerReady: sessionRunner.initialized,
     engineOf: async (sid) => (await getSessionByClaudeId(sid).catch(() => null))?.engine ?? undefined,
-    liveCli: (sid) => runtimeLiveCli(sid), liveSids: () => runtimeLiveSids(), toldLine: (sid) => log.toldLine(sid),
+    liveCli: (sid) => runtimeLiveCli(sid), liveSids: () => runtimeLiveSids(), toldLine: (sid) => log.toldLine(sid), saidLine: (sid) => log.saidLine(sid),
     readsReady: () => selfHostConnection(o.hostKey)?.connected === true,
     // Tests: the boot passes wait this much longer, so only the attach before a write can take a session.
     ...(delayMs > 0 ? { delayMs } : {}), log: say,

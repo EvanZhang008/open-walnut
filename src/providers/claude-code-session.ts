@@ -110,6 +110,7 @@ import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
 import { readAttachEvidence, judgedReplayFloor, ON_DEMAND_ATTACH_EVIDENCE_MS, EVIDENCE_TIMEOUT, type StreamEvidence } from './attach-evidence.js'
+import { lineInSaidWindow, openSaidWindow, readingLine, saidLineOf, type SaidWindow } from '../core/session-channel/host-judged-lines.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -1131,6 +1132,12 @@ export class ClaudeCodeSession {
   private _consumedOffset = -1
   /** The furthest stream line (its daemon `v`) this instance has handled, -1 before the first. */
   private _readOffset = -1
+  /**
+   * An attach's read of lines an earlier read already said (host-judged-lines.ts readingLine):
+   * below `upTo` (fact-log.ts saidLine), each line after `last`. Ends at the first line that is not
+   * (one at or past `upTo`, or one that went back: another file).
+   */
+  private _saidWindow: SaidWindow | undefined
   /** Where the line being handled starts (the furthest line before it), -1 when unknown. */
   private _lineStart = -1
   /** Where the result line a withheld turn end (`_deferredOutcome`) came from starts: the host's told
@@ -4088,6 +4095,11 @@ export class ClaudeCodeSession {
     if (replay) {
       session._consumedOffset = replay.floor
       session._readOffset = replay.floor
+      // Lines of this read whose facts an earlier read said (a withheld result held the told line back):
+      // their transcript detail is not said again (host-judged-lines.ts readingLine). From the told line
+      // of this very file only.
+      const at = typeof streamEvidence === 'string' ? (file ? { epoch: file.streamEpoch, size: file.fileSize } : undefined) : { epoch: streamEvidence.streamEpoch, size: streamEvidence.fileSize }
+      session._saidWindow = replay.from === 'told' && record.claudeSessionId ? openSaidWindow(saidLineOf(record.claudeSessionId), at, replay.floor) : undefined
       // The turn the floor closes, or the last one when the floor is past it with no turn started since,
       // was handled (the downgrade's convergence, which a floor skips): never a turn end again, whatever
       // the host's copy of the task's phase says. A floor on a result's own line owes its companion
@@ -7353,8 +7365,18 @@ export class ClaudeCodeSession {
   /** `parsed`: the line already parsed on its way here (RemoteSessionManager); a line is parsed once. */
   private handleStreamLine(line: string, v?: number, parsed?: Record<string, unknown>): void {
     // What the line's handling emits, now or after an await, carries the line's own position (readOffset).
-    if (typeof v === 'number' && v >= 0 && v < Number.MAX_SAFE_INTEGER) lineScope.run({ session: this, v }, () => this._handleStreamLine(line, v, parsed))
-    else this._handleStreamLine(line, v, parsed)
+    if (typeof v === 'number' && v >= 0 && v < Number.MAX_SAFE_INTEGER) {
+      const run = (): void => lineScope.run({ session: this, v }, () => this._handleStreamLine(line, v, parsed))
+      if (this.claudeSessionId) readingLine(this.claudeSessionId, v, this._lineAlreadySaid(v), run)
+      else run()
+    } else this._handleStreamLine(line, v, parsed)
+  }
+
+  /** Was line `v` said by an earlier read of this session (the attach's said window)? */
+  private _lineAlreadySaid(v: number): boolean {
+    if (lineInSaidWindow(this._saidWindow, v)) return true
+    this._saidWindow = undefined
+    return false
   }
 
   private _handleStreamLine(line: string, v?: number, parsed?: Record<string, unknown>): void {

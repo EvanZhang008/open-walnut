@@ -26,11 +26,21 @@
  * record) waits up to `pendingMs` for its row: once the row is this host's own the events go after
  * its `born` record, in order; else they are dropped (a session that is not this host's never
  * reaches the log). Events re-emitted by the channel itself (`source: 'host-channel'`) are skipped.
+ *
+ * A runner that attaches again (a restart of the service or of its daemon, a rehydrate) reads its
+ * CLI's output on from the told line (fact-log.ts toldLine), which can sit well before lines whose
+ * facts the leader already heard: a result withheld while background work runs holds the told line
+ * at its start, and every tool call after it went again (2026-11-25: 119 tool calls of one lead's
+ * session reached the leader twice after a daemon update, and the chat drew each one twice). The
+ * runner marks the lines of that read the log says were already read (fact-log.ts saidLine,
+ * host-judged-lines.ts readingLine): a transcript-detail fact (TURN_DETAIL_FACTS, its snapshots aside)
+ * said while one is handled is not kept again. Turn ends, deliveries and every other fact go as before (the runner
+ * judges those again from the lines), and so does anything said later, after the line's handling.
  */
 import type { FactLog } from './fact-log.js'
 import type { HostChannel } from './channel.js'
 import type { LiveState } from './host-api.js'
-import { channelClassOf, sessionIdOf } from './event-classes.js'
+import { channelClassOf, sessionIdOf, SNAPSHOT_FACTS, TURN_DETAIL_FACTS } from './event-classes.js'
 import { setOwnLiveListener, setOwnRowListener } from './row-hook.js'
 import { rowOwnedHere, sessionFieldOwner } from '../sessions/session-row-owner.js'
 import type { SessionRecord } from '../types.js'
@@ -59,6 +69,12 @@ export interface HostEmitterOptions {
   liveOf?(sid: string): LiveState | null
   /** How far the session's runner has read its CLI output (the fact's `line.v`), when known. */
   offsetOf?(sid: string): number | undefined
+  /**
+   * The CLI output line the session's runner is handling right now (host-judged-lines.ts
+   * lineBeingRead): its end offset, never held back as offsetOf is, and whether an earlier read
+   * already said its facts.
+   */
+  lineOf?(sid: string): { v: number; said: boolean } | undefined
   bus?: EmitterBus
   /** Install the row listener (row-hook.ts); tests pass their own. */
   rowListener?(fn: ((row: SessionRecord) => void) | null): void
@@ -162,6 +178,8 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   /** Renames the port announced, new id -> old id, until the store wrote them. */
   const expected = new Map<string, string>()
   const GONE_KEY = '{"gone":true}'
+  /** Per session, how many detail facts of already-said lines were not kept (one log line per read). */
+  const skipped = new Map<string, number>()
   let started = false
   let busRef: EmitterBus | null = null
   let rowListener: ((fn: ((row: SessionRecord) => void) | null) => void) | null = null
@@ -170,12 +188,12 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   const warn = (msg: string, data?: Record<string, unknown>): void => o.onLog?.('warn', msg, data)
 
   /** Keep one record; false when the log did not take it (the caller keeps what it would have sent). */
-  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader' } = {}): boolean {
+  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[]; judgedBy?: 'leader'; src?: number } = {}): boolean {
     const v = name === 'row' || name === 'live' || name === 'rename' || name === 'drop' ? undefined : o.offsetOf?.(sid)
     const epoch = lastRows.get(sid)?.streamEpoch
     try {
       o.log.append(sid, name, data, {
-        ...(typeof v === 'number' ? { line: { ...(epoch ? { epoch } : {}), v } } : {}),
+        ...(typeof v === 'number' ? { line: { ...(epoch ? { epoch } : {}), v }, ...(typeof opts.src === 'number' ? { src: opts.src } : {}) } : {}),
         ...(opts.at !== undefined ? { at: opts.at } : {}),
         ...(opts.continueFrom ? { continueFrom: opts.continueFrom } : {}),
         ...(opts.to ? { to: opts.to } : {}),
@@ -197,6 +215,22 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     const copy = JSON.parse(JSON.stringify(row)) as SessionRecord
     if (append(sid, 'row', { resync: true, patch: copy })) lastRows.set(sid, copy)
     own.add(sid)
+  }
+
+  /** The line this fact is read from, or `said`: a detail fact of a line an earlier read said (see the header). */
+  function readFor(sid: string, name: string): { said: boolean; src?: number } {
+    let at: { v: number; said: boolean } | undefined
+    try { at = o.lineOf?.(sid) } catch { at = undefined }
+    if (!at || !Number.isSafeInteger(at.v) || at.v < 0) return { said: false }
+    // A snapshot (the newest stands for every earlier one) goes as ever: a duplicate of one is harmless.
+    if (at.said && TURN_DETAIL_FACTS.has(name) && !SNAPSHOT_FACTS.has(name)) {
+      const n = (skipped.get(sid) ?? 0) + 1
+      skipped.set(sid, n)
+      if (n === 1) o.onLog?.('info', 'session channel: a new read of a session keeps no detail the leader already heard', { sessionId: sid, from: at.v })
+      return { said: true }
+    }
+    if (!at.said) skipped.delete(sid)
+    return { said: false, src: at.v }
   }
 
   function scheduleLive(sid: string): void {
@@ -246,6 +280,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     const row = lastRows.get(from)
     lastRows.delete(from)
     if (row) lastRows.set(to, row)
+    skipped.delete(from)
     const l = lastLive.get(from)
     lastLive.delete(from)
     if (l) lastLive.set(to, l)
@@ -312,7 +347,9 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     }
     const judgedBy = o.judgedByLeaderNow?.() ? 'leader' as const : undefined
     if (own.has(sid)) {
-      append(sid, event.name, data, { to: event.destinations, ...(judgedBy ? { judgedBy } : {}) })
+      const read = readFor(sid, event.name)
+      if (read.said) return
+      append(sid, event.name, data, { to: event.destinations, ...(judgedBy ? { judgedBy } : {}), ...(read.src !== undefined ? { src: read.src } : {}) })
       scheduleLive(sid)
     } else {
       hold(sid, event.name, data, event.destinations, judgedBy)
@@ -350,6 +387,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       liveTimers.clear()
       for (const p of pending.values()) clearTimeout(p.timer)
       pending.clear()
+      skipped.clear()
     },
     noteRename(from, to) { rename(from, to) },
     expectRename(from, to) {
@@ -379,6 +417,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
         own.delete(sid)
         lastRows.delete(sid)
         lastLive.delete(sid)
+        skipped.delete(sid)
         const t = liveTimers.get(sid)
         if (t) { clearTimeout(t); liveTimers.delete(sid) }
       }
@@ -390,6 +429,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
         own.delete(sid)
         lastRows.delete(sid)
         lastLive.delete(sid)
+        skipped.delete(sid)
         const t = liveTimers.get(sid)
         if (t) { clearTimeout(t); liveTimers.delete(sid) }
       }

@@ -297,6 +297,25 @@ class SessionStreamBuffer {
 
   appendToolUse(sessionId: string, toolUseId: string, name: string, input?: Record<string, unknown>, planContent?: string, parentToolUseId?: string, subagentType?: string, taskDescription?: string, msgId?: string): void {
     const entry = this.getOrCreate(sessionId)
+    // One block per tool call: the same toolUseId again (a host that read its CLI's output again
+    // after a re-attach, a reconnect replay) is the call the buffer already holds, never a second
+    // panel. It fills what the first event lacked and keeps its status and result; it is no new
+    // turn data either, so the turn's blocks stay as they are.
+    const existing = entry.blocks.find((b): b is StreamingToolCallBlock => b.type === 'tool_call' && b.toolUseId === toolUseId)
+    if (existing) {
+      log.ws.warn('appendToolUse DUPLICATE — same toolUseId already in buffer', {
+        sessionId, toolUseId, toolName: name,
+        existingStatus: existing.status,
+        blocksTotal: entry.blocks.length,
+      })
+      if (input && !existing.input) existing.input = input
+      if (planContent && !existing.planContent) existing.planContent = planContent
+      if (subagentType && !existing.subagentType) existing.subagentType = subagentType
+      if (taskDescription && !existing.taskDescription) existing.taskDescription = taskDescription
+      if (msgId && !existing.msgId) existing.msgId = msgId
+      this.touch(entry)
+      return
+    }
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here — see appendTextDelta
     // for the Root Cause 5 explanation. Data events must never flip the lifecycle flag.
     // Subagent tool calls (parentToolUseId set) live in their own lane: they must
@@ -307,17 +326,6 @@ class SessionStreamBuffer {
       this.carryPendingMarkup(entry)
     }
     this.touch(entry)
-    // DUP-DEBUG: detect if the same toolUseId is appended twice — that means
-    // two SESSION_TOOL_USE events reached the buffer for the same logical
-    // tool call, which is what causes the duplicate panel in the chat UI.
-    const existing = entry.blocks.find((b) => b.type === 'tool_call' && b.toolUseId === toolUseId)
-    if (existing) {
-      log.ws.warn('appendToolUse DUPLICATE — same toolUseId already in buffer', {
-        sessionId, toolUseId, toolName: name,
-        existingStatus: existing.type === 'tool_call' ? existing.status : undefined,
-        blocksTotal: entry.blocks.length,
-      })
-    }
     entry.blocks.push({
       type: 'tool_call', toolUseId, name, input, status: 'calling',
       ...(planContent ? { planContent } : {}),

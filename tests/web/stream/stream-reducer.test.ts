@@ -374,6 +374,16 @@ describe('appendToolCall / backfillToolResult / findToolCall', () => {
     });
   });
 
+  it('folds the same toolUseId into the block it names: one panel, status and result kept (a replay)', () => {
+    let blocks: StreamingBlock[] = appendToolCall([], { toolUseId: 'tu-1', toolName: 'Bash', input: { command: 'ls' } });
+    blocks = backfillToolResult(blocks, 'tu-1', 'a.txt', false);
+    const again = appendToolCall(blocks, { toolUseId: 'tu-1', toolName: 'Bash', input: { command: 'ls' } });
+    expect(again).toBe(blocks);
+    const filled = appendToolCall(blocks, { toolUseId: 'tu-1', toolName: 'Bash', msgId: 'msg_1' });
+    expect(filled).toHaveLength(1);
+    expect(filled[0]).toMatchObject({ toolUseId: 'tu-1', status: 'done', result: 'a.txt', msgId: 'msg_1' });
+  });
+
   it('backfills results out of order, matching only status=calling', () => {
     let blocks: StreamingBlock[] = [];
     blocks = appendToolCall(blocks, { toolUseId: 'tu-1', toolName: 'Read' });

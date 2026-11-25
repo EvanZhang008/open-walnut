@@ -210,8 +210,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     return () => { wsClient.offConnectionChange(onStateChange); };
   }, []);
 
-  // The REST read of the session's pending prompts (and its status). Held in a ref
-  // so the subscribe effect and the resync listener below share one copy.
+  // The blocks as last rendered (the pending prompts a resync knows, a tool call a replay names).
   const blocksNowRef = useRef(blocks);
   blocksNowRef.current = blocks;
   // It is the panel's own record read (session-record-read.ts): one request per session for both,
@@ -664,16 +663,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // accumulator, and land the reasoning that led to this call before the call
     // itself. A subagent tool call (parentToolUseId set) lives in its own lane
     // and must NOT cut the main turn's text mid-token.
-    if (!parentToolUseId) {
+    if (!parentToolUseId && !findToolCall(blocksNowRef.current, toolUseId)) {
       interruptPendingText();
       flushPendingThinking();
     }
 
     setBlocks((prev) => {
-      // DUP-DEBUG: detect duplicate tool_use rendering at the closest layer
-      // to the UI. If this WARN fires, the same toolUseId already exists in
-      // local block state when a new event arrived — that's exactly what the
-      // user sees as two identical Bash panels.
+      // The same toolUseId again (a replay) folds into the block it names
+      // (appendToolCall), never a second panel; the WARN says where it came from.
       const existing = findToolCall(prev, toolUseId);
       if (existing) {
         log.warn('frontend', 'session:tool-use DUPLICATE — toolUseId already in blocks', {
