@@ -19,14 +19,18 @@
  * run`), a skip in a plain local run. The check is by file time, so a dist/ a
  * deploy copied in (scripts/deploy-committed.sh: the committed HEAD's build) can
  * pass for fresh beside uncommitted edits: build again after editing. With
- * PW_BUILT_SPA=1 the fixture serves that build itself.
+ * PW_BUILT_SPA=1 the fixture serves that build itself. PW_BUNDLE_DIR=<dir> serves another
+ * build instead, unchecked, to measure a before/after pair (a copy of the old build).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, type Page } from '@playwright/test'
 
 const REPO = path.resolve(import.meta.dirname, '../../..')
-export const BUNDLE_DIR = path.join(REPO, 'dist/web/static')
+if (process.env.PW_BUNDLE_DIR && process.env.PW_BUILT_SPA === '1') {
+  throw new Error('PW_BUNDLE_DIR and PW_BUILT_SPA=1 are both set: the fixture would serve its own build and ignore PW_BUNDLE_DIR. Set one.')
+}
+export const BUNDLE_DIR = process.env.PW_BUNDLE_DIR ? path.resolve(process.env.PW_BUNDLE_DIR) : path.join(REPO, 'dist/web/static')
 // What the bundle is built from: the SPA, and the server modules its aliases
 // (web/vite.config.ts `@open-walnut/*`) compile in.
 const SOURCES = ['web/src', 'web/index.html', 'web/vite.config.ts', 'web/public', 'src/core', 'src/lib'].map((p) => path.join(REPO, p))
@@ -62,6 +66,7 @@ function newestMtime(p: string): number {
 /** Why the production bundle cannot be used now, or null when it can. */
 export function productionBundleProblem(): string | null {
   if (process.env.PW_BUILT_SPA === '1') return null
+  if (process.env.PW_BUNDLE_DIR) return fs.existsSync(path.join(BUNDLE_DIR, 'index.html')) ? null : `no build at ${BUNDLE_DIR}`
   const index = path.join(BUNDLE_DIR, 'index.html')
   let built: number
   try { built = fs.statSync(index).mtimeMs } catch {

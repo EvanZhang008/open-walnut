@@ -167,6 +167,28 @@ describe('useExperimental: the newest read wins', () => {
     expect(shown()).toBe(true);
   });
 
+  // 2026-11-25 (task 9bceb9f2): every config change and reconnect handed each reader a new flags
+  // object, and every open session panel (six readers) drew its whole body again for it.
+  it('an answer equal to the shown one, or a change to another experiment, draws no view', async () => {
+    await mount(2);
+    server.reads[0]!.answer({ apps_stay_open: true, voice_conversation: false });
+    await settle();
+    const drawn = [seen[0]!.length, seen[1]!.length];
+    ws.emit('config:changed', { config: {} });
+    server.reads.at(-1)!.answer({ apps_stay_open: true, voice_conversation: false });
+    await settle();
+    ws.emit('config:changed', { config: {} });
+    server.reads.at(-1)!.answer({ apps_stay_open: true, voice_conversation: true });
+    await settle();
+    expect(server.reads).toHaveLength(3);
+    expect([seen[0]!.length, seen[1]!.length]).toEqual(drawn);
+    // Its own switch still draws it.
+    ws.emit('config:changed', { config: {} });
+    server.reads.at(-1)!.answer({ apps_stay_open: false, voice_conversation: true });
+    await settle();
+    expect([shown(0), shown(1)]).toEqual([false, false]);
+  });
+
   it('views that mount while a read is out join it: one request for the page', async () => {
     await mount(3);
     expect(server.reads).toHaveLength(1);

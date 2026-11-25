@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { SettingsGroup } from '@/components/settings/SettingsSection';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { usePersistentState } from '@/hooks/usePersistentState';
@@ -88,7 +89,8 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
   const data = useMemo(() => buildBreakdown(report.groups.find((g) => g.id === breakdown), days,
     (line) => breakdown === 'host' ? hostName(line.key) : line.label, grain), [report, breakdown, days, hostName, grain]);
   const oldest = (report.countedUntil ?? []).map((u) => Date.parse(u.until)).filter(Number.isFinite).sort((a, b) => a - b)[0];
-  const stillReading = !!report.collection?.running || oldest === undefined || Date.now() - oldest > STALE_AFTER_MS;
+  const readLongAgo = useMinuteValue((now) => oldest !== undefined && now - oldest > STALE_AFTER_MS);
+  const stillReading = !!report.collection?.running || oldest === undefined || readLongAgo;
   const storedFrom = (report.stored ?? []).map((s) => s.from).sort()[0];
   const ownFrom = (report.stored ?? []).filter((s) => !s.imported).map((s) => s.from).sort()[0];
   const today = new Date().toLocaleDateString('en-CA');

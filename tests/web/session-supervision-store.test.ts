@@ -122,6 +122,28 @@ describe('session-supervision store — one entry per session id', () => {
     expect(askSlot.notified).toBe(1);
   });
 
+  // 2026-11-25 (task 9bceb9f2): every open session panel drew its whole body again for every
+  // 15 s poll, each handing it a new snapshot of the same answer.
+  it('a poll that answers what is shown tells no one and keeps the snapshot', async () => {
+    const SID = 'sess-poll-same';
+    serveGet(sup({ enabled: true }));
+    const panel = reader(SID);
+    await flush();
+    expect(panel.notified).toBe(1);
+    const shown = panel.snap;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flush();
+    expect(api.fetchSessionSupervision).toHaveBeenCalledTimes(2);
+    expect(panel.notified).toBe(1);
+    expect(panel.snap).toBe(shown);
+    // A real change still reaches it.
+    serveGet(sup({ enabled: true, state: 'restarting' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flush();
+    expect(panel.notified).toBe(2);
+    expect(panel.snap.value?.supervision?.state).toBe('restarting');
+  });
+
   it('keeps different sids isolated, and an unsubscribed sid reads the empty snapshot', async () => {
     const A = 'sess-iso-a';
     const B = 'sess-iso-b';

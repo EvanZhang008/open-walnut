@@ -9,6 +9,7 @@
  * Drawn from the generic shape alone (src/core/changes/model.ts): the card knows no service.
  */
 import { useState } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { timeAgo } from '@/utils/time';
 import { ChangeDeployView } from './ChangeDeployView';
@@ -33,7 +34,7 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
   const { review, deploy } = snap;
   const now = changeHeadline(snap);
   const [focus, setFocus] = useState<{ stage: string; ask: number } | undefined>();
-  const stale = !!snap.checkedAt && Date.now() - Date.parse(snap.checkedAt) > STALE_MS;
+  const stale = useMinuteValue((at) => !!snap.checkedAt && at - Date.parse(snap.checkedAt) > STALE_MS);
   const facts = review ? reviewFacts(review) : [];
   if (review?.approvedBy?.length) facts.push(`by ${review.approvedBy.join(', ')}`);
   return (

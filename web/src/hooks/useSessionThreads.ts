@@ -1,4 +1,5 @@
 import { useLeanCallback } from './useLeanCallback';
+import { useResetOnChange } from '@/hooks/useResetOnChange';
 import type { NavRetarget } from '@/utils/tree-split-state';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { fetchSession, updateSession } from '@/api/sessions';
@@ -399,9 +400,9 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   const noteAsked = useCallback((key: string) => {
     setAskedAt((m) => new Map(m).set(key, Date.now()));
   }, []);
-  useEffect(() => {
+  useResetOnChange(sessionId, () => {
     setTreeState(emptyThreadTree()); setHistoryComplete(false); setDerived(EMPTY_DERIVED); setPinJump(null); setAskedAt(new Map());
-  }, [sessionId]);
+  });
   const hiddenKeys = useMemo(() => hiddenKeysOf(tree, meta.index), [tree, meta.index]);
 
   // The toast lives INSIDE the panel (its provider wraps this panel's markup),

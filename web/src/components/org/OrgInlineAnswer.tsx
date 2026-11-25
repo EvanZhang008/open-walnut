@@ -19,6 +19,7 @@
  * never show up in another box to be sent twice.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import type { Task } from '@open-walnut/core';
 import { apiGet, apiPut } from '@/api/client';
 import { answerLetter, humanReplyToLetter } from '@/api/human-inbox';
@@ -162,7 +163,8 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
     void loadLetters().finally(() => { if (alive) setFresh(true); });
     return () => { alive = false; };
   }, []);
-  const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId, Date.now(), alert.itemId), [snap.letters, alert.taskId, alert.itemId]);
+  // On the minute clock: the letter's grace window ends without a new read of the list.
+  const letter = useMinuteValue((now) => openLetterFor(snap.letters, alert.taskId, now, alert.itemId));
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
   // Fresh with no letter: the words box takes over (onWords), so nothing shows meanwhile.
   if (!letter) return fresh ? <div className="org-answer-note" role="status" /> : <LoadingState size="row" title="Loading the letter…" />;

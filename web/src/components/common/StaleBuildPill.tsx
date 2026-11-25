@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getStaleBuild, reloadForUpgrade, subscribeStaleBuild, type StaleBuildState } from '@/utils/stale-assets';
@@ -176,7 +177,9 @@ export function StaleBuildPill() {
     document.addEventListener('visibilitychange', arm);
     return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', arm); };
   }, [kind, markSeen]);
-  const visible = !!identity && (pending || !isSnoozed(snooze, identity, Date.now()));
+  // On the minute clock: "Later" ends by itself, with no new read of the build.
+  const snoozed = useMinuteValue((now) => !!identity && isSnoozed(snooze, identity, now));
+  const visible = !!identity && (pending || !snoozed);
   const docked = !!dock;
   // In the rail the notice is one of its rows: the collapsed rail's peek names it and holds its ×
   // (RailItemPill, `data-rail-dismiss`), which comes back here as `rail:dismiss`.

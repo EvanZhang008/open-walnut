@@ -10,7 +10,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { REMOTE_OFF_NOTE, hostProblemOf, isConnectingPhaseWire, type HostProblem } from '@open-walnut/host-problem';
-import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
+import { serverNow, useHostStatus, useHostStatusOf } from '@/hooks/useHostStatus';
+import type { HostStatus } from '@/api/hosts';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
@@ -31,9 +32,10 @@ export function reconnectingText(label: string): string {
  * SessionHostErrorText renders, so a quiet suggestion always has a sentence in its place.
  */
 export function useSessionHostHasProblem(host: string | null | undefined): boolean {
-  const status = useHostStatus(host ?? null);
-  return !!host && !!hostProblemOf(status);
+  const problem = useHostStatusOf(host, hasHostProblem);
+  return !!host && problem;
 }
+const hasHostProblem = (status: HostStatus | undefined): boolean => !!hostProblemOf(status);
 
 export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
   host: string;

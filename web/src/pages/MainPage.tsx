@@ -66,6 +66,7 @@ import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
 import { resolveOrgContact } from '@/api/org';
 import { isBuiltinTier } from '@/api/focus';
+import { keepEqual } from '@/utils/keep-equal';
 import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWalnutSlot';
@@ -495,17 +496,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead of
   // inheriting the active tab's (possibly provider-claimed) project/source.
   const [taskDefaults, setTaskDefaults] = useState<{ platform?: string; project?: string }>({});
+  // An answer equal to the held one keeps it: every config change re-reads it, and a new
+  // object drew the whole page again (2026-11-25, task 9bceb9f2).
+  const takeTaskDefaults = useLeanCallback((c: Awaited<ReturnType<typeof fetchConfig>>) => {
+    setTaskDefaults((prev) => keepEqual(prev, { platform: c.defaults?.platform, project: c.defaults?.project }));
+  }, []);
   useEffect(() => {
     let alive = true;
     fetchConfig()
-      .then((c) => { if (alive) setTaskDefaults({ platform: c.defaults?.platform, project: c.defaults?.project }); })
+      .then((c) => { if (alive) takeTaskDefaults(c); })
       .catch(() => { /* defaults stay empty — falls back to local/Inbox below */ });
     return () => { alive = false; };
-  }, []);
+  }, [takeTaskDefaults]);
   useEvent('config:changed', () => {
-    fetchConfig()
-      .then((c) => setTaskDefaults({ platform: c.defaults?.platform, project: c.defaults?.project }))
-      .catch(() => {});
+    fetchConfig().then(takeTaskDefaults).catch(() => {});
   });
   // WHICH task is focused. The rendered row comes from the shared store below —
   // this state only remembers the selection (and answers for a row the list does

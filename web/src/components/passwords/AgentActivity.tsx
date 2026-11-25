@@ -8,6 +8,7 @@
  * into a page.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMinuteNow } from '@/utils/minute-clock';
 import { vaultApi, VaultApiError, isLockedError, type AgentLogEntry, type AgentPolicy, type AgentsSwitch, type VaultItemSummary } from '@/api/vault'
 import { SiteTile } from './ItemView'
 import { RobotIcon } from './pw-icons'
@@ -81,11 +82,13 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
     vaultApi.endAgentGrants().then((r) => { setNote(`Ended ${r.grants} grant${r.grants === 1 ? '' : 's'}${r.asks ? ` and withdrew ${r.asks} ask${r.asks === 1 ? '' : 's'}` : ''}.`); load() }).catch(fail)
   }
 
+  // The last day moves with the clock, not with the log: read the minute clock.
+  const minute = useMinuteNow()
   const counts = useMemo(() => {
-    const day = Date.now() - 86_400_000
+    const day = minute - 86_400_000
     const recent = (log ?? []).filter((e) => Date.parse(e.at) > day)
     return { got: recent.filter((e) => e.kind === 'released' || e.kind === 'fill').length, asked: recent.filter((e) => e.kind === 'asked').length, refused: recent.filter((e) => e.kind === 'denied' || e.kind === 'refused').length }
-  }, [log])
+  }, [log, minute])
 
   return (
     <div className="pw-detail pw-agents" data-testid="pw-agents">

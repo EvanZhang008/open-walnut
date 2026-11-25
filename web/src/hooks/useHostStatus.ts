@@ -314,6 +314,18 @@ export function useHostStatus(host: string | null | undefined): HostStatus | und
   );
 }
 
+/**
+ * One thing a view reads from a host's status (a flag, a sentence), redrawing it only when that
+ * changes. A status frame carries the server's clock, so every push and every re-read of the
+ * list is a new object: a view that keeps the whole status drew again for each (2026-11-25,
+ * task 9bceb9f2: every open session panel and its chat, on every frame of every host).
+ * `select` must return a primitive or a value it keeps.
+ */
+export function useHostStatusOf<T>(host: string | null | undefined, select: (status: HostStatus | undefined) => T): T {
+  const read = () => select(host ? statuses.get(host) : undefined);
+  return useSyncExternalStore(subscribeHostStatus, read, read);
+}
+
 /** Live status for every host, in first-seen order (never reshuffles on update). */
 export function useAllHostStatus(): HostStatus[] {
   return useSyncExternalStore(subscribeHostStatus, getAllHostStatus);

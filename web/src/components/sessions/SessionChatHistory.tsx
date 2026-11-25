@@ -1,4 +1,5 @@
 import { countRender } from '@/utils/render-count';
+import { useResetOnChange } from '@/hooks/useResetOnChange';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
 import { sessionReplaced } from '@/stores/session-status-store';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
@@ -7,7 +8,8 @@ import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { sendFailureWords } from '@/utils/operation-error-words';
 import { useDraft } from '@/hooks/useDraft';
-import { useHostStatus } from '@/hooks/useHostStatus';
+import { useHostStatusOf } from '@/hooks/useHostStatus';
+import type { HostStatus } from '@/api/hosts';
 import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
@@ -748,6 +750,9 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
 /** How long the history waits for the rest of a moment's signals before it reads (bumpHistory). */
 const HISTORY_BUMP_COALESCE_MS = 150;
 
+/** Whether the session's host is connected (null: no status yet): the chat reads only this. */
+const hostConnectedOf = (status: HostStatus | undefined): boolean | null => (status ? status.connected === true : null);
+
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, folderGoneBanner, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory, onHistoryShown }: SessionChatHistoryProps) {
   countRender('SessionChatHistory');
   // Dev-only render counter per session: lets a browser test prove a hot
@@ -1472,8 +1477,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Its host's link came back: what the session wrote while nothing reached the host (a reply
   // to a message sent before the link went) reached no stream of ours, so history is read again
   // (2026-11-06: a host's sign-in expired for hours under its tasks' open panels).
-  const hostLink = useHostStatus(sessionHost || null);
-  const hostConnected = hostLink ? hostLink.connected === true : null;
+  const hostConnected = useHostStatusOf(sessionHost || null, hostConnectedOf);
   const hostWasDown = useRef(false);
   useEffect(() => {
     if (hostConnected === false) { hostWasDown.current = true; return; }
@@ -4549,10 +4553,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     wordsSig = [...newest].map(([k, v]) => `${k}\u0001${v}`).join('\u0002');
   }
-  useEffect(() => {
+  useResetOnChange(sessionId, () => {
     answerDating.current = newAnswerDating();
     setStreamEnds(new Map());
-  }, [sessionId]);
+  });
 
   // `deduped` is a fresh array every render: key the derivation on a string of
   // what it says about questions, or the publish below would loop the panel.

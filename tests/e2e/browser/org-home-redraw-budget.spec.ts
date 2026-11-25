@@ -15,6 +15,16 @@
  *    one shared minute clock themselves: web/src/utils/minute-clock.ts).
  * Each step's draws (web/src/utils/render-count.ts) and its main-thread CPU (Chrome's trace) are
  * printed on a `REDRAW` line.
+ *
+ * The open session panels themselves (2026-11-25, task 9bceb9f2: 119 main-thread blocks in a day
+ * on the Mac app, p50 300 ms, each drawing SessionPanelBody and SessionChatHistory up to 21
+ * times): a panel draws its body (over a thousand hooks) for every new copy of something it
+ * reads, and its pollers and re-reads handed it new copies of the same answer. On Home with two
+ * long chats open, and on /org, none of these may draw a panel or a chat:
+ *  - its polls (cron recovery every 15 s, the slash command retries, the browser tabs);
+ *  - the window coming back to the front (focus, show: the inbox and more read again);
+ *  - a config change (every experiment's reader read the flags again);
+ *  - and a status write of its own session that changes nothing its chat shows draws no chat.
  */
 import { test, expect, type Page } from '@playwright/test'
 import { serveProductionBundle } from './production-bundle'
@@ -22,7 +32,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { REAL_PANEL, seedColumns } from './draft-helpers'
 import { answerTaskList } from './task-list-stub'
 import { traceTaskTimes } from './cpu-reference'
-import { AI_SESSION, DENSE_SESSION } from './threads-fixture'
+import { AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION } from './threads-fixture'
 
 test.use({ viewport: { width: 1600, height: 900 } })
 test.describe.configure({ mode: 'default' })
@@ -148,17 +158,90 @@ async function measure(page: Page, act: (n: number) => Promise<void>, took: (n: 
   return best!
 }
 
-async function sendFrame(page: Page, data: Record<string, unknown>): Promise<void> {
-  await page.evaluate((d) => {
+/** One server event, as the socket hands it to the page. */
+async function sendEvent(page: Page, name: string, data: Record<string, unknown>): Promise<void> {
+  await page.evaluate(([n, d]) => {
     const sock = (window as unknown as { __pwSocks: WebSocket[] }).__pwSocks.find((s) => s.readyState === 1)!
-    sock.onmessage!(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'task:updated', seq: 1, data: d }) }))
-  }, data)
+    sock.onmessage!(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: n, seq: 1, data: d }) }))
+  }, [name, data] as const)
 }
 
-/** Draw counters a page's root, a list or a chat would raise; none may move on a minute. (A chat's
- *  panel, SessionPanelBody, is left out: its own pollers, every 4 to 20 s, land inside a jump of the
- *  clock; its history, the costly part, is in.) */
-const PAGE_LEVEL = ['OrgPage', 'OrgChannelList', 'OrgNodeDetail', 'OrgTaskRail', 'OrgTaskTabRow', 'OrgSidePanel', 'MainPage', 'TodoPanel', 'TaskRowBody', 'SessionChatHistory']
+const sendFrame = (page: Page, data: Record<string, unknown>) => sendEvent(page, 'task:updated', data)
+
+/** Whether the page got a response whose URL matches `re` since `arm` was last called. */
+function responses(page: Page, re: RegExp): { arm: () => void; seen: () => boolean } {
+  let hit = true
+  page.on('response', (r) => { if (re.test(r.url())) hit = true })
+  return { arm: () => { hit = false }, seen: () => hit }
+}
+
+interface PanelSteps { poll: Step; focus: Step; config: Step; ownStatus: Step; processStatus: Step; experiment: Step }
+
+/** What must draw no session panel and no chat (the panels' own pollers and re-reads), on the
+ *  page as it is; `sid` is an open panel's session, written to by the last step. */
+async function quietPanelSteps(page: Page, sid: string): Promise<PanelSteps> {
+  const none = (c: Record<string, number>) => !c.SessionPanelBody && !c.SessionChatHistory
+  // Cron recovery reads every open session every 15 s; the jump also lands the slash command
+  // retries that are due (3 and 8 s). (The browser tabs' re-read, every 20 s and only for a task
+  // with tabs, is not in it.)
+  const supervision = responses(page, /\/api\/sessions\/[^/]+\/supervision/)
+  const poll = await measure(page, async () => { supervision.arm(); await page.clock.fastForward(16_000) }, async () => supervision.seen(), none)
+  // The window back in front: the inbox, the task list and more read again.
+  const inbox = responses(page, /\/api\/v1\/human-inbox/)
+  const focus = await measure(page, async () => {
+    inbox.arm()
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')) })
+  }, async () => inbox.seen(), none)
+  const configRead = responses(page, /\/api\/config(\?|$)/)
+  const config = await measure(page, async () => { configRead.arm(); await sendEvent(page, 'config:changed', {}) }, async () => configRead.seen(), none)
+  // A status write of the panel's own session that moves only its revision and time. (A try with
+  // a draw of Home's list, from elsewhere now and then, is tried again.)
+  const status = await page.evaluate(async (id) => (await (await fetch(`/api/sessions/status?ids=${encodeURIComponent(id)}`)).json()).statuses[id], sid)
+  let revision = (status.statusRevision as number) + 100
+  const ownStatus = await measure(page, async () => {
+    revision += 1
+    await sendEvent(page, 'session:status-changed', { sessionId: sid, status: { ...status, statusRevision: revision, statusUpdatedAt: new Date().toISOString() } })
+  }, async () => true, (c) => !c.SessionChatHistory && !c.TaskRowBody)
+  // The controls: what the panel and its chat show still draws them. A new process status draws
+  // the chat (its stream follows it); it goes back after, so the page stays as it was.
+  const processStatus = await measure(page, async () => {
+    revision += 1
+    await sendEvent(page, 'session:status-changed', { sessionId: sid, status: { ...status, process_status: 'running', statusRevision: revision, statusUpdatedAt: new Date().toISOString() } })
+  }, async () => true, (c) => (c.SessionChatHistory ?? 0) >= 1)
+  revision += 1
+  await sendEvent(page, 'session:status-changed', { sessionId: sid, status: { ...status, statusRevision: revision, statusUpdatedAt: new Date().toISOString() } })
+  await quiet(page)
+  // An experiment the panel reads (voice_conversation), turned the other way on the server: the
+  // panel draws for it. Answered here, and left so: the test ends with it.
+  let flip = false
+  await page.route(/\/api\/config(\?|$)/, async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { config?: { experimental?: Record<string, boolean> } }
+    if (body.config) body.config.experimental = { ...body.config.experimental, voice_conversation: flip }
+    await route.fulfill({ response: res, json: body })
+  })
+  const experiment = await measure(page, async (n) => { flip = n % 2 === 0; configRead.arm(); await sendEvent(page, 'config:changed', {}) },
+    async () => configRead.seen(), (c) => (c.SessionPanelBody ?? 0) >= 1)
+  return { poll, focus, config, ownStatus, processStatus, experiment }
+}
+
+function expectQuietPanels({ processStatus, experiment, ...steps }: PanelSteps): void {
+  // The controls hold on every build: a test that drew nothing at all would pass the rest.
+  expect(steps.ownStatus.draws.SessionPanelBody ?? 0, `ownStatus: ${JSON.stringify(steps.ownStatus)}`).toBeGreaterThanOrEqual(1)
+  expect(processStatus.draws.SessionChatHistory ?? 0, `processStatus: ${JSON.stringify(processStatus)}`).toBeGreaterThanOrEqual(1)
+  expect(experiment.draws.SessionPanelBody ?? 0, `experiment: ${JSON.stringify(experiment)}`).toBeGreaterThanOrEqual(1)
+  // Before: a poll, a focus and a config change each drew every open panel (a config change
+  // its chat too); a status write of a session drew its chat.
+  for (const [name, step] of Object.entries(steps)) {
+    expect(step.draws.SessionChatHistory ?? 0, `${name}: ${JSON.stringify(step)}`).toBe(0)
+    if (name !== 'ownStatus') expect(step.draws.SessionPanelBody ?? 0, `${name}: ${JSON.stringify(step)}`).toBe(0)
+  }
+}
+
+/** Draw counters a page's root, a list or a chat would raise; none may move on a minute. A chat's
+ *  panel (SessionPanelBody) is in too: its pollers land inside the jump of the clock and, answering
+ *  what it shows, draw nothing (before 2026-11-25 they drew every open panel, 4 draws here). */
+const PAGE_LEVEL = ['OrgPage', 'OrgChannelList', 'OrgNodeDetail', 'OrgTaskRail', 'OrgTaskTabRow', 'OrgSidePanel', 'MainPage', 'TodoPanel', 'TaskRowBody', 'SessionChatHistory', 'SessionPanelBody']
 const pageLevel = (c: Record<string, number>) => Object.fromEntries(PAGE_LEVEL.filter((k) => c[k]).map((k) => [k, c[k]]))
 
 /** Home's rows' due pills ("40m"), by task. */
@@ -177,7 +260,7 @@ async function open(page: Page, tasks: T[], url: string): Promise<void> {
   await page.goto(url)
 }
 
-test('on /org a status write draws only its rows and no chat; a minute draws only the labels that moved', async ({ page, browserName }) => {
+test('on /org a status write draws only its rows and no chat, a minute only the labels that moved, a poll, a focus or a config change no panel', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'traced on Chromium')
   const tasks = orgTasks()
   await open(page, tasks, `/org?node=main&open=task:${SIDE_TASK}`)
@@ -197,7 +280,9 @@ test('on /org a status write draws only its rows and no chat; a minute draws onl
   const minute = await measure(page, async () => { before = await rowTitles(page); await page.clock.fastForward(60_000) },
     async () => (await moved()) > 0,
     (c, n) => Object.keys(pageLevel(c)).length === 0 && (c.OrgChannelRow ?? 0) <= n, moved)
-  console.log('REDRAW org ' + JSON.stringify({ update, minute }))
+  const panels = await quietPanelSteps(page, AI_SESSION)
+  console.log('REDRAW org ' + JSON.stringify({ update, minute, panels }))
+  expectQuietPanels(panels)
 
   // The chats, the one beside the page and the node's own, never draw for another task's status
   // (before: each drew its panel and its history, twice a write).
@@ -221,10 +306,11 @@ test('on /org a status write draws only its rows and no chat; a minute draws onl
   expect(minute.draws.OrgChannelRow ?? 0, JSON.stringify(minute)).toBeLessThanOrEqual(minute.seen ?? 0)
 })
 
-test('on Home a minute draws no page, list or row; a status write draws no chat', async ({ page, browserName }) => {
+test('on Home a minute draws no page, list or row; a status write, a poll, a focus or a config change draws no chat', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'traced on Chromium')
   const tasks = orgTasks()
-  await seedColumns(page, [DENSE_SESSION])
+  // Two long chats open, as the user keeps them (the second one 230 turns).
+  await seedColumns(page, [DENSE_SESSION, NO_THREAD_SESSION])
   await open(page, tasks, '/')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
   // Three projects open, as the user keeps some: their rows are what a whole-list draw would redraw.
@@ -247,7 +333,10 @@ test('on Home a minute draws no page, list or row; a status write draws no chat'
   const pillsMoved = async () => changed(pillsBefore, await duePills(page))
   const minute = await measure(page, async () => { pillsBefore = await duePills(page); await page.clock.fastForward(60_000) },
     async () => (await pillsMoved()) > 0, (c) => Object.keys(pageLevel(c)).length === 0, pillsMoved)
-  console.log('REDRAW home ' + JSON.stringify({ update, minute, shownRows }))
+  await expect(page.locator(REAL_PANEL)).toHaveCount(2, { timeout: 30_000 })
+  const panels = await quietPanelSteps(page, DENSE_SESSION)
+  console.log('REDRAW home ' + JSON.stringify({ update, minute, shownRows, panels }))
+  expectQuietPanels(panels)
 
   expect(update.draws.SessionChatHistory ?? 0, JSON.stringify(update)).toBe(0)
   expect(update.draws.SessionPanelBody ?? 0, JSON.stringify(update)).toBe(0)

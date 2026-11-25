@@ -5,6 +5,7 @@
  * list rows and the Focus cards, so the two read alike in every Home view (2026-11-09 review: By
  * project, the default, drew none). The note goes when the task is switched back or closed.
  */
+import { useMinuteNow } from '@/utils/minute-clock';
 import type { Task } from '@open-walnut/core';
 import { fallbackBannerWords, fallbackEngineName, fallbackModelName } from '@open-walnut/user-status';
 import { useEngineDefaultModel, withDefaultModel } from '../sessions/engine-default-model';
@@ -23,8 +24,10 @@ export function TaskFallbackTag({ task, compact }: { task: Task; compact?: boole
   const note = task.engine_fallback && task.status !== 'done' && task.phase !== 'COMPLETE' ? task.engine_fallback : null;
   // Read only for a row that wears the tag (the catalog is cached across the app).
   const defaultModel = useEngineDefaultModel(note && !note.model ? note.to : undefined);
+  // Its reset time moves with the clock, not with the task: the tag reads the minute clock.
+  const now = useMinuteNow(!!note);
   if (!note) return null;
-  const words = fallbackBannerWords(withDefaultModel(note, defaultModel), Date.now());
+  const words = fallbackBannerWords(withDefaultModel(note, defaultModel), now);
   return (
     // The meta line's dot goes on the outer span, outside the tag's fill.
     <span className="status-card-fallback" data-testid="task-row-fallback" title={`${words.head} · ${words.why}`}>

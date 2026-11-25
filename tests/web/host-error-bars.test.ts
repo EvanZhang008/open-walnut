@@ -23,6 +23,7 @@ import type { HostStatus } from '../../web/src/api/hosts'
 const state = vi.hoisted(() => ({ current: undefined as unknown, replica: false }))
 vi.mock('@/hooks/useHostStatus', () => ({
   useHostStatus: () => state.current,
+  useHostStatusOf: (_host: unknown, select: (s: unknown) => unknown) => select(state.current),
   useHostStatusHydration: () => 'done',
   serverNow: () => 1_900_000_000_000,
   seedHostStatus: () => {},

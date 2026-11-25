@@ -4,6 +4,7 @@ import {
   type SlashCommandItem, type SlashCommandsResult,
 } from '@/api/slash-commands';
 import { perf } from '@/utils/perf-logger';
+import { keepEqual } from '@/utils/keep-equal';
 
 interface CacheEntry extends SlashCommandsResult {
   /** When this result was fetched (epoch ms) — drives the on-open revalidation. */
@@ -42,7 +43,7 @@ export interface UseSlashCommands {
   items: SlashCommandItem[];
   loading: boolean;
   /** Where the current list came from, and whether the host could be reached. */
-  status: Pick<SlashCommandsResult, 'source' | 'degraded'>;
+  status: Pick<SlashCommandsResult, 'source' | 'degraded' | 'stillLoading'>;
   search: (query: string) => SlashCommandItem[];
   /** Force a fresh server-side re-scan (bypasses both caches). */
   refresh: () => void;
@@ -67,7 +68,7 @@ export interface UseSlashCommands {
  */
 export function useSlashCommands(cwd?: string, host?: string, sessionId?: string, enabled = true): UseSlashCommands {
   const [items, setItems] = useState<SlashCommandItem[]>([]);
-  const [status, setStatus] = useState<UseSlashCommands['status']>({ source: 'discovery', degraded: false });
+  const [status, setStatus] = useState<UseSlashCommands['status']>({ source: 'discovery', degraded: false, stillLoading: false });
   const [loading, setLoading] = useState(false);
   // Track the latest key so an in-flight refresh for a stale key never overwrites items.
   const keyRef = useRef('');
@@ -83,8 +84,10 @@ export function useSlashCommands(cwd?: string, host?: string, sessionId?: string
 
   const applyResult = useCallback((key: string, result: SlashCommandsResult) => {
     if (keyRef.current !== key) return;
-    setItems(result.items);
-    setStatus({ source: result.source, degraded: result.degraded });
+    // A retry or revalidation that answers the same list keeps what the composer holds: each new
+    // copy drew the whole session panel again (2026-11-25, task 9bceb9f2).
+    setItems((prev) => keepEqual(prev, result.items));
+    setStatus((prev) => keepEqual(prev, { source: result.source, degraded: result.degraded, stillLoading: result.stillLoading === true }));
   }, []);
 
   // Fetch one key (non-fresh unless asked), publish it, and arm the next retry

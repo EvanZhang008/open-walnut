@@ -1,5 +1,6 @@
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
@@ -89,9 +90,10 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   const recovering = supervision?.enabled && ['watching', 'checking', 'restarting'].includes(supervision.state);
   // A stop its host never confirmed ends as failed (core/sessions/session-stop.ts): say so for a while,
   // since the session takes messages again and its CLI may still run.
+  // On the minute clock: a poll answering the same state draws nothing, so the window ends by itself.
   const stopAsked = Date.parse(value?.stopRequest?.requestedAt ?? '');
-  const failedStop = value?.stopRequest?.state === 'failed' && Number.isFinite(stopAsked) && Date.now() - stopAsked < FAILED_STOP_SHOWN_MS
-    ? value.stopRequest : null;
+  const failedRecently = useMinuteValue((now) => Number.isFinite(stopAsked) && now - stopAsked < FAILED_STOP_SHOWN_MS);
+  const failedStop = value?.stopRequest?.state === 'failed' && failedRecently ? value.stopRequest : null;
   const forced = stopPending || stopping || !!failedStop || !!error || supervision?.state === 'blocked'
     || supervision?.reason === 'launch-failed' || (supervision && (unavailable || value?.available === false))
     || (recovering && !activeCron);

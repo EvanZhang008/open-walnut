@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
+import { keepEqual } from '@/utils/keep-equal';
 import type { BrowserViewState } from './browser-view-model';
 
 /** While the task has tabs: a re-read now and then, in case an event went missing. */
@@ -20,7 +21,8 @@ export function useBrowserView(taskId: string | undefined): { state: BrowserView
     if (!taskId) return;
     const mine = ++gen.current;
     apiGet<BrowserViewState>('/api/v1/browser/view', { task: taskId }, { priority: 'low', quietStatuses: [400, 404] })
-      .then((v) => { if (gen.current === mine) setState({ tabs: v.tabs ?? [], ...(v.ended ? { ended: v.ended } : {}), ...(v.replay ? { replay: v.replay } : {}) }); })
+      // A re-read that answers the same tabs keeps the panel's copy (it would draw the panel again).
+      .then((v) => { if (gen.current === mine) setState((prev) => keepEqual(prev, { tabs: v.tabs ?? [], ...(v.ended ? { ended: v.ended } : {}), ...(v.replay ? { replay: v.replay } : {}) })); })
       .catch((err: unknown) => {
         log.warn('session-panel', 'browser view read failed', { taskId, error: err instanceof Error ? err.message : String(err) });
       });

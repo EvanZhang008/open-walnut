@@ -80,6 +80,25 @@ describe('one fetch, many surfaces', () => {
     expect(listLetters).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-25 (task 9bceb9f2): every focus and show re-reads the list, and each answer equal to
+  // the last handed every open session panel a new snapshot to draw its whole body again for.
+  it('a re-read that answers the same list wakes nobody and keeps the snapshot', async () => {
+    listLetters.mockImplementation(async () => structuredClone(LIVE));
+    await loadLetters();
+    const shown = getLetterSnapshot();
+    let woken = 0;
+    const off = subscribeLetters(() => { woken++; });
+    await loadLetters();
+    expect(listLetters).toHaveBeenCalledTimes(2);
+    expect(woken).toBe(0);
+    expect(getLetterSnapshot()).toBe(shown);
+    listLetters.mockImplementation(async () => [...structuredClone(LIVE), letter({ id: 'lt-3', createdAt: 4_000 })]);
+    await loadLetters();
+    expect(woken).toBe(1);
+    expect(getLetterSnapshot().letters[0]).toBe(shown.letters[0]);
+    off();
+  });
+
   it('a load failure is reported without wiping what is on screen', async () => {
     await loadLetters();
     listLetters.mockRejectedValueOnce(new Error('offline'));

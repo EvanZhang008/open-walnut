@@ -10,6 +10,7 @@
  * comes back into the list rather than vanishing falsely.
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useResetOnChange } from '@/hooks/useResetOnChange';
 import { ApiError } from '@/api/client';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { fetchSessionServers, lastSessionServers, stopSessionServer, type SessionServer, type SessionServersResult } from '@/api/session-servers';
@@ -62,10 +63,10 @@ export function useSessionServers(sessionId: string | null | undefined, opts: { 
   const shown = useContext(RouteShownContext) !== false;
   const enabled = opts.enabled && shown;
 
-  useEffect(() => {
+  useResetOnChange(sessionId, () => {
     setResult(sessionId ? lastSessionServers(sessionId) ?? null : null); setStopping(new Set()); setStopErrors(new Map());
     lastJson.current = ''; missing.current = false; gone.current.clear();
-  }, [sessionId]);
+  });
 
   useEffect(() => {
     if (!sessionId || !enabled || missing.current) return;

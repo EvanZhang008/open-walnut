@@ -23,6 +23,7 @@
  * title bar (`variant="strip"`, experiment action_needed_everywhere).
  */
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import type { Task } from '@open-walnut/core';
 import { ACTION_KIND_LABELS, type ActionItem, type ActionKind } from '@open-walnut/user-status';
 import { apiPut } from '@/api/client';
@@ -153,7 +154,8 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
   // another place, must not bring this place's own write back).
   useEffect(() => { setSnoozing((s) => (s && s.from !== server ? null : s)); }, [server]);
   const own = snoozing && snoozing.from === server ? snoozing.until : server;
-  const until = own && Date.parse(own) > Date.now() ? own : null;
+  // On the minute clock: a snooze ends by itself, with no new read of the item.
+  const until = useMinuteValue((now) => (own && Date.parse(own) > now ? own : null));
   const label = ACTION_KIND_LABELS[item.kind];
   const write = (next: string | null) => {
     setSnoozing({ until: next, from: server });

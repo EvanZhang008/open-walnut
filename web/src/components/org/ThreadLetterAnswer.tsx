@@ -8,6 +8,7 @@
  * the inbox a moment ago, its thread not settled yet) says so instead of offering a box.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useMinuteValue } from '@/utils/minute-clock';
 import type { OrgThread } from '@/api/org-threads';
 import { getLetterSnapshot, loadLetters, subscribeLetters } from '@/components/inbox/letter-store';
 import { OrgInlineAnswer, type AnswerFailure } from './OrgInlineAnswer';
@@ -30,7 +31,8 @@ export function ThreadLetterAnswer({ t }: { t: OrgThread }) {
     void loadLetters().finally(() => { if (alive) setFresh(true); });
     return () => { alive = false; };
   }, []);
-  const open = useMemo(() => !!openLetterFor(snap.letters, letter.task, Date.now(), letter.id), [snap.letters, letter.task, letter.id]);
+  // On the minute clock: the letter's grace window ends without a new read of the list.
+  const open = useMinuteValue((now) => !!openLetterFor(snap.letters, letter.task, now, letter.id));
   if (sent) return <p className="org-thread-stand-in-note" data-testid="org-thread-letter-sent">Answer sent.</p>;
   if (!open) {
     return (

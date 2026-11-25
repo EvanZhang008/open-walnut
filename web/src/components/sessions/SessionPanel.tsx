@@ -177,7 +177,8 @@ import { SessionHostDownBanner, SessionHostErrorText, useSessionHostHasProblem }
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionSettings, useSessionStatus } from '@/hooks/useSessionStatus';
 import { ComposerThreadPill } from './ComposerThreadPill';
-import { useHostStatus } from '@/hooks/useHostStatus';
+import { useHostStatusOf } from '@/hooks/useHostStatus';
+import type { HostStatus } from '@/api/hosts';
 import { applySessionSettings, clearSessionSettings, sessionReplaced } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -376,6 +377,11 @@ function claimRecheckSlot(sessionId: string): boolean {
   }
   recheckClaimedAt.set(sessionId, now);
   return true;
+}
+
+/** Why the host cannot open a terminal now (its status frame's `terminal: false`), or null. */
+function terminalBlockedWhyOf(status: HostStatus | undefined): string | null {
+  return status?.terminal === false ? (status.terminalWhy ?? 'This host cannot open a terminal right now') : null;
 }
 
 interface SessionPanelProps {
@@ -1474,10 +1480,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // "it should always have ... no matter what connection"). A host whose daemon cannot open
   // one yet (its status frame's terminal: false) keeps the tab: the tab then says
   // why and how to fix it (TerminalUnavailableView), and opens no pty.
-  const sessionHostStatus = useHostStatus(session?.host);
-  const terminalBlockedWhy = sessionHostStatus?.terminal === false
-    ? (sessionHostStatus.terminalWhy ?? 'This host cannot open a terminal right now')
-    : null;
+  const terminalBlockedWhy = useHostStatusOf(session?.host, terminalBlockedWhyOf);
   // An open panel asks first: its repos are re-read ahead of the rows', so the Changed
   // chip's tooltip has the session's git state without the tab.
   useEffect(() => { if (sessionId) void sessionGitStore.refresh(sessionId); }, [sessionId]);

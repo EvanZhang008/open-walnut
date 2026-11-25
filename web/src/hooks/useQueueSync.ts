@@ -15,6 +15,7 @@
  * One read at a time, coalesced; an answer for a session the panel left is dropped.
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { useResetOnChange } from '@/hooks/useResetOnChange';
 import { wsClient } from '@/api/ws';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
@@ -81,11 +82,11 @@ export function useQueueSync(
   const again = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
+  useResetOnChange(sessionId, () => {
     retired.current = new Set();
     touched.current = new Map();
     setState({});
-  }, [sessionId]);
+  });
 
   const read = useCallback(async () => {
     const sid = sidRef.current;

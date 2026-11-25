@@ -26,6 +26,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { listLetters, type LetterEnvelope } from '@/api/human-inbox';
 import { log } from '@/utils/log';
+import { keepEqual } from '@/utils/keep-equal';
 import { mergeReceipts } from './item-receipt-model';
 import { ingestItem, itemKey } from './item-store';
 
@@ -62,6 +63,18 @@ function emit(): void {
   for (const fn of [...subscribers]) fn();
 }
 
+/**
+ * Take a re-read's answer, telling the readers only when it changed: every focus, show and
+ * letter event re-reads the list, and an answer equal to the last one handed every session
+ * panel a new snapshot to draw again for (2026-11-25, task 9bceb9f2).
+ */
+function commit(next: LetterStoreSnapshot): void {
+  const kept = keepEqual(snapshot, next);
+  if (kept === snapshot) return;
+  snapshot = kept;
+  emit();
+}
+
 export function subscribeLetters(fn: () => void): () => void {
   subscribers.add(fn);
   return () => { subscribers.delete(fn); };
@@ -78,14 +91,13 @@ export function loadLetters(): Promise<void> {
     try {
       const letters = await listLetters();
       const merged = letters.map(next => mergeLetterPatch(snapshot.letters.find(old => old.id === next.id) ?? next, next));
-      snapshot = { ...snapshot, letters: merged, loaded: true, error: null };
       lastLoadedAt = Date.now();
+      commit({ ...snapshot, letters: merged, loaded: true, error: null });
     } catch (err) {
-      snapshot = { ...snapshot, loaded: true, error: 'Could not load letters' };
       log.warn('inbox', 'session letters load failed', { error: String(err) });
+      commit({ ...snapshot, loaded: true, error: 'Could not load letters' });
     } finally {
       inflight = null;
-      emit();
     }
   })();
   return inflight;
@@ -98,14 +110,13 @@ export function loadArchivedLetters(): Promise<void> {
     try {
       const archived = await listLetters({ archived: true });
       const merged = archived.map(next => mergeLetterPatch(snapshot.archived.find(old => old.id === next.id) ?? next, next));
-      snapshot = { ...snapshot, archived: merged, archivedLoaded: true, error: null };
       lastArchivedAt = Date.now();
+      commit({ ...snapshot, archived: merged, archivedLoaded: true, error: null });
     } catch (err) {
-      snapshot = { ...snapshot, archivedLoaded: true, error: 'Could not load the inbox' };
       log.warn('inbox', 'archived letters load failed', { error: String(err) });
+      commit({ ...snapshot, archivedLoaded: true, error: 'Could not load the inbox' });
     } finally {
       archivedInflight = null;
-      emit();
     }
   })();
   return archivedInflight;

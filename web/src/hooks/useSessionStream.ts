@@ -33,8 +33,8 @@ import {
   type StreamingPermissionBlock,
 } from '@/stream/stream-reducer';
 import { splitPendingMarkup } from '@open-walnut/pending-markup';
-import { useSessionStatus } from './useSessionStatus';
-import { seedSessionStatus } from '@/stores/session-status-store';
+import { useSessionStatusOf } from './useSessionStatus';
+import { seedSessionStatus, sessionStatusStore, type StoredSessionStatus } from '@/stores/session-status-store';
 import { readSessionRecord, type SessionRecordAnswer } from '@/api/session-record-read';
 import { ApiError } from '@/api/api-error';
 
@@ -131,10 +131,13 @@ function seedOnAdopt(
  *  2. Server returns a snapshot of the current buffer (catch-up)
  *  3. Incremental events arrive via broadcast; client filters by sessionId
  */
+const processStatusOf = (status: StoredSessionStatus | null) => status?.process_status;
+
 export function useSessionStream(sessionId: string | null): UseSessionStreamReturn {
   const [blocks, setBlocks] = useState<StreamingBlock[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const sessionStatus = useSessionStatus(sessionId);
+  // Only its process status: a status write that changes something else draws no chat.
+  const processStatusNow = useSessionStatusOf(sessionId, processStatusOf);
   const streamBuffer = useRef('');
   /** Counts every cut, clear and message boundary of the accumulator (seedOnAdopt). */
   const textCut = useRef(0);
@@ -537,7 +540,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // the accepted store value, so stale REST and equal-revision conflicts cannot
   // stop a live stream.
   useEffect(() => {
-    const processStatus = sessionStatus?.process_status;
+    const processStatus = processStatusNow;
     if (!sessionId || !processStatus) return;
 
     if (processStatus !== 'running') {
@@ -547,11 +550,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         if (previous) {
           log.info('stream', `status-store ps=${processStatus} → isStreaming true→false`, {
             sessionId,
-            revision: sessionStatus.statusRevision,
+            revision: sessionStatusStore.getStatus(sessionId)?.statusRevision,
           });
         }
         return false;
       });
+      // Every block so far is complete: the drawn ones now (the ref), and the ones a flush above
+      // just queued once React runs the updater (it returns its input, so it draws nothing).
+      completedLen.current = Math.max(completedLen.current, blocksLenRef.current);
       setBlocks((previous) => {
         completedLen.current = Math.max(completedLen.current, previous.length);
         return previous;
@@ -572,7 +578,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         return current;
       });
     }, 3000);
-  }, [sessionId, sessionStatus?.process_status, doResubscribe, flushPendingTextRaf]);
+  }, [sessionId, processStatusNow, doResubscribe, flushPendingTextRaf]);
 
   // Cancel pending flushes on unmount to avoid setState on unmounted component
   useEffect(() => {

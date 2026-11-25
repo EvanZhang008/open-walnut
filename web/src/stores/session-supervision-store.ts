@@ -1,6 +1,7 @@
 import { fetchSessionSupervision, setSessionSupervision, terminateSession, type SessionSupervision } from '@/api/sessions';
 import { isBrowserNetworkMessage, readErrorWords } from '@/utils/operation-error-words';
 import { sessionReplaced } from '@/stores/session-status-store';
+import { keepEqual } from '@/utils/keep-equal';
 
 export interface SupervisionSnapshot {
   value: SessionSupervision | null;
@@ -68,8 +69,12 @@ function entryFor(sid: string): Entry {
   return entry;
 }
 
+/** A read that answers what the panel already shows (the 15 s poll, mostly) tells no one: each
+ *  open session panel drew again for every poll of every session (2026-11-25, task 9bceb9f2). */
 function publish(entry: Entry, patch: Partial<SupervisionSnapshot>): void {
-  entry.snapshot = { ...entry.snapshot, ...patch };
+  const next = keepEqual(entry.snapshot, { ...entry.snapshot, ...patch });
+  if (next === entry.snapshot) return;
+  entry.snapshot = next;
   for (const listener of entry.listeners) listener();
 }
 

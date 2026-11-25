@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { experimentalEnabled, type ExperimentalFeatureId, type ExperimentalFlags } from '@open-walnut/core';
 import { fetchConfig, fetchFreshConfig } from '@/api/config';
 import { wsClient } from '@/api/ws';
 import { testRunLabel } from '@/api/test-run';
+import { keepEqual } from '@/utils/keep-equal';
 
 /**
  * Whether an experiment (src/core/experimental.ts) is on, for a view to read.
@@ -16,6 +17,11 @@ import { testRunLabel } from '@/api/test-run';
  * its own, past the shared answer of the last few seconds (the read out, or that answer,
  * may predate the change), and an answer that lands after a newer one is dropped. A view
  * that mounts while a read is out joins it.
+ *
+ * A view redraws only when what it reads changed (2026-11-25, task 9bceb9f2): an answer equal to
+ * the last one tells no one, and `useExperimental` reads its one switch, so a change to another
+ * experiment draws nothing. Every config change and reconnect read the flags again and handed
+ * every reader a new object: each open session panel (it reads six) drew its whole body again.
  */
 
 let cached: ExperimentalFlags | null = null;
@@ -24,7 +30,7 @@ let inflight: Promise<void> | null = null;
 let started = 0;
 let shown = 0;
 let wsBound = false;
-const listeners = new Set<(v: ExperimentalFlags) => void>();
+const listeners = new Set<() => void>();
 const LAST_KEY = 'walnut:experimental-flags';
 
 function lastRead(): ExperimentalFlags {
@@ -35,12 +41,20 @@ function lastRead(): ExperimentalFlags {
   } catch { return {}; }
 }
 
+/** The flags a view reads before the first answer: the last read kept, parsed once. */
+let firstRead: ExperimentalFlags | null = null;
+function current(): ExperimentalFlags {
+  return cached ?? (firstRead ??= lastRead());
+}
+
 function publish(v: ExperimentalFlags) {
-  cached = v;
+  const next = keepEqual(current(), v);
+  const changed = next !== current();
+  cached = next;
   if (!testRunLabel()) {
-    try { localStorage.setItem(LAST_KEY, JSON.stringify(v)); } catch { /* private mode */ }
+    try { localStorage.setItem(LAST_KEY, JSON.stringify(next)); } catch { /* private mode */ }
   }
-  for (const l of listeners) l(v);
+  if (changed) for (const l of [...listeners]) l();
 }
 
 /** One read of the server's flags; `fresh` skips the shared answer of the last few seconds. */
@@ -73,22 +87,23 @@ function bindConfigChanges() {
 
 /** The same answer outside a render, for a menu built at the click (the page's last read). */
 export function experimentalOn(id: ExperimentalFeatureId): boolean {
-  return experimentalEnabled(cached ?? lastRead(), id);
+  return experimentalEnabled(current(), id);
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  bindConfigChanges();
+  if (cached === null && !inflight) void read(false);
+  return () => { listeners.delete(listener); };
 }
 
 /** Every experiment's switch, for a view that gates on several (Settings' pane gates). */
 export function useExperimentalFlags(): ExperimentalFlags {
-  const [flags, setFlags] = useState<ExperimentalFlags>(() => cached ?? lastRead());
-  useEffect(() => {
-    listeners.add(setFlags);
-    bindConfigChanges();
-    if (cached !== null) setFlags(cached);
-    else if (!inflight) void read(false);
-    return () => { listeners.delete(setFlags); };
-  }, []);
-  return flags;
+  return useSyncExternalStore(subscribe, current, current);
 }
 
 export function useExperimental(id: ExperimentalFeatureId): boolean {
-  return experimentalEnabled(useExperimentalFlags(), id);
+  // A primitive, so a new reader function each render is fine (React compares what it returns).
+  const on = () => experimentalEnabled(current(), id);
+  return useSyncExternalStore(subscribe, on, on);
 }

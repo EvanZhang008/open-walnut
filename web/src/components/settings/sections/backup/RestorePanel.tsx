@@ -7,6 +7,7 @@
  * Settings, until the user dismisses the result or starts another restore.
  */
 import { useEffect, useRef, useState } from 'react'
+import { useMinuteValue } from '@/utils/minute-clock';
 import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
@@ -101,7 +102,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     void apiPost('/api/backup/restore/dismiss', {}).catch(() => {}).finally(() => onSwitchChanged?.())
   }
   // A result is news for a day: after that the Restore row stands alone again.
-  const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt && Date.now() - Date.parse(restore.finishedAt) < 86_400_000 ? restore : undefined
+  const recent = useMinuteValue((now) => !!restore?.finishedAt && now - Date.parse(restore.finishedAt) < 86_400_000)
+  const shownResult = restore?.finishedAt && restore.finishedAt !== dismissedAt && recent ? restore : undefined
   const [cancelling, setCancelling] = useState(false)
   const cancelRestore = () => {
     setCancelling(true)

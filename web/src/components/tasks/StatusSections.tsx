@@ -11,6 +11,7 @@
  * watch to be able to reorder by drag"), in a DndContext of their own, outside the tiers'.
  */
 import { memo, useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useMinuteNow } from '@/utils/minute-clock';
 import { useRevealOnMount } from '@/utils/reveal';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DraggableAttributes, type DraggableSyntheticListeners } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy, type AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
@@ -516,8 +517,9 @@ export function limitedTasksOf(model: StatusSectionsModel): { waiting: Task[]; n
 export function LimitedSummary({ model, onShow }: { model: StatusSectionsModel; onShow: (key: StatusSectionKey, taskIds: string[]) => void }) {
   const { waiting, needs } = limitedTasksOf(model);
   const n = waiting.length + needs.length;
+  // The next reset moves with the clock, not with the task list: read the minute clock.
+  const now = useMinuteNow(n > 0);
   if (n === 0) return null;
-  const now = Date.now();
   const next = [...waiting, ...needs].map((t) => t.user_status?.limit?.resetsAt).filter((iso): iso is string => !!iso && Date.parse(iso) > now).sort()[0];
   const parts: Array<{ key: StatusSectionKey; tasks: Task[]; words: string }> = [
     ...(waiting.length ? [{ key: 'waiting' as const, tasks: waiting, words: `${waiting.length} waiting` }] : []),

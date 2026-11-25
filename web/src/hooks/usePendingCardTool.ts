@@ -17,10 +17,12 @@ export function readSessionGone(root: ParentNode | null): boolean {
   return !!root?.querySelector('[data-session-gone="true"]');
 }
 
+const NO_PENDING_TOOL: { tool: string | null; gone: boolean } = { tool: null, gone: false };
+
 export function usePendingCardTool(sessionId: string, active: boolean): { tool: string | null; gone: boolean } {
-  const [tool, setTool] = useState<{ tool: string | null; gone: boolean }>({ tool: null, gone: false });
+  const [tool, setTool] = useState<{ tool: string | null; gone: boolean }>(NO_PENDING_TOOL);
   useEffect(() => {
-    if (!active) { setTool({ tool: null, gone: false }); return undefined; }
+    if (!active) { setTool(NO_PENDING_TOOL); return undefined; }
     const find = () => document.querySelector(`.session-panel[data-session-id="${CSS.escape(sessionId)}"]`);
     let raf = 0;
     const read = () => {

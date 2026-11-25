@@ -13,6 +13,7 @@
  * does not take new tasks, it says why.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMinuteNow } from '@/utils/minute-clock';
 import type { Config, SessionEngine } from '@open-walnut/core';
 import { claudeFamilyOf, fallbackEngineName, fallbackModelName, limitName, limitTimeWords } from '@open-walnut/user-status';
 import { SettingsRow } from '../SettingsSection';
@@ -85,6 +86,8 @@ export function fallbackNowLine(now: EngineFallbackNow | null, nowMs: number, op
 }
 
 export function FallbackEngineRow({ config, save }: { config: Config; save: SerialSave }) {
+  // The reset time in its line moves with the clock: the row reads the minute clock.
+  const minute = useMinuteNow();
   const catalog = useEngineCatalog();
   const defaultEngine = currentDefaultEngine(config);
   const saved = currentFallback(config);
@@ -133,7 +136,7 @@ export function FallbackEngineRow({ config, save }: { config: Config; save: Seri
     && !/^seven_day_(opus|sonnet)$/.test(now.limit.window ?? '') ? now.limit : null;
   // The default model named is the picked engine's: the saved note of another engine (a pick still
   // saving) keeps its own words.
-  const line = fallbackNowLine(now?.fallback && now.fallback.note.to === picked ? { ...now, fallback: { ...now.fallback, note: withDefaultModel(now.fallback.note, defaultModel) } } : now, Date.now(), { noClaudeModelHelps: !!allClaudeLimited });
+  const line = fallbackNowLine(now?.fallback && now.fallback.note.to === picked ? { ...now, fallback: { ...now.fallback, note: withDefaultModel(now.fallback.note, defaultModel) } } : now, minute, { noClaudeModelHelps: !!allClaudeLimited });
 
   return (
     <>

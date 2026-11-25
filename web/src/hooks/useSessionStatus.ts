@@ -27,6 +27,21 @@ export function useSessionStatus(
   return status ?? fallback ?? null;
 }
 
+/**
+ * One thing a view reads from a session's status (its process status, say), redrawing it only
+ * when that changes. Every status write is a new snapshot (a new revision and time), so a view
+ * that keeps the whole snapshot draws again for each; the chat beside a running session drew its
+ * whole history for every one (2026-11-25, task 9bceb9f2). `select` must return a primitive or a
+ * value it keeps.
+ */
+export function useSessionStatusOf<T>(
+  sessionId: string | null | undefined,
+  select: (status: StoredSessionStatus | null) => T,
+): T {
+  const read = () => select(sessionStatusStore.getStatus(sessionId));
+  return useSyncExternalStore(sessionStatusStore.subscribe, read, read);
+}
+
 export function useCanonicalSessionId(sessionId: string | null | undefined): string | null {
   const getSnapshot = useCallback(
     () => sessionStatusStore.resolveSessionId(sessionId),
