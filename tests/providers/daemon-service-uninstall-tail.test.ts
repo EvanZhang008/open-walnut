@@ -13,6 +13,7 @@ import { chooseServiceSet, readSetOwner, SET_OWNER_FILE } from '../../src/provid
 import { serviceSet, serviceSetBase } from '../../src/providers/service-set.js'
 import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from '../../src/providers/service-launcher-script.js'
 import { SERVES_FILE, walnutKeyOf } from '../../src/providers/daemon-shared.js'
+import { HOST_SERVER_STATE_DIR } from '../../src/providers/daemon-service-state-move.js'
 
 const A = 'aaaaaaaaaaaaaaaa00000000000000aa'
 const OLD_HOME = '/home/u/.open-walnut-old'
@@ -75,5 +76,41 @@ describe('afterServiceUninstall', () => {
       expect(fs.existsSync(serviceSetBase(home, id))).toBe(false)
       expect(fs.existsSync(pinned)).toBe(false)
     } finally { fs.rmSync(pinned, { recursive: true, force: true }) }
+  })
+  it('drill r9: a follower a daemon in its two-program fallback started is stopped before the set\'s dir is judged, so it never runs on with no parent', async () => {
+    const id = 'f0f0f0f0f0f0f0f0'
+    const set = serviceSet('darwin', home, id, { uid: 501 })
+    const followers = path.join(set.installRoot, HOST_SERVER_STATE_DIR)
+    fs.mkdirSync(followers, { recursive: true })
+    const pidFile = path.join(followers, 'server-leader-a.pid')
+    fs.writeFileSync(pidFile, JSON.stringify({ pid: 4242, startTime: 's' }))
+    fs.writeFileSync(path.join(followers, 'server-leader-a.json'), '{}')
+    const asked: string[][] = []
+    // Alive until its stop: the pid file is the follower's word that it runs.
+    const removeDeps = { ...none, isAlive: (pid: number) => pid === 4242 && fs.existsSync(pidFile), startTimeOf: () => 's' }
+    const stopFollowers = async (files: string[]) => { asked.push(files); for (const f of files) fs.rmSync(f); return true }
+    expect(await afterServiceUninstall({ home, uid: 501, platform: 'darwin', set, unitConfig: null, say, removeDeps, stopFollowers }))
+      .toMatchObject({ removed: true })
+    expect(asked).toEqual([[pidFile]])
+    expect(fs.existsSync(serviceSetBase(home, id))).toBe(false)
+  })
+
+  it('drill r9: a follower that may still run keeps its pid file and the set\'s dir, and says so', async () => {
+    const id = 'e0e0e0e0e0e0e0e0'
+    const set = serviceSet('darwin', home, id, { uid: 501 })
+    const followers = path.join(set.installRoot, HOST_SERVER_STATE_DIR)
+    fs.mkdirSync(followers, { recursive: true })
+    fs.writeFileSync(path.join(followers, 'server-leader-a.pid'), JSON.stringify({ pid: 4243, startTime: 's' }))
+    const removeDeps = { ...none, isAlive: (pid: number) => pid === 4243, startTimeOf: () => 's' }
+    expect(await afterServiceUninstall({ home, uid: 501, platform: 'darwin', set, unitConfig: null, say, removeDeps, stopFollowers: async () => false }))
+      .toMatchObject({ removed: false, why: 'its follower still runs (pid 4243)' })
+    expect(said.join('')).toMatch(/a follower of the service may still run/)
+  })
+
+  it('a service with no follower pid files asks no stop', async () => {
+    const def = serviceSet('linux', home, '', { runtimeDir: runtime })
+    let asked = 0
+    await afterServiceUninstall({ home, uid: 1000, platform: 'linux', set: def, unitConfig: null, say, stopFollowers: async () => { asked += 1; return true } })
+    expect(asked).toBe(0)
   })
 })

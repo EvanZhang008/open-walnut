@@ -3,6 +3,9 @@
  * in this order:
  *   - the launcher's own files: its script (systemd, launchd; cron's is the boot script, removed with the
  *     service) and its dir,
+ *   - the followers its server-*.pid files name (service-entry.ts stopOldFollowers): a daemon in its
+ *     two-program fallback starts its follower in a process group of its own, so the service's stop
+ *     leaves it running with no parent (drill r9 on a Mac),
  *   - the service mode (no launcher, no service: a later install starts as the daemon unless its leader
  *     says otherwise),
  *   - a boot-setup marker that tells the server not to set it up again (remote-boot-start.ts
@@ -19,6 +22,7 @@ import { removeServiceMode } from '../binary/service-mode-update.js'
 import { readDaemonServiceDir } from './daemon-service-config.js'
 import { releaseSetOwner } from './service-set-choice.js'
 import { removeServiceSetDir, type SetRemoveDeps, type SetRemoveResult } from './service-set-remove.js'
+import { HOST_SERVER_STATE_DIR } from './daemon-service-state-move.js'
 import type { ServicePlatform, ServiceSet } from './service-set.js'
 
 export interface UninstallTailInput {
@@ -32,6 +36,19 @@ export interface UninstallTailInput {
   say(line: string): void
   /** Tests: the process checks of the set's dir removal. */
   removeDeps?: SetRemoveDeps
+  /** Tests: stops the followers these pid files name; false when one may still run (stopOldFollowers). */
+  stopFollowers?: (pidFiles: string[]) => Promise<boolean>
+}
+
+/** Stop the followers the service's pid files name; a line on stderr when one may still run. */
+async function stopFollowersOf(root: string, o: UninstallTailInput): Promise<void> {
+  const dir = path.join(root, HOST_SERVER_STATE_DIR)
+  const names = await fs.readdir(dir).catch(() => [] as string[])
+  const pidFiles = names.filter((n) => /^server-.*\.pid$/.test(n)).map((n) => path.join(dir, n))
+  if (!pidFiles.length) return
+  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files))
+  const stopped = await stop(pidFiles).catch(() => false)
+  if (!stopped) o.say(`walnut daemon: a follower of the service may still run (its pid file in ${dir} is kept)\n`)
 }
 
 /** Returns what became of a set's own dir; null for the default set. */
@@ -39,6 +56,7 @@ export async function afterServiceUninstall(o: UninstallTailInput): Promise<SetR
   const root = o.set.installRoot
   await fs.rm(path.join(root, LAUNCHER_SCRIPT_NAME), { force: true }).catch(() => {})
   await fs.rm(path.join(root, LAUNCHER_DIR_NAME), { recursive: true, force: true }).catch(() => {})
+  await stopFollowersOf(root, o)
   await removeServiceMode(root).catch(() => { /* the entry reads a doubt as the daemon */ })
   await fs.writeFile(path.join(root, 'boot-setup'), `v=uninstall at=${Date.now()} result=removed\n`, { mode: 0o600 }).catch(() => {})
   if (!o.set.id) {
