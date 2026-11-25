@@ -1635,7 +1635,7 @@ export function ensureCriticalIgnores(): void {
     // switch's promoted home before the file was leader data; a file removed by hand), and an
     // `add -A` with no ignore list takes in tmp/, /voice-archive/ and the machine-local stores.
     // Not while the home is quiet for a leader switch's stop: the next leader's boot writes it.
-    if (!gitQuietAt(WALNUT_HOME)) fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+    if (!gitQuietAt(WALNUT_HOME)) writeGitignore(gitignorePath, GITIGNORE_CONTENT);
     return;
   }
   // Retire only the scanner's blanket filename rules, not machine-local stores or user rules.
@@ -1652,7 +1652,7 @@ export function ensureCriticalIgnores(): void {
   // Appended lines land above the plugin-files block, which stays last.
   const next = withPluginFilesBlockLast(rewritten + suffix);
   if (next === content) return;
-  fs.writeFileSync(gitignorePath, next, 'utf-8');
+  writeGitignore(gitignorePath, next);
 }
 
 /**
@@ -1760,11 +1760,26 @@ async function sweepGitTempsAsync(): Promise<void> {
   } catch { /* best-effort: the next tick tries again */ }
 }
 
+/**
+ * The .gitignore written whole or not at all (a temp file beside it, then a rename): a torn one
+ * would still exist, so nothing would write it again, and the rules past the tear would be gone.
+ */
+function writeGitignore(gitignorePath: string, content: string): void {
+  const tmp = `${gitignorePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, 'utf-8');
+    fs.renameSync(tmp, gitignorePath);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* gone */ }
+    throw err;
+  }
+}
+
 /** A new data home gets the standard .gitignore; an existing one gets its critical rules back. */
 function writeOrHealGitignore(): void {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+    writeGitignore(gitignorePath, GITIGNORE_CONTENT);
   } else {
     ensureCriticalIgnores();
   }
