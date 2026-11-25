@@ -165,6 +165,8 @@ export const NO_PATH_STORES: Readonly<Record<string, string>> = {
   secrets: 'credentials',
   'vault-in-home': 'the password vault',
   'vault-in-home.vault': 'the password vault',
+  'locked-notes-key-backup': 'a vault id, key parameters, sealed key items and the hint',
+  'locked-notes-key-backup-unreadable': 'a key backup set aside as it was',
   router: 'routing areas, ledgers and frozen content',
   'browser-control': 'pairing state',
   sync: 'sync state',
