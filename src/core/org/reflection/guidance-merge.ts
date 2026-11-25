@@ -254,7 +254,8 @@ async function noteLeaving(node: Task, nodeName: string, todo: ReadonlyArray<{ t
 export async function backfillDropped(node: Task, nodeName: string, deps: MergeDeps, nowMs: number): Promise<number> {
   const state = await readReflectionState(node.id, nowMs);
   const done = new Set(state.backfilled ?? []);
-  const todo = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !state.removed.includes(normalizeForQuote(l.text)));
+  const covered = new Set(state.covered ?? []);
+  const todo = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !state.removed.includes(normalizeForQuote(l.text)) && !covered.has(normalizeForQuote(l.text)));
   const date = localDate(nowMs);
   await noteLeaving(node, nodeName, todo, nowMs);
   const check = checkStepOf(deps);

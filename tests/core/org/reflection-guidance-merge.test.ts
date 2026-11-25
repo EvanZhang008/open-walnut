@@ -236,7 +236,8 @@ describe('merges and their budget', () => {
     await updateReflectionState(vp.id, (s) => { s.merges = { date: DAY, count: MERGE_CALLS_PER_DAY_MAX } }, NOW)
     const { d, calls } = deps([finding()])
     await reflectForNode(vp, 'Marina VP', [vp, worker], d)
-    expect(calls).toHaveLength(1)
+    // The judge's call, and no merge call (the tidy's once-a-day check of lessons said elsewhere is its own).
+    expect(calls.filter((c) => !c.user.includes('WAITING LESSONS:'))).toHaveLength(1)
     expect((await readDayEntries(vp.id, DAY))![0].rule.text).toContain(`not merged: ${MERGES_SPENT}`)
   })
 

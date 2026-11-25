@@ -36,7 +36,7 @@ const SKILLS_ROOM_MIN = 300;
 const ORG_SKILLS_TTL_MS = 60_000;
 let orgSkillsCache: { at: number; skills: Array<{ name: string; description: string }> } | null = null;
 
-async function orgSkills(taskId: string): Promise<Array<{ name: string; description: string }>> {
+export async function orgSkills(taskId: string): Promise<Array<{ name: string; description: string }>> {
   if (orgSkillsCache && Date.now() - orgSkillsCache.at < ORG_SKILLS_TTL_MS) return orgSkillsCache.skills;
   const { listAgentSkills } = await import('../../sessions/agent-skills.js');
   const skills = (await listAgentSkills('org', taskId).catch(() => [])).map((s) => ({ name: s.name, description: s.description }));

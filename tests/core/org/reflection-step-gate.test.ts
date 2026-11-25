@@ -202,6 +202,25 @@ describe('the lesson backlog', () => {
   })
 })
 
+describe('waiting lessons said elsewhere already', () => {
+  it('leave the queue once a day, by one call that reads the lines, his rules and the org skills; the tidy note says it is routine', async () => {
+    const { settleCovered, tidyNote } = await import('../../../src/core/org/reflection/guidance-tidy.js')
+    const asked: string[] = []
+    const d = { send: async () => true, userRules: async () => 'Any choice put to him comes with your pick first.',
+      orgSkills: async () => [{ name: 'self-explaining-ask-check', description: 'An ask card reads on its own.' }],
+      callModel: async (_s: string, user: string) => { asked.push(user); return '{"covered":[1],"same":[3]}' } }
+    const waiting = ['Put the recommendation first in a choice.', 'Dates in his own time zone.', 'Show dates in his time zone.']
+    const out = await settleCovered(vp, waiting, ['A line.'], d as never, NOW)
+    expect(out).toEqual(['Put the recommendation first in a choice.', 'Show dates in his time zone.'])
+    expect(asked[0]).toContain('Any choice put to him comes with your pick first.')
+    expect(asked[0]).toContain('self-explaining-ask-check')
+    expect((await readReflectionState(vp.id, NOW)).covered).toHaveLength(2)
+    expect(await settleCovered(vp, waiting, ['A line.'], d as never, NOW + 60_000)).toEqual([])
+    expect(asked).toHaveLength(1)
+    expect(tidyNote('/x/guidance.md', -10, ['A lesson.'])).toContain('do not report it to the user')
+  })
+})
+
 describe('every way out of the reflection passes the step check (ratchet)', () => {
   it('the real dependencies wire the model layer', () => {
     expect(typeof defaultDeps().checkStep).toBe('function')

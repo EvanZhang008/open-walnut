@@ -14,7 +14,8 @@ import { gatedByWords } from './step-gate.js';
 import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, nearlySame, readGuidance } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
-import { guidanceRoomLeft } from './team-guidance-hint.js';
+import { guidanceRoomLeft, orgSkills } from './team-guidance-hint.js';
+import type { CallModel } from './judge.js';
 
 /** Below this much free room a waiting lesson cannot go in (a line is about 150 characters). */
 export const TIDY_ROOM_MIN = 200;
@@ -25,6 +26,56 @@ export interface TidyDeps {
   send: (task: Task, text: string, title: string) => Promise<boolean>;
   confirmSend?: (node: Task, task: Task, sessionId: string) => Promise<boolean | string>;
   currentSession?: (task: Task) => Promise<string>;
+  /** For settleCovered: the model, his standing rules and the org's skills (the defaults read the real ones). */
+  callModel?: CallModel;
+  userRules?: () => Promise<string>;
+  orgSkills?: (nodeId: string) => Promise<Array<{ name: string; description: string }>>;
+}
+
+/** Waiting lessons one call reads; at most two calls a day. */
+export const COVERED_BATCH = 40;
+
+export const COVERED_SYSTEM = [
+  'A team\'s guidance is full and lessons wait for room. Find the waiting lessons that need no room:',
+  '- covered: a GUIDANCE line, one of the USER RULES, or an ORG SKILL already says all of it (the same rule in other words counts; a lesson that adds a condition, a case or a step the others lack is not covered);',
+  '- same: a waiting lesson that says the same as an EARLIER waiting lesson (name the later one; the earlier one stays).',
+  'Answer only JSON: {"covered": [lesson numbers], "same": [lesson numbers]}',
+].join('\n');
+
+/**
+ * Once a day, the waiting lessons a line, his standing rules or an org skill already says, or that repeat
+ * an earlier waiting one, leave the queue (2026-11-25: of 79 waiting, several said what USER.md or an org
+ * skill said, and two VPs spent a session each tidying for them). Answers the lessons settled. A call
+ * that fails or cannot be read settles none.
+ */
+export async function settleCovered(node: Task, waiting: readonly string[], lines: readonly string[], deps: TidyDeps, nowMs: number): Promise<string[]> {
+  const date = localDate(nowMs);
+  if (!waiting.length || !deps.callModel || (await readReflectionState(node.id, nowMs)).coveredChecked === date) return [];
+  await updateReflectionState(node.id, (s) => { s.coveredChecked = date; }, nowMs);
+  const rules = (await deps.userRules?.().catch(() => '')) ?? '';
+  const skills = await (deps.orgSkills ?? orgSkills)(node.id).catch(() => []);
+  const settled: string[] = [];
+  for (let at = 0; at < Math.min(waiting.length, COVERED_BATCH * 2); at += COVERED_BATCH) {
+    const batch = waiting.slice(at, at + COVERED_BATCH);
+    const user = [
+      'GUIDANCE:', ...lines.map((l, i) => `${i + 1}. ${l}`), '',
+      'USER RULES:', rules.trim() || '(none)', '',
+      'ORG SKILLS:', ...(skills.length ? skills.map((k) => `- ${k.name}: ${k.description}`) : ['(none)']), '',
+      'WAITING LESSONS:', ...batch.map((l, i) => `${i + 1}. ${l}`),
+    ].join('\n');
+    const raw = await deps.callModel(COVERED_SYSTEM, user, node.id).catch(() => '');
+    let a: { covered?: unknown; same?: unknown } = {};
+    try { a = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { continue; }
+    const nums = [...(Array.isArray(a.covered) ? a.covered : []), ...(Array.isArray(a.same) ? a.same : [])]
+      .filter((n): n is number => Number.isInteger(n) && n >= 1 && n <= batch.length);
+    settled.push(...new Set(nums.map((n) => batch[n - 1]!)));
+  }
+  if (settled.length) {
+    const keys = settled.map(normalizeForQuote);
+    await updateReflectionState(node.id, (s) => { s.covered = [...new Set([...(s.covered ?? []), ...keys])].slice(-1000); }, nowMs);
+    log.task.info('reflection: waiting lessons already said elsewhere left the queue', { nodeId: node.id, count: settled.length });
+  }
+  return settled;
 }
 
 /** The waiting lessons no line says yet, each once (the newest wording kept). Pure. */
@@ -50,6 +101,7 @@ export function tidyNote(file: string, roomLeft: number, waiting: readonly strin
     ...waiting.slice(0, TIDY_LISTED_MAX).map((l) => `- ${l}`),
     ...(waiting.length > TIDY_LISTED_MAX ? [`- ... and ${waiting.length - TIDY_LISTED_MAX} more`] : []),
     ...(twins.length ? [`Lines that say nearly the same, to merge first: ${twins.slice(0, 6).map(([a, b]) => `${a} and ${b}`).join('; ')}.`] : []),
+    'This is your team\'s routine upkeep: do it yourself, and do not report it to the user (no message, letter or thread about it).',
     `Make room in ${file}: merge lines that say the same, shorten long ones (keep every point and condition), delete what no longer holds. A lesson already said by a line needs no room. The file is on the machine Walnut's server runs on: from a session on another host, edit it there (host_exec on __local__). The waiting lessons go in by themselves once there is room. No reply is needed.`,
   ].join('\n');
 }
@@ -58,18 +110,22 @@ export function tidyNote(file: string, roomLeft: number, waiting: readonly strin
 export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowMs: number): Promise<boolean> {
   const date = localDate(nowMs);
   const state = await readReflectionState(node.id, nowMs);
-  if (state.tidyAsked === date) return false;
   const lines = await readGuidance(node.id);
   const texts = lines.map((l) => l.text);
   const room = guidanceRoomLeft(nodeName, texts);
-  // Placed (added, merged) or deleted by someone: no longer waiting. A lesson the backfill gave up on still waits.
-  // State from before backfillGaveUp kept no such list: there a backfilled lesson neither written nor merged was given up.
+  // Placed (added, merged), deleted by someone, or said elsewhere already (settleCovered): no longer waiting.
+  // A lesson the backfill gave up on still waits. State from before backfillGaveUp kept no such list: there
+  // a backfilled lesson neither written nor merged was given up.
   const merged = new Set((state.mergedLessons ?? []).map((m) => m.lesson));
   const gaveUp = new Set(state.backfillGaveUp ?? (state.backfilled ?? []).filter((k) => !state.written.includes(k) && !merged.has(k)));
-  const done = new Set([...(state.backfilled ?? []).filter((k) => !gaveUp.has(k)), ...state.removed, ...merged]);
+  const done = new Set([...(state.backfilled ?? []).filter((k) => !gaveUp.has(k)), ...state.removed, ...merged, ...(state.covered ?? [])]);
   // Counted once each: a lesson a line already says, or one said again in other words, is not waiting
   // (2026-11-24 audit: "80 wait" counted the same lesson from several tasks and days).
-  const waiting = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !gatedByWords(l.text)).map((l) => l.text), texts);
+  const queued = distinctWaiting((await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !gatedByWords(l.text)).map((l) => l.text), texts);
+  // Once a day, the ones a line, his rules or an org skill already says leave the queue first.
+  const settled = new Set((await settleCovered(node, queued, texts, deps, nowMs).catch(() => [])).map(normalizeForQuote));
+  const waiting = queued.filter((w) => !settled.has(normalizeForQuote(w)));
+  if (state.tidyAsked === date) return false;
   if (!waiting.length) return false;
   // Asked when little room is left, or when none of the waiting lessons fits in what is left
   // (2026-11-23: 276 characters left, every waiting lesson longer, and the node was never asked).

@@ -60,6 +60,10 @@ export interface ReflectionState {
   held?: HeldCorrection[];
   /** On a Main or lead task's own state: when a reflection's correction last went to its chat. */
   lastChatSendAt?: string;
+  /** Waiting lessons a guidance line, his rules or an org skill already says (guidance-tidy.ts settleCovered), normalized: never waiting again. */
+  covered?: string[];
+  /** The local date settleCovered last ran: once a day. */
+  coveredChecked?: string;
   /** When an ask or card correction last went to a task, by `<task>:<thread, decision or 'ask'>` (CARD_CORRECTION_GAP_MS). */
   cardCorrected?: Record<string, string>;
 }
@@ -143,6 +147,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
     ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
+    ...(Array.isArray(r.covered) ? { covered: r.covered.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
+    ...(typeof r.coveredChecked === 'string' ? { coveredChecked: r.coveredChecked } : {}),
     ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),
     ...(Array.isArray(r.held) ? { held: r.held.filter((h): h is HeldCorrection => !!h && typeof h.taskId === 'string' && typeof h.at === 'string' && typeof h.text === 'string' && typeof h.date === 'string' && typeof h.entryAt === 'string').slice(-100) } : {}),
     ...(typeof r.lastChatSendAt === 'string' ? { lastChatSendAt: r.lastChatSendAt } : {}),
