@@ -275,6 +275,16 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
 export async function runHostService(d: ServeDecision, loadRuntime: () => Promise<unknown>, runtimeRoot?: string): Promise<void> {
   if (!(await enterService(d, runtimeRoot))) return
   if (!(await stopOldFollowers([d.pidFile]))) { process.exitCode = 1; return }
+  // Not ready in time, or never ready in its last starts (a crash at boot): the marker, and the next
+  // start runs the daemon, which starts the follower as its child (service-lead-ready.ts).
+  const { armRoleReady } = await import('./service-lead-ready.js')
+  let serving = false, left = false
+  armRoleReady({ role: 'replica', home: d.home, exe: process.execPath, stateDir: d.stateDir, serverEnv: d.serverEnv }, {
+    // Before the server loads there is nothing to stop: this start just ends.
+    leave: () => { if (serving) endServicePlanned(); else left = true },
+  })
+  if (left) { process.exitCode = 1; return }
+  serving = true
   await serveWithRuntime(d, loadRuntime)
 }
 

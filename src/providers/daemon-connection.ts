@@ -74,7 +74,9 @@ import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type NothingCha
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
 import { pastSetHold, SetHold } from './service-set-hold.js'
-import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
+import { provisionServiceSet, type ProvisionServe, type SetProvision } from './service-set-provision.js'
+import { macosOneServiceWanted, serveSlotWhy, slotArchOf, slotSystemOf, sshTakesSystem } from './one-service-targets.js'
+import type { ServiceModeInputs } from './one-service-mode.js'
 import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { endUpdateWait, noteUpdateWait, type DaemonUpdateWait } from './daemon-update-wait.js'
@@ -947,6 +949,8 @@ export class DaemonConnection {
   private _homeHere: string | null = null
   /** This build's walnut file could not go to the host for the service: no offer with this build. */
   private _serveUnfit: { expected: string; why: string } | null = null
+  /** The SSH host's system as its connect probe said it: the slot's name (`daemon-<system>-<arch>`, one-service-targets.ts). */
+  private _remoteSystem: 'linux' | 'darwin' = 'linux'
   /** The switch an update that ran last asked of this host (ServiceModeAsk; undefined: not read from disk yet). */
   private _modeAsked: ServiceModeAsk | null | undefined = undefined
   private cronMetadataToken: object | null = null
@@ -1695,13 +1699,13 @@ export class DaemonConnection {
   private async detectRemoteArch(): Promise<string> {
     if (this._remoteArch) return this._remoteArch
     const raw = (await this.sshExec('uname -m')).trim()
-    this._remoteArch = raw === 'aarch64' ? 'arm64' : 'x64'
+    this._remoteArch = slotArchOf(raw)
     return this._remoteArch
   }
 
-  /** Binary name for the detected remote arch. */
+  /** Binary name for the detected remote system and arch (`daemon-linux-x64`, `daemon-darwin-arm64`). */
   private async getRemoteBinaryName(): Promise<string> {
-    return `daemon-linux-${await this.detectRemoteArch()}`
+    return `daemon-${this._remoteSystem}-${await this.detectRemoteArch()}`
   }
 
   /** Full remote path where the binary is deployed. */
@@ -1864,15 +1868,50 @@ export class DaemonConnection {
   private async provisionServiceSet(ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
     const expected = this.getExpectedDaemonVersion()
     if (!expected) return { set: null, installed: false, ok: false, message: 'this server names no daemon build' }
+    const serve = await this.setServe(expected).catch(() => undefined)
     if (this.setLinkKind === 'net') {
       const updater = this.netUpdater
-      return updater ? updater.provisionSet(ask, opts) : { set: null, installed: false, ok: false, message: 'no host network update path' }
+      return updater ? updater.provisionSet(ask, { ...opts, ...(serve ? { serve } : {}) }) : { set: null, installed: false, ok: false, message: 'no host network update path' }
     }
     if (!(await this.hasDaemonBinary())) return { set: null, installed: false, ok: false, message: 'the daemon artifact is not available' }
-    return provisionServiceSet(await this.serviceDaemonSource(false), expected, {
+    let source: ServiceDaemonSource
+    let withServe = serve
+    try {
+      source = await this.serviceDaemonSource(!!serve)
+    } catch (err) {
+      // No walnut file of this build for the host: the set goes in as the session daemon, and Walnut Health says why.
+      if (!serve || !(err instanceof WalnutFileUnavailableError)) throw err
+      serve.onUnfit(err.message.slice(0, 300))
+      withServe = undefined
+      source = await this.serviceDaemonSource(false)
+    }
+    return provisionServiceSet(source, expected, {
       run: (command, timeout) => this.sshExec(command, timeout),
       chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
-    }, ask, opts)
+    }, ask, { ...opts, ...(withServe ? { serve: withServe } : {}) })
+  }
+
+  /**
+   * A service set installed or refreshed straight into the one Walnut service (service-set-provision.ts
+   * `serve`), with the experiment macos_one_service on: when the mode decision for this host says the
+   * service, read for the set as it will run (under the launcher when that experiment is on, as the
+   * session daemon now), never from the hello of the daemon the link reaches before the move, which
+   * may be another Walnut's.
+   */
+  private async setServe(expected: string): Promise<ProvisionServe | undefined> {
+    if (this.isCloudTunnel || !(await macosOneServiceWanted())) return undefined
+    const set = { serves: 'daemon' as const, serviceHome: null, launcher: await serviceLauncherWanted() }
+    const want = await this.serviceModeWant(set)
+    const ask = serviceModeAsk(want, { ...set, home: WALNUT_HOME, homeHere: this._homeHere })
+    if (!ask?.on) return undefined
+    return {
+      serve: { home: ask.home, on: true },
+      onUnfit: (why) => {
+        log.session.warn('DaemonConnection: the service set goes in as the session daemon, not the Walnut service', { host: this.hostKey, expected, why })
+        this._serveUnfit = { expected, why }
+        void this.serviceModeWant()
+      },
+    }
   }
 
   /** A service set move: drop the link and dial again (its dir or route changed); the set the new hello names, or null. */
@@ -4545,7 +4584,7 @@ export class DaemonConnection {
    * host-server manager's word on this Walnut's follower there, and the experiments. With the
    * experiments off and a host that runs as the daemon, nothing is read and nothing changes.
    */
-  private serviceModeWant(): Promise<ServiceModeWant> {
+  private serviceModeWant(facts: Partial<Pick<ServiceModeInputs, 'serves' | 'serviceHome' | 'launcher'>> = {}): Promise<ServiceModeWant> {
     // The cloud box gets its daemon from the companion and runs no follower of this Walnut: never switched.
     if (this.isCloudTunnel) return Promise.resolve({ want: null })
     return serviceModeWantNow({
@@ -4556,6 +4595,8 @@ export class DaemonConnection {
       follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
       note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },
       noteOff: () => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOfferOff(this.hostKey)).catch(() => {}) },
+      // A service set's own facts, as it will run (setServe).
+      ...facts,
     })
   }
 
@@ -4567,6 +4608,24 @@ export class DaemonConnection {
     if (this._platform) return this._platform
     const { readHostProfile } = await import('../core/hosts/host-profile.js')
     return platformOf((await readHostProfile(this.hostKey).catch(() => null))?.probed?.os?.platform)
+  }
+
+  /**
+   * The host's one Walnut service of this Walnut did not come up there (its launcher facts name the
+   * fallback marker, service-lead-ready.ts: not ready in time, or never ready in its last starts) and
+   * the build runs as the session daemon: this build is unfit for the service there, so the mode
+   * decision says the daemon, with the marker's reason for Walnut Health, and asks no switch again
+   * that would restart the host's service for nothing. A newer build tries again (its mode write
+   * clears the marker).
+   */
+  private noteRoleFallback(): void {
+    const f = this._launcher?.roleFallback
+    const expected = this.getExpectedDaemonVersion()
+    if (!f || f.role !== 'replica' || f.home !== WALNUT_HOME || !expected || this._daemonVersion !== expected) return
+    if (f.exe !== this._launcher?.current || this._serveUnfit?.expected === expected) return
+    this._serveUnfit = { expected, why: `the walnut file did not come up as the Walnut service there (${f.why || 'no reason given'}), so it runs the two programs` }
+    log.session.warn('DaemonConnection: the host\'s Walnut service fell back to the session daemon', { host: this.hostKey, expected, why: f.why })
+    void this.serviceModeWant()
   }
 
   /** A switch of the mode alone due on this live link, and the words the update carries for it (the same for every link). */
@@ -5144,10 +5203,12 @@ export class DaemonConnection {
     }
     // The ssh path installs a Linux daemon (and a Linux service): a Mac or BSD machine would get a
     // file it cannot run (exit 127). Say so once, as its own kind (not_linux), and never upload.
+    // A Mac is set up too with the experiment macos_one_service on (one-service-targets.ts).
     const os = probe.os?.trim()
-    if (os && os.toLowerCase() !== 'linux') throw new Error(notLinuxSentence(this.hostKey, os))
+    if (os && !sshTakesSystem(os, { macos: await macosOneServiceWanted() })) throw new Error(notLinuxSentence(this.hostKey, os))
     this._platform = platformOf(os) ?? this._platform
-    if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
+    this._remoteSystem = slotSystemOf(os)
+    if (probe.arch) this._remoteArch = slotArchOf(probe.arch)
     if (probe.home) this._remoteHome = probe.home
     // This Walnut's own service set there, once its sessions moved (service-set-move.ts): its runtime dir.
     const own = this.isolation.mode === 'shared' ? await this.serviceSetLink?.sshDir().catch(() => null) : null
@@ -6734,6 +6795,7 @@ export class DaemonConnection {
       this._helloServiceSet = helloServiceSet(res)
       // Said again by this connection's leader.configure.
       this._homeHere = null
+      this.noteRoleFallback()
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {
@@ -6907,7 +6969,7 @@ export class DaemonConnection {
   }
 
   /**
-   * Deploy the compiled daemon to the remote host: a prebuilt `daemon-linux-<arch>` binary
+   * Deploy the compiled daemon to the remote host: a prebuilt `daemon-<system>-<arch>` binary
    * (a dist build has them), else this build's walnut file in the binary's slot (a compiled
    * leader, or a checkout that can build or download it: deployWalnutFile). Neither needs a
    * runtime on the host. With neither available it throws a plain error that says why.
@@ -7476,7 +7538,8 @@ export class DaemonConnection {
   /**
    * A compiled Mac's daemon for a Linux host: the host's walnut file (the same
    * build, for the host's target: host-file.ts, also what the host's Walnut server
-   * runs) in the binary's slot `<dir>/daemon-linux-<arch>`, which the binary start
+   * runs) in the binary's slot `<dir>/daemon-<system>-<arch>` (a Mac's with the experiment
+   * macos_one_service: one-service-targets.ts), which the binary start
    * runs as `--start` and checks with `--status` (src/binary/main.ts). Not sent
    * when the slot already holds it, copied on the host from a host server install
    * of it, downloaded by the host itself from the release that publishes this
@@ -7492,7 +7555,9 @@ export class DaemonConnection {
       import('../core/host-server/install.js'),
     ])
     const target = parseHostTarget(await this.sshExec(targetProbeScript(), 15_000))
-    if (!target.target.startsWith('linux-')) throw new WalnutFileUnavailableError(`the host runs ${target.describe}; its daemon slot takes a Linux walnut file only`)
+    // The one table of which systems' slots take the walnut file (one-service-targets.ts): Linux, and a Mac with its experiment on.
+    const unfit = serveSlotWhy(target.target, 'ssh', { macos: await macosOneServiceWanted() })
+    if (unfit) throw new WalnutFileUnavailableError(`the host runs ${target.describe}; its daemon slot does not take this walnut file (${unfit})`)
     const file = await sharedHostFileSource().file(target.target, (message) => {
       log.session.info('DaemonConnection: getting the walnut file for the daemon', { host: this.hostKey, message })
     }).catch((err: unknown) => { throw new WalnutFileUnavailableError(err instanceof Error ? err.message : String(err)) })
@@ -8578,7 +8643,7 @@ export class DaemonConnection {
       // The launcher's facts again after hello (the good version's roles became known): no reconnect needed.
       if (event.ev === 'launcher-facts') {
         const facts = launcherFactsFrom((event as unknown as { launcher?: unknown }).launcher)
-        if (facts) this._launcher = facts
+        if (facts) { this._launcher = facts; this.noteRoleFallback() }
         return
       }
       // STT relay (cloud voice input): the daemon forwards phone audio from

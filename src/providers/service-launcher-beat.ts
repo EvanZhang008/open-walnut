@@ -24,9 +24,9 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { pruneDaemonServiceVersions } from './daemon-service-artifact.js'
+import { pruneDaemonServiceVersions, type ExecFileLike } from './daemon-service-artifact.js'
 import { serviceRolesFrom } from './service-roles.js'
-import type { ServiceRole } from '../binary/service-mode.js'
+import { parseServiceRoleFallback, SERVICE_ROLE_FALLBACK_FILE, type ServiceRole } from '../binary/service-mode.js'
 
 export const BEAT_MS = 5_000
 export const READY_RETRY_MS = 2_000
@@ -51,6 +51,12 @@ export interface LauncherFacts {
    */
   goodRoles?: ServiceRole[]
   rollback?: LauncherRollback
+  /**
+   * The install root's fallback marker (service-mode.ts service-role.fallback): this machine's one
+   * Walnut service did not come up in that role, and the version runs as the session daemon until
+   * the next mode write or version. Its leader takes this build as unfit for the service there.
+   */
+  roleFallback?: { role: 'replica' | 'leader'; home: string; exe: string; at: number; why: string }
 }
 
 function keyValues(text: string): Map<string, string> {
@@ -85,8 +91,15 @@ export function parseLauncherFacts(stateText: string, rollbackText = ''): Launch
 
 /** The launcher's facts in `dir`, read async; null when there is no launcher state there. */
 export async function readLauncherFacts(dir: string): Promise<LauncherFacts | null> {
-  const [state, rollback] = await Promise.all(['state', 'rollback'].map((name) => fs.promises.readFile(path.join(dir, name), 'utf8').catch(() => '')))
-  return parseLauncherFacts(state!, rollback)
+  const [state, rollback, fallback] = await Promise.all([
+    ...['state', 'rollback'].map((name) => fs.promises.readFile(path.join(dir, name), 'utf8').catch(() => '')),
+    // The marker lives in the install root, the launcher dir's parent.
+    fs.promises.readFile(path.join(path.dirname(dir), SERVICE_ROLE_FALLBACK_FILE), 'utf8').catch(() => ''),
+  ])
+  const facts = parseLauncherFacts(state!, rollback)
+  const marker = facts && fallback ? parseServiceRoleFallback(fallback) : null
+  if (facts && marker) facts.roleFallback = { role: marker.role, home: marker.home, exe: marker.exe, at: marker.at, why: marker.why.slice(0, 500) }
+  return facts
 }
 
 async function writeWhole(file: string, text: string): Promise<void> {
@@ -188,6 +201,8 @@ export interface LauncherBeat {
 /** Start the heartbeat when this process runs under a launcher (`dir`, WALNUT_LAUNCHER_DIR); null otherwise. */
 export function startLauncherBeat(opts: {
   dir: string | undefined; pid?: number; everyMs?: number; warn?: (message: string) => void; onPruned?: (removed: string[]) => void
+  /** The runtime's child runner (its env and umask): on macOS the prune asks ps what runs (daemon-service-artifact.ts). */
+  execFile?: ExecFileLike
 }): LauncherBeat | null {
   const dir = opts.dir
   if (!dir || !path.isAbsolute(dir)) return null
@@ -216,7 +231,7 @@ export function startLauncherBeat(opts: {
     if (facts && facts.phase === 'committed' && facts.current === facts.good && prunedFor !== facts.good) {
       prunedFor = facts.good
       const root = path.dirname(dir)
-      const removed = await launcherKeeps(root).then((keep) => pruneDaemonServiceVersions(root, keep, { keepNewerThanMs: PRUNE_KEEP_NEWER_MS })).catch((err: unknown) => {
+      const removed = await launcherKeeps(root).then((keep) => pruneDaemonServiceVersions(root, keep, { keepNewerThanMs: PRUNE_KEEP_NEWER_MS, ...(opts.execFile ? { execFile: opts.execFile } : {}) })).catch((err: unknown) => {
         warn(`old daemon versions were not pruned: ${err instanceof Error ? err.message : String(err)}`)
         return []
       })
@@ -278,6 +293,10 @@ export function launcherFactsFrom(value: unknown): LauncherFacts | null {
   const r = v.rollback as Record<string, unknown> | undefined
   if (r && typeof r === 'object' && typeof r.at === 'number' && r.at > 0 && clean(r.from) && clean(r.reason, 2000)) {
     facts.rollback = { at: r.at, from: clean(r.from)!, to: clean(r.to) ?? '', reason: clean(r.reason, 2000)!, ...(clean(r.build, 64) ? { build: clean(r.build, 64)! } : {}) }
+  }
+  const f = v.roleFallback as Record<string, unknown> | undefined
+  if (f && typeof f === 'object' && (f.role === 'replica' || f.role === 'leader') && clean(f.home)?.startsWith('/') && clean(f.exe)?.startsWith('/')) {
+    facts.roleFallback = { role: f.role, home: clean(f.home)!, exe: clean(f.exe)!, at: typeof f.at === 'number' && f.at > 0 ? f.at : 0, why: clean(f.why, 500) ?? '' }
   }
   return facts
 }

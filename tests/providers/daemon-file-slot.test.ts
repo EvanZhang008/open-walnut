@@ -226,3 +226,48 @@ describe('the slot needs room for the walnut file', () => {
     expect(slotNeedKb(100 * 1024 * 1024)).toBe(256_000)
   })
 })
+
+// A Mac's slot (one-service-targets.ts, the experiment macos_one_service): the quarantine mark comes
+// off the slot's own part before it runs, on a Mac only, and the file still goes in by rename (a new
+// inode: a signed file is never rewritten in place, which macOS kills on its next exec).
+describe('the daemon slot on a Mac', () => {
+  function fakeMac(system: string): { env: NodeJS.ProcessEnv; calls: () => string[] } {
+    const bin = path.join(dir, 'bin')
+    fs.mkdirSync(bin, { recursive: true })
+    const log = path.join(dir, 'xattr.log')
+    fs.writeFileSync(path.join(bin, 'uname'), `#!/bin/sh\necho ${system}\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(bin, 'xattr'), `#!/bin/sh\necho "$*" >> '${log}'\nexit 1\n`, { mode: 0o755 })
+    return { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) }
+  }
+  const runIn = (script: string, env: NodeJS.ProcessEnv) => execFileSync('/bin/sh', ['-c', script], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+
+  it('an upload: the part loses its quarantine mark before its run, and is renamed in', () => {
+    const mac = fakeMac('Darwin')
+    const macSlot = path.join(dir, 'open-walnut', 'daemon-darwin-arm64')
+    fs.mkdirSync(path.dirname(macSlot), { recursive: true })
+    fs.writeFileSync(macSlot, OTHER)
+    const before = fs.statSync(macSlot).ino
+    fs.writeFileSync(`${macSlot}.gz`, zlib.gzipSync(FILE))
+    // An xattr that fails (no mark there) is no failure.
+    expect(parseSlotAnswer(runIn(slotInstallScript(macSlot, `${macSlot}.gz`, sha(FILE)), mac.env))).toBe('installed')
+    expect(mac.calls()).toEqual([`-d com.apple.quarantine ${macSlot}.part`])
+    expect(sha(fs.readFileSync(macSlot))).toBe(sha(FILE))
+    expect(fs.statSync(macSlot).ino).not.toBe(before)
+  })
+
+  it('a copy from a host server install (cp keeps its source\'s marks): its part too', () => {
+    const mac = fakeMac('Darwin')
+    fs.mkdirSync(path.dirname(app), { recursive: true })
+    fs.writeFileSync(app, FILE)
+    expect(parseSlotAnswer(runIn(slotCheckScript(slot, sha(FILE), [app]), mac.env))).toBe('copied')
+    expect(mac.calls()).toEqual([`-d com.apple.quarantine ${slot}.part`])
+  })
+
+  it('on Linux nothing is cleared', () => {
+    const linux = fakeMac('Linux')
+    fs.mkdirSync(path.dirname(slot), { recursive: true })
+    fs.writeFileSync(`${slot}.gz`, zlib.gzipSync(FILE))
+    expect(parseSlotAnswer(runIn(slotInstallScript(slot, `${slot}.gz`, sha(FILE)), linux.env))).toBe('installed')
+    expect(linux.calls()).toEqual([])
+  })
+})

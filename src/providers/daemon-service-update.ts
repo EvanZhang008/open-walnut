@@ -531,6 +531,8 @@ export async function installRemoteDaemonService(
  */
 export async function runServiceInstall(
   executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, walnut?: SetAsk | null,
+  /** A service set's install straight into the host's one Walnut service (service-set-provision.ts): `--serve <home>`, under the launcher only. */
+  serve?: { home: string; on: boolean },
 ): Promise<Omit<RemoteInstallResult, 'uploaded'>> {
   const words = serviceSetWords(walnut)
   let serviceSet: string | null = null
@@ -541,7 +543,8 @@ export async function runServiceInstall(
     try { return JSON.parse(output.slice(output.indexOf('{'))) as ServiceReply } catch { return null }
   }
   const named = (): { serviceSet?: string | null } => (words ? { serviceSet } : {})
-  const install = `install --yes --executable ${executable}${await serviceLauncherWanted() ? ' --launcher' : ''}`
+  const launcher = await serviceLauncherWanted()
+  const install = `install --yes --executable ${executable}${launcher ? ' --launcher' : ''}${serveWords(serve, launcher)}`
   let reply = await cli(install, 600_000)
   // The old daemon may have exited after handing over: a second install finishes that handover.
   if (reply && reply.ok !== true && (reply.failure?.code === 'handoverPending' || /retry install/i.test(reply.failure?.rollback ?? ''))) {

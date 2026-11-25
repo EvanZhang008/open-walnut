@@ -872,6 +872,25 @@ describe('NetDaemonUpdater', () => {
     u.stop()
   })
 
+  // macos_one_service: a set installed straight into the one Walnut service gets the walnut file
+  // (it holds the server); a build with none for the host goes in as the daemon, and says why.
+  it('a service set look with the service asks for the walnut file; none to be had: the daemon build, and the reason told', async () => {
+    const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
+    const source = vi.fn(async (_t: string, _e: string, _s: unknown, o: { walnutFile?: boolean }) => ({ missing: o.walnutFile ? 'no walnut file for darwin-arm64 in this test' : 'no daemon file in this test' }))
+    const { u } = updater({ source: source as never })
+    const unfit = vi.fn()
+    const got = await u.provisionSet(ask, { serve: { serve: { home: ask.home, on: true }, onUnfit: unfit } })
+    expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: true }, { walnutFile: false }])
+    expect(unfit).toHaveBeenCalledWith('no walnut file for darwin-arm64 in this test')
+    expect(got.message).toBe('no daemon file in this test')
+    // Without the service: the daemon build, as before, and nothing told.
+    source.mockClear()
+    await u.provisionSet(ask)
+    expect(source.mock.calls.map((c) => c[3])).toEqual([{ walnutFile: false }])
+    expect(unfit).toHaveBeenCalledTimes(1)
+    u.stop()
+  })
+
   it('never schedules for a host of another kind', async () => {
     const { u, update } = updater({ kind: () => 'ssh' })
     u.schedule(0)

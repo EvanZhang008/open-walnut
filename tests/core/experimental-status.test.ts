@@ -56,7 +56,8 @@ describe('experimental choices', () => {
     // Each computer running its own sessions changes which machine runs and watches them; a second
     // service on a computer another Walnut serves changes which service runs this Walnut's sessions there.
     const own = EXPERIMENTAL_FEATURES.filter((f) => keepsOwnSwitch(f.id)).map((f) => f.id);
-    expect(own.sort()).toEqual(['host_runs_sessions', 'host_service_sets', 'restore_drill', 'switchable_leader']);
+    // Macs running one Walnut service changes what runs on machines that may be other people's.
+    expect(own.sort()).toEqual(['host_runs_sessions', 'host_service_sets', 'macos_one_service', 'restore_drill', 'switchable_leader']);
     for (const id of own) {
       // "Every experiment on" changes none of them: each stays at its own default (host_runs_sessions
       // graduated by its default, so it is on with or without it), and its own choice wins either way.

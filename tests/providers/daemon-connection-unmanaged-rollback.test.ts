@@ -190,7 +190,8 @@ describe('the unmanaged update never leaves the host without a daemon', () => {
     await priv(c).recheckPostponedUpgrade()
     const keep = seen.find((cmd) => cmd.includes('walnut-previous-kept'))!
     expect(keep).toContain(`v='${OLD}'`)
-    expect(keep).toContain('for f in "$d/daemon-linux-x64" "$d/daemon-linux-arm64"; do [ -f "$f" ] && grep -qF "$v" "$f"')
+    // Every slot the stop command knows, a Mac's too (daemon-live-sh.ts DAEMON_BINARY_NAMES).
+    expect(keep).toContain('for f in "$d/daemon-linux-x64" "$d/daemon-linux-arm64" "$d/daemon-darwin-arm64" "$d/daemon-darwin-x64"; do [ -f "$f" ] && grep -qF "$v" "$f"')
     expect(keep).toContain('walnut-previous-not-running')
   })
 

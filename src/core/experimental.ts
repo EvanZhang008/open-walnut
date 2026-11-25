@@ -278,6 +278,14 @@ export const EXPERIMENTAL_FEATURES = [
     ownSwitchOnly: true,
   },
   {
+    id: 'macos_one_service',
+    name: 'Macs you add as hosts run one Walnut service',
+    description: 'A Mac you added as a host (joined with a link, or reached over SSH) is offered the one Walnut service the way a Linux host is: its session helper and this Walnut\'s copy there run as one program, kept running by its launch agent; this Walnut\'s own service on a computer shared with another Walnut is installed that way at once. A Mac that cannot run it (the file does not start there, the new version fails its trial, or the copy does not come up) goes back to the two programs by itself, and Walnut Health says why. Off: Macs keep the two programs, and SSH hosts must be Linux. "Every experiment on" does not turn this on: it changes what runs on other people\'s machines, so it keeps its own switch.',
+    summary: 'A Mac you added as a host runs its session helper and this Walnut\'s copy there as one program.',
+    default: false,
+    ownSwitchOnly: true,
+  },
+  {
     id: 'restore_drill',
     name: 'Weekly restore drill',
     description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health. "Every experiment on" does not turn this on: it copies or downloads all of your data, so it keeps its own switch.',

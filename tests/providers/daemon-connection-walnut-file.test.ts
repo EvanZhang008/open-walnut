@@ -201,12 +201,24 @@ describe('a compiled Mac deploys the host\'s walnut file as its daemon', () => {
     expect(starts).toEqual([])
   })
 
-  it('a macOS host: the slot takes Linux files only, so a clear error', async () => {
+  it('a macOS host with the experiment macos_one_service off: its slot takes no darwin file, so a clear error', async () => {
     compiledMac()
+    vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '0')
     const { conn, uploads, starts } = setup({ system: 'os=Darwin\narch=arm64\nlibc=\ntranslated=0\nglibc=\nbits=\nloader=\n', start: STARTED })
-    await expect(priv(conn).deployAndStart()).rejects.toThrow(/has no daemon file for devbox.*Linux walnut file only/)
+    await expect(priv(conn).deployAndStart()).rejects.toThrow(/has no daemon file for devbox.*does not take this walnut file.*Macs run the one Walnut service only with the experiment/)
     expect(uploads).toEqual([])
     expect(starts).toEqual([])
+  })
+
+  it('a macOS host with the experiment on: the darwin walnut file is checked for room and goes in like a Linux one', async () => {
+    compiledMac()
+    vi.stubEnv('WALNUT_MACOS_ONE_SERVICE', '1')
+    const { conn, uploads, seen } = setup({ system: 'os=Darwin\narch=arm64\nlibc=\ntranslated=0\nglibc=\nbits=\nloader=\n', start: STARTED })
+    await priv(conn).deployAndStart().catch(() => {})
+    // The same room check as a Linux slot, then the upload, for the darwin target.
+    expect(seen.find((c) => c.includes('echo slot=none'))).toContain('then echo "slot=low')
+    expect(seen.some((c) => c.includes('xattr -d com.apple.quarantine'))).toBe(true)
+    expect(uploads.length).toBeGreaterThan(0)
   })
 
   it('a slot dir without room for the walnut file: nothing is sent, and the error says how much room is missing', async () => {

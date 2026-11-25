@@ -32,7 +32,28 @@ export class DaemonArtifactError extends Error {
   }
 }
 
-export interface StageDaemonServiceArtifactInput { sourceExecutable: string; installRoot: string }
+export interface StageDaemonServiceArtifactInput {
+  sourceExecutable: string
+  installRoot: string
+  /** The system (process.platform; tests): on macOS the staged copy loses its quarantine mark (clearQuarantine). */
+  platform?: NodeJS.Platform
+  /**
+   * Takes com.apple.quarantine off the staged copy (the CLI's: `/usr/bin/xattr -d`, quarantineClearer).
+   * copyFile keeps a source's extended attributes (an executable a browser downloaded carries the
+   * mark), and Gatekeeper refuses a quarantined ad-hoc signed program with a dialog nobody at a host
+   * sees, so the launcher's start would fail for good. Only that copy, under the install root this
+   * account owns, is touched; its bytes and its signature stay. Absent: nothing is cleared.
+   */
+  clearQuarantine?: (file: string) => Promise<void>
+}
+
+/** A child-process runner as node's execFile takes one (the caller's: the CLI's own, or the daemon runtime's childUse). */
+export type ExecFileLike = (file: string, args: string[], opts: { timeout: number; maxBuffer?: number }, cb: (err: Error | null, stdout: string | Buffer) => void) => unknown
+
+/** clearQuarantine with `execFile`: best effort, a copy with no mark answers an error, which is no failure. */
+export function quarantineClearer(execFile: ExecFileLike): (file: string) => Promise<void> {
+  return (file) => new Promise((resolve) => { execFile('/usr/bin/xattr', ['-d', 'com.apple.quarantine', file], { timeout: 10_000 }, () => resolve()) })
+}
 
 export interface StagedDaemonServiceArtifact { executable: string; args: string[]; version: string }
 
@@ -235,6 +256,7 @@ export async function stageDaemonServiceArtifact(
       fail('stageFailed', `the copy is mode ${modeText(copied.mode)}, expected ${modeText(FILE_MODE)}`)
     }
     checkOwned(stagedFile, copied, 'stageFailed')
+    if ((input.platform ?? process.platform) === 'darwin' && input.clearQuarantine) await input.clearQuarantine(stagedFile).catch(() => {})
     await syncPath(stagedFile, FILE_SYNC_FLAGS)
     await syncPath(staging, DIR_SYNC_FLAGS)
 
@@ -255,22 +277,51 @@ export async function stageDaemonServiceArtifact(
   }
 }
 
+/** The executables processes run now, as absolute paths: Linux from /proc, macOS from ps (with `execFile`); null when that cannot be told. */
+export async function runningExecutables(platform: NodeJS.Platform, execFile?: ExecFileLike): Promise<string[] | null> {
+  if (platform === 'linux') {
+    const out: string[] = []
+    for (const pid of await fsp.readdir('/proc').catch(() => [] as string[])) {
+      if (!/^\d+$/.test(pid)) continue
+      const exe = await fsp.readlink(`/proc/${pid}/exe`).catch(() => null)
+      if (exe) out.push(exe)
+    }
+    return out
+  }
+  if (platform !== 'darwin' || !execFile) return null
+  // macOS ps prints each process's executable path as its `comm` (every user's, -ax).
+  return new Promise((resolve) => {
+    execFile('/bin/ps', ['-axww', '-o', 'comm='], { timeout: 15_000, maxBuffer: 16 << 20 }, (err, stdout) => {
+      resolve(err ? null : String(stdout).split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/')))
+    })
+  })
+}
+
 /**
  * Remove staged versions nothing needs: every version dir except the ones whose
  * executable is in `keep` (the running service and its rollback target) and any
  * a live process of this account still runs (a plugin job the daemon started
- * from it), and with `keepNewerThanMs` any staged that recently. Linux only: /proc says what runs where; elsewhere nothing is removed.
- * Only plain, private, sha-named dirs are touched. Returns the removed dirs.
+ * from it), and with `keepNewerThanMs` any staged that recently. What runs where is
+ * read from /proc on Linux and from ps on macOS, run with the caller's `execFile` (a
+ * Mac host's one Walnut service stages its ~100 MB walnut file at every update, so
+ * its versions must go too); where it cannot be read, nothing is removed. Only plain, private, sha-named dirs
+ * are touched. Returns the removed dirs.
  */
-export async function pruneDaemonServiceVersions(installRoot: string, keep: string[], opts: { keepNewerThanMs?: number } = {}): Promise<string[]> {
-  if (process.platform !== 'linux') return []
+export async function pruneDaemonServiceVersions(
+  installRoot: string, keep: string[],
+  opts: { keepNewerThanMs?: number; platform?: NodeJS.Platform; execFile?: ExecFileLike; runningExes?: () => Promise<string[] | null> } = {},
+): Promise<string[]> {
+  const platform = opts.platform ?? process.platform
   const versions = daemonArtifactVersionsDir(installRoot)
+  const running = await (opts.runningExes ?? (() => runningExecutables(platform, opts.execFile)))().catch(() => null)
+  if (!running) return []
   const kept = new Set(keep.map((exe) => path.basename(path.dirname(exe))))
   const root = await fsp.realpath(versions).catch(() => versions)
-  for (const pid of await fsp.readdir('/proc').catch(() => [] as string[])) {
-    if (!/^\d+$/.test(pid)) continue
-    const exe = await fsp.readlink(`/proc/${pid}/exe`).catch(() => null)
-    if (exe && exe.startsWith(root + path.sep)) kept.add(path.relative(root, exe).split(path.sep)[0])
+  // macOS /var is /private/var: a path ps names under either form counts.
+  const roots = [...new Set([root, versions])]
+  for (const exe of running) {
+    const under = roots.find((r) => exe.startsWith(r + path.sep))
+    if (under) kept.add(path.relative(under, exe).split(path.sep)[0])
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   const removed: string[] = []

@@ -1,7 +1,8 @@
 /**
- * The session daemon a compiled Mac gives a Linux host: the host's own walnut
+ * The session daemon a compiled Mac gives a host: the host's own walnut
  * file (src/core/host-server/host-file.ts), put in the daemon binary's slot
- * `<daemon dir>/daemon-linux-<arch>` and run there as `--start` / `--status`
+ * `<daemon dir>/daemon-<system>-<arch>` (a Mac's only with the experiment macos_one_service,
+ * one-service-targets.ts) and run there as `--start` / `--status`
  * (src/binary/main.ts routes those words to the daemon it carries).
  *
  * The compiled file has no separate daemon binaries to send (its runtime tree
@@ -53,6 +54,16 @@ function fitsSh(fit: SlotFit): string {
     + `[ "$W_SAID" = ${shq(fit.version)} ]; }`
 }
 
+/**
+ * On a Mac, the quarantine mark comes off this file before it runs: only the slot's own part,
+ * which this script just wrote or copied (a copy keeps the marks of its source, and a quarantined
+ * ad-hoc signed file is refused by Gatekeeper, a dialog nobody at a host sees). A plain shell
+ * redirect or an upload writes none, so this is a guard, never a step that may fail the install.
+ */
+export function clearQuarantineSh(file: string): string {
+  return `if [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v xattr >/dev/null 2>&1; then xattr -d com.apple.quarantine ${shq(file)} 2>/dev/null; fi; :`
+}
+
 /** What a file that did not fit printed, on its own marked line (printable characters only). */
 const UNFIT_ANSWER = 'echo slot=unrunnable; printf \'detail=%s\\n\' "$(printf %s "$W_SAID" | tr -cd \'[:print:]\' | cut -c1-200)"'
 
@@ -86,6 +97,7 @@ export function slotCheckScript(slot: string, sha256: string, alsoAt: string[] =
     ...alsoAt.map((from) => [
       `if [ -f ${shq(from)} ] && [ "$( ${remoteSha256Command(from)} )" = ${want} ]; then`,
       `  rm -f ${part}; if cp ${shq(from)} ${part} && chmod 755 ${part}; then`,
+      `    ${clearQuarantineSh(`${slot}.part`)}`,
       `    if ! w_fits ${part}; then rm -f ${part}; ${UNFIT_ANSWER}; exit 0; fi`,
       `    mv -f ${part} ${q} && { ${tidy}; echo slot=copied; exit 0; }`,
       '  fi',
@@ -143,6 +155,7 @@ export function slotDeltaInstallScript(
     `SUM=$( ${remoteSha256Command(`${slot}.part`)} )`,
     `if [ "$SUM" != ${want} ]; then rm -f ${part} ${shq(deltaGz)}; echo "the walnut file built from its delta is broken (sha256 $SUM)" >&2; exit 1; fi`,
     `chmod 755 ${part} || { rm -f ${part}; echo "cannot make the walnut file executable" >&2; exit 1; }`,
+    clearQuarantineSh(`${slot}.part`),
     fitsSh(fit),
     `if ! w_fits ${part}; then rm -f ${part}; ${leftoversOf(slot)}; ${UNFIT_ANSWER}; exit 0; fi`,
     `mv -f ${part} ${q} || { rm -f ${part}; echo "cannot move the walnut file into the daemon slot" >&2; exit 1; }`,
@@ -172,6 +185,7 @@ export function slotInstallScript(slot: string, gz: string, sha256: string, fit:
     `SUM=$( ${remoteSha256Command(`${slot}.part`)} )`,
     `if [ -n "$SUM" ] && [ "$SUM" != ${want} ]; then rm -f ${part}; echo "the walnut file arrived broken (sha256 $SUM)" >&2; exit 1; fi`,
     `chmod 755 ${part} || { rm -f ${part}; echo "cannot make the walnut file executable" >&2; exit 1; }`,
+    clearQuarantineSh(`${slot}.part`),
     fitsSh(fit),
     `if ! w_fits ${part}; then rm -f ${part}; ${leftoversOf(slot)}; ${UNFIT_ANSWER}; exit 0; fi`,
     `mv -f ${part} ${q} || { rm -f ${part}; echo "cannot move the walnut file into the daemon slot" >&2; exit 1; }`,

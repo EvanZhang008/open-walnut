@@ -6217,7 +6217,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   }
   if (SERVICE_MODE) {
     // A runtime inside the host's one Walnut service starts no beat: that server writes the launcher's marks (serve-launcher-beat.ts).
-    if (LISTEN) launcherBeat = startLauncherBeat({ dir: daemonEnv.WALNUT_LAUNCHER_DIR, warn: (message) => logMsg('warn', message) })
+    if (LISTEN) launcherBeat = startLauncherBeat({ dir: daemonEnv.WALNUT_LAUNCHER_DIR, warn: (message) => logMsg('warn', message), execFile: childUse.execFile })
     // Its own: a daemon or service started below this one must never write this launcher's marks.
     delete daemonEnv.WALNUT_LAUNCHER_DIR
     // The handover and the adoption below can take long on a big registry: no stall until it serves.

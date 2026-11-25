@@ -53,7 +53,7 @@ import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type ClaimEnd } from './daemon-update-claim.js'
 import { serviceSetWords, setWordsDue, type LinkStanding, type SetAsk } from './service-set-leader.js'
-import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
+import { provisionServiceSet, type ProvisionServe, type SetProvision } from './service-set-provision.js'
 import { endUpdateWait, noteUpdateWait, waitKindOf, type DaemonUpdateWait } from './daemon-update-wait.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
@@ -400,8 +400,10 @@ export class NetDaemonUpdater {
   /**
    * The service set check and first install over this link (service-set-provision.ts), with this
    * build's daemon for the host's system staged there as an update stages it. Never while an update runs.
+   * With `serve` (straight into the one Walnut service) the walnut file goes, which holds the server;
+   * a build that has none for the host goes without the service, and `serve.onUnfit` says why.
    */
-  async provisionSet(ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
+  async provisionSet(ask: SetAsk, opts: { refresh?: boolean; serve?: ProvisionServe } = {}): Promise<SetProvision> {
     const c = this.d.conn
     const expected = this.d.expectedVersion()
     const no = (message: string): SetProvision => ({ set: null, installed: false, ok: false, message })
@@ -421,9 +423,16 @@ export class NetDaemonUpdater {
     const target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
     if (!target) return no('the host\'s system could not be read')
     const say = (message: string) => log.session.info('service set: getting the daemon file for a host network machine', { host: c.host, message })
-    const src = await (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile: false })
+    const lookup = (walnutFile: boolean) => (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile })
+    let serve = opts.serve
+    let src = await lookup(!!serve)
+    if (serve && 'missing' in src) {
+      serve.onUnfit(src.missing.slice(0, 300))
+      serve = undefined
+      src = await lookup(false)
+    }
     if ('missing' in src) return no(src.missing)
-    return provisionServiceSet('file' in src ? { binary: src.file, base: c.serviceExecutable } : { binary: null, gz: src.gz, base: c.serviceExecutable }, expected, io, ask, opts)
+    return provisionServiceSet('file' in src ? { binary: src.file, base: c.serviceExecutable } : { binary: null, gz: src.gz, base: c.serviceExecutable }, expected, io, ask, { ...opts, serve })
   }
 
   private async within(p: Promise<unknown>, ms: number): Promise<void> {

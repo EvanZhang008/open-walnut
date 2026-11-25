@@ -14,7 +14,7 @@ import { runServiceSetNetArgs, SERVICE_SET_NET_ACTIONS } from './service-set-net
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
 import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
-import { pruneDaemonServiceVersions, stageDaemonServiceArtifact } from './daemon-service-artifact.js'
+import { pruneDaemonServiceVersions, quarantineClearer, stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
 import { createSystemServiceAccess } from './daemon-service-system.js'
 import { createCronDaemonServiceManager } from './daemon-service-cron.js'
@@ -499,7 +499,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       prepareUpdate: () => requestDaemonServiceUpdate(runtimeDir, root, options.overBusy ? { busyMs: OVER_BUSY_WAIT_MS, force: true } : {}),
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
-        const staged = await stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
+        const staged = await stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root, clearQuarantine: quarantineClearer(execFile) })
         const next = await stageServiceMode(root, options.serve, staged.executable)
         modeBefore = next.before
         modeWritten = next.written
@@ -539,7 +539,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       const keep = [after, before].map((text) => serviceExecutableOf(platform, scope, text)).filter((exe): exe is string => !!exe)
       keep.push(...await launcherKeeps(root).catch(() => []))
       if (keep.length) {
-        await pruneDaemonServiceVersions(root, keep).catch((error) => {
+        await pruneDaemonServiceVersions(root, keep, { execFile: execFile }).catch((error) => {
           process.stderr.write(`walnut daemon: old daemon versions were not pruned: ${String(error)}\n`)
         })
       }

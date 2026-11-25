@@ -10,6 +10,16 @@
  * (updateRemoteDaemonService: the detached runner and its tail), naming the Walnut, so only that set's
  * service is updated. The leader then moves its sessions there (service-set-move.ts). With this
  * build's executable on the host (withServiceExecutable).
+ *
+ * `serve`: the leader's mode decision for the host says the one Walnut service (one-service-mode.ts
+ * serviceModeAsk, `--serve <home>`; a Mac with the experiment macos_one_service), so the set is
+ * installed or refreshed straight into it: its mode file names this build, and the install proves
+ * the build as the service (daemon-boot-proof.ts) before anything moves. The set's first start has
+ * no follower spec yet and runs as the session daemon; once its Walnut's follower is configured
+ * there, the regular mode update makes it the service. An install or a refresh that fails with
+ * `--serve` is run once more without it; when that one goes through, the service was the cause:
+ * `onUnfit` says why (no offer with this build, Walnut Health shows it) and the set runs the two
+ * programs, with no step of a person's.
  */
 import { DAEMON_VERSION_ARGS, runServiceInstall, updateRemoteDaemonService, withServiceExecutable, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
 import { shq } from './daemon-net-update-io.js'
@@ -58,7 +68,9 @@ export function setRuntimeDirFrom(said: string, set: string): string | undefined
  * installed yet. With `refresh` (the set is not moved to yet), an own set installed with no copy of
  * `refresh.expected` takes this build (takeThisBuild).
  */
-export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, ask: SetAsk, refresh?: { expected: string }): Promise<SetProvision> {
+export async function provisionWith(
+  executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, ask: SetAsk, refresh?: { expected: string }, serve?: ProvisionServe,
+): Promise<SetProvision> {
   const words = serviceSetWords(ask)
   if (!words) return { set: null, installed: false, ok: false, message: 'this Walnut has no id the host can name a set by' }
   const said = (await io.run(`${executable} walnut daemon status${words} 2>/dev/null || true`, 60_000)).trim()
@@ -78,7 +90,13 @@ export async function provisionWith(executable: string, io: Pick<RemoteDaemonUpd
     try { const s = (JSON.parse(said.slice(said.indexOf('{'))) as { scope?: unknown }).scope; if (typeof s === 'string') scope = s } catch { /* none */ }
     return { ...at, ok: false, buildMissing: scope ? { scope } : {} }
   }
-  const done = await runServiceInstall(executable, io, ask)
+  let done = await runServiceInstall(executable, io, ask, serve?.serve)
+  if (!done.ok && serve) {
+    // Once more as the session daemon: the set must not stay uninstalled for the service's sake.
+    const plain = await runServiceInstall(executable, io, ask)
+    if (plain.ok) serve.onUnfit(`the install as the Walnut service did not go through (${(done.message ?? done.code ?? 'no answer').slice(0, 300)}); it runs as the session helper`)
+    done = plain
+  }
   // The install named another set than the status did (a claim won meanwhile): go by the install's.
   const named = done.serviceSet ?? set
   return {
@@ -97,20 +115,39 @@ async function setHasBuild(io: Pick<RemoteDaemonUpdateIo, 'run'>, set: string, e
   return /^build:yes$/m.test(said) ? true : /^build:no$/m.test(said) ? false : null
 }
 
+/** The service's words for a set's install or refresh, and where its failure is told (the header). */
+export interface ProvisionServe {
+  serve: { home: string; on: true }
+  onUnfit(why: string): void
+}
+
 /**
  * The same, staging this build's executable on the host first (an upload when the one there is another
  * build). `refresh`: the link still reaches the shared daemon and no move flipped, so an own set without
  * this build takes it (the header). Its update is the regular one with the Walnut named, its answer
  * checked to name this set.
  */
-export async function provisionServiceSet(source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, ask: SetAsk, opts: { refresh?: boolean } = {}): Promise<SetProvision> {
-  const p = await withServiceExecutable(source, expectedVersion, io, (executable) => provisionWith(executable, io, ask, opts.refresh ? { expected: expectedVersion } : undefined))
+export async function provisionServiceSet(
+  source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, ask: SetAsk,
+  opts: { refresh?: boolean; serve?: ProvisionServe } = {},
+): Promise<SetProvision> {
+  const p = await withServiceExecutable(source, expectedVersion, io, (executable) => provisionWith(executable, io, ask, opts.refresh ? { expected: expectedVersion } : undefined, opts.serve))
   if (!p.buildMissing || !p.set) return p
   const { buildMissing, ...at } = p
   const scope = buildMissing.scope === 'cron' ? 'cron' : 'user'
+  const set = p.set
   let named: string | null = null
+  const refresh = (serve?: ProvisionServe['serve']) => updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set, onServiceSet: (s) => { named = s }, ...(serve ? { serve } : {}) })
   try {
-    await updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set: p.set, onServiceSet: (s) => { named = s } })
+    try {
+      await refresh(opts.serve?.serve)
+    } catch (err) {
+      // A cut upload changed nothing (no try as the daemon then); any other failure as the service is tried once as the daemon.
+      if (!opts.serve || (err as { name?: unknown } | null)?.name === 'DaemonUpdateStageError') throw err
+      named = null
+      await refresh()
+      opts.serve.onUnfit(`the update as the Walnut service did not go through (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); it runs as the session helper`)
+    }
   } catch (err) {
     const buildFailed = (err as { buildFailed?: unknown } | null)?.buildFailed === true
     // The new build never got onto the host (an upload the link cut): nothing changed there, looked at again quietly.

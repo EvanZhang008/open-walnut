@@ -30,6 +30,7 @@
  *            holds what runs again), and when the staged build does not start after the stop.
  */
 import { PREVIOUS_DIR, previousKeyOf } from './daemon-previous-key.js'
+import { DAEMON_BINARY_NAMES } from './daemon-live-sh.js'
 
 export const TRIAL_OK = 'walnut-trial-ok'
 export const TRIAL_FAILED = 'walnut-trial-failed'
@@ -39,8 +40,8 @@ export const PREVIOUS_RESTORED = 'walnut-previous-restored'
 export const PREVIOUS_NONE = 'walnut-previous-none'
 export const TRIAL_WAIT_SECONDS = 60
 export const TRIAL_ALIVE_SECONDS = 3
-/** The binary names a daemon dir holds (daemon-start-cmd.ts starts them). */
-const BINARY_NAMES = ['daemon-linux-x64', 'daemon-linux-arm64']
+/** The binary names a daemon dir holds (daemon-start-cmd.ts starts them): a Mac's slot too (one-service-targets.ts). */
+const BINARY_NAMES = DAEMON_BINARY_NAMES
 
 export interface DaemonTrialOpts {
   /** The compiled daemon's path on the host (a daemon binary, or the walnut file in its slot). */

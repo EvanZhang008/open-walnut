@@ -22,7 +22,7 @@ import path from 'node:path'
 import { ServiceModeBusyError, withServiceModeLock } from './service-mode-lock.js'
 
 export const SERVICE_MODE_FILE = 'service-mode.json'
-/** A leader role that did not get ready in time (service-entry.ts runLeaderService): the next start runs the daemon. */
+/** A role that did not get ready in time (service-lead-ready.ts, either role): the next start runs the daemon. */
 export const SERVICE_ROLE_FALLBACK_FILE = 'service-role.fallback'
 export const HOST_SERVER_DIR = 'host-server'
 
@@ -239,7 +239,14 @@ function setServiceRoleHeld(installRoot: string, next: { role: ServiceRole; home
 /** The fallback marker, or null when there is none (or it does not read). */
 export function readServiceRoleFallback(stateDir: string, f: FsLike = fs): ServiceRoleFallback | null {
   try {
-    const raw = JSON.parse(f.readFileSync(path.join(stateDir, SERVICE_ROLE_FALLBACK_FILE), 'utf8')) as Partial<ServiceRoleFallback>
+    return parseServiceRoleFallback(f.readFileSync(path.join(stateDir, SERVICE_ROLE_FALLBACK_FILE), 'utf8'))
+  } catch { return null }
+}
+
+/** The marker's text as a marker, or null when it does not read as one (service-launcher-beat.ts reads it too, for hello). */
+export function parseServiceRoleFallback(text: string): ServiceRoleFallback | null {
+  try {
+    const raw = JSON.parse(text) as Partial<ServiceRoleFallback>
     if (raw?.v !== 1 || (raw.role !== 'leader' && raw.role !== 'replica') || typeof raw.home !== 'string' || typeof raw.exe !== 'string') return null
     return { v: 1, role: raw.role, home: raw.home, exe: raw.exe, at: typeof raw.at === 'number' ? raw.at : 0, why: typeof raw.why === 'string' ? raw.why : '' }
   } catch { return null }
