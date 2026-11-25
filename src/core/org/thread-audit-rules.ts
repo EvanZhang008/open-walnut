@@ -210,6 +210,9 @@ export function readJudgement(answer: string, n: number): Array<{ verdict: PairV
   return out;
 }
 
+/** What a repeat's note to the node says when the model gave no reason (the node reads it, never the user). */
+const NO_REASON = 'one subject';
+
 /**
  * A pair the model called one subject, and which card stays. The card in needs stays (he answers
  * where he was asked); otherwise a task's card keeps its subject over the node's own, and of two of
@@ -229,7 +232,7 @@ export function repeatFinding(c: RepeatCandidate, reason: string): AuditFinding 
     kind: 'repeat', key: c.key,
     thread: cardOf(from.thread, from.taskId, from.taskTitle), other: cardOf(into.thread, into.taskId, into.taskTitle),
     ...(from.taskId !== c.a.taskId ? { onTask: from.taskId } : {}),
-    why: reason || 'one subject',
+    why: reason || NO_REASON,
   };
 }
 

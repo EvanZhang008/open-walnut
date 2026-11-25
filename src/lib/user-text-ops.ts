@@ -125,6 +125,7 @@ export const USER_TEXT_EXEMPT: Readonly<Record<string, string>> = {
   thread_file: 'files the user\'s own words under a thread',
   thread_split: 'moves the user\'s own message to a thread of its own',
   thread_move: 'hands a thread to another node; its why goes to that node',
+  thread_audit: 'reads the thread check\'s counts or runs one check: a node id and numbers, no prose',
   task_ask_answer_withdraw: 'names the answer taken back and why, for the task that asked',
   task_sync_to_project: 'carries the user\'s own words only',
   project_create: 'a project\'s name and where it comes from',

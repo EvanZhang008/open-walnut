@@ -16,6 +16,7 @@
  * dropped.
  */
 import crypto from 'node:crypto';
+import { registerMemoryHolder } from '../observability/memory-ledger.js';
 
 export interface ShortTextEmbedder {
   /** The model's id: part of every cache key, so a model switch embeds again. */
@@ -36,6 +37,19 @@ export const SHORT_TEXT_MAX_CHARS = 600;
 let override: ShortTextEmbedder | null | undefined;
 const cache = new Map<string, Int8Array>();
 const inflight = new Map<string, Promise<void>>();
+
+/** Bytes one cached vector is budgeted at (an int8 per dimension, with room for a wide model). */
+const VECTOR_BUDGET_BYTES = 2048;
+registerMemoryHolder({
+  name: 'short-text-vectors.cache',
+  budgetBytes: SHORT_VECTOR_CACHE_MAX * VECTOR_BUDGET_BYTES,
+  read: () => {
+    let bytes = 0;
+    let chars = 0;
+    for (const [key, vec] of cache) { bytes += vec.byteLength; chars += key.length; }
+    return { entries: cache.size, bytes, chars };
+  },
+});
 
 /** Test seam: the embedder every caller gets (null: none); undefined restores the search stack's. Clears the cache. */
 export function setShortTextEmbedderForTests(e: ShortTextEmbedder | null | undefined): void {

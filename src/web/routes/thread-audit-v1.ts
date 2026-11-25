@@ -16,6 +16,7 @@ import { Router, type Request, type Response } from 'express'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error } from './v1-control-relay.js'
+import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 
 export const threadAuditV1Router = Router()
 
@@ -29,9 +30,11 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
     .finally(() => clearTimeout(timer))
 }
 
-function fail(res: Response, err: unknown): void {
-  if (err instanceof RouteError) sendV1Error(res, err.status, err.code, err.message)
-  else sendV1Error(res, 500, 'internal', err instanceof Error ? err.message : String(err))
+function fail(req: Request, res: Response, err: unknown): void {
+  if (err instanceof RouteError) { sendV1Error(res, err.status, err.code, err.message); return }
+  // A run tells the node, which can be a session on another host: a link that failed says so.
+  if (sendLinkFailure(req, res, err)) return
+  sendV1Error(res, 500, 'internal', err instanceof Error ? err.message : String(err))
 }
 
 const primaryOnly = (res: Response) => sendV1Error(res, 503, 'primary_only', `${followerName()} could not reach your Mac just now.`)
@@ -49,7 +52,7 @@ threadAuditV1Router.get('/thread-audit', async (req: Request, res: Response) => 
     const out = await within(read, READ_DEADLINE_MS)
     if (out === TIMED_OUT) { sendV1Error(res, 503, 'busy', 'The thread check\'s counts could not be read in time: try again.'); return }
     res.json(out)
-  } catch (err) { fail(res, err) }
+  } catch (err) { fail(req, res, err) }
 })
 
 threadAuditV1Router.post('/thread-audit/run', async (req: Request, res: Response) => {
@@ -62,5 +65,5 @@ threadAuditV1Router.post('/thread-audit/run', async (req: Request, res: Response
     const out = await within(auditNode(task.id), RUN_DEADLINE_MS)
     if (out === TIMED_OUT) { res.status(202).json({ running: true, task: task.id }); return }
     res.json(out)
-  } catch (err) { fail(res, err) }
+  } catch (err) { fail(req, res, err) }
 })
