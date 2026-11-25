@@ -368,10 +368,13 @@ export async function listBoardTaskIds(): Promise<string[]> {
     .filter((id) => TASK_ID_RE.test(id));
 }
 
-/** True when the task has a board file (no parse: the team-owner walk asks this per ancestor). */
+/**
+ * True when the task has a board file, or (a service with no copy) its slice holds the task's
+ * Board (no parse: the team-owner walk asks this per ancestor).
+ */
 export async function hasBoard(taskId: string): Promise<boolean> {
   const file = await readBoardFile(taskId);
-  return fsp.stat(file).then((s) => s.isFile(), () => false);
+  return fsp.stat(file).then((s) => s.isFile(), () => false).then((onDisk) => onDisk || unstoredBoard(taskId) !== null);
 }
 
 /**

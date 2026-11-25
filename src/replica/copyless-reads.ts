@@ -18,8 +18,9 @@
  * Search, notes, memory, skills, the inbox, the org, folders and every setting are not here: the
  * leader keeps them (no_copy). tests/replica/copyless-reads.test.ts holds every away read op to it.
  *
- * A route that names one task (its id, or the start of one) answers only for a task the slice holds:
- * any other is the leader's, so it is `no_copy` too, never a "no such task" for one the leader has.
+ * A route that names one task (its id, or the start of one), one session or one request answers only
+ * for a row the slice holds, and the bulk read only when the slice holds every task it names: any
+ * other is the leader's, so it is `no_copy` too, never a "no such task" for one the leader has.
  */
 
 /** A task id segment: not one of the collection paths a task id pattern would take. */
@@ -41,24 +42,44 @@ const SLICE_READS: readonly RegExp[] = [
   /^\/api\/v1\/(?:op-calls|transfers)\/[^/]+$/,
 ]
 
-/** The routes that name one task, and where its id is. */
-const ONE_TASK: readonly RegExp[] = [
-  new RegExp(`^/api/(?:v1/)?tasks/(${ID})(?:/board(?:/owner)?|/sessions)?$`),
-  /^\/api\/sessions\/task\/([^/]+)$/,
+/** What the slice holds, by id (core/unstored-rows.ts sliceHolds). */
+export interface SliceHolds {
+  /** A task with this id, or one whose id starts with it. */
+  task(id: string): boolean
+  session(id: string): boolean
+  request(id: string): boolean
+}
+
+/** Holds everything: a caller that only asks which routes are slice reads. */
+const ANY: SliceHolds = { task: () => true, session: () => true, request: () => true }
+
+/** The routes that name one row, where its id is, and which kind of row it is. */
+const ONE_ROW: ReadonlyArray<{ re: RegExp; kind: keyof SliceHolds }> = [
+  { re: new RegExp(`^/api/(?:v1/)?tasks/(${ID})(?:/board(?:/owner)?|/sessions)?$`), kind: 'task' },
+  { re: /^\/api\/sessions\/task\/([^/]+)$/, kind: 'task' },
+  { re: /^\/api\/(?:v1\/)?sessions\/([^/]+)$/, kind: 'session' },
+  { re: /^\/api\/v1\/requests\/([^/]+)$/, kind: 'request' },
 ]
 
 /**
- * Whether an away read of `path` (the request's pathname) is answered without a copy. `holdsTask`:
- * the slice holds a task with this id or one that starts with it (core/unstored-rows.ts).
+ * Whether an away read of `url` (the request's path, with its query) is answered without a copy.
+ * `holds`: what the slice holds. A route naming one row answers only for a row the slice holds, and
+ * the bulk read only when it holds every task it names: the others are the leader's.
  */
-export function readsWithoutCopy(path: string, holdsTask: (id: string) => boolean = () => true): boolean {
-  let p = path
-  try { p = decodeURIComponent(path) } catch { /* as sent */ }
+export function readsWithoutCopy(url: string, holds: SliceHolds = ANY): boolean {
+  const q = url.indexOf('?')
+  let p = q < 0 ? url : url.slice(0, q)
+  try { p = decodeURIComponent(p) } catch { /* as sent */ }
   p = p.replace(/\/{2,}/g, '/')
   if (!SLICE_READS.some((re) => re.test(p))) return false
-  for (const re of ONE_TASK) {
+  for (const { re, kind } of ONE_ROW) {
     const id = re.exec(p)?.[1]
-    if (id !== undefined) return holdsTask(id)
+    if (id !== undefined) return holds[kind](id)
+  }
+  if (/^\/api\/tasks\/bulk$/.test(p)) {
+    const ids = (new URLSearchParams(q < 0 ? '' : url.slice(q + 1)).get('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    // No ids: the route's own 400, not the leader's data.
+    return ids.every((id) => holds.task(id))
   }
   return true
 }

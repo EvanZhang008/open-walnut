@@ -69,7 +69,7 @@ import { answerTunnelProbe } from '../core/expose/probe.js'
 import type { DeviceCopy } from '../host-server/device-copy.js'
 import { chooseReplicaRoute, leaderDropRecent, presenceOf, quietWindow, SuspectMarks, wireLeaderPresence, type Presence, type PresenceInput, type ToldPresence } from './presence.js'
 import { keepsNoCopy } from '../core/replication/kinds/gate.js'
-import { holdsUnstoredTask } from '../core/unstored-rows.js'
+import { sliceHolds } from '../core/unstored-rows.js'
 import { readsWithoutCopy } from './copyless-reads.js'
 import { createDispatcher, PRESENCE_BOOT_HEADER, PRESENCE_SEQ_HEADER, type Dispatcher, type OfflineWhy } from './dispatch.js'
 import { rpcAway } from './ws-rpc-table.js'
@@ -395,7 +395,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     // A model helper this server spawned: its reads answered here, anything else 403 (dispatch.ts).
     helperCall: isHelperCall,
     // A service that keeps no copy answers only the reads of its slice (copyless-reads.ts).
-    ...(keepsNoCopy() ? { awayReadHere: (req: IncomingMessage) => readsWithoutCopy((req.url ?? '').split('?')[0] ?? '', holdsUnstoredTask) } : {}),
+    ...(keepsNoCopy() ? { awayReadHere: (req: IncomingMessage) => readsWithoutCopy(req.url ?? '', sliceHolds) } : {}),
     // The same answer as the /api auth: a wrong token counts toward the shared limit.
     refuse: (req) => replicaRefusal(req.headers.authorization),
     ...(opts.writeBudgetMs ? { writeBudgetMs: opts.writeBudgetMs } : {}),

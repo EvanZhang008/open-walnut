@@ -15,6 +15,7 @@
 import type { Task } from '../types.js';
 import { hasBoard, type BoardFile, type BoardWriter, type BoardWriterStamp } from './board-store.js';
 import { effectiveLanes, type BoardTeamEntry } from './board-lanes.js';
+import { unstoredBoardOwner } from '../unstored-rows.js';
 
 /** Ancestors walked before giving up; subtasks nest at most a few levels. */
 export const TEAM_WALK_CAP = 32;
@@ -50,6 +51,13 @@ export async function resolveTeamBoardTask(taskId: string): Promise<TeamBoardOwn
     seen.add(parent.id);
     chain.push(parent);
     parentId = parent.parent_task_id || undefined;
+  }
+  // A service with no copy holds only the slice: the leader's answer for this task, when it gave
+  // one, names the team's Board (its own walk saw every ancestor's Board, the slice not all).
+  const named = unstoredBoardOwner(start.id);
+  if (named) {
+    const owner = chain.find((t) => t.id === named) ?? await getTask(named).catch(() => undefined);
+    if (owner) return { taskId: owner.id, title: owner.title, self: owner.id === start.id, hasBoard: await hasBoard(owner.id) };
   }
   for (const t of chain) {
     if (await hasBoard(t.id)) return { taskId: t.id, title: t.title, self: t.id === start.id, hasBoard: true };

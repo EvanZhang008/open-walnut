@@ -99,7 +99,7 @@ describe('which away reads a service with no copy answers', () => {
 
   it('a route that names one task answers only for a task the slice holds (its id or the start of one)', () => {
     const slice = ['task-1', 'mwvabc-1234']
-    const holds = (id: string) => slice.some((t) => t.startsWith(id))
+    const holds = { task: (id: string) => slice.some((t) => t.startsWith(id)), session: () => false, request: () => false }
     for (const p of ['/api/v1/tasks/task-1', '/api/tasks/mwvabc', '/api/v1/tasks/task-1/board/owner', '/api/sessions/task/task-1', '/api/v1/tasks/task-1/sessions']) {
       expect(readsWithoutCopy(p, holds), p).toBe(true)
     }
@@ -107,8 +107,25 @@ describe('which away reads a service with no copy answers', () => {
       expect(readsWithoutCopy(p, holds), p).toBe(false)
     }
     // A list or the caller is not one task: the slice answers it whatever it holds.
-    expect(readsWithoutCopy('/api/v1/tasks', () => false)).toBe(true)
-    expect(readsWithoutCopy('/api/v1/me', () => false)).toBe(true)
+    const none = { task: () => false, session: () => false, request: () => false }
+    expect(readsWithoutCopy('/api/v1/tasks', none)).toBe(true)
+    expect(readsWithoutCopy('/api/v1/me', none)).toBe(true)
+  })
+
+  it('one session, one request and the bulk read answer only for rows the slice holds', () => {
+    const holds = {
+      task: (id: string) => ['task-1', 'task-2'].includes(id),
+      session: (id: string) => id === 'sid-here',
+      request: (id: string) => id === 'rq-here',
+    }
+    for (const p of ['/api/sessions/sid-here', '/api/v1/sessions/sid-here', '/api/v1/requests/rq-here', '/api/tasks/bulk?ids=task-1,task-2&fields=title']) {
+      expect(readsWithoutCopy(p, holds), p).toBe(true)
+    }
+    for (const p of ['/api/sessions/sid-other', '/api/v1/sessions/sid-other', '/api/v1/requests/rq-other', '/api/tasks/bulk?ids=task-1,task-9']) {
+      expect(readsWithoutCopy(p, holds), p).toBe(false)
+    }
+    // No ids: the route's own 400 answers it.
+    expect(readsWithoutCopy('/api/tasks/bulk', holds)).toBe(true)
   })
 
   it('no_copy has words in the console\'s reasons', () => {

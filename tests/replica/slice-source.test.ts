@@ -19,6 +19,8 @@ import { awaySessionsOfTask, getSessionByClaudeId, isAwaySession, listSessions }
 import { getSessionRequest } from '../../src/core/session-requests.js'
 import { createSliceSource, rowsOfSlice, type SliceAnswer } from '../../src/replica/slice-source.js'
 import { hasUnstoredRows } from '../../src/core/unstored-rows.js'
+import { resolveTeamBoardTask } from '../../src/core/boards/board-team.js'
+import { fieldBases } from '../../src/replica/write-port.js'
 
 const HOST = 'smallbox'
 
@@ -110,6 +112,65 @@ describe('the slice beneath the stores (copyless service)', () => {
       const a = source.missing('task-elsewhere')
       expect(a).toMatchObject({ answered: false, status: 503, body: { error: { code: 'needs_leader', why: 'no_copy' } } })
     } finally { source.stop() }
+  })
+
+  it('a team of three (VP > lead with a Board > worker): the lead\'s Board is the team\'s, as the leader named it', async () => {
+    const team = slice({
+      tasks: [
+        { id: 'task-vp-0000', title: 'VP', phase: 'IN_PROGRESS', project: 'Acme' },
+        { id: 'task-lead-0001', title: 'Lead with its own Board', phase: 'IN_PROGRESS', project: 'Acme', parent_task_id: 'task-vp-0000' },
+        { id: 'task-work-0002', title: 'Worker', phase: 'IN_PROGRESS', project: 'Acme', parent_task_id: 'task-lead-0001' },
+      ],
+      boardOf: { 'task-lead-0001': 'task-lead-0001', 'task-work-0002': 'task-lead-0001' },
+    })
+    const source = createSliceSource({ request: link({ current: team }).request, hostKey: HOST, everyMs: 0 })
+    try {
+      await source.refresh(0)
+      for (const id of ['task-lead-0001', 'task-work-0002']) {
+        expect(await resolveTeamBoardTask(id), id).toMatchObject({ taskId: 'task-lead-0001', hasBoard: true })
+      }
+      // The slice's Boards alone name it too (an older leader's slice with no boardOf).
+      source.stop()
+      const older = createSliceSource({ request: link({ current: { ...team, boardOf: undefined } }).request, hostKey: HOST, everyMs: 0 })
+      await older.refresh(0)
+      expect(await resolveTeamBoardTask('task-work-0002')).toMatchObject({ taskId: 'task-lead-0001', hasBoard: true })
+      older.stop()
+    } finally { source.stop() }
+  })
+
+  it('a field the slice leaves out (summary, note) stays unknown, so an away write on it has base unknown', () => {
+    const rows = rowsOfSlice(slice({ tasks: [{ id: 'task-lead-0001', title: 'Lead', phase: 'IN_PROGRESS', project: 'Acme', description: '', priority: 'high' }] }), new Map(), HOST)
+    const t = rows.tasks[0] as unknown as Record<string, unknown>
+    expect(t.summary).toBeUndefined()
+    expect(t.note).toBeUndefined()
+    expect(t.priority).toBe('high')
+    expect(t.slice_omits).toEqual(expect.arrayContaining(['summary', 'note']))
+    expect(t.slice_omits).not.toContain('priority')
+    expect(fieldBases(t, { summary: 'new', note: 'n', priority: 'low', description: 'd' })).toEqual({ summary: 'unknown', note: 'unknown', priority: 'high', description: '' })
+  })
+
+  it('a session\'s state is unknown, never stopped, while the runtime\'s list cannot be read; the last one read is kept', async () => {
+    expect(rowsOfSlice(slice(), null, HOST).sessions[0].process_status).toBeUndefined()
+    const state: { current: SliceAnswer; live?: Record<string, string>; fail?: boolean } = { current: slice(), live: { 'sid-work-1': 'working' } }
+    const base = link(state)
+    const request = async (cmd: string, p: Record<string, unknown>, t: number) => {
+      if (cmd === 'follower.sessions' && state.fail) throw new Error('timed out')
+      return base.request(cmd)
+    }
+    const source = createSliceSource({ request, hostKey: HOST, everyMs: 0 })
+    try {
+      await source.refresh(0)
+      expect(source.rows()!.sessions[0].process_status).toBe('running')
+      state.fail = true
+      state.current = slice({ asOf: 2_000 })
+      await source.refresh(0)
+      expect(source.rows()!.sessions[0].process_status).toBe('running')
+    } finally { source.stop() }
+    const cold = createSliceSource({ request: async (cmd) => { if (cmd === 'follower.sessions') throw new Error('timed out'); return base.request(cmd) }, hostKey: HOST, everyMs: 0 })
+    try {
+      await cold.refresh(0)
+      expect(cold.rows()!.sessions[0].process_status).toBeUndefined()
+    } finally { cold.stop() }
   })
 
   it('reads the runtime once per refresh window, shared by concurrent readers', async () => {

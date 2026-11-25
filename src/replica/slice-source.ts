@@ -47,26 +47,40 @@ const MIN_GAP_MS = 1_000
 
 const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : [])
 
-/** A slice task as a stored task: the fields the slice carries, the rest as a new row has them. */
+/**
+ * The fields a write can name that the slice may leave out (host-slice.ts keeps summary and note
+ * out on purpose; an older leader ships fewer). One the slice lacks stays unset, never a made-up
+ * empty value: an away write's base for it is then 'unknown' (write-port.ts fieldBases), as the
+ * daemon's slice reader did, and the row names it in `slice_omits` so a reader knows it is not known here.
+ */
+const QUEUEABLE = ['description', 'summary', 'note', 'priority', 'status', 'due_date', 'start_date', 'end_date', 'sprint', 'focus_tier', 'wait_until', 'tags', 'depends_on', 'pinned', 'unread'] as const
+
+/** A slice task as a stored task: the fields the slice carries, the rest unset (QUEUEABLE). */
 export function taskOfSlice(t: OfflineSliceTask, asOfIso: string): Task {
   const phase = (t.phase || 'TODO') as TaskPhase
+  const omits = QUEUEABLE.filter((f) => f !== 'status' && (t as unknown as Record<string, unknown>)[f] === undefined)
   return {
-    priority: 'none', session_ids: [], description: '', summary: '', note: '', project: '',
+    session_ids: [], project: '',
     created_at: t.updated_at ?? asOfIso,
     ...t,
     phase,
+    // A status follows from the phase (phase.ts), so a missing one is known.
     status: (t.status ?? deriveStatusFromPhase(phase)) as Task['status'],
     updated_at: t.updated_at ?? asOfIso,
+    ...(omits.length ? { slice_omits: omits } : {}),
   } as unknown as Task
 }
 
-/** A slice session as a stored session row: its task, this host, its state now when known. */
-export function sessionOfSlice(s: OfflineSliceSession, hostKey: string, state: string | undefined, asOfIso: string, tasks: ReadonlyMap<string, Task>): SessionRecord {
-  const process: ProcessStatus = state === 'working' ? 'running' : state === 'idle' ? 'idle' : 'stopped'
+/**
+ * A slice session as a stored session row: its task, this host, its state now when known.
+ * `state` null: the runtime's list could not be read, so the state is unknown (left unset), never 'stopped'.
+ */
+export function sessionOfSlice(s: OfflineSliceSession, hostKey: string, state: string | undefined | null, asOfIso: string, tasks: ReadonlyMap<string, Task>): SessionRecord {
+  const process: ProcessStatus | undefined = state === null ? undefined : state === 'working' ? 'running' : state === 'idle' ? 'idle' : 'stopped'
   const task = s.taskId ? tasks.get(s.taskId) : undefined
   return {
     claudeSessionId: s.sid, taskId: s.taskId ?? '', project: task?.project ?? '',
-    process_status: process, mode: 'default', startedAt: asOfIso, lastActiveAt: asOfIso, messageCount: 0,
+    ...(process ? { process_status: process } : {}), mode: 'default', startedAt: asOfIso, lastActiveAt: asOfIso, messageCount: 0,
     host: hostKey, ...(s.title ? { title: s.title } : {}),
     ...(s.acp ? { provider: 'acp' } : {}),
   } as unknown as SessionRecord
@@ -84,13 +98,14 @@ export function boardOfSlice(b: OfflineSliceBoard): BoardFile {
   return { task_id: taskId, ...rest } as unknown as BoardFile
 }
 
-export function rowsOfSlice(a: SliceAnswer, live: ReadonlyMap<string, string>, hostKey: string): SliceRows {
+/** `live`: each session's state from the runtime (`follower.sessions`), or null when that list could not be read. */
+export function rowsOfSlice(a: SliceAnswer, live: ReadonlyMap<string, string> | null, hostKey: string): SliceRows {
   const asOf = typeof a.asOf === 'number' ? a.asOf : null
   const asOfIso = new Date(asOf ?? 0).toISOString()
   const tasks = arr<OfflineSliceTask>(a.tasks).filter((t) => t && typeof t.id === 'string').map((t) => taskOfSlice(t, asOfIso))
   const byId = new Map(tasks.map((t) => [t.id, t]))
   const sessions = arr<OfflineSliceSession>(a.sessions).filter((s) => s && typeof s.sid === 'string')
-    .map((s) => sessionOfSlice(s, hostKey, live.get(s.sid), asOfIso, byId))
+    .map((s) => sessionOfSlice(s, hostKey, live ? live.get(s.sid) : null, asOfIso, byId))
   const boards = new Map(arr<OfflineSliceBoard>(a.boards).filter((b) => b && typeof b.taskId === 'string').map((b) => [b.taskId, boardOfSlice(b)]))
   const boardOf = a.boardOf && typeof a.boardOf === 'object' && !Array.isArray(a.boardOf) ? a.boardOf as Record<string, string> : {}
   return {
@@ -121,6 +136,7 @@ export function createSliceSource(opts: SliceSourceOptions): SliceSource {
   const now = opts.now ?? Date.now
   const log = opts.log ?? (() => {})
   let rows: SliceRows | null = null
+  let lastStates: Map<string, string> | null = null
   let key = ''
   let readAt = 0
   let inFlight: Promise<void> | null = null
@@ -131,9 +147,14 @@ export function createSliceSource(opts: SliceSourceOptions): SliceSource {
       opts.request('follower.sessions', {}, READ_TIMEOUT_MS).catch(() => null),
     ])
     if (slice.ok === false) throw new Error(String(slice.error ?? 'follower.slice refused'))
-    const states = new Map<string, string>()
-    for (const s of arr<{ sid?: unknown; state?: unknown }>(live?.sessions)) if (typeof s?.sid === 'string' && typeof s.state === 'string') states.set(s.sid, s.state)
-    const next = `${String(slice.asOf)}|${[...states].map(([k, v]) => `${k}=${v}`).join(',')}`
+    // A list that could not be read keeps the states last read; with none, they are unknown.
+    let states: Map<string, string> | null = lastStates
+    if (live && live.ok !== false) {
+      states = new Map<string, string>()
+      for (const s of arr<{ sid?: unknown; state?: unknown }>(live.sessions)) if (typeof s?.sid === 'string' && typeof s.state === 'string') states.set(s.sid, s.state)
+      lastStates = states
+    }
+    const next = `${String(slice.asOf)}|${states ? [...states].map(([k, v]) => `${k}=${v}`).join(',') : '?'}`
     readAt = now()
     if (next === key && rows) return
     key = next
@@ -150,6 +171,7 @@ export function createSliceSource(opts: SliceSourceOptions): SliceSource {
   installUnstoredRows({
     tasks: () => rows?.tasks ?? [],
     board: (taskId) => rows?.boards.get(taskId) ?? null,
+    boardOwner: (taskId) => (rows && Object.hasOwn(rows.boardOf, taskId) && typeof rows.boardOf[taskId] === 'string' ? rows.boardOf[taskId] : null),
     sessions: () => rows?.sessions ?? [],
     requests: () => rows?.requests ?? [],
   })

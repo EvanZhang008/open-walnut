@@ -22,6 +22,8 @@ export interface UnstoredRows {
   tasks(): readonly Task[]
   /** The Board kept for `taskId` (its own, not its team's), or null. */
   board(taskId: string): BoardFile | null
+  /** Whose Board `taskId`'s team shares, as the leader worked it out (host-slice.ts boardOf), or null. */
+  boardOwner(taskId: string): string | null
   /** This host's sessions of the Walnut, as the slice names them. */
   sessions(): readonly SessionRecord[]
   /** The pending requests one of those sessions asks or is asked. */
@@ -66,10 +68,29 @@ export function holdsUnstoredTask(id: string): boolean {
   try { return matchIdRef(installed.tasks().filter((t) => typeof t?.id === 'string'), id).length > 0 } catch { return false }
 }
 
+/** What the rows hold, by id: what a copyless away read may answer (replica/copyless-reads.ts). */
+export const sliceHolds = {
+  task: holdsUnstoredTask,
+  session(id: string): boolean {
+    if (!installed || !id) return false
+    try { return installed.sessions().some((s) => s?.claudeSessionId === id) } catch { return false }
+  },
+  request(id: string): boolean {
+    if (!installed || !id) return false
+    try { return installed.requests().some((r) => r?.id === id) } catch { return false }
+  },
+}
+
 /** The Board to show for `taskId` when the store has none. */
 export function unstoredBoard(taskId: string): BoardFile | null {
   if (!installed) return null
   try { return installed.board(taskId) } catch { return null }
+}
+
+/** The team Board owner the leader named for `taskId` (board-team.ts resolveTeamBoardTask), or null. */
+export function unstoredBoardOwner(taskId: string): string | null {
+  if (!installed) return null
+  try { return installed.boardOwner(taskId) } catch { return null }
 }
 
 /** The sessions to show beneath the registry's own rows. */
