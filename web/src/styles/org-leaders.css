@@ -1,5 +1,12 @@
-/* The leaders under a VP (OrgLeaders.tsx): one quiet line, folded, in the Org chart. */
+/* The Directors under a VP (OrgLeaders.tsx): one quiet line, folded, under its row in the Org list and in
+   its card on the Org chart. */
 .org-leaders { display: flex; flex-direction: column; min-width: 0; }
+/* In the list: the line starts under the VP's name (the row's 8px inset, its 34px avatar and 10px gap), as
+   the phone's drawer draws it (ChatDirectorFold.nameInset), and its rows hang on a quiet guide line. */
+.org-leaders.is-list { margin: -4px 0 4px 46px; }
+.org-leaders.is-list .org-leaders-toggle { color: var(--fg-secondary); font-size: var(--font-size-sm); }
+.org-leaders.is-list .org-leaders-list { margin-left: 4px; padding-left: 6px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
+.org-leader[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 /* In a chart card: under the name, above the projects, its chevron in the projects' fold column (org-chart.css .oc-chevron). */
 .org-leaders.is-chart { padding: 0 4px 6px 2px; }
 .org-leaders.is-chart .org-leaders-chevron { color: var(--fg-secondary); }

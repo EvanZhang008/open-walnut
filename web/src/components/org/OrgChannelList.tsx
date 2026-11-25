@@ -10,10 +10,12 @@
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded); its hover says which VP has it now and a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
- * Nothing hangs under a row (2026-11-22): the tasks the user watches are in the node's own Watching
- * (OrgTaskRail) and Home's, a locked panel stands beside the node it was locked at, and the Directors
- * under a VP are on the Org chart (OrgChartSheet). With the "sections" Directors layout (Settings → Org)
- * they are also one DIRECTORS section after the VPs (OrgDirectorSection).
+ * A row is only itself (2026-11-22): the tasks the user watches are in the node's own Watching
+ * (OrgTaskRail) and Home's, and a locked panel stands beside the node it was locked at. With the
+ * `org_leaders` experiment on, a VP with Directors has one folded "N directors" line under its row
+ * (OrgLeaders, 2026-11-25, the user: "I want Director, where is my Director?"), as on the Org chart and
+ * the phone's drawer; with the "sections" layout (Settings → Org) they are one DIRECTORS section after
+ * the VPs instead (OrgDirectorSection).
  */
 import { countRender } from '@/utils/render-count';
 import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
@@ -38,6 +40,7 @@ import { ICON_ORG_CHART } from '@/components/common/Icons';
 import { useOrgSettings } from './useOrgSettings';
 import { SearchField } from '@/components/common/SearchField';
 import { OrgDirectorSection } from './OrgDirectorSection';
+import { OrgLeaders } from './OrgLeaders';
 import type { OrgDirectorsView } from './useOrgLeaders';
 import { EmptyState } from '@/components/common/EmptyState';
 
@@ -132,6 +135,7 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   const sections = orgName.settings.directorsLayout === 'sections';
+  const showProjects = orgName.settings.directorsShowProjects !== false;
   // A right-click selects a word in WebKit before the menu opens: that selection is the
   // gesture's, not the user's, so it neither keeps the browser's menu nor stays lit.
   const menu = useContextMenu<ChannelMenuTarget>({ ignorePressSelection: true });
@@ -166,7 +170,7 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     // Among the Directors, Up and Down walk every option in the order drawn, so they lead out again.
-    if ((e.target as HTMLElement).closest('.org-directors')) {
+    if ((e.target as HTMLElement).closest('.org-leaders, .org-directors')) {
       const all = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
       const at = all.indexOf(e.target as HTMLElement);
       all[at + (e.key === 'ArrowDown' ? 1 : -1)]?.focus();
@@ -220,6 +224,9 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
             <Row row={r} selected={selectedKey === r.key} onSelect={onSelect} onMenu={onMenu} />
+            {directors && !sections && (
+              <OrgLeaders groups={directors.groupsOf(r)} projects={directors.projectsOf(r)} showProjects={showProjects} surface="list" vpKey={r.key} vpName={shownName(r)} query={query} openTaskIds={openTaskIds} />
+            )}
           </div>
         ))}
         {directors && sections && <OrgDirectorSection vps={shown} groupsOf={directors.groupsOf} projectsOf={directors.projectsOf} query={query} openTaskIds={openTaskIds} />}

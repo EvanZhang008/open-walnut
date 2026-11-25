@@ -3,9 +3,10 @@
  * its avatar, its name and, when something there waits on the user, one round red dot. Nothing
  * else (2026-11-22, the user: "just show name of vp icon, read dot for thread ... We need to be
  * super simple"): no time, no line under the name, no count, no unread dot, no state mark on the
- * avatar, no card for the CEO, and nothing hung under a row (watched or locked tasks, a folded
- * "N directors" line). What those said stays one hover away (the row's title) and the dot's label
- * says the count.
+ * avatar, no card for the CEO, and no watched or locked tasks hung under a row. What those said
+ * stays one hover away (the row's title) and the dot's label says the count. The one line that may
+ * follow a VP's row is its folded "N directors" (OrgLeaders), its own line, never part of the row
+ * (2026-11-25, the user on the list with none: "I want Director, where is my Director?").
  *
  * The class: a row of the list that draws a second piece of text or a mark. Members are found from
  * the source: every file the list draws a row from, and every `org-channel` row in web/src. A new
@@ -119,7 +120,7 @@ describe('every row of the Org list goes through OrgListRow', () => {
     const src = code(read(f))
     // Only OrgListRow writes the row's own class.
     expect(src).not.toMatch(/className=\{?[`'"]org-channel(?![\w-])/)
-    expect(src).not.toMatch(/org-channel-(?:time|latest|tail|top|mid|led|pin)\b|org-badge\b|is-unread|org-watched|KeptChildren|<OrgLeaders\b|<TaskStateIcon\b|shortAgo\(/)
+    expect(src).not.toMatch(/org-channel-(?:time|latest|tail|top|mid|led|pin)\b|org-badge\b|is-unread|org-watched|KeptChildren|<TaskStateIcon\b|shortAgo\(/)
   })
 
   it('the row draws its avatar, its name and the dot, and nothing else', () => {

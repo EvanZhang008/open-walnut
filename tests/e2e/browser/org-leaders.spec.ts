@@ -67,7 +67,7 @@ async function openOrg(page: Page): Promise<void> {
   await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toBeVisible()
 }
 
-/** The list draws no fold under a VP's row (2026-11-22): any fold in it is a regression. */
+/** The folded "N directors" line under a VP's row in the list (2026-11-25, the user: "where is my Director?"). */
 const listFolds = (page: Page) => page.locator('.org-list [data-testid="org-leaders"]')
 const card = (page: Page) => page.locator(`[data-testid="org-chart-vp"][data-project="${PROJECT}"]`)
 const chartLeaders = (page: Page) => card(page).getByTestId('org-leaders')
@@ -113,13 +113,38 @@ test('off, nothing changes: no leaders line in the list or the chart', async ({ 
   await expect(page.getByTestId('org-leaders')).toHaveCount(0)
 })
 
-test('on: no fold in the list; on the chart folded by default; opened, the project, its leader with eye and count, never the leader inside its team', async ({ page, request }) => {
+test('on: the list\'s VP row is plain, its Directors one folded line under it that opens on them and opens one beside the page', async ({ page, request }) => {
   test.setTimeout(120_000)
   await setFlag(request, true)
+  await page.setViewportSize({ width: 1280, height: 800 })
   await openOrg(page)
-  // The list stays one plain row per VP.
-  await expect(listFolds(page)).toHaveCount(0)
-  await expect(page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)).toHaveText(new RegExp(`^${PROJECT}( VP)?$`))
+  const vp = page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)
+  // The row is only its name; the Directors are their own line under it, folded by default.
+  await expect(vp).toHaveText(new RegExp(`^${PROJECT}( VP)?$`))
+  const listFold = page.locator(`.org-list [data-testid="org-leaders"][data-key="${NODE}"]`)
+  const listToggle = listFold.getByTestId('org-leaders-toggle')
+  await expect(listToggle).toHaveText(/1 director$/)
+  await expect(listToggle).toHaveAttribute('data-open', 'false')
+  await expect(listFold.getByTestId('org-leaders-list')).toHaveCount(0)
+  // Under the row, starting no further left than its name.
+  const [rowBox, foldBox, nameBox] = await Promise.all([vp.boundingBox(), listToggle.boundingBox(), vp.locator('.org-channel-name').boundingBox()])
+  expect(foldBox!.y).toBeGreaterThanOrEqual(rowBox!.y + rowBox!.height - 6)
+  expect(foldBox!.x).toBeGreaterThan(nameBox!.x - 12)
+  await listToggle.click()
+  await expect(listToggle).toHaveAttribute('data-open', 'true')
+  const listed = leaderRow(listFold, ids.team)
+  await expect(listed.getByTestId('org-leader-leads')).toHaveText('leads 2')
+  await expect(leaderRow(listFold, ids.sub)).toHaveCount(0)
+  await expect(listed.locator('.org-leader-avatar img')).toBeVisible()
+  await page.locator('.org-list').screenshot({ path: `${SHOTS}/web-list-fold.png` })
+  // Kept across a reload.
+  await page.reload()
+  await page.getByTestId('org-search').fill(PROJECT)
+  await expect(page.locator(`.org-list [data-testid="org-leaders"][data-key="${NODE}"]`).getByTestId('org-leaders-toggle')).toHaveAttribute('data-open', 'true')
+  await leaderRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team).getByTestId('org-leader-open').click()
+  await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
+  // Folded again for the chart's checks below.
+  await page.locator(`.org-list [data-testid="org-leaders"][data-key="${NODE}"]`).getByTestId('org-leaders-toggle').click()
   await openChart(page)
   const box = chartLeaders(page)
   const toggle = box.getByTestId('org-leaders-toggle')
@@ -168,7 +193,7 @@ test('on: no fold in the list; on the chart folded by default; opened, the proje
   await expect(chartLeaders(page).getByTestId('org-leaders-list')).toHaveCount(0)
 })
 
-test('a search for a leader shows its VP\'s row in the list, still one plain row', async ({ page, request }) => {
+test('a search for a Director shows its VP\'s row in the list and opens its fold on it', async ({ page, request }) => {
   await setFlag(request, true)
   await isolateUiPrefs(page)
   await loadHome(page)
@@ -176,7 +201,7 @@ test('a search for a leader shows its VP\'s row in the list, still one plain row
   await page.getByTestId('org-search').fill(`Beds team ${STAMP}`)
   const vp = page.locator(`[data-testid="org-channel"][data-key="${NODE}"]`)
   await expect(vp).toBeVisible()
-  await expect(listFolds(page)).toHaveCount(0)
+  await expect(leaderRow(page.locator('.org-list [data-testid="org-leaders"]'), ids.team)).toBeVisible()
 })
 
 test('the chart card\'s folded line: a leader there opens beside the page', async ({ page, request }) => {
@@ -309,6 +334,7 @@ test('settings: Also in the list lists every Director as a plain row under DIREC
   await page.keyboard.press('Escape')
   const section = page.locator('.org-list [data-testid="org-directors"]')
   await expect(section).toBeVisible()
+  // The sections layout draws no fold under the VP rows: the Directors are the section.
   await expect(listFolds(page)).toHaveCount(0)
   // team and solo (made one above), never the leader inside team's team: each its title only, its
   // state and VP in its hover.
@@ -333,7 +359,7 @@ test('settings: Also in the list lists every Director as a plain row under DIREC
   await expect.poll(async () => ((await (await request.get('/api/v1/org/settings')).json()) as { directorsShowProjects?: boolean }).directorsShowProjects).toBe(false)
   await page.keyboard.press('Escape')
   await expect(section).toHaveCount(0)
-  await expect(listFolds(page)).toHaveCount(0)
+  await expect(listFolds(page)).toHaveCount(1)
   await openFold(page)
   await expect(chartLeaders(page).getByTestId('org-leaders-project')).toHaveCount(0)
   await expect(leaderRow(chartLeaders(page), ids.team)).toBeVisible()
