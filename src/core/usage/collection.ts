@@ -15,6 +15,7 @@ import { outsideHosts } from './outside-codex.js';
 import { classifyClaudeOutside } from './outside-claude.js';
 import { WALNUT_SESSION_ENTRYPOINTS, type ClaudeSessionMeta } from '../../providers/claude-outside-core.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
+import { needCapability } from '../../providers/daemon-capability-need.js';
 
 let store: ResponseUsageStore | undefined;
 let inflight: Promise<unknown> | undefined;
@@ -194,7 +195,7 @@ async function collect(since: string | undefined, until: string) {
   for (const [host, owners] of hosts) {
     try {
       const conn = await connectedLink(host, [...otherNames.get(host) ?? []]);
-      if (!conn.hasCapability('usage-scan-v1') || (extraHosts.has(host) && !conn.hasCapability('claude-outside-v1'))) {
+      if (!needCapability(conn, 'usage-scan-v1') || (extraHosts.has(host) && !needCapability(conn, 'claude-outside-v1'))) {
         if (extraHosts.has(host)) continue;
         throw new Error('This host needs the usage collector daemon upgrade.');
       }

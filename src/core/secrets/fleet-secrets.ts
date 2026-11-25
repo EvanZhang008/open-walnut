@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { createSecretStore, envNameProblem, isSecretName, secretsRoot, type SecretStore } from '../../providers/secrets-core.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 const LOCAL = '__local__'
 const FLEET_FILE = '.fleet.json'
@@ -311,7 +312,7 @@ export function reconcileHost(host: string): Promise<void> {
         link(h),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('the host did not answer')), PUSH_MS) }),
       ]).finally(() => clearTimeout(timer))
-      if (!conn.hasCapability('secrets-v1')) throw new Error('its Walnut daemon needs an update (it updates on its next connect)')
+      if (!needCapability(conn, 'secrets-v1')) throw new Error('its Walnut daemon needs an update (it updates on its next connect)')
       const listed = await conn.send('secrets.list', {}) as { ok?: boolean; secrets?: Array<{ name: string; version: number }>; error?: string }
       if (!listed.ok) throw new Error(listed.error ?? 'the host could not list its secrets')
       const there = new Map((listed.secrets ?? []).map((s) => [s.name, s.version]))

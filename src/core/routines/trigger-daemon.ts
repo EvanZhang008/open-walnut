@@ -17,6 +17,7 @@
  */
 
 import { SessionControlError } from '../sessions/session-controls.js';
+import { needCapability } from '../../providers/daemon-capability-need.js';
 
 export const TRIGGERS_CAPABILITY = 'triggers-v1';
 
@@ -91,7 +92,7 @@ export async function requireTriggerDaemon(host: string): Promise<TriggerDaemon>
   if (!conn) {
     throw new SessionControlError(`daemon on ${host} is not connected — a trigger runs on its host, so it cannot be saved while that host is unreachable`, 503);
   }
-  if (!conn.hasCapability(TRIGGERS_CAPABILITY)) {
+  if (!needCapability(conn, TRIGGERS_CAPABILITY)) {
     throw new SessionControlError(`upgrade the daemon on ${host} (it auto-deploys on the next send)`, 400);
   }
   return conn;

@@ -23,3 +23,13 @@ export function needCapability(conn: CapabilityLink, cap: string): boolean {
   conn.noteCapabilityNeed?.(cap)
   return false
 }
+
+/**
+ * The first link that has `cap`; when none of them has it, each notes the need. Never a need noted
+ * on one link while a later one has it (a host reached two ways, one already updated).
+ */
+export function firstWithCapability<T extends CapabilityLink>(conns: readonly T[], cap: string): T | undefined {
+  const able = conns.find((c) => c.hasCapability(cap))
+  if (!able) for (const c of conns) needCapability(c, cap)
+  return able
+}

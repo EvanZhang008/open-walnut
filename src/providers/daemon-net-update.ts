@@ -398,7 +398,12 @@ export class NetDaemonUpdater {
   private async attempt(trigger: 'auto' | 'request', gate?: () => void): Promise<NetUpdateState> {
     const c = this.d.conn
     const refused = (): string | null => {
-      try { gate?.(); return null } catch (err) { return err instanceof Error ? err.message : String(err) }
+      try { gate?.(); return null } catch (err) {
+        // The asker may no longer have it run: its ask goes, so the gap holds this build again (UpdateGapHold.unask).
+        const expected = this.d.expectedVersion()
+        if (expected) this.gap.unask(expected)
+        return err instanceof Error ? err.message : String(err)
+      }
     }
     if (this.stopped || !c.connected) return this.set('skipped', 'the host is not connected')
     this.set('checking', 'checking the host\'s daemon')

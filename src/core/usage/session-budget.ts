@@ -23,6 +23,7 @@ import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js';
 import type { LetterRecord } from '../human-inbox/types.js';
 import { readHostOf } from '../sessions/session-row-owner.js';
+import { needCapability } from '../../providers/daemon-capability-need.js';
 
 /** Engines whose per-request usage the host can price (session-cost-core.ts). */
 export { BUDGET_ENGINES };
@@ -65,7 +66,7 @@ async function target(sid: string) {
   const conn = await hostConnection(host);
   // budget-v1 hosts priced only some Claude models; their budgets stay enforced by
   // that daemon until it updates (it does on connect), but this server cannot read them.
-  if (!conn.hasCapability('budget-v2')) throw fail('budget_needs_upgrade', 'The session\'s host runs an older Walnut daemon; it updates on its next connect. Its saved budget still holds.', 503);
+  if (!needCapability(conn, 'budget-v2')) throw fail('budget_needs_upgrade', 'The session\'s host runs an older Walnut daemon; it updates on its next connect. Its saved budget still holds.', 503);
   return { session, engine, conn };
 }
 

@@ -362,16 +362,34 @@ describe('an SSH host\'s daemon asked for now', () => {
     expect(String(postpone.mock.calls[0]?.[0])).toMatch(/at most once every 2 h/)
   })
 
-  // Review r1, low 5: a run that found the daemon already swapped by another decision says so.
-  it('answers running when another decision swapped the daemon while it waited', async () => {
+  // Review r1 low 5, r2 low D: running only when a decision here replaced the daemon meanwhile; a link blip is no swap.
+  it.each([
+    ['another decision replaced the daemon while it waited', true, 'running'],
+    ['the link only dropped', false, 'skipped'],
+  ])('answers by what happened: %s', async (_case, replaced, phase) => {
     const c = make()
     host(c, OLD, '02:05:00')
     live(c)
     vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockImplementation(async () => {
-      ;(c as unknown as { _connected: boolean })._connected = false
+      Object.assign(c as unknown as Record<string, unknown>, { _connected: false, ...(replaced ? { _replacedAt: Date.now() } : {}) })
       return false
     })
-    expect(await c.requestDaemonUpdate()).toMatchObject({ phase: 'running', message: expect.stringContaining('reconnects on the new build') })
+    expect(await c.requestDaemonUpdate()).toMatchObject({ phase, ...(replaced ? { message: expect.stringContaining('reconnects on the new build') } : {}) })
+  })
+
+  // Review r2, low C: a grant revoked before the swap takes the ask with it.
+  it('an asker refused before the swap leaves no ask behind: the gap holds that build again', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '00:30')
+    live(c)
+    let asks = 0
+    const gate = () => { if (++asks > 1) throw new Error('the grant was revoked') }
+    expect(await c.requestDaemonUpdate(gate)).toMatchObject({ phase: 'postponed', message: expect.stringContaining('refused') })
+    expect(stops(seen)).toEqual([])
+    const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+    expect(String(postpone.mock.calls[0]?.[0])).toMatch(/at most once every 2 h/)
   })
 })
 

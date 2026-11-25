@@ -158,6 +158,8 @@ export class UpdateGapHold {
    * the gap, so an ask a safety hold put off (an open ACP turn) is not then held for up to 2 h.
    */
   ask(expected: string): void { this.askedFor = expected }
+  /** The asker may no longer have it run (its grant was revoked): the ask is gone, the gap holds as before. */
+  unask(expected: string): void { if (this.askedFor === expected) this.askedFor = null }
   asked(expected: string): boolean { return this.askedFor === expected }
 
   /** The capability noted while `running` runs there, if any. */

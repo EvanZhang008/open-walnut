@@ -25,6 +25,8 @@ export interface RequestedUpdateDeps {
   run(expected: string, gate?: () => void): Promise<boolean>
   /** What the update waits for after the decision (its postpone), if anything. */
   wait(): DaemonUpdateWait | null
+  /** When a decision on this link last replaced the daemon (ms epoch, 0 never): the one sign that a swap happened. */
+  replacedAt(): number
   now?: () => number
 }
 
@@ -44,21 +46,21 @@ export class RequestedUpdate {
     // Refused before anything runs: the route answers the refusal itself.
     gate?.()
     this.set('checking', 'checking the host\'s daemon')
-    const before = this.d.running()
+    const startedAt = (this.d.now ?? Date.now)()
     const run = this.d.run(expected, gate)
-      .then((went) => this.settle(went, expected, before), (err) => this.set('failed', err instanceof Error ? err.message : String(err)))
+      .then((went) => this.settle(went, expected, startedAt), (err) => this.set('failed', err instanceof Error ? err.message : String(err)))
       .finally(() => { this.inFlight = null })
     this.inFlight = run
     await within(run, waitMs)
     return this.state
   }
 
-  private settle(went: boolean, expected: string, before: string | null): NetUpdateState {
+  private settle(went: boolean, expected: string, startedAt: number): NetUpdateState {
     const swapping = `the old daemon was replaced by ${expected}; the host reconnects on the new build`
     if (went) return this.set('running', swapping)
     if (this.d.running() === expected) return this.set('updated', `its daemon is this build (${expected})`)
-    // Another decision swapped it while this one waited for it (the link dropped, or came back on another build).
-    if (!this.d.connected() || this.d.running() !== before) return this.set('running', swapping)
+    // Another decision on this link replaced it while this one waited for it; a link that only dropped is no swap.
+    if (this.d.replacedAt() >= startedAt) return this.set('running', swapping)
     const wait = this.d.wait()
     if (wait && wait.expected === expected) {
       const skip: NetUpdateSkip | undefined = wait.kind === 'postponed' ? undefined : wait.kind

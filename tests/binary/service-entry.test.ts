@@ -209,6 +209,33 @@ describe('stopOldFollowers, the one stop of an older daemon\'s follower', () => 
       try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ }
     }
   }, 30_000)
+
+  // Review r2, low E: an uninstall tries every follower (each one left runs on with no parent); a
+  // service start ends at the first that does not stop, since that start ends then anyway.
+  it('tryEach stops every follower it can and answers at the end; a start stops at the first', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'service-each-follower-'))
+    roots.push(root)
+    const [a, b] = [spawn('sleep', ['60'], { detached: true, stdio: 'ignore' }), spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })]
+    const [pa, pb] = [a.pid!, b.pid!]
+    const bGone = new Promise((r) => b.once('exit', r))
+    try {
+      const files = [path.join(root, 'server-a.pid'), path.join(root, 'server-b.pid')]
+      fs.writeFileSync(files[0]!, JSON.stringify({ pid: pa, startTime: defaultReadStartTime(fs, pa) }))
+      fs.writeFileSync(files[1]!, JSON.stringify({ pid: pb, startTime: defaultReadStartTime(fs, pb) }))
+      // The first one's start time does not read: it may still be a follower, and is kept.
+      const startTimeOf = (pid: number) => (pid === pa ? null : defaultReadStartTime(fs, pid))
+      const deps = { startTimeOf, unknownRetryMs: 10 }
+      expect(await stopOldFollowers(files, deps)).toBe(false)
+      expect(fs.existsSync(files[1]!)).toBe(true) // a start stopped at the first: the second was not tried
+      expect(await stopOldFollowers(files, { ...deps, tryEach: true })).toBe(false)
+      await bGone
+      expect(fs.existsSync(files[1]!)).toBe(false)
+      expect(fs.existsSync(files[0]!)).toBe(true)
+      expect(() => process.kill(pa, 0)).not.toThrow()
+    } finally {
+      for (const pid of [pa, pb]) { try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ } }
+    }
+  }, 30_000)
 })
 
 // 2026-11-22, a real host: the service unpacked its tree under the launcher's env, then took the

@@ -336,7 +336,7 @@ export class DaemonFileReader implements SessionFileReader {
   async ensureGitExcluded(cwd: string, filePath: string): Promise<'added' | 'already' | 'not-a-repo' | 'unavailable'> {
     await this.resolve()
     const conn = await link(this.host)
-    if (!conn.capabilitiesKnown || !conn.hasCapability('git-exclude-v1')) return 'unavailable'
+    if (!conn.capabilitiesKnown || !needCapability(conn, 'git-exclude-v1')) return 'unavailable'
     const result = await conn.send('git.ensureExcluded', { cwd, path: filePath })
     if (!result.ok) {
       throw new Error('git.ensureExcluded failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
@@ -377,7 +377,7 @@ export class DaemonFileReader implements SessionFileReader {
   async readCostState(sessionId: string, cwd?: string, timeoutMs = 30_000): Promise<{ totalCostUsd: number } | null> {
     await this.resolve()
     const conn = await link(this.host)
-    if (!conn.hasCapability('usage-scan-v1')) return null
+    if (!needCapability(conn, 'usage-scan-v1')) return null
     const reply = await conn.send('usage.costState', { sid: sessionId, cwd }, timeoutMs)
     if (!reply.ok) throw new Error(String(reply.error ?? 'Cost state read failed'))
     return reply.result as { totalCostUsd: number } | null
@@ -412,7 +412,7 @@ export class DaemonFileReader implements SessionFileReader {
     await this.resolve()
     const conn = await link(this.host)
     await conn.connect()
-    if (!conn.hasCapability('codex-outside-v1')) return null
+    if (!needCapability(conn, 'codex-outside-v1')) return null
     const reply = await conn.send('usage.codexOutside', params, timeoutMs)
     if (!reply.ok) throw new Error(String(reply.error ?? 'Codex usage read failed'))
     return reply.result ?? null

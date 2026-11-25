@@ -20,7 +20,7 @@
 
 import { log } from '../logging/index.js'
 import { replyText } from '../model/reply-text.js'
-import { needCapability } from '../providers/daemon-capability-need.js'
+import { firstWithCapability } from '../providers/daemon-capability-need.js'
 
 export const GIT_COMMIT_CAPABILITY = 'git-commit-v1'
 const PLAN_RPC_MS = 90_000
@@ -115,7 +115,7 @@ const realDeps: SessionCommitDeps = {
       }
     }
     if (conns.length === 0) throw new SessionCommitError(`Walnut is not connected to ${hostDisplay(host)} right now.`, 503, 'host-offline')
-    const able = conns.find((c) => needCapability(c, GIT_COMMIT_CAPABILITY))
+    const able = firstWithCapability(conns, GIT_COMMIT_CAPABILITY)
     if (!able) throw new SessionCommitError(`The Walnut daemon on ${hostDisplay(host)} needs an update before it can commit.`, 409, 'daemon-upgrade')
     return able as unknown as Conn
   },

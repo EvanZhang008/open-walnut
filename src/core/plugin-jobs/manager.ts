@@ -34,6 +34,7 @@ import { maskByKey } from '../config-secret-shape.js'
 import { servingJobOf, type PluginJobDeclaration } from './manifest.js'
 import { assertOutwardDoor, holdUntilDoorsOpen, isPermitRefusal, leaderPermitActive } from '../leader/switch/doors.js'
 import type { PluginJobSpec, PluginJobStatus } from '../../providers/plugin-jobs-core.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const PLUGIN_JOBS_CAPABILITY = 'plugin-jobs-v1'
 /** `jobs.http`: a daemon that forwards a plugin's routes to its serving job (plugin-jobs-core.ts). */
@@ -472,7 +473,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const target = host || p?.runOn || LOCAL_HOST
     const rec = hosts.get(target)
     if (!rec?.handle.connected) throw Object.assign(new Error(`${target === LOCAL_HOST ? 'this computer\'s daemon' : target} is not connected`), { status: 503 })
-    if (!rec.handle.hasCapability(PLUGIN_JOBS_CAPABILITY)) throw Object.assign(new Error('that daemon is older than plugin jobs'), { status: 409 })
+    if (!needCapability(rec.handle, PLUGIN_JOBS_CAPABILITY)) throw Object.assign(new Error('that daemon is older than plugin jobs'), { status: 409 })
     const r = await rec.handle.send('jobs.logs', { home: deps.home, plugin: pluginId, job, lines }, 10_000)
     if (r.ok !== true) throw Object.assign(new Error(String(r.error ?? 'no answer')), { status: 404 })
     return { host: target, lines: Array.isArray(r.lines) ? r.lines.map(String) : [], bytes: Number(r.bytes) || 0 }
@@ -488,7 +489,7 @@ export function createPluginJobsManager(deps: ManagerDeps) {
     const where = p.runOn === LOCAL_HOST ? 'this computer' : labelOf(await deps.hosts(), p.runOn)
     const rec = hosts.get(p.runOn)
     if (!rec?.handle.connected) return { error: `${p.runOn === LOCAL_HOST ? 'the daemon of this computer' : where} is not connected, so the job's routes cannot be reached`, retryAfterS: 5 }
-    if (!rec.handle.hasCapability(PLUGIN_JOBS_SERVE_CAPABILITY)) return { error: `the daemon on ${where} is older than jobs that serve routes; it is upgraded on its next connect` }
+    if (!needCapability(rec.handle, PLUGIN_JOBS_SERVE_CAPABILITY)) return { error: `the daemon on ${where} is older than jobs that serve routes; it is upgraded on its next connect` }
     return { handle: rec.handle, where }
   }
 

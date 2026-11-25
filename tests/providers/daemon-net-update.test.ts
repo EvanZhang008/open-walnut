@@ -251,6 +251,23 @@ describe('NetDaemonUpdater', () => {
     u.stop()
   })
 
+  // Review r2, low C: a grant revoked before the upload takes the ask with it.
+  it('an ask whose grant is revoked before the upload leaves no ask: the next automatic try waits for the gap', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const conn = link({ daemonStartedAt: Date.now() - 10 * 60_000 })
+    const { u, update } = updater({ minGapMs: 2 * 3600_000 }, conn)
+    let asks = 0
+    const answer = u.request(1_000, () => { if (++asks > 1) throw new Error('the grant was revoked') })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await answer).toMatchObject({ phase: 'skipped', skip: 'refused' })
+    // Past the cooldown its try set, so the gap is what decides now.
+    u.schedule(COOLDOWN + 10)
+    await vi.advanceTimersByTimeAsync(COOLDOWN + 50)
+    expect(u.state).toMatchObject({ phase: 'skipped', skip: 'recent' })
+    expect(update).not.toHaveBeenCalled()
+    u.stop()
+  })
+
   it('its view, read on every status frame, never hashes the build (no sync work on a request path)', () => {
     // 2026-11-04 review: the getter asked expectedVersion() (a sync hash of the daemon file) on every getDaemonConnectState.
     const expectedVersion = vi.fn(() => NEW)

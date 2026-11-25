@@ -51,7 +51,7 @@ async function stopFollowersOf(root: string, o: UninstallTailInput): Promise<voi
   const names = await fs.readdir(dir).catch(() => [] as string[])
   const pidFiles = names.filter((n) => /^server-.*\.pid$/.test(n)).map((n) => path.join(dir, n))
   if (!pidFiles.length) return
-  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files, { says: { by: 'walnut daemon uninstall', whose: 'the service' } }))
+  const stop = o.stopFollowers ?? (async (files: string[]) => (await import('../binary/service-entry.js')).stopOldFollowers(files, { says: { by: 'walnut daemon uninstall', whose: 'the service' }, tryEach: true }))
   const stopped = await stop(pidFiles).catch(() => false)
   if (!stopped) o.say(`walnut daemon: a follower of the service may still run (its pid file in ${dir} is kept)\n`)
 }

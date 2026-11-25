@@ -772,7 +772,8 @@ is held one gap at most in all (a crash loop always looks young), and a held upd
 past the 3 hour bound; a capability a feature refuses or degrades without (`needCapability`,
 `src/providers/daemon-capability-need.ts`; a plain `hasCapability` is only a read) or a required one the
 handshake misses, which this build's daemon has and the running one lacks (decided again at once, once per
-running build); and an update someone asked for, which stays asked for its build until it runs there.
+running build); and an update someone asked for, which stays asked for its build until it runs there (an ask whose grant
+is revoked before the swap is dropped).
 
 To have it now (a task that just fixed host-side code): `host_daemon_update <host>` (POST
 `/api/v1/hosts/:host/daemon-update`), for an SSH host and a host network machine alike. It goes past the

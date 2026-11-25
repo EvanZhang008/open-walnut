@@ -61,6 +61,7 @@ import {
 import { computeSessionChanges, isExcludedPath, type SessionChangesResult, type SessionFileChange, type SessionRepoGroup } from './session-changes.js';
 import { log } from '../logging/index.js';
 import { gitChildEnv } from '../lib/git-env.js';
+import { needCapability } from '../providers/daemon-capability-need.js';
 
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 25_000;
@@ -110,7 +111,7 @@ export interface GitCompareOpts { ref?: string; commit?: string; namesOnly?: boo
 async function compareLink(host: string, needsCompare: boolean) {
   // The link resolves the host (an unknown one throws `Unknown host: <alias>`).
   const conn = await link(host);
-  if (needsCompare && conn.capabilitiesKnown && !conn.hasCapability(GIT_COMPARE_CAPABILITY)) {
+  if (needsCompare && conn.capabilitiesKnown && !needCapability(conn, GIT_COMPARE_CAPABILITY)) {
     throw new GitDiffError(`The Walnut daemon on ${host} needs an update for this comparison. It updates itself the next time a session there gets a message.`);
   }
   return conn;

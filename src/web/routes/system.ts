@@ -14,6 +14,7 @@ import { validateBearerCredential } from '../middleware/auth.js'
 import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE, type DesktopUpdateAnswer } from './desktop-update-cache.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { memoryReport, writeHeapSnapshot } from '../../core/observability/memory-ledger.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const systemRouter = Router()
 
@@ -148,7 +149,7 @@ systemRouter.get('/desktop-update', async (req, res) => {
 systemRouter.post('/desktop-update/restart', async (req, res) => {
   if (!isOnThisMachine(req) || process.platform !== 'darwin') { res.status(403).json({ error: 'Restart is only available at this computer.' }); return }
   const daemon = getConnectedDaemonConnection('__local__')
-  if (!daemon?.hasCapability('desktop-update-v1')) { res.status(503).json({ error: 'The local daemon is not ready.' }); return }
+  if (!daemon || !needCapability(daemon, 'desktop-update-v1')) { res.status(503).json({ error: 'The local daemon is not ready.' }); return }
   const token = req.body?.token
   if (typeof token !== 'string' || !token || token.length > 200) { res.status(400).json({ error: 'An update token is required.' }); return }
   try {

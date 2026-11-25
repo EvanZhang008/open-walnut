@@ -238,6 +238,11 @@ export interface StopFollowerDeps {
   unknownRetryMs?: number
   /** Who stops them and whose followers they are, for the stderr line (default: a service start, an older daemon's). */
   says?: { by: string; whose: string }
+  /**
+   * Try every pid file, and answer at the end (an uninstall: each follower left would run on with no
+   * parent). Off (a service start): the first that does not stop ends it, since this start ends then anyway.
+   */
+  tryEach?: boolean
 }
 
 /**
@@ -250,6 +255,7 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
   const [{ stopRecordedServer }, { defaultReadStartTime }] = await Promise.all([
     import('../providers/host-server-core.js'), import('../providers/daemon-core.js'),
   ])
+  let allStopped = true
   for (const pidFile of pidFiles) {
     const stopped = await stopRecordedServer({
       pidFile, fs,
@@ -262,9 +268,12 @@ export async function stopOldFollowers(pidFiles: string[], deps: StopFollowerDep
       const what = stopped === 'stays' ? 'did not stop' : stopped === 'unknown' ? 'may still run (its start time did not read); its pid file is kept' : 'was stopped'
       process.stderr.write(`${deps.says?.by ?? 'walnut --service'}: the follower ${deps.says?.whose ?? 'an older daemon'} started ${what}\n`)
     }
-    if (stopped === 'stays' || stopped === 'unknown') return false
+    if (stopped === 'stays' || stopped === 'unknown') {
+      if (!deps.tryEach) return false
+      allStopped = false
+    }
   }
-  return true
+  return allStopped
 }
 
 /** Tests and rehearsals: WALNUT_SERVICE_ROLE_WATCH=1 or 0 decides; else a Mac (the one service is new there, macos_one_service). */

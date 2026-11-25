@@ -22,6 +22,7 @@ import { experimentalEnabled } from '../experimental.js'
 import type { HostServerHost, WorkingProgram } from './manager-types.js'
 import type { FollowerGateReason } from './eligibility.js'
 import type { HostTarget } from './host-target.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export const COPYLESS_CAPABILITY = 'copyless-service-v1'
 const COPIES_ENV = 'WALNUT_COPIES'
@@ -48,7 +49,7 @@ export async function copylessWanted(): Promise<boolean> {
  * launcher off, or its own `service_offer: false`): it would run the follower beside the daemon.
  */
 export function copylessUnfit(host: HostServerHost, target: HostTarget | null, service = false, refused = false): string | null {
-  if (!host.hasCapability(COPYLESS_CAPABILITY)) return 'its Walnut is older than the service without a copy'
+  if (!needCapability(host, COPYLESS_CAPABILITY)) return 'its Walnut is older than the service without a copy'
   if (refused) return 'the one service is turned off for this host'
   if (!service && host.underLauncher && !host.underLauncher()) return 'its session helper does not run under the service launcher yet'
   // Not known yet (the probe's answer did not parse) counts as not Linux: the next look decides.

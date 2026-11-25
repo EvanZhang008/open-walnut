@@ -1662,11 +1662,14 @@ export class DaemonConnection {
       expected: () => this.getExpectedDaemonVersion(),
       // The ask stays with its build (UpdateGapHold.ask): a safety hold that puts it off now does not hand it to the gap after.
       run: (expected, g) => { this._gap.ask(expected); return this.recheckPostponedUpgrade({ expected, gate: g }) },
+      replacedAt: () => this._replacedAt,
       wait: () => this._updateWait,
     })
     return this._requested.request(undefined, gate)
   }
   private _requested: RequestedUpdate | null = null
+  /** When a decision here last replaced the host's daemon (ms epoch; 0 never): a requested update's answer reads it. */
+  private _replacedAt = 0
 
   /** The build that did not stay serving here: in memory, or first after a restart the kept record. */
   private async realDirFailure(): Promise<BuildBackoffEntry | null> {
@@ -4408,7 +4411,7 @@ export class DaemonConnection {
    */
   runRemoteScript(script: string, timeoutMs = 30_000): Promise<string> {
     if (this.noSsh) {
-      if (!this.hasCapability('host-exec-v1')) return Promise.reject(new Error(this.linkDaemonNeedsUpdate('Running a script')))
+      if (!needCapability(this, 'host-exec-v1')) return Promise.reject(new Error(this.linkDaemonNeedsUpdate('Running a script')))
       return import('./daemon-net-update-io.js').then(({ createNetUpdateIo }) => createNetUpdateIo(this).run(script, timeoutMs))
     }
     return this.sshExec(script, timeoutMs)
@@ -4430,7 +4433,7 @@ export class DaemonConnection {
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
     // A link host (the host network, the cloud box): checked parts over the daemon link.
     if (this.noSsh) {
-      if (!this.hasCapability('fs-write-part-v1') || !this.hasCapability('host-exec-v1')) throw new Error(this.linkDaemonNeedsUpdate('Uploading a file'))
+      if (!needCapability(this, 'fs-write-part-v1') || !needCapability(this, 'host-exec-v1')) throw new Error(this.linkDaemonNeedsUpdate('Uploading a file'))
       if (opts.sha256 && await sha256Hex(data) !== sha) throw new Error('uploadFile: sha256 does not match the data')
       const there = parseUploadPrecheck(await this.runRemoteScript(uploadPrecheckScript(remotePath, sha), 60_000))
       if (there?.sha === sha && there.size === data.length) {
@@ -4822,7 +4825,7 @@ export class DaemonConnection {
     if (!isLoopbackHostname(target)) {
       return new Error(`Port forwarding on ${this.linkName} goes ${this.linkWords} and reaches only its own loopback (127.0.0.1, localhost, ::1), not ${target.slice(0, 120)}`)
     }
-    if (!this.hasCapability('port-stream-v1')) return new Error(this.linkDaemonNeedsUpdate('Port forwarding'))
+    if (!needCapability(this, 'port-stream-v1')) return new Error(this.linkDaemonNeedsUpdate('Port forwarding'))
     const h = bareHost(target)
     return /^127(?:\.\d{1,3}){3}$/.test(h) || h === '::1' ? h : 'localhost'
   }
@@ -5605,6 +5608,7 @@ export class DaemonConnection {
 
   /** A replace went through: when the daemon it replaced was shared, the breaker starts. */
   private noteDaemonReplaced(): void {
+    this._replacedAt = Date.now()
     if (this._sharedReplacing) this._sharedReplacedAt = Date.now()
     this._sharedReplacing = false
   }
@@ -6238,7 +6242,11 @@ export class DaemonConnection {
     const gate = (): UpgradeHold => {
       if (!live()) return UPGRADE_STALE
       // The asker may no longer have it run (its grant was revoked, the host closed): nothing stops.
-      try { askGate?.() } catch (err) { return `the update asked for was refused (${err instanceof Error ? err.message : String(err)})` }
+      try { askGate?.() } catch (err) {
+        // Refused before the swap: the ask goes with it, so the gap holds this build again (UpdateGapHold.unask).
+        if (asked) this._gap.unask(asked.expected)
+        return `the update asked for was refused (${err instanceof Error ? err.message : String(err)})`
+      }
       const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
       if (writes > 0) return `${writes} daemon command(s) that change a session or a file are in flight`
       return null

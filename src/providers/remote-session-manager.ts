@@ -58,6 +58,7 @@ import type {
   TransportAttachOptions,
   TransportAttachResult,
 } from './session-manager.js'
+import { needCapability } from './daemon-capability-need.js'
 
 // DUP-DEBUG: per-process counter so each RemoteSessionManager has a stable id
 // in logs. If logs show two different `rsmId`s touching the same sid for the
@@ -1149,7 +1150,7 @@ export class RemoteSessionManager implements SessionManager {
           const conn = this.conn
           if (conn?.connected) {
             // Reconnected to a daemon that cannot dedupe: a resend could run the line twice.
-            if (!conn.hasCapability(SEND_DEDUPE_CAPABILITY)) throw new SendOutcomeUnknownError(`${last}; the host's daemon cannot confirm delivery`)
+            if (!needCapability(conn, SEND_DEDUPE_CAPABILITY)) throw new SendOutcomeUnknownError(`${last}; the host's daemon cannot confirm delivery`)
             const result = await this.dispatch(sid, opts?.stopFence, () =>
               conn.send('send', payload(conn), RemoteSessionManager.SEND_CONFIRM_ATTEMPT_MS))
             log.session.info('RemoteSessionManager: send outcome confirmed', {

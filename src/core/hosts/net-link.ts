@@ -7,13 +7,14 @@
  */
 import { log } from '../../logging/index.js'
 import { link } from './link.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 const FORWARD_TIMEOUT_MS = 30_000
 
 /** A loopback port on this machine that reaches `endpoint`'s daemon. */
 export async function netForwardPort(endpoint: string, host: string): Promise<number> {
   const local = await link('__local__')
-  if (!local.hasCapability('net-v1')) {
+  if (!needCapability(local, 'net-v1')) {
     throw new Error(`${host} is on the host network, and this machine's Walnut daemon has no host network yet; restart Walnut to update it`)
   }
   const r = await local.send('net.forward', { to: endpoint }, FORWARD_TIMEOUT_MS) as { ok?: boolean; port?: number; error?: string }

@@ -15,6 +15,7 @@
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 import { hostDisplayNameFor } from './hosts/host-display-name.js'
+import { needCapability } from '../providers/daemon-capability-need.js'
 
 const LIST_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 20_000
@@ -146,7 +147,7 @@ export async function listSessionServers(session: SessionRecord, deps: SessionSe
   const ids = sessionProcessIds(session)
   const conn = await (deps.connection ?? connectedDaemon)(host).catch(() => null)
   if (!conn) return unavailable('offline', host)
-  if (!conn.hasCapability('ports-v1')) return unavailable('unsupported', host)
+  if (!needCapability(conn, 'ports-v1')) return unavailable('unsupported', host)
   try {
     const res = await conn.send('ports.list', { sids: ids, guardPids: guardPids(host, deps) }, LIST_TIMEOUT_MS)
     if (!res.ok) return { state: 'error', host, servers: [], error: res.error ?? 'the host did not answer' }
@@ -176,7 +177,7 @@ export async function stopSessionServer(
   const host = hostOf(session)
   const conn = await (deps.connection ?? connectedDaemon)(host).catch(() => null)
   if (!conn) throw new SessionServerStopError('the session\'s host is not connected', 503, 'offline')
-  if (!conn.hasCapability('ports-v1')) throw new SessionServerStopError('the session\'s host runs an older daemon', 503, 'unsupported')
+  if (!needCapability(conn, 'ports-v1')) throw new SessionServerStopError('the session\'s host runs an older daemon', 503, 'unsupported')
   let res
   try {
     res = await conn.send('ports.stop', {

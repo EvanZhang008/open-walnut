@@ -22,6 +22,7 @@ import {
 import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 import { readHostOf } from './sessions/session-row-owner.js'
+import { needCapability } from '../providers/daemon-capability-need.js'
 
 /** Remote ensure can include a first-time ~100MB install; give it room. */
 const REMOTE_ENSURE_TIMEOUT_MS = 120_000
@@ -115,7 +116,7 @@ export async function buildSessionVscodeEmbed(
     }
     throw new SessionVscodeEmbedError(`Could not reach ${name}: ${inHostTerms(err instanceof Error ? err.message : String(err), host, name)}`, 502)
   }
-  if (!conn.hasCapability('vscode-v1')) {
+  if (!needCapability(conn, 'vscode-v1')) {
     throw new SessionVscodeEmbedError(
       `daemon on ${name} needs an upgrade for embedded VS Code`, 503,
       'redeploy the daemon (bun run build:daemon), then retry',

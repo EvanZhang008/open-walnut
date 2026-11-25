@@ -180,15 +180,22 @@ describe('NetDaemonUpdater carries the mode', () => {
     const m = mode({ due: true, serve: ON })
     const update = vi.fn(async () => { throw stageError })
     let triesAtUnfit: number | null = null
-    m.unfit.mockImplementation(() => { triesAtUnfit ??= update.mock.calls.length })
+    // The phase that round ends in, read right after it (the postpone runs in the same turn as unfit),
+    // and the updater stopped there: a poll of 50 ms let the next round (a 30 ms cooldown) start first.
+    let phaseAfterUnfit: string | null = null
+    let stopIt = () => {}
+    m.unfit.mockImplementation(() => {
+      triesAtUnfit ??= update.mock.calls.length
+      queueMicrotask(() => { phaseAfterUnfit ??= u.state.phase; stopIt() })
+    })
     const { u } = updater({ mode: m, update: update as never, cooldownMs: 30 })
+    stopIt = () => u.stop()
     u.schedule(0)
-    await vi.waitFor(() => expect(m.unfit).toHaveBeenCalled())
-    u.stop()
+    await vi.waitFor(() => expect(phaseAfterUnfit).not.toBeNull())
     // Tries 1 and 2 were postponements with the offer kept; the third took it away for this build.
     expect(triesAtUnfit).toBe(STAGE_TRIES_BEFORE_UNFIT)
     expect(m.unfit).toHaveBeenCalledWith(NEW, expect.stringContaining('__daemon --version'))
-    expect(u.state.phase).toBe('postponed')
+    expect(phaseAfterUnfit).toBe('postponed')
     expect(m.asked).not.toHaveBeenCalled()
 
     // A passing fault: the second try puts the file there, and the offer was never taken away.

@@ -7,6 +7,7 @@
  * there against its own daemon), never of its daemon from here (session-command-gate.ts).
  */
 import { sessionCommandTarget } from './session-command-gate.js'
+import { needCapability } from '../../providers/daemon-capability-need.js'
 
 export interface CancelPendingAnswer { ok?: boolean; alive?: boolean; cancelled?: boolean; error?: unknown }
 
@@ -38,6 +39,6 @@ export async function cancelPendingStartOf(input: { sid: string; sessionId?: str
   let conn = getConnectedDaemonConnection(host)
   if (!conn && input.dial) conn = await (await import('../hosts/link.js')).link(host)
   if (!conn) throw new CancelNotAskableError(`no link to ${host}`)
-  if (!conn.hasCapability(CANCEL_PENDING_START_CAPABILITY)) throw new CancelNotAskableError('The execution host needs a daemon upgrade before this start can be retried')
+  if (!needCapability(conn, CANCEL_PENDING_START_CAPABILITY)) throw new CancelNotAskableError('The execution host needs a daemon upgrade before this start can be retried')
   return await conn.send('cancelPendingStart', { sid: input.sid }, 5_000) as CancelPendingAnswer
 }
