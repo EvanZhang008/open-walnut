@@ -128,10 +128,37 @@ enum TalkReason {
     /// person picked Send or Copy.
     static let notChosen = "Not sent or copied yet."
 
-    /// The failures the next try fixes by itself: the server was away, or Walnut
-    /// was ended before the send finished.
+    /// The server the phone reached answered that the CEO's chat needs the Mac, and the Mac
+    /// is not there (asleep, off, offline): an older cloud companion's 501, a replica's
+    /// 503 `needs_leader` (`APIError.isLeaderUnreachable`). Before 2026-11-25 this read as
+    /// the server's own refusal, which nothing sent again, so the words waited unseen in
+    /// Settings while the person thought them lost.
+    static let macAway = "Your Mac isn't connected right now."
+    /// The computer the CEO's chat runs on is not on the server's bridge (503 `bridge_offline`).
+    static let hostAway = "The computer your CEO runs on isn't connected right now."
+
+    /// The failures the next try fixes by itself: the server, the Mac or the CEO's computer
+    /// was away, or Walnut was ended before the send finished.
     static func goesOutLater(_ reason: String) -> Bool {
-        reason == serverUnavailable || reason == uploadCut || reason == closedMidSend
+        reason == serverUnavailable || reason == uploadCut || reason == closedMidSend || waitsForComputer(reason)
+    }
+
+    /// Away until a computer comes back, which may take a night: these keep going out by
+    /// themselves however many tries that takes (`TalkSession.waits`), never handed to the person.
+    static func waitsForComputer(_ reason: String) -> Bool {
+        reason == macAway || reason == hostAway
+    }
+
+    /// A sent take the server holds for a Mac that is away (`TalkDelivery.held`).
+    static let heldLine = "Your Mac is away: Walnut has it, and your CEO gets it when your Mac is back."
+
+    /// What a kept take that goes out by itself says it waits for.
+    static func laterLine(_ reason: String) -> String {
+        switch reason {
+        case macAway: return "It goes to your CEO by itself when your Mac is back and Walnut is open."
+        case hostAway: return "It goes to your CEO by itself when that computer is back and Walnut is open."
+        default: return "It goes to your CEO by itself the next time Walnut reaches your server."
+        }
     }
 
     /// Wordings of the unreachable server that older builds and the voice

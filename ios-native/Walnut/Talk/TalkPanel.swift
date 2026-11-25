@@ -157,7 +157,9 @@ struct TalkPanelView: View {
             // A failure to start belongs to the press that caused it, not the take after it.
             case .starting: model.error = nil
             // A sent (or copied) take shows its words a moment, then Walnut is as it was.
-            case .sent, .copied: TalkPanel.shared.hide(after: 2)
+            // One held for a Mac that is away says so: long enough to read it.
+            case .sent: TalkPanel.shared.hide(after: talk.sentHeld ? 6 : 2)
+            case .copied: TalkPanel.shared.hide(after: 2)
             // Nothing sent: long enough to read why; the take stays on the Live Activity
             // and in Settings when it is kept.
             case .notSent: TalkPanel.shared.hide(after: 8)
@@ -271,14 +273,14 @@ struct TalkPanelView: View {
             return dictating
                 ? "Tap anywhere when you're done, or press the Action Button again."
                 : "Tap anywhere to send, or press the Action Button again."
-        case .sent(let words): return "\u{201C}\(TalkSession.preview(words))\u{201D}"
+        case .sent(let words):
+            let quoted = "\u{201C}\(TalkSession.preview(words))\u{201D}"
+            return talk.sentHeld ? quoted + " " + TalkReason.heldLine : quoted
         case .copied: return "Paste it anywhere."
         case .notSent(let reason, let kept):
             guard kept else { return reason }
             if dictating { return reason + " It is kept in Settings, Action Button." }
-            if TalkReason.goesOutLater(reason) {
-                return reason + " It goes to your CEO by itself the next time Walnut reaches your server."
-            }
+            if TalkReason.goesOutLater(reason) { return reason + " " + TalkReason.laterLine(reason) }
             return reason + " It is kept in Settings, Action Button, to send again."
         default: return nil
         }

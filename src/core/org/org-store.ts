@@ -81,6 +81,11 @@ export async function getOrgTree(): Promise<OrgTree> {
   return buildOrgTree(await orgTasks());
 }
 
+/** The main agent's task as the store holds it now, or null: a read, so a replica may answer it. */
+export async function findMainTask(): Promise<Task | null> {
+  return pickMain(await orgTaskView()) ?? null;
+}
+
 /** The main agent's task, made on first use. Never more than one. */
 export function ensureMainTask(): Promise<Task> {
   return serial(async () => {

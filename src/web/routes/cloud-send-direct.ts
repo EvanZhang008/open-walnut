@@ -150,14 +150,19 @@ async function settleDirect(ctx: DirectContext, outcome: DirectSendOutcome, answ
     return
   }
   if (!answer) return
-  if (outcome.offline) {
-    // The host's bridge went away between the relay and the direct path:
-    // nothing was sent, so it is held like any send with no bridge.
-    if (await ctx.holdIt('no bridge to the host', { provablyUnsent: true })) {
+  if (outcome.offline || outcome.notSent) {
+    // Nothing was sent: the host's bridge went away between the relay and the direct path,
+    // or the host answered that the line never went in (2026-11-25: with the Mac asleep, the
+    // dev box refused a CEO chat send as "a session of another Walnut", and the 503 lost the
+    // phone's words). Held like any send with no way through now; the Mac's relay, or the
+    // host once it takes it, delivers it (send-queue-sweep.ts).
+    // The host answered here, after saying no Mac is behind it: the Mac is the hop it waits on.
+    const why = outcome.offline ? 'no bridge to the host' : `the host did not take it (${outcome.message})`
+    if (await ctx.holdIt(why, outcome.offline ? { provablyUnsent: true } : { provablyUnsent: true, macLinkDown: true })) {
       res.status(202).json(await ctx.held())
       return
     }
-    sendError(res, 503, 'bridge_offline', notConnectedSentence(host, ctx.hostName))
+    sendError(res, 503, outcome.offline ? 'bridge_offline' : 'send_state_unavailable', outcome.offline ? notConnectedSentence(host, ctx.hostName) : NOT_SAVED_SENTENCE)
     return
   }
   sendError(res, 503, 'bridge_offline', relayFailureSentence(outcome.message, host, ctx.hostName, ctx.hostLabel))

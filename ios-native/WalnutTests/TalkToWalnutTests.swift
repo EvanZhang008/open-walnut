@@ -83,10 +83,12 @@ private final class FakeTalkSender: TalkSending, @unchecked Sendable {
     var startsChat = false
     /// Holds a send that starts the chat until released (Walnut ended mid-start).
     var holdStart = false
+    /// The server holds what arrives for a Mac that is away (`TalkDelivery.held`).
+    var holds = false
     private(set) var sent: [(text: String, messageId: String)] = []
     private var startGate: CheckedContinuation<Void, Never>?
 
-    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws {
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws -> TalkDelivery {
         try Task.checkCancellation()
         if startsChat {
             await beforeStart()
@@ -94,6 +96,7 @@ private final class FakeTalkSender: TalkSending, @unchecked Sendable {
         }
         if !failures.isEmpty { throw failures.removeFirst() }
         sent.append((text, messageId))
+        return holds ? .held : .delivered
     }
 }
 
@@ -141,9 +144,11 @@ private final class FakeMainTransport: TalkMainTransport, @unchecked Sendable {
         return sessionIds.isEmpty ? nil : sessionIds.removeFirst()
     }
 
-    func talkSend(sessionId: String, text: String, messageId: String) async throws {
+    var queued = false
+    func talkSend(sessionId: String, text: String, messageId: String) async throws -> Bool {
         calls.append("send:\(sessionId):\(text):\(messageId)")
         if let sendError { throw sendError }
+        return queued
     }
 
     func talkLaunch(taskId: String, message: String) async throws {
@@ -321,6 +326,48 @@ final class TalkSessionTests: XCTestCase {
         await talk.resendKept(source: "test")
         XCTAssertTrue(sender.sent.isEmpty, "the server is still away: nothing more is tried")
         XCTAssertEqual(outbox.unsent.count, 2)
+    }
+
+    /// 2026-11-25: with the Mac asleep, the cloud companion refused the CEO chat (501), the take
+    /// read as the server's refusal, and nothing sent it again: the words sat unseen in Settings.
+    /// A take the Mac (or the CEO's computer) being away stopped waits calmly and goes out by
+    /// itself, however many tries that takes, and goes once the Mac answers.
+    func testATakeTheMacBeingAwayStoppedWaitsAndGoesOutWhenItIsBack() async throws {
+        let away = APIError.server(status: 501, code: "not_supported_cloud", message: "The main agent is made on the primary box", serverHash: nil, serverContent: nil)
+        sender.failures = [away]
+        let talk = session()
+        try await pressTwice(talk)
+        XCTAssertEqual(talk.phase, .notSent(TalkReason.macAway, kept: true))
+        let ending = try XCTUnwrap(activity.ended.last?.state)
+        XCTAssertEqual(ending.later, true, "it goes out by itself: the island says Waiting, not Not sent")
+        XCTAssertFalse(ending.needsAttention)
+        let entry = try XCTUnwrap(outbox.unsent.first)
+        // Long past the resend limit (a night of tries), it still waits for the Mac, not the person.
+        outbox.update(entry.id) { $0.attempts = TalkSession.autoResendLimit * 4 }
+        XCTAssertTrue(TalkSession.waits(try XCTUnwrap(outbox.entry(entry.id))))
+        sender.failures = [APIError.server(status: 503, code: "needs_leader", message: "", serverHash: nil, serverContent: nil)]
+        await talk.resendKept(source: "retry-later")
+        XCTAssertTrue(sender.sent.isEmpty)
+        XCTAssertEqual(outbox.entry(entry.id)?.reason, TalkReason.macAway)
+        XCTAssertTrue(TalkSession.waits(try XCTUnwrap(outbox.entry(entry.id))))
+        // The Mac is back: it goes, under the message id it was first sent with.
+        await talk.resendKept(source: "app-active")
+        XCTAssertEqual(sender.sent.map(\.messageId), [entry.messageId])
+        XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    /// The server took the words and holds them for a Mac that is away: sent, and it says when
+    /// the CEO gets them.
+    func testATakeTheServerHoldsForTheMacSaysSo() async throws {
+        sender.holds = true
+        let talk = session()
+        try await pressTwice(talk)
+        XCTAssertEqual(talk.phase, .sent("hello"))
+        XCTAssertTrue(talk.sentHeld)
+        XCTAssertTrue(outbox.entries.isEmpty, "the server has it: nothing is kept on the phone")
+        sender.holds = false
+        try await pressTwice(talk)
+        XCTAssertFalse(talk.sentHeld, "a take that reached the CEO is not said to wait")
     }
 
     func testATakeTriedTooOftenWaitsForThePerson() async throws {
@@ -1414,10 +1461,11 @@ private final class GatedSender: TalkSending, @unchecked Sendable {
     private var opened = false
     private(set) var count = 0
 
-    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws {
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws -> TalkDelivery {
         count += 1
-        if opened { return }
+        if opened { return .delivered }
         await withCheckedContinuation { continuation = $0 }
+        return .delivered
     }
 
     func open() {
@@ -1525,6 +1573,18 @@ final class TalkMainSenderTests: XCTestCase {
         XCTAssertEqual(transport.calls, ["orgMain", "detail:task-main", "send:sess-main:create a task:qm-mobile-abc"])
     }
 
+    func testWordsTheServerHoldsForTheMacReadAsHeld() async throws {
+        let transport = FakeMainTransport()
+        transport.queued = true
+        let sender = TalkMainSender(transport: { transport }, isPaired: { true })
+        let delivery = try await sender.send(text: "for later", messageId: "qm-mobile-abc")
+        XCTAssertEqual(delivery, .held)
+        transport.queued = false
+        transport.sessionIds = ["sess-main"]
+        let now = try await sender.send(text: "now", messageId: "qm-mobile-abd")
+        XCTAssertEqual(now, .delivered)
+    }
+
     func testACEOWithNoSessionStartsWithTheseWords() async throws {
         let transport = FakeMainTransport()
         transport.sessionIds = [nil]
@@ -1566,6 +1626,11 @@ final class TalkMainSenderTests: XCTestCase {
             (APIError.unauthorized, "Your Walnut server did not accept this iPhone. Open Walnut to check its connection."),
             (APIError.network(underlying: URLError(.cannotConnectToHost)), "Walnut server unavailable."),
             (APIError.server(status: 501, code: "x", message: "", serverHash: nil, serverContent: nil), "The CEO can start only while your Mac is online."),
+            // The Mac (or the CEO's computer) is away: each reads as waiting for it, never as a refusal.
+            (APIError.server(status: 501, code: "not_supported_cloud", message: "The main agent is made on the primary box", serverHash: nil, serverContent: nil), TalkReason.macAway),
+            (APIError.server(status: 503, code: "needs_leader", message: "Needs your Mac.", serverHash: nil, serverContent: nil), TalkReason.macAway),
+            (APIError.server(status: 503, code: "primary_unreachable", message: "x", serverHash: nil, serverContent: nil), TalkReason.macAway),
+            (APIError.server(status: 503, code: "bridge_offline", message: "Can't reach clouddev right now.", serverHash: nil, serverContent: nil), TalkReason.hostAway),
             (APIError.server(status: 500, code: "x", message: "Disk full.", serverHash: nil, serverContent: nil), "Disk full."),
         ]
         for (error, expected) in cases {

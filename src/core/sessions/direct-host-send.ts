@@ -44,8 +44,11 @@ export type DirectSendOutcome =
    * The host could not be asked. `offline`: no bridge socket, nothing was sent.
    * `ambiguous`: a delivery request went out and its answer was lost, so the
    * message MAY have reached the CLI (never send it again without proof).
+   * `notSent`: the host answered, and its answer proves the line never went in
+   * (an error to `status`, a session another Walnut runs, a write it refused before
+   * any byte): the message may be held and tried again later.
    */
-  | { ok: false; kind: 'transport'; offline: boolean; ambiguous: boolean; message: string; hostJudged?: true };
+  | { ok: false; kind: 'transport'; offline: boolean; ambiguous: boolean; message: string; hostJudged?: true; notSent?: true };
 
 export interface DirectSendInput {
   host: string;
@@ -162,14 +165,14 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
     // the phone keeps the message and tries again, never told the session died (daemon-status-reply.ts).
     if (status.ok === false) {
       log.web.info('mobile send: the host answered status with an error; not sent', { sessionId, host, error: typeof status.error === 'string' ? status.error : undefined });
-      return { ok: false, kind: 'transport', offline: false, ambiguous: false, message: `The host is busy (${String(status.error ?? 'no answer')}); try again` };
+      return { ok: false, kind: 'transport', offline: false, ambiguous: false, notSent: true, message: `The host is busy (${String(status.error ?? 'no answer')}); try again` };
     }
     // The launch wait above can take seconds: look again.
     const stoppedSince = input.waitForLaunch ? await overtakenByStop(input) : null;
     if (stoppedSince) return stoppedSince;
     if (input.holdOnPrompt && status.exists === true && status.alive === true && status.pendingCtrl) {
       log.web.info('direct send held: the session waits on a permission prompt', { sessionId, host, messageId });
-      return { ok: false, kind: 'transport', offline: false, ambiguous: false, message: 'The session waits on a permission prompt' };
+      return { ok: false, kind: 'transport', offline: false, ambiguous: false, notSent: true, message: 'The session waits on a permission prompt' };
     }
     if (status.exists === true && status.alive === true) {
       // send-markers-v1: the marker is written inside the delivery (see the header).
@@ -199,7 +202,7 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
           return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_dead', message: 'Session process died mid-send' });
         }
         // The daemon answered, and did not write the line.
-        return notStarted({ ok: false, kind: 'transport', offline: false, ambiguous: false, message: `Send failed: ${reason}` });
+        return notStarted({ ok: false, kind: 'transport', offline: false, ambiguous: false, notSent: true, message: `Send failed: ${reason}` });
       }
       if (!ordered) await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {});
       log.web.info('mobile session send via bridge (direct)', { sessionId, host, messageId, path: 'live' });
@@ -215,6 +218,10 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
     if (resumed.reason === 'session_stopped') {
       return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_stopped', message: 'Message predates the latest stop; send a new message to continue' });
     }
+    if (!resumed.pid && resumed.errorKind === 'not_owner') {
+      // Another Walnut's session: this host takes it only through that Walnut, so it is no death.
+      return notStarted({ ok: false, kind: 'transport', offline: false, ambiguous: false, notSent: true, message: String(resumed.error ?? 'a session of another Walnut') });
+    }
     if (!resumed.pid) {
       return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_dead', message: String(resumed.error ?? 'resume failed') });
     }
@@ -225,9 +232,12 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
     const offline = err instanceof BridgeOfflineError;
     // BridgeOfflineError is raised only when there is no socket to write to, so
     // even mid-sequence it sent nothing: the request that failed never left.
+    // A failure before any request that can start a turn (the `status` ask timed out) sent
+    // nothing either: it may be held and tried again (`notSent`).
     const outcome: DirectSendOutcome = {
       ok: false, kind: 'transport', offline,
       ambiguous: delivering && !offline,
+      ...(!delivering && !offline ? { notSent: true as const } : {}),
       message: err instanceof Error ? err.message : String(err),
     };
     // An intent that could not be written: nothing went out.

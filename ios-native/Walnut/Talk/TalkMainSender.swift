@@ -6,14 +6,23 @@ import Foundation
 protocol TalkSending {
     /// `beforeStart` runs (and is awaited) before a request that carries no message
     /// id: the start of the CEO chat with these words.
-    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws
+    @discardableResult
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void) async throws -> TalkDelivery
+}
+
+/// Where words that went out are: in the CEO's chat, or held by the server the phone reached
+/// for a Mac that is away (the cloud companion's queue, which hands them over once it is back).
+enum TalkDelivery: Equatable {
+    case delivered
+    case held
 }
 
 /// The four calls the CEO chat send needs, a seam for the unit tests.
 protocol TalkMainTransport {
     func orgMain() async throws -> String
     func talkCurrentSession(taskId: String) async throws -> String?
-    func talkSend(sessionId: String, text: String, messageId: String) async throws
+    /// True when the server held the words for later (`SessionSendReceipt.queued`).
+    func talkSend(sessionId: String, text: String, messageId: String) async throws -> Bool
     func talkLaunch(taskId: String, message: String) async throws
 }
 
@@ -22,8 +31,8 @@ extension WalnutAPI: TalkMainTransport {
         try await taskDetail(id: taskId).currentSessionId
     }
 
-    func talkSend(sessionId: String, text: String, messageId: String) async throws {
-        _ = try await sendSessionMessage(id: sessionId, text: text, images: [], messageId: messageId)
+    func talkSend(sessionId: String, text: String, messageId: String) async throws -> Bool {
+        try await sendSessionMessage(id: sessionId, text: text, images: [], messageId: messageId).queued
     }
 
     func talkLaunch(taskId: String, message: String) async throws {
@@ -38,11 +47,14 @@ struct TalkMainSender: TalkSending {
     var transport: () -> TalkMainTransport = { WalnutAPI() }
     var isPaired: () -> Bool = { AppConfig.isConfigured }
 
-    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void = {}) async throws {
+    @discardableResult
+    func send(text: String, messageId: String, beforeStart: @escaping @Sendable () async -> Void = {}) async throws -> TalkDelivery {
         guard isPaired() else { throw APIError.notConfigured }
         let api = transport()
         let taskId = try await api.orgMain()
-        if try await sendToCurrentSession(api, taskId: taskId, text: text, messageId: messageId) { return }
+        if let held = try await sendToCurrentSession(api, taskId: taskId, text: text, messageId: messageId) {
+            return held ? .held : .delivered
+        }
         await beforeStart()
         // The start carries no message id (the server takes none there), so a
         // start whose answer was lost may still have delivered the words: say so
@@ -52,14 +64,15 @@ struct TalkMainSender: TalkSending {
         } catch APIError.network, APIError.cancelled {
             throw TalkSendError.startOutcomeUnknown
         }
+        return .delivered
     }
 
+    /// Nil when the CEO has no chat yet; else whether the server held the words.
     private func sendToCurrentSession(
         _ api: TalkMainTransport, taskId: String, text: String, messageId: String
-    ) async throws -> Bool {
-        guard let sessionId = try await api.talkCurrentSession(taskId: taskId), !sessionId.isEmpty else { return false }
-        try await api.talkSend(sessionId: sessionId, text: text, messageId: messageId)
-        return true
+    ) async throws -> Bool? {
+        guard let sessionId = try await api.talkCurrentSession(taskId: taskId), !sessionId.isEmpty else { return nil }
+        return try await api.talkSend(sessionId: sessionId, text: text, messageId: messageId)
     }
 
     /// The sentence a failed send shows, said so the person knows what to do.
@@ -71,6 +84,12 @@ struct TalkMainSender: TalkSending {
             return "This iPhone isn't connected to a Walnut server. Open Walnut to pair it."
         case APIError.unauthorized:
             return "Your Walnut server did not accept this iPhone. Open Walnut to check its connection."
+        // The server answered, but the CEO's chat needs a computer it cannot reach now: the words
+        // wait and go out by themselves when it is back (`TalkReason.waitsForComputer`).
+        case let away as APIError where away.isBridgeOffline:
+            return TalkReason.hostAway
+        case let away as APIError where away.isLeaderUnreachable:
+            return TalkReason.macAway
         case APIError.server(let status, _, let message, _, _) where status == 501:
             return message.isEmpty ? "The CEO can start only while your Mac is online." : message
         case APIError.server(_, _, let message, _, _) where !message.isEmpty:

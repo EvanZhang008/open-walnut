@@ -245,6 +245,9 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // daily guard run read that empty answer and wrote an empty run over the last real one).
   { method: 'GET', pattern: '/api/v1/org/nodes/:id/pains', away: 'needs-leader', why: 'pains_need_leader' },
   { method: 'GET', pattern: '/api/v1/org/nodes/:id/pains-tests', away: 'needs-leader', why: 'pains_need_leader' },
+  // The main agent's task: the phone asks before every word to the CEO. A replica answers the one
+  // its copy holds (org-v1.ts); only making one is the Mac's, and that still answers 501 here.
+  { method: 'POST', pattern: '/api/v1/org/main', away: 'read' },
   // The thread check's counts and its run live with the threads, on the leader only (core/org/thread-audit.ts).
   { method: 'GET', pattern: '/api/v1/thread-audit', away: 'needs-leader', why: 'threads_need_leader' },
   { method: 'POST', pattern: '/api/v1/thread-audit/run', away: 'needs-leader', why: 'threads_need_leader' },

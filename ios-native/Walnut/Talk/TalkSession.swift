@@ -97,6 +97,8 @@ final class TalkSession {
     private(set) var resending: Set<String> = []
     /// The words of the last take a Resend delivered, so the list the person
     /// tapped it in says it went out (its row leaves, as a Delete's does).
+    /// The take just sent was held by the server for a Mac that is away (`TalkDelivery.held`).
+    private(set) var sentHeld = false
     private(set) var lastResent: String?
     /// The last take a Resend delivered was copied, not sent.
     private(set) var lastResentCopied = false
@@ -153,8 +155,11 @@ final class TalkSession {
     /// tries left): it waits, calmly. Anything else needs the person.
     /// A dictation never waits: it goes only where the person sends or copies it, and
     /// copied later by itself it would replace whatever they copied since.
+    /// One that waits for the Mac (or the CEO's computer) to come back waits with no limit.
     static func waits(_ entry: TalkOutbox.Entry) -> Bool {
-        entry.copy != true && TalkReason.goesOutLater(entry.reason ?? "") && entry.attempts < autoResendLimit
+        let reason = entry.reason ?? ""
+        return entry.copy != true && TalkReason.goesOutLater(reason)
+            && (entry.attempts < autoResendLimit || TalkReason.waitsForComputer(reason))
     }
     @ObservationIgnored private var resendingKept = false
     /// Send or Cancel tapped on the Live Activity while the microphone still opens:
@@ -692,12 +697,13 @@ final class TalkSession {
         }
         do {
             let outbox = self.outbox
-            try await sender.send(text: text, messageId: entry.messageId) { @MainActor in
+            let delivery = try await sender.send(text: text, messageId: entry.messageId) { @MainActor in
                 outbox.update(entry.id) { $0.startingChat = true }
             }
             drop(entry.id)
-            AppLog.info("talk", "sent", ["chars": String(text.count), "live": live ? "true" : "false"])
+            AppLog.info("talk", "sent", ["chars": String(text.count), "live": live ? "true" : "false", "held": delivery == .held ? "true" : "false"])
             if live {
+                sentHeld = delivery == .held
                 phase = .sent(text)
                 cue(.sent)
                 activity.end(state(.sent, words: text), linger: sentLinger)

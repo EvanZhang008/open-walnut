@@ -191,6 +191,9 @@ final class ChatStore {
     /// failed, and "Not sent. Tap to retry." stood under the message's own row).
     /// Cleared with `inconclusiveSends`.
     @ObservationIgnored private(set) var sendsShownByServer: Set<String> = []
+    /// Words sends whose POST is still out (`performSend`), so a chat opened again meanwhile
+    /// draws their kept copy as going, never as failed (`restoreFileSends`).
+    @ObservationIgnored private var wordSendsInFlight: Set<String> = []
 
     /// Console agents (Walnut = main, Mentor, Note Assistant, …).
     var agents: [AgentSummary] = []
@@ -873,6 +876,7 @@ final class ChatStore {
             // banked entry whose message the server shows by id is delivered: it
             // leaves the disk too, so nothing automatic posts it again.
             let keptIDs = Set(localOnly.map(\.id))
+            let keptFileSends = Set(messages.filter { $0.localFiles?.isEmpty == false }.map(\.id))
             let arrivedSends = messages.map(\.id).filter { rowID in
                 (self.inconclusiveSends.contains(rowID) || shownByServer.contains(rowID))
                     && !keptIDs.contains(rowID)
@@ -898,7 +902,10 @@ final class ChatStore {
             let survivingLocalIDs = Set(localOnly.map(\.id))
             localRowConversation = localRowConversation.filter { survivingLocalIDs.contains($0.key) }
             inconclusiveSends.formIntersection(survivingLocalIDs)
-            for rowID in arrivedSends { dropQueueEntry(rowID) }
+            for rowID in arrivedSends {
+                dropQueueEntry(rowID)
+                if !keptFileSends.contains(rowID) { dropKeptWords(rowID, conversationID: id, agentID: activeAgentID) }
+            }
             // Freeze-report context: rows handed to SwiftUI for layout.
             FreezeContext.shared.setHistoryRows(messages.count)
             // The PAGE decides whether there is more history, so this stays the
@@ -1363,7 +1370,13 @@ final class ChatStore {
             // Tag the echo with its conversation (a new chat has none yet — tagged
             // below, once createConversation names it).
             if let target { localRowConversation[optimistic.id] = target }
+            // On disk until the server has it, like a file send (`PendingFileSends`): a failed
+            // bubble lived only in memory, so an app that ended lost the words (2026-11-25).
+            PendingFileSends.save(outboxEntry(for: optimistic, key: PendingFileSends.chatKey(conversationID: target, agentID: agentID)),
+                                  images: jpegDatas)
+            wordSendsInFlight.insert(optimistic.id)
         }
+        defer { if drain == nil { wordSendsInFlight.remove(optimistic.id) } }
         // Sending explicitly accepts a re-pin: the user wants to see their own
         // message land even if they were reading history.
         bottomPinned = true
@@ -1427,6 +1440,7 @@ final class ChatStore {
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
                 messages[idx].pending = false
             }
+            if drain == nil { dropKeptWords(optimistic.id, conversationID: convID, agentID: agentID) }
             rememberSentImages(text: text, datas: jpegDatas)
             // If the store went inactive meanwhile the turn is genuinely running:
             // do NOT mark it failed (that would duplicate the message on retry);
@@ -1472,6 +1486,7 @@ final class ChatStore {
                 AppLog.info("chat", "a send whose answer was lost is on the server", [
                     "messageId": messageId, "conversationID": convID ?? "-",
                 ])
+                if drain == nil { dropKeptWords(optimistic.id, conversationID: convID, agentID: agentID) }
                 return .accepted
             }
             if posted && Self.sendMayHaveArrived(error) {
@@ -1632,6 +1647,8 @@ final class ChatStore {
         // Rebuild the attached images from the retained JPEG datas so retry
         // re-sends them (no loss); silently drop any that no longer decode.
         let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
+        // Its kept copy goes with it: the send below keeps the words again, under its new bubble.
+        dropKeptWords(message.id, conversationID: localRowConversation[message.id] ?? activeID, agentID: activeAgentID)
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
         inconclusiveSends.remove(message.id)
@@ -1650,6 +1667,8 @@ final class ChatStore {
         if let key = fileSendKeys[message.id] {
             PendingFileSends.remove(session: key, bubble: message.id)
             forgetFileSend(message.id)
+        } else {
+            dropKeptWords(message.id, conversationID: localRowConversation[message.id] ?? activeID, agentID: activeAgentID)
         }
         messages.removeAll { $0.id == message.id }
         localRowConversation[message.id] = nil
@@ -1729,6 +1748,16 @@ final class ChatStore {
         if fileSendQueuedBefore[bubbleID] == nil { fileSendQueuedBefore[bubbleID] = queuedBefore }
     }
 
+    /// A words send's kept copy goes (the server has it, or the person retried or deleted it).
+    /// It is kept under its chat's key, a new chat's until its conversation is made (and moved
+    /// with the new chat's file sends only when that chat was still on screen), so both are looked in.
+    private func dropKeptWords(_ bubbleID: String, conversationID: String?, agentID: String) {
+        PendingFileSends.remove(session: PendingFileSends.chatKey(conversationID: nil, agentID: agentID), bubble: bubbleID)
+        if let conversationID {
+            PendingFileSends.remove(session: PendingFileSends.chatKey(conversationID: conversationID, agentID: agentID), bubble: bubbleID)
+        }
+    }
+
     private func outboxEntry(for bubble: ChatMessage, key: String, failed: Bool = false) -> PendingFileSends.Entry {
         PendingFileSends.Entry(
             bubbleID: bubble.id, messageID: bubble.clientMessageId, sessionID: key, text: bubble.text,
@@ -1750,6 +1779,19 @@ final class ChatStore {
             var bubble = ChatMessage(id: entry.bubbleID, role: "user", text: entry.text,
                                      createdAt: entry.createdAt, kind: nil)
             bubble.clientMessageId = entry.messageID
+            if entry.files.isEmpty {
+                // Words alone (`performSend`), back as they were left and never sent again by
+                // themselves: still going, it shows going; any other is the person's to retry
+                // (under the same id, which the server answers once) or delete.
+                let jpegs = PendingFileSends.images(of: entry)
+                if !jpegs.isEmpty { bubble.localImages = jpegs }
+                bubble.pending = wordSendsInFlight.contains(entry.bubbleID)
+                bubble.failed = bubble.pending != true
+                messages.append(bubble)
+                if let activeID { localRowConversation[entry.bubbleID] = activeID }
+                AppLog.info("chat", "kept words put back", ["key": key, "going": bubble.pending == true ? "true" : "false"])
+                continue
+            }
             bubble.localFiles = kept.map(\.file)
             bubble.uploadHeld = fileSendHeld[entry.bubbleID] ?? entry.held
             let jpegs = PendingFileSends.images(of: entry)

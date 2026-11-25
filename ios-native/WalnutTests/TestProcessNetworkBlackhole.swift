@@ -63,6 +63,13 @@ final class WalnutTestsPrincipal: NSObject, XCTestObservation {
     func testBundleWillStart(_ testBundle: Bundle) {
         Self.install()
     }
+
+    /// Every test starts with no kept sends: a session page keeps each send on disk until it is
+    /// accepted (`PendingFileSends`, words alone too), and one a test left failed or waiting would
+    /// come back on the next test's page of the same session id.
+    func testCaseWillStart(_ testCase: XCTestCase) {
+        PendingFileSends.eraseAll()
+    }
 }
 
 /// Minimal strong-reference box (the test bundle has no other need for one).

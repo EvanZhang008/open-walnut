@@ -480,13 +480,15 @@ final class SessionConversationStore {
             var bubble = ChatMessage(id: entry.bubbleID, role: "user", text: entry.text,
                                      createdAt: entry.createdAt, kind: nil)
             bubble.clientMessageId = entry.messageID
-            bubble.localFiles = kept.map(\.file)
+            // Words alone (and pictures) are kept here too (`send`): no files, no file cards.
+            if !kept.isEmpty { bubble.localFiles = kept.map(\.file) }
             bubble.uploadHeld = entry.held
             let jpegs = PendingFileSends.images(of: entry)
             if !jpegs.isEmpty { bubble.localImages = jpegs }
             if entry.voice { voiceBubbleIDs.insert(entry.bubbleID) }
-            // No baseline: only a row naming this send's own upload ids is its
-            // row (`rowShows`), so an older row can never take it.
+            // No baseline: only a row naming this send's own upload ids (or, for words
+            // alone, its message id first: `bubblesAbsorbed`) is its row, so an older
+            // row can never take it.
             sendBaselines[entry.bubbleID] = []
             AppLog.info("session-upload", "file send put back", [
                 "sessionId": sessionId, "bubbleId": entry.bubbleID,
@@ -542,8 +544,8 @@ final class SessionConversationStore {
             restoredWaiting.removeAll { $0 == bubble.id }
             guard let current = pendingUser.first(where: { $0.id == bubble.id }), current.pending == true else { continue }
             if FileSendFlights.wasAccepted(bubble.id)
-                || (rows ?? []).contains(where: { Self.rowShows(current, row: $0) })
-                || historyMessages.contains(where: { $0.isUser && $0.kind == nil && Self.rowShows(current, row: $0) }) {
+                || (rows ?? []).contains(where: { Self.rowIsRestoredSend(current, row: $0) })
+                || historyMessages.contains(where: { $0.isUser && $0.kind == nil && Self.rowIsRestoredSend(current, row: $0) }) {
                 AppLog.info("session-upload", "kept file send was already taken", ["sessionId": sessionId, "bubbleId": bubble.id])
                 markAccepted(bubble.id)
                 continue
@@ -909,6 +911,14 @@ final class SessionConversationStore {
             gone.insert(bubble.id)
         }
         return gone
+    }
+
+    /// A transcript row is a put-back send's own: by the message id it was delivered from when
+    /// the row names one (a current server), whatever its words, so the same words sent earlier
+    /// ("yes", "ok") never pass for it and drop it unsent; by shape and words otherwise.
+    static func rowIsRestoredSend(_ bubble: ChatMessage, row: ChatMessage) -> Bool {
+        if let id = row.walnutMessageId { return id == bubble.clientMessageId }
+        return rowShows(bubble, row: row)
     }
 
     /// Whether a transcript row has this bubble's shape and words. The row's text is
@@ -1388,16 +1398,16 @@ final class SessionConversationStore {
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
         // Files are uploaded first, then the message names their paths (`deliver`).
-        // Until the server has it, the send exists only here: keep it on disk, so
-        // the app being ended mid-upload does not lose it (`PendingFileSends`).
-        if !files.isEmpty {
-            optimistic.localFiles = files
-            PendingFileSends.save(PendingFileSends.Entry(
-                bubbleID: optimistic.id, messageID: optimistic.clientMessageId, sessionID: sessionId,
-                text: text, createdAt: optimistic.createdAt, voice: voice,
-                files: files.map(PendingFileSends.ref), held: [:], imageCount: jpegDatas.count, savedAt: Date()
-            ), images: jpegDatas)
-        }
+        if !files.isEmpty { optimistic.localFiles = files }
+        // Until the server has it, the send exists only here: keep it on disk, words
+        // alone too, so the app being ended (mid-upload, or while a send waits out a
+        // Mac that is away, then settles as not sent) does not lose it
+        // (`PendingFileSends`). 2026-11-25: a words-only send lived in memory only.
+        PendingFileSends.save(PendingFileSends.Entry(
+            bubbleID: optimistic.id, messageID: optimistic.clientMessageId, sessionID: sessionId,
+            text: text, createdAt: optimistic.createdAt, voice: voice,
+            files: files.map(PendingFileSends.ref), held: [:], imageCount: jpegDatas.count, savedAt: Date()
+        ), images: jpegDatas)
         sendBaselines[optimistic.id] = Set(historyMessages.lazy.filter(\.isUser).map(\.id))
         closeRun(before: optimistic.id)
         pendingUser.append(optimistic)
@@ -1450,15 +1460,14 @@ final class SessionConversationStore {
     /// its outcome, and the whole attempt, uploads, POST and the kept copy's
     /// removal, holds background time, so a phone locked after the uploads still
     /// gets the server's answer and the kept copy is not sent again later.
+    /// A send of words alone goes the same way (no uploads): it is kept on disk as well
+    /// (`send`), so a page opened again while it runs must wait for it, never post it again.
     @discardableResult
     private func deliver(
         bubbleID: String, messageId: String?, text: String, jpegDatas: [Data],
         attempt: Int, firstFailureAt: Date?
     ) async -> Bool {
-        guard let files = pendingUser.first(where: { $0.id == bubbleID })?.localFiles, !files.isEmpty else {
-            return await deliverAttempt(bubbleID: bubbleID, messageId: messageId, text: text, jpegDatas: jpegDatas,
-                                        attempt: attempt, firstFailureAt: firstFailureAt)
-        }
+        let files = pendingUser.first(where: { $0.id == bubbleID })?.localFiles ?? []
         let me = ObjectIdentifier(self)
         // A page of this session already got it taken (this one was left and
         // opened again): it is delivered, and its files are gone from the phone.
@@ -2908,9 +2917,9 @@ extension SessionConversationStore {
 
     /// The send of a sender that keeps its own copy of the words until they are
     /// delivered (the diff review): the server has them, a bubble holds them for
-    /// its retry (its message id, to ask about later), or nothing holds them. A
-    /// failed bubble lives only in memory, so the sender must not drop its copy
-    /// on `.held`: the app ending would lose the words.
+    /// its retry (its message id, to ask about later), or nothing holds them. The
+    /// sender still keeps its copy on `.held`: the bubble's kept record
+    /// (`PendingFileSends`) comes back only when this session's page opens again.
     func sendKeepingCopy(_ text: String) async -> ReviewSendResult {
         let before = Set(pendingUser.map(\.id))
         if await send(text) { return .delivered }

@@ -5,6 +5,7 @@
  *   GET  /org/reports[?of=id] → { of, rows }          one node's direct reports, compact (org_get);
  *                                                     `of` defaults to the calling session's task
  *   POST /org/main            → { task }              the main agent's task, made on first use
+ *                                                     (a replica answers the one its copy holds)
  *   POST /org/contact { to }  → { task, kind, project, started, launch? }
  *                                                     who `to` (a project or a task) means; a
  *                                                     project with no lead gets its lead here;
@@ -38,7 +39,7 @@ import { matchIdRef, missingIsNull } from '../../lib/id-ref.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { getOrgSettings, isDirectorsLayout, setOrgSettings } from '../../core/org/org-settings.js'
 import {
-  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
+  OrgError, contactLaunch, ensureMainTask, findMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
 import { createOrgNode, editOrgNode, editProjectVp, type OrgWriter } from '../../core/org/org-node-edit.js'
 import { orgDisplayTitle } from '../../core/org/org-tree.js'
@@ -143,6 +144,13 @@ orgV1Router.get('/org/reports', async (req: Request, res: Response, next: NextFu
 
 orgV1Router.post('/org/main', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    // A replica answers the main agent its copy holds: the phone asks this before every word to
+    // the CEO, and with the Mac away a 501 here lost them (2026-11-25, the Action Button's Send).
+    // Only making it is the primary's.
+    if (role() !== 'leader') {
+      const main = await findMainTask()
+      if (main) { res.json({ task: main }); return }
+    }
     primaryOnly('The main agent is made')
     res.json({ task: await ensureMainTask() })
   } catch (err) {

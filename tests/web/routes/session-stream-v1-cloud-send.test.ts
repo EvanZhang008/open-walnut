@@ -298,6 +298,39 @@ describe('direct fallback (old daemon / primary down)', () => {
     expect(cmds.indexOf('bridgeResume')).toBeLessThan(cmds.indexOf('appendUserMarker'))
   })
 
+  it.each([
+    ['refuses a session another Walnut runs', { status: { ok: false, errorKind: 'not_owner', error: 'status: a session of another Walnut' } }],
+    ['refuses its resume as another Walnut\'s', {
+      status: { exists: true, alive: false },
+      bridgeResume: { error: 'bridgeResume: a session of another Walnut', errorKind: 'not_owner' },
+    }],
+    ['answers status with an error', { status: { ok: false, error: 'status: shutting down' } }],
+    ['refuses the write before any byte', { status: { exists: true, alive: true }, send: { ok: false, error: 'send: a session of another Walnut' } }],
+  ])('a host that %s, with no Mac behind it, HOLDS the send (202), never a 503 that loses it', async (_why, replies: Record<string, unknown>) => {
+    // 2026-11-25: with the Mac asleep, the phone's Action Button note to the CEO went this way
+    // (relay: "no primary server connected"; direct: the host refused it as another Walnut's
+    // session), and the 503 left the words nowhere. The host sent nothing, so the send is held
+    // for the Mac's relay (macLinkDown: the note names the Mac) and the sweep tries it later.
+    bridgeRequestMock.mockImplementation(async (_host: string, cmd: string) => {
+      switch (cmd) {
+        case 'session.message': return { ok: false, error: 'session.message: no primary server connected' }
+        default:
+          if (cmd in replies) return replies[cmd]
+          throw new Error('unexpected command: ' + cmd)
+      }
+    })
+    const res = await request(createApp())
+      .post(`/api/v1/sessions/${SID}/messages`)
+      .send({ text: 'note for the CEO', messageId: 'qm-mobile-ceo000000001' })
+    expect(res.status).toBe(202)
+    expect(res.body).toMatchObject({ messageId: 'qm-mobile-ceo000000001', queued: true, waitingFor: '' })
+    expect(callsByCmd()).not.toContain('appendUserMarker')
+    const { listBankedSends } = await import('../../../src/core/send-queue.js')
+    const rows = (await listBankedSends()).filter((op) => op.messageId === 'qm-mobile-ceo000000001')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ provablyUnsent: true, macLinkDown: true, message: 'note for the CEO' })
+  })
+
   it('failed resume on the fallback path writes NO marker and is 409', async () => {
     bridgeRequestMock.mockImplementation(async (_host: string, cmd: string) => {
       switch (cmd) {

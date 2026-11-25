@@ -1,6 +1,8 @@
 import Foundation
 
-/// Messages with files that have not reached the server yet, kept on disk.
+/// Messages that have not reached the server yet, kept on disk: a session page's
+/// every send (words alone too, since 2026-11-25: one that waited out a Mac that was
+/// away lived only in memory, and an app that ended lost it), the main chat's file sends.
 ///
 /// A message with files is only POSTed once its files are on the session's host,
 /// so for the whole upload it exists nowhere but in this app. If iOS ends the app
