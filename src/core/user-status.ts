@@ -1093,6 +1093,20 @@ export function askAnswerText(form: Pick<AskForm, 'summary' | 'kind' | 'options'
   return `Answer to "${form.summary}": ${parts.join('. ') || '(no answer)'}`;
 }
 
+/** His answer from a card (askAnswerText): `Answer to "<ask>": <words>`. */
+export interface CardAnswer { ask: string; words: string }
+const CARD_ANSWER_RE = /^Answer to "([\s\S]*?)": ([\s\S]*)$/;
+
+/**
+ * The card answer a message is, or null: the reader of askAnswerText's frame, beside its writer. The
+ * ask is the agent's words, the rest his, so nothing in the ask is ever read as said by him (a
+ * question mark in it is no question of his: org/thread-question.ts). Pure.
+ */
+export function parseCardAnswer(text: string): CardAnswer | null {
+  const m = CARD_ANSWER_RE.exec(text.trim());
+  return m ? { ask: m[1].trim(), words: m[2].trim() } : null;
+}
+
 /** The task's own line for the state it is in (StatusLine), from its current report. */
 function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
   const r = reportIsCurrent(input) ? input.report : null;

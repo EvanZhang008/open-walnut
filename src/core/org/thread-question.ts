@@ -19,6 +19,7 @@
  * No store import here: the model and the stores import this.
  */
 import { experimentCache } from '../experimental-cache.js';
+import { parseCardAnswer } from '../user-status.js';
 import type { OrgThread, ThreadMessage, ThreadWriter } from './threads-model.js';
 
 const flag = experimentCache('threads_each_question');
@@ -110,10 +111,14 @@ function standsAlone(text: string): boolean {
 /**
  * Whether his message is a question of its own: a question mark (a link's or code's left aside), an
  * English interrogative, or a Chinese question form; long enough to stand alone; never a
- * plain reaction. By form only, no model. Leans towards yes: a statement read as a question only
+ * plain reaction, never his answer from a card. By form only, no model. Leans towards yes: a statement read as a question only
  * makes one more thread, a question read as a statement loses its thread. Pure.
  */
 export function asksQuestion(text: string): boolean {
+  // His answer from a card (`Answer to "<ask>": <words>`) answers a question, it asks none: the
+  // quoted ask is the agent's, and whatever he adds is about that ask (2026-11-25: such an answer
+  // opened a thread of its own for the ask's question mark, a second card for one matter).
+  if (parseCardAnswer(text)) return false;
   const t = text.replace(LINK_OR_CODE, ' ').trim();
   if (!t || isPlainReaction(t) || !standsAlone(t)) return false;
   return /[?\uff1f]/.test(t) || whAsks(t) || EN_AUX_ANYWHERE.test(t) || tagAsks(t) || EN_QUESTION.test(t) || ZH_QUESTION.test(t);

@@ -195,15 +195,8 @@ export function saysNotForUser(text: string): boolean { return NOT_FOR_USER_RE.t
 export function saysUnclearAsk(text: string): boolean { return UNCLEAR_ASK_RE.test(text); }
 export function saysUnreviewedDesign(text: string): boolean { return UNREVIEWED_DESIGN_RE.test(text); }
 
-/** His answer from a card (user-status.ts askAnswerText): `Answer to "<ask>": <words>`. */
-export interface CardAnswer { ask: string; words: string }
-const CARD_ANSWER_RE = /^Answer to "([\s\S]*?)": ([\s\S]*)$/;
-
-/** The card answer a message is, or null. The ask is the agent's words, the rest his. Pure. */
-export function parseCardAnswer(text: string): CardAnswer | null {
-  const m = CARD_ANSWER_RE.exec(text.trim());
-  return m ? { ask: m[1].trim(), words: m[2].trim() } : null;
-}
+// His answer from a card is read where its frame is written (user-status.ts askAnswerText).
+export { parseCardAnswer, type CardAnswer } from '../../user-status.js';
 export function recommends(text: string): boolean { return RECOMMENDS_RE.test(text); }
 export function opensWithOverrule(text: string): boolean { return OVERRULE_OPEN_RE.test(text); }
 export function isFollowUp(text: string): boolean { return FOLLOW_UP_RE.test(text); }
