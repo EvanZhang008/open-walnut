@@ -237,7 +237,7 @@ describe('leader protocol: the daemon', () => {
     // gatewayTargetFor picks among gatewayCandidates, which skips every socket that is not a server's.
     expect(fnBody(src, 'gatewayTargetFor')).toMatch(/gatewayCandidates\(false\)/)
     expect(fnBody(src, 'gatewayCandidates')).toMatch(/if \(!isServerClient\(client\) \|\| \(!withQuiet && isQuietTrustedClient\(client\)\)\) continue/)
-    expect(fnBody(src, 'sendTriggerEvent')).toMatch(/if \(isServerClient\(client\) && \(everyone \|\| triggerClientOf\(client, home\)\)\) \{/)
+    expect(fnBody(src, 'sendTriggerEventTo')).toMatch(/if \(isServerClient\(client\) && \(everyone \|\| triggerClientOf\(client, home\)\)\) \{/)
     expect(src).toMatch(/if \(isServerClient\(client\)\) sendEvent\(client, 'cron-metadata'/)
     // Only the socket the leader's configure tagged may say what server runs here.
     expect(fnBody(src, 'cmdServerConfigure')).toMatch(/gatewayClientHomes\.get\(ws\) !== home\) return sendError/)

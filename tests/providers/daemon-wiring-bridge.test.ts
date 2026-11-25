@@ -316,14 +316,14 @@ describe('cloud bridge', () => {
     // JS: the per-connection timer asks before it pings; its socket wrapper can destroy.
     // bun: one loop over every client, the bridge adapter skipped.
     const loop = standaloneSrc.slice(standaloneSrc.indexOf('const clientKeepaliveExpired'), standaloneSrc.indexOf('}, TRUSTED_CLIENT_BEAT_MS).unref?.()') + 40)
-    expect(loop).toMatch(/if \(ws\.data\?\.origin === 'bridge'\) continue\s*\n\s*if \(clientKeepaliveExpired\(ws\)\) continue\s*\n\s*try \{ ws\.ping\(\) \} catch \{\}/)
+    expect(loop).toMatch(/if \(ws\.data\?\.origin === 'bridge'\) continue\s*\n\s*if \(clientKeepaliveExpired\(ws\)\) continue\s*\n\s*(?:\/\/[^\n]*\n\s*)?try \{ ws\.ping\(String\(Date\.now\(\)\)\) \} catch \{\}/)
     // Every inbound frame counts as an answer, on the daemon.
     // bun: the door (daemon-door.ts) hands every frame to the runtime's handlers, which hear it first.
-    for (const h of [/open\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /message\(ws, text\) \{\s*\n\s*heardFrom\(ws\)/, /heard: \(ws\) => heardFrom\(ws\)/]) {
+    for (const h of [/open\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /message\(ws, text\) \{\s*\n\s*heardFrom\(ws\)/, /heard: \(ws, pong\) => heardFrom\(ws, /]) {
       expect(standaloneSrc).toMatch(h)
     }
     const doorSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-door.ts'), 'utf-8')
-    for (const h of [/ping: \(ws\) => handlers\.heard\(ws\)/, /pong: \(ws\) => handlers\.heard\(ws\)/, /message: \(ws, msg\) => handlers\.message\(/]) {
+    for (const h of [/ping: \(ws\) => handlers\.heard\(ws\)/, /pong: \(ws, data\) => handlers\.heard\(ws, data\)/, /message: \(ws, msg\) => handlers\.message\(/]) {
       expect(doorSrc).toMatch(h)
     }
     for (const h of [/wss\.on\('connection', \(ws\) => \{\s*\n\s*heardFrom\(ws\);/, /ws\.on\('pong', \(\) => heardFrom\(ws\)\);/, /ws\.on\('ping', \(\) => heardFrom\(ws\)\);/, /ws\.on\('message', \(msg\) => \{\s*\n\s*heardFrom\(ws\);/, /\/\/ pong\s*\n\s*ws\.emit\('ping'\);/]) {
