@@ -44,7 +44,8 @@ export interface WalnutServersInput {
 const bare = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
 /** A host that runs a server for this Walnut: its own switch, or it carries this Walnut's tunnel. */
-const runsServer = (h: HostServerEntry) => h.settings.enabled || !!h.settings.carriesTunnel;
+// A host whose switch is off but runs the service without a copy (core/host-server/copyless.ts) runs one too.
+const runsServer = (h: HostServerEntry) => h.settings.enabled || !!h.settings.carriesTunnel || h.view?.copyless === true;
 
 export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
   const rows: WalnutServerRow[] = [{
@@ -92,7 +93,7 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
       id: `host:${key}`,
       name: m.name,
       line: `${state.text}${address}`,
-      short: carrier ? `carries ${i.tunnelTitle}` : state.dot === 'done' ? 'a copy' : 'not running',
+      short: carrier ? `carries ${i.tunnelTitle}` : state.dot === 'done' ? (lead.view?.copyless ? 'no copy' : 'a copy') : 'not running',
       dot: state.dot,
       // The row whose server this is: its switch and its tunnel's settings live there
       // (HostServersGroup.tsx reads one row's settings), not always the named twin's.

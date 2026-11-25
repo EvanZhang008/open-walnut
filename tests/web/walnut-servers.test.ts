@@ -55,6 +55,12 @@ describe('walnutServerRows', () => {
   it('the overview line\'s few words: main, the companion\'s address, the tunnel a host carries', () => {
     expect(rows.map((r) => r.short)).toEqual(['main', 'companion.example.test', 'carries Acme Tunnel'])
   })
+  it('a host whose switch is off but runs the service without a copy shows, as "no copy"', () => {
+    const copyless = host({ hostKey: 'small-box', label: 'Small box', view: { ...running('small-box'), enabled: false, copyless: true } })
+    const out = walnutServerRows({ companion: null, hosts: [copyless, HOSTS[2]], tunnelTitle: 'Tunnel' })
+    expect(out.map((r) => [r.name, r.short])).toEqual([['This Mac', 'main'], ['Small box', 'no copy']])
+    expect(out[1].line).toBe('Running, without a copy of your data.')
+  })
   it('never says "browser link"', () => {
     for (const r of rows) expect(r.line).not.toMatch(/browser link/i)
   })
