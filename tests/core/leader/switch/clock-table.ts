@@ -275,6 +275,7 @@ export const STARTERS: Record<string, [StarterKind, string, string?]> = {
   'src/integrations/git-maintenance.ts': ['stopped', 'Self re-arming setTimeout tick (first at 10 min) running gc and history rewrites; stopped both here and in stopWritersForSwitch.', 'gitMaintenanceHandle.stop()'],
   'src/providers/model-window-store.ts': ['none', 'Listener that debounces 1s writes of cache/model-windows.json, which is rebuildable (cache default); fires only on a newly learned window.'],
   'src/web/connect-door.ts': ['stopped', 'Config subscriber that opens or closes the phone connect door (network, no leader data); the door is stopped.', 'phoneDoor?.stop()'],
+  'src/web/routes/slash-commands.ts': ['none', 'Boot read-back of the slash palette\'s kept host scans; its later writes go to cache/slash-palette.json (rebuildable) and the shutdown flushes them; no timer of its own.'],
   'src/web/expose-runtime.ts': ['stopped', 'Config subscriber and recheck setTimeout supervising the tunnel; it writes only local/expose-handover.json (machine-local); the runtime is stopped.', 'getExposeRuntime()?.stop()'],
 }
 
