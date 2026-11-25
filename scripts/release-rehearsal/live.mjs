@@ -31,9 +31,11 @@
  *                  person was active a moment ago; POST /api/system/update/check.
  *                  `live` goes downloading -> installed/waiting -> restarting,
  *                  the same port serves B, the process the terminal started is
- *                  still alive as the parent of the server, the task, the history,
- *                  the daemon and the session's CLI are the same, a third message
- *                  is answered, and bin/walnut runs B.
+ *                  still alive as the parent of the server, the task, the history
+ *                  and the session's CLI are the same, the session runtime is kept
+ *                  (a daemon program: the same pid; in the server's process: the
+ *                  new server's, the old one gone), a third message is answered,
+ *                  and bin/walnut runs B.
  *   live-again     POST /api/system/update/restart with nothing new answers 409;
  *                  C is published and the server (now supervised: exit 75 to the
  *                  parent) restarts into it the same way; a fourth message.
@@ -58,7 +60,7 @@ import { fileURLToPath } from 'node:url'
 import { nextVersion, setManifestVersion } from '../release.mjs'
 import { builtName } from '../release-files.mjs'
 import { packVersion, publishedTags } from './field-packs.mjs'
-import { alive, childrenOf, commandOf, cpuTicks, groupAlive, listenersOf, openPaths, parentOf, startedAt } from './live-proc.mjs'
+import { alive, childrenOf, commandOf, cpuTicks, daemonOf, groupAlive, listenersOf, openPaths, parentOf, startedAt } from './live-proc.mjs'
 import { startRegistry } from './registry.mjs'
 import { INSTALL_SH, systemPathWithoutNode } from './runtime.mjs'
 import { compareVersions } from './version-order.mjs'
@@ -165,6 +167,12 @@ async function installA(work, name, live, registry) {
       WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl,
       npm_config_registry: `${registry.url}/`,
       WALNUT_UPDATE_IDLE_MS: String(IDLE_MS),
+      // The session's CLI outlives a restart of the server, as on a person's machine, whose daemon
+      // dir keeps its sessions. Since 0f5d35bca6 the server holds the runtime in its own process
+      // (in_process_daemon) and an isolated dir's runtime ends its CLIs when it stops: this marks
+      // the dir as one that keeps them (local-daemon.ts defaultDaemonPersistence), as a deploy
+      // rehearsal's does. shutdown() still ends the CLIs its streams dir records.
+      WALNUT_DAEMON_PERSISTENT: '1',
     },
   })
   const bare = systemPathWithoutNode(path.join(work, 'system-bin'))
@@ -229,9 +237,38 @@ function treeOf(w) {
   return { parent, parentAlive: alive(parent), listeners, server, serverParent: server ? parentOf(server) : null, serverCmd: server ? commandOf(server) : '' }
 }
 
-function daemonOf(w) {
-  const read = (f) => { try { return fs.readFileSync(path.join(w.daemonDir, f), 'utf8').trim() } catch { return null } }
-  return Number(read('daemon.pid')) || null
+/**
+ * The session runtime of a serving install (live-serve): a daemon program of its own, alive, or
+ * the runtime inside the server's process (in_process_daemon, on by default since 0f5d35bca6),
+ * held by the server on the port. Never none: a stage that read none passed with "daemon null".
+ */
+export function judgeRuntimeServing({ daemon, server, isAlive = alive }) {
+  if (!daemon.pid) throw new Error('no session runtime: the daemon dir has no daemon.pid and no instance id of the server\'s process')
+  if (daemon.inProcess) {
+    if (daemon.pid !== server) throw new Error(`the runtime in the server's process names pid ${daemon.pid}, not the server ${server}`)
+    return `runtime in the server's process (pid ${daemon.pid})`
+  }
+  if (!isAlive(daemon.pid)) throw new Error(`the daemon ${daemon.pid} is not alive`)
+  return `daemon ${daemon.pid}`
+}
+
+/**
+ * The session runtime across a restart of the server into a newer release (live-update,
+ * live-again). A daemon program of its own outlives the server: the same pid, alive. The runtime
+ * in the server's process (since 0f5d35bca6) goes with the old server and the new one holds the
+ * next: it must be the new server's, the old one gone. One build never moves it between the two.
+ * Either way the session's CLI is kept, which the stage checks beside this.
+ */
+export function judgeRuntimeKept({ before, now, server, isAlive = alive }) {
+  if (!now.pid) throw new Error(`no session runtime after the restart (was ${before.inProcess ? 'in the server\'s process, pid' : 'the daemon'} ${before.pid})`)
+  if (!!now.inProcess !== !!before.inProcess) throw new Error(`the runtime moved ${before.inProcess ? 'out of' : 'into'} the server's process: pid ${before.pid} -> ${now.pid}`)
+  if (!before.inProcess) {
+    if (now.pid !== before.pid || !isAlive(now.pid)) throw new Error(`the daemon changed: ${before.pid} -> ${now.pid} (alive ${isAlive(now.pid)})`)
+    return `daemon ${now.pid} same`
+  }
+  if (now.pid !== server) throw new Error(`the runtime in the server's process names pid ${now.pid}, not the new server ${server}`)
+  if (isAlive(before.pid)) throw new Error(`the old server's runtime (pid ${before.pid}) still runs beside the new one (pid ${now.pid})`)
+  return `runtime in the server's process, pid ${before.pid} -> ${now.pid}`
 }
 
 function cliGroupOf(w, sid) {
@@ -340,20 +377,21 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const send = await w.api('POST', '/api/v1/messages', { to: state.sid, text: two.text })
       if (send.status !== 202) throw new Error(`POST /api/v1/messages answered ${send.status}`)
       await w.waitForAnswer(state.sid, two.answer)
-      state.daemon = daemonOf(w)
+      state.daemon = daemonOf(w.daemonDir)
       state.cli = cliGroupOf(w, state.sid)
       const up = await w.api('GET', '/api/system/update')
       const l = up.json?.live
       if (!l || l.state !== 'idle' || l.canInstall !== true) throw new Error(`live is ${JSON.stringify(l)}, expected idle and canInstall (install ${JSON.stringify(up.json?.install)})`)
       const tree = treeOf(w)
       if (!tree.server || tree.server === tree.parent || tree.serverParent !== tree.parent) throw new Error(`before any update the server on :${w.port} must be the child of the started process ${tree.parent}: ${JSON.stringify(tree)}`)
+      const runtime = judgeRuntimeServing({ daemon: state.daemon, server: tree.server })
       state.watch = watchParent(w)
       state.boots = new Set([tree.server])
       if (video) {
         recorder = startRecorder(w.base, video)
         await recorder.ready
       }
-      return `A ${V.a} on :${w.port} (started pid ${tree.parent} supervises; server ${tree.server} is its child; install kind ${up.json.install.kind}); task ${state.taskId}; session ${state.sid} answered 2; daemon ${state.daemon}; CLI group ${state.cli}; live ${l.state}, canInstall ${l.canInstall}`
+      return `A ${V.a} on :${w.port} (started pid ${tree.parent} supervises; server ${tree.server} is its child; install kind ${up.json.install.kind}); task ${state.taskId}; session ${state.sid} answered 2; ${runtime}; CLI group ${state.cli}; live ${l.state}, canInstall ${l.canInstall}`
     })
     const updated = serving && await scenario('live-update', async () => {
       const r = await updateTo(w, registry, V.b, 'A -> B')
@@ -362,8 +400,9 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       if (!(list.json?.tasks ?? []).some((t) => t.id === state.taskId && t.title === state.title)) throw new Error(`task ${state.taskId} is gone under B`)
       const messages = await w.waitForAnswer(state.sid, ask('two', state.marks[1]).answer, 60_000)
       if (!messages.some((m) => m.role === 'assistant' && m.text?.includes(ask('one', state.marks[0]).answer))) throw new Error('the first turn is gone from the history')
-      const daemonNow = daemonOf(w)
-      if (daemonNow !== state.daemon || !alive(daemonNow)) throw new Error(`the daemon changed: ${state.daemon} -> ${daemonNow} (alive ${alive(daemonNow)})`)
+      const daemonNow = daemonOf(w.daemonDir)
+      const kept = judgeRuntimeKept({ before: state.daemon, now: daemonNow, server: r.after.server })
+      state.daemon = daemonNow
       if (!groupAlive(state.cli)) throw new Error(`the session's CLI group ${state.cli} is gone`)
       const three = ask('three', state.marks[2])
       const send = await w.api('POST', '/api/v1/messages', { to: state.sid, text: three.text })
@@ -374,7 +413,7 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       if (word(printed) !== V.b) throw new Error(`bin/walnut --version says ${printed}`)
       if (linked(w) !== `../versions/${V.b}/walnut`) throw new Error(`bin/walnut -> ${linked(w)}`)
       if (fs.existsSync(path.join(w.walnutHome, 'local/update-unverified.json'))) throw new Error('update-unverified.json is still there after B served')
-      return `${r.states.join(' -> ')}; ${r.timeline}; parent ${r.after.parent} alive, server pid ${r.before.server} -> ${r.after.server} (child of ${r.after.serverParent}: ${r.after.serverCmd.slice(0, 120)}); task kept, history kept, daemon ${daemonNow} same, CLI group ${state.cli} alive${cliAfter !== state.cli ? ` (now ${cliAfter})` : ' (same)'}, third message answered; bin/walnut -> ${linked(w)}`
+      return `${r.states.join(' -> ')}; ${r.timeline}; parent ${r.after.parent} alive, server pid ${r.before.server} -> ${r.after.server} (child of ${r.after.serverParent}: ${r.after.serverCmd.slice(0, 120)}); task kept, history kept, ${kept}, CLI group ${state.cli} alive${cliAfter !== state.cli ? ` (now ${cliAfter})` : ' (same)'}, third message answered; bin/walnut -> ${linked(w)}`
     })
     if (recorder) {
       // Let the window show "Walnut updated to" for a while, then end the recording.
@@ -391,9 +430,12 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const send = await w.api('POST', '/api/v1/messages', { to: state.sid, text: four.text })
       if (send.status !== 202) throw new Error(`POST /api/v1/messages answered ${send.status}`)
       await w.waitForAnswer(state.sid, four.answer)
-      if (daemonOf(w) !== state.daemon) throw new Error(`the daemon changed under C: ${daemonOf(w)}`)
+      const daemonNow = daemonOf(w.daemonDir)
+      const kept = judgeRuntimeKept({ before: state.daemon, now: daemonNow, server: r.after.server })
+      state.daemon = daemonNow
+      if (!groupAlive(state.cli)) throw new Error(`the session's CLI group ${state.cli} is gone under C`)
       if (word(w.version()) !== V.c) throw new Error(`bin/walnut --version says ${w.version()}`)
-      return `restart with nothing new: 409 no_update; ${r.states.join(' -> ')}; ${r.timeline}; parent ${r.after.parent} still the same, server ${r.before.server} -> ${r.after.server}; fourth message answered; daemon ${state.daemon} same`
+      return `restart with nothing new: 409 no_update; ${r.states.join(' -> ')}; ${r.timeline}; parent ${r.after.parent} still the same, server ${r.before.server} -> ${r.after.server}; fourth message answered; ${kept}, CLI group ${state.cli} alive`
     })
     if (again) await scenario('live-stop', async () => {
       const tree = treeOf(w)
@@ -410,11 +452,11 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const left = listenersOf(w.port)
       if (left.length) throw new Error(`still listening on :${w.port}: ${left.map((p) => `${p} ${commandOf(p)}`).join('; ')}`)
       const orphans = childrenOf(1).filter((p) => /walnut/.test(commandOf(p)) && commandOf(p).includes(' web'))
-      const daemonAlive = alive(state.daemon)
+      const daemonAlive = alive(state.daemon.pid)
       const watched = state.watch.stop()
       if (watched.violations.length) throw new Error(`the started process ${tree.parent} did server work: ${watched.violations.slice(0, 5).join('; ')}`)
       const said = parentLog(w, tree.parent, state.boots.size)
-      return `parent ${tree.parent} exited (code ${end.code}, signal ${end.signal}) in ${ms}ms; child ${child} gone; nothing on :${w.port}; reparented walnut web processes: ${orphans.length}; daemon ${state.daemon} ${daemonAlive ? 'still runs (by design)' : 'gone'}; the started process over ${watched.samples} samples: never listened, never opened a data file, ${watched.cpu} CPU ticks; ${said}`
+      return `parent ${tree.parent} exited (code ${end.code}, signal ${end.signal}) in ${ms}ms; child ${child} gone; nothing on :${w.port}; reparented walnut web processes: ${orphans.length}; ${state.daemon.inProcess ? `the runtime in the server's process (pid ${state.daemon.pid}) ended with it` : `daemon ${state.daemon.pid} ${daemonAlive ? 'still runs (by design)' : 'gone'}`}; the started process over ${watched.samples} samples: never listened, never opened a data file, ${watched.cpu} CPU ticks; ${said}`
     })
     if (w) await w.shutdown()
 

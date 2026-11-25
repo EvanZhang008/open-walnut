@@ -92,6 +92,7 @@ import { readFieldJson } from './field-packs.mjs'
 import { PACKAGE, UPSTREAM, publishedVersion, startRegistry } from './registry.mjs'
 import { ArchiveWalnut, publishLocally, serveReleases } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
+import { daemonOf as daemonIn } from './live-proc.mjs'
 import { compareVersions } from './version-order.mjs'
 
 const nonce = () => crypto.randomBytes(4).toString('hex')
@@ -163,15 +164,8 @@ export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch,
 }
 
 /** The install's daemon dir: the running daemon's version and pid. */
-function daemonOf(w) {
-  const read = (f) => { try { return fs.readFileSync(path.join(w.daemonDir, f), 'utf8').trim() } catch { return null } }
-  const pid = Number(read('daemon.pid')) || null
-  if (pid) return { version: read('daemon.version'), pid }
-  // A runtime in the server's process (experiment in_process_daemon, on by default since 2026-11-24)
-  // writes no daemon.pid: its instance id (`d-<pid>-<rand>`) names the process that holds it.
-  const inProcess = /^d-(\d+)-/.exec(read('daemon.instance') ?? '')
-  return inProcess ? { version: read('daemon.version'), pid: Number(inProcess[1]), inProcess: true } : { version: read('daemon.version'), pid: null }
-}
+// A daemon program's pid, or the server's own when it holds the runtime in its process (live-proc.mjs).
+const daemonOf = (w) => daemonIn(w.daemonDir)
 
 const alive = (pid) => { if (!pid || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
 const groupAlive = (pgid) => { if (!pgid || pgid <= 1) return false; try { process.kill(-pgid, 0); return true } catch { return false } }

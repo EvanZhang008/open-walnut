@@ -118,3 +118,17 @@ export function cpuTicks(pid) {
     return Number(cols[11]) + Number(cols[12])
   } catch { return null }
 }
+
+/**
+ * The session runtime that serves `daemonDir`: a daemon program of its own (the pid its
+ * daemon.pid records), or the runtime inside the server's own process (experiment
+ * in_process_daemon, on by default since 0f5d35bca6), which writes no daemon.pid and names its
+ * process in its instance id (`d-<pid>-<rand>`). pid null: neither is there.
+ */
+export function daemonOf(daemonDir) {
+  const read = (f) => { try { return fs.readFileSync(`${daemonDir}/${f}`, 'utf8').trim() } catch { return null } }
+  const pid = Number(read('daemon.pid')) || null
+  if (pid) return { version: read('daemon.version'), pid }
+  const inProcess = /^d-(\d+)-/.exec(read('daemon.instance') ?? '')
+  return inProcess ? { version: read('daemon.version'), pid: Number(inProcess[1]), inProcess: true } : { version: read('daemon.version'), pid: null }
+}
