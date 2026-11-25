@@ -268,6 +268,9 @@ test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on 
   const primaries = await flat('#plugin-store .btn-primary')
   for (const id of await installedCardIds(page)) {
     await openPluginDetail(page, id)
+    // A plugin that needs setup leads with its settings form, whose Save is its primary; the form
+    // loads after the page (PluginConfigCards' "Loading settings..."), so read once nothing loads.
+    await expect(page.locator('[data-testid="plugin-detail"] .empty-state[data-kind="loading"]')).toHaveCount(0)
     primaries.push(...await flat('[data-testid="plugin-detail"] .btn-primary'))
     await backToApps(page)
   }
