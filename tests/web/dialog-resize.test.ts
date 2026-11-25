@@ -107,6 +107,15 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+function walkSources(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) walkSources(p, out);
+    else if (/\.tsx?$/.test(p)) out.push(p);
+  }
+  return out;
+}
+
 /** Dialogs that keep their own size, and why (none today). */
 const NO_RESIZE: Record<string, string> = {};
 
@@ -139,5 +148,26 @@ describe('every dialog is resizable by construction', () => {
       .filter((f) => !f.endsWith('DialogResizeEdges.tsx') && readFileSync(f, 'utf8').includes('data-no-dialog-resize'))
       .map((f) => f.slice(WEB_SRC.length + 1));
     expect(opted.sort()).toEqual(Object.keys(NO_RESIZE).sort());
+  });
+
+  it('steps aside while a full screen sheet inside the dialog covers the window, for every kind of sheet', async () => {
+    // Every component that goes full screen retains the area (useFullscreenArea); each names the
+    // mark it carries while full screen in FULLSCREEN_SHEETS, which the layer looks for in its dialog.
+    const { FULLSCREEN_SHEETS, FULLSCREEN_SHEET_SELECTOR } = await import('../../web/src/components/layout/fullscreen-area');
+    const callers = walkSources(WEB_SRC)
+      .filter((f) => !f.endsWith('fullscreen-area.ts') && readFileSync(f, 'utf8').includes('useFullscreenArea('))
+      .map((f) => f.slice(WEB_SRC.length + 1));
+    expect(callers.sort(), 'a new full screen sheet: add the mark it carries while full screen to FULLSCREEN_SHEETS').toEqual(Object.keys(FULLSCREEN_SHEETS).sort());
+    for (const [file, selector] of Object.entries(FULLSCREEN_SHEETS)) {
+      const token = selector.match(/^\[([\w-]+)/)?.[1] ?? selector.replace(/^\./, '');
+      expect(readFileSync(join(WEB_SRC, file), 'utf8'), `${file} carries ${selector}`).toContain(token);
+    }
+    const src = readFileSync(join(WEB_SRC, 'components', 'common', 'DialogResizeEdges.tsx'), 'utf8');
+    expect(src).toContain('querySelector(FULLSCREEN_SHEET_SELECTOR)');
+    expect(src).toMatch(/attributeFilter: \[[^\]]*'data-fullscreen'/);
+    const { document } = parseHTML('<div class="wn-dialog"><div class="drawing-workspace" data-fullscreen="true"></div></div><div class="wn-dialog"><div class="drawing-workspace" data-fullscreen="false"></div></div>');
+    const [inSheet, plain] = [...document.querySelectorAll('.wn-dialog')];
+    expect(inSheet.querySelector(FULLSCREEN_SHEET_SELECTOR)).not.toBeNull();
+    expect(plain.querySelector(FULLSCREEN_SHEET_SELECTOR)).toBeNull();
   });
 });

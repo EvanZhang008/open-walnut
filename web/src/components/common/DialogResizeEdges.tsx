@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { FULLSCREEN_SHEET_SELECTOR } from '@/components/layout/fullscreen-area';
 import { applyDialogSize, clampDialogSize, dialogKind, keepDialogSize, storedDialogSize, DIALOG_WINDOW_GAP, type DialogSize } from '@/utils/dialog-size';
 import '@/styles/dialog-resize.css';
 
@@ -174,6 +175,8 @@ export function DialogResizeEdges() {
     let dirty = true;
     let top: HTMLElement | null = null;
     let last: Box | null = null;
+    // A full screen sheet inside the dialog covers the window: no edges on the panel under it.
+    let covered = false;
     const look = () => {
       frame = 0;
       if (dirty || (top && !top.isConnected)) {
@@ -186,17 +189,18 @@ export function DialogResizeEdges() {
           const kept = kind ? storedDialogSize(kind) : null;
           if (kept) applyDialogSize(top, clampDialogSize(kept, { width: window.innerWidth, height: window.innerHeight }));
         }
+        covered = !!top?.querySelector(FULLSCREEN_SHEET_SELECTOR);
         const now = top;
         setDialog((d) => (d === now ? d : now));
       }
-      const next = top ? boxOf(top) : null;
+      const next = top && !covered ? boxOf(top) : null;
       if (!sameBox(last, next)) { last = next; setBox(next); if (next) placeStrips(next); }
       if (top) frame = requestAnimationFrame(look);
     };
     const wake = () => { dirty = true; if (!frame) frame = requestAnimationFrame(look); };
     wakeRef.current = wake;
     const mo = new MutationObserver(wake);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden'] });
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'data-fullscreen'] });
     window.addEventListener('resize', wake);
     wake();
     return () => {

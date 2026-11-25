@@ -77,6 +77,21 @@ export const fullscreenArea = createFullscreenArea((value) => {
   document.documentElement.style.setProperty(FULLSCREEN_LEFT_VAR, value);
 });
 
+/**
+ * What each full screen sheet carries while it is full screen, by the file that retains the area.
+ * A sheet inside a dialog covers the window, not the dialog's panel, so the dialog's resize edges
+ * (components/common/DialogResizeEdges.tsx) step aside while one is there: they would sit on the
+ * sheet's own controls (2026-11-25: the drawing dialog's Exit full screen button lay under the top
+ * edge and took no click). tests/web/dialog-resize.test.ts fails on a caller of useFullscreenArea
+ * missing here.
+ */
+export const FULLSCREEN_SHEETS: Record<string, string> = {
+  'components/drawing/DrawingWorkspace.tsx': '[data-fullscreen="true"]',
+  'components/common/FileContentView.tsx': '.fv-fullscreen',
+  'hooks/useFullscreen.tsx': '.open-walnut-fullscreen',
+};
+export const FULLSCREEN_SHEET_SELECTOR = Object.values(FULLSCREEN_SHEETS).join(', ');
+
 /** Call from every component whose full screen rule reads `--fullscreen-left`. */
 export function useFullscreenArea(active: boolean): void {
   useLayoutEffect(() => (active ? fullscreenArea.retain() : undefined), [active]);
