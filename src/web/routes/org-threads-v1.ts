@@ -439,6 +439,9 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   else if (watch !== undefined) throw new RouteError(400, 'bad_request', 'watch must be true or false.')
   if (typeof b.watch_at === 'string') patch.watch_at = b.watch_at
   else if (b.watch_at !== undefined) throw new RouteError(400, 'bad_request', 'watch_at must be an ISO datetime.')
+  // With a merge, user_words are his words asking to combine the threads (mergeThreads), no change of this thread.
+  const combineWords = mergeInto ? patch.user_words : undefined
+  if (mergeInto) delete patch.user_words
   // A merge removes this thread: anything else asked of it would be written and then lost.
   if (mergeInto && Object.keys(patch).length) {
     throw new RouteError(400, 'bad_request', `merge_into goes alone (this thread is gone after the merge, so ${Object.keys(patch).join(', ')} would be lost): send { merge_into } by itself, then change ${mergeInto} with its own update.`)
@@ -462,7 +465,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     const { mergeAcrossTree } = await import('../../core/org/thread-tree-merge.js')
     const across = await mergeAcrossTree({ from: task, threadId: id, intoId: mergeInto, by })
     if (across) mergedOn = across.on
-    thread = across ? across.thread : await mergeThread(task.id, id, mergeInto, by)
+    thread = across ? across.thread : await mergeThread(task.id, id, mergeInto, by, combineWords ? { userWords: combineWords } : {})
   }
   if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, options, tasks, add_tasks, known, close, reopen, snooze, watch, watch_at or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto, mergedOn: mergedOn?.task })

@@ -1339,13 +1339,23 @@ function newestNodeWord(t: OrgThread): { text: string; at: string; by?: ThreadWr
 }
 
 /**
+ * He asked the node to combine threads, in his own words: the node's `user_words` are in a message
+ * of his on one of this node's threads, open or closed (his words about cards are filed wherever
+ * Walnut put them, often a thread of their own, so the two being merged need not hold them).
+ */
+function askedToCombine(file: ThreadsFile, words: string | undefined): boolean {
+  const quote = wordsKey(words ?? '');
+  return !!quote && file.threads.some((t) => t.messages.some((m) => quotes(m.text, quote)));
+}
+
+/**
  * Put thread `fromId` under `intoId`: its messages join the target in time order, its tasks too,
  * and it is gone. The node does this when a new message is about an open subject. Two threads the
  * node opened itself merge too (2026-11-23: two such threads about one issue could only be closed):
  * the target keeps its first post, and the other's newest word becomes the summary when it is newer
  * than the target's, so it is not lost.
  */
-export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string, opts: { questionMoves?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
+export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string, opts: { questionMoves?: boolean; userWords?: string } = {}): { file: ThreadsFile; thread: OrgThread } {
   if (fromId === intoId) throw new ThreadError('same_thread', 400, 'A thread cannot be merged into itself.');
   file = stampLegacyReplyAt(file);
   const fromFound = find(file, fromId);
@@ -1356,9 +1366,10 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   if (!isOpen(into)) throw new ThreadError('thread_closed', 409, `Thread ${intoId} is closed; a new ask about it stays its own thread (it follows ${intoId}).`);
   // A thread the user closed stays closed: merging it would open it again unasked.
   if (!isOpen(from)) throw new ThreadError('thread_closed', 409, `Thread ${fromId} is closed; reopen it first if it belongs under ${intoId}.`);
-  // threads_each_question: a thread his question opened stays its own (thread-question.ts). `questionMoves`
-  // false: a split's one message that did not open its thread (splitMessageInto).
-  const own = opts.questionMoves === false ? null : ownQuestionRefusal(from, into, by);
+  // threads_each_question: a thread his question opened stays its own while it waits for its answer
+  // (thread-question.ts). `questionMoves` false: a split's one message that did not open its thread
+  // (splitMessageInto). `userWords`: he asked to combine them, in a message of his on this node.
+  const own = opts.questionMoves === false ? null : ownQuestionRefusal(from, into, by, askedToCombine(file, opts.userWords));
   if (own) throw new ThreadError('own_question', 409, own);
   // A thread the node opened keeps its first post: his ask goes under it, never the other way.
   if (from.opener && !into.opener) {

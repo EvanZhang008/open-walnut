@@ -5,8 +5,15 @@
  *
  * With the switch on, a chat message of his that asks a question (asksQuestion) opens a thread of
  * its own whatever came right before it (threads-model.ts fileMessage), and no step of Walnut and no
- * node puts it into or under another thread (threads-model.ts mergeThreads, ownQuestionRefusal): only
- * he can, or a repeat of the very same words. A remark that asks nothing keeps the old rules.
+ * node puts it into or under another thread while it waits for its answer (threads-model.ts
+ * mergeThreads, ownQuestionRefusal): only he can, or a repeat of the very same words. A remark that
+ * asks nothing keeps the old rules.
+ *
+ * Once its answer is in, it may join a thread on the same matter, and at any time when he asked for
+ * it in his own words (2026-11-25, the same day: he typed one question as two messages seconds
+ * apart, both were answered alike, and with a third card on that matter his Done read "look all
+ * duplicated ... you need to combine them"; the node's merge was refused three times). What the
+ * rule guards is a question of his going out of his sight unanswered, never two cards on one matter.
  *
  * Pure but for the switch, which the status sync and the prompt inputs set (experimental-cache.ts).
  * No store import here: the model and the stores import this.
@@ -123,22 +130,36 @@ export function ownQuestionOf(t: Pick<OrgThread, 'opener' | 'createdAt' | 'messa
   return m && (m.via === 'chat' || m.via === 'follow-up' || m.via === 'split') && asksQuestion(m.text) ? m : undefined;
 }
 
-/** With the switch on, `t` is a thread his question opened: never offered for a merge. */
-export const isQuestionThread = (t: Pick<OrgThread, 'opener' | 'createdAt' | 'messages'>): boolean => eachQuestionNow() && !!ownQuestionOf(t);
+/** The states he does not see (thread-groups.ts folds them): his question there still waits for its answer. */
+const AWAITS_ANSWER: ReadonlySet<OrgThread['state']> = new Set(['new', 'working', 'pending']);
+
+/**
+ * With the switch on, `t` is a thread his question opened that still waits for its answer: never
+ * offered for a merge. Once answered (or asking him) it is a thread like any other: one on the same
+ * matter is offered, so his Done never holds two cards on one thing.
+ */
+export const isQuestionThread = (t: Pick<OrgThread, 'opener' | 'createdAt' | 'messages' | 'state'>): boolean =>
+  eachQuestionNow() && AWAITS_ANSWER.has(t.state) && !!ownQuestionOf(t);
 
 /** What a node does with his question's thread instead of a merge (the status question and the refusal say it). */
 export const OWN_QUESTION_DO = 'give it a title that says what this question asks, and answer it there';
 
 /**
- * Why `from` may not go into `into`, with the switch on: it is a thread his question opened. He may
- * merge it himself, and the very same words already in `into` (a repeat of one question) may merge.
- * Null when the merge may go on. Pure but for the switch.
+ * Why `from` may not go into `into`, with the switch on: it is a thread his question opened, and the
+ * question still waits for its answer, so joining another card would take it out of his sight. He may
+ * merge it himself; the very same words already in `into` (a repeat of one question) may merge; a
+ * question whose answer is in (answered, or asking him: needs) may join a thread on the same matter;
+ * and so may any when he asked for it in his own words (`heAsked`: mergeThreads read the node's
+ * user_words in a message of his). Null when the merge may go on. Pure but for the switch.
  */
-export function ownQuestionRefusal(from: Pick<OrgThread, 'id' | 'opener' | 'createdAt' | 'messages'>, into: Pick<OrgThread, 'id' | 'messages'>, by: ThreadWriter): string | null {
-  if (!eachQuestionNow() || by === 'human') return null;
+export function ownQuestionRefusal(
+  from: Pick<OrgThread, 'id' | 'opener' | 'createdAt' | 'messages' | 'state'>, into: Pick<OrgThread, 'id' | 'messages'>, by: ThreadWriter, heAsked = false,
+): string | null {
+  if (!eachQuestionNow() || by === 'human' || heAsked) return null;
   const q = ownQuestionOf(from);
-  if (!q) return null;
+  if (!q || !AWAITS_ANSWER.has(from.state)) return null;
   const said = wordsKey(q.text);
   if (into.messages.some((m) => wordsKey(m.text) === said)) return null;
-  return `Thread ${from.id} is his own question, so it stays its own thread and does not go into ${into.id}: ${OWN_QUESTION_DO}.`;
+  return `Thread ${from.id} is his own question and still waits for its answer, so it stays its own thread and does not go into ${into.id}: ${OWN_QUESTION_DO}. `
+    + 'Once it is answered it may join a thread on the same matter; before that only when he asked you to combine them: send merge_into with user_words quoting his words.';
 }

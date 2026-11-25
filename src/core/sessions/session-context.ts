@@ -252,8 +252,8 @@ export const LEAD_DECISION_LINE =
 /** How his asks make threads, without and with threads_each_question (org/thread-question.ts). */
 const SAME_THING = 'Several asks about the same thing are one thread: put a new one under the open thread it belongs to (merge_into). '
 const SAME_THING_KEPT = 'Several asks about the same thing are one thread; '
-const EACH_QUESTION = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes under its thread (merge_into). '
-const EACH_QUESTION_KEPT = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes with its thread; '
+const EACH_QUESTION = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there; merge it only once answered, with a thread on the same matter (or when he asks to combine: merge_into with user_words), so no two cards say the same; a remark that asks nothing goes under its thread (merge_into). '
+const EACH_QUESTION_KEPT = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there; merge it only once answered, with a thread on the same matter (or when he asks to combine: merge_into with user_words), so no two cards say the same; a remark that asks nothing goes with its thread; '
 
 /** The Threads rules (core/org/threads-model.ts): the user's own requests, one thread per subject; `where` he reads them. */
 const threadsLine = (where: string, last: string, each = false): string =>

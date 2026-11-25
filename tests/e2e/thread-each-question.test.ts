@@ -142,7 +142,7 @@ describe('each question he asks is its own thread', () => {
   it('a node\'s thread_update merge_into and thread_split merge_into of his question are refused; his own merge goes through', async () => {
     const merge = await asSession('thread_update', { id: b, merge_into: a })
     expect(merge.ok).toBe(false)
-    expect(JSON.stringify(merge)).toContain('is his own question, so it stays its own thread')
+    expect(JSON.stringify(merge)).toContain('is his own question and still waits for its answer, so it stays its own thread')
     const first = (await thread(b)).messages[0].id
     const split = await asSession('thread_split', { id: b, message: first, merge_into: a })
     expect(split.ok).toBe(false)
@@ -184,5 +184,38 @@ describe('each question he asks is its own thread', () => {
     const res = await fetch(`${flow.base}/api/v1/tasks/${flow.taskId}/threads/${b}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ merge_into: a }) })
     expect(res.status, await res.clone().text()).toBe(200)
     expect(await texts(a)).toEqual([Q_A, Q_B, REMARK, 'I will pack a rain jacket'])
+  }, 30_000)
+
+  // 2026-11-25: after his "you need to combine them" the node's merge was refused three times, and
+  // merge_into took no user_words. His words now ride the merge through the op and the route.
+  it('the node merges his waiting question once he asked to combine them, his words quoted with merge_into', async () => {
+    const now = Date.now()
+    const file = (text: string, ms: number) => fileThreadMessage(flow.taskId, { text, via: 'chat', at: new Date(now + ms).toISOString() })
+    const q1 = (await file('Is the bike rack on the early train free?', 0)).thread.id
+    const q2 = (await file('Does the rack on that train cost extra?', 1000)).thread.id
+    expect(q2).not.toBe(q1)
+    await file('those two rack cards are one thing, combine them', 2000)
+    const refused = await asSession('thread_update', { id: q2, merge_into: q1 })
+    expect(refused.ok).toBe(false)
+    expect(JSON.stringify(refused)).toContain('user_words quoting his words')
+    const notHis = await asSession('thread_update', { id: q2, merge_into: q1, user_words: 'merge the rack threads right now' })
+    expect(notHis.ok).toBe(false)
+    const merged = await asSession('thread_update', { id: q2, merge_into: q1, user_words: 'combine them' })
+    expect(merged.ok, JSON.stringify(merged)).toBe(true)
+    expect(await thread(q2)).toBeUndefined()
+    expect((await texts(q1)).slice(0, 2)).toEqual(['Is the bike rack on the early train free?', 'Does the rack on that train cost extra?'])
+  }, 30_000)
+
+  it('the node merges his question on its own once it is answered', async () => {
+    const now = Date.now()
+    const file = (text: string, ms: number) => fileThreadMessage(flow.taskId, { text, via: 'chat', at: new Date(now + ms).toISOString() })
+    const q1 = (await file('Which platform does the coast train leave from?', 0)).thread.id
+    const q2 = (await file('Is it platform two for the coast train?', 1000)).thread.id
+    expect(q2).not.toBe(q1)
+    const answer = await asSession('thread_update', { id: q2, reply: 'Platform two, the same as last week.', state: 'answered' })
+    expect(answer.ok, JSON.stringify(answer)).toBe(true)
+    const merged = await asSession('thread_update', { id: q2, merge_into: q1 })
+    expect(merged.ok, JSON.stringify(merged)).toBe(true)
+    expect(await texts(q1)).toEqual(['Which platform does the coast train leave from?', 'Is it platform two for the coast train?'])
   }, 30_000)
 })

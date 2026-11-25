@@ -28,8 +28,8 @@ const plain = { id: 't-2', title: 'Fence posts' }
 
 const SAME = 'Several asks about the same thing are one thread: put a new one under the open thread it belongs to (merge_into). '
 const SAME_KEPT = 'Several asks about the same thing are one thread; '
-const EACH = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes under its thread (merge_into). '
-const EACH_KEPT = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes with its thread; '
+const EACH = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there; merge it only once answered, with a thread on the same matter (or when he asks to combine: merge_into with user_words), so no two cards say the same; a remark that asks nothing goes under its thread (merge_into). '
+const EACH_KEPT = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there; merge it only once answered, with a thread on the same matter (or when he asks to combine: merge_into with user_words), so no two cards say the same; a remark that asks nothing goes with its thread; '
 const MODES = [['plain', false, false], ['kept', true, false], ['tag', true, true]] as const
 
 beforeAll(async () => { await seedFixtureHome(WALNUT_HOME) })
@@ -72,9 +72,10 @@ describe('the rule text, on and off', () => {
 
   it('the bytes it adds to every prompt that carries it', () => {
     expect(Buffer.byteLength(SAME)).toBe(114)
-    expect(Buffer.byteLength(EACH)).toBe(196)
+    // 2026-11-25: +134 for when a question's thread may merge (once answered, or on his words).
+    expect(Buffer.byteLength(EACH)).toBe(330)
     expect(Buffer.byteLength(SAME_KEPT)).toBe(50)
-    expect(Buffer.byteLength(EACH_KEPT)).toBe(182)
+    expect(Buffer.byteLength(EACH_KEPT)).toBe(316)
   })
 })
 

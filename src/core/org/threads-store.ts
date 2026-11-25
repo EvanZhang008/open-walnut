@@ -436,10 +436,10 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   return thread;
 }
 
-export async function mergeThread(taskId: string, fromId: string, intoId: string, by: ThreadWriter): Promise<OrgThread> {
+export async function mergeThread(taskId: string, fromId: string, intoId: string, by: ThreadWriter, opts: { userWords?: string } = {}): Promise<OrgThread> {
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
-    const r = mergeThreads(cur, fromId, intoId, by, at);
+    const r = mergeThreads(cur, fromId, intoId, by, at, opts.userWords ? { userWords: opts.userWords } : {});
     return { file: r.file, out: r.thread };
   });
   emit({ taskId, kind: 'merged', threadId: intoId });

@@ -178,6 +178,35 @@ describe('mergeThreads: a thread his question opened stays its own', () => {
     expect(mergeThreads(f, b, a, 'human', at(100)).thread.messages.map((m) => m.text)).toEqual([Q_A, Q_B])
   })
 
+  // 2026-11-25, the same day the rule shipped: one question typed as two messages seconds apart gave
+  // two cards with the same answer, and the node's merge was refused three times after his "you
+  // need to combine them". The rule guards a question going out of his sight unanswered, no more.
+  it('mergeThreads: once his question has its answer, the node may put it with a thread on the same matter', () => {
+    const { f, a, b } = twoQuestions()
+    for (const state of ['working', 'pending'] as const) {
+      const waits = updateThread(f, b, { reply: 'Handed on.', state }, NODE, at(90)).file
+      expect(() => mergeThreads(waits, b, a, NODE, at(100)), state).toThrow(/still waits for its answer/)
+    }
+    const answered = updateThread(f, b, { reply: 'It holds until spring.' }, NODE, at(90)).file
+    expect(answered.threads.find((t) => t.id === b)!.state).toBe('answered')
+    const merged = mergeThreads(answered, b, a, NODE, at(100))
+    expect(merged.thread.id).toBe(a)
+    expect(merged.thread.messages.map((m) => m.text)).toEqual([Q_A, Q_B])
+    expect(merged.file.threads.find((t) => t.id === b)).toBeUndefined()
+  })
+
+  it('mergeThreads: he asked to combine them in his own words, so a waiting question may merge too', () => {
+    const { f, a, b } = twoQuestions()
+    // His words are a message of his on this node, filed in a thread of its own.
+    const asked = chat(f, 'these two are the same thing, you need to combine them', 3 * 3600).file
+    expect(() => mergeThreads(asked, b, a, NODE, at(3 * 3600 + 5))).toThrow(/user_words quoting his words/)
+    // Words he never wrote, and a quote too short to be his ask, do not count.
+    expect(() => mergeThreads(asked, b, a, NODE, at(3 * 3600 + 5), { userWords: 'please merge these cards now' })).toThrow(/own question/)
+    expect(() => mergeThreads(asked, b, a, NODE, at(3 * 3600 + 5), { userWords: 'you' })).toThrow(/own question/)
+    const merged = mergeThreads(asked, b, a, NODE, at(3 * 3600 + 5), { userWords: 'You need to  combine them' })
+    expect(merged.thread.messages.map((m) => m.text)).toEqual([Q_A, Q_B])
+  })
+
   it('mergeThreads: the very same question asked twice may merge', () => {
     const { f, a } = twoQuestions()
     const again = fileMessage(f, { text: `  ${Q_A.toUpperCase()} `, via: 'chat', at: at(2 * 3600), joinRecent: SAME_CONVERSATION_MS })
@@ -332,8 +361,13 @@ describe('what nodes are told', () => {
   it('the thread check pairs no two of his questions, and keeps his question as the card that stays', () => {
     const { f, a, b } = twoQuestions()
     const tree = (file: ThreadsFile) => [{ task: { id: TASK, title: 'Fence work' }, threads: file.threads }] as never
-    const named = updateThread(f, b, { reply: `Same as ${a}.` }, NODE, at(100)).file
+    // Both still wait for their answer: no pair, each stays his own card.
+    const named = updateThread(f, b, { reply: `Same as ${a}.`, state: 'working' }, NODE, at(100)).file
     expect(repeatCandidates(TASK, tree(named), T0 + 200_000)).toEqual([])
+    // Both answered: two cards on one thing in his Done are a repeat again (2026-11-25, his words:
+    // "look all duplicated ... you need to combine them").
+    const answered = updateThread(updateThread(f, a, { reply: 'It holds.' }, NODE, at(90)).file, b, { reply: `Same as ${a}.` }, NODE, at(100)).file
+    expect(repeatCandidates(TASK, tree(answered), T0 + 200_000).length).toBeGreaterThan(0)
     // His question beside a thread that asks nothing: that one goes into his.
     const remark = chat(named, 'the gate hinge squeaks', 4 * 3600)
     const withLink = updateThread(remark.file, remark.thread.id, { reply: `See ${b}.` }, NODE, at(4 * 3600 + 10)).file
