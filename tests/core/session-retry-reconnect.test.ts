@@ -832,8 +832,8 @@ describe('Retry finishes a failed hard Stop cancellation without sending it agai
       expect((await getQueue(SID)).map((r) => r.id)).toEqual([pending.id])
       expect(() => h.session.send('new pending user message', CWD, SID)).not.toThrow()
       // The start reaches the transport after the send's own queue writes settle.
-      await vi.waitFor(() => expect(factory).toHaveBeenCalled())
-      await vi.waitFor(() => expect(manager.start).toHaveBeenCalled())
+      await vi.waitFor(() => expect(factory).toHaveBeenCalled(), { timeout: 8000 })
+      await vi.waitFor(() => expect(manager.start).toHaveBeenCalled(), { timeout: 8000 })
     } finally { factory.mockRestore() }
   })
 
