@@ -209,9 +209,13 @@ export interface HiddenReason {
   ariaLabel: string;
 }
 
-/** Why a focus-override row is outside the filters (5.12), one entry per dim. */
-export function hiddenByReasons(task: Task, ctx: FilterEvalContext, lists?: FilterLists): HiddenReason[] {
-  return failingDims(task, ctx).map((dim) => {
+/**
+ * Why a focus-override row is outside the filters (5.12), one entry per dim. `opts` is the rule
+ * of the list that draws the row: a search passes `bypassDefaults`, as its own hits do, so a row
+ * the search shows never says a default it ignores hides it.
+ */
+export function hiddenByReasons(task: Task, ctx: FilterEvalContext, lists?: FilterLists, opts: FailingOptions = {}): HiddenReason[] {
+  return failingDims(task, ctx, opts).map((dim) => {
     const what = `${dimLabel(dim)}: ${dimValueText(ctx.state, dim, lists)}`;
     return { dim, text: `Hidden by ${what}`, ariaLabel: `Show tasks hidden by ${what}` };
   });

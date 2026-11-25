@@ -110,6 +110,68 @@ test.describe('board entry points', () => {
   })
 })
 
+test.describe('the "Hidden by" line says only what is true, quietly (2026-11-25)', () => {
+  // The user underlined a search hit that read "Hidden by Status: Open  Show" in orange, ahead of
+  // its own second line: a Waiting task the search found, clicked, while the search showed it.
+  // Both panel designs: By project draws the line on a list row, By status (Flat) on a section card.
+  for (const design of ['project', 'status'] as const) {
+    test(`${design}: a search hit and a row its section holds carry no line; a row past a chip carries it at its title's edge`, async ({ page, baseURL }) => {
+      const stamp = runStamp()
+      const home = `Home ${stamp}`
+      const garden = `Garden ${stamp}`
+      const [waiting, asking] = await seed(page, garden, [
+        { title: `w parked ${stamp}`, phase: 'WAITING' }, { title: `n asking ${stamp}`, phase: 'NEED_ACTION' },
+      ])
+      const [homeTask] = await seed(page, home, [{ title: `h open ${stamp}` }])
+      await boot(page, baseURL!, { 'walnut-todo-panel-design': design })
+      try {
+        // 1. The search shows the Waiting task (it skips the Status default), so its clicked hit says nothing.
+        await page.locator('.todo-search-input').fill(`w parked ${stamp}`)
+        const hit = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${waiting}"]`)
+        await expect(hit).toBeVisible({ timeout: 15_000 })
+        await hit.locator('.todo-item-title').first().click()
+        await expect(hit).toHaveClass(/task-focused/, { timeout: 10_000 })
+        await page.waitForTimeout(500)
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(0)
+        // 2. Without the search the board holds it (its Waiting fold or section): no line either.
+        await page.locator('.todo-search-clear').click()
+        await expect(page.locator('.todo-search-results')).toHaveCount(0)
+        await page.waitForTimeout(500)
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(0)
+        // 3. A Project chip hides a task: opened by its link, its own row says why, in grey words
+        //    with a link key, nowhere else.
+        await filterProjects(page, [home])
+        await openHome(page, `${baseURL}/?task=${asking}`, 90_000)
+        const reasons = anyRow(page, asking).getByTestId('filter-override-reasons')
+        await expect(reasons).toContainText(`Hidden by Project: ${home}`, { timeout: 20_000 })
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(1)
+        await expect(reasons.locator('.badge')).toHaveCount(0)
+        const show = reasons.getByRole('button', { name: `Show tasks hidden by Project: ${home}` })
+        await expect(show).toHaveClass(/btn-link/)
+        const edges = await anyRow(page, asking).first().evaluate((rowEl) => {
+          const textLeft = (el: Element | null) => {
+            if (!el) return NaN
+            const r = document.createRange(); r.selectNodeContents(el)
+            const rect = [...r.getClientRects()].find((q) => q.width > 0)
+            return rect ? rect.left : NaN
+          }
+          return {
+            title: textLeft(rowEl.querySelector('.todo-item-title, .status-card-title, .todo-pinned-title, .wn-title')),
+            line: textLeft(rowEl.querySelector('[data-testid="filter-override-reasons"]')),
+          }
+        })
+        expect(Math.abs(edges.line - edges.title), JSON.stringify(edges)).toBeLessThanOrEqual(1)
+        await page.screenshot({ path: `${SHOTS}/hidden-by-line-${design}.png`, clip: await panelClip(page) })
+        await show.click()
+        await expect(filterChip(page, 'project')).toContainText(`${home}, ${garden}`)
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(0)
+      } finally {
+        await cleanup(page, [waiting, asking, homeTask])
+      }
+    })
+  }
+})
+
 /** Search for a title, click its hit (a user locate), then clear the search. */
 async function locateBySearch(page: Page, title: string, id: string): Promise<void> {
   await page.locator('.todo-search-input').fill(title)

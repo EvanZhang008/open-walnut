@@ -560,11 +560,8 @@
    root keeps container-type normal (its fixed drag overlays need the viewport). */
 .fb-toolbar-scope { flex-shrink: 0; }
 .todo-filter-footer { color: var(--fg-secondary); }
-.task-filter-override-show {
-  font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: var(--radius-full);
-  background: transparent; color: var(--accent-text); cursor: pointer; text-decoration: underline;
-}
-.task-filter-override-show:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Its look is the family's small link key (.btn-link.btn-sm: accent words, underline on hover); only its place here. */
+.task-filter-override-show { margin-left: 4px; }
 /* A task opened from outside that this tab does not draw: one line, its button switches. */
 .todo-offview-note {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex-shrink: 0; min-width: 0;

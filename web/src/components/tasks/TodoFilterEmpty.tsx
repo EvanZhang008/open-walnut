@@ -56,13 +56,14 @@ export const FilterOverrideReasons = memo(function FilterOverrideReasons({ reaso
   }
   return (
     <div className="task-filter-override-row" data-testid="filter-override-reasons" title={title}>
+      {/* Quiet words, as the row's other metadata: one reason and its Show link each. */}
       {reasons.map((r, i) => (
-        <span key={r.dim} className="badge badge-warning task-filter-override-badge" data-reason-dim={r.dim}>
+        <span key={r.dim} className="task-filter-override-reason" data-reason-dim={r.dim}>
           {i > 0 && <span aria-hidden="true">, </span>}
           <span>{r.text}</span>
           <button
             type="button"
-            className="task-filter-override-show"
+            className="btn btn-link btn-sm task-filter-override-show"
             aria-label={r.ariaLabel}
             onPointerDown={stop}
             onClick={(e) => { stop(e); onShow(r.dim); }}

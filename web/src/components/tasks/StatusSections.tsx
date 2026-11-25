@@ -68,6 +68,7 @@ import '@/styles/status-sections.css';
 import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { ownLineIsItem } from '@open-walnut/user-status';
 import { projectGroupKey } from '@/utils/project-display';
+import { FilterOverrideReasons, type FilterOverrideReasonsProps } from './TodoFilterEmpty';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
@@ -168,6 +169,9 @@ export interface SectionRowHandlers {
   onReorderWatching?: (writes: { id: string; watched_at: string }[]) => void;
   /** Flat's worker fold (worker-fold.ts): the teams leaders carry, and the words that move them. */
   fold?: WorkerFoldCtl;
+  /** The one row Flat draws past the chips (a locate, a task just made: spec 5.12) and why:
+   *  the line goes on that row, under its title (Flat's rows are always two-line). */
+  filterOverride?: FilterOverrideReasonsProps & { id: string };
 }
 
 /** A Watching row's drag: the sortable's node, its moving style and its pointer listeners. */
@@ -228,6 +232,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
   // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
   const reasonBelow = twoLine && reasonText !== '' && reasonText !== 'Snoozed';
+  const override = handlers.filterOverride?.id === task.id ? handlers.filterOverride : undefined;
+  const overrideLine = override ? <FilterOverrideReasons reasons={override.reasons} created={override.created} onShow={override.onShow} /> : null;
   const reason = !showStatusLines && reasonText !== 'Snoozed' ? null : need ? (
     <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}${limitOwn ? ' is-limit' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
       {limitOwn ? null : <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text || limitOwn ? ':' : ''}</span>}
@@ -377,6 +383,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
           </span>
           {title}
           {reasonBelow ? shownReason : null}
+          {overrideLine}
           {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
         </span>
       ) : (

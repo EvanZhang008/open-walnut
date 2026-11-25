@@ -12322,10 +12322,20 @@ body.walnut-dragging {
 
 /* ===== Focus override: task temporarily shown outside current filters ===== */
 
+/* Quiet words, as the line under a Waiting row's title (.status-card-wait-line: grey, small), never a
+   warning label: "Hidden by Status: Open Show" (2026-11-25, the user underlined the orange badge
+   and its underlined link). */
 .task-filter-override-row {
-  padding-left: 26px; /* align with title text (phase icon 18px + gap 4px + 4px) */
   padding-top: 1px;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-muted);
 }
+/* On a list row it starts where the title text does, as the row's second line does
+   (.todo-search-meta-row): past the 18px phase circle and the row's gap. A card's own line box
+   (.todo-pinned-card-override, .status-card-body) already starts there. */
+.todo-item-content > .task-filter-override-row { padding-left: 22px; }
+.home-navigation-scroll .todo-item-content > .task-filter-override-row { padding-left: 24px; }
 
 /* Fade-out animation when focus override is removed */
 /* 0.6s — must match JS fadingTimerRef timeout in TodoPanel.tsx */

@@ -121,6 +121,20 @@ describe('failingDims and reasons (5.12)', () => {
     expect(text).toBe('Hidden by Status: Open, Hidden by Project: Garden');
     expect(text).not.toMatch(/≠|·|phase/);
   });
+  it('a search reads the reasons by its own rule: a hit never says a default hides it (2026-11-25)', () => {
+    // A Waiting task found by a search and clicked read "Hidden by Status: Open" on its own hit.
+    const waiting = mk({ title: 'waiting', phase: 'WAITING', project: 'Home' });
+    const all = [...tasks, waiting];
+    const ctx = buildFilterEvalContext(all, S0, NOW);
+    expect(hiddenByReasons(waiting, ctx).map((x) => x.text)).toEqual(['Hidden by Status: Open']);
+    // Every task a search shows (passesChips with bypassDefaults) has no reason under that rule.
+    for (const t of all) {
+      if (passesChips(t, ctx, { bypassDefaults: true })) expect(hiddenByReasons(t, ctx, undefined, { bypassDefaults: true })).toEqual([]);
+    }
+    // A chip the user chose still names itself.
+    const garden = buildFilterEvalContext(all, { ...S0, projects: ['Garden'] }, NOW);
+    expect(hiddenByReasons(waiting, garden, undefined, { bypassDefaults: true }).map((x) => x.text)).toEqual(['Hidden by Project: Garden']);
+  });
   it('Show widens exactly that dimension so the task becomes a hit', () => {
     let s: FilterState = { ...S0, projects: ['Garden'] };
     s = showValueFor(s, done, 'status');

@@ -143,7 +143,7 @@ import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
 import { OPEN_PHASES, hasAllOpen, isDefaultStatus } from './filter-bar-model';
-import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips, type FilterEvalContext } from './filter-predicate';
+import { buildFilterEvalContext, dimPasses, hiddenByReasons, hiddenByText, passesChips, type FilterEvalContext } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
@@ -5087,10 +5087,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     if (!overrideReasonTaskId) return undefined;
     const task = tasks.find((t) => t.id === overrideReasonTaskId);
     if (!task) return undefined;
-    const reasons = hiddenByReasons(task, boardEvalCtx, homeFilters.lists);
+    // A search shows every task past the defaults nobody chose (searchMatches below), so its
+    // reasons skip them too: a hit the user clicked in a search is no override there.
+    const reasons = isSearchMode
+      ? hiddenByReasons(task, filterEvalCtx, homeFilters.lists, { bypassDefaults: true })
+      : hiddenByReasons(task, boardEvalCtx, homeFilters.lists);
     if (reasons.length === 0) return undefined;
     return { task, reasons };
-  }, [overrideReasonTaskId, tasks, boardEvalCtx, homeFilters.lists]);
+  }, [overrideReasonTaskId, tasks, isSearchMode, filterEvalCtx, boardEvalCtx, homeFilters.lists]);
   // A locate of a task someone else just made shows the reasons; only a creation here gets the pill.
   const overrideCreated = !!filterOverrideReasons && createdOverrideRef.current === filterOverrideReasons.task.id
     && isJustCreated(filterOverrideReasons.task.created_at);
@@ -7795,8 +7799,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
    */
   const flatSections = needsSection && effectiveSection !== 'recent' && effectiveSection !== 'tasks';
   // A task shown past the chips (5.12: a locate, a task just made) leads the section of
-  // its state in Flat, the way the list draws it in place; its reasons show above the
-  // sections, and that section opens for it.
+  // its state in Flat, the way the list draws it in place; its reasons show on that row
+  // (flatOverride below), and a locate opens that section for it.
   const overrideSection = useMemo((): DrawnSectionKey | null => {
     const t = filterOverrideReasons?.task;
     if (!flatSections || !t) return null;
@@ -7846,9 +7850,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   // Waiting / snoozed and Completed fold at the bottom (By project: Completed only).
   const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? [] : bottomStatusSections(panelDesign, effectiveSection);
   // Out of its project's run, a By project Completed row names its project, as Flat's do.
+  // Flat draws the reasons on the row it put in a section past the chips (overrideSection), under
+  // its title. A row its sections hold anyway (a located Waiting task in Waiting) is no override:
+  // it gets no line, which would say a task in plain view is hidden.
+  // Keyed by the reasons' words, not the task object: a task update or a socket echo would
+  // otherwise give every section card new handlers while a located row shows.
+  const flatOverrideKey = overrideId && filterOverrideReasons ? `${overrideId}|${overrideCreated}|${hiddenByText(filterOverrideReasons.reasons)}` : '';
+  const flatOverrideReasons = filterOverrideReasons?.reasons;
+  const flatOverride = useMemo(
+    () => (overrideId && flatOverrideReasons
+      ? { id: overrideId, reasons: flatOverrideReasons, created: overrideCreated, onShow: showOverrideDim }
+      : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key holds the id, the reasons' words and created
+    [flatOverrideKey, showOverrideDim],
+  );
   const flatRowHandlers = useMemo(
-    () => (workerFoldCtl ? { ...sectionRowHandlers, fold: workerFoldCtl } : sectionRowHandlers),
-    [sectionRowHandlers, workerFoldCtl],
+    () => (workerFoldCtl || flatOverride ? { ...sectionRowHandlers, fold: workerFoldCtl, filterOverride: flatOverride } : sectionRowHandlers),
+    [sectionRowHandlers, workerFoldCtl, flatOverride],
   );
   const bottomRowHandlers = useMemo(
     () => (projectFoldsOn && effectiveSection !== 'recent' ? { ...flatRowHandlers, twoLine: true } : flatRowHandlers),
@@ -8229,7 +8247,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
           hideClosed={sectionRowsDrawn || sectionModel.working.length > 0}
         />
       )}
-      {flatSections && filterOverrideNode}
       {!isSearchMode && !phoneFirstLoad && (
         <LimitedSummary model={sectionModel} onShow={showLimitedSection} />
       )}
