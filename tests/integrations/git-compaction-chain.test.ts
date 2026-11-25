@@ -46,7 +46,7 @@ function logOf(dir: string): Array<{ hash: string; date: string; message: string
 }
 
 describe('buildCompactedChain', () => {
-  it('writes the same objects git commit-tree would', () => {
+  it('writes the same objects git commit-tree would', async () => {
     const dir = repo();
     const kept = logOf(dir);
     let parent = '';
@@ -55,14 +55,14 @@ describe('buildCompactedChain', () => {
         GIT_AUTHOR_DATE: c.date, GIT_COMMITTER_DATE: c.date,
       });
     }
-    expect(buildCompactedChain(dir, kept)).toBe(parent);
+    expect(await buildCompactedChain(dir, kept)).toBe(parent);
     expect(git(dir, ['rev-parse', `${parent}^{tree}`])).toBe(git(dir, ['rev-parse', 'main^{tree}']));
   });
 
-  it('keeps every subject byte for byte, quotes and dollars included', () => {
+  it('keeps every subject byte for byte, quotes and dollars included', async () => {
     const dir = repo();
     const kept = logOf(dir);
-    const head = buildCompactedChain(dir, kept);
+    const head = await buildCompactedChain(dir, kept);
     expect(git(dir, ['log', '--reverse', '--format=%s|', head]).split('\n').map((l) => l.slice(0, -1))).toEqual(kept.map((c) => c.message));
   });
 

@@ -13,9 +13,9 @@
  * checks each object's format. Its answers must match the hashes we computed.
  */
 
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { gitChildEnv } from '../lib/git-env.js';
 
@@ -28,16 +28,34 @@ export interface ChainCommit {
 
 const BIG = 512 * 1024 * 1024;
 
-function gitOut(repoDir: string, args: string[], input?: string): string {
-  return execFileSync('git', args, {
-    cwd: repoDir, input, encoding: 'utf-8', maxBuffer: BIG, timeout: 600_000,
-    stdio: ['pipe', 'pipe', 'pipe'], env: gitChildEnv(),
+/** Async, never execSync: the event-loop ratchet holds for the worker too. */
+function gitOut(repoDir: string, args: string[], input?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', args, { cwd: repoDir, stdio: ['pipe', 'pipe', 'pipe'], env: gitChildEnv() });
+    const out: Buffer[] = [];
+    let size = 0;
+    let err = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`git ${args[0]} timed out`)); }, 600_000);
+    child.stdout.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > BIG) { child.kill('SIGKILL'); return; }
+      out.push(c);
+    });
+    child.stderr.on('data', (c: Buffer) => { err = (err + c.toString('utf-8')).slice(-2000); });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0 && size <= BIG) resolve(Buffer.concat(out).toString('utf-8'));
+      else reject(new Error(`git ${args.join(' ')} exited ${code}: ${err.trim()}`));
+    });
+    child.stdin.on('error', () => { /* git exited early: its exit code tells */ });
+    child.stdin.end(input ?? '');
   });
 }
 
 /** `Name <email>` of an ident as git var prints it (`Name <email> 1700000000 +0000`). */
-function identName(repoDir: string, which: 'GIT_AUTHOR_IDENT' | 'GIT_COMMITTER_IDENT'): string {
-  const ident = gitOut(repoDir, ['var', which]).trim();
+async function identName(repoDir: string, which: 'GIT_AUTHOR_IDENT' | 'GIT_COMMITTER_IDENT'): Promise<string> {
+  const ident = (await gitOut(repoDir, ['var', which])).trim();
   const end = ident.lastIndexOf('>');
   if (end < 0) throw new Error(`unreadable ${which}: ${ident}`);
   return ident.slice(0, end + 1);
@@ -68,9 +86,9 @@ function objectHash(body: string, algo: 'sha1' | 'sha256'): string {
 }
 
 /** Write the chain and return its head. Nothing points at it yet. */
-export function buildCompactedChain(repoDir: string, kept: ChainCommit[]): string {
+export async function buildCompactedChain(repoDir: string, kept: ChainCommit[]): Promise<string> {
   if (kept.length === 0) throw new Error('nothing to keep');
-  const treeLines = gitOut(repoDir, ['cat-file', '--batch-check'], kept.map((c) => `${c.hash}^{tree}`).join('\n') + '\n')
+  const treeLines = (await gitOut(repoDir, ['cat-file', '--batch-check'], kept.map((c) => `${c.hash}^{tree}`).join('\n') + '\n'))
     .split('\n').filter(Boolean);
   if (treeLines.length !== kept.length) throw new Error(`read ${treeLines.length} trees for ${kept.length} commits`);
   const trees = treeLines.map((line, i) => {
@@ -78,36 +96,37 @@ export function buildCompactedChain(repoDir: string, kept: ChainCommit[]): strin
     if (type !== 'tree') throw new Error(`no tree for ${kept[i].hash}: ${line}`);
     return sha;
   });
-  const author = identName(repoDir, 'GIT_AUTHOR_IDENT');
-  const committer = identName(repoDir, 'GIT_COMMITTER_IDENT');
+  const author = await identName(repoDir, 'GIT_AUTHOR_IDENT');
+  const committer = await identName(repoDir, 'GIT_COMMITTER_IDENT');
 
   // The repo's own hash (a SHA-256 repo has 64-hex trees).
   const algo = trees[0].length === 64 ? 'sha256' : 'sha1';
   // Inside .git and cleared first: a run a deploy kills skips the finally,
   // and the next run removes what it left.
-  const gitDir = gitOut(repoDir, ['rev-parse', '--absolute-git-dir']).trim();
+  const gitDir = (await gitOut(repoDir, ['rev-parse', '--absolute-git-dir'])).trim();
   const tmp = path.join(gitDir, 'walnut-compact-chain');
-  fs.rmSync(tmp, { recursive: true, force: true });
-  fs.mkdirSync(tmp, { recursive: true });
+  await fsp.rm(tmp, { recursive: true, force: true });
+  await fsp.mkdir(tmp, { recursive: true });
   try {
     const files: string[] = [];
     const expected: string[] = [];
     let parent = '';
-    kept.forEach((c, i) => {
+    for (let i = 0; i < kept.length; i++) {
+      const c = kept[i];
       const body = commitObject({ tree: trees[i], parent, author, committer, date: c.date, message: c.message });
       const file = path.join(tmp, `${i}`);
-      fs.writeFileSync(file, body, 'utf-8');
+      await fsp.writeFile(file, body, 'utf-8');
       files.push(file);
       parent = objectHash(body, algo);
       expected.push(parent);
-    });
-    const written = gitOut(repoDir, ['hash-object', '-t', 'commit', '-w', '--stdin-paths'], files.join('\n') + '\n')
+    }
+    const written = (await gitOut(repoDir, ['hash-object', '-t', 'commit', '-w', '--stdin-paths'], files.join('\n') + '\n'))
       .split('\n').filter(Boolean);
     if (written.length !== expected.length || written.some((h, i) => h !== expected[i])) {
       throw new Error('written commit objects differ from the computed chain');
     }
     return parent;
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    await fsp.rm(tmp, { recursive: true, force: true });
   }
 }

@@ -267,7 +267,7 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
     // I/O, each kept commit's EXISTING tree reused, so the final tree is
     // byte-identical by construction. Three git calls, whatever the count:
     // git-compaction-chain.ts says why not one `commit-tree` per commit.
-    const newHead = buildCompactedChain(repoDir, selected.map((commit, i) => ({
+    const newHead = await buildCompactedChain(repoDir, selected.map((commit, i) => ({
       hash: commit.hash,
       date: commit.date,
       message: i === 0 && selected.length < commits.length ? `compacted: ${commit.subject}` : commit.subject,
