@@ -518,15 +518,18 @@ export async function acpMenuFor(sessionId: string, record: SessionRecord): Prom
   const bound = await import('../hosts/remote-read-bound.js');
   let hostNote: string | undefined;
   let catalog: AcpModelCatalog | null = null;
-  const remote = bound.isRemoteHost(record.host);
+  // Its place, not the row's raw host: a host's own replica runs its own rows here (session-row-owner.ts).
+  const { execHostOf } = await import('./session-row-owner.js');
+  const host = execHostOf(record);
+  const remote = bound.isRemoteHost(host);
   if (!recordSaysLive(record)) {
     catalog = sessionRunner.findAcpSession(sessionId)?.modelCatalog ?? null;
-  } else if (remote && !(await import('../../providers/daemon-connection.js')).isDaemonConnected(record.host!)) {
-    hostNote = (await hostUnreachableError(record.host!)).message;
+  } else if (remote && !(await import('../../providers/daemon-connection.js')).isDaemonConnected(host!)) {
+    hostNote = (await hostUnreachableError(host!)).message;
   } else {
     const read = async () => (await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined))?.modelCatalog ?? null;
     catalog = remote
-      ? await cappedControlRead(record.host, read).catch((err: unknown) => {
+      ? await cappedControlRead(host, read).catch((err: unknown) => {
           if (!(err instanceof bound.HostReconnectingError)) throw err;
           hostNote = err.message;
           return null;
