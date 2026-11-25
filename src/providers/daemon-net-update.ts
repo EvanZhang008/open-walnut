@@ -35,6 +35,7 @@
  * (2026-11-22: a mode due on a host network machine went to the SSH check and failed every minute).
  */
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { busyRetryLeftMs, busyRetryWhy, noteBusyRefusal } from './daemon-busy-retry.js'
 import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
@@ -550,6 +551,10 @@ export class NetDaemonUpdater {
     }
     // Overdue: the CLI goes over the daemon's own work, in at most a minute (daemon-over-busy.ts).
     const goesOver = behind.overdue
+    // The last try was refused as busy (daemon-busy-retry.ts): none before its wait ends, a new server's
+    // first included. Someone's own request (host_daemon_update) asks now.
+    const busyLeft = trigger === 'auto' ? busyRetryLeftMs(c.host, c.daemonVersion ?? '', { overdue: goesOver, behindMs: behind.behindMs }, (this.d.now ?? Date.now)()) : 0
+    if (busyLeft > 0) return this.postpone(busyRetryWhy(busyLeft), busyLeft)
     const holds = async (): Promise<string | null> => {
       if (!goesOver) return this.d.hold() ?? await this.hostBusy()
       // Overdue: the writes in flight get a moment to end (as on the SSH path), then go over the rest.
@@ -653,14 +658,15 @@ export class NetDaemonUpdater {
       // 2026-11-04: deferred on the host (launchd starting no jobs in a dark wake), so nothing changed there: no failure, asked again after the cooldown.
       if (deferredAt >= 0) { claimKept = 'held'; this.launched.outcome(expected, null); return this.postpone(msg.slice(deferredAt), this.d.cooldownMs) }
       // The daemon refused before it changed anything (busy, or its drain ran out): asked again,
-      // not a failure that gives the build up after a few. Overdue, in a minute; otherwise after
-      // the cooldown, since each try uploads the file again.
+      // not a failure that gives the build up after a few, on the busy clock (daemon-busy-retry.ts).
+      // Overdue, within a few minutes; otherwise not before the cooldown, since a try may upload again.
       if (!buildFailed && daemonBusyRefusal(err)) {
         claimKept = 'held'
         this.lastAttempt = null
         this.launched.outcome(expected, null)
+        const wait = noteBusyRefusal(c.host, from ?? '', { overdue: goesOver, behindMs: behind.behindMs }, (this.d.now ?? Date.now)())
         return this.postpone(`the host's daemon is busy (${msg.split('\n')[0].slice(0, 200)})`,
-          goesOver ? (this.d.recheckMs ?? 60_000) : this.d.cooldownMs)
+          goesOver ? wait : Math.max(this.d.cooldownMs, wait))
       }
       // The link dropped while the new daemon was put on the host (a cut upload, a command lost
       // with the link): nothing changed there and the next connection tries again, as the SSH path

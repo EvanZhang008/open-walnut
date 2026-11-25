@@ -104,6 +104,20 @@ export const HANDOVER_BUSY_WAIT_MS = 90_000
 export const UPDATE_BUSY_WAIT_MS = 30_000
 
 /**
+ * The pauses between asks of a busy daemon within one wait: `base` (2 s), doubled after each refusal,
+ * at most four times `base`. 2026-11-25: a fixed 2 s made each try 15 asks in 30 s, and a host
+ * network runner's 8 tries 120, against a daemon that stayed busy for an hour (daemon-busy-retry.ts).
+ */
+export function busyPauses(base: number): () => number {
+  let next = base
+  return () => {
+    const now = next
+    next = Math.min(next * 2, base * 4)
+    return now
+  }
+}
+
+/**
  * A handover the daemon refused before it changed anything, so asking again is safe: it
  * had a command or a relay of its server still open (every daemon since 0.6.5 says so in
  * these words, at once), or it did not answer the connection or the hello in time. A server
@@ -127,6 +141,7 @@ export async function requestDaemonServiceHandover(
     throw new DaemonServiceHandoverPendingError(`Cannot inspect pending handover: ${String(error)}`)
   })
   const deadline = performance.now() + (wait.busyMs ?? HANDOVER_BUSY_WAIT_MS)
+  const pause = busyPauses(wait.pauseMs ?? 2000)
   let noted = false
   for (;;) {
     const pending = await hasPending()
@@ -139,13 +154,13 @@ export async function requestDaemonServiceHandover(
         noted = true
         ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error instanceof Error ? error.message : String(error)}); asking again`)
       }
-      await delay(wait.pauseMs ?? 2000)
+      await delay(pause())
     }
   }
 }
 
 /**
- * Prepare a managed daemon's update, asking again (every 2 s, up to UPDATE_BUSY_WAIT_MS)
+ * Prepare a managed daemon's update, asking again (after 2, 4, then every 8 s: busyPauses; up to UPDATE_BUSY_WAIT_MS)
  * while it refuses as busy before it changed anything: a relay or a command of its server
  * in flight lasts a second or so, and a deploy's update that met one gave up at once
  * (2026-11-03). Nothing else is asked again, a refusal of any other kind included.
@@ -157,6 +172,7 @@ export async function requestDaemonServiceUpdate(
   const started = performance.now()
   const deadline = started + (wait.busyMs ?? UPDATE_BUSY_WAIT_MS)
   const say = wait.note ?? ((text: string) => process.stderr.write(`walnut daemon: ${text}\n`))
+  const pause = busyPauses(wait.pauseMs ?? 2000)
   let noted = false
   for (;;) {
     try {
@@ -188,7 +204,9 @@ export async function requestDaemonServiceUpdate(
         noted = true
         say(`the running daemon is busy (${error.message}); asking again`)
       }
-      await delay(wait.pauseMs ?? 2000)
+      // Overdue, the first forced ask goes on time (OVER_BUSY_PLAIN_MS) whatever the pause grew to.
+      const toForce = wait.force === true ? started + (wait.plainMs ?? OVER_BUSY_PLAIN_MS) - performance.now() : 0
+      await delay(toForce > 0 ? Math.min(pause(), toForce) : pause())
     }
   }
 }

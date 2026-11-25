@@ -84,6 +84,7 @@ import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { endUpdateWait, noteUpdateWait, type DaemonUpdateWait } from './daemon-update-wait.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
+import { busyRetryLeftMs, busyRetryWhy, endBusyRefusals, noteBusyRefusal } from './daemon-busy-retry.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
 import { setDaemonFileFence } from './daemon-file-fence.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
@@ -4929,7 +4930,6 @@ export class DaemonConnection {
       this.reconnectTimer = null
     }
     this.clearUpgradeRecheck()
-    this._busyRefusals = null
     this._handoverArmed = false
     this._handoverUntil = 0
     if (this._handoverTimer) { clearTimeout(this._handoverTimer); this._handoverTimer = null }
@@ -5651,7 +5651,7 @@ export class DaemonConnection {
       // The new build runs: a later build's busy asks start from the first again, and a record
       // an update left on the host when its answer came late is read and removed.
       if (remoteVersion === expected) {
-        this.clearUpgradeRecheck(); this._busyRefusals = null
+        this.clearUpgradeRecheck(); endBusyRefusals(this.hostKey)
         endUpdateWait(this.hostKey)
         if (this._unreadUpdate !== null) void this.readBackUnreadUpdate()
       }
@@ -5692,6 +5692,8 @@ export class DaemonConnection {
         if (remoteVersion !== expected || modeDue) {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
+          // Before the claim: a wait that tries nothing holds no other name of the daemon.
+          if (this.busyClockHolds(expected, remoteVersion)) return false
           if (await this.claimOrHold(expected, remoteVersion, held)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           // Nothing changed on the host and this name asks again. Refused BY the host ('held': busy, deferred,
@@ -6042,6 +6044,20 @@ export class DaemonConnection {
     return this._overdueMs > 0
   }
 
+  /** How long the host has run another build (noteOverdue), for the busy clock's waits. */
+  private _behindMs = 0
+
+  /**
+   * The last try was refused as busy (daemon-busy-retry.ts): no try before its wait ends, a new
+   * server's first included. True: postponed until then.
+   */
+  private busyClockHolds(expected: string, remoteVersion: string): boolean {
+    const left = busyRetryLeftMs(this.hostKey, remoteVersion, { overdue: this.forceable(), behindMs: this._behindMs })
+    if (left <= 0) return false
+    this.postponeUpgrade(busyRetryWhy(left), expected, remoteVersion, { delayMs: left })
+    return true
+  }
+
   /**
    * Overdue, every hold gives way. A managed daemon is replaced by the new build's CLI with
    * `--over-busy` (daemon-over-busy.ts), which gets past an older daemon too: one that will not
@@ -6060,6 +6076,7 @@ export class DaemonConnection {
       })
     }
     this._overdueMs = verdict.overdue && !spent ? Math.max(1, verdict.behindMs) : 0
+    this._behindMs = verdict.behindMs
     if (!verdict.overdue || spent) { this._overdueNoted = null; return }
     if (this._overdueNoted === expected) return
     this._overdueNoted = expected
@@ -6073,9 +6090,6 @@ export class DaemonConnection {
   /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
   private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
   private _upgradeRecheckAttempt = 0
-  /** Busy refusals of the update to `expected` in a row; after BUSY_STEADY_TRIES the asks back off. */
-  private _busyRefusals: { expected: string; n: number } | null = null
-  private static BUSY_STEADY_TRIES = 3
   /** The re-run in progress: a reconnect waits for it, so the two never stop or deploy at once. */
   private _upgradeRecheckInFlight: Promise<void> | null = null
   /** The unmanaged daemon this connection last stopped itself, and where (see checkDaemonRunning). */
@@ -6575,15 +6589,11 @@ export class DaemonConnection {
       if (daemonBusyRefusal(error)) {
         // Not an attempt: the update's cooldown would otherwise hold the next minute's try off.
         this._lastUpgradeAttempt = null
-        // A relay in flight ends within a second, so the next minutes ask again; a daemon
-        // busy every time (an idle ACP worker lives up to 2 h) is asked less and less often.
-        const n = this._busyRefusals?.expected === expected ? this._busyRefusals.n + 1 : 1
-        this._busyRefusals = { expected, n }
-        // Overdue, the over-busy update should not be refused; if it is (its restart could not
-        // be confirmed), it is asked again every few minutes at most, not backed off for good.
+        // Asked again on the busy clock (daemon-busy-retry.ts): on disk, so a deploy does not start it
+        // over, and longer the longer the daemon stays busy. Overdue (the over-busy update refused, its
+        // restart not confirmed), within a few minutes.
         this.postponeUpgrade(`the host's daemon is busy (${String(error).split('\n')[0].slice(0, 200)})`, expected, remoteVersion,
-          n <= DaemonConnection.BUSY_STEADY_TRIES ? { steady: true }
-            : { attempt: this.forceable() ? Math.min(n - DaemonConnection.BUSY_STEADY_TRIES, 2) : n - DaemonConnection.BUSY_STEADY_TRIES })
+          { delayMs: noteBusyRefusal(this.hostKey, remoteVersion, { overdue: this.forceable(), behindMs: this._behindMs }) })
         return 'held'
       }
       // The server stopped waiting (NetUpdateUnansweredError): the record stays on the host, and

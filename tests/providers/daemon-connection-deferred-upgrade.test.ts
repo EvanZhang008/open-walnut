@@ -33,7 +33,7 @@ vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { acpUpgradeHoldFlushedForTest, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import {
   DaemonConnection,
@@ -45,6 +45,7 @@ import {
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
+import { noteBusyRefusal, resetBusyRetryForTest } from '../../src/providers/daemon-busy-retry.js'
 import { recentLinkDrops, resetLinkDropsForTest } from '../../src/providers/daemon-link-drops.js'
 import { __resetHostLinkLedgerForTest, linkDownIntervals } from '../../src/providers/host-link-ledger.js'
 import { waitHostLink } from '../../src/providers/daemon-drain-resend.js'
@@ -67,6 +68,7 @@ afterEach(() => {
   conns = []
   setPooledConnectionForTest('devbox', null)
   managedUpdate.mockReset()
+  resetBusyRetryForTest()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -323,7 +325,9 @@ describe('the background update of a service-managed daemon', () => {
         })
         state(c)._capabilities = caps
         state(c)._lastUpgradeAttempt = null
-        state(c)._busyRefusals = { expected: EXPECTED, n: 10 }
+        // Refused for two hours, the last refusal longer ago than the overdue wait (daemon-busy-retry.ts).
+        resetBusyRetryForTest()
+        for (let t = Date.now() - 2 * 60 * 60_000; t <= Date.now() - 6 * 60_000; t += 10 * 60_000) noteBusyRefusal('devbox', OLD, {}, t)
         clearTimeout(state(c).upgradeRecheckTimer as ReturnType<typeof setTimeout>)
         state(c).upgradeRecheckTimer = null
         live(c)
@@ -437,32 +441,70 @@ describe('the background update of a service-managed daemon', () => {
     expect(state(c)._fileFence).toBeNull()
   })
 
-  it('a daemon busy at every ask is asked less often: three times a minute apart, then backing off', async () => {
-    const c = make()
-    stub(c, { probe: MANAGED, version: OLD })
-    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
-    const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
-    vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
-    managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
-      expect(await opts?.onStaged?.()).toBe(true)
-      throw new Error('Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first; the old service config was put back')
-    })
-    live(c)
-    const delays: number[] = []
-    const levels: string[] = []
-    for (let i = 0; i < 6; i++) {
-      warn.mockClear(); info.mockClear()
-      await priv(c).recheckPostponedUpgrade()
+  it('a daemon busy at every ask is asked less and less often, on a clock a new server does not start over', async () => {
+    // 2026-11-25: the count of busy refusals lived in the connection, so each deploy of the leader (every
+    // 10 to 20 min) asked again at once and a minute apart for good (daemon-busy-retry.ts).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-busy-'))
+    const holds = path.join(dir, 'holds.json')
+    setAcpUpgradeHoldFileForTest(holds)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+        expect(await opts?.onStaged?.()).toBe(true)
+        throw new Error('Managed daemon update failed: Error: service.handover: active ACP workers or relay requests must finish first; the old service config was put back')
+      })
+      const server = () => {
+        const c = make()
+        stub(c, { probe: MANAGED, version: OLD })
+        vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
+        live(c)
+        return c
+      }
       const isPostpone = ([m]: unknown[]) => m === 'DaemonConnection: daemon update postponed; checking again'
-      const asWarn = warn.mock.calls.find(isPostpone)
-      const said = asWarn ?? info.mock.calls.find(isPostpone)
-      levels.push(asWarn ? 'warn' : 'info')
-      delays.push((said?.[1] as { retryInMs: number }).retryInMs)
-      expect(state(c)._lastUpgradeAttempt).toBeNull()
+      const ask = async (c: DaemonConnection) => {
+        warn.mockClear(); info.mockClear()
+        await priv(c).recheckPostponedUpgrade()
+        const said = (warn.mock.calls.find(isPostpone) ?? info.mock.calls.find(isPostpone))?.[1] as { retryInMs: number; reason: string }
+        expect(state(c)._lastUpgradeAttempt).toBeNull()
+        return said
+      }
+      let c = server()
+      const delays: number[] = []
+      for (let i = 0; i < 8; i++) {
+        const said = await ask(c)
+        expect(said.reason).toContain("the host's daemon is busy")
+        delays.push(said.retryInMs)
+        vi.setSystemTime(Date.now() + said.retryInMs)
+      }
+      // A minute apart for 3 min, then 2 min apart until 10 min, then 5 min.
+      expect(delays).toEqual([60_000, 60_000, 60_000, 120_000, 120_000, 120_000, 120_000, 300_000])
+      expect(managedUpdate).toHaveBeenCalledTimes(8)
+
+      // A deploy: a new server (the clock read again from disk) asks nothing before the wait ends.
+      vi.setSystemTime(Date.now() - 60_000)
+      await acpUpgradeHoldFlushedForTest()
+      setAcpUpgradeHoldFileForTest(holds)
+      resetDaemonUpdateClaims({ restart: true })
+      c = server()
+      const early = await ask(c)
+      expect(early.reason).toContain('refused the last try as busy')
+      expect(early.retryInMs).toBe(60_000)
+      expect(managedUpdate).toHaveBeenCalledTimes(8)
+      // That wait tried nothing, so it took no claim: another name of the daemon is not held off by it.
+      const other = await claimDaemonUpdate('devbox-net', async () => ['devbox-net', 'devbox'])
+      expect('heldBy' in other).toBe(false)
+      if (!('heldBy' in other)) other.release(false)
+      // Once it ends, the next try waits longer again.
+      vi.setSystemTime(Date.now() + 60_000)
+      expect((await ask(c)).retryInMs).toBe(300_000)
+      expect(managedUpdate).toHaveBeenCalledTimes(9)
+    } finally {
+      vi.useRealTimers()
+      setAcpUpgradeHoldFileForTest(null)
+      fs.rmSync(dir, { recursive: true, force: true })
     }
-    expect(delays).toEqual([60_000, 60_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000])
-    // The same hold asked again is not news: one warning, the rest at info (2026-11-12 log-spike alarm).
-    expect(levels).toEqual(['warn', 'info', 'info', 'info', 'info', 'info'])
   })
 
   it('a boot-start install waits for host_exec runs too', async () => {

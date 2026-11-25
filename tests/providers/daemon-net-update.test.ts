@@ -19,6 +19,7 @@ import {
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { ACP_UPGRADE_HOLD_MAX_MS, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { noteBusyRefusal, resetBusyRetryForTest } from '../../src/providers/daemon-busy-retry.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS, daemonUpdateOverdue } from '../../src/providers/daemon-update-behind.js'
 import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
@@ -479,23 +480,57 @@ describe('NetDaemonUpdater', () => {
     }
   })
 
-  it('a busy refusal is a postponement, never a failure: after the cooldown, or overdue after the recheck', async () => {
+  it('a busy refusal is a postponement, never a failure: on the busy clock, not before the cooldown, and overdue within minutes', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-busy-'))
     setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    vi.useFakeTimers()
     try {
-      for (const late of [false, true]) {
+      // [overdue, cooldown, the wait before the second try]
+      for (const [late, cooldownMs, waitMs] of [[false, 40, 60_000], [false, 10 * 60_000, 10 * 60_000], [true, 10 * 60_000, 60_000]] as const) {
+        resetBusyRetryForTest()
         if (late) { const now = Date.now(); for (let t = now - DAEMON_UPDATE_BEHIND_MAX_MS - 60_000; t < now; t += 30 * 60_000) daemonUpdateOverdue('studio-mac', OLD, true, t) }
         let calls = 0
         const { u } = updater({
-          cooldownMs: late ? 60_000 : 40,
+          cooldownMs,
           update: vi.fn(async () => { calls += 1; if (calls === 1) throw new Error('Managed daemon update failed: service.handover: running host_exec jobs must finish first') }),
         })
         u.schedule(0)
-        await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(u.state.phase).toBe('postponed')
+        expect(calls).toBe(1)
+        await vi.advanceTimersByTimeAsync(waitMs - 2_000)
+        expect(calls).toBe(1)
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(u.state.phase).toBe('updated')
         expect(calls).toBe(2)
         u.stop()
       }
     } finally {
+      vi.useRealTimers()
+      resetBusyRetryForTest()
+      setAcpUpgradeHoldFileForTest(null)
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a new server does not try before the busy clock says so; a request asks at once', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'net-busy-gate-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    try {
+      resetBusyRetryForTest()
+      noteBusyRefusal('studio-mac', OLD)
+      const { u, update } = updater()
+      u.schedule(0)
+      await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
+      expect(u.state.message).toContain('refused the last try as busy')
+      expect(update).not.toHaveBeenCalled()
+      u.stop()
+      const asked = updater()
+      expect((await asked.u.request()).phase).toBe('updated')
+      expect(asked.update).toHaveBeenCalledTimes(1)
+      asked.u.stop()
+    } finally {
+      resetBusyRetryForTest()
       setAcpUpgradeHoldFileForTest(null)
       await fs.rm(dir, { recursive: true, force: true })
     }

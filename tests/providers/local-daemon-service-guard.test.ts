@@ -40,6 +40,8 @@ import { ourDaemonCapabilities } from '../../src/providers/daemon-shared.js'
 import { log } from '../../src/logging/index.js'
 import { buildBackoffSettled } from '../../src/providers/daemon-build-backoff.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
+import { resetBusyRetryForTest } from '../../src/providers/daemon-busy-retry.js'
 
 // Stub spawn — the guard's whole job is that this never runs. Everything else in
 // node:child_process stays real (constants/logging use it at import time).
@@ -474,20 +476,42 @@ describe('LocalDaemon managed service updates', () => {
     expect(daemon.port).toBe(32200)
   })
 
-  it('a busy refusal is asked again on the upgrade clock, the old daemon adopted', async () => {
-    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
-    const internals = daemon as unknown as { ensureRunningInner(): Promise<number>; ping(port: number): Promise<unknown>; readPortFile(): number; readBinaryVersion(): string; auditOwnerOnAdopt(): void; scheduleUpgradeRecheck(): void }
-    vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
-    vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
-    vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: ['cron-supervision-v1'] })
-    vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
-    const recheck = vi.spyOn(internals, 'scheduleUpgradeRecheck').mockImplementation(() => {})
-    vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
-    vi.spyOn(log.session, 'warn').mockImplementation(() => {})
-    localUpdate.mockResolvedValue('busy')
-    await expect(internals.ensureRunningInner()).resolves.toBe(32100)
-    await daemon.managedUpdatePending
-    expect(recheck).toHaveBeenCalledTimes(1)
+  it('a busy refusal is asked again on the busy clock, the old daemon adopted, and a new server waits it out', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-busy-'))
+    setAcpUpgradeHoldFileForTest(path.join(dir, 'holds.json'))
+    try {
+      const server = () => {
+        const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+        const internals = daemon as unknown as { ensureRunningInner(): Promise<number>; ping(port: number): Promise<unknown>; readPortFile(): number; readBinaryVersion(): string; auditOwnerOnAdopt(): void; scheduleUpgradeRecheck(ms?: number): void }
+        vi.spyOn(internals, 'readBinaryVersion').mockReturnValue('new-version')
+        vi.spyOn(internals, 'readPortFile').mockReturnValue(32100)
+        vi.spyOn(internals, 'ping').mockResolvedValue({ alive: true, version: 'old-version', capabilities: ['cron-supervision-v1'] })
+        vi.spyOn(internals, 'auditOwnerOnAdopt').mockImplementation(() => {})
+        const recheck = vi.spyOn(internals, 'scheduleUpgradeRecheck').mockImplementation(() => {})
+        vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
+        return { daemon, internals, recheck }
+      }
+      vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+      vi.spyOn(log.session, 'info').mockImplementation(() => {})
+      localUpdate.mockResolvedValue('busy')
+      const first = server()
+      await expect(first.internals.ensureRunningInner()).resolves.toBe(32100)
+      await first.daemon.managedUpdatePending
+      expect(localUpdate).toHaveBeenCalledTimes(1)
+      expect(first.recheck).toHaveBeenCalledWith(60_000)
+      // A deploy right after: the new server adopts the daemon and asks nothing before the wait ends.
+      const next = server()
+      await expect(next.internals.ensureRunningInner()).resolves.toBe(32100)
+      await next.daemon.managedUpdatePending
+      expect(localUpdate).toHaveBeenCalledTimes(1)
+      const waited = next.recheck.mock.calls[0]?.[0] as number
+      expect(waited).toBeGreaterThan(50_000)
+      expect(waited).toBeLessThanOrEqual(60_000)
+    } finally {
+      resetBusyRetryForTest()
+      setAcpUpgradeHoldFileForTest(null)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('a service config on disk with no daemon running is started before the refusal, and its daemon adopted', async () => {

@@ -141,6 +141,14 @@ export function upgradeHoldClock(
   return { holds: heldMs < maxMs, heldMs }
 }
 
+/** A clock as it stands, read without touching it (null: none, not seen for `staleMs`, or dated after `now`: the clock stepped back). */
+export function readHoldClock(key: string, now: number = Date.now(), staleMs: number = ACP_UPGRADE_HOLD_STALE_MS): { since: number; seen: number } | null {
+  const cur = load()[key]
+  const valid = !!cur && typeof cur === 'object' && Number.isFinite(cur.since) && Number.isFinite(cur.seen)
+    && cur.since <= now && cur.seen <= now && now - cur.seen < staleMs
+  return valid ? { since: cur.since, seen: cur.seen } : null
+}
+
 /** Drop the clocks whose key starts with `prefix`, all but `keep` (a clock for a state that is over). */
 export function dropHoldClocks(prefix: string, keep: string): void {
   const s = load()

@@ -65,6 +65,7 @@ import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type OtherService } from './in-process-daemon.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
+import { busyRetryLeftMs, noteBusyRefusal } from './daemon-busy-retry.js'
 
 /** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
 const IN_PROCESS_PREWARM_MAX_MS = 120_000
@@ -580,12 +581,15 @@ export class LocalDaemon {
   private readonly _holdNews = new HoldNews()
   /** Overdue on a managed daemon: its update passes `--over-busy`. */
   private _forceable = false
+  /** How long this Mac's daemon has run another build (noteOverdue), for the busy clock's waits. */
+  private _behindMs = 0
 
   private noteOverdue(running: string | undefined, expected: string | null | undefined, capabilities?: string[]): void {
     const verdict = daemonUpdateOverdue('__local__', running ?? '', !!running && !!expected && running !== expected)
     // A managed daemon is replaced with `--over-busy` (daemon-over-busy.ts); an unmanaged one is stopped from here.
     this._forceable = verdict.overdue && !!capabilities?.includes('cron-supervision-v1')
     this._overdueMs = verdict.overdue ? Math.max(1, verdict.behindMs) : 0
+    this._behindMs = verdict.behindMs
     if (!verdict.overdue) { this._overdueNoted = null; return }
     if (this._overdueNoted === expected) return
     this._overdueNoted = expected ?? null
@@ -1114,7 +1118,7 @@ export class LocalDaemon {
    * failed update put back. One at a time.
    */
   private startManagedUpdate(binaryPath: string, expected: string, running: string | null): void {
-    if (this._managedUpdate) return
+    if (this._managedUpdate || this.deferForBusyClock(running)) return
     const run = this._managedUpdate = (async () => {
       let outcome: Awaited<ReturnType<LocalDaemon['updateManagedDaemon']>>
       try {
@@ -1130,9 +1134,12 @@ export class LocalDaemon {
       if (outcome === 'backoff') {
         // Its day off: the old daemon keeps serving, and the update is asked again once the day is over.
         this.scheduleUpgradeRecheck(this._managedFail ? backoffLeftMs(this._managedFail) : LOCAL_UPGRADE_RECHECK_MS)
-      } else if (outcome === 'busy' || outcome === 'later') {
-        // Work of its own started after the hello (a host_exec run), or a try within 10 minutes:
-        // the old daemon keeps serving. Overdue (this._overdueMs), the next try goes over that work.
+      } else if (outcome === 'busy') {
+        // Work of its own started after the hello (a host_exec run): the old daemon keeps serving, and the
+        // next try waits on the busy clock (daemon-busy-retry.ts). Overdue, the next try goes over that work.
+        this.scheduleUpgradeRecheck(noteBusyRefusal('__local__', running ?? '', { overdue: this._forceable, behindMs: this._behindMs }))
+      } else if (outcome === 'later') {
+        // A try within 10 minutes, launchd starting no jobs now, or a config not readable: asked again in a minute.
         this.scheduleUpgradeRecheck()
       } else if (outcome !== null) {
         this.noteDaemonReplaced()
@@ -1146,6 +1153,14 @@ export class LocalDaemon {
   }
 
   private _managedSkipLogged: string | null = null
+
+  /** The last try was refused as busy (daemon-busy-retry.ts): none before its wait ends, a new server's first included. */
+  private deferForBusyClock(running: string | null): boolean {
+    const busyLeft = busyRetryLeftMs('__local__', running ?? '', { overdue: this._forceable, behindMs: this._behindMs })
+    if (busyLeft <= 0) return false
+    this.scheduleUpgradeRecheck(busyLeft)
+    return true
+  }
 
   /** After a managed update: the daemon that serves now, through a fresh start check (its hello, its version). */
   private async adoptAfterManagedUpdate(): Promise<void> {
@@ -1203,7 +1218,7 @@ export class LocalDaemon {
       // Refused before anything changed (the daemon busy, launchd starting no jobs): asked again on the upgrade clock.
       this._lastManagedUpdate = null
       holdLog(this._holdNews, expected, `managed update ${outcome}`, `local daemon: managed update ${outcome === 'busy' ? 'refused while the daemon is busy, or another update or the last one\'s probation is at work' : 'deferred: launchd starts no jobs in this login session now'}; trying again later`, { expected })
-      return 'busy'
+      return outcome === 'busy' ? 'busy' : 'later'
     }
     const port = this.readPortFile()
     if (!port) {
