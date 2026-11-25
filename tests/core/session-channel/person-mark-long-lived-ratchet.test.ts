@@ -111,7 +111,7 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
     // pushTriggersOnce: a retry of the trigger push, which is no person-only command.
     'sharedJobVerdict timer': 'no-send', 'opReadsJobNamed timer': 'call', 'pushTriggersOnce timer': 'no-send',
     'sendOnce timer': 'call', 'sendOnce timer #2': 'call', 'sendOnce timer #3': 'call',
-    'drainBeforeAnswering timer': 'call', 'sendGatewayResult timer': 'no-send', 'checkUpstream timer': 'call',
+    'drainBeforeAnswering timer': 'call', 'sendGatewayResultOnce timer': 'no-send', 'checkUpstream timer': 'call',
     // A stream the host opened toward this server: made in the link's own events.
     'plugFollowerStream socket': 'link',
     'dialLinkPortForward socket': 'outside', 'dialPortForward process': 'outside',

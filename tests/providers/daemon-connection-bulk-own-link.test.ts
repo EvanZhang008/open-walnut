@@ -40,59 +40,19 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { _setBulkForwardForTesting, type LaneForward } from '../../src/providers/stream-lane.js'
+import { _setBulkForwardForTesting } from '../../src/providers/stream-lane.js'
 import { pacedForward } from '../../src/providers/paced-forward.js'
 import { linkFailureKind } from '../../src/providers/link-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { proxyForward } from '../helpers/proxy-forward.js'
+import { waitFor } from '../helpers/poll-wait.js'
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
 type Statics = { BULK_REDIAL_DELAY_MS: number; BULK_UPLOAD_WAIT_MS: number; BULK_OWN_RETRY_MS: number }
 const statics = DaemonConnection as unknown as Statics
-
-async function waitFor(cond: () => boolean, timeoutMs = 5_000, label = 'condition'): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (cond()) return
-    await new Promise((r) => setTimeout(r, 25))
-  }
-  throw new Error(`timed out waiting for ${label}`)
-}
-
-/** A forward like ssh -L: a local port onto the daemon's, which `cut()` ends as the relay does. */
-async function proxyForward(daemonPort: number): Promise<LaneForward & { cut(): void; accepted: () => number }> {
-  const sockets = new Set<net.Socket>()
-  let accepted = 0
-  const server = net.createServer((client) => {
-    accepted++
-    const up = net.connect(daemonPort, '127.0.0.1')
-    sockets.add(client); sockets.add(up)
-    client.pipe(up); up.pipe(client)
-    const end = () => { client.destroy(); up.destroy() }
-    client.on('error', end); up.on('error', end); client.on('close', end); up.on('close', end)
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
-  const port = (server.address() as net.AddressInfo).port
-  const exitCbs: Array<(why: string) => void> = []
-  let exited: string | null = null
-  const finish = (why: string) => {
-    if (exited !== null) return
-    exited = why
-    server.close()
-    for (const s of sockets) s.destroy()
-    for (const cb of exitCbs.splice(0)) cb(why)
-  }
-  return {
-    port,
-    onExit: (cb) => { if (exited !== null) cb(exited); else exitCbs.push(cb) },
-    stop: () => finish('stopped'),
-    cut: () => finish('code 255: client_loop: send disconnect: Broken pipe'),
-    accepted: () => accepted,
-  }
-}
 
 describe('DaemonConnection: the bulk channel on a connection of its own', () => {
   let daemon: MockDaemon

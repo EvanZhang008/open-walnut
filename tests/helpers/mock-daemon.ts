@@ -20,6 +20,7 @@ import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { unpackReplicaSyncLists } from '../../src/providers/replica-sync-gz.js'
 import { ARG_REF_TOKEN, ARG_REF_MIN_CHARS, argRefHash } from '../../src/providers/start-arg-refs.js'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 import { lineFate } from '../../src/providers/line-fate-core.js'
@@ -346,6 +347,13 @@ export class MockDaemon {
     }
 
     const id = cmd.id as number
+    // A manifest's lists as the real daemon's cmdReplica reads them (replica-sync-gz-v1), so history holds them plain.
+    if (cmd.cmd === 'replica.sync' && typeof cmd.listsGz === 'string') {
+      try { cmd = unpackReplicaSyncLists(cmd) } catch (err) {
+        ws.send(JSON.stringify({ id, ok: false, error: (err as Error).message }))
+        return
+      }
+    }
 
     // A start's arguments as the real daemon's cmdStart reads them: refs put back from its copies
     // (start-arg-refs-v1) and hook texts back in the settings, so history holds the inline args.

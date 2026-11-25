@@ -66,6 +66,7 @@ import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
 import { createHostReplica } from './host-replica-core.js'
+import { unpackReplicaSyncLists } from './replica-sync-gz.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createFollowerGateway, type FollowerGatewayResponse, type GatewayCaller } from './follower-gateway-core.js'
@@ -3824,6 +3825,8 @@ function cmdReplica(ws: ServerWebSocket<WsData>, id: number, op: 'sync' | 'put' 
   try {
     const home = cmd.home as string
     // `confirm`/`confirmFor` (note-journal-v1): the leader's override of the half rule, bound to its manifest.
+    // replica-sync-gz-v1: the manifest's lists may come gzipped (`listsGz`).
+    if (op === 'sync') cmd = unpackReplicaSyncLists(cmd)
     if (op === 'sync') return sendOk(ws, id, hostReplica.sync(home, cmd.kind, cmd.entries, cmd.asOf, cmd.opts as Record<string, unknown> | undefined, { confirm: cmd.confirm, confirmFor: cmd.confirmFor }, cmd))
     if (op === 'put') return sendOk(ws, id, hostReplica.put(home, cmd.kind, cmd.files))
     if (op === 'drop') return sendOk(ws, id, hostReplica.drop(home, cmd.kind))
@@ -3990,6 +3993,15 @@ function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; o
 }
 
 /**
+ * Servers are connected, and each has said whose Walnut it is: a call naming no Walnut has none to go
+ * to (the pick takes a socket that names none, a starting one included). False with no server at all.
+ */
+function gatewayOnlyNamedWalnuts(): boolean {
+  const picked = gatewayIdentity.pick(gatewayCandidates(false), undefined, { pinned: false, allowUnidentified: true })
+  return picked.target === null && picked.otherWalnut > 0
+}
+
+/**
  * No server of `home`'s Walnut takes calls now, but one may in a moment: a socket between
  * its hello and its bind, or one that just opened and has named no run yet (a server
  * starting).
@@ -4031,9 +4043,10 @@ function sendGatewayRequest(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean; followerBy?: number } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean; followerBy?: number; home?: string } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
-  const home = gatewayOwnerHome(callerSid)
+  // `home`: the Walnut the daemon itself knows the call is for (a trigger check's run), else the caller's.
+  const home = plan.home || gatewayOwnerHome(callerSid)
   // Why a server is passed over is logged on a call's first look, not on each look of a wait.
   const target = gatewayTargetFor(home, plan.followerBy === undefined ? { callerSid, op: payload.name } : undefined)
   const deadline = plan.deadline
@@ -4132,6 +4145,12 @@ function sendGatewayRequest(
     return
   }
   if (!target) {
+    // A call that names no Walnut while only other Walnuts' servers are here: no server would take it,
+    // however long it waits (2026-11-25: a shared host's outside calls waited 90 s each). Told at once.
+    if (!home && external && gatewayOnlyNamedWalnuts()) {
+      logMsg('info', 'gateway: an outside call names no Walnut, and this host serves more than one', { capability, op: payload.name })
+      return respond(gatewayError('unknown_caller', 'this host serves more than one Walnut and this call, from outside any session, names none; nothing was sent. Run it from a session or a trigger check of the Walnut you mean'))
+    }
     if (waitHere()) {
       logMsg('info', 'gateway: no server connected, waiting for one', { capability, callerSid, leftMs: deadline - Date.now() })
       return
@@ -4355,8 +4374,10 @@ function sendRelayAttempt(relayId: number, target: ServerWebSocket<WsData>): voi
   // The instance id makes (instance, relayId) unique across daemon restarts: the server runs a relay once by it.
   // `busyAgain`: this host asks a busy call again; it paid its write at its first ask (capability-router.ts).
   // `caller`: the plugin job that made it, the field the follower gets (follower-gateway-core.ts GatewayCaller).
+  // `callerWaitsMs`: how long its caller still waits (an answer is taken until then, on any attempt).
   sendEvent(target, 'gateway-request', {
     relayId, instanceId: DAEMON_INSTANCE_ID, capability: call.capability, callerSid: call.callerSid, payload: call.payload,
+    callerWaitsMs: Math.max(0, call.deadline - Date.now()),
     ...(call.busyAgain ? { busyAgain: call.busyAgain } : {}),
     ...(call.caller ? { caller: call.caller } : {}),
   })
@@ -4603,7 +4624,9 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
     // The check's caller hanging up ends its waiting call too (waitForPrimary).
     const left = gatewayCallerLeft.get(respond)
     if (left) gatewayCallerLeft.set(answer, left)
-    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
+    // `external` names no Walnut: the run's own (the trigger's) routes it on a host two Walnuts share.
+    const plan = gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now())
+    return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, check?.home ? { ...plan, home: check.home } : plan)
   }
   if (pluginJobs.isRunSid(req.sid)) {
     const home = pluginJobs.homeOfRun(req.sid)

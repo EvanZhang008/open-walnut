@@ -157,7 +157,7 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
     const stillArmed = () => armedTriggers.get(triggerKey(entry.home, entry.def.id)) === entry
     try {
       // Its `walnut` calls act for this trigger's task (trigger-caller-v1), only while it runs.
-      const caller = checkCallers.mint({ kind: 'armed', id: entry.def.id })
+      const caller = checkCallers.mint({ kind: 'armed', id: entry.def.id, ...(entry.home ? { home: entry.home } : {}) })
       const proc = await runCheckProcess(entry.def.check, buildCheckStdin(entry.state, startedAt), {
         env: { WALNUT_TRIGGER_ID: entry.def.id, WALNUT_TRIGGER_NAME: entry.def.name, ...checkCallerEnv(caller.sid, GATEWAY_SOCK_PATH) },
         templateShimDir: GATEWAY_SHIM_DIR,

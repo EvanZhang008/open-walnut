@@ -365,6 +365,11 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the path ends a connection every few MB carried up). Optional: without
   // it the copy rides the session socket.
   'host-slice-unbound-v1',
+  // 'replica-sync-gz-v1' (replica-sync-gz.ts): `replica.sync {listsGz}` carries the manifest's lists
+  // (entries, changed, removed, renamed) gzipped, base64. The whole notes manifest (about 1.7 MB)
+  // took longer than this daemon's 120 s keepalive to go up a paced bulk connection, which was cut
+  // every two minutes with every answer behind it (2026-11-25). Optional: without it the lists go as JSON.
+  'replica-sync-gz-v1',
   // 'fs-read-range-gz-v1': `fs.readRange {gz: true}` answers a range of 16 KB or more as
   // `dataGz` (gzip level 1, base64) when that is smaller, else `data` as before. A JSONL
   // packs 2 to 4 times smaller (measured 2026-11-20 on 4 MB windows of a 49 MB transcript),

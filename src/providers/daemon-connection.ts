@@ -117,6 +117,8 @@ import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRem
 import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
 import { pacedForward } from './paced-forward.js'
 import { uploadPaceFor } from './upload-pace.js'
+import { kbps, PacedFrameTooSlowError, PacedSendGate, relayAnswerSecs, type LateAnswer, type PacedLink } from './paced-send-gate.js'
+import { packReplicaSyncLists, REPLICA_SYNC_GZ_CAPABILITY } from './replica-sync-gz.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
@@ -132,7 +134,7 @@ import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
 import { BootStartKeeper, type BootStartView } from './remote-boot-start-keeper.js'
 import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
 import { AWAKE_TICK_MS, AwakeDownClock } from './awake-down-clock.js'
-import { assertFrameFits, DAEMON_FRAME_MAX_BYTES, DaemonFrameTooLargeError, tooLargeGatewayReply } from './daemon-frame-cap.js'
+import { assertFrameFits, DAEMON_FRAME_MAX_BYTES, DaemonFrameTooLargeError, neverFitsGatewayReply, tooLargeGatewayReply, tooSlowGatewayReply } from './daemon-frame-cap.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, masterTargetIdentity, ownedMuxClientArgs, planControlMaster, recordForward, startControlMaster, type MasterControl } from './ssh-control-master.js'
@@ -1084,6 +1086,20 @@ export class DaemonConnection {
   private bulkUpBytes(): number { return this.bulkUpBase + (this.bulkUpSent?.() ?? 0) }
   /** Request bytes written to the bulk socket on the current own connection (its pacer lets them up later). */
   private bulkOwnWritten = 0
+  /** The current own connection's pace now (bytes a second), or null: unpaced. */
+  private bulkUpPace: (() => number | null) | null = null
+  /** The own paced connection as its send gate reads it: only while the bulk socket rides it. */
+  private pacedLink(): PacedLink {
+    return {
+      // bufferedAmount is part of what was written (bulkOwnWritten): not counted again.
+      aheadBytes: () => this.bulkQueuedUp(),
+      bytesPerSec: () => (this.bulkSocketOwn && this.bulkWs?.readyState === WebSocket.OPEN ? this.bulkUpPace?.() ?? null : null),
+      upBytes: () => this.bulkUpBytes(),
+    }
+  }
+  /** What may go up the own paced connection, and when (paced-send-gate.ts). */
+  private _pacedGate: PacedSendGate | null = null
+  private get pacedGate(): PacedSendGate { return (this._pacedGate ??= new PacedSendGate(this.hostKey, this.pacedLink())) }
   /** Bytes written to the own bulk connection that its pacer has not let go up yet: what a new request waits behind. */
   private bulkQueuedUp(): number {
     // An unpaced forward counts nothing going up: nothing waits on it either.
@@ -3334,6 +3350,8 @@ export class DaemonConnection {
   ): Promise<DaemonCommandResult> {
     // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
     // shutdown does not wait for a file write: a file change waits for the swap (bounded).
+    // A daemon that reads it takes a manifest's lists gzipped (replica-sync-gz.ts).
+    if (cmd === 'replica.sync' && this.hasCapability(REPLICA_SYNC_GZ_CAPABILITY)) params = await packReplicaSyncLists(params)
     const upload = DaemonConnection.isUpload(cmd, params)
     const background = upload && DaemonConnection.isBackgroundUpload(cmd, params)
     let waited = 0
@@ -3409,6 +3427,21 @@ export class DaemonConnection {
       && message.length >= DaemonConnection.COPY_HOLD_BYTES) {
       this.heldCopies.add(cmd)
       throw markLinkFailure(new Error(`${cmd}: a ${Math.round(message.length / 1024)} KB copy waits for the upload channel's own connection to ${this.hostKey} (${this.bulkOwnRefusal || 'it will not open'}); nothing was sent, it goes when that opens`), 'no-link')
+    }
+    // On the own paced connection a frame goes only when it can go up before the host's keepalive
+    // ends the link, and only once what is ahead of it has mostly gone up; a relay's answer never
+    // waits behind the rest (paced-send-gate.ts; 2026-11-25: a 1.7 MB manifest was cut every two
+    // minutes there, with every answer behind it).
+    // What the pacer counts: bytes, not characters (a Chinese note is three bytes a character).
+    const wireBytes = ownUp ? Buffer.byteLength(message) : message.length
+    if (ownUp && upload && !inProcess) {
+      const turn = this.pacedGate.admit(wireBytes, { what: cmd, first: cmd === 'gateway-result', stallMs: timeoutMs, maxMs: DaemonConnection.UPLOAD_PROGRESS_CEILING_MS })
+      if (turn) {
+        await turn
+        if (this.bulkWs !== bulkSocket || bulkSocket.readyState !== WebSocket.OPEN) {
+          throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} dropped while it waited to go up; nothing was sent, try again`), 'no-link')
+        }
+      }
     }
 
     const startedAt = Date.now()
@@ -3506,7 +3539,7 @@ export class DaemonConnection {
         this.mainSentByCmd.set(cmd, (this.mainSentByCmd.get(cmd) ?? 0) + message.length)
         this.noteLinkSent(message.length)
       }
-      if (ownBulk) this.bulkOwnWritten += message.length
+      if (ownBulk) this.bulkOwnWritten += wireBytes
       if (!isInProcessDaemonSocket(sentOn)) { sentOn.send(message); return }
       // A daemon in this process answers most commands by function: the reply is the call's result,
       // taken as its reply frame would be (the pending entry above, its timer and its logs).
@@ -4018,7 +4051,12 @@ export class DaemonConnection {
       before: async () => {
         if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.journalName())) await this.drainBeforeAnswering()
       },
-      send: (reply, kept) => this.sendGatewayResult(reply, call.relayId, kept, { capability: call.capability, callerSid: call.callerSid }),
+      // answerBy only when the host said how long its caller waits (callerWaitsMs): an older daemon's
+      // relay is never judged late, as before.
+      send: (reply, kept) => this.sendGatewayResult(reply, call.relayId, kept, {
+        capability: call.capability, callerSid: call.callerSid,
+        ...(call.callerWaitsMs !== undefined ? { answerBy: receivedAt + call.callerWaitsMs } : {}), instanceId: call.instanceId,
+      }),
     })
   }
 
@@ -4029,30 +4067,61 @@ export class DaemonConnection {
    * clouddev stopped arriving for two minutes while its events still came, so
    * the ping loop, which counts any byte heard, never called the link dead).
    */
-  private async sendGatewayResult(
+  private sendGatewayResult(
     reply: Record<string, unknown>, relayId: number,
-    kept?: { reply: Promise<Record<string, unknown>> }, about: { capability?: string; callerSid?: string } = {},
+    kept?: { reply: Promise<Record<string, unknown>> }, about: { capability?: string; callerSid?: string; answerBy?: number; instanceId?: string } = {},
+  ): Promise<boolean> {
+    // The host asks again after each attempt while its caller waits, and the memo answers each ask:
+    // an answer still going up is that answer (2026-11-25 review: sent twice, the second was judged
+    // behind the first on the paced connection and its small error overtook the real answer).
+    const key = `${about.instanceId ?? ''}:${relayId}`
+    const going = this.answersGoingUp.get(key)
+    if (going) return going
+    const sending = this.sendGatewayResultOnce(reply, relayId, kept, about).finally(() => {
+      if (this.answersGoingUp.get(key) === sending) this.answersGoingUp.delete(key)
+    })
+    this.answersGoingUp.set(key, sending)
+    return sending
+  }
+  /** Relay answers being sent now, by host run and relay id. */
+  private answersGoingUp = new Map<string, Promise<boolean>>()
+
+  private async sendGatewayResultOnce(
+    reply: Record<string, unknown>, relayId: number,
+    kept: { reply: Promise<Record<string, unknown>> } | undefined, about: { capability?: string; callerSid?: string; answerBy?: number; instanceId?: string },
   ): Promise<boolean> {
     const sentAt = Date.now()
     const watch = setTimeout(() => { void this.checkUpstream(sentAt) }, DaemonConnection.UPSTREAM_CHECK_MS)
     watch.unref?.()
+    const { answerBy, instanceId: _run, ...said } = about
+    // The caller gets why instead of an answer that cannot go, and so does a resend (the memo keeps the small one).
+    const answerSmall = async (why: string, small: Record<string, unknown>, data: Record<string, unknown>): Promise<boolean> => {
+      log.session.warn(`DaemonConnection: ${why}, answered with an error`, { host: this.hostKey, relayId, ...data, ...said })
+      if (kept) kept.reply = Promise.resolve(small)
+      const ack = await this.send('gateway-result', small) as { ok?: unknown } | undefined
+      return ack?.ok === true
+    }
     try {
       // Taken only when the daemon says ok (a refusal resolves too).
-      let ack: { ok?: unknown } | undefined
       try {
-        ack = await this.send('gateway-result', await this.packGatewayResult(reply)) as { ok?: unknown } | undefined
+        const packed = await this.packGatewayResult(reply)
+        // On the paced connection, an answer that cannot reach the host before its caller stops
+        // waiting is not sent: the caller gets why at once, not a timeout (paced-send-gate.ts).
+        const late = this.lateRelayAnswer(packed, answerBy)
+        if (late) return await answerSmall('gateway answer cannot go up in time', tooSlowGatewayReply(relayId, this.hostKey, late), { ...late })
+        const ack = await this.send('gateway-result', packed) as { ok?: unknown } | undefined
+        return ack?.ok === true
       } catch (err) {
-        if (!(err instanceof DaemonFrameTooLargeError)) throw err
-        // Sent, it would close the link and come back asked again on the next one, forever:
-        // the caller gets why instead, and so does a resend (the memo keeps the small answer).
-        log.session.warn('DaemonConnection: gateway answer too large for one frame, answered with an error', {
-          host: this.hostKey, relayId, bytes: err.bytes, ...about,
-        })
-        const small = tooLargeGatewayReply(relayId, err.bytes, this.hostKey)
-        if (kept) kept.reply = Promise.resolve(small)
-        ack = await this.send('gateway-result', small) as { ok?: unknown } | undefined
+        // Sent, it would end the paced connection (the host's keepalive) and every answer on it.
+        if (err instanceof PacedFrameTooSlowError) {
+          return await answerSmall('gateway answer too slow for the paced link alone', neverFitsGatewayReply(relayId, this.hostKey, err.bytes, err.bytesPerSec), { bytes: err.bytes, paceKBps: kbps(err.bytesPerSec) })
+        }
+        // Sent, it would close the link and come back asked again on the next one, forever.
+        if (err instanceof DaemonFrameTooLargeError) {
+          return await answerSmall('gateway answer too large for one frame', tooLargeGatewayReply(relayId, err.bytes, this.hostKey), { bytes: err.bytes })
+        }
+        throw err
       }
-      return ack?.ok === true
     } catch (err) {
       // A socket that closed with the answer on it is the link's drop, told once by its own line
       // (the bulk channel's warns when it took commands with it; the session link's "connection
@@ -4067,6 +4136,29 @@ export class DaemonConnection {
       clearTimeout(watch)
     }
   }
+
+  /**
+   * How late a relay answer would be on the own paced connection, or null: it goes in time (or
+   * rides another socket, or the link is unpaced). Judged as the frame would go: behind the bytes
+   * already written to the connection (an answer never waits behind frames not written yet).
+   */
+  private lateRelayAnswer(packed: Record<string, unknown>, answerBy: number | undefined): LateAnswer | null {
+    if (answerBy === undefined || !DaemonConnection.isUpload('gateway-result', packed)) return null
+    if (!this.bulkSocketOwn || this.bulkWs?.readyState !== WebSocket.OPEN || isInProcessDaemonSocket(this.bulkWs)) return null
+    const link = this.pacedLink()
+    const pace = link.bytesPerSec()
+    // As the frame goes: its JSON in bytes, with room for the command's own fields.
+    let json = ''
+    try { json = JSON.stringify(packed) } catch { return null }
+    const bytes = Buffer.byteLength(json) + 128
+    const need = relayAnswerSecs(link, bytes)
+    if (pace === null || need === null) return null
+    const left = (answerBy - Date.now()) / 1000 - DaemonConnection.RELAY_ANSWER_SPARE_SECS
+    if (need <= left) return null
+    return { bytes, aheadKB: Math.round(link.aheadBytes() / 1024), paceKBps: kbps(pace), needSecs: Math.round(need), leftSecs: Math.max(0, Math.round(left)) }
+  }
+  /** What an answer keeps of its relay's time for the host to take it and hand it on. */
+  static RELAY_ANSWER_SPARE_SECS = 1
 
   /**
    * A big answer's result goes gzipped where the daemon reads it (gateway-result-gz-v1):
@@ -8625,6 +8717,7 @@ export class DaemonConnection {
       // Kept monotonic across connections, so a mark taken on the last one still compares.
       this.bulkUpBase = this.bulkUpBytes()
       this.bulkUpSent = (fwd as { sentBytes?: () => number }).sentBytes ?? null
+      this.bulkUpPace = (fwd as { paceBytesPerSec?: () => number | null }).paceBytesPerSec ?? null
       this.bulkOwnWritten = 0
       fwd.onExit((why) => {
         if (this.bulkForward !== fwd) return
@@ -8892,6 +8985,8 @@ export class DaemonConnection {
 
     ws.on('close', () => {
       const lost = this.failPendingOn(ws)
+      // Frames waiting to go up it were never written: their senders hear so now.
+      if (own && this._pacedGate && this.bulkWs === ws) this._pacedGate.close(markLinkFailure(new Error(`the upload channel to ${this.hostKey} dropped while frames waited to go up; nothing of them was sent, try again`), 'no-link'))
       if (seq !== this.bulkDialSeq) return // superseded or deliberately torn down
       if (this.bulkWs === ws) { this.bulkWs = null; this.bulkSocketOwn = false }
       if (established) {

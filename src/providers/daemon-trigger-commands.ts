@@ -111,7 +111,9 @@ export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: Daemo
       const entry = held && armedTriggers.get(triggerKey(held.home, held.def.id)) === held ? held : undefined
       const state = entry ? entry.state : emptyHostState(now)
       // A test the server asked for a task's session acts for that task, as the trigger will.
-      const caller = checkCaller ? checkCallers.mint(checkCaller) : null
+      // Its calls go to the Walnut that asked for the test (the one whose trigger it is).
+      const runHome = home || entry?.home
+      const caller = checkCaller ? checkCallers.mint({ ...checkCaller, ...(runHome ? { home: runHome } : {}) }) : null
       const proc = await runCheckProcess(spec, buildCheckStdin(state, now), {
         env: {
           WALNUT_TRIGGER_ID: entry ? entry.def.id : (targetId ?? 'trigger-test'),

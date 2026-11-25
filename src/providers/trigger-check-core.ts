@@ -1123,8 +1123,13 @@ export const CHECK_CALLER_SID_PREFIX = 'trigger-check:';
 /** The server's id of one test run (trigger-caller.ts mints them). */
 export const CHECK_TEST_RUN_RE = /^tt-[A-Za-z0-9_-]{8,64}$/;
 
-/** What a daemon vouches a check's call came from: an armed trigger, or one test run. */
-export interface CheckCaller { kind: 'armed' | 'test'; id: string }
+/**
+ * What a daemon vouches a check's call came from: an armed trigger, or one test run. `home`: the
+ * Walnut whose trigger it runs, set by the daemon when it starts the run (never from the wire), so
+ * the run's `walnut` calls go to that Walnut's server on a host two Walnuts share (2026-11-25: with
+ * a second Walnut's server connected, every check's call waited for "no server" and timed out).
+ */
+export interface CheckCaller { kind: 'armed' | 'test'; id: string; home?: string }
 
 export function isCheckCaller(v: unknown): v is CheckCaller {
   if (!v || typeof v !== 'object') return false;
@@ -1165,7 +1170,9 @@ export function createCheckCallers(token: () => string = () => randomBytes(18).t
   return {
     mint(caller) {
       const sid = CHECK_CALLER_SID_PREFIX + token();
-      const run: { caller: CheckCaller; fault?: MachineFaultKind } = { caller: { kind: caller.kind, id: caller.id } };
+      const run: { caller: CheckCaller; fault?: MachineFaultKind } = {
+        caller: { kind: caller.kind, id: caller.id, ...(caller.home ? { home: caller.home } : {}) },
+      };
       live.set(sid, run);
       return { sid, release: () => { live.delete(sid); }, fault: () => run.fault };
     },

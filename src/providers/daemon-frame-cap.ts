@@ -14,6 +14,7 @@
  * tests/providers/daemon-frame-cap.test.ts (every socket write of daemon-connection.ts
  * goes through this check, and Bun still closes on a frame over the cap).
  */
+import { kbps, type LateAnswer } from './paced-send-gate.js'
 
 /** Bun's WebSocket `maxPayloadLength` default, which the daemon's server keeps. */
 export const DAEMON_FRAME_MAX_BYTES = 16 * 1024 * 1024
@@ -49,5 +50,34 @@ export function tooLargeGatewayReply(relayId: number, bytes: number, host: strin
       + 'one /api/sessions/<id> instead of every session).',
     errorCode: 'bad_request',
     detail: { tooLarge: true, bytes, maxBytes: DAEMON_FRAME_MAX_BYTES },
+  }
+}
+
+/**
+ * The small answer a caller gets instead of one that cannot reach its host in time on the paced
+ * upload link (paced-send-gate.ts). `bad_request`: asking again for the same at once fails the same
+ * way while the link is this slow, so the words say what helps (less, or later).
+ */
+export function tooSlowGatewayReply(relayId: number, host: string, late: LateAnswer): Record<string, unknown> {
+  const ahead = late.aheadKB > 0 ? ` with ${late.aheadKB} KB ahead of it` : ''
+  return {
+    relayId,
+    error: `The answer is ${Math.round(late.bytes / 1024)} KB, and the upload link from the leader to ${host} runs at ${late.paceKBps} KB/s${ahead}: `
+      + `it needs about ${late.needSecs} s to get there, and this call has ${late.leftSecs} s left, so it was not sent. `
+      + 'Ask for less (a limit, compact, since, the fields you need, one id), or try again in a minute.',
+    errorCode: 'bad_request',
+    detail: { tooSlow: true, ...late },
+  }
+}
+
+/** The small answer instead of one that alone takes longer to go up the paced link than the host keeps it open. */
+export function neverFitsGatewayReply(relayId: number, host: string, bytes: number, bytesPerSec: number): Record<string, unknown> {
+  return {
+    relayId,
+    error: `The answer is ${Math.round(bytes / 1024)} KB, and the upload link from the leader to ${host} runs at ${kbps(bytesPerSec)} KB/s: `
+      + `it would take about ${Math.round(bytes / Math.max(1, bytesPerSec))} s, longer than ${host} keeps a link it hears nothing whole from, so it was not sent. `
+      + 'Ask for less: a filter, a limit, compact, the fields you need, or one id.',
+    errorCode: 'bad_request',
+    detail: { tooSlow: true, never: true, bytes, paceKBps: kbps(bytesPerSec) },
   }
 }

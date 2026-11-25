@@ -56,13 +56,7 @@ export const jobs = { worker: run, second: run, third: run }
 export interface Daemon { proc: ChildProcess; dir: string; port: number; pid: number; sock: string }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-export async function waitFor(cond: () => boolean, ms: number, label: string): Promise<void> {
-  const end = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + label)
-    await sleep(50)
-  }
-}
+export { waitFor } from './poll-wait.js'
 /** Asks again until the answer is the one awaited or `ms` ran out; the last answer either way. */
 export async function askUntil<T>(ask: () => Promise<T>, done: (answer: T) => boolean, ms: number): Promise<T> {
   const end = Date.now() + ms

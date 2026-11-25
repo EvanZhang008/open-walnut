@@ -26,6 +26,8 @@ export type PacedForwardOptions = {
 /** A paced forward also says how many bytes it let go up so far (its owner's upload progress). */
 export interface PacedLaneForward extends LaneForward {
   sentBytes(): number
+  /** The pace its upload goes at now (bytes a second), or null when unpaced. */
+  paceBytesPerSec(): number | null
 }
 
 export async function pacedForward(inner: LaneForward, opts: PacedForwardOptions): Promise<PacedLaneForward> {
@@ -116,5 +118,5 @@ export async function pacedForward(inner: LaneForward, opts: PacedForwardOptions
     for (const s of sockets) s.destroy()
     server.close()
   })
-  return { port, onExit: (cb) => inner.onExit(cb), stop, sentBytes: () => pacer.sentBytes }
+  return { port, onExit: (cb) => inner.onExit(cb), stop, sentBytes: () => pacer.sentBytes, paceBytesPerSec: () => pacer.limits?.bytesPerSec ?? null }
 }
