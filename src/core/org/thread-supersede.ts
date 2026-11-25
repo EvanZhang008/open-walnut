@@ -25,6 +25,7 @@
 import type { OrgThread, ThreadsFile, ThreadWriter } from './threads-model.js';
 import { movedAway, ThreadError } from './threads-model.js';
 import { answerUnread, heldWhy, holdsHim, replacedLine, type HeldWhy } from './thread-ended.js';
+import { clause } from '../../utils/format.js';
 
 export const SEPARATE_REASON_MIN = 10;
 
@@ -303,7 +304,7 @@ export async function applyElsewhere(asks: readonly ElsewhereAsk[], now: { id: s
     } catch (err) {
       why = err instanceof Error ? err.message : String(err);
     }
-    throw new ThreadError('bad_input', 409, `Thread ${now.id} is written (do not write it again), but ${a.id} on ${a.node} still waits on the user: ${why}. `
+    throw new ThreadError('bad_input', 409, `Thread ${now.id} is written (do not write it again), but ${a.id} on ${a.node} still waits on the user: ${clause(why)}. `
       + `Ask that node (task_send ${a.node}) to settle it and step the card aside.`);
   }
 }
