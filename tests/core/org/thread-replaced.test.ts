@@ -155,8 +155,8 @@ describe('a card named as replaced that is no ask of the writer\'s own', () => {
     { name: 'another task\'s card', where: at(false, false), over: { tasks: ['t-other'] }, mine: false, why: 'not_yours' },
   ] as const
   /** Everything that can still be his on a card (thread-ended.ts heldWhy), one fixture per reason. */
-  const HELD: Record<Exclude<NonNullable<ReturnType<typeof heldWhy>>, 'acknowledged'>, Partial<OrgThread>> = {
-    watch: { watched: { at: ago(5), by: 'human' } } as never,
+  const WATCHED = { watched: { at: ago(5), by: 'human' } } as never as Partial<OrgThread>
+  const HELD: Record<Exclude<NonNullable<ReturnType<typeof heldWhy>>, 'acknowledged' | 'watch'>, Partial<OrgThread>> = {
     letter: { letter: { id: 'lt-other001', task: 't-other' } } as never,
     ask: { reportAsk: { id: 'ask-1', at: ago(5) } } as never,
     choice: { choice: { id: 'c-1' } } as never,
@@ -187,7 +187,8 @@ describe('a card named as replaced that is no ask of the writer\'s own', () => {
     for (const why of Object.keys(HELD)) expect(heldWhy(fixture(why), NOW), why).toBe(why)
     // "acknowledged" is the one reason with no fixture: only a pending card is in Acknowledged, and a
     // pending card asks him nothing, so naming it is "nothing" before anything is weighed.
-    expect(Object.keys(HELD).sort()).toEqual(['delivery', 'watch', 'word', ...Object.keys(HOLDS)].sort())
+    // His watch is the other: a watched card steps aside open and stays in his Watching (next test).
+    expect(Object.keys(HELD).sort()).toEqual(['delivery', 'word', ...Object.keys(HOLDS)].sort())
     for (const why of Object.keys(HELD)) {
       for (const p of PLACES.filter((x) => x.mine)) {
         const t = leads({ ...(p.over as Partial<OrgThread>), ...HELD[why as keyof typeof HELD] })
@@ -195,6 +196,19 @@ describe('a card named as replaced that is no ask of the writer\'s own', () => {
         expect(setAsideNamed(file(t), t.id, 'x', WRITER, ago(0)), `${why}, ${p.name}`).toMatchObject({ out: 'held', why })
       }
     }
+  })
+
+  it('a card he watches steps aside open and keeps his watch, unless something else of his is on it too', () => {
+    expect(heldWhy(leads(WATCHED), NOW)).toBe('watch')
+    expect(namedVerdict(leads(WATCHED), TASK, at(false, false), NOW)).toEqual({ verdict: 'replace' })
+    const r = setAsideNamed(file(leads(WATCHED)), 'th-lead0001', 'x', WRITER, ago(0))
+    expect(r.out).toBe('aside')
+    expect(r.file.threads[0]).toMatchObject({ state: 'pending', reply: 'x', ...WATCHED })
+    expect(r.file.threads[0]!.closed).toBeUndefined()
+    expect(r.file.threads[0]!.options).toBeUndefined()
+    const both = leads({ ...WATCHED, ...HELD.word })
+    expect(namedVerdict(both, TASK, at(false, false), NOW)).toEqual({ verdict: 'refuse', why: 'word' })
+    expect(setAsideNamed(file(both), 'th-lead0001', 'x', WRITER, ago(0))).toMatchObject({ out: 'held', why: 'word' })
   })
 
   it('a card that shows a task\'s own question waits on him whatever state it stores', () => {

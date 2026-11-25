@@ -131,13 +131,14 @@ export type NamedRefusedWhy = 'not_yours' | 'shared' | HeldWhy;
 export type NamedVerdict = { verdict: 'replace' | 'nothing' } | { verdict: 'refuse'; why: NamedRefusedWhy };
 
 /**
- * What still holds a named card for him, the writer's own pointer aside (a card its lead pointed at
- * the writer's question is the writer's to replace). Pure.
+ * What still holds a named card for him. Two things do not: his watch or snooze (the card steps
+ * aside open and stays in his Watching, setAsideNamed; on his data of 2026-11-25 the very card that
+ * showed the bug was one he watched), and the writer's own pointer (a card its lead pointed at the
+ * writer's question is the writer's to replace). Pure.
  */
 function namedHeldWhy(t: OrgThread, writer: string, now: number): HeldWhy | null {
-  const why = heldWhy(t, now);
-  const pointer = why === 'ask' && !t.reportAsk && !(t as { heldAsk?: unknown }).heldAsk && t.askOwner?.task === writer;
-  return pointer ? heldWhy(t, now, 'ask') : why;
+  const pointer = !t.reportAsk && !(t as { heldAsk?: unknown }).heldAsk && t.askOwner?.task === writer;
+  return heldWhy(t, now, new Set<HeldWhy>(pointer ? ['watch', 'ask'] : ['watch']));
 }
 
 /**
@@ -146,9 +147,9 @@ function namedHeldWhy(t: OrgThread, writer: string, now: number): HeldWhy | null
  *            question): a retry names it again;
  *   refuse   it waits on him and is not the writer's to take off: another task's card, a card that
  *            names other tasks too (their part would go with it), or one with something of his on it
- *            (thread-ended.ts heldWhy: a word of his unanswered, his watch, a letter, a Board
- *            choice, a task's own question shown through it): hiding it would hide what he never
- *            answered (a review, 2026-11-25);
+ *            (thread-ended.ts heldWhy: a word of his unanswered, a reply on its way, a letter, a
+ *            Board choice, a task's own question shown through it): hiding it would hide what he
+ *            never answered (a review, 2026-11-25);
  *   replace  it waits on him and is the writer's: on its own Threads (`own`), on a node below it
  *            (`below`: a lead decides for its team), opened by it there, pointed at it, or naming it
  *            and no other task.
@@ -263,8 +264,9 @@ export async function namedElsewhere(nodeTaskId: string, by: ThreadWriter, super
 /**
  * The file with a card another node's card replaced taken off his Needs you, its summary the line
  * naming where it is asked now, its buttons and a pointer at the writer gone: closed ('closed': one
- * decision shows once, as closeReplaced does on the writer's own Threads), or, while an answer on it
- * is still his to read, stepped aside ('aside': pending, kept open for that answer). Judged inside
+ * decision shows once, as closeReplaced does on the writer's own Threads), or, while he watches or
+ * snoozed it or an answer on it is still his to read, stepped aside ('aside': pending, kept open, still
+ * in his Watching). Judged inside
  * the lock: something of his on it by now ('held', with what) leaves it untouched, and 'gone' is a
  * card that no longer waits on him. Pure.
  */
@@ -276,7 +278,7 @@ export function setAsideNamed(file: ThreadsFile, id: string, line: string, by: T
   if (t.state !== 'needs') return { file, out: 'gone' };
   const { snoozed: _s, options: _o, reply_sid: _sid, reply_host: _host, askOwner: _owner, ...rest } = t;
   const base = { ...rest, reply: line, replyAt: at, reply_by: by, updatedAt: at };
-  const aside = answerUnread(t);
+  const aside = answerUnread(t) || heldWhy(t, Date.parse(at)) === 'watch';
   const next: OrgThread = aside ? { ...base, state: 'pending' } : { ...base, closed: { how: 'dropped', at, by, told: true } };
   return { file: { ...file, threads: file.threads.map((x) => (x.id === id ? next : x)) }, out: aside ? 'aside' : 'closed', changed: { kind: 'updated', threadId: id } };
 }

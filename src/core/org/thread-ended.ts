@@ -72,13 +72,17 @@ export function holdsHim(t: OrgThread, now: number = Date.now(), except?: keyof 
 /** What on a thread is still his (holdsHim), named: the first that holds, or null. */
 export type HeldWhy = 'watch' | 'acknowledged' | keyof typeof HOLDS | 'delivery' | 'word';
 
-/** holdsHim with its reason, for a refusal that must say why (thread-supersede.ts). Pure. */
-export function heldWhy(t: OrgThread, now: number = Date.now(), except?: keyof typeof HOLDS): HeldWhy | null {
-  if (watchedNow(t) || snoozedNow(t, now)) return 'watch';
-  if (inAcknowledged(t)) return 'acknowledged';
-  for (const kind of Object.keys(HOLDS) as Array<keyof typeof HOLDS>) if (kind !== except && HOLDS[kind](t)) return kind;
-  if (t.messages.some(deliveryOpen)) return 'delivery';
-  return hisWordOpen(t) ? 'word' : null;
+/**
+ * holdsHim with its reason, for a refusal that must say why (thread-supersede.ts). `except`: one
+ * hold, or several reasons, the caller has dealt with itself. Pure.
+ */
+export function heldWhy(t: OrgThread, now: number = Date.now(), except?: keyof typeof HOLDS | ReadonlySet<HeldWhy>): HeldWhy | null {
+  const skip: ReadonlySet<HeldWhy> = except instanceof Set ? except : new Set(except ? [except as HeldWhy] : []);
+  if (!skip.has('watch') && (watchedNow(t) || snoozedNow(t, now))) return 'watch';
+  if (!skip.has('acknowledged') && inAcknowledged(t)) return 'acknowledged';
+  for (const kind of Object.keys(HOLDS) as Array<keyof typeof HOLDS>) if (!skip.has(kind) && HOLDS[kind](t)) return kind;
+  if (!skip.has('delivery') && t.messages.some(deliveryOpen)) return 'delivery';
+  return !skip.has('word') && hisWordOpen(t) ? 'word' : null;
 }
 
 /** Why `t` on node `node` closes now, or null. Pure. */
