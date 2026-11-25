@@ -47,7 +47,7 @@ function relay(relayId: number, instanceId: string | null = 'd-1') {
 }
 
 describe('a relay the daemon sends again', () => {
-  it('runs its op once and gets the same answer each time', async () => {
+  it('runs its op once; a resend while its answer still goes up shares that send, a later one gets the kept word', async () => {
     const conn = new DaemonConnection('devbox', null)
     const c = conn as unknown as Internals
     const results: Array<Record<string, unknown>> = []
@@ -62,18 +62,22 @@ describe('a relay the daemon sends again', () => {
       await new Promise((r) => setTimeout(r, 30))
       return { ok: true, result: { delivered: runs } }
     })
-    // The resend arrives while the first is still running (its ack not in yet), and once more.
+    // The resends arrive while the first is still running, then while its answer goes up (its ack
+    // not in yet). Sent again, the second copy waited behind the first on a paced link and its
+    // small "too slow" error overtook the real answer (2026-11-25 review): it shares the send instead.
     const first = c.handleGatewayRequest(relay(7))
-    await c.handleGatewayRequest(relay(7))
-    await c.handleGatewayRequest(relay(7))
+    const again = [c.handleGatewayRequest(relay(7)), c.handleGatewayRequest(relay(7))]
+    await vi.waitFor(() => expect(results).toHaveLength(1))
+    await new Promise((r) => setImmediate(r))
+    expect(results).toHaveLength(1)
     releaseAck()
-    await first
+    await Promise.all([first, ...again])
     expect(runs).toBe(1)
-    expect(results).toEqual([
-      { relayId: 7, result: { delivered: 1 } },
-      { relayId: 7, result: { delivered: 1 } },
-      { relayId: 7, result: { delivered: 1 } },
-    ])
+    expect(results).toEqual([{ relayId: 7, result: { delivered: 1 } }])
+    // Once the daemon took it, a resend still on its way gets the small word, and nothing runs again.
+    await c.handleGatewayRequest(relay(7))
+    expect(runs).toBe(1)
+    expect(results[1]).toEqual({ relayId: 7, error: 'this relay was answered already', errorCode: 'internal' })
   })
 
   it('once the daemon took the answer, only a small word is kept for a resend still on its way', async () => {
