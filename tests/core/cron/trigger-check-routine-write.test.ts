@@ -97,17 +97,27 @@ describe('routine trigger checks share one write', () => {
     expect(stateWrites(state)).toBe(1)
   })
 
-  it('a reload that reads the files writes what waits first', async () => {
+  it('the periodic reread keeps what waits in memory instead of writing it early', async () => {
     const state = makeState()
     const job = await trigger(state)
     const e = checked(job.id)
     await applyTriggerChecked(state, e)
     expect(state.routineWriteDue).toBe(true)
-    state.disk!.readAt = 0 // past CRON_REREAD_MAX_MS: the next forced reload reads the files
+    _resetJsonIoForTesting()
+    state.disk!.readAt = 0 // past CRON_REREAD_MAX_MS: without lines waiting, the next forced reload reads the files
     await locked(state, async () => { await ensureLoaded(state, { forceReload: true }) })
-    expect((await onDisk(state, job.id))?.lastCheck?.atMs).toBe(e.atMs)
+    // No second write clock: the lines ride the delayed write, and a reader here sees them now.
+    expect(stateWrites(state)).toBe(0)
+    expect(state.routineWriteDue).toBe(true)
     const [listed] = await ops.list(state, { includeDisabled: true })
     expect(listed!.state.lastCheck?.atMs).toBe(e.atMs)
+    await flushRoutineChecks(state)
+    expect(stateWrites(state)).toBe(1)
+    expect((await onDisk(state, job.id))?.lastCheck?.atMs).toBe(e.atMs)
+    // The first reload after that write reads the files (the reread still happens).
+    const reads = jsonIoTop(50).find((r) => r.file === cronStatePath(state.deps.storePath))?.reads ?? 0
+    await locked(state, async () => { await ensureLoaded(state, { forceReload: true }) })
+    expect(jsonIoTop(50).find((r) => r.file === cronStatePath(state.deps.storePath))?.reads ?? 0).toBe(reads + 1)
   })
 
   it('another writer\'s change wins over what waits, never the other way', async () => {

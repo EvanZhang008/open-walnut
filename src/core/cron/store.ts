@@ -101,22 +101,25 @@ export async function ensureLoaded(
   opts?: { forceReload?: boolean; skipRecompute?: boolean },
 ): Promise<void> {
   if (state.store && !opts?.forceReload) return;
-  if (state.store && state.disk && Date.now() - state.disk.readAt < CRON_REREAD_MAX_MS
-    && await diskStampOf(state) === state.disk.stamp) {
+  // Taken before any read: a write after it changes the stamp, so the next reload reads again.
+  const stamp = await diskStampOf(state);
+  // The stamp held: keep the store. Past CRON_REREAD_MAX_MS it is read again anyway, except while
+  // routine check lines wait in it (persistRoutineCheck): their write is due within
+  // ROUTINE_WRITE_DELAY_MS and goes over the files just as a write before this read would, and
+  // the first reload after it reads them. Writing them here instead was a second write clock
+  // beside that one (2026-11-25, the live server: the 1.1 MB sidecar about 5 times a minute
+  // where one clock alone makes 2).
+  if (state.store && state.disk && stamp === state.disk.stamp
+    && (Date.now() - state.disk.readAt < CRON_REREAD_MAX_MS || state.routineWriteDue)) {
     state.keptAt = Date.now();
     if (!opts?.skipRecompute) recomputeNextRuns(state);
     return;
   }
-  // About to read the files: what routine checks left in `store` is written first, unless another
-  // writer changed a file since (its write wins, as it did over our store before; a few seconds of
-  // check lines are lost, never a fire or a count).
-  if (state.store && state.routineWriteDue) {
-    if (state.disk && await diskStampOf(state) === state.disk.stamp) await persist(state);
-    else state.routineWriteDue = false;
-  }
+  // About to read the files another writer changed (its write wins, as it did over our store
+  // before): what routine checks left waiting goes with this store (a few seconds of check lines,
+  // never a fire or a count).
+  state.routineWriteDue = false;
 
-  // Taken before the read: a write after it changes the stamp, so the next reload reads again.
-  const stamp = await diskStampOf(state);
   let loaded: CronStoreFile;
   try {
     loaded = await readJsonFile<CronStoreFile>(state.deps.storePath, emptyStore());
@@ -249,8 +252,13 @@ export async function persist(state: CronServiceState): Promise<void> {
   // recomputed a next run would rewrite the copy away from the Mac's rows.
   if (isHostReplicaProgram()) throw new NeedsLeaderError('routine_writes_need_mac');
   if (!state.store) return;
-  // This write carries what routine checks left waiting (trigger-apply.ts persistRoutineCheck).
+  // This write carries what routine checks left waiting (trigger-apply.ts persistRoutineCheck), so
+  // their delay starts again from it: a check after it waits its full ROUTINE_WRITE_DELAY_MS
+  // instead of riding a timer an earlier check armed (a fire, an edit and that timer were each
+  // a write a few seconds apart).
   state.routineWriteDue = false;
+  if (state.routineWriteTimer) clearTimeout(state.routineWriteTimer);
+  state.routineWriteTimer = undefined;
 
   // Before overwriting with 0 jobs, check if the on-disk file has jobs
   if (state.store.jobs.length === 0) {
@@ -292,8 +300,9 @@ export async function persist(state: CronServiceState): Promise<void> {
   const sizesHold = (!writeJobs || sizes[0] === Buffer.byteLength(jobsText)) && (!writeState || sizes[1] === Buffer.byteLength(stateText));
   state.disk = sizesHold ? { stamp, readAt: prior?.readAt ?? Date.now(), jobsText, stateText } : undefined;
   state.keptAt = Date.now();
-  // The routines copy kind's watch (replication/store-writes.ts): this is the one write point.
-  noteStoreWrite('routines');
+  // The routines copy kind's watch (replication/store-writes.ts): this is the one write point. A
+  // persist that wrote neither file changed nothing that kind copies.
+  if (writeJobs || writeState) noteStoreWrite('routines');
 }
 
 /** The two files' texts for `store`: definitions only (indented, git-synced), and the runtime states. */
