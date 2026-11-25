@@ -41,7 +41,7 @@ describe('session event classes', () => {
 const KEPT_WHOLE = [
   'session:started', 'session:ended', 'session:result', 'session:error', 'transfer:fork-init', 'session:will-reap',
   'session:tool-use', 'session:tool-result', 'session:unknown-event', 'session:usage-limit', 'session:messages-delivered',
-  'session:queued-cancelled', 'session:batch-completed', 'session:batch-failed', 'session:delivery-held',
+  'session:queued-cancelled', 'session:queue-left', 'session:batch-completed', 'session:batch-failed', 'session:delivery-held',
   'session:message-queued', 'session:system-event', 'session:user-line', 'session:usage-update',
   'session:settings-applied', 'session:controls-changed', 'session:turn-settled', 'session:retry-over',
   'session:permission-request', 'session:permission-resolved', 'session:cron-fired', 'session:side-question-done',

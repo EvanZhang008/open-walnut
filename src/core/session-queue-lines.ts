@@ -15,6 +15,7 @@ import { CANCELLED_UNRUN_REASON, fateOf, isPhoneMessageId, noteDelivered, setFat
 const setAsideByCancel = (reason: string | undefined): boolean => reason === STOP_PARKED_REASON || reason === CANCELLED_UNRUN_REASON;
 import { compareEnqueueOrder, getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
+import { noteQueueExit } from './session-queue-exits.js';
 
 /**
  * Remove rows the CLI itself reported taking (or a Stop cancelling), whatever
@@ -46,6 +47,9 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
     const gone = queue.filter(matches);
     s.queues[sessionId] = queue.filter((m) => !matches(m));
     for (const m of gone) {
+      // A row the CLI took that was no longer in its hands (put back while its line's fate was
+      // unknown): its read is this (session-queue-exits.ts), never "left the queue unsent".
+      if (ran && m.status !== 'processing') noteQueueExit(m.id, 'read', { via: 'cli' });
       // A cancelled line never ran: sending its text again is a new line.
       if (ran) noteSettledLine(s, m);
       else {
@@ -104,7 +108,11 @@ export async function repairCancelledTaken(sessionId: string, rows: QueuedMessag
       const captured = saved ?? current;
       if (!captured) continue;
       if (answered) {
-        if (current) queue.splice(queue.indexOf(current), 1);
+        if (current) {
+          queue.splice(queue.indexOf(current), 1);
+          // The CLI answered it: the delivery ledger's `read` (session-queue-exits.ts).
+          noteQueueExit(current.id, 'read', { via: 'cli' });
+        }
         noteSettledLine(s, captured);
       } else if (opts?.pending) {
         // A dead holder never answered it: pending under its own uuid, in doubt, so the delivery asks again.

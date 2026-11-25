@@ -513,6 +513,15 @@ export interface SessionQueuedCancelledEvent {
   messages: string[];
 }
 
+/** Rows that left a session's queue by a way that is not their delivery (session-queue-exits.ts). */
+export interface SessionQueueLeftEvent {
+  sessionId: string;
+  /** The rows (a host's fact keeps only its own session's: session-channel/fact-keys.ts). */
+  messageIds: string[];
+  /** Each row's step, by id: `removed` (left unsent), `dropped` (retired), `read` (the CLI took it), `written` (its words rode another line), `queued` (moved here from another session). Read only for the ids in messageIds. */
+  exits: Record<string, { step: 'removed' | 'dropped' | 'read' | 'written' | 'queued'; why?: string; via?: string }>;
+}
+
 export interface SessionBatchCompletedEvent {
   sessionId: string;
   count: number;
@@ -1552,6 +1561,7 @@ export interface EventPayloadMap {
   'session:status-changed': SessionStatusChangedEvent;
   'session:messages-delivered': SessionMessagesDeliveredEvent;
   'session:queued-cancelled': SessionQueuedCancelledEvent;
+  'session:queue-left': SessionQueueLeftEvent;
   'session:batch-completed': SessionBatchCompletedEvent;
   'session:batch-failed': SessionBatchFailedEvent;
   'session:delivery-held': SessionDeliveryHeldEvent;

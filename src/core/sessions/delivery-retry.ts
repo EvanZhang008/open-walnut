@@ -120,19 +120,81 @@ export function nextRetryAt(row: Pick<QueuedMessage, 'parkedAt' | 'enqueuedAt' |
 
 /** An archived session, or one whose task is complete: a send would start work nobody waits on. */
 async function leftAlone(sessionId: string): Promise<boolean> {
+  return (await leftAloneWhy(sessionId)) !== null;
+}
+
+/**
+ * Why a session is left alone (its words for a retired row) and since when it is known to be (its
+ * task's completion; null for an archived session, which keeps no time), or null when it is not.
+ */
+async function leftAloneWhy(sessionId: string): Promise<{ why: string; since: number | null } | null> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const rec = await getSessionByClaudeId(sessionId);
-    if (!rec) return false;
-    if ((rec as { archived?: boolean }).archived === true) return true;
-    if (!rec.taskId) return false;
+    if (!rec) return null;
+    if ((rec as { archived?: boolean }).archived === true) return { why: 'its session is archived', since: null };
+    if (!rec.taskId) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([rec.taskId])).find((t) => t.id === rec.taskId);
-    return task?.phase === 'COMPLETE';
+    if (task?.phase !== 'COMPLETE') return null;
+    const done = Date.parse(task.completed_at ?? '');
+    return { why: 'its task is complete', since: Number.isFinite(done) ? done : null };
   } catch {
     // Unreadable records: tried as before, as a reconnect would.
-    return false;
+    return null;
   }
+}
+
+/**
+ * A parked row of a session left alone (archived, or its task complete) waits for nothing: no clock
+ * tries it and a send would start work nobody waits on. An agent's row (a peer's note, a routine's,
+ * Walnut's) parked this long is retired: taken out, recorded `dropped` with why in the delivery
+ * ledger (session-queue-exits.ts). 2026-11-25, the Reflection VP's audit: parked rows to completed
+ * tasks waited for weeks with nobody to look at them. A person's own words stay (his Retry or
+ * Discard in that task's chat), and so does a row a hold keeps on its own clock.
+ */
+export const RETIRE_AFTER_MS = 60 * 60_000;
+const OWN_CLOCK_REASONS: ReadonlySet<string> = new Set([COLD_HOLD_REASON, AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, MOVE_HELD_REASON]);
+
+/**
+ * Is this row one a session left alone retires: an agent's park, not on a hold's own clock, parked
+ * and left alone (`since`: its task's completion) for RETIRE_AFTER_MS, so a task reopened soon after
+ * it completed still gets it.
+ */
+export function retiresWhenLeftAlone(
+  row: Pick<QueuedMessage, 'status' | 'sentBy' | 'parkedReason' | 'parkedAt' | 'enqueuedAt'>, now: number, since: number | null = null,
+): boolean {
+  if (row.status !== 'parked' || row.sentBy !== 'agent' || OWN_CLOCK_REASONS.has(row.parkedReason ?? '')) return false;
+  const at = Math.max(Date.parse(row.parkedAt ?? row.enqueuedAt), since ?? 0);
+  return Number.isFinite(at) && now - at >= RETIRE_AFTER_MS;
+}
+
+/** Retire the rows of a session left alone that retiresWhenLeftAlone names; returns their ids. */
+async function retireLeftAlone(sessionId: string, rows: QueuedMessage[], now: number): Promise<string[]> {
+  const due = rows.filter((r) => retiresWhenLeftAlone(r, now));
+  if (due.length === 0) return [];
+  const alone = await leftAloneWhy(sessionId);
+  if (!alone) return [];
+  const { why, since } = alone;
+  const { noteQueueExit } = await import('../session-queue-exits.js');
+  const { fateOf, setFate } = await import('../relay-fates.js');
+  const ids = new Set(due.map((r) => r.id));
+  const gone = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return [];
+    // Read again under the lock: only a row still parked by an agent and still due goes.
+    const out = queue.filter((m) => ids.has(m.id) && retiresWhenLeftAlone(m, now, since)).map((m) => m.id);
+    if (out.length === 0) return out;
+    for (const m of queue) {
+      if (out.includes(m.id)) noteQueueExit(m.id, 'dropped', { why: `not delivered: ${why}, so nothing waits on it (it was parked: ${m.parkedReason ?? 'no reason kept'})` });
+    }
+    s.queues[sessionId] = queue.filter((m) => !out.includes(m.id));
+    if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
+    for (const id of out) if (fateOf(s, id)) setFate(s, id, 'removed');
+    return out;
+  });
+  if (gone.length > 0) log.session.info('parked messages retired: their session is left alone', { sessionId, why, messageIds: gone });
+  return gone;
 }
 
 /**
@@ -223,9 +285,14 @@ export function sweepDeliveryRetries(now = Date.now()): Promise<string[]> {
     const out: string[] = [];
     for (const sid of kicked.keys()) if (!store.queues[sid]?.some((r) => r.status === 'pending')) kicked.delete(sid);
     const judgedHere = ownOnly ? (await import('./judge-of.js')).judgedHere : null;
-    for (const [sid, rows] of Object.entries(store.queues)) {
+    for (const [sid, queued] of Object.entries(store.queues)) {
       if (judgedHere && !judgedHere(sid)) continue;
+      let rows = queued;
       try {
+        if (rows.some((r) => retiresWhenLeftAlone(r, now))) {
+          const retired = new Set(await retireLeftAlone(sid, rows, now));
+          if (retired.size > 0) rows = rows.filter((r) => !retired.has(r.id));
+        }
         const back = rows.some((r) => r.status === 'parked') ? await retrySession(sid, rows, now) : [];
         if (back === null) continue;
         out.push(...back);

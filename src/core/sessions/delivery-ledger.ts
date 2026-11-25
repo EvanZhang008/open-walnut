@@ -8,7 +8,8 @@
  * waiting for the target's next message: held-notices-store.ts keeps it on disk, so a restart keeps
  * it), `carried` (held notes that rode the queue row named), `dropped` (a held note the hold let go
  * unsent, with why), `queued` (a row in the session's queue), `parked` (held back, with why),
- * `written` (in the CLI's input), `read` (the CLI started the line), `failed`, `cancelled`, and
+ * `written` (in the CLI's input), `read` (the CLI started the line), `failed`, `cancelled`,
+ * `removed` (a row that left the queue unsent, with what it was: session-queue-exits.ts), and
  * `server_start` (where the server restarted, for reading a trail).
  *
  * Every way into a session is recorded where it cannot be skipped (2026-11-24 audit: a person's words
@@ -32,7 +33,7 @@ import { eventData } from '../event-types.js';
 export const DELIVERY_LEDGER_DIR = (): string => path.join(WALNUT_HOME, 'cache', 'delivery-ledger');
 export const DELIVERY_KEEP_DAYS = 14;
 
-export type DeliveryStep = 'sent' | 'held' | 'carried' | 'dropped' | 'queued' | 'parked' | 'written' | 'read' | 'failed' | 'cancelled' | 'server_start';
+export type DeliveryStep = 'sent' | 'held' | 'carried' | 'dropped' | 'queued' | 'parked' | 'written' | 'read' | 'failed' | 'cancelled' | 'removed' | 'server_start';
 
 export interface DeliveryLine {
   at: string;
@@ -50,9 +51,9 @@ export interface DeliveryLine {
   ids?: string[];
   /** read: the CLI line's uuid. */
   lineUuid?: string;
-  /** parked, failed: why. */
+  /** parked, failed, dropped, removed: why. */
   why?: string;
-  /** read: how, when no CLI line carried it (`threads`: its owner read it in its Threads). */
+  /** read: how, when no CLI line carried it (`threads`: its owner read it in its Threads; `cli`: the CLI took a row put back while its line's fate was unknown). */
   via?: string;
   requestId?: string;
 }
@@ -133,6 +134,9 @@ export function recordStartLine(line: { sessionId: string; taskId?: string; sour
   });
 }
 
+/** The steps a SESSION_QUEUE_LEFT may name (session-queue-exits.ts): no other comes from it. */
+const EXIT_STEPS: ReadonlySet<string> = new Set(['removed', 'dropped', 'read', 'written', 'queued']);
+
 export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
   switch (event.name) {
     case EventNames.SESSION_MESSAGE_QUEUED: {
@@ -158,6 +162,18 @@ export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
       const d = eventData<'session:delivery-held'>(event);
       return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'parked', id, sessionId: d.sessionId, why: d.reason.slice(0, 200) })));
     }
+    case EventNames.SESSION_QUEUE_LEFT: {
+      const d = eventData<'session:queue-left'>(event);
+      // Only the rows messageIds names (a host's fact keeps only its own session's), and only a step an exit has.
+      return Promise.all((d.messageIds ?? []).flatMap((id) => {
+        const e = d.exits?.[id];
+        if (!e || !EXIT_STEPS.has(e.step)) return [];
+        return [recordDelivery({
+          step: e.step, id, sessionId: d.sessionId,
+          ...(typeof e.why === 'string' ? { why: e.why.slice(0, 200) } : {}), ...(typeof e.via === 'string' ? { via: e.via.slice(0, 40) } : {}),
+        })];
+      }));
+    }
     case EventNames.SESSION_QUEUED_CANCELLED: {
       const d = eventData<'session:queued-cancelled'>(event);
       return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'cancelled', id, sessionId: d.sessionId })));
@@ -169,6 +185,15 @@ export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
 
 const SUBSCRIBER = 'delivery-ledger';
 
+/**
+ * The events the ledger records a step from. A host's session reaches the leader only through its
+ * channel's facts, so each must be a fact the host's log keeps whole, never one a turn summary
+ * folds (session-channel/event-classes.ts TURN_DETAIL_FACTS). Ratchet:
+ * tests/core/sessions/delivery-ledger-facts-ratchet.test.ts.
+ */
+export const DELIVERY_LEDGER_EVENTS = [EventNames.SESSION_MESSAGE_QUEUED, EventNames.SESSION_MESSAGES_DELIVERED, EventNames.SESSION_USER_LINE,
+  EventNames.SESSION_BATCH_FAILED, EventNames.SESSION_DELIVERY_HELD, EventNames.SESSION_QUEUED_CANCELLED, EventNames.SESSION_QUEUE_LEFT] as const;
+
 /** Every emitter of these events is covered by construction (as request-reached.ts). Prunes old days. */
 export function startDeliveryLedger(): { stop: () => void } {
   setDeliveryTaskResolver(async (sid) => (await (await import('../session-tracker.js')).getSessionByClaudeId(sid))?.taskId ?? undefined);
@@ -176,8 +201,7 @@ export function startDeliveryLedger(): { stop: () => void } {
   void pruneDeliveryLedger();
   bus.subscribe(SUBSCRIBER, (event) => { void onDeliveryEvent(event); }, {
     global: true,
-    interest: [EventNames.SESSION_MESSAGE_QUEUED, EventNames.SESSION_MESSAGES_DELIVERED, EventNames.SESSION_USER_LINE,
-      EventNames.SESSION_BATCH_FAILED, EventNames.SESSION_DELIVERY_HELD, EventNames.SESSION_QUEUED_CANCELLED],
+    interest: [...DELIVERY_LEDGER_EVENTS],
   });
   return { stop: () => { bus.unsubscribe(SUBSCRIBER); setDeliveryTaskResolver(null); } };
 }
@@ -188,7 +212,7 @@ export async function pruneDeliveryLedger(nowMs = Date.now()): Promise<void> {
   for (const n of names) if (/^\d{4}-\d{2}-\d{2}\.ndjson$/.test(n) && n.slice(0, 10) < keep) await fsp.rm(path.join(DELIVERY_LEDGER_DIR(), n), { force: true });
 }
 
-export type DeliveryState = 'read' | 'written' | 'queued' | 'parked' | 'held' | 'carried' | 'dropped' | 'failed' | 'cancelled' | 'sent';
+export type DeliveryState = 'read' | 'written' | 'queued' | 'parked' | 'held' | 'carried' | 'dropped' | 'failed' | 'cancelled' | 'removed' | 'sent';
 
 export interface DeliveryTrail {
   id: string; state: DeliveryState; sessionId?: string; taskId?: string; from?: string; title?: string;
@@ -196,6 +220,8 @@ export interface DeliveryTrail {
   carriedBy?: string;
   /** Still waiting (held, parked, queued): minutes since the step it waits at, when the reader passed a clock. */
   waitingMin?: number;
+  /** removed with no step of its own: where it is not (settleGone). */
+  gone?: string;
   steps: DeliveryLine[];
 }
 
@@ -259,6 +285,43 @@ export function trailsOf(lines: readonly DeliveryLine[], nowMs?: number): Delive
       id, state, ...(waitingMin !== undefined ? { waitingMin } : {}), ...(sessionId ? { sessionId } : {}), ...(taskId ? { taskId } : {}), ...(first.from ? { from: first.from } : {}),
       ...(first.title ? { title: first.title } : {}), ...(carriedBy ? { carriedBy } : {}), steps,
     };
+  });
+}
+
+/** A trail still waiting whose row or note is gone this long is not waiting any more (settleGone). */
+export const GONE_GRACE_MS = 2 * 60_000;
+
+/** Where a waiting message could still be, on this server (the delivery route reads them). */
+export interface WaitingPlaces {
+  /** Does this server hold the session's queue (sessions/judge-of.ts judgedHere)? */
+  queueHere(sessionId: string): boolean;
+  /** Is a row with this id in any queue here? */
+  inQueue(id: string): boolean;
+  /** null: the held notes were not read here; else whether the note still waits (held or taken). */
+  heldNote(id: string): boolean | null;
+}
+
+/**
+ * A trail that reads as waiting (queued, parked, held) whose row or note is no longer where it waits
+ * reads `removed`, with `gone` saying so: it left by a way that recorded no step (2026-11-25 audit:
+ * 12 messages read parked for 31 to 39 hours, gone from the queue long before; every way out is
+ * recorded since, session-queue-exits.ts, and this settles the trails written before). A row in a
+ * queue another server holds (a host that judges its sessions) is never settled here. Pure.
+ */
+export function settleGone(trails: DeliveryTrail[], where: WaitingPlaces, nowMs: number): DeliveryTrail[] {
+  return trails.map((t) => {
+    if (t.carriedBy || (t.state !== 'queued' && t.state !== 'parked' && t.state !== 'held')) return t;
+    const waitsAt = [...t.steps].reverse().find((s) => s.step === t.state)?.at;
+    if (!waitsAt || nowMs - Date.parse(waitsAt) < GONE_GRACE_MS) return t;
+    let gone: string | null = null;
+    if (t.state === 'held') {
+      if (where.heldNote(t.id) === false) gone = 'no longer held: it left the hold without a recorded step';
+    } else if (t.sessionId && where.queueHere(t.sessionId) && !where.inQueue(t.id)) {
+      gone = 'no longer in the queue: it left without a recorded step';
+    }
+    if (!gone) return t;
+    const { waitingMin: _w, ...rest } = t;
+    return { ...rest, state: 'removed', gone };
   });
 }
 

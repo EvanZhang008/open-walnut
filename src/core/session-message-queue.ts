@@ -59,6 +59,7 @@ import { keepLeadingFrame } from './sessions/queue-edit-frame.js';
 import { assertDemoAdmission, demoAdmissionClosed, DemoAdmissionClosedError } from './sessions/demo-admission.js';
 import { noteTaskInput } from './sessions/task-input-clock.js';
 import { recordQueuedRow } from './sessions/delivery-ledger.js';
+import { noteQueueExit, type ExitNote } from './session-queue-exits.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -1009,7 +1010,7 @@ function forgetPairing({ dictation, message }: { dictation: SentDictation; messa
  * Returns false if the message is missing or already processing (in flight —
  * deleting it would race the delivery points' own scoped removal).
  */
-export async function deleteMessage(sessionId: string, messageId: string, opts?: { discarded?: boolean }): Promise<boolean> {
+export async function deleteMessage(sessionId: string, messageId: string, opts?: { discarded?: boolean; exit?: ExitNote }): Promise<boolean> {
   const { switchContextIn, keepSwitchContext, dropKeptSwitchContext } = await import('./sessions/engine-switch-io.js');
   // The engine switch's carried context on this row, with no other queued row to take it: kept on
   // the session record BEFORE the row goes, so a send in between still carries it (a copy twice is
@@ -1031,6 +1032,8 @@ export async function deleteMessage(sessionId: string, messageId: string, opts?:
     if (queue[idx].status === 'processing') return false;
 
     const [removed] = queue.splice(idx, 1);
+    // The step the delivery ledger records for it, when it is not "left the queue unsent" (session-queue-exits.ts).
+    if (opts?.exit) noteQueueExit(removed.id, opts.exit.step, opts.exit);
     if (removed.dictation) discarded = { dictation: removed.dictation, message: removed.message };
     // Spliced out: a row now at `idx` or later stood after it.
     if (hasAiOnly(removed.message)) droppedBrief = !handOnBrief(queue, removed, idx - 0.5);
@@ -1172,6 +1175,8 @@ export async function withdrawQueuedLines(sessionId: string, ids: readonly strin
     const queue = s.queues[sessionId] ?? [];
     const out = queue.filter((m) => gone.has(m.id) && m.status === 'pending');
     if (out.length === 0) return 0;
+    // The leader delivers these itself and records their steps: nothing to say of them here.
+    for (const m of out) noteQueueExit(m.id, 'silent');
     s.queues[sessionId] = queue.filter((m) => !out.includes(m));
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     for (const m of out) if (fateOf(s, m.id) === 'taken' && s.relay) delete s.relay[m.id];

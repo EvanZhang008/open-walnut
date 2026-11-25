@@ -531,7 +531,9 @@ async function startFresh(record: SessionRecord, from: string, to: string, by: s
   await updateSessionRecord(sid, { cwdGone: undefined, folderMoved: { from, to, at, by, told: true } } as Partial<SessionRecord>).catch(() => {})
   await moveTaskCwd(task.id, from, to)
   // The messages rode the new conversation's first message; the old rows are done.
-  for (const m of rows) await deleteMessage(sid, m.id).catch(() => false)
+  for (const m of rows) {
+    await deleteMessage(sid, m.id, { exit: { step: 'written', via: 'start', why: `its words rode the first line of the new conversation ${newId}` } }).catch(() => false)
+  }
   log.session.info('folder gone: history gone too, started a new conversation', { oldSessionId: sid, sessionId: newId, taskId: task.id, from, to, carried: rows.length, by })
   return { status: 'started', oldSessionId: sid, sessionId: newId, taskId: task.id, cwd: to, from, history: 'fresh', carried: rows.length }
 }

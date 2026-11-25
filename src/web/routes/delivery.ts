@@ -3,11 +3,12 @@
  * (core/sessions/delivery-ledger.ts). Read only. `id` (a message id), `task` (every session of the
  * task; its id or a prefix task_get takes), `session`, `state` (read, written, queued, parked, held, carried, dropped, failed, cancelled,
  * sent), `days` (1 to 14, default 3), `limit` (default 200, newest first). A message still waiting says
- * for how many minutes (`waitingMin`). The answer says how many
+ * for how many minutes (`waitingMin`); one that reads as waiting but is no longer in this server's
+ * queue or hold reads `removed` with `gone` (settleGone). The answer says how many
  * matched and counts them by state.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express'
-import { readDeliveryLines, trailsOf, DELIVERY_KEEP_DAYS } from '../../core/sessions/delivery-ledger.js'
+import { readDeliveryLines, settleGone, trailsOf, DELIVERY_KEEP_DAYS, type WaitingPlaces } from '../../core/sessions/delivery-ledger.js'
 
 export const deliveryRouter = Router()
 
@@ -31,7 +32,10 @@ deliveryRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       const { getSessionsForTask } = await import('../../core/session-tracker.js')
       sessions = new Set([...sessions, ...(await getSessionsForTask(task).catch(() => [])).map((s) => s.claudeSessionId)])
     }
-    const trails = trailsOf(await readDeliveryLines(days), Date.now()).filter((t) => (!id || t.id === id)
+    const now = Date.now()
+    const all = trailsOf(await readDeliveryLines(days), now)
+    const places = await waitingPlaces()
+    const trails = (places ? settleGone(all, places, now) : all).filter((t) => (!id || t.id === id)
       && (!task || t.taskId === task || (t.sessionId !== undefined && sessions.has(t.sessionId)))
       && (!session || t.sessionId === session)
       && (!state || t.state === state))
@@ -43,3 +47,28 @@ deliveryRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     next(err)
   }
 })
+
+/**
+ * Where a waiting message could still be on this server: its queues and their transits (a fresh
+ * read), its spool, and its held notes. Null when the queue file cannot be read now: no trail is
+ * settled then.
+ */
+async function waitingPlaces(): Promise<WaitingPlaces | null> {
+  const [{ readQueueFileFresh }, { placesOf }, { spooledRows }, { judgedHere }, held] = await Promise.all([
+    import('../../core/session-queue-store.js'), import('../../core/session-queue-exits.js'), import('../../core/session-queue-spool.js'),
+    import('../../core/sessions/judge-of.js'), import('../../core/sessions/held-notices-store.js'),
+  ])
+  let ids: Set<string>
+  try {
+    ids = new Set(placesOf(await readQueueFileFresh({ readErrors: 'throw' })).keys())
+    for (const r of await spooledRows()) ids.add(r.id)
+  } catch {
+    return null
+  }
+  const heldRead = held.storeOpened() && !held.storeLoading()
+  return {
+    queueHere: (sid) => judgedHere(sid),
+    inQueue: (mid) => ids.has(mid),
+    heldNote: (mid) => (heldRead ? held.waitingNote(mid) !== null : null),
+  }
+}

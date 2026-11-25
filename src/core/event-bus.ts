@@ -81,6 +81,8 @@ export const EventNames = {
   SESSION_STATUS_CHANGED: 'session:status-changed',
   SESSION_MESSAGES_DELIVERED: 'session:messages-delivered',
   SESSION_QUEUED_CANCELLED: 'session:queued-cancelled',
+  // Rows that left a session's queue unsent, or moved to another session's (session-queue-exits.ts): the delivery ledger's step.
+  SESSION_QUEUE_LEFT: 'session:queue-left',
   SESSION_BATCH_COMPLETED: 'session:batch-completed',
   SESSION_BATCH_FAILED: 'session:batch-failed',
   SESSION_DELIVERY_HELD: 'session:delivery-held',

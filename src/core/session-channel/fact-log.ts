@@ -28,6 +28,7 @@
  *     their instructions again and again, a rule cut mid-word as "Taken out");
  *   - compaction (when the file passes `compactBytes`) drops what the leader confirmed, and in
  *     what it has not, stands one `turn-summary` record for the tool facts of each finished turn
+ *     (TURN_SUMMARY_FACTS: never a delivery step, such as the CLI's read of a line)
  *     and one merged `row` record for its row patches; facts of a turn still running are kept;
  *     a session's `drop` record (the leader deleted it) stands for all of that session before it;
  *     a session's newest `live` record and its newest snapshot fact (SNAPSHOT_FACTS) stand for
@@ -50,7 +51,7 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { SNAPSHOT_FACTS, TURN_DETAIL_FACTS, TURN_END_FACT } from './event-classes.js'
+import { SNAPSHOT_FACTS, TURN_END_FACT, TURN_SUMMARY_FACTS } from './event-classes.js'
 import { comparePermit, isPermitPair, type PermitPair } from './channel.js'
 
 export interface FactRef { epoch?: string; v?: number; bytes: number }
@@ -481,7 +482,7 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
     for (const r of list) {
       turn.push(r)
       if (r.name !== TURN_END_FACT) continue
-      const detail = turn.filter((x) => TURN_DETAIL_FACTS.has(x.name) || x.name === 'turn-summary')
+      const detail = turn.filter((x) => TURN_SUMMARY_FACTS.has(x.name) || x.name === 'turn-summary')
       if (detail.length > 1) {
         const tools: Record<string, number> = {}
         let toolUses = 0

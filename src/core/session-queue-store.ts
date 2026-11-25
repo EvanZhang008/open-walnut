@@ -11,6 +11,7 @@ import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { FileLockTimeoutError, withFileLock } from '../utils/file-lock.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
+import { exitsBetween, placesOf, recordQueueExits } from './session-queue-exits.js';
 import type { RelayFates } from './relay-fates.js';
 
 // ── Types ──
@@ -482,10 +483,16 @@ async function persist<R>(fn: (s: QueueStore) => R, take: (r: R) => void, durabl
         // would replace every session's queue with this one change (2026-11-23, no message is lost).
         const s = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }, { readErrors: 'throw' }));
         const before = JSON.stringify(s);
+        // Where each row was before this process's changes: a row they take out leaves its step in
+        // the delivery ledger once the write is on disk (session-queue-exits.ts).
+        const places = placesOf(s);
         const waiting = replays;
         for (const patch of waiting) applyPatch(s, patch);
         take(fn(s));
-        if (JSON.stringify(s) !== before) await writeJsonFile(SESSION_QUEUE_FILE, s, { durable });
+        if (JSON.stringify(s) !== before) {
+          await writeJsonFile(SESSION_QUEUE_FILE, s, { durable });
+          recordQueueExits(exitsBetween(places, s));
+        }
         // On disk now (or nothing to write): those replays are done.
         if (replays === waiting) replays = [];
         else replays = replays.slice(waiting.length);

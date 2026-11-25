@@ -30,6 +30,7 @@ export const FACT_KEYS: Readonly<Record<string, readonly [FactKeyClass, string]>
   host: ['rewritten', 'the link\'s host'],
   messageIds: ['scoped', 'queue rows: none of another session (linesNotOthers); a row the leader never made stands'],
   messageId: ['scoped', 'a queue row: removed when it is another session\'s'],
+  exits: own('session:queue-left\'s step per row, by row id: the ledger reads it only for the ids its scoped messageIds keeps (delivery-ledger.ts)'),
   dictationIds: own('the recordings dictated into a person\'s send (stt/dictation-ids.ts): Voice Accuracy pairs only a recording kept on this machine, never another session\'s object'),
   dictationText: TEXT,
   attemptId: ['scoped', 'a transfer attempt: only one the leader started on this host; else the fork-init is not said'],

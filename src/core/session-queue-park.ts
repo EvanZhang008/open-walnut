@@ -8,6 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { noteQueueExit } from './session-queue-exits.js';
 import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
 import { AFTER_TURN_REASON, COLD_HOLD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from './relay-fates.js';
@@ -341,6 +342,8 @@ export async function removeStartRecoveryRows(sessionId: string, ids: string[]):
     const gone = (r: QueuedMessage) => ids.includes(r.id)
       && (r.status === 'pending' || (r.status === 'parked' && r.parkedReason === START_RECOVERY_HELD_REASON));
     const out = queue.filter(gone).map((r) => r.id);
+    // They ran: the delivery ledger's `read` (session-queue-exits.ts), never "left unsent".
+    for (const id of out) noteQueueExit(id, 'read', { via: 'start-recovery' });
     s.queues[sessionId] = queue.filter((r) => !gone(r));
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     return out;

@@ -171,11 +171,12 @@ describe('compaction', () => {
       rec(8, 's1', 'session:result', { result: 'done' }, 50),
       rec(9, 's1', 'session:tool-use', { name: 'Edit' }, 60),
     ])
+    // The CLI's read of the line is a step of its message's delivery (delivery-ledger.ts): kept whole.
     expect(out.map((r) => [r.seq, r.sid, r.name])).toEqual([
-      [1, 's1', 'turn-summary'], [4, 's2', 'session:tool-use'], [7, 's1', 'row'], [8, 's1', 'session:result'], [9, 's1', 'session:tool-use'],
+      [1, 's1', 'session:user-line'], [3, 's1', 'turn-summary'], [4, 's2', 'session:tool-use'], [7, 's1', 'row'], [8, 's1', 'session:result'], [9, 's1', 'session:tool-use'],
     ])
-    expect(out[0].data).toMatchObject({ facts: 4, toolUses: 2, tools: { Bash: 2 }, vFrom: 10, vTo: 40 })
-    expect(out[2].data).toEqual({ patch: { process_status: 'running', messageCount: 3 } })
+    expect(out[1].data).toMatchObject({ facts: 3, toolUses: 2, tools: { Bash: 2 }, vFrom: 20, vTo: 40 })
+    expect(out[3].data).toEqual({ patch: { process_status: 'running', messageCount: 3 } })
   })
 
   it('only the newest live state of each session stays', () => {

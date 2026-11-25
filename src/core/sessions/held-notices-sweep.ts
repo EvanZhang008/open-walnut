@@ -32,7 +32,7 @@
  */
 import { log } from '../../logging/index.js';
 import {
-  DROP_TELL_KEY, TELL_KEEP_MS, closeStore, expiredByAge, goesAlone, held, metaOf, oldestQuietAt, openStore, persist, pruneFates,
+  DROP_TELL_KEY, TELL_KEEP_MS, closeStore, expiredByAge, goesAlone, held, keptWhole, metaOf, oldestQuietAt, openStore, persist, pruneFates,
   setQuietWaitWhy, settleTells, storeLoading, storeOpened, taken, waitingNote, type DropTell, type Held, type TellKind,
 } from './held-notices-store.js';
 import {
@@ -134,7 +134,12 @@ export async function sweepHeldNotices(now = Date.now()): Promise<{ dropped: num
     }
     if (!slot.size) { held.delete(sid); continue; }
     const where = await whereNow(sid);
-    if (where === 'stay') { goneSince.delete(sid); continue; }
+    if (where === 'stay') {
+      goneSince.delete(sid);
+      const n = await dropRidersOfComplete(sid, now);
+      if (n > 0) { dropped += n; changed = true; }
+      continue;
+    }
     if (where !== 'gone') {
       goneSince.delete(sid);
       moved += await moveHeldNotices(sid, where.to);
@@ -164,6 +169,42 @@ export async function sweepHeldNotices(now = Date.now()): Promise<{ dropped: num
   if (changed) await persist();
   await flushDropTells();
   return { dropped, moved };
+}
+
+/**
+ * Walnut's own notices (those that only ride: a title-topic or status notice, a subtask's
+ * completion its reply told, a request's reminder; goesAlone is false) held for a session whose task is
+ * complete, once they waited the cold hold's max: dropped, recorded so (DROP_WHY.complete), as the
+ * quiet notes of such a target are (lookAtQuiet). Before, they waited out the 3-day age limit
+ * (2026-11-25 audit: a title-topic notice held 13.6 hours for a completed task, neither carried nor
+ * dropped). A task reopened before then gets them on its next message. Returns how many went.
+ */
+async function dropRidersOfComplete(sid: string, now: number): Promise<number> {
+  const { COLD_HOLD_MAX_MS } = await import('./cold-hold.js');
+  const due = (slot: Map<string, Held> | undefined) => [...(slot ?? [])]
+    // A topic's folded posts are left to the gone-session path, which returns them to the topic unread.
+    // A task's own words (keptWhole) wait for their target's next message, as the age limit leaves them.
+    .filter(([key, v]) => now - v.at >= COLD_HOLD_MAX_MS && !(v.parts ?? []).some((p) => goesAlone(key, p) || !!metaOf(p).topic || keptWhole(p)));
+  if (due(held.get(sid)).length === 0) return 0;
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const rec = await getSessionByClaudeId(sid);
+    if (!rec?.taskId) return 0;
+    const { getTask } = await import('../task-manager.js');
+    if ((await getTask(rec.taskId).catch(() => null))?.phase !== 'COMPLETE') return 0;
+  } catch {
+    return 0;
+  }
+  // Read again after the awaits: a message may have carried them meanwhile.
+  const slot = held.get(sid);
+  const go = due(slot);
+  for (const [key, v] of go) {
+    slot!.delete(key);
+    dropParts(sid, v.parts ?? [], DROP_WHY.complete, now);
+  }
+  if (slot && !slot.size) held.delete(sid);
+  if (go.length > 0) log.session.info('held notices dropped: their target\'s task is complete', { sessionId: sid, keys: go.map(([key]) => key) });
+  return go.length;
 }
 
 /** The parts of `slot`'s notices that are a topic's fold (topics/topic-text.ts FoldPart). */

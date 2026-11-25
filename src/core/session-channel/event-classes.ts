@@ -39,6 +39,7 @@ export const SESSION_EVENT_CLASS: Readonly<Record<string, ChannelClass>> = {
   'session:status-changed': 'leader',
   'session:messages-delivered': 'fact',
   'session:queued-cancelled': 'fact',
+  'session:queue-left': 'fact',
   'session:batch-completed': 'fact',
   'session:batch-failed': 'fact',
   'session:delivery-held': 'fact',
@@ -93,11 +94,29 @@ export function channelClassOf(name: string): ChannelClass | null {
   return SESSION_EVENT_CLASS[name] ?? null
 }
 
-/** The facts a finished turn's summary stands for, in a log the leader has not read (compaction). */
+/**
+ * Transcript detail: what the CLI's output file holds anyway, so a new read of lines the leader
+ * already heard keeps none of it (host-emitter.ts).
+ */
 export const TURN_DETAIL_FACTS: ReadonlySet<string> = new Set([
   'session:tool-use', 'session:tool-result', 'session:user-line', 'session:system-event', 'session:usage-update',
   'session:unknown-event', 'session:background-tasks', 'session:turn-speed', 'session:team-info',
 ])
+
+/**
+ * Facts that are a step of a message's delivery (`session:user-line`: the CLI read a line, the
+ * delivery ledger's `read`): a turn summary never stands for one.
+ */
+export const DELIVERY_STEP_FACTS: ReadonlySet<string> = new Set(['session:user-line'])
+
+/**
+ * The facts a finished turn's summary stands for, in a log the leader has not read (fact-log.ts
+ * compaction): transcript detail, never a delivery step. 2026-11-25: after the Mac slept 3.4 hours,
+ * the compacted logs of its hosts folded the CLI's read of 57 delivered messages into turn
+ * summaries, and the delivery ledger showed them written and never read. Ratchet:
+ * tests/core/sessions/delivery-ledger-facts-ratchet.test.ts.
+ */
+export const TURN_SUMMARY_FACTS: ReadonlySet<string> = new Set([...TURN_DETAIL_FACTS].filter((n) => !DELIVERY_STEP_FACTS.has(n)))
 
 /**
  * The facts whose payload is a whole snapshot of one session's state (its background-task ledger,

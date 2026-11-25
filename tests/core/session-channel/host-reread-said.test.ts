@@ -188,6 +188,8 @@ const RE_JUDGED = new Set([
   'session:controls-changed', 'session:turn-settled', 'session:retry-over', 'session:model-catalog',
   'session:permission-request', 'session:permission-resolved', 'session:cron-fired', 'session:side-question-done',
   'session:side-thread-renamed', 'session:side-question-error',
+  // Told by the queue's write (session-queue-exits.ts), never from a line: a re-read never makes one.
+  'session:queue-left',
 ])
 
 describe('every fact is placed for a re-read', () => {
