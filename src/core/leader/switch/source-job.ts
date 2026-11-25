@@ -82,6 +82,18 @@ export function oldMachineStandbyReasons(witnesses: LeaderSwitchSettings['witnes
   }
 }
 
+/**
+ * Who starts the old leader again on a rollback (start-source): the job, or, for a host's one Walnut
+ * service, its launcher. A service's standby ends once the job removes the marker (its home leads again),
+ * says it is leaving, and its launcher starts it again at once, now as the leader. A plain leader the job
+ * spawned beside it would race it for the instance lock and the daemon dir, so the job only waits for it.
+ */
+export function oldLeaderRestartedBy(st: Pick<SwitchState, 'sourceDaemonShape'>): 'job' | 'launcher' {
+  return st.sourceDaemonShape === 'service' ? 'launcher' : 'job'
+}
+/** How long a rollback waits beyond the take-back time for a launcher's service to be up again (its standby's stop, its next start). */
+const LAUNCHER_RESTART_MS = 90_000
+
 export async function runSourceJob(o: SourceJobOptions): Promise<SwitchState> {
   const env = o.env ?? process.env
   const out = o.out ?? (() => {})
@@ -353,7 +365,10 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'start-source': {
           if (!(await stopEnded())) throw new SwitchRefused('the old leader\'s server did not end its switch stop before the commit window ended: it is not started beside it; rerun with --resume')
-          if (s.sourceWasRunning && !side.runningServer()) {
+          const byLauncher = oldLeaderRestartedBy(s) === 'launcher'
+          if (s.sourceWasRunning && !side.runningServer() && byLauncher) {
+            out(`the old leader is this machine's Walnut service: its launcher starts it again as the leader once its standby ends (this job starts no second process)`)
+          } else if (s.sourceWasRunning && !side.runningServer()) {
             const started = await side.startServer('leader')
             if (!started.ok) {
               // It came up as a standby: the new leader committed after all (its record is the truth).
@@ -362,7 +377,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
             }
           }
           // A restarted old leader holds again only once its handover ran out (up to a minute).
-          const leads = s.sourceWasRunning ? await waitDoorsOpen(side, takeBackMs(settings)) : true
+          const leads = s.sourceWasRunning ? await waitDoorsOpen(side, takeBackMs(settings) + (byLauncher ? LAUNCHER_RESTART_MS : 0)) : true
           try { fs.unlinkSync(sourceCancelFile(home)) } catch { /* none */ }
           save('rolled-back', `${s.rollbackWhy ?? ''}${leads ? '' : ` (${s.from} has not taken the permission back yet; it keeps asking)`}`)
           await note('rolled-back', s.rollbackWhy)

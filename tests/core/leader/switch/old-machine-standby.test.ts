@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { oldMachineStandbyReasons } from '../../../../src/core/leader/switch/source-job.js'
+import { oldLeaderRestartedBy, oldMachineStandbyReasons } from '../../../../src/core/leader/switch/source-job.js'
 import { standbyAfterRollback } from '../../../../src/core/leader/switch/target-job.js'
 import { cleanStartEnv } from '../../../../src/core/leader/switch/side.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
@@ -70,5 +70,15 @@ describe('the standby the switch starts gets a clean env', () => {
       HOME: '/home/u', PATH: '/usr/bin', USER: 'u', TZ: 'UTC',
       WALNUT_DAEMON_DIR: '/tmp/open-walnut', WALNUT_DAEMON_STATE_DIR: '/opt/w', WALNUT_IN_PROCESS_DAEMON: '0', XDG_RUNTIME_DIR: '/run/user/1',
     })
+  })
+})
+
+describe('the source job\'s rollback starts the old leader again', () => {
+  it('itself for a plain server, never beside a service, whose launcher starts it again as the leader', () => {
+    expect(oldLeaderRestartedBy({ sourceDaemonShape: 'in-process' })).toBe('job')
+    expect(oldLeaderRestartedBy({ sourceDaemonShape: 'program' })).toBe('job')
+    // A source older than the shape field: as before, the job starts it.
+    expect(oldLeaderRestartedBy({})).toBe('job')
+    expect(oldLeaderRestartedBy({ sourceDaemonShape: 'service' })).toBe('launcher')
   })
 })
