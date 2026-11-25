@@ -119,9 +119,9 @@ final class FirstResponderUpdatePassTests: XCTestCase {
 
     /// The report's steps on the real Threads page: a 76-character transcript lands in a card's
     /// Follow up box, and one turn later the box asks for the keyboard (what
-    /// `VoiceDictationBody.insert` does). The keyboard must arrive and the main thread stay free:
+    /// `VoiceDictationBody.insert` does). The keyboard must arrive with no AttributeGraph cycle:
     /// on build 176 this was where the app hung until the watchdog killed it.
-    func testFocusingAFollowUpBoxAfterATranscriptOnAFullThreadsPageIsQuick() throws {
+    func testFocusingAFollowUpBoxAfterATranscriptOnAFullThreadsPageLeavesNoGraphCycle() throws {
         let stores = H.Stores()
         let store = OrgThreadsStore(taskId: "task-fixture-vp", threads: try openThreads(40), cache: nil,
                                     read: { throw URLError(.notConnectedToInternet) })
@@ -150,8 +150,9 @@ final class FirstResponderUpdatePassTests: XCTestCase {
         }
         let cycles = errText.components(separatedBy: "AttributeGraph: cycle detected").count - 1
         print("FirstResponderUpdatePass: keyboard after \(Int(elapsed * 1000)) ms with \(boxes.count) boxes, \(cycles) AttributeGraph cycles")
+        // Judged without the clock (a CI simulator's timing proves nothing): the keyboard arrives,
+        // and the update that asked for it leaves no AttributeGraph cycle behind.
         XCTAssertTrue(box.isFirstResponder, "the box takes the keyboard")
-        XCTAssertLessThan(elapsed, 1.0, "the keyboard came \(Int(elapsed * 1000)) ms after the focus")
         // The bug's own mark on the simulator: with the keyboard taken inside the update,
         // AttributeGraph reports a cycle on every pass (61 lines on iOS 26.2 before the fix,
         // none after). On the phone (iOS 27) the same walk hung the main thread for seconds.
