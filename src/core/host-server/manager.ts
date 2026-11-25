@@ -670,6 +670,7 @@ export function createHostServerManager(deps: ManagerDeps) {
           const unfit = !(offCopyless || await wantsCopyless()) ? 'off'
             : !replica ? 'it runs the plain host server, which has no service' : copylessUnfit(host, target, oneServiceHere(host), await serviceRefused(hostKey))
           if (unfit === null) { copyless = true; known = target ?? undefined }
+          else if (unfit !== 'off' && !offCopyless) log.session.info('host server: a host too small for a copy cannot run without one yet', { host: hostKey, why: unfit })
           else if (offCopyless) {
             log.session.info('host server: a turned-off host stays off, it cannot run without a copy', { host: hostKey, why: unfit })
             return offNow()
