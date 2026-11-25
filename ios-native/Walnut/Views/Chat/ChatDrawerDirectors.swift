@@ -60,7 +60,8 @@ struct ChatDirectorFold: View {
             .accessibilityIdentifier("chat.drawer.directors.fold.\(row.id)")
             if isOpen {
                 ForEach(fold.groups) { group in
-                    if let project = group.project {
+                    // A heading only when it tells two projects apart, as on the web's fold.
+                    if fold.groups.count > 1, let project = group.project {
                         Text(verbatim: project)
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -100,24 +101,31 @@ struct ChatDirectorFold: View {
     }
 }
 
-/// One Director in an opened fold: its state's dot, its Org avatar and its title, as the web's fold
-/// row draws it (OrgLeaders.tsx: dot, NodeAvatar, title).
+/// One Director in an opened fold, drawn as the org list's own plain row (`ChatOrgRowView`): its Org
+/// avatar, its title on one line and the list's red dot only when it waits on the user; no state dot
+/// (2026-11-25, as the web's fold row `DirectorListRow`; the user's "super simple" rows, 2026-11-22).
+/// VoiceOver still reads its state (the fold's accessibility label).
 struct ChatDirectorFoldRow: View {
     let director: ChatDirectorsModel.Director
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The list's red dot: only a Director that asks (To read counts, as on every surface).
+    static func hasDot(_ d: ChatDirectorsModel.Director) -> Bool { d.state.shown == .needs }
+
     var body: some View {
         HStack(spacing: 8) {
-            ChatDirectorDot(state: director.state)
             ChatDirectorAvatar(director: director, side: 22)
             Text(verbatim: director.title)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
                 .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+            Spacer(minLength: 4)
+            if Self.hasDot(director) { ChatOrgNeedsDot() }
         }
         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
         .padding(.leading, ChatDirectorFold.nameInset + 6)
-        .padding(.trailing, 16)
+        // The red dot lines up with a VP row's (12 + 8 from the edge).
+        .padding(.trailing, 20)
         .contentShape(Rectangle())
     }
 }

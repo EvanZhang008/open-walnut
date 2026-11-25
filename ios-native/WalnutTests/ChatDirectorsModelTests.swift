@@ -111,6 +111,17 @@ final class ChatDirectorsModelTests: XCTestCase {
         XCTAssertEqual(list[0].stateText, UserState.needs.label)
     }
 
+    /// A fold row is the list's plain row: the red dot only for a Director that waits on the user
+    /// (To read counts), never a dot per state (2026-11-25).
+    func testAFoldRowShowsTheRedDotOnlyWhenItAsks() throws {
+        let t = try tree()
+        let list = ChatDirectorsModel.sections(rows: rows(t), tree: t, tasks: [])
+        let byId = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+        XCTAssertFalse(ChatDirectorFoldRow.hasDot(try XCTUnwrap(byId["d1"])))  // working
+        XCTAssertFalse(ChatDirectorFoldRow.hasDot(try XCTUnwrap(byId["d3"])))  // waiting
+        XCTAssertTrue(ChatDirectorFoldRow.hasDot(try XCTUnwrap(byId["g1"])))   // to read
+    }
+
     func testOpenRowOpensTheDirectorsOwnTask() throws {
         let t = try tree()
         let d = try XCTUnwrap(ChatDirectorsModel.sections(rows: rows(t), tree: t, tasks: []).first)

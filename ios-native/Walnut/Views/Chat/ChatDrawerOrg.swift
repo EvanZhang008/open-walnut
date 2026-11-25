@@ -174,6 +174,16 @@ private struct VPRowMenu: ViewModifier {
     }
 }
 
+/// The org list's one red dot: a row that waits on the user (a VP's threads, a Director that asks).
+struct ChatOrgNeedsDot: View {
+    var body: some View {
+        Circle()
+            .fill(UserStatePill.color(.needs))
+            .frame(width: 8, height: 8)
+            .accessibilityHidden(true)
+    }
+}
+
 struct ChatOrgRowView: View {
     let row: ChatOrgModel.Row
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -192,12 +202,7 @@ struct ChatOrgRowView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(lines)
             Spacer(minLength: 4)
-            if ChatDrawerOrgList.hasDot(row) {
-                Circle()
-                    .fill(UserStatePill.color(.needs))
-                    .frame(width: 8, height: 8)
-                    .accessibilityHidden(true)
-            }
+            if ChatDrawerOrgList.hasDot(row) { ChatOrgNeedsDot() }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
