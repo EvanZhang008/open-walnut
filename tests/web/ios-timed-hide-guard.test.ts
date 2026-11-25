@@ -55,7 +55,17 @@ const KNOWN: KnownHide[] = [
   k('Views/Sessions/SessionConversationView.swift', 'coveredUntilPage = false', 'the longest a cover hides an unpainted page; ending sooner is the point'),
   k('Views/Sessions/SessionQueueViews.swift', 'dismiss', 'the edit sheet closes itself after its row went out; held longer it would sit over the page the test goes on to'),
   k('Talk/TalkSetupView.swift', 'dismiss', 'the Action Button sheet closes after a Resend; held longer it would sit over the page the test goes on to'),
-  k('Talk/TalkPanel.swift', 'self.close', 'the Talk panel closes once a take is idle (callers pass 0.5 s); nothing to read'),
+  k('Talk/TalkPanel.swift', 'self.close', 'the Talk panel closes after a take (callers pass 0.5 to 2 s); its UI tests read it while the take runs, and they need the audio Mac, so a longer hold is not proven safe', 2),
+  k('Talk/TalkSession.swift', 'self?.retryLater = nil', 'a retry wait forgets its own task'),
+  k('Stores/ChatStore.swift', 'self?.laneFollow = nil', 'a lane follow forgets its own task; nothing shown goes'),
+  k('Stores/InboxItemStore.swift', 'self.queryJobs[key] = nil', 'a background query forgets its own job'),
+  k('Stores/SessionConversationStore.swift', 'restoredWaiting.removeAll', 'the restored sends\' check gives up after its tries; nothing shown goes'),
+  k('Stores/SessionConversationStore.swift', 'self.gateExpiryTask = nil', 'the stream gate\'s expiry forgets its own task'),
+  k('Stores/SessionConversationStore.swift', 'self.gate.expire', 'the stream gate lets held events through at its deadline; it adds, never takes a shown thing away'),
+  k('Stores/SessionConversationStore.swift', 'self.replayHoldTask = nil', 'the replay hold forgets its own task'),
+  k('Views/Inbox/InboxItemConfirmation.swift', 'store.expirePlan', 'a plan expires at the time the server gave it, minutes away'),
+  k('Core/VoiceLiveUploader.swift', 'advanced = false', 'the live upload\'s own step flag, not shown'),
+  k('Core/DebugDictationCapture.swift', 'failOnce = false', 'a debug dictation fixture'),
   k('Views/Org/OrgThreadsView.swift', 'testMark = nil', 'the UI tests\' own reveal mark, already 8 s (testMarkSeconds)'),
   k('Views/Org/OrgThreadsView.swift', 'highlight = nil', 'a tint UI tests read through testMark; holding it longer would show under the next push\'s held sheet (expectHeld)'),
   k('Views/Tasks/TasksView.swift', 'highlightedTaskId = nil', 'a row tint, nothing to read or tap, no UI test reads it'),
@@ -189,8 +199,23 @@ describe('iOS: a thing taken off the screen on a clock waits through NoticeTimin
     expect(one('static let tick: Duration = .milliseconds(100)\nTask { try? await Task.sleep(for: Self.tick); listening = false }')).toBe(0)
     expect(one('static let window: Duration = .seconds(5)\nTask { try? await Task.sleep(for: Self.window); offer = nil }')).toBe(1)
     expect(one('static let hold: TimeInterval = 0.2\nDispatchQueue.main.asyncAfter(deadline: .now() + Self.hold) { shown = false }')).toBe(0)
-    // Two types in one file each read their own length: the first never masks the second.
+    // Two lengths of one name in a file: which one a wait reads is not known, so it counts, above
+    // or below the use (2026-11-25 review: B's 4 s was read as A's 0.2 s).
     expect(one('struct A { static let hold = 0.2 }\nstruct B { static let hold = 4\n func f() { DispatchQueue.main.asyncAfter(deadline: .now() + Self.hold) { shown = false } } }')).toBe(1)
+    expect(one('struct A { static let hold = 0.2 }\nstruct B { func f() { DispatchQueue.main.asyncAfter(deadline: .now() + Self.hold) { shown = false } }\n static let hold = 4.0 }')).toBe(1)
+    // A declaration of the name that is no length (a view's object) is not read as one.
+    expect(one('@State private var settle = Settle()\nstatic let settle: Duration = .milliseconds(150)\nTask { try? await Task.sleep(for: Self.settle); self.pending = nil }')).toBe(0)
+    // A sleep in a `do`, a loop or an `if`: the take-away after the block is its work.
+    expect(one('.task { do { try await Task.sleep(for: .seconds(3)) } catch { return }\n store.expirePlan(key) }')).toBe(1)
+    expect(one('Task { if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }\n self.close() }')).toBe(1)
+    expect(one('Task { for _ in 0..<3 { try? await Task.sleep(for: .seconds(2)) }\n banner = nil }')).toBe(1)
+    // Up to the next long wait; a short step between does not end it.
+    expect(all('Task { try? await Task.sleep(for: .seconds(2)); try? await Task.sleep(for: .seconds(NoticeTiming.seconds(4))); note = nil }').map((h) => h.wait)).toEqual(['Task.sleep(for: .seconds(NoticeTiming.seconds(4)))'])
+    expect(one('Task { try? await Task.sleep(for: .seconds(2)); for c in cs { try? await Task.sleep(for: .milliseconds(80)) }\n self.activity = nil }')).toBe(1)
+    // An injected clock's sleep.
+    expect(one('Task { try? await clock.sleep(seconds: Self.holdSpan); self.hold = nil }')).toBe(1)
+    expect(one('Task { do { try await sleep(wake.delay) } catch { return }\n toast = nil }')).toBe(1)
+    expect(one('Task { try? await clock.sleep(seconds: 0.2); self.hold = nil }')).toBe(0)
     expect(one('Task { try? await Task.sleep(for: .seconds(5)); await refresh() }')).toBe(0)
     expect(one('if a == nil { Task { try? await Task.sleep(for: .seconds(3)) } }\nx = nil')).toBe(0)
     // A call that takes something away after the wait (2026-11-25 review: dismiss() and clear() were missed).
@@ -208,6 +233,8 @@ describe('iOS: a thing taken off the screen on a clock waits through NoticeTimin
     expect(all('func f() { hiddenUntil[id] = Date().addingTimeInterval(Self.span) }').map((h) => h.takes)).toEqual(['hiddenUntil'])
     expect(all('if isOpen { quietUntil = .now + 30 }').map((h) => h.takes)).toEqual(['quietUntil'])
     expect(all('if Date().timeIntervalSince(armedAt) < 5 { confirm() }').map((h) => h.takes)).toEqual(['since armedAt'])
+    expect(all('if armedAt.timeIntervalSinceNow > -5 { confirm() }').map((h) => h.takes)).toEqual(['since armedAt'])
+    expect(all('if 5 > Date().timeIntervalSince(armedAt) { confirm() }').map((h) => h.takes)).toEqual(['since armedAt'])
     expect(one('let deadline = Date().addingTimeInterval(30)')).toBe(0)
     expect(one('let cutoff = now.addingTimeInterval(-86_400)')).toBe(0)
     expect(one('if now.timeIntervalSince(typedAt) < 0.5 { return true }')).toBe(0)

@@ -45,6 +45,43 @@ function restOfClosure(src: string, from: number): string {
 /** The body of the closure whose `{` is at `open`. */
 const closureAt = (src: string, open: number) => restOfClosure(src, open + 1)
 
+/** The index of the `{` that the `}` at `close` ends. */
+function openOf(src: string, close: number): number {
+  let depth = 0
+  for (let i = close; i >= 0; i--) {
+    if (src[i] === '}') depth++
+    else if (src[i] === '{' && --depth === 0) return i
+  }
+  return 0
+}
+
+/** A block the code after it still runs in the same closure: `do`, `catch`, a loop, an `if`/`else`. */
+const INNER_BLOCK = /(?:\bdo|\bcatch\b[^{};]*|\b(?:while|for|if|else\s+if|guard)\b[^{};]*|\belse|\brepeat)\s*$/
+
+/**
+ * What runs after `from` in the closure that holds it: the rest of the closure, read on past the
+ * end of a `do`, `catch`, loop or `if` block it sits in (`do { try await Task.sleep(...) } catch {
+ * return }` then the take-away), never past the closure's own end.
+ */
+function restAfter(src: string, from: number): string {
+  let work = ''
+  let pos = from
+  for (;;) {
+    const chunk = restOfClosure(src, pos)
+    work += chunk
+    const close = pos + chunk.length
+    if (close >= src.length) return work
+    const header = src.slice(Math.max(0, openOf(src, close) - 200), openOf(src, close))
+    if (!INNER_BLOCK.test(header)) return work
+    pos = close + 1
+    // Past the `catch { ... }` blocks of a `do` (their bodies are not what runs after the wait).
+    for (let m = /^\s*catch\b[^{]*\{/.exec(src.slice(pos)); m; m = /^\s*catch\b[^{]*\{/.exec(src.slice(pos))) {
+      pos += m[0].length
+      pos += restOfClosure(src, pos).length + 1
+    }
+  }
+}
+
 const lineOf = (src: string, at: number) => src.slice(0, at).split('\n').length
 
 /** Seconds a length expression asks for, or null when it is not a literal. */
@@ -61,24 +98,30 @@ export function literalSeconds(expr: string): number | null {
 }
 
 /**
- * Seconds a length expression asks for: a literal, or a name read where the file declares it (the
- * nearest declaration above `at`, else the first in the file, so two types with the same name in one
- * file each read their own). Null when the source does not say (a sum, a call, a name declared
- * elsewhere): such a wait counts as long.
+ * Seconds a length expression asks for: a literal, or a name read where the file declares it. Null
+ * when the source does not say (a sum, a call, a name declared elsewhere, or declared more than once
+ * in the file with different values): such a wait counts as long.
  */
-export function lengthSeconds(expr: string, src: string, at = src.length, nanos = false): number | null {
+export function lengthSeconds(expr: string, src: string, nanos = false): number | null {
   const e = expr.trim()
   const literal = literalSeconds(e)
   if (literal !== null) return nanos && /^[\d_.]+$/.test(e) ? literal / 1e9 : literal
   const name = /^(?:Self\.|self\.|\w+\.)?(\w+)$/.exec(e)?.[1] ?? /^\.?seconds\(\s*(?:Self\.|self\.)?(\w+)\s*\)$/.exec(e)?.[1]
   if (!name) return null
   const decls = [...src.matchAll(new RegExp(`\\b(?:let|var)\\s+${name}\\s*(?::\\s*[\\w.]+)?\\s*=\\s*([^\\n;]+)`, 'g'))]
-  const decl = decls.filter((d) => d.index < at).pop() ?? decls[0]
-  if (!decl) return null
-  const value = decl[1].trim().replace(/\s*\{$/, '')
-  const seconds = literalSeconds(value)
-  if (seconds === null) return null
-  return nanos && /^[\d_.]+$/.test(value) ? seconds / 1e9 : seconds
+  const valueOf = (d: RegExpMatchArray) => {
+    const value = d[1].trim().replace(/\s*\{$/, '')
+    const seconds = literalSeconds(value)
+    if (seconds === null) return null
+    return nanos && /^[\d_.]+$/.test(value) ? seconds / 1e9 : seconds
+  }
+  // Only declarations that are lengths (`@State var settle = AppearanceSettle()` is not one).
+  const values = decls.map(valueOf).filter((v): v is number => v !== null)
+  // Declared once, or every declaration says the same: that is its length. Two that differ (two
+  // types, or a local beside a static, declared above or below the use): which one the wait reads
+  // is not known from the text, so it counts as long.
+  if (values.length === 0 || values.some((v) => v !== values[0])) return null
+  return values[0]
 }
 
 /** The length a wait asks for, as written: `for:`, `nanoseconds:`, `.now() + x`, a Timer's interval. */
@@ -90,19 +133,21 @@ function waitLength(wait: string): { expr: string; nanos: boolean } | null {
   if (m) return { expr: m[1], nanos: true }
   m = /deadline:\s*\.now\(\)\s*\+\s*([^,]+?)\s*(?:,|$)/.exec(args)
   if (m) return { expr: m[1], nanos: false }
-  m = /(?:withTimeInterval|timeInterval):\s*([^,]+?)\s*(?:,|$)/.exec(args)
+  m = /(?:withTimeInterval|timeInterval|seconds):\s*([^,]+?)\s*(?:,|$)/.exec(args)
   if (m) return { expr: m[1], nanos: false }
+  // An injected clock's `sleep(x)`: x is seconds or a Duration, as the literal says.
+  if (/^sleep/.test(wait) && !/:/.test(args)) return { expr: args, nanos: false }
   return null
 }
 
 /** Seconds a wait asks for, null when the source does not say. */
-export function waitSeconds(wait: string, src: string, at = src.length): number | null {
+export function waitSeconds(wait: string, src: string): number | null {
   const length = waitLength(wait)
-  return length ? lengthSeconds(length.expr, src, at, length.nanos) : null
+  return length ? lengthSeconds(length.expr, src, length.nanos) : null
 }
 
 /** A wait the app runs: a sleep in a task, or a run later (`asyncAfter`, a `Timer`). */
-const WAIT = /Task\.sleep\s*\(|asyncAfter\s*\(|Timer\.scheduledTimer\s*\(|\bTimer\s*\(\s*timeInterval/g
+const WAIT = /Task\.sleep\s*\(|(?<!Task)\.sleep\s*\(\s*seconds:|(?<=\bawait\s+)sleep\s*\(|asyncAfter\s*\(|Timer\.scheduledTimer\s*\(|\bTimer\s*\(\s*timeInterval/g
 
 /**
  * Something taken away: `x = nil`, `x = false`, `f(false)`, or a call whose name says it (dismiss,
@@ -131,7 +176,7 @@ export interface TimedHide {
 
 /** The work a wait runs: the rest of a sleeping task, or the closure or work item it hands over. */
 function workOf(src: string, waitAt: number, argEnd: number, wait: string): string {
-  if (/^Task\.sleep/.test(wait)) return restOfClosure(src, argEnd)
+  if (!/^(?:asyncAfter|Timer)/.test(wait)) return restAfter(src, argEnd)
   // `execute: reset`: the work item of that name defined nearest above the wait is what runs.
   const item = /(?:execute|block):\s*(\w+)\s*\)$/.exec(wait)?.[1]
   if (item) {
@@ -153,10 +198,19 @@ function timedWaits(file: string, src: string): TimedHide[] {
   for (const m of src.matchAll(WAIT)) {
     const open = src.indexOf('(', m.index)
     const argEnd = pastParen(src, open)
-    const wait = src.slice(m.index, argEnd)
-    const seconds = waitSeconds(wait, src, m.index)
+    const wait = src.slice(m.index, argEnd).replace(/^\./, '')
+    const seconds = waitSeconds(wait, src)
     if (seconds !== null && seconds < 1) continue
-    const work = workOf(src, m.index, argEnd, wait)
+    // Up to the next long wait: what comes after that one is its work, judged with it (a short
+    // wait between, a loop's 80 ms step, does not end it).
+    const all = workOf(src, m.index, argEnd, wait)
+    let end = all.length
+    for (const n of all.matchAll(WAIT)) {
+      const nextWait = all.slice(n.index, pastParen(all, all.indexOf('(', n.index))).replace(/^\./, '')
+      const s = waitSeconds(nextWait, src)
+      if (s === null || s >= 1) { end = n.index; break }
+    }
+    const work = all.slice(0, end)
     // Every take-away in the work, not only the first: a known one never hides the next.
     for (const t of work.matchAll(TAKE_AWAY)) {
       found.push({
@@ -182,7 +236,7 @@ const NOW = String.raw`(?:Date\(\)|Date\.now|\.now\(\)|\.now|now\(\)|\bnow|Self\
 function dateWindows(file: string, src: string): TimedHide[] {
   const found: TimedHide[] = []
   const push = (at: number, text: string, name: string, length: string) => {
-    const seconds = lengthSeconds(length, src, at)
+    const seconds = lengthSeconds(length, src)
     if (seconds !== null && seconds < 1) return
     found.push({ file, line: lineOf(src, at), kind: 'window', wait: text.replace(/\s+/g, ' '), takes: name })
   }
@@ -200,6 +254,13 @@ function dateWindows(file: string, src: string): TimedHide[] {
     String.raw`timeIntervalSince\(\s*([^()\n]*(?:\([^()\n]*\))?[^()\n]*)\)\s*(?:<=?|>=?)\s*([\w.()]+(?:\s*[*+]\s*[\w.()]+)?)`,
     'g',
   )
+  const sinceNow = /([\w.?\]\[]+)\.timeIntervalSinceNow\s*(?:<=?|>=?)\s*-?\s*([\w.()]+)/g
+  for (const m of src.matchAll(sinceNow)) push(m.index, m[0], `since ${m[1].split('.').pop()}`, m[2])
+  const reversed = /([\w.()]+)\s*(?:<=?|>=?)\s*[\w.()]*\.timeIntervalSince\(\s*([^()\n]*)\)/g
+  for (const m of src.matchAll(reversed)) {
+    if (/^(?:if|guard|return|while|&&|\|\|)$/.test(m[1])) continue
+    push(m.index, m[0], `since ${m[2].replace(/\s+/g, '')}`, m[1])
+  }
   for (const m of src.matchAll(age)) {
     push(m.index, m[0], `since ${m[1].replace(/\s+/g, '')}`, m[2].replace(/^NoticeTiming\.seconds\((.*)\)$/, '$1'))
   }
