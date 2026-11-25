@@ -440,6 +440,13 @@ final class ChatStore {
     /// (`refreshAgents`), a deleted conversation to a new chat. A new chat is
     /// created lazily on first send, so it never litters the server.
     func initialize() async {
+        await adoptCache()
+        await refreshAfterLaunch()
+    }
+
+    /// The phone's own copy, with no network before it (`hydrateStores` reads every store's copy
+    /// first: offline, a request waits out its timeout).
+    func adoptCache() async {
         // Reactivate explicitly: Settings disconnect calls closeStream()
         // (isActive=false) and re-pairing runs initialize() in the SAME
         // foreground session — without this the chat tab is dead until the
@@ -468,7 +475,17 @@ final class ChatStore {
         // Before anything is selected: a queue restored after the first `select`
         // would have no bubbles until the next switch.
         await restoreQueuedSendsFromDisk()
-        guard isActive else { return }
+        cacheRead = true
+    }
+
+    /// `adoptCache` ran to its end (it stops early when a disconnect closed the store meanwhile).
+    @ObservationIgnored private var cacheRead = false
+
+    /// After `adoptCache` (and the launch's status probe): the chat the user left, then the
+    /// server's agents and list.
+    func refreshAfterLaunch() async {
+        guard cacheRead, isActive else { return }
+        cacheRead = false
         // The conversation the user left on this agent (nil: they left a new chat,
         // or were never here).
         let remembered = ChatPlace.remembered(agentID: activeAgentID).conversationID

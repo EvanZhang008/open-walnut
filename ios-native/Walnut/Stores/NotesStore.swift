@@ -39,6 +39,13 @@ final class NotesStore {
     /// prewarm launch that read is scene-update work the OS bills against the
     /// 10s allowance before killing the process (P0-1).
     func initialize() async {
+        await adoptCache()
+        await refreshAfterLaunch()
+    }
+
+    /// The phone's own copy, read from disk with no network before it (`hydrateStores` reads
+    /// every store's copy first).
+    func adoptCache() async {
         isActive = true
         if let cached = await DiskCache.loadAsync([NoteTreeNode].self, key: "notes-tree"),
            isActive, tree.isEmpty {
@@ -48,6 +55,10 @@ final class NotesStore {
            isActive, pinned.isEmpty {
             pinned = cachedPins
         }
+    }
+
+    /// After `adoptCache`: the server.
+    func refreshAfterLaunch() async {
         async let treeRefresh: Void = refreshTree()
         async let pinRefresh: Void = refreshPinned()
         _ = await (treeRefresh, pinRefresh)

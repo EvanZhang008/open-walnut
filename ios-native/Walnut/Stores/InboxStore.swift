@@ -170,11 +170,22 @@ final class InboxStore {
     /// Cached rows first (off-main), then the network. Mirrors NotesStore: the
     /// disk read must never block the caller's thread on a cold/prewarm launch.
     func initialize() async {
+        await adoptCache()
+        await refreshAfterLaunch()
+    }
+
+    /// The phone's own copy, read from disk with no network before it (`hydrateStores` reads
+    /// every store's copy first).
+    func adoptCache() async {
         isActive = true
         if let cached = await DiskCache.loadAsync([Letter].self, key: "inbox-letters"),
            isActive, letters.isEmpty {
             letters = InboxListing.inboxOrder(cached)
         }
+    }
+
+    /// After `adoptCache`: the server.
+    func refreshAfterLaunch() async {
         await refresh()
     }
 

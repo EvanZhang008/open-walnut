@@ -498,12 +498,21 @@ struct MainTabView: View {
     @MainActor private func hydrateStores() async {
         LaunchTrace.mark("store hydration start")
         let started = Date()
+        // Every store's own copy first, with no request before it: offline a request waits out
+        // its timeout, and what the phone holds must not wait for the network (2026-11-25 CI: a
+        // thread push at an offline cold launch gave up on the VP's chat the phone held, because
+        // its copy of the sessions was read only after the chat's and the notes' requests).
+        // `tests/web/ios-launch-cache-first-guard.test.ts` holds every store to it.
+        await tasks.adoptCache()
+        await chat.adoptCache()
+        await notes.adoptCache()
+        await inbox.adoptCache()
         await connection.refreshStatus()
-        await chat.initialize()
+        await chat.refreshAfterLaunch()
         DemoEntry.didHydrateChat(chat)
-        await notes.initialize()
-        await tasks.initialize()
-        await inbox.initialize()
+        await notes.refreshAfterLaunch()
+        await tasks.refreshAfterLaunch()
+        await inbox.refreshAfterLaunch()
         await approvals.refresh()
         approvals.presentNextIfAny()
         LaunchTrace.mark("store hydration done")

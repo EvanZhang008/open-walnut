@@ -634,6 +634,17 @@ final class TasksStore {
     /// Each adoption is guarded on "nothing canonical landed yet" because the
     /// network refresh can win the race.
     func initialize() async {
+        await adoptCache()
+        await refreshAfterLaunch()
+    }
+
+    /// The phone's own copy, read from disk with no network before it. A launch reads every
+    /// store's copy first (`hydrateStores`): offline, a request still waits out its timeout, and
+    /// an open from what the phone holds (a thread push at a cold launch) waits for this read
+    /// (`waitForCacheAdoption`), so it must not sit behind another store's requests
+    /// (2026-11-25 CI: offline, the chat's and the notes' reads came first and the push open
+    /// gave up before this ran).
+    func adoptCache() async {
         isActive = true
         if let cachedPending = await DiskCache.loadAsync([PendingCreated].self, key: "tasks-pending-created"),
            isActive, pendingCreated.isEmpty {
@@ -662,6 +673,10 @@ final class TasksStore {
         // 96, Satellite 96, no Focus/Backlog/Wait).
         await adoptCachedFocusSplit()
         await recents.hydrate()
+    }
+
+    /// After `adoptCache`: the server.
+    func refreshAfterLaunch() async {
         // Live feed + one REST refresh in parallel: the feed's snapshot frame
         // usually lands first, and the REST answers are then no-ops.
         connectFeed()
