@@ -41,6 +41,7 @@ import { memoryEntriesForHost, replicaExtras, type Extras } from './host-replica
 import { peekKindState } from './replication/replica-status.js'
 import { cleanKeepEntries, leftOut } from './replication/keep-rule.js'
 import { companionKeepOf } from './replication/companion-keep.js'
+import { runsCopyless } from './host-server/copyless.js'
 import { noteRefusalEnded, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
 import { daemonKeeperAlias, daemonTwinGroups, type NetSwitch, type TwinRows } from './hosts/daemon-twins.js'
@@ -97,8 +98,15 @@ export function keepSettingsOf(config: Config, hostKey: string, opts: { companio
   return config.hosts?.[name]?.keep
 }
 
-/** What `hostKey` keeps (`companion`: the cloud companion's own copy). A replica with no settings keeps everything. */
+/**
+ * What `hostKey` keeps (`companion`: the cloud companion's own copy). A replica with no settings keeps
+ * everything; a host whose service runs without a copy (host-server/copyless.ts) keeps nothing: no
+ * reader there reads this copy while the leader answers, and its away reads of it answer no_copy.
+ */
 export function hostKeepFor(config: Config, hostKey: string, opts: { companion?: boolean } = {}): HostKeep {
+  if (runsCopyless(hostKey)) {
+    return { notes: false, notesExclude: [], memory: false, skills: false, attachments: false }
+  }
   const keep = keepSettingsOf(config, hostKey, opts)
   return {
     notes: keep?.notes !== false,

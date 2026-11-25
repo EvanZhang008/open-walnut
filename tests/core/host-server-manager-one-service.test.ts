@@ -471,13 +471,24 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
 
     // Every takeDown names why; only 'off' (the settings) may stop a host's one service.
     const downs = [...src.matchAll(/takeDown\(([^,]+), ([^,]+)(?:, '([a-z-]+)')?/g)].filter(notDef)
+    // 'off': the settings (the switch off, offNow), or a service without a copy that the experiment
+    // or the host's room no longer allows (copyless.ts: back to the daemon alone).
     const downWhy: Record<string, RegExp> = {
-      off: /if \(!enabled\)/,
+      off: /if \(!enabled\)|const offNow = async|if \(wasCopyless && !\(await $/,
       // A remote follower service never probes true; the leader's own row is skipped, then ruled out.
       'this-computer': /!oneServiceHere\(host\) && !\(await $/,
       failed: /if \(byDefault\) await $/,
     }
-    expect(downs.map((x) => x[3]).sort()).toEqual(Object.keys(downWhy).sort())
+    expect(downs.map((x) => x[3]).sort()).toEqual([...Object.keys(downWhy), 'off'].sort())
+    // offNow runs only for a switch the person turned off.
+    const offCalls = [...src.matchAll(/\n([^\n]*)return offNow\(\)/g)].map((x) => x[1]!.trim())
+    expect(offCalls).toEqual([
+      'if (!enabled && !offCopyless)',
+      'if (self === true && offCopyless)',
+      '',
+    ])
+    expect(src).toMatch(/const offCopyless = !enabled && settings\?\.turnedOff === true/)
+    expect(src).toMatch(/else if \(offCopyless\) \{\n[^\n]*\n\s*return offNow\(\)/)
     for (const d of downs) {
       const { headers, before } = scope(d.index!)
       expect(`${headers}\n${before}`, d[3]).toMatch(downWhy[d[3]!]!)
@@ -513,7 +524,7 @@ describe('a failure never takes down a host that runs as this Walnut\'s one serv
     for (const x of nones.filter((n) => n.fn === 'reconcileOnce')) {
       const { headers, before } = scope(x.at)
       // 'off' only by the settings; 'unsupported' after a one-service host has left the block.
-      if (x.phase === 'off') expect(headers).toMatch(/if \(!enabled\)/)
+      if (x.phase === 'off') expect(headers).toMatch(/if \(!enabled\)|const offNow = async/)
       else expect(before).toMatch(/if \(await oneServiceMeant\(host\)\) \{[^]*return\n\s*\}/)
     }
 

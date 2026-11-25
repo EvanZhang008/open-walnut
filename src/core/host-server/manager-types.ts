@@ -60,10 +60,18 @@ export interface HostServerHost {
   oneServiceWanted?(): Promise<boolean | null>
   /** This Walnut's follower there settled (manager.ts followerFact): a switch of the host's mode may be due. */
   serviceModeChanged?(): void
+  /** The daemon runs under the service launcher (its hello's `launcher`); absent: not known (an older leader build). */
+  underLauncher?(): boolean
 }
 
 export interface HostServerSettings {
   enabled: boolean
+  /**
+   * The person turned this managed host's Walnut off (a stored `server.enabled: false` on a host that
+   * would run one by default): with the experiment service_without_copy it runs the service without a
+   * copy (copyless.ts), else nothing, as before.
+   */
+  turnedOff?: boolean
   /** On because of the default (follower-default.ts): the person never set the switch. Such a host is gated (eligibility.ts). */
   byDefault?: boolean
   expose: {
@@ -102,6 +110,8 @@ export interface HostServerView {
   phase: HostServerPhase
   /** One sentence for the person: what is happening, or what went wrong. */
   message?: string
+  /** It runs the host's service without a copy of the leader's data (copyless.ts): no copies, no port, no console. */
+  copyless?: boolean
   since: number
   build?: string
   install?: InstallState
@@ -213,6 +223,8 @@ export interface ManagerDeps {
   tryLaterMs?: Partial<Record<TryLaterKind, readonly number[]>>
   /** The floors a host on by default must meet (eligibility.ts FOLLOWER_FLOORS). */
   floors?: FollowerFloors
+  /** The experiment `service_without_copy` is on (copyless.ts copylessWanted; tests set it). */
+  copylessWanted?(): Promise<boolean>
   /**
    * Walnut Health (health-item.ts): a start that failed (it tries again by itself), and one that
    * settled (it runs, or none is meant to run). Never awaited.

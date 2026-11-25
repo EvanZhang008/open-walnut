@@ -46,6 +46,8 @@ export async function hostServiceOfferWanted(hostKey: string, machineIdOf?: (hos
   const forced = process.env.WALNUT_HOST_SERVICE_OFFER
   if (forced === '1' || forced === '0') return forced === '1'
   if (hostKey === '__local__') return false
+  // A host the leader runs without a copy (experiment service_without_copy) runs only as the one service.
+  try { if ((await import('../core/host-server/copyless.js')).runsCopyless(hostKey)) return true } catch { /* the offer below decides */ }
   try {
     const [{ getConfig }, { isFollower }] = await Promise.all([import('../core/config-manager.js'), import('../core/server-role.js')])
     if (isFollower()) return false

@@ -5,6 +5,7 @@
  * switch sends the same thing to the old leader's own daemon at a handover, so the old machine goes
  * on as an ordinary host of the new leader (core/leader/switch/host-follow.ts).
  */
+import { copylessEnv } from './copyless.js'
 
 export interface HostServerEnvInput {
   /** The service's own data dir on that machine (never a leader's home). */
@@ -39,7 +40,7 @@ export interface ProgramRun { args: string[]; env: Record<string, string>; fallb
  * What runs: the replica (`web --replica`) with the plain host server as its fallback, or the plain
  * host server alone. `prefix`: the program's own leading args (the CLI entry, for a Node).
  */
-export function hostProgramRun(o: { prefix: readonly string[]; env: Record<string, string>; replica: boolean; hostKey: string; gateway: boolean }): ProgramRun {
+export function hostProgramRun(o: { prefix: readonly string[]; env: Record<string, string>; replica: boolean; hostKey: string; gateway: boolean; copyless?: boolean }): ProgramRun {
   const hostServerArgs = [...o.prefix, 'host-server']
   if (!o.replica) return { args: hostServerArgs, env: o.env }
   return {
@@ -53,6 +54,8 @@ export function hostProgramRun(o: { prefix: readonly string[]; env: Record<strin
     env: {
       ...o.env, WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_KEY: o.hostKey,
       ...(o.gateway ? { WALNUT_CAPABILITIES: 'host-local-calls' } : {}),
+      // A host that keeps no copy of the leader's data (copyless.ts, kinds/gate.ts keepsNoCopy).
+      ...copylessEnv(o.copyless === true),
     },
     // The daemon runs this by itself after a crash loop (it works while the leader sleeps).
     fallback: { args: hostServerArgs, env: o.env },

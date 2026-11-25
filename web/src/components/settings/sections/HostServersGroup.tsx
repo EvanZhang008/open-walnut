@@ -19,7 +19,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { CopyButton } from '../inputs/CopyButton';
 import { apiPost } from '@/api/client';
 import { describeExpose, optionFits } from './cloud/browser-access-status';
-import { copiesSummary, describeHostServer, HOST_SERVER_BY_DEFAULT_TITLE, hostServerSwitchWords } from './host-servers-status';
+import { copiesSummary, COPYLESS_OFF_TEXT, describeHostServer, HOST_SERVER_BY_DEFAULT_TITLE, hostServerSwitchWords } from './host-servers-status';
 import { ReplicaCopyRows } from './ReplicaCopyRows';
 import { useHostSettings } from './host-settings-data';
 import '@/styles/browser-access.css';
@@ -90,7 +90,7 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
         help={
           <span className="browser-access-state" data-testid={`host-server-state-${host.hostKey}`}>
             <span className="browser-access-dot" data-dot={on ? line.dot : 'off'} aria-hidden="true" />
-            <span>{on ? line.text : 'Off: no Walnut runs there, so a browser there cannot open Walnut while your Mac is away.'}</span>
+            <span>{on ? line.text : host.view?.copyless ? COPYLESS_OFF_TEXT : 'Off: no Walnut runs there, so a browser there cannot open Walnut while your Mac is away.'}</span>
           </span>
         }
         error={errors[host.hostKey]}
@@ -128,7 +128,7 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
       />
       {/* The replica is every host's program since D13; 'host-server' is the rollback, which keeps no copies. */}
       {/* Eleven switches folded behind one line that says how many are on (2026-11-04 review). */}
-      {on && host.settings.program !== 'host-server' && host.settings.copies && (
+      {on && !host.view?.copyless && host.settings.program !== 'host-server' && host.settings.copies && (
         <SettingsDisclosure
           id={`host-server-copies-${host.hostKey}`}
           indent

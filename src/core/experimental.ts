@@ -125,6 +125,14 @@ export const EXPERIMENTAL_FEATURES = [
     default: true,
   },
   {
+    id: 'service_without_copy',
+    name: 'Small hosts run the one Walnut service, without a copy of your data',
+    description: 'A Linux host with too little memory or disk for a copy of your data, or one whose Walnut you turned off, runs the one Walnut service anyway: it runs and keeps its sessions and their writes while this computer is away, but keeps no copy of your data, opens no port and has no console. While this computer is away, its sessions read their own tasks, Boards and requests there; anything else waits for this computer. It needs about 170 MB of memory there, against about 80 MB for the session helper alone. Needs the service launcher. Off: such a host runs the session helper alone, as before. "Every experiment on" does not turn this on: it changes what runs on your other computers, so it keeps its own switch.',
+    summary: 'Small Linux hosts, and ones you turned off, run the Walnut service with no copy of your data, no port and no console.',
+    default: false,
+    ownSwitchOnly: true,
+  },
+  {
     id: 'change_status',
     name: 'Change status in link tags',
     description: 'A task\'s change links (pull requests, code reviews, commits) show how far each got inside its link pill: in review, approved, merged, deploying, deployed or blocked. Click the pill for the review and every deploy stage; Walnut tells the task\'s session when a change is approved, fails, is blocked or finishes deploying.',

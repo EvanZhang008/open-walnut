@@ -32,7 +32,14 @@ export interface HostServerView {
   retryAt?: number;
   /** While the program goes up to the host: the bytes it holds so far. */
   upload?: { sent: number; total: number };
+  /** It runs the host's service without a copy of your data (core/host-server/copyless.ts). */
+  copyless?: boolean;
 }
+
+/** A host whose service runs without a copy of your data (experiment service_without_copy). */
+export const COPYLESS_RUNNING_TEXT = 'Runs without a copy of your data: no copy kept here, no port opened, no console. Its sessions keep going while this Mac is away.';
+/** Its switch off with that experiment on: what off means now. */
+export const COPYLESS_OFF_TEXT = 'Off: Walnut runs here only as its service. It keeps no copy of your data, opens no port and has no console.';
 
 export interface HostServerReport {
   route?: { kind: string; why?: string };
@@ -187,6 +194,7 @@ function describeHostServerNow(entry: HostServerEntry): HostServerLine {
     case 'starting':
       return { dot: 'pending', text: v.message ?? 'Setting it up...', retry: false };
     case 'running':
+      if (v.copyless) return { dot: 'done', text: COPYLESS_RUNNING_TEXT, retry: false };
       if (v.notice) return { dot: 'action', text: `${routeText(v.server?.route)} ${v.notice}`, retry: true };
       return { dot: 'done', text: routeText(v.server?.route), retry: false };
     case 'error':

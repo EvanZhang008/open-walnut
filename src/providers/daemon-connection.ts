@@ -4605,6 +4605,7 @@ export class DaemonConnection {
         return offer === false ? false : (await serviceLauncherWanted()) ? offer : false
       },
       serviceModeChanged: () => { void conn.checkServiceMode() },
+      underLauncher: () => !!conn._launcher,
     }
   }
 

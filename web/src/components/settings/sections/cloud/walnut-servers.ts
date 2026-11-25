@@ -80,7 +80,9 @@ export function walnutServerRows(i: WalnutServersInput): WalnutServerRow[] {
     // The state of the one that runs, else the first; the address of the one that carries the tunnel.
     const lead = m.entries.find((e) => e.view?.phase === 'running') ?? m.entries[0];
     // Running: just that (the Remote Hosts line goes on about where a browser on that host lands).
-    const state = lead.view?.phase === 'running' && !lead.view.notice ? { text: 'Running.', dot: 'done' as const } : describeHostServer(lead);
+    const state = lead.view?.phase === 'running' && !lead.view.notice
+      ? { text: lead.view.copyless ? 'Running, without a copy of your data.' : 'Running.', dot: 'done' as const }
+      : describeHostServer(lead);
     const carrier = m.entries.find((e) => e.settings.carriesTunnel);
     const tunnel = carrier?.view?.server?.expose;
     const address = carrier && tunnel?.state === 'connected' && tunnel.url

@@ -73,6 +73,7 @@ import { createTryLater, inWords, type TryLaterKind } from './try-later.js'
 import { FOLLOWER_GATEWAY_CAPABILITY } from '../../providers/follower-gateway-core.js'
 import { pluginsKeepingTasks } from '../plugins/plugin-task-visibility.js'
 import { servesThisWalnut, type FollowerFact } from '../../providers/one-service-mode.js'
+import { copylessGate, copylessUnfit, copylessWanted, noteCopyless, programIsCopyless, withCopies } from './copyless.js'
 
 export type {
   HostServerHost, HostServerSettings, HostServerPhase, HostServerView, HostCopyTarget, ManagerDeps,
@@ -134,6 +135,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     // A failed proof boot is tried again as Retry does: the install is sent again.
     run: (hostKey, kind) => { if (hosts.get(hostKey)?.connected) void reconcile(hostKey, kind === 'proof' ? { retry: true } : {}) },
   })
+  const wantsCopyless = deps.copylessWanted ?? copylessWanted
   /** The view's sentence for a setup that runs again later, and when (none past the end of a ladder that stops). */
   function retryingLater(hostKey: string, kind: TryLaterKind, message: string, o: { stopAtEnd?: boolean } = {}): { message: string; at: number | undefined } {
     const next = tryLater.later(hostKey, kind, o)
@@ -590,11 +592,14 @@ export function createHostServerManager(deps: ManagerDeps) {
     // during the steps below (plugins stopping) must not turn the host's tunnel off.
     const exposeSettings = settings?.enabled === true ? await exposeSettingsFor(settings) : null
     const enabled = settings?.enabled === true
-    if (!enabled) {
+    // A managed host the person turned off runs the service without a copy, when that can be (copyless.ts).
+    const offCopyless = !enabled && settings?.turnedOff === true && host?.connected === true && await wantsCopyless()
+    const offNow = async (): Promise<void> => {
+      noteCopyless(hostKey, false)
       if (!(await takeDown(hostKey, host, 'off'))) return
-      set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined, lastReport: undefined, lastReportAt: undefined })
-      return
+      set(hostKey, { enabled: false, phase: 'off', server: null, daemon: undefined, lastReport: undefined, lastReportAt: undefined, copyless: undefined })
     }
+    if (!enabled && !offCopyless) return offNow()
     if (!host?.connected) {
       set(hostKey, { enabled: true, phase: 'waiting-for-host', message: 'It starts once Walnut connects to this host.' })
       return
@@ -614,8 +619,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     // installed on an unknown; it is looked at again soon. This computer running as its own leading
     // one service says walnut-serve with this home in its hello too: the probe still applies. A
     // remote follower service never probes true; for a one-service host only the takedown is skipped.
-    if (settings!.byDefault && !settings!.carriesTunnel) {
+    if ((settings!.byDefault || offCopyless) && !settings!.carriesTunnel) {
       const self = host.reachesThisComputer ? await host.reachesThisComputer().catch(() => null) : false
+      if (self === true && offCopyless) return offNow()
       if (self === true) {
         if (!oneServiceHere(host) && !(await takeDown(hostKey, host, 'this-computer'))) return
         notEligible(hostKey, 'this-computer', 'No Walnut server runs on this host by default: it is this computer, which runs Walnut already.')
@@ -627,7 +633,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         return
       }
     }
-    set(hostKey, { enabled: true, phase: 'checking', message: 'Checking the host.' })
+    set(hostKey, { enabled, phase: 'checking', message: 'Checking the host.' })
     try {
       // The full program as this host's replica wherever the daemon can (D13: the default since
       // the WP14 release gate); `server_program: 'host-server'` keeps the plain host server.
@@ -640,7 +646,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         // Read by the server while it runs: a change here restarts nothing. `pluginsKeepTasks`: the
         // plugins that keep their tasks to their own view, which a follower that loads no plugin
         // manifest stamps its away creates by (plugin-task-visibility.ts).
-        settings: { expose: exposeSettings, exposeRetry: retryCount(hostKey), pluginsKeepTasks: pluginsKeepingTasks() },
+        settings: { expose: copyless ? null : exposeSettings, exposeRetry: retryCount(hostKey), pluginsKeepTasks: pluginsKeepingTasks() },
       })
       // A newer build of this Mac waits while the program that works there reports (update-hold.ts):
       // the host keeps it, with the settings of now, and nothing is sent.
@@ -649,25 +655,47 @@ export function createHostServerManager(deps: ManagerDeps) {
       // follower was ever set up (its port is kept, or its daemon runs one) skip it: a running
       // follower's own memory must never read as the host's lack of it.
       let known: HostTarget | undefined
-      if (await firstOnByDefault(host, settings!)) {
-        const judged = judgeFollowerRoom(await host.runRemoteScript(roomProbeScript(deps.hostRoot ?? HOST_ROOT), 15_000), deps.floors ?? FOLLOWER_FLOORS)
-        if ('gate' in judged) {
+      // Without a copy (copyless.ts): a turned-off host, a host too small for a copy, or one that ran so
+      // before (looked at again each time: it may have grown, or the experiment may be off now).
+      let copyless = false
+      const wasCopyless = programIsCopyless(readState()[hostKey]?.working)
+      if (offCopyless || wasCopyless || await firstOnByDefault(host, settings!)) {
+        const out = await host.runRemoteScript(roomProbeScript(deps.hostRoot ?? HOST_ROOT), 15_000)
+        const judged = judgeFollowerRoom(out, deps.floors ?? FOLLOWER_FLOORS)
+        let target: HostTarget | null = null
+        try { target = parseHostTarget(out) } catch { target = null }
+        if (offCopyless || ('gate' in judged && copylessGate(judged.gate.reason))) {
+          const unfit = !(offCopyless || await wantsCopyless()) ? 'off'
+            : !replica ? 'it runs the plain host server, which has no service' : copylessUnfit(host, target, oneServiceHere(host))
+          if (unfit === null) { copyless = true; known = target ?? undefined }
+          else if (offCopyless) {
+            log.session.info('host server: a turned-off host stays off, it cannot run without a copy', { host: hostKey, why: unfit })
+            return offNow()
+          }
+        }
+        if (!copyless && 'gate' in judged) {
+          // The service ran without a copy here and no longer may: back to the daemon alone.
+          if (wasCopyless && !(await takeDown(hostKey, host, 'off'))) return
+          noteCopyless(hostKey, false)
           notEligible(hostKey, judged.gate.reason, judged.gate.message, { again: judged.gate.again ? 'gate' : null, room: judged.gate.room })
           return
         }
-        known = judged.target
+        if (!copyless && 'target' in judged) known = judged.target
       }
+      noteCopyless(hostKey, copyless)
+      if (copyless) log.session.info('host server: the host runs the service without a copy', { host: hostKey, why: offCopyless ? 'turned off' : 'too small for a copy' })
       // A host's one Walnut service is this Walnut's follower itself (one-service-mode.ts): no app of
       // its own is installed there; the spec is still sent (the service starts from it, and a daemon
       // put back starts the follower from it), and its status is read over the same server.status.
       const held = (replica ? serviceHolds(host) : null) ?? await heldBuild(host, replica, retry)
       if (held) {
-        set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: held.rec.publicPort })
-        await deps.holdTunnelPort(`host-server:${hostKey}`)
-        host.keepStreamLane?.(true)
-        await configure(host, await specOf(held.working, held.rec.publicPort), isReplica(held.working))
-        await afterConfigure(host, isReplica(held.working))
-        const missed = await firstReport(host, held.working.log)
+        const heldRuns = withCopies(held.working, copyless)
+        set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: held.rec.publicPort, copyless: copyless || undefined })
+        await holdDoor(host)
+        await configure(host, await specOf(heldRuns, held.rec.publicPort), isReplica(heldRuns))
+        if (heldRuns !== held.working) updateRecord(hostKey, (r) => { r.working = heldRuns })
+        await afterConfigure(host, isReplica(heldRuns), copyless)
+        const missed = await firstReport(host, heldRuns.log)
         if (missed) throw new Error(missed)
         startPoll(hostKey)
         return
@@ -676,23 +704,21 @@ export function createHostServerManager(deps: ManagerDeps) {
       // The link may have dropped and come back as a new connection during the install.
       host = hosts.get(hostKey) ?? host
       const rec = await portsFor(host, install.program)
-      set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort })
-      // The door its streams come in by (the tunnel port trusts nothing on loopback).
-      await deps.holdTunnelPort(`host-server:${hostKey}`)
-      host.keepStreamLane?.(true)
+      set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort, copyless: copyless || undefined })
+      await holdDoor(host)
       const { command, prefix } = install.program
       const hostServerEnv = hostServerEnvOf({
         dataDir: install.dataDir, runDir: install.runDir, port: rec.publicPort, leaderHome: deps.home,
         walnutId: await deps.walnutId(), label: await deps.label(hostKey),
       })
       const run: Omit<WorkingProgram, 'id' | 'command' | 'cwd' | 'log'> = hostProgramRun({
-        prefix, env: hostServerEnv, replica, hostKey, gateway: host.hasCapability(FOLLOWER_GATEWAY_CAPABILITY),
+        prefix, env: hostServerEnv, replica, hostKey, gateway: host.hasCapability(FOLLOWER_GATEWAY_CAPABILITY), copyless,
       })
       if (settings!.program !== 'host-server' && !replica) {
         log.session.info('host server: the host would run the replica, its daemon cannot run it yet', { host: hostKey })
       }
       const fresh: WorkingProgram = { id: install.id, command, cwd: install.dataDir, log: install.logFile, ...run }
-      const working = rec.working && rec.working.id !== fresh.id ? rec.working : undefined
+      const working = rec.working && rec.working.id !== fresh.id ? withCopies(rec.working, copyless) : undefined
       let runs = fresh
       if (!retry && working && rec.refused?.id === fresh.id) {
         // This build did not answer before: until Retry, the host keeps the one that worked.
@@ -704,7 +730,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         const before = reportedId((await host.send('server.status', { home: deps.home }, 10_000).catch(() => null))?.status as HostServerStatus | undefined)
         notices.delete(hostKey)
         await configure(host, await specOf(fresh, rec.publicPort), replica)
-        await afterConfigure(host, replica)
+        await afterConfigure(host, replica, copyless)
         const missed = await firstReport(host, fresh.log)
         if (!missed) {
           updateRecord(hostKey, (r) => { r.working = fresh; delete r.refused; delete r.behindSince })
@@ -724,7 +750,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         notices.set(hostKey, olderNotice(fresh.id, working.id, missed))
         await configure(host, await specOf(working, rec.publicPort), isReplica(working))
       }
-      await afterConfigure(host, isReplica(runs))
+      await afterConfigure(host, isReplica(runs), copyless)
       const missed = await firstReport(host, runs.log)
       if (missed) throw new Error(missed)
       startPoll(hostKey)
@@ -852,7 +878,17 @@ export function createHostServerManager(deps: ManagerDeps) {
   }
 
   /** What follows a configure: the replica's spawn template, the copy target. */
-  async function afterConfigure(host: HostServerHost, replica: boolean): Promise<void> {
+  /**
+   * The door a follower's streams come in by (the tunnel port trusts nothing on loopback) and the
+   * stream lane. A service without a copy keeps both: its sessions' channel to this Mac rides them
+   * (it has no public port and no console, which its spec and its server leave out).
+   */
+  async function holdDoor(host: HostServerHost): Promise<void> {
+    await deps.holdTunnelPort(`host-server:${host.hostKey}`)
+    host.keepStreamLane?.(true)
+  }
+
+  async function afterConfigure(host: HostServerHost, replica: boolean, copyless = false): Promise<void> {
     const hostKey = host.hostKey
     const settings = await deps.settingsOf(hostKey)
     const dataDir = (links.get(hostKey)?.spec as { cwd?: string } | undefined)?.cwd
@@ -876,9 +912,15 @@ export function createHostServerManager(deps: ManagerDeps) {
         log.session.warn('host server: the spawn template was not pushed; a new ask there needs this Mac', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
       }
     }
-    // The copies (task store, search index) for this follower, on a stream through its daemon.
+    // The copies (task store, search index) for this follower, on a stream through its daemon;
+    // none for a service that keeps no copy (copyless.ts).
     const link = links.get(hostKey) ?? {}
     links.set(hostKey, link)
+    if (copyless) {
+      link.target?.unregister()
+      delete link.target
+      return
+    }
     if (deps.registerTarget && !link.target) {
       link.target = deps.registerTarget(hostKey, async (body, opts) => {
         const h = hosts.get(hostKey)

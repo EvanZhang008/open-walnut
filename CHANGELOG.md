@@ -12,6 +12,7 @@ breaking changes).
 - The one Walnut service is on by default: a remote Linux host under the service launcher runs its Walnut server and its session helper as one program; `hosts.<name>.service_offer: false` or a stored `host_service_offer` list keeps a host on two programs, macOS hosts are not offered it yet, and a `host_service_offer` set to null now means every host, not none
 - A remote host two Walnuts share becomes the one service of whichever leader asks first; the other Walnut's running sessions keep their CLI and their conversation, and it keeps sending to them and hearing them
 - On one computer account, the Walnut server runs this computer's sessions in its own process: a second server on the same daemon dir refuses to start and names the running one (pid, port, data dir), and a newer server that finds an older one's daemon program takes it over, its sessions adopted with their conversations
+- With the experiment "Small hosts run the one Walnut service, without a copy of your data", a host's Walnut switch turned off means the service runs there with no copy of your data, no port and no console (about 170 MB of memory against 80 MB for the session helper alone); Linux hosts only for now
 
 ## [0.6.37] - 2026-11-20
 

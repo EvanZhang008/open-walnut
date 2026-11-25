@@ -100,6 +100,7 @@ export function hostServerSettingsFrom(raw: unknown, program?: unknown, onByDefa
   return {
     enabled: s.enabled === true || byDefault,
     ...(byDefault ? { byDefault: true } : {}),
+    ...(s.enabled === false && onByDefault ? { turnedOff: true } : {}),
     expose: {
       enabled: s.expose?.enabled === true,
       provider: typeof s.expose?.provider === 'string' && s.expose.provider ? s.expose.provider : null,
