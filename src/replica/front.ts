@@ -279,7 +279,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     log: (level, msg, data) => log.web[level](msg, data),
   }
   const link: FollowerLink = opts.link ?? (opts.seat
-    ? createDirectFollowerLink({ ...wiring, seat: opts.seat })
+    ? createDirectFollowerLink({ ...wiring, seat: opts.seat, ...(keepsNoCopy() ? { liveView: true } : {}) })
     : createFollowerLink({ ...wiring, daemonDir: env.daemonDir, token: env.followerToken }))
   // The Mac's name for this host resolves to this link (self-host.ts, WP6).
   // In a host's one Walnut service too: the stand-in goes through the in-process follower seat, whose

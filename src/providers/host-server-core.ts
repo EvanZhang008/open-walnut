@@ -734,6 +734,16 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       if (!deps.self || deps.leads || !home) return false
       return isSelf(home) || (!!deps.self.dataHome && home === deps.self.dataHome)
     },
+    /**
+     * Whether this very process is the follower of `home` and keeps no copy of its leader's data: the
+     * spec the leader sent it carries WALNUT_COPIES=none (core/host-server/copyless.ts). The daemon's
+     * own away answers are never asked for such a home (daemon-standalone.ts ownAnswersOff).
+     */
+    selfWithoutCopy: (home: string): boolean => {
+      if (!deps.self || deps.leads || !home) return false
+      if (!isSelf(home) && !(!!deps.self.dataHome && home === deps.self.dataHome)) return false
+      return entries.get(deps.self.home)?.spec.env.WALNUT_COPIES === 'none'
+    },
     /** The settings the leader gave the server for `home`. */
     settingsOf: (home: string): Record<string, unknown> => entryOf(home)?.spec.settings ?? {},
     /** The program the leader configured for `home` (its node and `<appDir>/dist/cli.js`), or null: an ask's MCP mount (host-start-core.ts). */

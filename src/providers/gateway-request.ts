@@ -105,3 +105,17 @@ export function toolsCallLineWithin(sid: string, args: Record<string, unknown>, 
 export function gatewayListLine(op: Exclude<GatewayOp, 'tools.call'>, sid: string, args: Record<string, unknown>, timeoutMs = WALNUT_CLI_TIMEOUT_MS): GatewayLine {
   return { req: { v: 1, op, sid, args }, timeoutMs }
 }
+
+/**
+ * The same line sent again with `leftMs` of its time left (a client's resend after a retryable answer,
+ * wn-cli.ts requestRidingRestart): a call that waited waits at most what is left, its socket that
+ * and GATEWAY_ANSWER_SLACK_MS; a call that waits for nothing keeps waiting for nothing.
+ */
+export function gatewayLineAgain(line: GatewayLine, leftMs: number): GatewayLine {
+  const waitMs = line.req.waitMs
+  if (line.req.op !== 'tools.call' || typeof waitMs !== 'number' || waitMs <= 0) return { req: line.req, timeoutMs: Math.max(1, Math.min(line.timeoutMs, Math.floor(leftMs))) }
+  const left = Math.max(1, Math.floor(Number.isFinite(leftMs) ? leftMs : 0))
+  if (left < GATEWAY_MIN_RELAY_MS) return { req: { ...line.req, waitMs: 0 }, timeoutMs: left }
+  const again = Math.min(waitMs, left)
+  return { req: { ...line.req, waitMs: again }, timeoutMs: again + GATEWAY_ANSWER_SLACK_MS }
+}

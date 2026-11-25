@@ -37,7 +37,7 @@ interface Rig {
 const links: FollowerLink[] = []
 afterEach(() => { for (const l of links.splice(0)) l.stop() })
 
-function rig(over: Partial<Record<keyof FollowerSeat, (...a: never[]) => unknown>> = {}): Rig {
+function rig(over: Partial<Record<keyof FollowerSeat, (...a: never[]) => unknown>> = {}, linkOver: { pollMs?: number; liveView?: boolean } = {}): Rig {
   const set: Rig['set'] = { present: true, view: VIEW, seated: null }
   const events: Array<Record<string, unknown>> = []
   const attachedWith: Rig['attachedWith'] = []
@@ -79,6 +79,7 @@ function rig(over: Partial<Record<keyof FollowerSeat, (...a: never[]) => unknown
     onEvent: (e) => events.push(e),
     log: () => {},
     seat: () => (set.present ? seat : null),
+    ...linkOver,
   })
   links.push(link)
   return { link, seat, client, frame: (f) => onFrame(f), closeFromRuntime: () => onClose?.(), events, attachedWith, set }
@@ -92,8 +93,8 @@ async function until(what: string, fn: () => boolean, ms = 2_000): Promise<void>
   }
 }
 
-async function following(over?: Parameters<typeof rig>[0]): Promise<Rig> {
-  const r = rig(over)
+async function following(over?: Parameters<typeof rig>[0], linkOver?: Parameters<typeof rig>[1]): Promise<Rig> {
+  const r = rig(over, linkOver)
   r.link.start()
   await until('following', () => r.link.linkState() === 'following' && r.link.capabilities() !== null)
   return r
@@ -387,5 +388,27 @@ describe('the seat it holds', () => {
     expect((r.seat.op as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]).toBe(FIRST)
     // Still the one seat: a moved home is no lost seat.
     expect(r.attachedWith).toHaveLength(1)
+  })
+})
+
+describe('one presence (a service without a copy)', () => {
+  it('liveView: the view is the seat\'s at the moment it is read, not one poll old', async () => {
+    const live = await following(undefined, { pollMs: 60_000, liveView: true })
+    const polled = await following(undefined, { pollMs: 60_000 })
+    expect(live.link.view()?.view.primaryConnected).toBe(true)
+    expect(polled.link.view()?.view.primaryConnected).toBe(true)
+    live.set.view = { ...VIEW, primaryConnected: false }
+    polled.set.view = { ...VIEW, primaryConnected: false }
+    await vi.waitFor(() => expect(live.link.view()?.view.primaryConnected).toBe(false), { timeout: 2_000, interval: 50 })
+    // The polled link still holds the view of its last poll (a minute away).
+    expect(polled.link.view()?.view.primaryConnected).toBe(true)
+    // Read again at most every 200 ms: a second read at once asks the seat no more.
+    const asked = (live.seat.view as unknown as { mock: { calls: unknown[] } }).mock.calls.length
+    live.link.view()
+    expect((live.seat.view as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(asked)
+    // Paused for a swap (the seat answers no view): once it was asked again, the last view stands.
+    live.set.view = null
+    await vi.waitFor(() => { live.link.view(); expect((live.seat.view as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBeGreaterThan(asked) }, { timeout: 2_000, interval: 50 })
+    expect(live.link.view()?.view.primaryConnected).toBe(false)
   })
 })

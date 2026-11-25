@@ -2847,6 +2847,23 @@ function followerHere(home: string | undefined) {
   }
 }
 /**
+ * This process is the one Walnut service of `home` and keeps no copy of its leader's data
+ * (core/host-server/copyless.ts, experiment service_without_copy: the spec's WALNUT_COPIES=none).
+ * The daemon's own away answers (offlineHost.handle, handleLocal, holdWrite, deliverTrigger) are
+ * never asked for it: what the follower in this process answers is final, a call before it is
+ * seated waits within its own time and then answers `needs_leader` `service_starting` (retryable,
+ * nothing ran), and a same-host send while the leader answers goes to the leader.
+ */
+function ownAnswersOff(home: string | undefined): boolean {
+  return !!home && SERVICE_MODE && (hostServers.selfWithoutCopy(home) || hostServers.selfWithoutCopy(walnutOfHome(home)))
+}
+
+/** A call the service in this process could not take yet (it is starting): retryable, nothing ran. */
+function serviceStartingAnswer(): GatewayResponse {
+  return { ok: false, error: { code: 'needs_leader', message: 'this host\'s Walnut service is starting; nothing was sent, try again in a moment', retryAfterMs: 1_000, detail: { why: 'service_starting', retryable: true } } }
+}
+
+/**
  * When a call last waited its whole room for this host's follower and got no answer (waitForFollower):
  * a follower alive but never linking (a hung boot, a refused hello) or linked but not taking calls (the
  * leader still heard) would make every call wait its room again. While it is younger than
@@ -2869,7 +2886,7 @@ const followerGateway = createFollowerGateway<ServerWebSocket<WsData>>({
   // link, held for the Mac when it takes nothing either (follower-gateway-core.ts askElsewhere).
   leaderElsewhere: (home) => leaderBook.backupLead(home) !== null,
   relayElsewhere: (call, answer, timeoutMs) => forwardToBackup(call.home, call.capability, call.callerSid, call.payload, answer, timeoutMs),
-  holdForLeader: (call) => offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload) as FollowerGatewayResponse | null,
+  holdForLeader: (call) => (ownAnswersOff(call.home) ? null : offlineHost.holdWrite(call.home, call.callerSid, call.capability, call.payload) as FollowerGatewayResponse | null),
   now: () => Date.now(),
   send: (ws, ev, data) => { try { sendEvent(ws, ev, data); return true } catch { return false } },
   nextRelayId: () => ++gatewayRelayCounter,
@@ -2900,7 +2917,7 @@ const followerTriggers = createFollowerTriggerDelivery<ServerWebSocket<WsData>>(
   nextId: () => `td-${DAEMON_INSTANCE_ID}-${++followerTriggerCounter}`,
   answerMs: FOLLOWER_TRIGGER_ANSWER_MS,
   // Counted with the gateway's own answers (the count task B drives to zero).
-  ownAnswerUsed: () => followerGateway.noteOwnAnswer('trigger_delivery', 'handed_back'),
+  ownAnswerUsed: (fire) => { if (!ownAnswersOff(fire.home)) followerGateway.noteOwnAnswer('trigger_delivery', 'handed_back') },
   setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
   clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
   log: (level, msg, data) => logMsg(level, msg, data),
@@ -2909,6 +2926,9 @@ const followerTriggers = createFollowerTriggerDelivery<ServerWebSocket<WsData>>(
 /** The daemon's own delivery of a fire (follower-trigger-delivery-core.ts `own`): a stopping Demo delivers nothing. */
 function deliverFireOwn(fire: TriggerFire): Promise<TriggerDeliveryResult> {
   if (demoQuiesce.fenced) return Promise.resolve({ ok: false, reason: 'demo_stopping' })
+  // The service without a copy delivers while its leader is away through its follower only: the fire
+  // stays due and is tried again a minute later (ownAnswersOff).
+  if (ownAnswersOff(fire.home) && followerEntry.mayWrite(fire.home)) return Promise.resolve({ ok: false, reason: 'service_starting' })
   return offlineHost.deliverTrigger(fire.home, fire.taskId, fire.text, fire.messageId)
 }
 
@@ -4062,7 +4082,8 @@ function sendGatewayRequest(
   const deadline = plan.deadline
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
-  const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
+  const noOwn = ownAnswersOff(home)
+  const readable = !noOwn && !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
   // A call from outside any session (a person's terminal on this host) is answered away only when
   // it reads: a write this host journals names a session for the Mac to replay, and this has none.
   const external = callerSid === EXTERNAL_CALLER_SID
@@ -4073,7 +4094,8 @@ function sendGatewayRequest(
   if (home && followers && followerGateway.answers(home)) {
     const fallback = () => sendGatewayRequest(capability, callerSid, payload, respond, { ...plan, ownServerAsked: true })
     const left = () => gatewayCallerLeft.get(respond)?.() === true
-    if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback, left }, (r) => respond(r as GatewayResponse))) return
+    // Without a copy (ownAnswersOff) the follower's refusal is the caller's answer: never handed back.
+    if (followerGateway.handOff({ home, capability, callerSid, payload, deadline, readable, fallback, left, ...(noOwn ? { noOwnAnswer: true as const } : {}) }, (r) => respond(r as GatewayResponse))) return
   }
   // The daemon's own away answer, counted once per call: a call that waits and comes again is not counted again.
   let noted = false
@@ -4118,6 +4140,18 @@ function sendGatewayRequest(
     if (forwardToBackup(home, capability, callerSid, payload, respond)) return
     if (waitHere()) return
     logMsg('info', 'gateway: no server connected', { capability, callerSid })
+    return respond(gatewayNoServerError(home))
+  }
+  // The service in this process keeps no copy: never the daemon's own away answer below. Its follower
+  // not seated yet (the service starting): retryable at once, nothing ran. Seated but not allowed to
+  // write yet (the leader's quiet window not over), or a call it left: looked at again each step
+  // within the call's own time, then no server.
+  if (home && noOwn && (!target || (offlineHost.pendingHandover(home) && !external))) {
+    if (!followerGateway.answers(home) && !followerHere(home).linked && !plan.ownServerAsked) {
+      logMsg('info', 'gateway: this host\'s Walnut service is not seated yet', { capability, callerSid, op: payload.name })
+      return respond(serviceStartingAnswer())
+    }
+    if (!plan.never && !plan.ownServerAsked && waitForPrimary(deadline, again(plan), respond, FOLLOWER_WAIT_STEP_MS)) return
     return respond(gatewayNoServerError(home))
   }
   // Answer here while the Walnut is away, and while its server is still taking
@@ -4198,6 +4232,8 @@ function sendGatewayRequest(
     // A follower that takes same-host sends (it said so last, its `host_call_entry` experiment on) and
     // is not linked this moment (a restart): the send waits for it, as a call with no leader does.
     if (followerSaidOnline.get(home) === true && offlineHost.localCandidate(home, callerSid, capability, payload) && waitForFollower()) return
+    // The service without a copy: the leader delivers it (ownAnswersOff), never handleLocal.
+    if (noOwn) return relayToPrimary(primary, home, capability, callerSid, payload, respond, readable, deadline)
     // What this host's follower said: it is linked, or kept here and away.
     const kept = followerHere(home).kept
     const linked = followerGateway.answersOnline(home)
@@ -4417,6 +4453,7 @@ function relayAttemptEnded(relayId: number): void {
   gatewayRelayPending.delete(relayId)
   // A schemas tools.list whose catalog is still on its way is held when it lands (held-catalogs-core.ts).
   heldCatalogs.timedOut(relayId, call.home, call.capability, call.payload, !!call.pinned)
+  // Never for a service without a copy: its relays are never `readable` (sendGatewayRequest noOwn).
   if (call.readable && call.home) {
     logMsg('info', 'gateway: primary timed out, reading from the copy', { relayId, callerSid: call.callerSid, op: call.payload.name, attempts: call.attempts })
     // The daemon's own answer although this host has a follower: that server's reads go to the same

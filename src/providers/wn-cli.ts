@@ -29,7 +29,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import {
-  GATEWAY_WAIT_NOTICE_MS, WALNUT_CLI_TIMEOUT_MS, cliWaitMs, gatewayListLine, mcpWaitMs, toolsCallLine, toolsCallLineWithin, waitNoticeText,
+  GATEWAY_ANSWER_SLACK_MS, GATEWAY_WAIT_NOTICE_MS, WALNUT_CLI_TIMEOUT_MS, cliWaitMs, gatewayLineAgain, gatewayListLine, mcpWaitMs, toolsCallLine, toolsCallLineWithin, waitNoticeText,
   type GatewayLine,
 } from './gateway-request.js'
 import { withFileLock } from '../utils/file-lock.js'
@@ -630,6 +630,15 @@ function unreadReset(err: unknown, platform: NodeJS.Platform): boolean {
   return platform === 'linux' && (e?.code === 'ECONNRESET' || e?.code === 'EPIPE') && e?.answerStarted !== true
 }
 
+/**
+ * This host's one Walnut service is starting (daemon-standalone.ts serviceStartingAnswer): nothing
+ * of the call ran, so the client sends it again within the call's own time (requestRidingRestart).
+ */
+export function serviceStartingAnswer(resp: GatewayResponse): boolean {
+  return !resp.ok && resp.error.code === 'needs_leader'
+    && (resp.error.detail as { why?: unknown } | null | undefined)?.why === 'service_starting'
+}
+
 /** A stopping daemon's answer: it ran nothing of the call, or only a read the server may run again. */
 export function stoppingAnswer(resp: GatewayResponse): boolean {
   return !resp.ok && resp.error.code === 'hub_unreachable'
@@ -655,6 +664,10 @@ export interface RideRestartDeps {
  * may run twice (a call that may have changed
  * something comes back hub_timeout instead), so this is safe. Says so once on stderr.
  * Without a mark, or past RESTART_RIDE_MAX_MS, it answers as requestOverSocket does.
+ *
+ * This host's one Walnut service starting (serviceStartingAnswer) is ridden the same way, with or
+ * without a mark, within the call's own time (its wait, the line's socket time less the answer
+ * slack): sent again with what is left of it (gatewayLineAgain), so a session never sees it.
  */
 export async function requestRidingRestart(
   socketPath: string,
@@ -668,11 +681,23 @@ export async function requestRidingRestart(
   const tell = deps.tell ?? (() => tellRestartWait())
   const platform = deps.platform ?? process.platform
   const until = now() + RESTART_RIDE_MAX_MS
+  const callEnd = now() + Math.max(0, line.timeoutMs - GATEWAY_ANSWER_SLACK_MS)
   let told = false
+  let sent = line
   for (;;) {
     let resp: GatewayResponse | undefined
     let failure: unknown
-    try { resp = await request(socketPath, line, deps.signal) } catch (err) { failure = err }
+    try { resp = await request(socketPath, sent, deps.signal) } catch (err) { failure = err }
+    // A call whose client chose not to wait for a server (waitMs 0) is not sent again either.
+    const rides = line.req.op !== 'tools.call' || (typeof line.req.waitMs === 'number' && line.req.waitMs > 0)
+    if (resp && rides && serviceStartingAnswer(resp) && !deps.signal?.aborted) {
+      const pause = Math.min(Math.max(resp.ok ? 0 : resp.error.retryAfterMs ?? RESTART_POLL_MS, RESTART_POLL_MS), 2_000)
+      if (now() + pause < callEnd) {
+        await sleep(pause)
+        sent = gatewayLineAgain(line, callEnd - now())
+        continue
+      }
+    }
     const again = (resp ? stoppingAnswer(resp) : noListener(failure) || unreadReset(failure, platform))
       && now() < until && restarting(socketPath) && !deps.signal?.aborted
     if (!again) {

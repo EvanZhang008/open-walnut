@@ -366,6 +366,8 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   not_held: 'This host cannot keep this message for your Mac.',
   // Also a host's service that keeps no copy at all (replica/copyless-reads.ts): only its own sessions' rows answer.
   no_copy: 'This host keeps no copy of your data, so only its own sessions\' tasks answer here.',
+  // This host's Walnut service had not started yet (daemon-standalone.ts serviceStartingAnswer); clients send it again.
+  service_starting: 'This host\'s Walnut service is starting. Nothing was sent; try again in a moment.',
   not_running_here: 'That session is not running on this host.',
   companion_leads: 'The cloud companion leads now and routes this message.',
   // A read of a task made on this host while the Mac is away that only the Mac's store answers (away-reads.ts).

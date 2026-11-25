@@ -143,6 +143,12 @@ export interface HandOff {
    * follower's follower.peer already claimed its message id and wrote it; offline-host-core.ts).
    */
   online?: boolean
+  /**
+   * This host's daemon keeps no away answer of its own for it (a service without a copy of the
+   * leader's data, daemon-standalone.ts ownAnswersOff): a code the follower answers is the caller's
+   * answer, never handed back. `fallback` still routes the call afresh after a lag or to the companion.
+   */
+  noOwnAnswer?: true
   /** A plugin job's call: routes it afresh (the twin's `again`), set by routeJob. */
   reroute?: () => void
   /** Its caller hung up (the twins' gatewayCallerLeft): nobody reads it, so it is not handed again. */
@@ -346,7 +352,7 @@ export function createFollowerGateway<S>(deps: FollowerGatewayDeps<S>) {
       askElsewhere(relayId, e, resp)
       return 'ok'
     }
-    if (e.call.fallback && FALLS_BACK.indexOf(code) !== -1 && !final) {
+    if (e.call.fallback && !e.call.noOwnAnswer && FALLS_BACK.indexOf(code) !== -1 && !final) {
       deps.log('info', 'gateway: this host\'s Walnut server handed the call back', { relayId, code, op: e.call.payload.name })
       e.call.fallback()
       return 'ok'

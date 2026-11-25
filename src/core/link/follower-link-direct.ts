@@ -41,6 +41,12 @@ import type { FollowerLink, FollowerLinkWiring } from './follower-link.js'
 export interface DirectFollowerLinkOptions extends FollowerLinkWiring {
   /** The runtime's follower seat once the runtime runs in this process, else null (asked again). */
   seat: () => FollowerSeat | null
+  /**
+   * One presence (a service without a copy, replica/front.ts): `view()` asks the seat itself, at most
+   * every LIVE_VIEW_MS, so this server's "is the leader away" is the runtime's at that moment, not
+   * one poll old (the gateway then never hands it a call it still refuses as `leader_answers`).
+   */
+  liveView?: boolean
 }
 
 type Params = Record<string, unknown>
@@ -63,6 +69,8 @@ export const FOLLOWER_CALLS: Record<string, { answer: boolean; call: (seat: Foll
 }
 
 const CALL_TIMEOUT_MS = 5_000
+/** A live view is read again after this long (liveView). */
+const LIVE_VIEW_MS = 200
 /** Asked again this often while the runtime or the Walnut is not there yet (the socket link's first redial). */
 const RETRY_MS = 1_000
 
@@ -241,7 +249,17 @@ export function createDirectFollowerLink(opts: DirectFollowerLinkOptions): Follo
       if (timer) { clearTimeout(timer); timer = null }
       drop()
     },
-    view: () => last,
+    view: () => {
+      if (opts.liveView && state === 'following' && client && (!last || now() - last.at >= LIVE_VIEW_MS)) {
+        const seat = opts.seat()
+        try {
+          const said = seat ? seat.view(homeOf(seat, client)) as Params | null : null
+          const view = said ? followerViewOf(said) : null
+          if (view && view.walnutId === opts.walnutId) last = { view, at: now() }
+        } catch { /* paused for a swap: the last view stands */ }
+      }
+      return last
+    },
     linkState: () => state,
     lastError: () => error,
     report: (body) => {

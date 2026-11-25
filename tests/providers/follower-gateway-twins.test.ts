@@ -38,7 +38,7 @@ describe('follower gateway daemon wiring', () => {
     expect(src).not.toMatch(/kind: 'plugin-job', plugin: job\.plugin/)
     expect(src).toMatch(/followerGateway\.routeJob\(\{ home(: home)?, capability(: capability)?, callerSid: EXTERNAL_CALLER_SID, payload(: payload)?, caller(: caller)?, deadline(: deadline)?, left(: leftOf)? \}/)
     // A call handed again after a lagging refusal ends as a first hand would: its caller gone, or the daemon stopping.
-    expect(src).toMatch(/followerGateway\.handOff\(\{ home(: home)?, capability(: capability)?, callerSid(: callerSid)?, payload(: payload)?, deadline(: deadline)?, readable(: ownReadable)?, fallback(: fallback)?, left(: leftOf)? \}/)
+    expect(src).toMatch(/followerGateway\.handOff\(\{ home(: home)?, capability(: capability)?, callerSid(: callerSid)?, payload(: payload)?, deadline(: deadline)?, readable(: ownReadable)?, fallback(: fallback)?, left(: leftOf)?(, \.\.\.\(noOwn \? \{ noOwnAnswer: true as const \} : \{\}\))? \}/)
     expect(src).toMatch(/stopping: (\(\) => |function \(\) \{ return )daemonCommands\.closed/)
     // Its answer is taken only from that follower socket.
     expect(src).toContain('followerGateway.settle(ws, relayId, followerGateway.responseOf(')
@@ -56,7 +56,7 @@ describe('follower gateway daemon wiring', () => {
     // ...telling the companion that rest (answerInMs), and a timeout says the call may have run.
     expect(src).toMatch(/answerInMs: (timeoutMs|typeof timeoutMs === 'number' \? timeoutMs : undefined),/)
     expect(src).toContain('did not answer in time; the call may have run, read before trying again')
-    expect(src).toMatch(/holdForLeader: (\(call\) => |function \(call\) \{ return )offlineHost\.holdWrite\(call\.home, call\.callerSid, call\.capability, call\.payload\)/)
+    expect(src).toMatch(/holdForLeader: (\(call\) => \(ownAnswersOff\(call\.home\) \? null : |function \(call\) \{ return )offlineHost\.holdWrite\(call\.home, call\.callerSid, call\.capability, call\.payload\)/)
     // A session's call while the leader still takes this host's journal goes to the follower too, and
     // so does an outside caller's read (D2: never answered from the copy while a follower answers).
     expect(src).toContain('const followers = !!home && (!target || offlineHost.pendingHandover(home)) && (!external || readable) && !plan.ownServerAsked')
