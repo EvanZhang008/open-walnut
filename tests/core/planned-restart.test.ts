@@ -72,6 +72,18 @@ describe('the last planned stop', () => {
     expect((await readLastPlannedStop(home))?.takenAt).toBe(now + 20)
   })
 
+  it('the record keeps the build a deploy\'s marker named, so the next boot can tell whether that deploy took', async () => {
+    const now = Date.parse('2026-11-25T04:48:21.000Z')
+    await writePlannedRestart(home, { reason: 'deploy', build: 'fab039c49' }, now)
+    await takePlannedRestart(home, now + 5, { stopping: true })
+    expect(await readLastPlannedStop(home)).toEqual({ reason: 'deploy', pid: process.pid, takenAt: now + 5, build: 'fab039c49' })
+    // A record an older Walnut wrote has no build, and reads as before.
+    fs.writeFileSync(lastPlannedStopFile(home), JSON.stringify({ reason: 'deploy', pid: 7, takenAt: now }))
+    expect(await readLastPlannedStop(home)).toEqual({ reason: 'deploy', pid: 7, takenAt: now })
+    fs.writeFileSync(lastPlannedStopFile(home), JSON.stringify({ reason: 'deploy', pid: 7, takenAt: now, build: 'no spaces allowed' }))
+    expect(await readLastPlannedStop(home)).toEqual({ reason: 'deploy', pid: 7, takenAt: now })
+  })
+
   it('a starting server\'s sweep of a fresh marker nobody took records it with pid 0', async () => {
     const now = Date.parse('2026-11-21T08:52:29.000Z')
     await writePlannedRestart(home, { reason: 'app-update' }, now)

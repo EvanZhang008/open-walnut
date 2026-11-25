@@ -26,7 +26,9 @@
  *    the old version again unless the trial process still runs and had become ready; neither is the
  *    version's fault, so neither refuses it.
  *  - A machine asleep, a paused VM or a clock jump (a tick JUMP_SECONDS or more off) moves the trial
- *    and probation clocks by the gap and gives the heartbeat STALL_SECONDS more, so a wake kills nothing.
+ *    and probation clocks by the gap and gives the heartbeat STALL_SECONDS more, so a wake kills nothing:
+ *    the clock is looked at again right before each verdict on elapsed time, so a sleep that falls
+ *    inside a tick counts as well as one in its sleep.
  *
  * One launcher per state dir: an flock on `launcher/lock` (flock(1), else perl's flock, else a pid
  * dir), never handed to the service. A launcher that comes back while its service still runs (the
@@ -189,6 +191,36 @@ l_bad() { # exe: refused when it failed here in the last day
 }
 
 c_pid=; c_last=; c_own=0; c_at=0; c_adopt=0; c_exe=; c_code=; fails=0; next_start=0
+# w_p: when the launcher last looked at the clock. l_follow runs at the top of a tick, right before
+# each verdict on elapsed time (the trial deadline, the heartbeat, a request's age) and right before
+# the tick's sleep, so every stretch of a tick is measured on its own and a machine that slept in
+# any of them moves the clocks before anything is judged (2026-11-25: a Mac asleep between the top
+# check and the heartbeat check woke to "no heartbeat for 187 s" and its server was ended).
+# l_waited <s>: the s seconds the launcher's own wait counted (a stop, a bounded run) are no sleep of
+# the machine; a sleep during the wait is more than it counted, and still reads as a jump.
+# w_n: the time l_follow read, the one every verdict after it uses. w_jumps: the jumps followed in
+# the last two hours ("<from> <gap>" pairs), for l_awake_since.
+w_p=0; w_n=0; hb_grace=0; w_jumps=
+l_waited() { w_p=$((w_p + $1)); }
+l_follow() {
+  lf_n=$(l_now); w_gap=$((lf_n - w_p)); lf_from=$w_p; w_p=$lf_n; w_n=$lf_n
+  if [ "$w_gap" -ge ${JUMP_SECONDS} ] || [ "$w_gap" -lt 0 ]; then
+    # Asleep, paused or the clock moved: the gap is no time the service ran, and its next beat is due.
+    l_log "the clock moved $w_gap s in one tick (a sleep, a pause or a clock change): the clocks follow"
+    s_since=$((s_since + w_gap)); c_at=$((c_at + w_gap)); next_start=$((next_start + w_gap)); l_write
+    hb_grace=$((lf_n + K_STALL))
+    lf_keep=; set -- $w_jumps
+    while [ $# -ge 2 ]; do [ "$1" -ge $((lf_n - 7200)) ] && lf_keep="$lf_keep $1 $2"; shift 2; done
+    [ "$w_gap" -gt 0 ] && lf_keep="$lf_keep $lf_from $w_gap"
+    w_jumps=$lf_keep
+  fi
+}
+# Seconds since <epoch> the machine was awake: the jumps l_follow followed after it are taken out.
+l_awake_since() {
+  la_t=$1; la_s=$((w_n - la_t)); set -- $w_jumps
+  while [ $# -ge 2 ]; do [ "$1" -ge "$la_t" ] && la_s=$((la_s - $2)); shift 2; done
+  echo "$la_s"
+}
 l_spawn() {
   # adopts: what the version about to start says it takes over (detached-registry.ts); it writes it anew.
   rm -f "$L/ready" "$L/leaving" "$STATE/detached/adopts"
@@ -209,6 +241,7 @@ l_reap() {
 # group, or the server would run on with no parent; its sessions run in sessions of their own.
 l_stop() {
   [ -n "$c_pid" ] || return 0
+  ls_n=0
   if l_alive "$c_pid"; then
     kill -TERM "$c_pid" 2>/dev/null
     ls_n=0; while l_alive "$c_pid" && [ "$ls_n" -lt $(($1 * 10)) ]; do sleep 0.1 9>&-; ls_n=$((ls_n + 1)); done
@@ -219,7 +252,7 @@ l_stop() {
       sleep 0.2
     fi
   fi
-  l_reap
+  l_reap; l_waited $((ls_n / 10))
 }
 # Run "$@" for at most $1 s.
 l_bounded() {
@@ -228,7 +261,7 @@ l_bounded() {
   lt_p=$!; lt_n=0
   while l_alive "$lt_p" && [ "$lt_n" -lt $((lt_s * 10)) ]; do sleep 0.1 9>&-; lt_n=$((lt_n + 1)); done
   l_alive "$lt_p" && { l_log "gave up waiting for $1 after $lt_s s"; kill -KILL "$lt_p" 2>/dev/null; }
-  wait "$lt_p" 2>/dev/null; :
+  wait "$lt_p" 2>/dev/null; l_waited $((lt_n / 10))
 }
 # The service went back to the good version: why, from which, to which. $2 = keep: not the version's
 # fault (a switch cut off by a power loss), so it is not refused for a day.
@@ -281,6 +314,7 @@ l_exited() {
 }
 # A request from walnut daemon update: switch to exe (op=switch), or put the good version back (op=rollback).
 l_request() {
+  l_follow
   lq_id=$(l_get "$L/request" id); lq_exe=$(l_get "$L/request" exe); lq_op=$(l_get "$L/request" op)
   lq_b=$(l_get "$L/request" build); lq_p=$(l_get "$L/request" prepared); lq_at=$(l_get "$L/request" at)
   lq_t=$(l_get "$L/request" tries); l_num "$lq_t" || lq_t=0
@@ -296,12 +330,12 @@ l_request() {
   if [ ! -x "$lq_exe" ]; then rm -f "$L/request"; l_result "$lq_id" refused "$lq_exe" "not an executable file"; return 0; fi
   if l_bad "$lq_exe"; then rm -f "$L/request"; l_result "$lq_id" refused "$lq_exe" "this version failed here in the last day"; return 0; fi
   if [ "$lq_exe" = "$s_cur" ] && [ "$s_phase" != trial ]; then rm -f "$L/request"; l_result "$lq_id" committed "$lq_exe" "already the current version"; return 0; fi
-  if l_num "$lq_at" && [ $(( $(l_now) - lq_at )) -gt ${REQUEST_MAX_AGE_SECONDS} ]; then
+  if l_num "$lq_at" && [ "$(l_awake_since "$lq_at")" -gt ${REQUEST_MAX_AGE_SECONDS} ]; then
     rm -f "$L/request"; l_result "$lq_id" failed "$lq_exe" "the switch was asked over an hour ago"; return 0
   fi
   if [ "$lq_p" != 1 ]; then
     # Written before the running service prepared for its update: wait for prepared=1 (or its removal).
-    l_num "$lq_at" && [ $(( $(l_now) - lq_at )) -le ${REQUEST_WAIT_SECONDS} ] && return 1
+    l_num "$lq_at" && [ "$(l_awake_since "$lq_at")" -le ${REQUEST_WAIT_SECONDS} ] && return 1
     l_log "dropped a switch to $lq_exe that never got ready to start"; rm -f "$L/request"; return 0
   fi
   l_log "switching from $s_cur to $lq_exe"
@@ -379,17 +413,13 @@ if [ "$s_phase" = trial ]; then
   fi
 fi
 if [ -n "$c_pid" ] && [ "$c_exe" != "$s_cur" ]; then l_log "pid $c_pid runs $c_exe, not $s_cur: replacing it"; l_stop "$K_STOP"; fi
-l_sum=$(cksum < "$SELF" 2>/dev/null); l_tick=0; w_p=$(l_now); hb_grace=0
+# A launcher just up cannot tell how long nobody looked (a re-run in place, a machine that slept
+# while it started): the service it finds gets one stall period before its beat is judged.
+l_sum=$(cksum < "$SELF" 2>/dev/null); l_tick=0; w_p=$(l_now); hb_grace=$((w_p + K_STALL))
 l_log "launcher up (current $s_cur, phase $s_phase)"
 
 while :; do
-  w_gap=$(( $(l_now) - w_p ))
-  if [ "$w_gap" -ge ${JUMP_SECONDS} ] || [ "$w_gap" -lt 0 ]; then
-    # Asleep, paused or the clock moved: the gap is no time the service ran, and its next beat is due.
-    l_log "the clock moved $w_gap s in one tick (a sleep, a pause or a clock change): the clocks follow"
-    s_since=$((s_since + w_gap)); c_at=$((c_at + w_gap)); next_start=$((next_start + w_gap)); l_write
-    hb_grace=$(( $(l_now) + K_STALL ))
-  fi
+  l_follow
   if [ -e "$STATE/${DAEMON_BOOT_STOP_NAME}" ]; then l_log "stop file: the launcher ends and leaves the service to its stop"; rm -f "$STATE/${DAEMON_BOOT_PID_NAME}"; exit 0; fi
   l_hold=0
   if [ -f "$L/request" ]; then l_request || l_hold=1; fi
@@ -399,7 +429,7 @@ while :; do
     # An exit while a switch is being prepared is that switch's (the old service's update exit).
     [ "$l_hold" = 1 ] || l_exited "$c_code"
   fi
-  w_n=$(l_now)
+  l_follow
   if [ -z "$c_pid" ]; then
     [ "$l_hold" = 0 ] && [ "$w_n" -ge "$next_start" ] && l_runnable && l_spawn "$s_cur"
   else
@@ -407,13 +437,14 @@ while :; do
       if [ "$(l_get "$L/ready" pid)" = "$c_pid" ]; then
         s_phase=probation; s_since=$w_n; s_crash=0; l_write; l_result "$s_req" committed "$s_cur" ""; s_req=; l_write
         l_log "$s_cur is ready: committed, watched for $K_PROB s"
-      elif [ $((w_n - s_since)) -gt "$K_TRIAL" ]; then
+      elif [ $((w_n - s_since)) -gt "$K_TRIAL" ] && [ "$w_n" -ge "$hb_grace" ]; then
+        # (Inside the grace after a wake its beat and its busy time are not judged: they were asleep.)
         # Still beating and saying it is busy (a long adoption): it gets up to TRIAL_BUSY_MAX_SECONDS.
         tb_t=; tb_b=; tb_p=; read -r tb_t tb_b tb_p < "$L/heartbeat" 2>/dev/null
         if [ "$tb_p" = "$c_pid" ] && l_num "$tb_t" && l_num "$tb_b" && [ $((w_n - tb_t)) -le "$K_STALL" ] && [ "$tb_b" -gt "$w_n" ] \
           && [ $((w_n - s_since)) -le ${TRIAL_BUSY_MAX_SECONDS} ]; then :
         else
-          l_rollback "the new version was not ready within $K_TRIAL s (it ran $((w_n - s_since)) s)"; w_p=$(l_now); continue
+          l_rollback "the new version was not ready within $K_TRIAL s (it ran $((w_n - s_since)) s)"; continue
         fi
       fi
     elif [ "$s_phase" = probation ] && [ $((w_n - s_since)) -ge "$K_PROB" ]; then
@@ -434,6 +465,7 @@ while :; do
       rm -f "$L/putback"; l_log "the put-back version $s_cur is ready: a later start of it is a plain start"
     fi
     if [ -f "$L/heartbeat" ]; then
+      l_follow
       hb_t=; hb_b=; hb_p=; read -r hb_t hb_b hb_p < "$L/heartbeat" 2>/dev/null
       if [ "$hb_p" = "$c_pid" ] && l_num "$hb_t"; then
         l_num "$hb_b" || hb_b=0; [ "$hb_b" -gt $((hb_t + ${BUSY_MAX_SECONDS})) ] && hb_b=$((hb_t + ${BUSY_MAX_SECONDS}))
@@ -449,8 +481,8 @@ while :; do
     l_selfcheck
     [ $((l_tick % 3600)) = 0 ] && l_rotate
   fi
-  # fd 9 closed: a sleep that outlives a killed launcher must not hold its lock. Only the sleep is
-  # measured for a jump: the launcher's own slow ticks (a stop that waits) are no sleep of the machine.
-  w_p=$(l_now); sleep "$K_TICK" 9>&-
+  # fd 9 closed: a sleep that outlives a killed launcher must not hold its lock. l_follow first: the
+  # rest of this tick is measured here, and the next tick's first l_follow measures only the sleep.
+  l_follow; sleep "$K_TICK" 9>&-
 done
 `.split('\n').slice(1, -1)

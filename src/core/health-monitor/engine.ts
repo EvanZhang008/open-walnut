@@ -28,7 +28,7 @@ import { bootOnSameBuild, plannedStopBefore, shutdownBailsSince, unplannedRestar
 import { effectiveOverride, overrideHolds, ownerOf, patchOverride, type OverridePatch } from './overrides.js'
 
 export { effectiveOverride, overrideHolds } from './overrides.js'
-export { bootOnSameBuild, plannedStopBefore, unplannedRestart } from './exit-trace.js'
+export { bootOnSameBuild, DEPLOY_TAKES_MS, plannedStopBefore, unplannedRestart } from './exit-trace.js'
 
 /** New fix tasks a day for the built-in alarms (disk, memory, host links, ...). */
 export const FIX_TASKS_PER_DAY = 5
@@ -103,7 +103,11 @@ export class HealthMonitor {
     delete this.logHours.recent
     const build = this.deps.build ?? null
     const after = plannedStopBefore(this.state.events, lastStop, now)
-    this.state.events.push({ kind: 'boot', at: now, pid: this.deps.pid, build, sameBuild: bootOnSameBuild(this.state.events, build), ...(after ? { after } : {}) })
+    const afterBuild = after && lastStop?.build ? lastStop.build : undefined
+    this.state.events.push({
+      kind: 'boot', at: now, pid: this.deps.pid, build, sameBuild: bootOnSameBuild(this.state.events, build),
+      ...(after ? { after } : {}), ...(afterBuild ? { afterBuild } : {}),
+    })
     await this.readShutdownBails()
     this.state.events = this.state.events.filter((e) => e.at > now - EVENTS_KEEP_MS)
     this.deps.collector.start()
@@ -179,7 +183,7 @@ export class HealthMonitor {
     const day = now - 86_400_000
     return {
       'server.restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day).length,
-      'server.unplanned_restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && unplannedRestart(e)).length,
+      'server.unplanned_restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && unplannedRestart(e, this.state.events, now)).length,
       'server.deploys_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && e.sameBuild !== true).length,
       'server.shutdown_bails_24h': this.state.events.filter((e) => e.kind === 'shutdown-bail' && e.at > day).length,
     }

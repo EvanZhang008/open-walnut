@@ -29,6 +29,8 @@ function stub(name: string, mode = 'good'): string {
   fs.writeFileSync(exe, [
     '#!/bin/sh',
     `d='${dir}'; n='${name}'`,
+    // The clock shim counts the launcher's own reads of the clock, not the stub's.
+    'WALNUT_TEST_STUB=1; export WALNUT_TEST_STUB',
     'echo "$n $$" >> "$d/pids"; echo "$n $$ $*" >> "$d/runs"',
     'm=$(cat "$d/$n.mode")',
     'case $m in fail) exit 1;; hangterm) trap "" TERM;; *) trap \'echo "$n $$ term" >> "$d/events"; exit 0\' TERM;; esac',
@@ -59,16 +61,31 @@ function writeLauncher(seed: string, file = path.join(state, 'walnut-launcher.sh
   return file
 }
 
-/** A `date` on PATH whose epoch runs `offset` seconds ahead (a wake from sleep, a clock jump) for the launcher and its service. */
-function clockShim(): { path: string; jump: (seconds: number) => void } {
+/**
+ * A `date` on PATH whose epoch runs `offset` seconds ahead (a wake from sleep, a clock jump) for the
+ * launcher and its service. `jumpAtRead(n, s)`: the jump lands on the launcher's n-th read of the
+ * clock from now (the stub's reads are not counted), so it can fall inside a tick, not only in its
+ * sleep: a machine that slept between two lines of the launcher.
+ */
+function clockShim(): { path: string; jump: (seconds: number) => void; jumpAtRead: (n: number, seconds: number) => void } {
   const shim = path.join(dir, 'shim')
   fs.mkdirSync(shim)
   const offset = path.join(dir, 'offset')
+  const arm = path.join(dir, 'jump-arm')
   fs.writeFileSync(path.join(shim, 'date'), [
-    '#!/bin/sh', `off=$(cat '${offset}' 2>/dev/null || echo 0)`,
+    '#!/bin/sh',
+    `if [ "$1" = "+%s" ] && [ -z "$WALNUT_TEST_STUB" ] && [ -f '${arm}' ]; then`,
+    `  read -r a_n a_s < '${arm}'`,
+    `  if [ "$a_n" -le 1 ]; then echo "$a_s" > '${offset}'; rm -f '${arm}'; else echo "$((a_n - 1)) $a_s" > '${arm}'; fi`,
+    'fi',
+    `off=$(cat '${offset}' 2>/dev/null || echo 0)`,
     'if [ "$1" = "+%s" ]; then echo $(( $(/bin/date +%s) + off )); else exec /bin/date "$@"; fi', '',
   ].join('\n'), { mode: 0o700 })
-  return { path: `${shim}:/usr/bin:/bin`, jump: (seconds) => fs.writeFileSync(offset, `${seconds}\n`) }
+  return {
+    path: `${shim}:/usr/bin:/bin`,
+    jump: (seconds) => fs.writeFileSync(offset, `${seconds}\n`),
+    jumpAtRead: (n, seconds) => fs.writeFileSync(arm, `${n} ${seconds}\n`),
+  }
 }
 
 let shell = '/bin/dash'
@@ -409,6 +426,41 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     // The 120 s asleep are no probation time: still watched, its clock moved by the gap.
     expect(launcherState().phase).toBe('probation')
     expect(Number(launcherState().since)).toBeGreaterThanOrEqual(since + 110)
+  })
+
+  // 2026-11-25: the Mac slept after the launcher's top-of-tick check and woke inside the tick; the
+  // heartbeat check read "no heartbeat for 187 s" and ended the server. Each read of the clock in a
+  // tick is a place the machine can wake: none may judge the service on time it was asleep.
+  it.each([1, 2, 3, 4])('a wake that lands on the launcher\'s read %i of the clock in a tick kills nothing', async (n) => {
+    const clock = clockShim()
+    const v1 = stub('v1', 'beat:1')
+    launch(writeLauncher(v1, undefined, clock.path))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    await sleep((CLOCKS.stall + 1) * 1000) // past the grace a launcher just up gives
+    const pid = live('v1')[0]!.pid
+    clock.jumpAtRead(n, 120)
+    await until(() => !fs.existsSync(path.join(dir, 'jump-arm')), 5_000, 'the jump')
+    await sleep(2_000)
+    expect(live('v1').map((r) => r.pid)).toEqual([pid])
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/the clock moved 1[12]\d s in one tick/)
+    expect(read(path.join(L, 'launcher.log'))).not.toMatch(/no heartbeat/)
+  })
+
+  it('a switch still waiting for its update to prepare is not dropped for time the machine slept', async () => {
+    const clock = clockShim()
+    const v1 = stub('v1', 'beat:1'); const v2 = stub('v2', 'beat:1')
+    launch(writeLauncher(v1, undefined, clock.path))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id = request(v2, { prepared: '0' })
+    await sleep(1_000)
+    clock.jump(300) // asleep for longer than the 120 s a switch may wait to be prepared
+    await until(() => /the clock moved/.test(read(path.join(L, 'launcher.log'))), 5_000, 'the jump')
+    await sleep(1_000)
+    expect(read(path.join(L, 'launcher.log'))).not.toMatch(/never got ready/)
+    expect(fs.existsSync(path.join(L, 'request'))).toBe(true)
+    const body = read(path.join(L, 'request')).replace('prepared=0', 'prepared=1')
+    fs.writeFileSync(path.join(L, 'request.tmp'), body); fs.renameSync(path.join(L, 'request.tmp'), path.join(L, 'request'))
+    await until(() => result().id === id && result().outcome === 'committed', 8_000, 'commit')
   })
 
   it('a trial that beats and says it is busy (a long adoption) gets longer than the trial time', async () => {

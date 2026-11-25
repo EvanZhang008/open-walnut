@@ -66,11 +66,36 @@ export function plannedStopBefore(
   return stop.reason
 }
 
+/** How long after a deploy's stop its own build may boot for that deploy to have taken. */
+export const DEPLOY_TAKES_MS = 15 * 60_000
+
+/** One commit, however short each side spells it (a boot's build is `<commit>@<built at>`). */
+function sameCommit(build: string | null | undefined, commit: string): boolean {
+  const a = (build ?? '').split('@')[0] ?? ''
+  const n = Math.min(a.length, commit.length)
+  return n >= 7 && a.slice(0, n) === commit.slice(0, n)
+}
+
 /**
  * A boot on the build that already ran that nothing planned to come back on it: a crash and
  * its respawn, a relaunch, a reboot. A Mac app update ends the server so it starts again under
  * the new app, on the same build (2026-11-20: two app installs counted as restarts on their own).
+ *
+ * A deploy's stop that came back on the old build is a deploy that did not take, and counts,
+ * unless that deploy's own build booted within DEPLOY_TAKES_MS after it: then another stop (a Mac
+ * app restart) ended the server inside the deploy's window and took its marker, and the deploy
+ * went on (2026-11-24: the app restarted 13 s before the deploy's switch, and the boot between
+ * read as a restart on its own). Until that window is over the boot is not judged yet.
+ * `events` and `now`: the monitor's boots and clock (without them, the boot is judged alone).
  */
-export function unplannedRestart(e: ServerEvent): boolean {
-  return e.kind === 'boot' && e.sameBuild === true && !(sameBuildRestartReasons as readonly string[]).includes(e.after ?? '')
+export function unplannedRestart(e: ServerEvent, events: readonly ServerEvent[] = [], now = Number.POSITIVE_INFINITY): boolean {
+  if (e.kind !== 'boot' || e.sameBuild !== true) return false
+  if ((sameBuildRestartReasons as readonly string[]).includes(e.after ?? '')) return false
+  if (e.after === 'deploy' && e.afterBuild) {
+    const until = e.at + DEPLOY_TAKES_MS
+    const afterBuild = e.afterBuild
+    if (events.some((b) => b.kind === 'boot' && b.at > e.at && b.at <= until && sameCommit(b.build, afterBuild))) return false
+    if (now < until) return false
+  }
+  return true
 }

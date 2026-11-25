@@ -503,6 +503,8 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/service-launcher-run.test.ts", sleep: "await sleep(1_500)", reason: "negative: the launcher that took over starts no second service (padded ps columns)" },
   { file: "tests/providers/service-launcher-run.test.ts", sleep: "await sleep(1_500)", reason: "negative: of two launchers on one state dir, only one service ever starts" },
   { file: "tests/providers/service-launcher-run.test.ts", sleep: "await sleep(600)", reason: "negative: a version that wrote its adopts gets no registry work ended" },
+  { file: "tests/providers/service-launcher-run.test.ts", sleep: "await sleep(2_000)", reason: "negative: after a wake inside a tick no healthy service is ended" },
+  { file: "tests/providers/service-launcher-run.test.ts", sleep: "await sleep(1_000)", reason: "negative: after a wake a switch still waiting to be prepared is not dropped" },
   { file: "tests/providers/service-launcher-beat.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400))", reason: "negative: a version that answers wrong never writes ready" },
   { file: "tests/providers/service-launcher-beat.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500))", reason: "negative: nothing is pruned while a version is on probation" },
   { file: "tests/providers/session-cost-core.test.ts", sleep: "await new Promise(r => setTimeout(r, 50))", reason: "already a poll on the state (pending) with each scan given a 5 s soft deadline" },

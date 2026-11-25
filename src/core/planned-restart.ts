@@ -40,7 +40,13 @@ export const sameBuildRestartReasons: readonly PlannedRestartReason[] = ['app-up
  * marker no server took, found by the next boot (the server had stopped before the marker was
  * left: a Mac app quit for an update installed by hand, desktop/apply-update.sh with pid 0).
  */
-export interface LastPlannedStop { reason: PlannedRestartReason; pid: number; takenAt: number }
+export interface LastPlannedStop {
+  reason: PlannedRestartReason; pid: number; takenAt: number
+  /** The build the stop's marker named (a deploy's next build), when it named one. */
+  build?: string
+}
+
+const BUILD_RE = /^[A-Za-z0-9._-]{1,96}$/
 
 export function lastPlannedStopFile(home: string): string {
   return path.join(home, 'local', 'last-planned-stop.json')
@@ -52,7 +58,8 @@ export async function readLastPlannedStop(home: string): Promise<LastPlannedStop
     const v = JSON.parse((await fsp.readFile(lastPlannedStopFile(home), 'utf8')).slice(0, 1024)) as Partial<LastPlannedStop>
     if (!plannedRestartReasons.includes(v.reason as PlannedRestartReason)) return null
     if (!Number.isInteger(v.pid) || (v.pid as number) < 0 || !Number.isFinite(v.takenAt)) return null
-    return { reason: v.reason as PlannedRestartReason, pid: v.pid as number, takenAt: v.takenAt as number }
+    const build = typeof v.build === 'string' && BUILD_RE.test(v.build) ? v.build : undefined
+    return { reason: v.reason as PlannedRestartReason, pid: v.pid as number, takenAt: v.takenAt as number, ...(build ? { build } : {}) }
   } catch { return null }
 }
 
@@ -66,7 +73,7 @@ export async function writePlannedRestart(
   const file = plannedRestartFile(home)
   await fsp.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
-  const build = typeof plan.build === 'string' && /^[A-Za-z0-9._-]{1,96}$/.test(plan.build) ? plan.build : undefined
+  const build = typeof plan.build === 'string' && BUILD_RE.test(plan.build) ? plan.build : undefined
   await fsp.writeFile(tmp, `${JSON.stringify({ at: new Date(now).toISOString(), reason: plan.reason, ...(build ? { build } : {}) })}\n`, { mode: 0o600 })
   await fsp.rename(tmp, file)
 }
@@ -78,7 +85,7 @@ export function parsePlannedRestart(raw: string, now = Date.now()): PlannedResta
     const at = typeof value.at === 'number' ? value.at : typeof value.at === 'string' ? Date.parse(value.at) : NaN
     if (!Number.isFinite(at) || now - at > PLANNED_RESTART_TTL_MS || at - now > 60_000) return null
     if (!plannedRestartReasons.includes(value.reason as PlannedRestartReason)) return null
-    const build = typeof value.build === 'string' && /^[A-Za-z0-9._-]{1,96}$/.test(value.build) ? value.build : undefined
+    const build = typeof value.build === 'string' && BUILD_RE.test(value.build) ? value.build : undefined
     return { at, reason: value.reason as PlannedRestartReason, ...(build ? { build } : {}) }
   } catch { return null }
 }
@@ -112,8 +119,9 @@ export async function takePlannedRestart(
   }
   await fsp.rm(file, { force: true }).catch(() => {})
   const plan = parsePlannedRestart(raw, now)
-  if (plan && opts.stopping) await recordLastPlannedStop(home, { reason: plan.reason, pid: process.pid, takenAt: now }).catch(() => {})
-  else if (plan && opts.atBoot) await recordLastPlannedStop(home, { reason: plan.reason, pid: 0, takenAt: plan.at }).catch(() => {})
+  const built = plan?.build ? { build: plan.build } : {}
+  if (plan && opts.stopping) await recordLastPlannedStop(home, { reason: plan.reason, pid: process.pid, takenAt: now, ...built }).catch(() => {})
+  else if (plan && opts.atBoot) await recordLastPlannedStop(home, { reason: plan.reason, pid: 0, takenAt: plan.at, ...built }).catch(() => {})
   return plan
 }
 

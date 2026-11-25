@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
-import { bootOnSameBuild, plannedStopBefore, unplannedRestart, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, isInvestigation, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { bootOnSameBuild, DEPLOY_TAKES_MS, plannedStopBefore, unplannedRestart, FIX_TASKS_PER_DAY, HealthMonitor, INVESTIGATION_FIX_TASKS_PER_DAY, isInvestigation, type FixTaskInput, type TellTaskInput } from '../../../src/core/health-monitor/engine.js'
 import { BUILTIN_ALARMS, setCustomAlarms } from '../../../src/core/health-monitor/alarms.js'
 import { customAlarmDefs } from '../../../src/core/health-monitor/custom-metrics.js'
 import { DAY_MS, hourStart, logDef, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
@@ -55,7 +55,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-async function harness(opts: { pid?: number; exitTrace?: string; now?: number; build?: string | null; lastPlannedStop?: { reason: string; pid: number; takenAt: number } | null } = {}): Promise<Harness> {
+async function harness(opts: { pid?: number; exitTrace?: string; now?: number; build?: string | null; lastPlannedStop?: { reason: string; pid: number; takenAt: number; build?: string } | null } = {}): Promise<Harness> {
   const clock = { now: opts.now ?? START }
   const disk = { free: 200, usedPct: 40 }
   const GiB = 1024 ** 3
@@ -641,6 +641,39 @@ describe('health monitor engine', () => {
     expect(h.m.alarms['server.restarts'].state).toBe('ALARM')
   })
 
+  // 2026-11-24: a Mac app restart ended the server 13 s before a deploy's switch; the server took
+  // the deploy's marker, came back on its build, and the deploy's build booted right after.
+  it('a same-build boot inside a deploy\'s window is that deploy\'s when its build booted soon after; else it counts once the window is over', async () => {
+    let pid = 500
+    let now = START
+    const boot = async (build: string, stop?: { reason: string; build?: string }, gapMs = 60 * 60_000, watchMin = 1) => {
+      const prev = pid
+      const h = await harness({ now, pid: ++pid, build, lastPlannedStop: stop ? { ...stop, pid: prev, takenAt: now - 3_000 } : null })
+      await minutes(h, watchMin)
+      h.m.stop(); await h.m.flushed(); harnesses = harnesses.filter((x) => x !== h)
+      now = h.clock.now + gapMs
+      return h
+    }
+    await boot('4aa4b361a@t1')
+    // The app's restart took the deploy's marker (next build fab039c49): the old build came back,
+    let h = await boot('4aa4b361a@t1', { reason: 'deploy', build: 'fab039c49' }, 10_000)
+    // and while the deploy's build has not booted yet, nothing is judged.
+    let row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(0)
+    // The deploy's own switch, seconds later: its build boots, so the boot between was that deploy's.
+    h = await boot('fab039c49@t2', undefined, 60_000, 20)
+    row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(0)
+    expect(row.v['server.deploys_24h']).toBe(2)
+    // A deploy that did not take: the old build came back and the deploy's build never booted.
+    h = await boot('fab039c49@t2', { reason: 'deploy', build: '1f5e04128' }, 60_000, 5)
+    row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(0) // still inside its window
+    h = await boot('fab039c49@t2', undefined, 60_000, 20)
+    row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(2) // the deploy that did not take, then a crash
+  })
+
   it('a planned stop counts only for the server the last boot started, taken after that boot', () => {
     const boot = (pid: number, at: number): ServerEvent => ({ kind: 'boot', at, pid, build: 'a@1' })
     const stop = (pid: number, takenAt: number) => ({ reason: 'app-update', pid, takenAt })
@@ -656,6 +689,16 @@ describe('health monitor engine', () => {
     expect(unplannedRestart({ ...boot(2, 7), sameBuild: true, after: 'deploy' })).toBe(true)
     expect(unplannedRestart({ ...boot(2, 7), sameBuild: true })).toBe(true)
     expect(unplannedRestart({ ...boot(2, 7), sameBuild: false, after: 'deploy' })).toBe(false)
+    // A deploy's stop with its next build named: judged by whether that build booted in its window.
+    const held = { ...boot(2, 1_000), sameBuild: true, after: 'deploy', afterBuild: 'fab039c49' }
+    const next = (at: number, build: string): ServerEvent => ({ kind: 'boot', at, pid: 3, build })
+    expect(unplannedRestart(held, [held], 2_000)).toBe(false) // not judged yet
+    expect(unplannedRestart(held, [held], 1_000 + DEPLOY_TAKES_MS + 1)).toBe(true)
+    expect(unplannedRestart(held, [held, next(14_000, 'fab039c49@t2')], 1_000 + DEPLOY_TAKES_MS + 1)).toBe(false)
+    expect(unplannedRestart(held, [held, next(14_000, 'fab039c49ca7@t2')], 1_000 + DEPLOY_TAKES_MS + 1)).toBe(false) // spelled longer
+    expect(unplannedRestart(held, [held, next(14_000, 'fab0@t2')], 1_000 + DEPLOY_TAKES_MS + 1)).toBe(true) // too short to say
+    expect(unplannedRestart(held, [held, next(1_000 + DEPLOY_TAKES_MS + 5, 'fab039c49@t2')], 1_000 + DEPLOY_TAKES_MS + 10)).toBe(true) // too late: a later deploy
+    expect(unplannedRestart(held, [next(500, 'fab039c49@t0'), held], 1_000 + DEPLOY_TAKES_MS + 1)).toBe(true) // before it: not its deploy
   })
 
   it('a boot is the same build only when the boot before it recorded that build', () => {

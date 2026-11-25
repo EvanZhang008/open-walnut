@@ -255,7 +255,9 @@ describe('the files a set renders name its set', () => {
 describe('flag off: the default set\'s files are byte for byte what they were', () => {
   // sha256 of each file as the renderers before service sets wrote it, for one fixed config: HEAD 12758251e7, and
   // the same again from the branch's merge-base with trunk, 2e0ddc8935 (review round 2, H-L5: `git archive`, rendered
-  // by the task's notes/ab-leader/render-files-mb.ts).
+  // by the task's notes/ab-leader/render-files-mb.ts). The three launcher hashes were recorded again on 2026-11-25,
+  // when the launcher itself changed (its clock is read again before each verdict on elapsed time): the set's
+  // render is still checked to be exactly renderLauncherScript's below.
   const GOLDEN = {
     unit: 'b8ff0f68dca72e2a7566f2b35cb1d85a92a7ea994248c54b28744f9082c19838',
     unitLauncher: 'fcc4edd6641c2dac43bfad5c60f6a67e06d852d90e48afcbd0e61b3a16d01fbc',
@@ -264,9 +266,9 @@ describe('flag off: the default set\'s files are byte for byte what they were', 
     plistLauncher: 'b758bb2e54d3b2e0774077686487b93c474debfc06011635b1954d5358e89c1d',
     bootScript: 'dfbcb9e426b60b1bf9124ddd487e618081610d286af2ac06f53c62293206b195',
     // The launcher script (createLauncherControl().render): systemd and launchd write the same text.
-    launcherSystemd: 'b4cda944749ac6d00502235cb3d74ed56ccdc375b5e08247f728f4921b403331',
-    launcherLaunchd: 'b4cda944749ac6d00502235cb3d74ed56ccdc375b5e08247f728f4921b403331',
-    launcherCron: '4d2b9b1788b8f098948dcdf635e8ba1792b5dba8604ccce8aa8da99fea4b53b8',
+    launcherSystemd: '670f2baf4fdfe795efd509c2b8bcadacfd3fc5289d2f28578bee794cec4c1598',
+    launcherLaunchd: '670f2baf4fdfe795efd509c2b8bcadacfd3fc5289d2f28578bee794cec4c1598',
+    launcherCron: '7468cbddf1b37d029e5fa08eb2cee1a1264177e54d889bcb9292af4fa5b5b93b',
   }
   const linux: DaemonServiceConfig = { platform: 'linux', home: '/home/walnut', executable: '/home/walnut/.local/share/open-walnut/daemon/versions/abc/daemon', args: ['--service'], runtimeDir: '/tmp/open-walnut', stateDir: '/home/walnut/.local/share/open-walnut/daemon', path: '/usr/local/bin:/usr/bin:/bin' }
   const mac: DaemonServiceConfig = { ...linux, platform: 'darwin', home: '/Users/walnut', stateDir: '/Users/walnut/Library/Application Support/Open Walnut/Daemon', executable: '/Users/walnut/Library/Application Support/Open Walnut/Daemon/versions/abc/daemon' }

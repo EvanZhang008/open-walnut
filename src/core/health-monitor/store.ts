@@ -42,6 +42,8 @@ export interface ServerEvent {
   sameBuild?: boolean
   /** Why the server before this boot stopped, when a planned restart said so (`app-update`, `deploy`). */
   after?: string
+  /** The build that planned stop was for (a deploy's next build), when its marker named one. */
+  afterBuild?: string
 }
 
 export interface StateFile {
