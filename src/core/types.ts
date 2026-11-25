@@ -1088,7 +1088,7 @@ export interface Task {
   agent_id?: string;
   /** The task is a node of the org above the work (src/core/org/org-tree.ts):
    *  'main' is the user's one main agent (an Ask Walnut task), 'lead' a project's
-   *  lead, made by Walnut when a project has more than one team. Both are hidden
+   *  lead (its VP), made by Walnut on the project's first contact. Both are hidden
    *  from the task lists; the org chart and the chat slot show them. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_role?: OrgRole;

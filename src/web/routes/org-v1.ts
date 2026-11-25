@@ -7,7 +7,7 @@
  *   POST /org/main            → { task }              the main agent's task, made on first use
  *   POST /org/contact { to }  → { task, kind, project, started, launch? }
  *                                                     who `to` (a project or a task) means; a
- *                                                     project with 2+ teams gets its lead here;
+ *                                                     project with no lead gets its lead here;
  *                                                     `launch` = where a lead with no session
  *                                                     would start ({ cwd, host }), read only
  *   POST /org/vp { project, vp } → { project, vp, lead?, closed, moved, unchanged? }
@@ -290,7 +290,7 @@ orgV1Router.put('/org/nodes/:id', async (req: Request, res: Response, next: Next
   }
 })
 
-// A project's VP, made first when the project has none yet (one team, never talked to).
+// A project's VP, made first when the project has none yet (never talked to).
 orgV1Router.put('/org/projects/:project/vp', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A VP is changed')

@@ -580,7 +580,7 @@ export function OrgPage() {
         const main = await ensureMainTask();
         if (main) await startOrgNode(main.id, false);
       } else {
-        // A project with no VP: the server makes its lead when it has two teams, started here.
+        // A project with no VP: the server makes its lead now, started here.
         const contact = await resolveOrgContact(row.project || 'Inbox');
         if (contact.kind === 'lead') await startOrgNode(contact.task.id, false);
       }

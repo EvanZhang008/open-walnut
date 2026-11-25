@@ -37,7 +37,7 @@ const tasks: Task[] = [
   t('tl', 'Travel', 'NEED_ACTION', { org_role: 'lead', title: 'Travel lead', ...handedBack('Your next message') }),
   t('t1', 'Travel', 'WAITING', { updated_at: at(5) }),
   t('t2', 'Travel', 'WAITING', { updated_at: at(6) }),
-  // Garden: one task and no lead (Main talks to it); Personal: two tasks, no lead yet.
+  // Garden: one task and no lead yet; Personal: two tasks, no lead yet. Both get one on first contact.
   t('h1', 'Garden', 'NEED_ACTION', { updated_at: at(40), ...handedBack('Your reply') }),
   t('p1', 'Personal', 'TODO', { updated_at: at(1) }),
   t('p2', 'Personal', 'TODO', { updated_at: at(2) }),
@@ -60,7 +60,11 @@ describe('org channels', () => {
     expect(walnut.lastAt).toBe(Date.parse(at(30)))
     // A plain wait on the user ("Your reply") adds nothing to the title.
     expect(rows.find((r) => r.name === 'Garden')!.latest).toBe('Waiting: h1 title')
-    expect(rows.find((r) => r.name === 'Garden')!.contactId).toBe('h1')
+    // Its one task is never drawn as its VP (2026-11-25): the row names the VP its first chat makes.
+    const garden = rows.find((r) => r.name === 'Garden')!
+    expect(garden.contactId).toBeUndefined()
+    expect(garden.contactTitle).toBe('Garden VP')
+    expect(garden.node?.needsLead).toBe(true)
     expect(rows.find((r) => r.name === 'Travel')!.latest).toBe('Waiting: t2 title')
     expect(rows.every((r) => r.needs === 0)).toBe(true)
     // No lead yet: the row names the lead the first chat makes.

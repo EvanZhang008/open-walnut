@@ -483,7 +483,8 @@ export async function contactLaunch(task: Task): Promise<ContactLaunch | undefin
 
 export interface OrgContact {
   task: Task;
-  /** 'lead' = the project's lead, 'team' = a project's only team, 'task' = a task named by id. */
+  /** 'lead' = the project's lead, 'task' = a task named by id. 'team' (a project's only team) is
+   *  no longer answered (2026-11-25: every project is reached through its lead); kept for callers. */
   kind: 'lead' | 'team' | 'task';
   project: string;
   /** The lead `to` named handed its project over: this is the lead that took it (org/retired-lead.ts). */
@@ -491,8 +492,7 @@ export interface OrgContact {
 }
 
 /**
- * Who `to` means: a project name (its lead, else its one team; a project with two or more teams
- * gets its lead now), an org node by name (Main as "Main" or "CEO", a VP by its name), or a task
+ * Who `to` means: a project name (its lead, made now when it has none), an org node by name (Main as "Main" or "CEO", a VP by its name), or a task
  * id (or unique prefix).
  * `askerTaskId`: the task of the session asking ('' for another program); the
  * human passes none, and reaches a lead that handed over as it is.
@@ -506,7 +506,7 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
   if (node) {
     if (node.contactId) {
       const task = await getTask(node.contactId);
-      return { task, kind: node.lead ? 'lead' : 'team', project: node.project };
+      return { task, kind: 'lead', project: node.project };
     }
     return { task: await ensureProjectLead(node.project), kind: 'lead', project: node.project };
   }
@@ -554,7 +554,7 @@ export interface OrgReportRow {
   to_read: number;
   waiting: number;
   /** For a project: who to talk to (task_send / org_send). */
-  contact?: { id?: string; title: string; kind: 'lead' | 'team' };
+  contact?: { id?: string; title: string; kind: 'lead' };
   /** The few that wait on the user, by title, so the main agent can name them. */
   waiting_on_user?: { id: string; title: string }[];
   /** A team or worker that is a Director under its VP (org-directors.ts); absent = not one. */
@@ -584,8 +584,8 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
         const contact: OrgReportRow['contact'] = p.contactId
           ? {
             id: p.contactId,
-            title: (p.lead?.name ? `${p.lead.name} VP` : p.lead?.title) ?? p.teams.find((t) => t.id === p.contactId)?.title ?? p.contactId,
-            kind: p.lead ? 'lead' : 'team',
+            title: (p.lead?.name ? `${p.lead.name} VP` : p.lead?.title) ?? p.contactId,
+            kind: 'lead',
           }
           : p.needsLead ? { title: `${p.project || INBOX_PROJECT} lead (made on first contact)`, kind: 'lead' } : undefined;
         return {

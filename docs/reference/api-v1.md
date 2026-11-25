@@ -1599,8 +1599,8 @@ The org is derived from tasks: Main (the user's main agent) → projects → tea
 project's top-level open tasks) → workers (`parent_task_id`). The stored facts
 are `org_role: "main" | "lead"` on a task (both kinds are hidden from the board)
 and, on a lead, `org_leads`: the other projects the user put under it.
-A project with two or more teams gets a lead on first contact; a project with one
-team is talked to through that task. The Inbox (`project: ""`) is a project like any other
+A project gets a lead on first contact, one team or many (2026-11-25: a project's
+`contactId` is always its lead, never one of its tasks). The Inbox (`project: ""`) is a project like any other
 (2026-11-21): its lead, the Inbox VP, is made on first contact the same way, and it can be put
 under another VP or lead other projects; a `vp` that names it says `"Inbox"`, since `""` there
 means a project's own.

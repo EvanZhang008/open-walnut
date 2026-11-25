@@ -215,14 +215,16 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   await expect(page.getByTestId('org-channel')).toHaveCount(2)
   await search.fill('')
 
-  // One task and no lead: Main talks to the task itself.
+  // One task and no lead: the row is the VP its first chat makes, never the task itself (2026-11-25).
   const beta = row(page, BETA)
   await beta.click()
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`Beta solo ${STAMP}`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${BETA} VP`)
+  await expect(page.getByTestId('org-chat-start')).toHaveAttribute('data-state', 'no-vp')
+  await expect(page.getByTestId('org-start-failed')).toHaveCount(0)
   await expect(page).toHaveURL(new RegExp(`node=${encodeURIComponent(rowKey(BETA)).replace(/%20/g, '(%20|\\+)')}`))
   await page.reload()
   await expect(row(page, BETA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`Beta solo ${STAMP}`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${BETA} VP`)
 
   // Live: work that starts moving recolors the row without a reload. Working is a turn running
   // now (a task only marked In progress, with no session, waits).

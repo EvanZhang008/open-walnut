@@ -13,6 +13,7 @@ import {
 } from '../../../src/core/org/org-tree.js'
 import * as viaAlias from '@open-walnut/org-tree'
 import { isAskTask } from '../../../src/core/sessions/caller-placement.js'
+import { isOrgNode } from '../../../src/core/org/org-enabled.js'
 
 let n = 0
 function t(over: Partial<OrgTaskLike> & { title?: string }): OrgTaskLike {
@@ -74,7 +75,8 @@ describe('org-tree', () => {
     const kept = [1, 2, 3].map(() => t({ project: 'Practice', phase: 'NEED_ACTION', plugin_only: 'practice', user_status: { state: 'needs' } }))
     const tree = buildOrgTree([work, ...kept])
     expect(tree.projects).toHaveLength(1)
-    expect(tree.projects[0]).toMatchObject({ project: 'Practice', needsLead: false, contactId: work.id })
+    expect(tree.projects[0]).toMatchObject({ project: 'Practice', needsLead: true })
+    expect(tree.projects[0]!.contactId).toBeUndefined()
     expect(tree.counts.needsYou).toBe(0)
     expect(buildOrgTree(kept).projects).toEqual([])
     expect(viaAlias.isHiddenFromTaskLists(kept[0]!)).toBe(true)
@@ -85,13 +87,48 @@ describe('org-tree', () => {
     expect(orgDigest([fresh], prev, '2026-10-03T00:00:00Z').lines).toEqual([])
   })
 
-  it('a project with one team: Main talks to that team, no lead needed', () => {
+  it('a project with one team has no VP until its first contact makes one: its task is never the contact', () => {
+    // 2026-11-25: the one task stood in as the project's VP, and opening its Org row tried to
+    // start it as one ("could not start: ... is not Main or a VP").
     const only = t({ project: 'Gardening', phase: 'IN_PROGRESS' })
     const tree = buildOrgTree([only])
     expect(tree.projects).toHaveLength(1)
     const p = tree.projects[0]!
-    expect(p).toMatchObject({ project: 'Gardening', needsLead: false, contactId: only.id })
+    expect(p).toMatchObject({ project: 'Gardening', needsLead: true })
+    expect(p.contactId).toBeUndefined()
     expect(p.lead).toBeUndefined()
+    const lead = t({ project: 'Gardening', org_role: 'lead' })
+    expect(buildOrgTree([only, lead]).projects[0]).toMatchObject({ contactId: lead.id, lead: { id: lead.id } })
+  })
+
+  it('guard: every project node\'s contact is an org node the Org page can start, whatever its shape', () => {
+    // The whole class: a contact that is a plain task makes the row's chat start it as an org
+    // node, which the server refuses. Every shape a project node takes is built here: no team, one,
+    // several, a plugin's own tasks, the Inbox, led by its own lead or by another project's.
+    const vp = t({ project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
+    const idle = t({ project: 'Quiet', org_role: 'lead' })
+    const main = t({ org_role: 'main', title: 'CEO' })
+    const router = t({ org_role: 'router', project: 'Mail' })
+    const work = [
+      t({ project: 'Solo' }),
+      t({ project: 'Pair' }), t({ project: 'Pair' }),
+      t({ project: 'Garden' }),
+      t({ project: 'Seeds' }),
+      t({ project: '' }),
+      t({ project: 'Plugged' }), t({ project: 'Plugged', plugin_only: 'x' }),
+      t({ project: 'Nested' }),
+    ]
+    work.push(t({ project: 'Nested', parent_task_id: work.at(-1)!.id }))
+    const all = [main, router, vp, idle, ...work]
+    const byId = new Map(all.map((x) => [x.id, x]))
+    const tree = buildOrgTree(all)
+    expect(tree.projects.length).toBeGreaterThanOrEqual(8)
+    for (const p of tree.projects) {
+      const contact = p.contactId ? byId.get(p.contactId) : undefined
+      if (p.contactId) expect(isOrgNode(contact), `${p.project || 'Inbox'}: contact ${p.contactId} is not an org node`).toBe(true)
+      // A row with work always has someone to talk to: its lead, or one made on first contact.
+      if (p.teams.length > 0) expect(!!p.contactId || p.needsLead, `${p.project || 'Inbox'} has work and no way to talk to it`).toBe(true)
+    }
   })
 
   it('a project with two or more teams needs a lead; once one exists it is the contact', () => {
@@ -117,8 +154,8 @@ describe('org-tree', () => {
   it('the Inbox is a project like any other: a lead of its own (the Inbox VP), keyed as before', () => {
     // 2026-11-21, the user: the Inbox is a project now, so it is a VP like every other project.
     const one = findProjectNode(buildOrgTree([t({ project: '' })]), 'Inbox')!
-    expect(one).toMatchObject({ project: '', needsLead: false })
-    expect(one.contactId).toBe(one.teams[0]!.id)
+    expect(one).toMatchObject({ project: '', needsLead: true })
+    expect(one.contactId).toBeUndefined()
     const two = findProjectNode(buildOrgTree([t({ project: '' }), t({})]), 'Inbox')!
     expect(two).toMatchObject({ project: '', needsLead: true })
     expect(two.contactId).toBeUndefined()

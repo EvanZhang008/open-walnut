@@ -12,8 +12,8 @@
  *   side bar beside the chat on a wide page, above it on a narrow one (OrgTaskRail): Tasks (by status,
  *            by team, or as the Board its lead keeps), Brief and Threads; it widens beside the chat
  *            and closes, and never takes the chat's place
- *   A row no one answers for yet (none on a current server: a project of one team talks to it,
- *            one of more makes its VP on first contact, the Inbox too) shows its teams instead.
+ *   A row no one answers for yet (a project with no work and no VP) shows its teams instead; one
+ *            with work and no VP offers Make a VP (2026-11-25: never its one task as the VP).
  *   A router (row kind 'router', OrgRouterSettings) is its own node, not a VP: its header has a folded
  *            settings section of its own under it, and it has no side bar, so no Tasks (it owns no
  *            team and never sees the Inbox's tasks), no Brief and no Threads. A VP gets none of it.

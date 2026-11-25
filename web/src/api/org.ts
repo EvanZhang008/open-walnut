@@ -25,7 +25,7 @@ export interface OrgContactAnswer {
   launch?: { cwd: string; host: string | null };
 }
 
-/** Who answers for a project (its lead, made here when it has 2+ teams, or its one team). */
+/** Who answers for a project: its lead, made here when it has none. */
 export async function resolveOrgContact(to: string): Promise<OrgContactAnswer> {
   return apiPost<OrgContactAnswer>('/api/v1/org/contact', { to });
 }

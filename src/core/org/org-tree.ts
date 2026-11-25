@@ -2,8 +2,8 @@
  * The org above the work: who the user's main agent talks to.
  *
  *   Main (the main agent, one Ask Walnut task)
- *     └ a project            the main agent talks to its lead, or to its one team
- *         ├ lead             a hidden task Walnut makes once a project has 2+ teams
+ *     └ a project            the main agent talks to its lead (its VP)
+ *         ├ lead             a hidden task Walnut makes on the project's first contact
  *         └ team             an open top-level task of the project
  *             └ worker       its subtasks (parent_task_id), as everywhere else
  *
@@ -111,9 +111,11 @@ export interface OrgProjectNode {
   project: string;
   /** The project's lead, once Walnut has made one. */
   lead?: OrgNodeRef;
-  /** More than one team: the main agent should talk to a lead, made on first contact. */
+  /** It has work: the main agent talks to it through its lead, made on first contact. */
   needsLead: boolean;
-  /** Who the main agent talks to now: the lead, else the one team. Absent = a lead is still to be made. */
+  /** Who the main agent talks to now: always the lead, an org node. Absent = a lead is still to be made.
+   *  Never a plain team (2026-11-25: a project of one team handed that task to the Org page as its
+   *  VP, and opening the row tried to start it as one: "could not start: ... is not Main or a VP"). */
   contactId?: string;
   /** Led by another project's lead (its `org_leads`): that lead's own project. */
   vp?: string;
@@ -450,9 +452,10 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
     const picked = pickLead(tasks, project);
     // A completed lead talks to no one; the next contact reopens it.
     const lead = picked && picked.phase !== 'COMPLETE' ? picked : undefined;
-    // The Inbox is a project like any other (2026-11-21): its lead, the Inbox VP, is made on first contact too.
-    const needsLead = teams.length > 1;
-    const contactId = lead ? lead.id : teams.length === 1 ? teams[0]?.id : undefined;
+    // Every project is a VP's (2026-11-21, the Inbox too): one of one team has no VP until its
+    // first contact makes one, as one of several does; its task is never drawn as that VP.
+    const needsLead = teams.length > 0;
+    const contactId = lead?.id;
     const vp = lead ? vpOf(lead, project) : undefined;
     projects.push({
       kind: 'project', project, needsLead, teams, counts,

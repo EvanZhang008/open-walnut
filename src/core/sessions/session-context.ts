@@ -379,7 +379,7 @@ export const AWAY_INBOX_KEPT_LINE = awayInboxLine(THREAD_ONE_PLACE_KEPT_RULE)
 
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
- * contact per project (its lead, or its one team), never to every task, so its
+ * contact per project (its lead, its VP), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
  * direction with the user and never reviews implementation; a lead assigns,
  * coordinates and unblocks. Work is routed by its deliverable, not by area: an
@@ -396,8 +396,8 @@ type OrgRoleTask = { org_role?: string; project?: string; org_leads?: readonly s
 export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> {
   if (task.org_role === 'main') {
     const head = 'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
-      + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
-      + 'more than one team) or its one team. For "how is it going" read org_get (one line per project); for detail, '
+      + 'with them. Every project reports to you through one contact, its lead, its VP (Walnut makes one on its first '
+      + 'contact). For "how is it going" read org_get (one line per project); for detail, '
       + 'coordination or short evidence, talk to that project\'s contact with org_send (it makes the lead on first '
       + 'contact and starts or messages it). Route a work request by its deliverable first, not by the project '
       + 'contact: independent work gets task_create with its project named, the same deliverable gets task_send or task_start by its exact '

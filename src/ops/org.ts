@@ -35,7 +35,7 @@ defineOp({
   description:
     'The org above the work, one level at a time. For the main agent (or with no task): one row per project, '
     + 'with its counts (open, running, needs_you = waiting on the user, waiting = parked), the few tasks waiting on '
-    + 'the user, and its `contact`: the project\'s lead, or its one team, the one to talk to with org_send. '
+    + 'the user, and its `contact`: the project\'s lead (its VP), the one to talk to with org_send. '
     + 'For a project lead: its teams (the project\'s open top-level tasks) and `directors`, the Directors under it. '
     + 'For any other task: its workers. A row with director: true is a Director. '
     + `Pass \`of\` to read another node. Read this before reading tasks one by one. Rows are short (counts that are not zero), ${ORG_ROWS_PAGE} at a time (offset, limit).`,
@@ -84,8 +84,8 @@ defineOp({
   name: 'org_send',
   title: 'Talk to a project or a team',
   description:
-    'Message the one who answers for a project (its lead, or its only team) or any task by id, the way the main '
-    + 'agent talks to its org. A project with two or more teams gets a lead the first time (Walnut makes it, hidden '
+    'Message the one who answers for a project (its lead, its VP) or any task by id, the way the main '
+    + 'agent talks to its org. A project with no lead gets one the first time (Walnut makes it, hidden '
     + 'from the board); a contact with no session yet is started with your text, one with a session gets it as a '
     + 'message. Use it for status, coordination or a short evidence handoff, not to send an independent goal into '
     + 'the old team\'s conversation: task_create gives that goal a fresh task and session. A contact\'s project or '

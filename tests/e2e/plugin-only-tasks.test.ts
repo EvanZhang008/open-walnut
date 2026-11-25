@@ -187,7 +187,10 @@ describe('tasks a plugin keeps to its own view', () => {
     const tree = (await api('GET', '/api/v1/org')).data.tree
     const room = tree.projects.find((p: { project: string }) => p.project === PROJECT)
     expect(room.teams.map((t: { id: string }) => t.id)).toEqual([plain])
-    expect(room.needsLead).toBe(false)
+    // Its one plain team gets a VP on first contact (every project with work does); the plugin's
+    // own tasks are never its contact.
+    expect(room.needsLead).toBe(true)
+    expect(room.contactId).toBeUndefined()
     expect(room.counts.needsYou).toBe(1)
     const row = (await api('GET', '/api/projects')).data.projects.find((p: { name: string }) => p.name === PROJECT)
     expect(row.counts).toEqual({ todo: 0, active: 1, done: 0 })

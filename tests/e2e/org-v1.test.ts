@@ -111,7 +111,7 @@ describe('/api/v1/org', () => {
     await updateTask(first.id, { title: 'CEO' });
   });
 
-  it('a project with two teams gets one local lead on first contact; one team is talked to directly', async () => {
+  it('a project gets one local lead on first contact, whether it has two teams or one', async () => {
     const a = (await addTask({ title: 'Fix the reconnect bug', project: 'Walnut' })).task
     const b = (await addTask({ title: 'Ship the org chart', project: 'Walnut' })).task
     const single = (await addTask({ title: 'Book the lab recheck', project: 'Health' })).task
@@ -119,7 +119,9 @@ describe('/api/v1/org', () => {
     const tree = await api<{ tree: { projects: { project: string; needsLead: boolean; contactId?: string }[] } }>('GET', '/org')
     expect(tree.json.tree.projects.find((p) => p.project === 'Walnut')).toMatchObject({ needsLead: true })
     expect(tree.json.tree.projects.find((p) => p.project === 'Walnut')?.contactId).toBeUndefined()
-    expect(tree.json.tree.projects.find((p) => p.project === 'Health')).toMatchObject({ needsLead: false, contactId: single.id })
+    // One team is no exception (2026-11-25): its task is never the project's contact.
+    expect(tree.json.tree.projects.find((p) => p.project === 'Health')).toMatchObject({ needsLead: true })
+    expect(tree.json.tree.projects.find((p) => p.project === 'Health')?.contactId).toBeUndefined()
 
     const contacts = await Promise.all([1, 2, 3].map(() => api<{ task: { id: string; org_role?: string }; kind: string; started: boolean }>('POST', '/org/contact', { to: 'walnut' })))
     const leadIds = new Set(contacts.map((c) => c.json.task.id))
@@ -141,8 +143,10 @@ describe('/api/v1/org', () => {
     for (const id of [a.id, b.id]) expect((await getTask(id)).parent_task_id).toBeFalsy()
     expect((await listTasks()).filter((x) => x.org_role === 'lead')).toHaveLength(1)
 
-    const health = await api<{ task: { id: string }; kind: string }>('POST', '/org/contact', { to: 'Health' })
-    expect(health.json).toMatchObject({ kind: 'team', task: { id: single.id } })
+    const health = await api<{ task: { id: string; title: string; org_role?: string }; kind: string }>('POST', '/org/contact', { to: 'Health' })
+    expect(health.json).toMatchObject({ kind: 'lead', task: { title: 'Health VP', org_role: 'lead' } })
+    expect(health.json.task.id).not.toBe(single.id)
+    expect((await getTask(single.id)).parent_task_id).toBeFalsy()
 
     const byId = await api<{ task: { id: string }; kind: string }>('POST', '/org/contact', { to: a.id })
     expect(byId.json).toMatchObject({ kind: 'task', task: { id: a.id } })
@@ -283,12 +287,12 @@ describe('/api/v1/org', () => {
     expect(titles).toEqual(expect.arrayContaining(['Walnut', 'Health', 'Tickets', 'Inbox']))
     expect(titles.at(-1)).toBe('Inbox')
     expect(main.json.rows.find((r) => r.title === 'Walnut')?.contact).toMatchObject({ kind: 'lead' })
-    expect(main.json.rows.find((r) => r.title === 'Tickets')?.contact).toMatchObject({ kind: 'team', id: leader.id })
+    expect(main.json.rows.find((r) => r.title === 'Tickets')?.contact).toMatchObject({ kind: 'lead', title: 'Tickets lead (made on first contact)' })
     // The Inbox's VP, made on first contact above, is its contact like any project's lead.
     expect(main.json.rows.find((r) => r.title === 'Inbox')?.contact).toMatchObject({ kind: 'lead', title: 'Inbox VP' })
     expect(main.json.rows.find((r) => r.title === 'Inbox')?.teams).toBeUndefined()
 
-    const leadId = (await listTasks()).find((x) => x.org_role === 'lead')!.id
+    const leadId = (await listTasks()).find((x) => x.org_role === 'lead' && x.project === 'Walnut')!.id
     const lead = await api<{ rows: { title: string; kind: string }[] }>('GET', `/org/reports?of=${leadId}`)
     expect(lead.json.rows.map((r) => r.title).sort()).toEqual(['Fix the reconnect bug', 'Ship the org chart'])
     expect(lead.json.rows.every((r) => r.kind === 'team')).toBe(true)

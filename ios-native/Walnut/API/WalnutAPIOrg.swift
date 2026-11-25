@@ -150,7 +150,7 @@ struct OrgProjectWire: Decodable, Equatable {
     let project: String
     var lead: OrgNodeRefWire? = nil
     var needsLead: Bool? = nil
-    /// Who the CEO talks to here now: the lead, else the project's one team.
+    /// Who the CEO talks to here now: the lead. Nil until its first contact makes one.
     var contactId: String? = nil
     /// Led by another project's VP: that VP's own project.
     var vp: String? = nil
