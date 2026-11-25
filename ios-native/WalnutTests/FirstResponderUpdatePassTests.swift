@@ -95,6 +95,24 @@ final class FirstResponderUpdatePassTests: XCTestCase {
         return try JSONDecoder().decode([OrgThread].self, from: JSONSerialization.data(withJSONObject: all))
     }
 
+    /// What the process writes to stderr while `body` runs (AttributeGraph prints its cycle
+    /// reports there). Through a file, never a pipe: a full pipe would block the writer.
+    private static func capturingStderr(_ body: () -> Void) -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("stderr-\(UUID().uuidString).txt")
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        guard let file = try? FileHandle(forWritingTo: url) else { body(); return "" }
+        fflush(stderr)
+        let saved = dup(STDERR_FILENO)
+        dup2(file.fileDescriptor, STDERR_FILENO)
+        body()
+        fflush(stderr)
+        dup2(saved, STDERR_FILENO)
+        close(saved)
+        try? file.close()
+        defer { try? FileManager.default.removeItem(at: url) }
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
     private func textViews(_ v: UIView) -> [UITextView] {
         ((v as? UITextView).map { [$0] } ?? []) + v.subviews.flatMap(textViews)
     }
@@ -121,14 +139,23 @@ final class FirstResponderUpdatePassTests: XCTestCase {
         field.parent.text = transcript
         turn()
         let start = Date()
-        field.parent.isFocused = true
-        while !box.isFirstResponder, Date().timeIntervalSince(start) < 20 {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        var elapsed: TimeInterval = 0
+        let errText = Self.capturingStderr {
+            field.parent.isFocused = true
+            while !box.isFirstResponder, Date().timeIntervalSince(start) < 20 {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            }
+            elapsed = Date().timeIntervalSince(start)
+            turn()
         }
-        let elapsed = Date().timeIntervalSince(start)
-        print("FirstResponderUpdatePass: keyboard after \(Int(elapsed * 1000)) ms with \(boxes.count) boxes")
+        let cycles = errText.components(separatedBy: "AttributeGraph: cycle detected").count - 1
+        print("FirstResponderUpdatePass: keyboard after \(Int(elapsed * 1000)) ms with \(boxes.count) boxes, \(cycles) AttributeGraph cycles")
         XCTAssertTrue(box.isFirstResponder, "the box takes the keyboard")
         XCTAssertLessThan(elapsed, 1.0, "the keyboard came \(Int(elapsed * 1000)) ms after the focus")
+        // The bug's own mark on the simulator: with the keyboard taken inside the update,
+        // AttributeGraph reports a cycle on every pass (61 lines on iOS 26.2 before the fix,
+        // none after). On the phone (iOS 27) the same walk hung the main thread for seconds.
+        XCTAssertEqual(cycles, 0, "taking the keyboard made AttributeGraph report cycles")
         XCTAssertEqual(box.text, transcript)
         box.resignFirstResponder()
     }
