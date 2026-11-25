@@ -13,17 +13,21 @@
  *                  lines and no such line writes the held title
  * A merged thread's line and marks speak for the thread it went into when that one has none. A word
  * of his in it since the question keeps it as it is, and the next question asks again.
+ * With threads_each_question on (org/thread-question.ts), a thread his question opened is never
+ * offered for a merge: a held title of it is asked again as a title of its own, and a merge of it
+ * the threads refuse (own_question) keeps its title held.
  */
 import { mergeThreads, ThreadError, type OrgThread, type ThreadsFile, type ThreadWriter } from '../org/threads-model.js';
 import { candidatesIn, sameSubjectCandidates, strongMatch, subjectIndex, type SubjectIndex } from '../org/thread-same-subject.js';
 import { markerRe } from './status-marker.js';
+import { isQuestionThread, OWN_QUESTION_DO } from '../org/thread-question.js';
 
 /** Held threads one question asks about at most. */
 export const MERGES_ASKED_MAX = 3;
 const TITLE_SHOWN_MAX = 60;
 
-/** A listed thread holding a title, and the open thread it reads like. */
-export interface HeldTitle { title: string; like: string; likeTitle: string }
+/** A listed thread holding a title, and the open thread it reads like; `own`: his question opened it (no merge is offered). */
+export interface HeldTitle { title: string; like: string; likeTitle: string; own?: boolean }
 /** A merge the answer may make: its thread and the one it goes into, with each one's newest message when asked. */
 export interface MergeMark { id: string; into: string; upTo?: string; intoUpTo?: string }
 /**
@@ -49,7 +53,7 @@ export function repeatedBy(file: ThreadsFile, id: string, title: string, now: nu
 export function heldTitleOf(file: ThreadsFile, t: OrgThread): HeldTitle | undefined {
   if (!t.titleHeld || t.titled) return undefined;
   const like = file.threads.find((x) => x.id === t.titleHeld!.like && !x.closed);
-  return like ? { title: t.titleHeld.title, like: like.id, likeTitle: like.title } : undefined;
+  return like ? { title: t.titleHeld.title, like: like.id, likeTitle: like.title, ...(isQuestionThread(t) ? { own: true } : {}) } : undefined;
 }
 
 /**
@@ -88,7 +92,7 @@ const NEAR_WORDS = 2;
  */
 export function nearThreads(file: ThreadsFile, t: OrgThread, now: number, index?: SubjectIndex): string[] {
   const first = t.messages[0];
-  if (t.titled || t.closed || t.movedTo || t.opener || !first) return [];
+  if (t.titled || t.closed || t.movedTo || t.opener || !first || isQuestionThread(t)) return [];
   const inPool = (x: OrgThread) => x.id !== t.id && !x.closed && !x.movedTo && x.createdAt <= first.at;
   const pool = file.threads.filter(inPool);
   const lastBefore = (x: OrgThread) => x.messages.reduce((a, m) => (m.at < first.at && m.at > a ? m.at : a), '');
@@ -124,10 +128,15 @@ export const MERGE_UNTITLED_LINE = 'One that is the subject of another listed th
 
 /** The question's part for the held threads it asks about (each with the listed ref it reads like), '' for none. Pure. */
 export function mergeQuestionPart(asked: ReadonlyArray<{ ref: string; held: HeldTitle; likeRef: string }>): string {
-  if (!asked.length) return '';
-  const items = asked.map(({ ref, held, likeRef }) => `${ref}, which you titled "${clean(held.title)}", reads like ${likeRef} "${clean(held.likeTitle)}"`);
-  return `Threads whose title repeats another listed one: ${items.join('; ')}. The same subject: FOR_USER_THREAD_MERGE: <ref> | <that ref> (Walnut puts it under that one before your lines, so that one's line speaks for both);`
-    + ' another subject: leave the line out, and the title you gave is written.';
+  const item = ({ ref, held, likeRef }: (typeof asked)[number]) => `${ref}, which you titled "${clean(held.title)}", reads like ${likeRef} "${clean(held.likeTitle)}"`;
+  const merge = asked.filter((a) => !a.held.own);
+  const own = asked.filter((a) => a.held.own);
+  return [
+    merge.length ? `Threads whose title repeats another listed one: ${merge.map(item).join('; ')}. The same subject: FOR_USER_THREAD_MERGE: <ref> | <that ref> (Walnut puts it under that one before your lines, so that one's line speaks for both);`
+      + ' another subject: leave the line out, and the title you gave is written.' : '',
+    // threads_each_question: his own question stays its own thread, so only its title is asked again.
+    own.length ? `His own questions whose title repeats another listed thread: ${own.map(item).join('; ')}. Each stays its own thread: ${OWN_QUESTION_DO} (FOR_USER_THREAD_TITLE: <ref> | <title>).` : '',
+  ].filter(Boolean).join('\n');
 }
 
 const MERGE_RE = markerRe('FOR_USER_THREAD_MERGE', 'gm');
@@ -191,7 +200,8 @@ export function settleHeldTitles(file: ThreadsFile, checked: readonly MergeMark[
       file = done.file;
     } catch (err) {
       if (!(err instanceof ThreadError)) throw err;
-      if (t.titleHeld) writeHeld(m.id);
+      // His own question refused (threads_each_question): its title stays held and is asked again.
+      if (t.titleHeld && err.code !== 'own_question') writeHeld(m.id);
     }
   }
   for (const c of checked) if (!settled.has(c.id) && still(c)?.titleHeld) writeHeld(c.id);

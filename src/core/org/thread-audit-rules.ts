@@ -14,6 +14,7 @@
  * scans once, maybe Haiku, periodically"; the check only reports, the node fixes.
  */
 import type { OrgThread } from './threads-model.js';
+import { isQuestionThread } from './thread-question.js';
 import { candidatesIn, subjectIndex, type TreeThreads } from './thread-same-subject.js';
 import { asksHimNow, summaryPointsElsewhere } from './thread-summary-content.js';
 import { snoozedNow } from './thread-view.js';
@@ -103,6 +104,9 @@ export function ruleFindings(threads: readonly OrgThread[], taskId: string, now:
 
 // repeat candidates
 
+/** His own question's card (threads_each_question) beside one that cannot go into it either: his other question, a decision, or the node's own post (mergeThreads). */
+const stuck = (q: RepeatSide, other: RepeatSide): boolean => isQuestionThread(q.thread) && (isQuestionThread(other.thread) || other.thread.state === 'needs' || !!other.thread.opener);
+
 export interface RepeatSide { thread: OrgThread; taskId: string; taskTitle?: string }
 export interface RepeatCandidate {
   key: string;
@@ -130,6 +134,8 @@ export function repeatCandidates(taskId: string, tree: readonly TreeThreads[], n
   const index = subjectIndex(tree, now);
   const byPair = new Map<string, RepeatCandidate>();
   const add = (a: RepeatSide, b: RepeatSide, why: RepeatCandidate['why'], score: number) => {
+    // threads_each_question: his own question never merges, so a pair whose other card cannot go into it is no repeat.
+    if (stuck(a, b) || stuck(b, a)) return;
     const key = pairKey(a.thread.id, b.thread.id);
     const had = byPair.get(key);
     if (!had || had.score < score) byPair.set(key, { key, a, b, why, score });
@@ -228,7 +234,9 @@ export function repeatFinding(c: RepeatCandidate, reason: string): AuditFinding 
     const [ma, mb] = [c.a.thread.messages.length, c.b.thread.messages.length];
     aStays = ma !== mb ? ma > mb : Date.parse(c.a.thread.createdAt) <= Date.parse(c.b.thread.createdAt);
   }
-  const [from, into] = aStays ? [c.b, c.a] : [c.a, c.b];
+  // His own question's card stays (threads_each_question): the other goes into it (`add` never pairs two such cards).
+  const stays = isQuestionThread(c.a.thread) ? true : isQuestionThread(c.b.thread) ? false : aStays;
+  const [from, into] = stays ? [c.b, c.a] : [c.a, c.b];
   return {
     kind: 'repeat', key: c.key,
     thread: cardOf(from.thread, from.taskId, from.taskTitle), other: cardOf(into.thread, into.taskId, into.taskTitle),

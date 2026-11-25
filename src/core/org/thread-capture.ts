@@ -23,6 +23,7 @@ import { exchangesOf, snoozedNow, watchedNow, summaryBehindHim, summaryOwed } fr
 import { keepsThreads } from './keeps-threads.js';
 import { asksHimNow } from './thread-summary-content.js';
 import { threadsKeptNow } from './threads-kept.js';
+import { isQuestionThread } from './thread-question.js';
 import { cardTagLine } from '../../lib/card-tag.js';
 import { letterThreadId } from './letter-thread-model.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
@@ -105,6 +106,8 @@ export interface ThreadHintState {
   card?: boolean;
   /** With `card`: the thread has no title of its own yet, so the line it asks for carries one. */
   untitled?: boolean;
+  /** A new thread his question opened (threads_each_question, thread-question.ts): no merge is offered. */
+  question?: boolean;
 }
 
 export interface ThreadCapture {
@@ -217,6 +220,7 @@ export async function prepareThreadCapture(input: {
     closed: closed.map((t) => ({ id: t.id, title: t.title, how: t.closed!.how, by: t.closed!.by })),
     ...(related.length ? { related } : {}),
     ...(await cardLineAsked(task) ? { card: true, ...(planned.thread.titled ? {} : { untitled: true }) } : {}),
+    ...(planned.created && isQuestionThread(planned.thread) ? { question: true } : {}),
   };
   return {
     hint,
@@ -327,10 +331,11 @@ export function threadHintText(s: ThreadHintState): string {
     // thread_update beside it (2026-11-25: "Give it a short title (thread_update). End your reply
     // with: ..." asked for the title in two places).
     if (s.card) text += s.open.length ? ` Open: ${open}.` : '';
+    else if (s.question) text += (s.open.length ? ` Open: ${open}.` : '') + ` His own question: its own thread${kept ? '' : ', a short title that says what it asks (thread_update)'}.`;
     else text += s.open.length
       ? ` Open: ${open}. Same subject as one: thread_update merge_into${kept ? '' : '; else give it a short title'}.`
       : kept ? '' : ' Give it a short title (thread_update).';
-    if (s.related?.length) text += relatedThreadsText(s.related, s.threadId, new Set(s.open.map((t) => t.id)), s.card ? 'line' : 'op');
+    if (s.related?.length) text += relatedThreadsText(s.related, s.threadId, new Set(s.open.map((t) => t.id)), s.question ? 'own' : s.card ? 'line' : 'op');
   } else text = `filed under thread ${s.threadId} ${q(s.title)}.`;
   if (s.closed.length) text += ` Closed since: ${s.closed.map((t) => `${t.id}${t.by === 'human' ? ' (by him)' : ''}`).join(', ')}.`;
   // threads_reply_tag: the line his reply ends with, its thread filled in (the rule is in the prompt).
@@ -342,12 +347,12 @@ export function threadHintText(s: ThreadHintState): string {
  * The words that ask for the reply's card line. A thread with no title of its own yet gets its
  * title in that line; a new thread beside open ones may be one of them, which is the line's merge.
  */
-function cardLineWords(s: Pick<ThreadHintState, 'threadId' | 'created' | 'untitled' | 'open'>): string {
+function cardLineWords(s: Pick<ThreadHintState, 'threadId' | 'created' | 'untitled' | 'open' | 'question'>): string {
   const line = cardTagLine(s.threadId);
   const states = 'state: working, waiting, answered, done';
   // A thread just opened has none, whatever the mark says.
   if (!s.untitled && !s.created) return ` End your reply with: ${line} (${states}).`;
-  const merge = s.created && s.open.length ? ` Same subject as an open one: ${line.replace(/ state="[a-z]+"\/>$/, ' merge="th-..."/>')} alone instead.` : '';
+  const merge = s.created && s.open.length && !s.question ? ` Same subject as an open one: ${line.replace(/ state="[a-z]+"\/>$/, ' merge="th-..."/>')} alone instead.` : '';
   return ` End your reply with: ${line.replace(/\/>$/, ' title="..."/>')} (${states}; title: a short one of your own).${merge}`;
 }
 

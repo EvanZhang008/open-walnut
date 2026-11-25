@@ -20,6 +20,10 @@ Two rules the user set and every part below serves:
   be maintained by a single task ... so that it wouldn't cause a single thread to appear in all
   different places, like in VP, in leaders, and in the subtask"). A leader sees the threads of the
   tasks below in its own view, each named by the task it comes from; it never copies them.
+- **Each question he asks is its own thread** (with `threads_each_question` on; 2026-11-25: "each
+  question I ask needs to have one thread, otherwise how can I track"). It replaces "several asks
+  about the same thing are one thread" for his questions; a remark that asks nothing still joins its
+  subject's thread, and the node's own threads keep the one-subject rule.
 - **A card reads alone**: its title and summary say the result or the question itself, for someone
   who never saw the chat (2026-11-23: "the thread should be readable self contained"), and never
   say his own message back to him ("my words are sometimes messy; summarize it, or just say the matter").
@@ -28,7 +32,7 @@ Two rules the user set and every part below serves:
 
 | Text | File | Reaches |
 |---|---|---|
-| The Threads setting: one thread per subject, filing, states | `src/core/sessions/session-context.ts` (`threadsLine`, `threadsKeptLine`) | the node's prompt |
+| The Threads setting: one thread per subject (with `threads_each_question` on: each question he asks is its own thread, `EACH_QUESTION`), filing, states | `src/core/sessions/session-context.ts` (`threadsLine`, `threadsKeptLine`) | the node's prompt |
 | Card summary rule (latest first, never one bare line) | `src/core/org/thread-rules.ts` `THREADS_SUMMARY_RULE` | prompt, thread ops |
 | Walnut keeps threads from the status answer | `thread-rules.ts` `THREADS_KEPT_RULE` | prompt (with `threads_kept_by_walnut`) |
 | Known only after his reaction | `thread-rules.ts` `THREADS_KNOWN_RULE` | prompt, thread ops |
@@ -57,7 +61,7 @@ Guard tests for the wording: `tests/core/org/thread-rules-guard.test.ts`,
 | A Threads list holds still while he reads it: under the pointer every card keeps its place (a new one goes last), and the card at the top of the view stays where it is on screen when cards above come, go or change height, in both engines | `web/src/components/org/useThreadsHold.ts` (hold-order.ts, useScrollAnchor), `org-threads.css` | `tests/web/threads-hold.test.ts`, `tests/e2e/browser/threads-hold-still.spec.ts` |
 | His messages minutes apart are one conversation | `threads-model.ts` `recentConversation` | `tests/core/org/thread-join-conversation.test.ts` |
 | A message that joined a thread only for coming right after his last one is marked (`ThreadMessage.joined`), and the node's status question asks once whether it is another subject (at most 3 a question, the first unchecked per thread, marks older than a day not asked; zero bytes when none). `FOR_USER_THREAD_SPLIT: <ref> \| <title> \| <state> \| <words>` takes it, and the joined ones right after it up to the newest message the question saw, into a thread of its own, before the answer's other lines in the same locked write; the run's tail keeps its mark and is asked next. A bare reaction is filed unmarked (`joined: 'reaction'`) | `src/core/sessions/status-thread-split.ts`, `status-threads.ts` `applyThreadLines` | `tests/core/sessions/status-thread-split.test.ts` (each filing rule classified marked or unmarked) |
-| One subject is one thread when the node names his new thread: the question's title line also offers `FOR_USER_THREAD_MERGE: <ref> \| <other ref>`, which puts an untitled thread under another listed one before the answer's lines, in the same answer. A title it gives instead (a title line, or a split line's) that strongly repeats another open thread is held (`OrgThread.titleHeld`), not written; the next question names it with that thread's ref when that thread is listed too (at most 3 a question) and asks it no title, and `FOR_USER_THREAD_MERGE: <ref>` merges it; an answer with thread lines and no such line writes the held title. A merged thread's line and seen mark speak for the thread it went into when that one has none. A word of his in it since the question keeps it as it is (asked again); a merge the threads refuse writes the title; the other thread unlisted (it waits on him) asks its title again | `src/core/sessions/status-thread-title.ts`, `status-thread-pre.ts` | `tests/core/sessions/status-thread-title.test.ts` (every place that sets a thread's title as given is classified) |
+| One subject is one thread when the node names his new thread: the question's title line also offers `FOR_USER_THREAD_MERGE: <ref> \| <other ref>`, which puts an untitled thread under another listed one before the answer's lines, in the same answer. A title it gives instead (a title line, or a split line's) that strongly repeats another open thread is held (`OrgThread.titleHeld`), not written; the next question names it with that thread's ref when that thread is listed too (at most 3 a question) and asks it no title, and `FOR_USER_THREAD_MERGE: <ref>` merges it; an answer with thread lines and no such line writes the held title. A merged thread's line and seen mark speak for the thread it went into when that one has none. A word of his in it since the question keeps it as it is (asked again); a merge the threads refuse writes the title; the other thread unlisted (it waits on him) asks its title again. With `threads_each_question` on, a thread his question opened is never offered for a merge (a merge of it is refused, `own_question`): a held title of it is asked again as a title of its own | `src/core/sessions/status-thread-title.ts`, `status-thread-pre.ts` | `tests/core/sessions/status-thread-title.test.ts` (every place that sets a thread's title as given is classified) |
 | A decision is not asked twice in one task tree | `src/core/same-ask-tree.ts`, `threads-store.ts` `refuseSameAskThread` | `tests/core/same-ask*.test.ts` |
 | A node's other open asks are named as replaced or as other decisions | `src/core/org/thread-supersede.ts` | its tests |
 | Known or closed only after his reaction | `threads-model.ts` `checkReacted` | `tests/core/org/threads-model.test.ts` |
@@ -68,7 +72,7 @@ Guard tests for the wording: `tests/core/org/thread-rules-guard.test.ts`,
 
 `task_threads`, `threads_sqlite`, `threads_pop_up`, `action_needed_everywhere`, `top_thread`,
 `reply_thread_line`, `letters_as_threads`, `threads_one_card`, `threads_kept_by_walnut`,
-`brief_off` (all in `src/core/experimental.ts`; "Every experiment on" turns on each one never set alone).
+`brief_off`, `threads_each_question` (all in `src/core/experimental.ts`; "Every experiment on" turns on each one never set alone).
 
 The Threads plan of 2026-11-25, five parts, each its own switch that "Every experiment on" never
 turns on (`ownSwitchOnly`), so each is measured alone: `threads_reply_tag` (the chat reply carries
@@ -453,6 +457,37 @@ lead 132), and of 40 judged by the fast model 18 SAME, 21 DIFFERENT, 1 UNSURE, 1
 repeat on reading. Limits: a node with more pairs than the cap takes a few passes to have them all
 judged; a pair with a task above the node is judged when that task is checked.
 
+### threads_each_question
+
+Each question he asks is its own thread (2026-11-25, the user, after a question he typed in a node's
+chat had no thread of its own: "each question I ask needs to have one thread, otherwise how can I
+track"). He had asked question A, then 3.5 minutes later question B on the same subject; B opened
+its own thread, and 32 seconds later the node's status answer merged it into A's
+(`FOR_USER_THREAD_MERGE`), because the prompt said "several asks about the same thing are one
+thread" and the status question offered the merge. On, "Every experiment on" included:
+
+- **One predicate, by form** (`src/core/org/thread-question.ts` `asksQuestion`, no model): a question
+  mark, an interrogative at a clause start (why, how, what, which, who; when or where before an
+  auxiliary; an auxiliary before its subject), or a Chinese question form, and at least 3 words or
+  4 CJK characters; never a plain reaction. It leans towards yes.
+- **Filing** (`threads-model.ts` `fileMessage`): such a chat message with no thread named joins no
+  thread by timing and none as a reaction, even when the recent thread waits on him. A Follow up, a
+  letter's note and a remark that asks nothing keep the old rules.
+- **Merging** (`mergeThreads`, every merge goes through it): a thread his question opened
+  (`ownQuestionOf`, its first message) is refused `own_question`, unless he merges it himself or the
+  target already holds the very same words. A split's one message is refused only when it opened its
+  thread. The refusal says to title it by what it asks and answer it there; the status answer's
+  refused merge keeps a held title held, and its line and marks are written on that thread.
+- **What nodes are told**: the prompt's sentence (bytes: 114 to 196; with Walnut keeping the threads,
+  50 to 182; a running session hears the changed sentence); the status question offers no merge for
+  such a thread and asks a held title again as a title of its own; the filing hint, the related
+  threads, the turn-end check of answers before his message and the thread check (`threads_audit`)
+  no longer tell a node to merge it.
+- Off: everything as before. Guards: `tests/core/org/thread-each-question.test.ts`,
+  `tests/core/org/thread-each-question-guard.test.ts` (every call of `mergeThreads(` and
+  `splitMessageInto(`, and every join kind of `fileMessage`, listed with its test),
+  `tests/core/org/thread-each-question-prompt.test.ts`, `tests/e2e/thread-each-question.test.ts`.
+
 ## What the user's data showed (2026-11-23)
 
 Read from one leader task and its six subtasks (64 threads), the tree the user reported:
@@ -477,6 +512,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-25 | A question he asked in a node's chat had no thread of its own ("why there is no thread for this") | it opened its own, and the node's status answer merged it into the thread of his question 3.5 minutes earlier on the same subject: the prompt said several asks about one thing are one thread, and the status question offered the merge | fixed behind `threads_each_question`: each question he asks is its own thread (see above) |
 | 11-25 | While he read the Threads list, a card that changed group still pushed what he saw (a review of the hold, item a: 186px in Chromium, 183px in WebKit, the pointer on a group's head at the top) | the card that moved was the one under his pointer (the matrix had picked its point before a move line from its last cell faded, so the pointer came to rest on that card), and a held card drawn again in another group was let go with no correction, so every card he saw moved by its new height: the same as a Needs you card he answers going to Done. Also, a press with no release (a ctrl-click's menu, a native drag) left the pointer counted as down, and a letter typed in a Follow up box counted as his scroll: either way WebKit's pull at the end of the list stayed in (376px) | fixed: when the card he reads leaves its place, the card drawn right before it (else right after it) holds the place until he moves or scrolls, so nothing above the pointer moves and the rest closes up under its line (`heldPlace` in `web/src/hooks/scroll-anchor.ts`, `useScrollAnchor.ts`); a move with no button, a wheel or a key lets a press go, and a letter typed in a text field is no scroll (`stepScrollInput`). The matrix waits for the last cell's lines and cleanups before it picks a point, refuses a pointer that rests on a card in a cell about the space between them, and has a column for his own card changing group (`tests/e2e/browser/threads-hold-matrix.spec.ts`, its columns now in `threads-hold-changes.ts`; `tests/web/threads-hold.test.ts`). Open: at the end of the list, his own card leaving below the rest still moves the cards above it (no scroll is left; it would need room at the bottom) |
 | 11-25 | Replies of sessions with Threads on ended with one line per open thread, often under a heading or inside a tag the session made up | the Threads rule said each turn ends with a line for each thread, and a Claude Code session never sees Walnut's status question in its own chat, so it wrote the lines into its reply | fixed: every screen hides a reply's trailing thread-status block, with its heading and a made-up tag around it (`src/lib/internal-lines.ts` `stripInternalLines`: the web chat, the history every client reads, push, the thread takeaway, ACP; the phone's `InternalLines.swift`; both run `tests/fixtures/internal-lines/cases.json`). Precision first, since a review found the first version hid his content: only a block that is strictly the reply's end goes (a list item, paragraph, table row or quote after a thread line keeps everything; only a line indented under a thread's item carries it on); a table row, a quote or a sentence that names a thread is never a thread line; an item that says its state in free words counts only under a heading, in a made-up tag or beside a line with a known state word; and the block stays when it is the whole reply, follows one sentence (sentences, not lines: a version, a file name, a time or a URL never ends one) or a lead-in (a colon, "as follows", "below", a sentence naming the threads), holds a link, a path, a letter, a task ref or a relative image the reply keeps nowhere else, has a line that waits on him (state needs or new, or words that ask him: a decision, a review, a question, news to answer; a second review found 39 real replies whose decision was hidden, some on threads in waiting, which his Threads view does not show), or ends a longer list. On 834 real replies 268 change, 234 still end with a block (the accepted miss), none hides a link or path the shown text lacks, and the review's reproductions all keep their content. Every text that asks for those lines says they go in Walnut's status question after the turn, in the reply only if he asks (`THREAD_LINE_CHANNEL`). The phone reads text as the server's JavaScript does (whitespace, trim, digits, word ends, the line split): on the 834 replies both show the same text at all 33,469 points tried. Guards `tests/lib/internal-lines.test.ts` (with its list of shapes that must show), `tests/core/sessions/status-threads-kept.test.ts` |
 | 11-25 | thread_split takes a title for the new thread. Real use on 11-24: a node sent a title with its split, was refused `bad_args`, and the split's answer then asked for a second call to give the thread a title | the op took no title | fixed: `title` is written on the thread the split made, in the same call, with thread_update's own write (the split route is unchanged); with merge_into, or on a thread Walnut split out before that has a title already, it is not applied and the answer names it in `not_applied` (`src/ops/org-threads.ts` titleSplitThread; `tests/mcp/org-answers.test.ts`, `tests/e2e/thread-split-route.test.ts`) |

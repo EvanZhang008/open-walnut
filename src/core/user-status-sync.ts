@@ -1549,6 +1549,8 @@ async function experimentSwitched(): Promise<boolean> {
   setThreadsKept(experimentalEnabled(flags, 'threads_kept_by_walnut'));
   // A reply is its thread's reply (org/reply-card-switch.ts): read by the prompt, the hint and the status question.
   (await import('./org/reply-card-switch.js')).setReplyTag(experimentalEnabled(flags, 'threads_reply_tag'));
+  // Each question is its own thread (org/thread-question.ts): read by the filing, every merge, the prompt and the status question.
+  (await import('./org/thread-question.js')).setEachQuestion(experimentalEnabled(flags, 'threads_each_question'));
   // Decision letters as threads (human-inbox/letter-threads.ts): a switch moves which letters count.
   const asThreads = experimentalEnabled(flags, 'letters_as_threads');
   const lettersMoved = lettersAsThreadsSeen !== undefined && lettersAsThreadsSeen !== asThreads;

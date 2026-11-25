@@ -231,6 +231,13 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'threads_each_question',
+    name: 'Each question is its own thread',
+    description: 'Each question you ask an agent in its chat gets a thread of its own, even right after another message or on a subject another thread already holds, so you can follow every one. The agent titles it by what it asks and answers it there; neither the agent nor Walnut folds it into another thread (you still can). A remark that asks nothing still goes with the thread it follows.',
+    summary: 'Each question you ask in a chat gets a thread of its own, never folded into another one.',
+    default: false,
+  },
+  {
     id: 'threads_reply_tag',
     name: 'A reply is its thread\'s reply',
     description: 'An agent that keeps Threads ends its chat reply to you with one hidden line naming the thread it answers, where it stands (working, waiting, answered, done, or a decision for you) and, when needed, its title or the thread it joins. That reply is then the thread\'s reply: Walnut writes the card from the line, checks it when the turn ends, sends a wrong or missing one back to the agent in the same turn, and no longer asks about that thread after the turn. Off: Walnut asks the agent about each thread after the turn, as before. "Every experiment on" does not turn this on: it changes what every agent writes in its replies, so it keeps its own switch.',

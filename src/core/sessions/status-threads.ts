@@ -56,12 +56,12 @@ export interface StatusThreadLine { id: string; title: string; state: ThreadLine
 export interface StatusThreadNew { title: string; state: 'working' | 'waiting'; progress?: string }
 /** The open threads the question listed, by ref: `untitled` still under Walnut's stand-in title, `wrote` he wrote since an answer it holds. */
 export type ThreadRefs = ReadonlyMap<string, ThreadRef>;
-export interface ThreadRef { id: string; title: string; untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; joined?: string; mergeInto?: string }
+export interface ThreadRef { id: string; title: string; untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; joined?: string; mergeInto?: string; own?: boolean }
 /**
  * One thread as the question lists it (linesAreCards marks `untitled` and `wrote`): `upTo` its
  * newest message then, `hisAt` his newest message in any thread then (a reaction is judged on it).
  */
-export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean; near?: string[]; besideOnly?: boolean; reminder?: ReminderMark; overdue?: boolean };
+export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; retitle?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean; joined?: JoinedMessage; held?: HeldTitle; card?: string; asked?: boolean; cardAsks?: boolean; near?: string[]; besideOnly?: boolean; reminder?: ReminderMark; overdue?: boolean; own?: boolean };
 /** The report's fields the thread lines fill (readThreadLines), each written to the threads, never stored with the report. */
 export const THREAD_REPORT_KEYS = ['threads', 'threads_new', 'ask_thread', 'thread_titles', 'threads_seen', 'threads_split', 'joins_checked', 'threads_merge', 'merges_checked'] as const;
 export type ThreadReportKey = typeof THREAD_REPORT_KEYS[number];
@@ -144,12 +144,13 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
     const likeRef = t.held ? refById.get(t.held.like) : undefined;
     const held = t.held && likeRef && merges.length < MERGES_ASKED_MAX ? t.held : undefined;
     if (held) merges.push({ ref, held, likeRef: likeRef! });
-    // Asked again by its title when its other thread is not listed; not while it waits its turn.
-    const untitled = t.untitled && !held && !(t.held && likeRef);
+    // Asked again by its title when its other thread is not listed; not while it waits its turn. His
+    // own question (threads_each_question) is asked its title again, never a merge.
+    const untitled = t.untitled && !(t.held && likeRef && !t.held.own);
     const marks = kept ? { ...(untitled ? { untitled: true } : {}), ...(t.retitle && !untitled ? { retitle: true } : {}), ...(t.wrote && !t.reminder ? { wrote: true } : {}) } : {};
     const joined = t.joined && joins.length < JOINS_ASKED_MAX ? t.joined : undefined;
     if (joined) joins.push({ ref, joined });
-    refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}), ...(joined ? { joined: joined.messageId } : {}), ...(held ? { mergeInto: held.like } : {}) });
+    refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}), ...(joined ? { joined: joined.messageId } : {}), ...(held && !held.own ? { mergeInto: held.like } : {}), ...(t.own ? { own: true } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
     if (t.reminder) return reminderItem(ref, title, t.reminder);
     // The threads listed beside an untitled one as its possible subject (status-thread-title.ts nearThreads).
@@ -185,7 +186,8 @@ function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadR
     `One line per thread, which Walnut writes as its state and the summary on his card: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <where it stands for him, latest first, readable alone by someone who never saw this chat: the result or the question itself (name the task by its title and where it stands, never only that it was given, sent or told), then at most one sentence of background; a proof's path or URL when there is one>${words}.`
       + ` working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished, or nothing left for him. ${CARD_KEEPS_LINE}`,
   ];
-  if (refs.some((r) => r.untitled)) parts.push(`Each untitled thread gets a short title: FOR_USER_THREAD_TITLE: <ref> | <title>.${refs.length > 1 ? ` ${MERGE_UNTITLED_LINE}` : ''}`);
+  // A thread his own question opened is never offered for a merge (threads_each_question).
+  if (refs.some((r) => r.untitled)) parts.push(`Each untitled thread gets a short title: FOR_USER_THREAD_TITLE: <ref> | <title>.${refs.length > 1 && refs.some((r) => r.untitled && !r.own) ? ` ${MERGE_UNTITLED_LINE}` : ''}`);
   if (refs.some((r) => r.retitle)) parts.push(`Each thread whose title still asks him what no longer waits on him gets a title that names the subject as it stands now: FOR_USER_THREAD_TITLE: <ref> | <title>${words}.`);
   if (refs.some((r) => r.wrote)) {
     // His own words, so the reaction is judged against what he said, never against a label (review round 1).

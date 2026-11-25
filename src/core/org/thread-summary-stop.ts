@@ -31,6 +31,7 @@
 import { hasThreadNews, snoozedNow, summaryAt, summaryBehindHim } from './thread-view.js';
 import type { OrgThread } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
+import { isQuestionThread } from './thread-question.js';
 import { checkedFor, markChecked } from './thread-checks.js';
 
 export const MAX_SUMMARY_NUDGES = 2;
@@ -85,7 +86,10 @@ export function answeredBeforeHimReason(threads: readonly OrgThread[], his: { at
   const lines = threads.map((t) => `- ${t.id} ${JSON.stringify(t.title)}: answered ${nodeWordAt(t)}`);
   return `Walnut: the user wrote to you after these answers (his message ${his.at}, filed in ${his.thread.id} ${JSON.stringify(his.thread.title)}), and their cards still show them as unread:\n`
     + `${lines.join('\n')}\n`
-    + 'Check each against what he said since. Same subject: merge his message into it (thread_update merge_into). He read it and its work is done: close it (close: acked). '
+    + 'Check each against what he said since. '
+    // threads_each_question: a thread his question opened is never merged (thread-question.ts).
+    + (isQuestionThread(his.thread) ? 'Same subject: his question stays its own thread, answered there. ' : 'Same subject: merge his message into it (thread_update merge_into). ')
+    + 'He read it and its work is done: close it (close: acked). '
     + 'He read it and it goes on: mark it known (known: "all") with a summary of where it stands now. Still waiting on him: keep only the one question left. '
     + 'His words did not touch it: leave it as it is.';
 }

@@ -71,6 +71,9 @@ import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.
 import { ASKS_OUTSIDE_NEEDS, asksHimNow, summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
 import { ackHoldsResult, lineMay, NO_LINE_REPLY } from './thread-known.js';
 import { repeatsAcknowledged } from './thread-ack-repeat.js';
+import { asksQuestion, eachQuestionNow, isPlainReaction, ownQuestionOf, ownQuestionRefusal, wordsKey } from './thread-question.js';
+
+export { isPlainReaction };
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -427,7 +430,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks' | 'same_subject' | 'he_has_it';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks' | 'same_subject' | 'he_has_it' | 'own_question';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -756,12 +759,6 @@ export function recentConversation(file: ThreadsFile, at: string, within = SAME_
   return isOpen(best.t) ? best.t : undefined;
 }
 
-/** A whole message that only reacts: a word or two of thanks, ok or done, no question (filing only; isAcknowledgement is the looser close check). */
-const PLAIN_REACTION = /^(?:done|ok|okay|k|thanks|thank you|thx|got it|great|nice|good|cool|perfect|sounds good|lgtm|\u597d|\u597d\u7684|\u884c|\u53ef\u4ee5|\u6536\u5230|\u8c22\u8c22|\u77e5\u9053\u4e86|\u660e\u767d|\u6ca1\u95ee\u9898|\u5b8c\u6210|\u641e\u5b9a|\ud83d\udc4d)(?:[\s,.!\uff0c\u3002\uff01~]*(?:thanks|thank you|\u8c22\u8c22|\ud83d\udc4d))?[\s.!\uff01\u3002~]*$/i;
-export function isPlainReaction(text: string): boolean {
-  return PLAIN_REACTION.test(text.trim());
-}
-
 /** Within this, a bare reaction goes to the thread of the node's newest answer. */
 const REACTION_JOINS_MS = 24 * 3_600_000;
 
@@ -819,10 +816,12 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   };
   const named = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
   const reopened = !!named && closedByHimJustNow(named, input.at, input.reopenWithin ?? FOLLOW_UP_REOPENS_MS);
-  const recent = !input.threadId && input.joinRecent && input.via === 'chat' ? recentConversation(file, input.at, input.joinRecent) : undefined;
+  // threads_each_question (thread-question.ts): a question he types in the chat opens its own thread, never joins one.
+  const ownQuestion = !input.threadId && input.via === 'chat' && eachQuestionNow() && asksQuestion(text);
+  const recent = !input.threadId && !ownQuestion && input.joinRecent && input.via === 'chat' ? recentConversation(file, input.at, input.joinRecent) : undefined;
   // A bare reaction ("Done", "ok, thanks") is about the node's newest answer, never a subject of its own
   // (2026-11-23: his "Done" became a third thread of one issue).
-  const reaction = !named && !recent && input.joinRecent && input.via === 'chat' && isPlainReaction(text) ? latestAnswered(file, input.at) : undefined;
+  const reaction = !named && !recent && !ownQuestion && input.joinRecent && input.via === 'chat' && isPlainReaction(text) ? latestAnswered(file, input.at) : undefined;
   const target = named ?? recent ?? reaction;
   if (target && (isOpen(target) || reopened)) {
     // A bare reaction moves nothing: it is his "ok" to what the node said, never an answer to a
@@ -1066,8 +1065,6 @@ function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: s
   throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx), words);
 }
 
-/** Words compared as he wrote them, case and spacing aside. */
-const wordsKey = (s: string): string => s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 /** The shortest quote that names a message of his, unless it is the whole message: a word or two is no quote. */
 const USER_WORDS_MIN = 6;
 const quotes = (text: string, quote: string): boolean => {
@@ -1348,7 +1345,7 @@ function newestNodeWord(t: OrgThread): { text: string; at: string; by?: ThreadWr
  * the target keeps its first post, and the other's newest word becomes the summary when it is newer
  * than the target's, so it is not lost.
  */
-export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
+export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string, opts: { questionMoves?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
   if (fromId === intoId) throw new ThreadError('same_thread', 400, 'A thread cannot be merged into itself.');
   file = stampLegacyReplyAt(file);
   const fromFound = find(file, fromId);
@@ -1359,6 +1356,10 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   if (!isOpen(into)) throw new ThreadError('thread_closed', 409, `Thread ${intoId} is closed; a new ask about it stays its own thread (it follows ${intoId}).`);
   // A thread the user closed stays closed: merging it would open it again unasked.
   if (!isOpen(from)) throw new ThreadError('thread_closed', 409, `Thread ${fromId} is closed; reopen it first if it belongs under ${intoId}.`);
+  // threads_each_question: a thread his question opened stays its own (thread-question.ts). `questionMoves`
+  // false: a split's one message that did not open its thread (splitMessageInto).
+  const own = opts.questionMoves === false ? null : ownQuestionRefusal(from, into, by);
+  if (own) throw new ThreadError('own_question', 409, own);
   // A thread the node opened keeps its first post: his ask goes under it, never the other way.
   if (from.opener && !into.opener) {
     throw new ThreadError('bad_input', 409, `Thread ${fromId} opens with your own post and ${intoId} with his ask; his ask goes under your post, so merge the other way: thread_update {"id":"${intoId}","merge_into":"${fromId}"}.`);
@@ -1547,8 +1548,10 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
  */
 export function splitMessageInto(file: ThreadsFile, threadId: string, messageId: string, intoId: string, by: ThreadWriter, at: string, lang: LetterLang = 'en', opts: SplitOptions = {}): { file: ThreadsFile; thread: OrgThread; from: OrgThread; closedFrom: boolean } {
   if (intoId === threadId) throw new ThreadError('same_thread', 400, `The message is already in ${threadId}: name another open thread as merge_into.`);
+  // The message moves alone: the question rule holds for it only when it opened its thread (ownQuestionOf).
+  const opened = ownQuestionOf(find(file, threadId))?.id === messageId;
   const split = splitThreadMessage(file, threadId, messageId, by, at, undefined, lang, opts);
-  const merged = mergeThreads(split.file, split.thread.id, intoId, by, at);
+  const merged = mergeThreads(split.file, split.thread.id, intoId, by, at, { questionMoves: opened });
   return { file: merged.file, thread: merged.thread, from: split.from, closedFrom: split.closedFrom };
 }
 

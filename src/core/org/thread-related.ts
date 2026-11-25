@@ -251,10 +251,11 @@ const cut = (s: string, n: number): string => {
  * already named in the hint's Open list goes by its id alone. At most RELATED_HINT_MAX_BYTES: the
  * lowest ranked go first. '' when there are none. Pure.
  * `how` 'line': the hint asks for the reply's card line (threads_reply_tag), so joining one of the
- * node's own is that line's merge, never a thread_update beside it.
+ * node's own is that line's merge, never a thread_update beside it. 'own': his question opened the new
+ * thread (threads_each_question), which joins none of them.
  */
-export function relatedThreadsText(related: readonly RelatedThread[], newThreadId: string, listed: ReadonlySet<string> = new Set(), how: 'op' | 'line' = 'op'): string {
-  const join = how === 'line' ? 'its line with merge="<id>" alone' : `thread_update {"id":"${newThreadId}","merge_into":"<id>"}`;
+export function relatedThreadsText(related: readonly RelatedThread[], newThreadId: string, listed: ReadonlySet<string> = new Set(), how: 'op' | 'line' | 'own' = 'op'): string {
+  const join = how === 'own' ? 'read it, his question stays its own thread' : how === 'line' ? 'its line with merge="<id>" alone' : `thread_update {"id":"${newThreadId}","merge_into":"<id>"}`;
   const item = (r: RelatedThread): string => {
     const whose = r.task ? `on ${JSON.stringify(cut(r.task.title, TASK_CUT))} ${r.task.id}` : 'yours';
     if (!r.task && !r.closed && listed.has(r.id)) return `${r.id} (yours)`;

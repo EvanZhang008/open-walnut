@@ -13,6 +13,7 @@ import { linesAreCards } from '../org/threads-kept.js';
 import { replyTagNow } from '../org/reply-card-switch.js';
 import { joinedToAsk } from './status-thread-split.js';
 import { heldTitleOf, nearAll } from './status-thread-title.js';
+import { isQuestionThread } from '../org/thread-question.js';
 import { cardWords } from './status-thread-card.js';
 import { decisionsUpPart, linesThatAsked, markAsks } from './status-thread-asked.js';
 import { byNeed, lastListed, noteListed } from './status-thread-pick.js';
@@ -31,7 +32,7 @@ export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[], n
   const hasOf = (t: OrgThread) => {
     const joined = joinedToAsk(t);
     const held = heldTitleOf(file, t);
-    return { ...(ackHoldsResult(t) ? { acked: true } : {}), ...(joined ? { joined } : {}), ...(held ? { held } : {}) };
+    return { ...(ackHoldsResult(t) ? { acked: true } : {}), ...(joined ? { joined } : {}), ...(held ? { held } : {}), ...(isQuestionThread(t) ? { own: true } : {}) };
   };
   const shared = sharedAnswers(file.threads);
   const card = (t: OrgThread) => { const c = cardWords(t, shared); return c ? { card: c } : {}; };

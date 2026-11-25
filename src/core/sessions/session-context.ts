@@ -101,6 +101,7 @@ import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREAD_ONE_PLACE_KEPT_RULE,
 import { STATUS_QUESTION } from '../../lib/internal-lines.js'
 import { threadsKeptNow } from '../org/threads-kept.js'
 import { replyTagNow } from '../org/reply-card-switch.js'
+import { eachQuestionNow } from '../org/thread-question.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -248,32 +249,45 @@ export const MAIN_DECISION_LINE =
 export const LEAD_DECISION_LINE =
   ' A report to the main agent that needs a decision from the user carries every one of these parts.\n\n'
 
+/** How his asks make threads, without and with threads_each_question (org/thread-question.ts). */
+const SAME_THING = 'Several asks about the same thing are one thread: put a new one under the open thread it belongs to (merge_into). '
+const SAME_THING_KEPT = 'Several asks about the same thing are one thread; '
+const EACH_QUESTION = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes under its thread (merge_into). '
+const EACH_QUESTION_KEPT = 'Each question he asks is its own thread, even on a subject another holds: title it by what it asks, answer it there, never merge it; a remark that asks nothing goes with its thread; '
+
 /** The Threads rules (core/org/threads-model.ts): the user's own requests, one thread per subject; `where` he reads them. */
-const threadsLine = (where: string, last: string): string =>
+const threadsLine = (where: string, last: string, each = false): string =>
   `Your Threads (${where}) are the user's own requests to you, one thread per `
   + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
   + 'thread_update: a short title, what he wants, its state (working: you are on it, needs: waiting on him, answered, pending: nothing new for him), the summary (reply) '
-  + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
-  + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. A new ask about a closed subject is a new thread. '
+  + 'and the tasks you handed it to. ' + (each ? EACH_QUESTION : SAME_THING)
+  + 'Walnut puts your chat reply under each of his messages by itself. A new ask about a closed subject is a new thread. '
   + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
 
 /** The Threads rules with threads_kept_by_walnut on (org/threads-kept.ts): the status answer keeps them, not a call each turn. */
-const threadsKeptLine = (where: string, last: string, rule = THREADS_KEPT_RULE): string =>
+const threadsKeptLine = (where: string, last: string, rule = THREADS_KEPT_RULE, each = false): string =>
   `Your Threads (${where}) are the user's own requests to you, one thread per subject: Walnut files every message he sends `
-  + 'you, says in it which thread it went to, and puts your chat reply under it. Several asks about the same thing are one thread; '
+  + 'you, says in it which thread it went to, and puts your chat reply under it. ' + (each ? EACH_QUESTION_KEPT : SAME_THING_KEPT)
   + 'a new ask about a closed subject is a new thread. '
   + rule + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_OPEN_RULE + ' ' + last + '\n\n'
 
-/** Main's and every lead's Threads. */
-export const THREADS_LINE = threadsLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
-/** The same with the Brief off: Threads are what the user reads, grouped by state. */
-export const THREADS_OFF_LINE = threadsLine('on the Org page, grouped by state', THREADS_MOVE_RULE)
-/** Both with threads_kept_by_walnut on. */
-export const THREADS_KEPT_LINE = threadsKeptLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE)
-export const THREADS_KEPT_OFF_LINE = threadsKeptLine('on the Org page, grouped by state', THREADS_MOVE_RULE)
-/** Both with threads_reply_tag on too (org/reply-card-switch.ts): a thread's line is its card line at the end of the reply. */
-export const THREADS_TAG_LINE = threadsKeptLine('the Threads view beside your Brief on the Org page', THREADS_MOVE_RULE, THREADS_TAG_RULE)
-export const THREADS_TAG_OFF_LINE = threadsKeptLine('on the Org page, grouped by state', THREADS_MOVE_RULE, THREADS_TAG_RULE)
+const ORG_WHERE = 'the Threads view beside your Brief on the Org page'
+const ORG_OFF_WHERE = 'on the Org page, grouped by state'
+/** Main's and every lead's Threads (`on`), the same with the Brief off (`off`, what the user reads grouped by state), each with threads_kept_by_walnut (`kept`) and threads_reply_tag (`tag`, org/reply-card-switch.ts: a thread's line is its card line at the end of the reply). */
+function orgThreadLines(each: boolean) {
+  return {
+    on: threadsLine(ORG_WHERE, THREADS_MOVE_RULE, each), off: threadsLine(ORG_OFF_WHERE, THREADS_MOVE_RULE, each),
+    keptOn: threadsKeptLine(ORG_WHERE, THREADS_MOVE_RULE, THREADS_KEPT_RULE, each), keptOff: threadsKeptLine(ORG_OFF_WHERE, THREADS_MOVE_RULE, THREADS_KEPT_RULE, each),
+    tagOn: threadsKeptLine(ORG_WHERE, THREADS_MOVE_RULE, THREADS_TAG_RULE, each), tagOff: threadsKeptLine(ORG_OFF_WHERE, THREADS_MOVE_RULE, THREADS_TAG_RULE, each),
+  }
+}
+const ORG_LINES = [orgThreadLines(false), orgThreadLines(true)] as const
+export const THREADS_LINE = ORG_LINES[0].on
+export const THREADS_OFF_LINE = ORG_LINES[0].off
+export const THREADS_KEPT_LINE = ORG_LINES[0].keptOn
+export const THREADS_KEPT_OFF_LINE = ORG_LINES[0].keptOff
+export const THREADS_TAG_LINE = ORG_LINES[0].tagOn
+export const THREADS_TAG_OFF_LINE = ORG_LINES[0].tagOff
 
 /** What needs him while he is away goes to his inbox in one thread (org/user-away.ts, human-inbox/away-thread.ts). */
 const AWAY_LETTERS_RULE =
@@ -297,11 +311,18 @@ function taskThreadsBlock(rules: string): string {
   const version = `v${createHash('sha1').update(rules).digest('hex').slice(0, 8)}`
   return versionedBlock(`Threads, the user's setting for your task (${version}): he turned Threads on for it, so you keep them.`, version, rules)
 }
-export const TASK_THREADS_LINE = taskThreadsBlock(threadsLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_RULE)).trim())
-/** The same with threads_kept_by_walnut on: another version, so a running session hears the change. */
-export const TASK_THREADS_KEPT_LINE = taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_KEPT_RULE)).trim())
-/** And with threads_reply_tag on too: one more version, so a running session hears that its line is the reply's card line. */
-export const TASK_THREADS_TAG_LINE = taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_KEPT_RULE), THREADS_TAG_RULE).trim())
+/** A task's Threads block; with threads_kept_by_walnut on another version (`kept`), and with threads_reply_tag on too one more (`tag`), so a running session hears each change. `each`: threads_each_question. */
+function taskThreadLines(each: boolean) {
+  return {
+    plain: taskThreadsBlock(threadsLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_RULE), each).trim()),
+    kept: taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_KEPT_RULE), THREADS_KEPT_RULE, each).trim()),
+    tag: taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_KEPT_RULE), THREADS_TAG_RULE, each).trim()),
+  }
+}
+const TASK_LINES = [taskThreadLines(false), taskThreadLines(true)] as const
+export const TASK_THREADS_LINE = TASK_LINES[0].plain
+export const TASK_THREADS_KEPT_LINE = TASK_LINES[0].kept
+export const TASK_THREADS_TAG_LINE = TASK_LINES[0].tag
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -465,7 +486,8 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
   }
   // Any other task: its role is its own, plus the Threads rules once the user turned them on.
   // With threads_reply_tag on, its line for a thread is the card line at the end of its reply: the status question asks such a task either way (status-threads.ts asksThreads).
-  if (keepsThreads(task)) return [['org-role', replyTagNow() ? TASK_THREADS_TAG_LINE : threadsKeptNow() ? TASK_THREADS_KEPT_LINE : TASK_THREADS_LINE]]
+  const lines = TASK_LINES[eachQuestionNow() ? 1 : 0]
+  if (keepsThreads(task)) return [['org-role', replyTagNow() ? lines.tag : threadsKeptNow() ? lines.kept : lines.plain]]
   return []
 }
 
@@ -474,8 +496,9 @@ const ORG_MANUALS = (): string => {
   const kept = threadsKeptNow()
   // The card line at the end of the reply stands in for the status question's line (threads_reply_tag): Main and a lead are asked that question only where Walnut keeps their threads.
   const tag = kept && replyTagNow()
-  const off = tag ? THREADS_TAG_OFF_LINE : kept ? THREADS_KEPT_OFF_LINE : THREADS_OFF_LINE
-  const on = tag ? THREADS_TAG_LINE : kept ? THREADS_KEPT_LINE : THREADS_LINE
+  const lines = ORG_LINES[eachQuestionNow() ? 1 : 0]
+  const off = tag ? lines.tagOff : kept ? lines.keptOff : lines.off
+  const on = tag ? lines.tagOn : kept ? lines.keptOn : lines.on
   return (kept ? AWAY_INBOX_KEPT_LINE : AWAY_INBOX_LINE) + (briefOffNow() ? BRIEF_OFF_LINE + off : BRIEF_LINE + on) + MESSAGE_ABOUT_LINE
 }
 
