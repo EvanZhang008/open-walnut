@@ -2664,6 +2664,13 @@ sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, nex
       res.status(404).json({ error: 'session not found' })
       return
     }
+    // An engine that lists its own models answers with them, never Claude Code's (acp-model-rows.ts).
+    const { listsOwnModels, acpMenu } = await import('../../core/sessions/acp-model-rows.js')
+    if (listsOwnModels(record.engine)) {
+      const acp = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
+      res.json({ source: acp ? 'acp' : 'record', live: !!acp, models: acpMenu(acp?.modelCatalog, record).rows })
+      return
+    }
     // Same-shape degradation: prefer the host's last-known CLI catalog over the
     // static registry so pickers never flash between two row shapes.
     const hostFallback = async (live: boolean) => {

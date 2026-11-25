@@ -70,6 +70,13 @@ describe('the picker from the copy', () => {
     expect(r!.models.every((m) => typeof m.id === 'string' && typeof m.label === 'string')).toBe(true)
   })
 
+  it("an engine that lists its own models shows only its own model, never the host's Claude catalog", async () => {
+    const acp = { id: B, host: 'devbox', process_status: 'idle', started_at: '', last_active_at: '', message_count: 2, engine: 'antigravity', model: 'gemini-4-neon[high]' }
+    const r = await harness({ projection: () => projection({ sessions: [acp] as SessionProjection['sessions'] }) }).copy.modelOptions(B)
+    expect(r).toMatchObject({ current: 'gemini-4-neon[high]', offline: true })
+    expect(r!.models).toEqual([{ id: 'gemini-4-neon[high]', label: 'gemini-4-neon[high]', supportsEffort: false }])
+  })
+
   it('a session the copy does not list: null, the route asks the Mac as before', async () => {
     expect(await harness().copy.modelOptions('dddddddd-4444-4444-8444-444444444444')).toBeNull()
     expect(await harness({ projection: () => null }).copy.modelOptions(B)).toBeNull()

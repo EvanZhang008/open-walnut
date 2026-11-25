@@ -31,13 +31,15 @@ import {
 } from '../types.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
-import type { SessionMode, Task } from '../types.js';
+import type { SessionMode, SessionRecord, Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 import { parseCompanionFields } from '../offline-merge/companion-op.js';
 import { RemoteReadError } from '../hosts/remote-read-error.js';
 import { isPersonSource } from './send-sent-by.js';
 import { markTemporary, tracksTemporaryModel, type ModelChoice } from './model-restore.js';
+import { acpMenu, listsOwnModels } from './acp-model-rows.js';
+import type { AcpModelCatalog } from '../../providers/acp-worker/protocol.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -448,6 +450,7 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
 
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('session not found', 404);
+  if (listsOwnModels(record.engine)) return acpModelOptions(sessionId, record);
 
   let entries: SessionModelCatalogEntry[] | null = null;
   let liveModel: string | null = null;
@@ -499,6 +502,33 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
     liveModel || record.cliModel || record.model || null,
     liveEffort ?? record.effectiveEffort ?? record.effort ?? null,
   );
+  return hostNote ? { ...options, hostNote } : options;
+}
+
+/**
+ * The menu of a session whose engine lists its own models (acp-model-rows.ts): its live ACP
+ * catalog, read through its host like every control read here, else the record's own model;
+ * never Claude Code's host catalog.
+ */
+async function acpModelOptions(sessionId: string, record: SessionRecord): Promise<ModelOptionsResult> {
+  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const bound = await import('../hosts/remote-read-bound.js');
+  let hostNote: string | undefined;
+  let catalog: AcpModelCatalog | null = null;
+  const remote = bound.isRemoteHost(record.host);
+  if (remote && !(await import('../../providers/daemon-connection.js')).isDaemonConnected(record.host!)) {
+    if (recordSaysLive(record)) hostNote = (await hostUnreachableError(record.host!)).message;
+  } else {
+    const read = async () => (await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined))?.modelCatalog ?? null;
+    catalog = await cappedControlRead(record.host, read, recordSaysLive(record) ? CONTROL_READ_CAP_MS : STOPPED_CHECK_CAP_MS)
+      .catch((err: unknown) => {
+        if (!(err instanceof bound.HostReconnectingError)) throw err;
+        hostNote = err.message;
+        return null;
+      });
+  }
+  const { rows, current } = acpMenu(catalog, record);
+  const options = modelOptionsFromCatalog(rows, current, null);
   return hostNote ? { ...options, hostNote } : options;
 }
 

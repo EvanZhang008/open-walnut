@@ -85,8 +85,8 @@ const ATTACHES: Record<string, [number, string]> = {
   'src/providers/claude-code-session.ts#requestTurnCompleteSelfReport': [1, 'a self-report asks the session that just ended a turn: it stays where it ran'],
   'src/providers/claude-code-session.ts#performNativeReinitialize': [1, 'a Restart stays legacy, as a native one does'],
   // Through findOrAttachAcpSession (so through the decision).
-  'src/web/routes/sessions.ts': [1, 'the model catalog (a read): asks, the host\'s proxy answers once handed'],
-  'src/core/sessions/session-controls.ts': [1, 'a model switch: asks; once handed, the proxy forwards it to the host'],
+  'src/web/routes/sessions.ts': [2, 'the model catalog and the models menu of an engine that lists its own (reads): ask, the host\'s proxy answers once handed'],
+  'src/core/sessions/session-controls.ts': [2, 'a model switch and the phone\'s model menu: ask; once handed, the proxy forwards it to the host'],
   'src/core/sessions/session-lifecycle.ts': [3, 'a mode change, a permission answer, restoring pending permissions: each asks'],
   'src/core/sessions/session-extras.ts': [2, 'the panel\'s controls, read and set: each asks'],
   'src/core/subagents/on-host.ts': [1, 'a subagent\'s session attached on use: asks'],

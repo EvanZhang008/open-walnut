@@ -22,6 +22,7 @@ import {
   type SessionEffort, type SessionModelCatalogEntry,
 } from '../types.js'
 import { effortSupportedBy, modelOptionsFromCatalog, type ModelOptionsResult } from './session-controls.js'
+import { listsOwnModels, recordModelRows } from './acp-model-rows.js'
 import { callLeadHost } from '../leader/host-session-control.js'
 
 export interface CopyAnswer { status: number; body: Record<string, unknown> }
@@ -58,6 +59,8 @@ export function createModelCopy(deps: ModelCopyDeps) {
   }
 
   function catalogOf(projection: SessionProjection, row: ProjectedSession): SessionModelCatalogEntry[] {
+    // An engine that lists its own models: the copy holds no catalog of it, so its own model only (acp-model-rows.ts).
+    if (listsOwnModels(row.engine)) return recordModelRows({ model: row.cli_model ?? row.model ?? undefined })
     const models = projection.host_model_catalogs?.[aliasOf(row.host)]?.models
     return models && models.length > 0 ? models : sessionModelsAsCatalog()
   }
