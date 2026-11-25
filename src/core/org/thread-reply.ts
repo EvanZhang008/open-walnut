@@ -193,7 +193,8 @@ async function markWithdrawn(owner: string, qm: string): Promise<void> {
  * queue row stayed "on its way" after the task had read it there, and every thread_update of the
  * task was refused with reply_pending while its stop hook asked for that very update). Each is
  * marked delivered (`read: 'threads'`); a queue row that carries only such replies and still waits
- * is withdrawn, so his words reach the task once. The leaders are told as for any delivery.
+ * is withdrawn, here or in the queue of the host that runs the session (asked again at the sweep
+ * while that host cannot be asked: `hostRow`), so his words reach the task once. The leaders are told as for any delivery.
  */
 export async function repliesReadByOwner(owner: string, threadIds: readonly string[]): Promise<number> {
   const store = await import('./threads-store.js');
@@ -207,10 +208,15 @@ export async function repliesReadByOwner(owner: string, threadIds: readonly stri
     // A row that also carries a reply on a thread the task did not read keeps going.
     const still = new Set((await store.readThreads(owner)).threads.flatMap((t) => t.messages.filter(deliveryOpen).map((m) => m.delivery?.queued)));
     const sid = (await sessionOf(owner).catch(() => null))?.claudeSessionId;
+    const unasked = new Set<string>();
     for (const qm of rows) {
       queuedRows.delete(qm);
       const row = still.has(qm) ? null : await findQueuedMessage(qm);
       if (row && row.status !== 'processing') await deleteMessage(row.sessionId, qm).catch(() => false);
+      // Not here: the host that runs the session holds it (a row handed with its hold). Taken back
+      // there too, or it goes at that turn's end and his words reach the task twice (2026-11-25: one
+      // waited 8 hours in clouddev's queue after the task had read it in its Threads).
+      else if (!row && !still.has(qm) && sid && !(await withdrawOnHost(sid, qm))) unasked.add(qm);
       // Read by pull: its row reads `read` in the delivery ledger, not `queued` for ever (2026-11-24
       // audit). A row that also carries a reply not read here, or one already in the CLI, reads as the CLI reads it.
       if (!still.has(qm) && row?.status !== 'processing') {
@@ -219,11 +225,47 @@ export async function repliesReadByOwner(owner: string, threadIds: readonly stri
         })).catch(() => {});
       }
     }
+    if (unasked.size) {
+      await store.updateReplyDeliveries(owner, (_t, m) => (m.delivery?.read === 'threads' && unasked.has(m.delivery.queued ?? '') ? { ...m.delivery, hostRow: true } : undefined));
+    }
   }
   if (!(await store.hasOpenDeliveries(owner))) pendingOwners.delete(owner);
   log.task.info('org thread replies read by their owner in its Threads', { owner, messages: read.map((r) => r.message.id), rows: [...rows] });
   if (read.length) await tellAbove(owner);
   return read.length;
+}
+
+/**
+ * Take back row `qm` from the queue of the host that runs session `sid` (sessions/host-queue-rows.ts
+ * discardOnHost). True when that is settled: taken back, not there (already gone, or in its CLI's
+ * hands), or no host holds the session's queue; false when the host could not be asked (try again).
+ */
+async function withdrawOnHost(sid: string, qm: string): Promise<boolean> {
+  try {
+    const { discardOnHost } = await import('../sessions/host-queue-rows.js');
+    const out = await discardOnHost(sid, qm);
+    if (out === true) log.task.info('org thread reply: its row was taken back from the host that runs the session, read in Threads', { sessionId: sid, messageId: qm });
+    return true;
+  } catch (err) {
+    log.task.warn('org thread reply: the host could not take back a row read in Threads; asked again at the sweep', { sessionId: sid, messageId: qm, error: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
+}
+
+/** Replies read in Threads whose row the host could not be asked to take back: asked again. */
+async function withdrawHostRows(node: string): Promise<void> {
+  const store = await import('./threads-store.js');
+  const left = (await store.readThreads(node)).threads.flatMap((t) => t.messages.filter((m) => m.delivery?.hostRow && m.delivery.queued));
+  if (!left.length) return;
+  const sid = (await sessionOf(node).catch(() => null))?.claudeSessionId;
+  const done = new Set<string>();
+  for (const qm of new Set(left.map((m) => m.delivery!.queued!))) if (!sid || await withdrawOnHost(sid, qm)) done.add(qm);
+  if (!done.size) return;
+  await store.updateReplyDeliveries(node, (_t, m) => {
+    if (!m.delivery?.hostRow || !done.has(m.delivery.queued ?? '')) return undefined;
+    const { hostRow: _h, ...rest } = m.delivery;
+    return rest;
+  });
 }
 
 /**
@@ -329,6 +371,7 @@ export async function sweepThreadReplies(): Promise<void> {
       scheduleWake(node);
     }
     if (msgs.some((m) => m.delivery!.state === 'delivered' && !m.delivery!.told)) await tellAbove(node);
+    if (msgs.some((m) => m.delivery!.hostRow)) await withdrawHostRows(node);
   }
 }
 

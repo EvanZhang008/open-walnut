@@ -25,6 +25,18 @@ import type { Server } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-thread-reply-leaves-needs'))
+// The host that runs a session, asked to take back a row it holds: scripted per case (passes through by default).
+const hostDiscard = vi.hoisted(() => ({ fn: null as null | ((sid: string, mid: string) => Promise<boolean | null>), calls: [] as Array<[string, string]> }))
+vi.mock('../../src/core/sessions/host-queue-rows.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/sessions/host-queue-rows.js')>()
+  return {
+    ...actual,
+    discardOnHost: async (sid: string, mid: string) => {
+      hostDiscard.calls.push([sid, mid])
+      return hostDiscard.fn ? hostDiscard.fn(sid, mid) : actual.discardOnHost(sid, mid)
+    },
+  }
+})
 
 import { IMAGES_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -314,6 +326,35 @@ describe('a reply on its way is sent once, across a restart too', () => {
     expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`)).status).toBe(200)
     expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`, undefined, plan.sid)).status).toBe(200)
     expect((await deliveryOf(other.message))?.state).toBe('claimed')
+  })
+
+  // 2026-11-25: his reply read in Threads waited 8 hours in the queue of the host that runs the
+  // session (a row handed with its after-turn hold), to go again at that turn's end.
+  it('read in Threads while its row waits on the host that runs the session: taken back there, asked again until the host answers', async () => {
+    const qm = `qm-reply-${randomUUID()}`
+    const t = await ask(trays.taskId, 'Rake the beds before or after the rain?')
+    const r = await api<{ message: { id: string } }>('POST', `/tasks/${plan.taskId}/threads`, { text: 'After the rain', thread: t.id })
+    expect(r.status).toBe(200)
+    // Claimed into a row the leader handed to the host: no row here.
+    await updateReplyDeliveries(trays.taskId, (_t, m) => (m.id === r.json.message.id ? { ...m.delivery!, state: 'claimed', at: new Date().toISOString(), queued: qm } : undefined))
+    expect(await findQueuedMessage(qm)).toBeNull()
+    hostDiscard.calls.length = 0
+    const { HostUnreachableError } = await import('../../src/core/sessions/host-queue-rows.js')
+    hostDiscard.fn = async () => { throw new HostUnreachableError('devbox', 'link down') }
+    try {
+      expect((await api('GET', `/tasks/${trays.taskId}/threads?open=1`, undefined, trays.sid)).status).toBe(200)
+      expect(await deliveryOf(r.json.message.id)).toMatchObject({ state: 'delivered', read: 'threads', hostRow: true })
+      expect(hostDiscard.calls).toEqual([[trays.sid, qm]])
+      // The host answers at the sweep: taken back, and not asked again.
+      hostDiscard.fn = async () => true
+      await sweepThreadReplies()
+      expect(hostDiscard.calls).toEqual([[trays.sid, qm], [trays.sid, qm]])
+      expect((await deliveryOf(r.json.message.id))?.hostRow).toBeUndefined()
+      await sweepThreadReplies()
+      expect(hostDiscard.calls).toHaveLength(2)
+    } finally {
+      hostDiscard.fn = null
+    }
   })
 
   it('a claimed reply whose row is still in the owner\'s queue stays claimed: it goes when that row goes, once', async () => {

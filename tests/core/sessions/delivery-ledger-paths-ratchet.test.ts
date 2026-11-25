@@ -82,5 +82,9 @@ describe('every way into a session records its row in the delivery ledger', () =
     const reply = read('src/core/org/thread-reply.ts')
     const body = reply.slice(reply.indexOf('export async function repliesReadByOwner('))
     expect(body).toMatch(/recordDelivery\(\{\s*step: 'read', ids: \[qm\], via: 'threads', taskId: owner/)
+    // ...and leaves every queue: one the host that runs the session holds too, asked again at the
+    // sweep while that host cannot be asked (2026-11-25: a read reply waited 8 hours on clouddev).
+    expect(body).toMatch(/else if \(!row && !still\.has\(qm\) && sid && !\(await withdrawOnHost\(sid, qm\)\)\) unasked\.add\(qm\)/)
+    expect(reply.slice(reply.indexOf('export async function sweepThreadReplies('))).toContain('await withdrawHostRows(node)')
   })
 })

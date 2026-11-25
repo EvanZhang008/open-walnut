@@ -157,6 +157,11 @@ export interface ThreadDelivery {
   withdrawn?: true;
   /** Delivered because the task read it in its own Threads before its queue row went (thread-reply.ts repliesReadByOwner). */
   read?: 'threads';
+  /**
+   * Read there while its row waited in the queue of the host that runs the session, and that host
+   * could not be asked to take it back: the sweep asks again until it answers (thread-reply.ts).
+   */
+  hostRow?: true;
 }
 
 /** His reply has not reached the owner's session yet. */
