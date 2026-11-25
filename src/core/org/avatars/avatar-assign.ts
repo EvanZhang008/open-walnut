@@ -17,7 +17,6 @@
  * Once every character and colour pair is taken (224 of them) a pair is used twice.
  */
 import { AVATAR_CHARACTERS, AVATAR_COLORS, parsePreset, presetId, presetSvg, svgDataUri } from './avatar-art.js';
-import { buildOrgTree, type OrgTaskLike } from '../org-tree.js';
 
 /** What a task stores: a preset, or a picture of its own (SVG text or a PNG/JPEG/WebP data URL). */
 export interface OrgAvatarValue {
@@ -176,34 +175,14 @@ const lasting = (t: AvatarTask) => t.org_role === 'main' || t.org_role === 'lead
 
 /**
  * The org's own nodes, the only ones that wear an avatar (2026-11-23, the user: "只有 leader、
- * director、VP 和 CEO 需要 icon，其他的 task 是不需要 icon 的"): the CEO, the VPs (and the task a
- * project with no VP yet talks to in its place), the routers, the leaders (an open task with an
- * open task under it) and a task made a Director by hand. They never
+ * director、VP 和 CEO 需要 icon，其他的 task 是不需要 icon 的"): the CEO, the VPs, the routers, the
+ * leaders (an open task with an open task under it) and a task made a Director by hand. They never
  * share one. Any other task wears none.
  */
 export function orgAvatarNodes(tasks: readonly AvatarTask[]): AvatarNode[] {
   const parents = new Set(tasks.filter((t) => open(t) && t.parent_task_id).map((t) => t.parent_task_id!));
-  const standIns = vpStandIns(tasks);
-  return tasks.filter((t) => open(t) && (lasting(t) || standIns.has(t.id) || parents.has(t.id) || t.director === 'yes'))
-    .map((t) => {
-      const project = standIns.get(t.id);
-      const stays = lasting(t) || project !== undefined;
-      return { id: t.id, name: project ?? avatarName(t), main: t.org_role === 'main', created: t.created_at, avatar: t.org_avatar ?? null, leader: !stays };
-    });
-}
-
-/**
- * A project with no VP yet still has its row among the VPs, and that row talks to the project's
- * only task (the Org tree's contact) until a VP is made: that task stands in for the VP, so it wears
- * the VP's avatar, picked by the project's name (2026-11-25: a new project's row showed none).
- * Task id -> project. Read from the Org tree itself, so it is always the task the row talks to.
- */
-function vpStandIns(tasks: readonly AvatarTask[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const p of buildOrgTree(tasks as unknown as readonly OrgTaskLike[]).projects) {
-    if (!p.lead && p.contactId) out.set(p.contactId, p.project);
-  }
-  return out;
+  return tasks.filter((t) => open(t) && (lasting(t) || parents.has(t.id) || t.director === 'yes'))
+    .map((t) => ({ id: t.id, name: avatarName(t), main: t.org_role === 'main', created: t.created_at, avatar: t.org_avatar ?? null, leader: !lasting(t) }));
 }
 
 /**
