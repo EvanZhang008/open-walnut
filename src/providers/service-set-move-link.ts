@@ -385,8 +385,12 @@ export class ServiceSetLink {
         this.lookRetryMs = Math.min(Math.max(LOOK_RETRY_FIRST_MS, this.lookRetryMs * 2), PROVISION_EVERY_MS)
         const inMs = Math.max(this.lookRetryMs, p.retryInMs ?? 0)
         this.provisionedAt = 0
-        log.session.warn('service set: this Walnut\'s own service there has no copy of this build yet; it looks again', { host: this.c.hostKey, why: (p.message ?? '').slice(0, 300), inMs })
-        this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not take this Walnut's build yet (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there, and Walnut tries again.`)
+        // A stage the link cut changed nothing on the host: no failure, no notice (daemon-update-link-cut-ratchet).
+        if (p.cut) log.session.info('service set: the link cut the upload of this build to this Walnut\'s own service; it looks again', { host: this.c.hostKey, inMs })
+        else {
+          log.session.warn('service set: this Walnut\'s own service there has no copy of this build yet; it looks again', { host: this.c.hostKey, why: (p.message ?? '').slice(0, 300), inMs })
+          this.c.notice(this.noticeKey, `This Walnut's own service on ${this.c.hostKey} could not take this Walnut's build yet (${(p.message ?? '').slice(0, 300)}); its sessions stay on the service another Walnut runs there, and Walnut tries again.`)
+        }
         this.schedule(inMs)
         return
       }

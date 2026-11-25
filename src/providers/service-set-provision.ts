@@ -34,6 +34,8 @@ export interface SetProvision {
   retryLook?: boolean
   /** With retryLook: not before this long (the build itself failed on the host: a day, as the regular update holds it). */
   retryInMs?: number
+  /** With retryLook: the link cut the upload, so nothing changed there and it is no failure to report ('DaemonUpdateStageError'). */
+  cut?: true
   /** The set took this build now: the move it waited for may run at once. */
   refreshed?: true
 }
@@ -111,8 +113,10 @@ export async function provisionServiceSet(source: ServiceDaemonSource, expectedV
     await updateRemoteDaemonService(source, expectedVersion, io, scope, { walnut: ask, set: p.set, onServiceSet: (s) => { named = s } })
   } catch (err) {
     const buildFailed = (err as { buildFailed?: unknown } | null)?.buildFailed === true
+    // The new build never got onto the host (an upload the link cut): nothing changed there, looked at again quietly.
+    const cut = (err as { name?: unknown } | null)?.name === 'DaemonUpdateStageError'
     return {
-      ...at, ok: false, retryLook: true, ...(buildFailed ? { retryInMs: BUILD_FAILED_RETRY_MS } : {}),
+      ...at, ok: false, retryLook: true, ...(buildFailed ? { retryInMs: BUILD_FAILED_RETRY_MS } : {}), ...(cut ? { cut: true as const } : {}),
       message: `this Walnut's own service there could not take this build: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`,
     }
   }

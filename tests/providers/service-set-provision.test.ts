@@ -389,6 +389,13 @@ describe('ServiceSetLink', () => {
     expect((await serviceSetMoves.read('net:h'))?.phase).toBe('gave_up')
   })
 
+  it('a refresh the link cut posts no notice and looks again', async () => {
+    await hostServiceSets.write('ssh:h', { at: 1, set: SET, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
+    const t = conn('ssh', { set: SET, installed: true, ok: false, retryLook: true, cut: true, message: 'upload cut' })
+    await t.link.check()
+    expect(t.calls).toEqual(['provision'])
+  })
+
   it('a refresh that did not happen is no move: the look runs again', async () => {
     await hostServiceSets.write('ssh:h', { at: 1, set: SET, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
     const t = conn('ssh', { set: SET, installed: true, ok: false, retryLook: true, message: 'the update failed' })
