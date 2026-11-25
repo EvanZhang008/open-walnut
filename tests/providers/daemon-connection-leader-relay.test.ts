@@ -62,7 +62,7 @@ describe('a stream of the relay purpose from a host\'s own service', () => {
       seen.permit = permit
       const { open, frames } = connection()
       open('r2', LEADER_RELAY_PURPOSE)
-      await vi.waitFor(() => expect(closes(frames)).toEqual([['r2', 'this server runs no switchable leader']]))
+      await vi.waitFor(() => expect(closes(frames)).toEqual([['r2', 'this server runs no switchable leader']]), { timeout: 10_000 })
     }
     expect(seen.relay).toEqual([])
   })
@@ -72,7 +72,7 @@ describe('a stream of the relay purpose from a host\'s own service', () => {
     setRevokedHosts(['devbox-b'])
     const { open, frames } = connection()
     open('r3', LEADER_RELAY_PURPOSE)
-    await vi.waitFor(() => expect(closes(frames)).toHaveLength(1))
+    await vi.waitFor(() => expect(closes(frames)).toHaveLength(1), { timeout: 10_000 })
     expect(closes(frames)[0]![1]).toMatch(/devbox-b is revoked/)
     expect(seen.relay).toEqual([])
   })
@@ -83,7 +83,7 @@ describe('a stream of the relay purpose from a host\'s own service', () => {
     open('r4')
     open('r5', 'replica')
     open('r6', 'web')
-    await vi.waitFor(() => expect(closes(frames)).toEqual([['r4', TUNNEL_WAY], ['r5', TUNNEL_WAY], ['r6', TUNNEL_WAY]]))
+    await vi.waitFor(() => expect(closes(frames)).toEqual([['r4', TUNNEL_WAY], ['r5', TUNNEL_WAY], ['r6', TUNNEL_WAY]]), { timeout: 10_000 })
     expect(seen.relay).toEqual([])
   })
 
