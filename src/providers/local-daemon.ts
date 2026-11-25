@@ -359,7 +359,10 @@ export class LocalDaemon {
     this.inProcess = opts.inProcess
   }
 
+  /** The daemon program's port; null in process (no WebSocket door) and before a start: never read it as "a daemon serves" (serving). */
   get port(): number | null { return this._port }
+  /** A daemon serves this dir now: a program on its port, or the runtime in this server's process. */
+  get serving(): boolean { return this._port !== null || this.runsInProcess }
   get wsUrl(): string | null { return this._wsUrl }
   /** The start in flight (boot), or null: a caller that needs the daemon can wait for it. */
   get starting(): Promise<number> | null { return this._ensureInFlight }

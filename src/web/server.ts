@@ -5109,7 +5109,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // has no later start to wait for.
           if (seeded.includes(LOCAL_DAEMON_RECOVERY_KEY)) {
             const { localDaemon } = await import('../providers/local-daemon.js')
-            if (localDaemon.port !== null) observeLocalDaemonReady()
+            if (localDaemon.serving) observeLocalDaemonReady()
           }
           log.web.info('startup: re-armed recovery for unresolved error cards', { count: seeded.length })
         }
