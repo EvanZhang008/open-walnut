@@ -21263,6 +21263,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   max-height: 132px;
   overflow-y: auto;
 }
+/* The shelf is a ChipGroup (its phone row gap keeps finger targets apart); its chips keep 6px between them. */
+.side-thread-archived.wn-chips { column-gap: 6px; }
 /* Archived rows always show their controls: the shelf exists to act on them. And
    they get real hit targets — Restore and the irreversible purge are neighbours, so
    an 18px button on a 2px gap is not a safe place for the only unrecoverable action

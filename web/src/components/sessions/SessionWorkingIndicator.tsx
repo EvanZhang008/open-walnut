@@ -7,7 +7,7 @@ import { backgroundAgentsOnly, backgroundRunningLabel } from './background-ledge
 import { useMemo } from 'react';
 import { useTaskListSelect } from '@/contexts/TasksContext';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { Chip, DisclosureButton } from '@/components/controls';
+import { Chip, ChipGroup, DisclosureButton } from '@/components/controls';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { workersStartFolded, workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
@@ -113,8 +113,10 @@ function WorkersWorkingRow({ sessionId, workers }: { sessionId: string; workers:
   const open = !folds || (picked ?? false);
   const label = workersWorkingLabel(workers.length);
   // The working line's own row and label; each worker is a one-shot chip (pressed undefined) that opens it.
+  // A ChipGroup, so on a phone its wrapped rows sit apart and no chip's 44 px finger target covers
+  // the toggle or the chip above (2026-11-25: at 390px the first chip took the tap meant to fold).
   return (
-    <div className="session-working-row" data-testid="session-workers-working" data-open={open ? 'true' : 'false'}>
+    <ChipGroup className="session-working-row" data-testid="session-workers-working" data-open={open ? 'true' : 'false'}>
       {folds
         ? <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the workers' : 'Show each worker'} onClick={() => setPicked(!open)}>
             <span className="session-working-label">{label}</span>
@@ -125,6 +127,6 @@ function WorkersWorkingRow({ sessionId, workers }: { sessionId: string; workers:
           {w.title}
         </Chip>
       ))}
-    </div>
+    </ChipGroup>
   );
 }

@@ -95,7 +95,7 @@ import {
 } from '@/stores/side-threads';
 import { SIDE_CHAT_LABEL, SIDE_CHAT_TITLE } from '@/components/chat/composer-words';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
-import { Chip, DisclosureButton } from '@/components/controls';
+import { Chip, ChipGroup, DisclosureButton } from '@/components/controls';
 import '@/styles/header-fit.css';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 
@@ -790,7 +790,7 @@ function SideQuestionDrawerBody({
           )}
 
           {archivedOpen && archivedThreads.length > 0 && (
-            <div className="side-thread-archived" id={`${instanceId}-archived-shelf`}>
+            <ChipGroup className="side-thread-archived" id={`${instanceId}-archived-shelf`}>
               {archivedThreads.map((t) => (
                 <span
                   key={t.id}
@@ -823,7 +823,7 @@ function SideQuestionDrawerBody({
                   </button>
                 </span>
               ))}
-            </div>
+            </ChipGroup>
           )}
 
           {/* Active thread conversation — the ONLY mounted SessionChatHistory. */}

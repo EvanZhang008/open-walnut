@@ -5,6 +5,10 @@
  * and the list open, the lead's own turn widened the line to 527px and two long titles ran past the
  * column's edge with no ellipsis; by itself the same line kept its 467px. The nested row is a flex
  * item, and a flex item's min-width is its content's unless it says otherwise.
+ *
+ * On a phone (390px) each chip's finger target is 44px tall over its drawn 24px (choice-controls.css),
+ * and the workers' chips sat in rows with no gap: the first chip's target covered the "13 workers
+ * are working…" toggle, so a tap meant to fold the list opened that worker instead (2026-11-25).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -50,17 +54,21 @@ test.afterAll(async () => {
   for (const id of [...litter].reverse()) await fetch(`${api.base}/api/tasks/${id}?force=true`, { method: 'DELETE' }).catch(() => undefined)
 })
 
-async function openLead(page: Page): Promise<Locator> {
+async function openLead(page: Page, phone = false): Promise<Locator> {
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: PROJECT })
   await page.setContent(`<a href="${api.base}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
-  // Found by search, as the user finds one task among many in a narrow window.
-  await page.locator('.todo-search-input').click()
-  await page.keyboard.type(LEAD_TITLE)
-  const row = page.locator(`.todo-panel-item[data-task-id="${lead}"]`)
+  // Found by search, as the user finds one task among many in a narrow window; a phone lists this
+  // project's tasks on its first screen (its search opens a page of its own).
+  if (!phone) {
+    await page.locator('.todo-search-input').click()
+    await page.keyboard.type(LEAD_TITLE)
+  }
+  // A phone draws the list's rows in its own shape: the row is the one carrying the task's id.
+  const row = page.locator(phone ? `.todo-panel [data-task-id="${lead}"]` : `.todo-panel-item[data-task-id="${lead}"]`).first()
   await expect(row).toBeVisible({ timeout: 90_000 })
-  await row.locator('.todo-item-title').click()
+  await (phone ? row.getByText(LEAD_TITLE, { exact: true }) : row.locator('.todo-item-title')).click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${leadSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   return panel
@@ -108,4 +116,49 @@ test('open, the line keeps inside a narrow column by itself and inside the lead\
   await expect(panel.locator('.session-working-row .session-working-row[data-testid="session-workers-working"]')).toBeVisible({ timeout: 30_000 })
   await expectInside(panel, 'inside the live turn')
   await expect(panel.locator('.chat-input-textarea')).toBeInViewport()
+})
+
+/** Every chip takes a tap at its centre and at its top and bottom edge, and the toggle takes one at its own centre. */
+async function expectTapsLand(panel: Locator, shape: string): Promise<void> {
+  const misses = await panel.getByTestId('session-workers-working').evaluate((el) => {
+    const out: string[] = []
+    const at = (x: number, y: number) => document.elementFromPoint(x, y)
+    const toggle = el.querySelector<HTMLElement>('[data-testid="session-workers-toggle"]')!
+    toggle.scrollIntoView({ block: 'center' })
+    const t = toggle.getBoundingClientRect()
+    if (!toggle.contains(at(t.left + t.width / 2, t.top + t.height / 2))) out.push(`toggle centre is ${at(t.left + t.width / 2, t.top + t.height / 2)?.className}`)
+    for (const [i, c] of [...el.querySelectorAll<HTMLElement>('.wn-chip')].entries()) {
+      c.scrollIntoView({ block: 'center' }) // a point off screen hits nothing
+      const r = c.getBoundingClientRect()
+      for (const [where, y] of [['centre', r.top + r.height / 2], ['top', r.top + 1], ['bottom', r.bottom - 1]] as const) {
+        if (!c.contains(at(r.left + r.width / 2, y))) out.push(`chip ${i + 1} ${where}`)
+      }
+    }
+    return out
+  })
+  expect(misses, shape).toEqual([])
+}
+
+test('on a phone the open list folds with a tap on its line, by itself and inside the lead\'s live turn', async ({ page }) => {
+  test.setTimeout(180_000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const panel = await openLead(page, true)
+  const line = panel.getByTestId('session-workers-working')
+  await expect(line).toBeVisible({ timeout: 60_000 })
+  const toggle = panel.getByTestId('session-workers-toggle')
+  if ((await line.getAttribute('data-open')) !== 'true') await toggle.click()
+  await expect(line).toHaveAttribute('data-open', 'true')
+  await expectTapsLand(panel, 'by itself')
+  await toggle.click()
+  await expect(line).toHaveAttribute('data-open', 'false')
+
+  await toggle.click()
+  await panel.locator('.chat-input-textarea').click()
+  await page.keyboard.type('compaction-test:10:2000')
+  await page.keyboard.press('Enter')
+  await expect(panel.locator('.session-working-row .session-working-row[data-testid="session-workers-working"]')).toBeVisible({ timeout: 30_000 })
+  await expect(line).toHaveAttribute('data-open', 'true')
+  await expectTapsLand(panel, 'inside the live turn')
+  await toggle.click()
+  await expect(line).toHaveAttribute('data-open', 'false')
 })

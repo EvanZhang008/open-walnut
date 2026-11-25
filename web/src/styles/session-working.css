@@ -21,6 +21,8 @@
   flex-wrap: wrap;
   column-gap: 6px;
 }
+/* The workers line is a ChipGroup (its phone row gap keeps finger targets apart); its words keep the line's spacing. */
+.session-working-row.wn-chips { column-gap: 6px; }
 .session-background-note {
   display: inline-flex;
   align-items: center;

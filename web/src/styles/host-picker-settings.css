@@ -7,8 +7,7 @@
    A sideways-scrolling row put its scrollbar over the chips' lower edge, where
    WebKit gives the press to the scrollbar (see HostTabBar). */
 .session-path-selector .sps-host-filter {
-  flex-wrap: wrap;
-  row-gap: 4px;
+  flex-wrap: wrap; /* its rows sit 4px apart (globals.css), a finger apart on a phone (choice-controls.css) */
 }
 .sps-host-filter-label {
   flex: none;

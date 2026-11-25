@@ -1002,10 +1002,14 @@ fieldset:disabled .wn-seg-item {
 /* A chip on a phone is a finger target (C19: 44 px tall) while it keeps its drawn 24 px: a centred
    ::before 44 px tall is part of the chip for hit testing, so the chip does not grow (the session
    surfaces' small keys do the same, phone-session.css). Its width is the chip's own, so it never
-   takes a tap meant for the chip beside it; wrapped rows of a ChipGroup sit 44 px apart for the
-   same reason. Every Chip gets it here, at its one definition, not screen by screen. */
+   takes a tap meant for the chip beside it; wrapped rows of chips sit 44 px apart for the same
+   reason, in a ChipGroup or in any row a chip sits in directly (2026-11-25: the workers line under a
+   lead's chat stacked 13 chips with no gap, and the first one's target took the tap meant for the
+   toggle above it). Every Chip gets it here, at its one definition, not screen by screen
+   (tests/web/chip-list-in-group.test.ts finds the rows and a narrower rule that would undo it). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .wn-chips {
+  .app-shell-navigation .wn-chips,
+  .app-shell-navigation :has(> .wn-chip) {
     row-gap: 20px;
   }
   .app-shell-navigation .wn-chip {
