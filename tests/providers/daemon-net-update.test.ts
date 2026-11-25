@@ -16,6 +16,7 @@ import {
   LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus, setWordsDue,
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
+import { UpdateGapHold } from '../../src/providers/daemon-update-gap.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 import { ACP_UPGRADE_HOLD_MAX_MS, setAcpUpgradeHoldFileForTest } from '../../src/providers/acp-upgrade-hold.js'
@@ -204,6 +205,35 @@ function updater(over: Partial<NetUpdaterDeps> = {}, conn = link()) {
 
 describe('NetDaemonUpdater', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  // The update gap (daemon-update-gap.ts): 2 h at most, decided again every 15 min so the 3 h bound stays seen.
+  it('a young daemon waits out the gap with its end said, asked again within 15 min; a capability needed lets it go', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const gap = new UpdateGapHold()
+    const conn = link({ daemonStartedAt: Date.now() - 10 * 60_000 })
+    const { u, update } = updater({ minGapMs: 2 * 3600_000, gap }, conn)
+    u.schedule(0)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(u.state).toMatchObject({ phase: 'skipped', skip: 'recent' })
+    expect(u.state.until).toBeGreaterThan(Date.now() + 109 * 60_000)
+    expect(u.state.until).toBeLessThanOrEqual(Date.now() + 110 * 60_000)
+    expect(u.wait).toMatchObject({ kind: 'recent', until: u.state.until })
+    expect(gap.holds).toBe(true)
+    expect(update).not.toHaveBeenCalled()
+    // Asked again at 15 min, still held (the clock behind the 3 h bound was seen).
+    const at = u.state.at
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 10)
+    expect(u.state.at).toBeGreaterThan(at)
+    expect(u.state.skip).toBe('recent')
+    // This server asks for something the running daemon lacks: decided now, past the gap.
+    expect(gap.need('snapshot-v1')).toBe(true)
+    u.schedule(0)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(u.state.phase).toBe('updated')
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(gap.holds).toBe(false)
+    u.stop()
+  })
 
   it('its view, read on every status frame, never hashes the build (no sync work on a request path)', () => {
     // 2026-11-04 review: the getter asked expectedVersion() (a sync hash of the daemon file) on every getDaemonConnectState.

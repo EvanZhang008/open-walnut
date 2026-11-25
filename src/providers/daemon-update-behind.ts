@@ -25,7 +25,7 @@ export const DAEMON_UPDATE_BEHIND_MAX_MS = 3 * 60 * 60_000
 
 /**
  * A host behind is checked at least every 15 minutes while its server runs (the longest
- * recheck delay, the update gap is 20 min); one not checked for this long (the server was
+ * recheck delay, which a held update gap keeps too); one not checked for this long (the server was
  * down, the host offline) starts its clock over rather than being updated at once over work
  * that just began.
  */
@@ -89,7 +89,7 @@ const BR = 'src/providers/daemon-busy-retry.ts'
  */
 export const DAEMON_UPDATE_HOLDS: readonly DaemonUpdateHold[] = [
   { file: DC, method: 'shouldUpgradeDaemon', near: 'could not check the OS-service state', kind: 'retry', why: 'no answer from the service probe; nothing is stopped without one' },
-  { file: DC, method: 'shouldUpgradeDaemon', near: 'daemonUpdateGapWhy(', kind: 'bounded', bound: 'DAEMON_UPDATE_MIN_GAP_MS', boundFile: 'src/providers/daemon-update-gap.ts', why: 'one replacement per gap, at most one gap in all; skipped when overdue' },
+  { file: DC, method: 'shouldUpgradeDaemon', near: 'postponeUpgrade(gap.why', kind: 'bounded', bound: 'DAEMON_UPDATE_MIN_GAP_MS', boundFile: 'src/providers/daemon-update-gap.ts', why: 'one automatic replacement per gap (2 h), at most one gap in all; skipped when overdue, asked for, or for a capability this server needs' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the new daemon could not be put on the host', kind: 'retry', why: 'the upload failed; asked again with a backoff' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'right after an update; asked again when its cooldown ends', kind: 'bounded', bound: 'UPGRADE_RETRY_COOLDOWN_MS', boundFile: 'src/providers/daemon-connection.ts', why: 'the daemon still reports another build right after an update (its version stamp may be broken); asked again once the cooldown ends' },
   { file: DC, method: 'shouldUpgradeDaemon', near: 'the version check did not finish', kind: 'retry', why: 'the version read failed' },

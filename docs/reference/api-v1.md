@@ -2450,14 +2450,15 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   `keptDir` when the line would show a dialog from the kept directory, each before anything runs.
 - `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
 - `POST /api/v1/hosts/:host/daemon-update` (op `host_daemon_update`) → updates the Walnut
-  daemon on a machine that joined over the host network to this server's build, now:
-  `{ host, phase: "running" | "updated" | "skipped" | "failed" | "postponed" | "held",
-  running, expected, message, skip? }`, answered once it is decided or started (ask again for
-  how it went). Walnut does this by itself after a deploy, except on a host whose config says
-  `autofix: false`, which is updated only this way. A session needs the same grant as
-  `host_exec`; without a session id only the person at this computer may ask
-  (`403 human_only`). `409 updates_itself` for a host Walnut reaches over SSH, this Mac and
-  the cloud box, `503 host_offline`.
+  daemon on a host Walnut reaches over SSH or one that joined over the host network to this
+  server's build, now: `{ host, kind, phase: "running" | "updated" | "skipped" | "failed" |
+  "postponed" | "held" | "checking", running, expected, message, skip?, until? }`, answered once
+  it is decided or started (ask again for how it went); `until` (ms epoch) while a wait with a
+  known end holds it. Walnut does this by itself after a deploy, at most once every 2 hours per
+  host, and a host whose config says `autofix: false` only this way (the rule:
+  `docs/reference/session-daemon.md`). A session needs the same grant as `host_exec`; without a
+  session id only the person at this computer may ask (`403 human_only`). `409 updates_itself`
+  for this Mac and the cloud box (before 2026-11-25 also for an SSH host), `503 host_offline`.
 - `GET /api/v1/host-exec/grants` (`?all=1` adds revoked) → `{ grants: [{ id, taskId,
   taskTitle, host, grantedAt, via: "letter" | "settings", revokedAt?, runs, lastRunAt?,
   lastCommand? }] }`. `POST /api/v1/host-exec/grants { task_id, host }` and

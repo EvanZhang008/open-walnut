@@ -53,7 +53,7 @@ vi.mock('../../../src/core/hosts/link.js', () => ({
     return {
       linkKind: gate.kind,
       requestDaemonUpdate: (g?: () => void) => {
-        if (gate.kind !== 'net') return null
+        if (gate.kind !== 'net' && gate.kind !== 'ssh') return null
         gate.requests += 1
         gate.handed = g ?? null
         return Promise.resolve({ phase: 'running', host, running: 'walnut-daemon-a', expected: 'walnut-daemon-b', message: 'uploading', at: 1 })
@@ -116,9 +116,16 @@ describe('host_daemon_update', () => {
     await expect(requestHostDaemonUpdate('nowhere', undefined)).rejects.toMatchObject({ status: 404, code: 'unknown_host' })
   })
 
-  it('a host that updates another way says so', async () => {
+  it('an SSH host is asked the same way, and the answer names the builds and the kind', async () => {
     gate.kind = 'ssh'
-    await expect(requestHostDaemonUpdate('devbox', undefined)).rejects.toMatchObject({ status: 409, code: 'updates_itself', message: expect.stringContaining('over SSH') })
+    expect(await requestHostDaemonUpdate('devbox', 's1')).toMatchObject({ host: 'devbox', kind: 'ssh', phase: 'running', running: 'walnut-daemon-a', expected: 'walnut-daemon-b' })
+    expect(gate.requests).toBe(1)
+    expect(gate.handed).toBeTypeOf('function')
+  })
+
+  it('a host that updates another way says so', async () => {
+    gate.kind = 'local'
+    await expect(requestHostDaemonUpdate('devbox', undefined)).rejects.toMatchObject({ status: 409, code: 'updates_itself', message: expect.stringContaining('restart Walnut') })
     gate.kind = 'cloud-tunnel'
     await expect(requestHostDaemonUpdate('devbox', undefined)).rejects.toMatchObject({ code: 'updates_itself', message: expect.stringContaining('companion') })
   })

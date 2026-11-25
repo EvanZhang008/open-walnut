@@ -1,8 +1,10 @@
 /**
- * A host's daemon is replaced at most once per gap (src/providers/daemon-update-gap.ts).
+ * A host's daemon is replaced automatically at most once every 2 hours
+ * (src/providers/daemon-update-gap.ts).
  *
  * 2026-11-03: a run of deploys replaced clouddev's daemon once per build, seven
- * pushes in 20 minutes over a slow link, each swap dropping its sessions' link.
+ * pushes in 20 minutes over a slow link, each swap dropping its sessions' link;
+ * 2026-11-24: one host's daemon was replaced 19 times in 24 hours.
  * Pinned on both update paths a remote host has:
  *   - SSH hosts (DaemonConnection.shouldUpgradeDaemon): the age comes from the
  *     same probe as the version (ps etime of daemon.pid); a daemon younger than
@@ -14,7 +16,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DaemonConnection, remoteServiceProbePaths } from '../../src/providers/daemon-connection.js'
 import { decideNetUpdate, type NetUpdateFacts } from '../../src/providers/daemon-net-update.js'
-import { DAEMON_UPDATE_MIN_GAP_MS, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from '../../src/providers/daemon-update-gap.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+  capabilityByBuild, DAEMON_UPDATE_GAP_RECHECK_MS, DAEMON_UPDATE_MIN_GAP_MS, daemonUpdateGapHold, daemonUpdateMinGapMs, daemonUpdateWaitMs,
+  DOOR_CAPABILITIES, parseEtimeMs, spanWords, UpdateGapHold,
+} from '../../src/providers/daemon-update-gap.js'
+import { HOST_DEPENDENT_CAPABILITIES } from '../../src/providers/daemon-shared.js'
+import { DAEMON_UPDATE_BEHIND_MAX_MS, DAEMON_UPDATE_BEHIND_STALE_MS } from '../../src/providers/daemon-update-behind.js'
+import { UPGRADE_RECHECK_DELAYS_MS } from '../../src/providers/daemon-connection.js'
 import { claimDaemonUpdate, resetDaemonUpdateClaims } from '../../src/providers/daemon-update-claim.js'
 
 const GAP = DAEMON_UPDATE_MIN_GAP_MS
@@ -40,17 +50,63 @@ describe('the gap rule', () => {
   })
 
   it('holds one build at most one gap in all, so a daemon that keeps restarting still gets it', () => {
-    expect(daemonUpdateWaitMs(60_000, GAP, 15 * 60_000)).toBe(5 * 60_000)
+    expect(daemonUpdateWaitMs(60_000, GAP, 15 * 60_000)).toBe(GAP - 15 * 60_000)
     expect(daemonUpdateWaitMs(60_000, GAP, GAP)).toBe(0)
     expect(daemonUpdateWaitMs(60_000, GAP, GAP * 3)).toBe(0)
   })
 
-  it('is 20 minutes unless the env sets it; 0 turns it off', () => {
-    expect(GAP).toBe(20 * 60_000)
+  it('is 2 hours unless the env sets it; 0 turns it off', () => {
+    expect(GAP).toBe(2 * 60 * 60_000)
     expect(daemonUpdateMinGapMs({})).toBe(GAP)
     expect(daemonUpdateMinGapMs({ WALNUT_DAEMON_UPDATE_MIN_GAP_MS: '0' })).toBe(0)
     expect(daemonUpdateMinGapMs({ WALNUT_DAEMON_UPDATE_MIN_GAP_MS: '60000' })).toBe(60_000)
     expect(daemonUpdateMinGapMs({ WALNUT_DAEMON_UPDATE_MIN_GAP_MS: 'soon' })).toBe(GAP)
+  })
+
+  it('gives way past the 3 h bound and to a capability this server needs', () => {
+    const base = { host: 'devbox', ageMs: 60_000, gapMs: GAP, now: 0 }
+    expect(daemonUpdateGapHold(base)).toMatchObject({ waitMs: GAP - 60_000, until: GAP - 60_000 })
+    expect(daemonUpdateGapHold({ ...base, overdue: true })).toBeNull()
+    expect(daemonUpdateGapHold({ ...base, needs: 'snapshot-v1' })).toBeNull()
+    // The bound is longer than the gap, so the gap is never what keeps a host past it.
+    expect(DAEMON_UPDATE_BEHIND_MAX_MS).toBeGreaterThan(GAP)
+  })
+
+  it('says when the update goes and how to have it now', () => {
+    const now = new Date(2026, 10, 25, 13, 0).getTime()
+    const why = daemonUpdateGapHold({ host: 'devbox', ageMs: 20 * 60_000, gapMs: GAP, now })!.why
+    expect(why).toBe('its daemon started 20 min ago; Walnut replaces a host\'s daemon by itself at most once every 2 h, '
+      + 'so this update goes at 14:40 with the build of then (host_daemon_update devbox does it now)')
+    expect(spanWords(100 * 60_000)).toBe('1 h 40 min')
+  })
+
+  it('a held update is decided again before the 3 h bound\'s clock would go stale', () => {
+    expect(DAEMON_UPDATE_GAP_RECHECK_MS).toBe(Math.max(...UPGRADE_RECHECK_DELAYS_MS))
+    expect(DAEMON_UPDATE_GAP_RECHECK_MS).toBeLessThan(DAEMON_UPDATE_BEHIND_STALE_MS)
+  })
+
+  it('counts a missing capability once per held build, and only one a newer daemon brings', () => {
+    const g = new UpdateGapHold()
+    expect(g.need('snapshot-v1')).toBe(false) // nothing held
+    expect(g.decide(EXPECTED, { host: 'devbox', ageMs: 60_000, gapMs: GAP, now: 0 })).not.toBeNull()
+    expect(g.holds).toBe(true)
+    // Said by where a daemon runs, never by its build: no update brings these.
+    for (const cap of ['net-v1', 'service-update-v1', 'acp-host-v1', 'not-a-capability']) expect(g.need(cap), cap).toBe(false)
+    expect(g.need('snapshot-v1')).toBe(true)
+    expect(g.need('usage-scan-v1')).toBe(false) // once per build
+    expect(g.needs(EXPECTED)).toBe('snapshot-v1')
+    expect(g.decide(EXPECTED, { host: 'devbox', ageMs: 60_000, gapMs: GAP, now: 1 })).toBeNull()
+    expect(g.holds).toBe(false)
+  })
+
+  // The door's capabilities (daemon-standalone.ts) are claimed by where the daemon runs: the two lists stay one.
+  it('knows every capability the daemon says by where it runs', () => {
+    const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    const line = /const DOOR_CAPABILITIES = new Set\(\[([^\]]*)\]\)/.exec(src)?.[1] ?? ''
+    const door = [...line.matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(door.length).toBeGreaterThan(0)
+    expect([...DOOR_CAPABILITIES].sort()).toEqual(door.sort())
+    for (const cap of [...door, ...HOST_DEPENDENT_CAPABILITIES]) expect(capabilityByBuild(cap), cap).toBe(false)
   })
 })
 
@@ -105,9 +161,46 @@ describe('an SSH host\'s daemon', () => {
     expect(seen.filter((s) => s === 'DEPLOY')).toEqual([])
     expect(stops(seen)).toEqual([])
     expect(postpone).toHaveBeenCalledTimes(1)
-    const [why, , , opts] = postpone.mock.calls[0] as [string, string, string, { delayMs: number }]
-    expect(why).toMatch(/started 5 min ago/)
-    expect(opts.delayMs).toBe(GAP - 5 * 60_000 + 5_000)
+    const [why, , , opts] = postpone.mock.calls[0] as [string, string, string, { delayMs: number; until: number }]
+    expect(why).toMatch(/started 5 min ago.*host_daemon_update devbox does it now/)
+    // Asked again within the recheck cadence, not only at the gap's end: the 3 h bound's clock stays seen.
+    expect(opts.delayMs).toBe(DAEMON_UPDATE_GAP_RECHECK_MS)
+    expect(opts.until).toBeGreaterThanOrEqual(Date.now() + GAP - 5 * 60_000 - 1_000)
+    expect(c.daemonUpdateWait).toBeNull() // the link is down: no wait is shown
+  })
+
+  it('past the 3 h bound is updated at once, young or not', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '00:30')
+    vi.spyOn(priv(c), 'noteOverdue').mockImplementation(function (this: { _overdueMs: number }) { this._overdueMs = DAEMON_UPDATE_BEHIND_MAX_MS + 1 })
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
+    expect(stops(seen)).toHaveLength(1)
+  })
+
+  it('held, a capability this server asks for and the daemon lacks decides it again now, once', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    vi.useFakeTimers()
+    try {
+      const c = make()
+      const seen = host(c, OLD, '00:30')
+      ;(c as unknown as { _capabilities: string[] })._capabilities = ['attach-v1']
+      const recheck = vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockResolvedValue(false)
+      expect(c.hasCapability('snapshot-v1')).toBe(false) // nothing held yet: no decision
+      await vi.advanceTimersByTimeAsync(0)
+      expect(recheck).not.toHaveBeenCalled()
+      await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+      expect(c.hasCapability('net-v1')).toBe(false) // a door capability: no build brings it
+      expect(c.hasCapability('snapshot-v1')).toBe(false)
+      expect(c.hasCapability('snapshot-v1')).toBe(false)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(recheck).toHaveBeenCalledTimes(1)
+      // The decision it starts goes past the gap.
+      await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
+      expect(stops(seen)).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('held, is decided again when the gap ends, and a daemon that restarted meanwhile no longer holds it past one gap', async () => {
@@ -116,7 +209,7 @@ describe('an SSH host\'s daemon', () => {
     try {
       const c = make()
       const seen = host(c, OLD, '00:30')
-      const recheck = vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockResolvedValue(undefined)
+      const recheck = vi.spyOn(priv(c), 'recheckPostponedUpgrade').mockResolvedValue(false)
       await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
       await vi.advanceTimersByTimeAsync(GAP)
       expect(recheck).toHaveBeenCalledTimes(1)
@@ -129,7 +222,7 @@ describe('an SSH host\'s daemon', () => {
   })
 
   it.each([
-    ['ran past the gap', OLD, '25:00'],
+    ['ran past the gap', OLD, '02:05:00'],
     ['whose age ps could not tell', OLD, null],
   ])('that %s is updated now', async (_case, version, etime) => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
@@ -157,6 +250,63 @@ describe('an SSH host\'s daemon', () => {
   })
 })
 
+// A task that fixed host-side code puts it on the host now (host_daemon_update), on the SSH path too.
+describe('an SSH host\'s daemon asked for now', () => {
+  /** A live link: the asked decision runs as a postponed one does (runUpgradeRecheck). */
+  function live(c: DaemonConnection): { lost: ReturnType<typeof vi.fn> } {
+    Object.assign(c as unknown as Record<string, unknown>, { _connected: true, _daemonVersion: OLD })
+    vi.spyOn(priv(c), 'getRemoteDaemonPath').mockResolvedValue('/tmp/open-walnut/daemon-linux-x64')
+    const lost = vi.fn()
+    vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(lost)
+    return { lost }
+  }
+
+  it('goes past the gap, and answers in the host network update\'s shape', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '00:30')
+    const { lost } = live(c)
+    const answer = await c.requestDaemonUpdate()
+    expect(answer).toMatchObject({ phase: 'running', host: 'devbox', running: OLD, expected: EXPECTED })
+    expect(stops(seen)).toHaveLength(1)
+    expect(lost).toHaveBeenCalledTimes(1)
+  })
+
+  it('still waits for the host\'s work, and says why', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    const seen = host(c, OLD, '02:05:00')
+    live(c)
+    vi.spyOn(priv(c), 'acpTurnsOpen').mockImplementation(async (...a: unknown[]) => {
+      priv(c).postponeUpgrade('ACP turns are open', a[0], a[1], { steady: true })
+      return true
+    })
+    expect(await c.requestDaemonUpdate()).toMatchObject({ phase: 'postponed', message: 'waiting: ACP turns are open', running: OLD, expected: EXPECTED })
+    expect(stops(seen)).toEqual([])
+  })
+
+  it('a refused asker stops nothing', async () => {
+    const c = make()
+    host(c, OLD, '02:05:00')
+    live(c)
+    const seen = (c as unknown as { sshExec: { mock: { calls: unknown[] } } }).sshExec.mock.calls
+    await expect(c.requestDaemonUpdate(() => { throw new Error('the grant was revoked') })).rejects.toThrow(/revoked/)
+    expect(seen).toEqual([])
+  })
+
+  it('an automatic decision after it holds again for the gap', async () => {
+    vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
+    const c = make()
+    host(c, OLD, '00:30')
+    live(c)
+    vi.spyOn(priv(c), 'acpTurnsOpen').mockResolvedValue(true)
+    await c.requestDaemonUpdate()
+    const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
+    await expect(priv(c).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(false)
+    expect(String(postpone.mock.calls[0]?.[0])).toMatch(/at most once every 2 h/)
+  })
+})
+
 describe('a host network machine\'s daemon', () => {
   const facts = (over: Partial<NetUpdateFacts> = {}): NetUpdateFacts => ({
     kind: 'net', host: 'studio-mac', testServer: false, follower: false, expected: EXPECTED, running: OLD, startup: 'service',
@@ -166,11 +316,16 @@ describe('a host network machine\'s daemon', () => {
   })
 
   it('that started within the gap waits for it to end', () => {
-    expect(decideNetUpdate(facts({ daemonAgeMs: 5 * 60_000 }))).toMatchObject({ go: false, skip: 'recent', retryInMs: GAP - 5 * 60_000 })
+    expect(decideNetUpdate(facts({ daemonAgeMs: 5 * 60_000 }))).toMatchObject({
+      go: false, skip: 'recent', retryInMs: GAP - 5 * 60_000, until: 1_000_000_000 + GAP - 5 * 60_000, why: expect.stringContaining('host_daemon_update studio-mac'),
+    })
   })
 
-  it('is updated past the gap, on request, with an unknown start, or once held a whole gap', () => {
-    for (const over of [{ daemonAgeMs: GAP + 1 }, { daemonAgeMs: 5 * 60_000, requested: true }, { daemonAgeMs: null }, { daemonAgeMs: 60_000, gapHeldForMs: GAP }]) {
+  it('is updated past the gap, on request, with an unknown start, once held a whole gap, past the 3 h bound, or for a capability needed', () => {
+    for (const over of [
+      { daemonAgeMs: GAP + 1 }, { daemonAgeMs: 5 * 60_000, requested: true }, { daemonAgeMs: null }, { daemonAgeMs: 60_000, gapHeldForMs: GAP },
+      { daemonAgeMs: 60_000, overdue: true }, { daemonAgeMs: 60_000, capNeeded: 'snapshot-v1' },
+    ]) {
       expect(decideNetUpdate(facts(over)), JSON.stringify(over)).toMatchObject({ go: true })
     }
   })
@@ -186,7 +341,7 @@ describe('an SSH host whose daemon another host name also reaches', () => {
   it('while the other name updates it, nothing goes up or stops here; once that ended badly, this one updates it', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     const c = make()
-    const seen = host(c, OLD, '25:00')
+    const seen = host(c, OLD, '02:05:00')
     vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
     const postpone = vi.spyOn(priv(c), 'postponeUpgrade')
     const peer = await claimDaemonUpdate('devbox-net', async () => ['devbox', 'devbox-net'])
@@ -205,7 +360,7 @@ describe('an SSH host whose daemon another host name also reaches', () => {
   it('an update that stopped before the stop frees the claim at once', async () => {
     vi.stubEnv('WALNUT_DAEMON_UPDATE_MIN_GAP_MS', String(GAP))
     const c = make()
-    host(c, OLD, '25:00')
+    host(c, OLD, '02:05:00')
     vi.spyOn(priv(c), 'sameDaemonHosts').mockResolvedValue(['devbox', 'devbox-net'])
     // The trial run of the staged build fails: the running daemon keeps serving.
     vi.spyOn(priv(c), 'trialStaged').mockResolvedValue('it did not answer')

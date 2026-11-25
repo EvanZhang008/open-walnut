@@ -9,6 +9,10 @@
  * kind here names its update path (the file and the symbol that do it) or an
  * exemption with its reason. tests/providers/daemon-update-paths-ratchet.test.ts
  * fails when a kind (or a new `SshTarget.via`) has neither.
+ *
+ * Each kind with a path also says how its automatic replacements are batched: it waits out
+ * the update gap (at most one automatic replacement every 2 hours, daemon-update-gap.ts) and
+ * has a request path that updates it now (host_daemon_update), or it names why not.
  */
 import type { SshTarget } from './session-io.js'
 
@@ -39,9 +43,16 @@ export function daemonLinkKind(c: DaemonLinkFacts, cloudBoxAlias: string): Daemo
   return c.dialledDirect ? 'direct-url' : 'ssh'
 }
 
+type CodeRef = { file: string; symbol: string }
+
+/** How a path's automatic replacements are batched: the gap and the request path, or why it has neither. */
+export type DaemonUpdateBatch =
+  | { gap: CodeRef[]; request: CodeRef[] }
+  | { unbatched: string }
+
 export type DaemonUpdatePath =
-  | { path: string; code: Array<{ file: string; symbol: string }> }
-  | { exempt: string; code?: Array<{ file: string; symbol: string }> }
+  | { path: string; code: CodeRef[]; batch: DaemonUpdateBatch }
+  | { exempt: string; code?: CodeRef[] }
 
 export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
   local: {
@@ -52,6 +63,10 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
       { file: 'src/providers/local-daemon-service.ts', symbol: 'updateLocalService' },
       { file: 'src/providers/local-daemon.ts', symbol: 'refuseReplacement' },
     ],
+    batch: {
+      unbatched: 'this machine\'s own daemon is replaced when Walnut itself starts on a new build, together with the server that runs it: '
+        + 'one restart of Walnut is one replacement, so there is nothing to batch, and restarting Walnut is the way to have it now',
+    },
   },
   ssh: {
     path: 'every connect reads daemon.version over SSH and service-updates a daemon of another build (detached on the host), '
@@ -61,6 +76,16 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
       { file: 'src/providers/daemon-connection.ts', symbol: 'updateManagedDaemon' },
       { file: 'src/providers/daemon-connection.ts', symbol: 'trialStaged' },
     ],
+    batch: {
+      gap: [
+        { file: 'src/providers/daemon-connection.ts', symbol: 'shouldUpgradeDaemon' },
+        { file: 'src/providers/daemon-connection.ts', symbol: 'UpdateGapHold' },
+      ],
+      request: [
+        { file: 'src/providers/daemon-connection.ts', symbol: 'requestDaemonUpdate' },
+        { file: 'src/providers/daemon-update-request.ts', symbol: 'RequestedUpdate' },
+      ],
+    },
   },
   net: {
     path: 'a connect to a daemon of another build uploads this build over the daemon link itself (fs.writePart, exec.run) and runs walnut daemon update there, detached; '
@@ -71,6 +96,16 @@ export const DAEMON_UPDATE_PATHS: Record<DaemonLinkKind, DaemonUpdatePath> = {
       { file: 'src/providers/daemon-net-update-io.ts', symbol: 'createNetUpdateIo' },
       { file: 'src/providers/daemon-connection.ts', symbol: 'NetDaemonUpdater' },
     ],
+    batch: {
+      gap: [
+        { file: 'src/providers/daemon-net-update-decide.ts', symbol: 'decideNetUpdate' },
+        { file: 'src/providers/daemon-net-update.ts', symbol: 'UpdateGapHold' },
+      ],
+      request: [
+        { file: 'src/providers/daemon-connection.ts', symbol: 'requestDaemonUpdate' },
+        { file: 'src/providers/daemon-net-update.ts', symbol: 'request' },
+      ],
+    },
   },
   'cloud-tunnel': {
     exempt: 'the cloud companion starts this daemon from its own build and replaces it on every new companion build '
@@ -107,6 +142,6 @@ export function daemonUpdateHowSentence(
       return `Walnut updates the daemon on ${name} by itself after a deploy (unless its automatic fixes are off), or ${ask} to do it now`
     }
     case 'direct-url': return 'This is a test daemon reached by its URL: the test that started it owns its build'
-    case 'ssh': return `Walnut updates the daemon on ${name} by itself the next time it connects there over SSH`
+    case 'ssh': return `Walnut updates the daemon on ${name} by itself over SSH, and a feature that needs the newer daemon starts that update`
   }
 }

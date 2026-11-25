@@ -11,7 +11,10 @@
  *    would silently take the ssh kind's update path, which needs SSH;
  *  - DaemonConnection decides its transport anywhere but through `linkKind`;
  *  - a kind with an update path is not handled by it (the net updater acts on 'net' only,
- *    and the ssh path is reached only for 'ssh').
+ *    and the ssh path is reached only for 'ssh');
+ *  - a kind with an update path neither waits out the update gap with a request path that
+ *    updates it now (host_daemon_update), nor names why not (2026-11-24: 19 replacements of
+ *    one host's daemon in 24 hours, and an SSH host could not be asked for its update at all).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -38,6 +41,39 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
         expect(read(file), `${kind}: ${symbol} in ${file}`).toMatch(new RegExp(`\\b${symbol}\\b`))
       }
     }
+  })
+
+  it('every kind with an update path waits out the gap and can be asked for it now, or says why not', () => {
+    const named: string[] = []
+    for (const kind of DAEMON_LINK_KINDS) {
+      const entry = DAEMON_UPDATE_PATHS[kind]
+      if (!('path' in entry)) continue
+      named.push(kind)
+      const batch = entry.batch
+      expect(batch, `${kind} says how its replacements are batched`).toBeTruthy()
+      if ('unbatched' in batch) {
+        expect(batch.unbatched.length, `${kind} says why it has no gap or request path`).toBeGreaterThan(60)
+        continue
+      }
+      for (const { file, symbol } of [...batch.gap, ...batch.request]) {
+        expect(read(file), `${kind}: ${symbol} in ${file}`).toMatch(new RegExp(`\\b${symbol}\\b`))
+      }
+      // The gap is the one rule (daemon-update-gap.ts), never a copy of it.
+      const gapFiles = [...new Set(batch.gap.map((c) => c.file))]
+      expect(gapFiles.some((f) => /\b(daemonUpdateGapHold|UpdateGapHold)\b/.test(read(f))), `${kind}: ${gapFiles.join(', ')} use the gap rule`).toBe(true)
+      expect(batch.request.length, `${kind} names its request path`).toBeGreaterThan(0)
+    }
+    expect(named.length).toBeGreaterThan(0)
+  })
+
+  it('host_daemon_update is refused only for a kind with no request path, in that kind\'s own words', () => {
+    const src = read('src/providers/daemon-connection.ts')
+    const body = /requestDaemonUpdate\(gate\?: \(\) => void\)[^{]*\{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
+    // The kinds it answers null for: every one but those whose batch has a request path.
+    const requestable = DAEMON_LINK_KINDS.filter((k) => { const e = DAEMON_UPDATE_PATHS[k]; return 'path' in e && 'request' in e.batch })
+    expect(requestable.sort()).toEqual(['net', 'ssh'])
+    expect(body).toContain('if (this.netUpdater) return this.netUpdater.request(')
+    expect(body).toContain("if (this.linkKind !== 'ssh' || this.isReadOnlyRemote) return null")
   })
 
   it('every SshTarget via is a kind of its own, never the ssh one', () => {
@@ -79,9 +115,9 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
   // away from SSH sits at its top, and the net updater carries the mode itself.
   it('the SSH update check is never entered for a link with no SSH, and the net updater carries the mode', () => {
     const src = read('src/providers/daemon-connection.ts')
-    const body = /private recheckPostponedUpgrade\(\): Promise<void> \{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
+    const body = /private recheckPostponedUpgrade\(.*\): Promise<boolean> \{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
     const firstStatement = body.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//'))
-    expect(firstStatement).toBe('if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve() }')
+    expect(firstStatement).toBe('if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve(false) }')
     // runUpgradeRecheck (the SSH check) has no other caller.
     expect(src.match(/this\.runUpgradeRecheck\(/g)).toHaveLength(1)
     expect(body).toContain('this.runUpgradeRecheck(')

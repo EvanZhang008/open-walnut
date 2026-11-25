@@ -140,7 +140,7 @@ if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
 }
 
 // A host's daemon is replaced at most once per gap (src/providers/daemon-update-gap.ts): a
-// test's daemon has always just started, so every upgrade test would wait 20 minutes. The gap's
+// test's daemon has always just started, so every upgrade test would wait 2 hours. The gap's
 // own tests set it themselves.
 if (process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS === undefined) {
   process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS = '0'

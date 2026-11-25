@@ -222,8 +222,8 @@ export interface HostDaemonUpdateAnswer { host: string; phase?: string; message?
 
 /**
  * Update the host's Walnut daemon to this server's build now (POST
- * /api/v1/hosts/:host/daemon-update). Only a host-network machine is updated this way; for
- * any other kind the server answers 409 with the way it is updated instead. It answers once
+ * /api/v1/hosts/:host/daemon-update). A host-network machine and an SSH host are updated this way;
+ * for this Mac and the cloud box the server answers 409 with the way it is updated instead. It answers once
  * the update is decided or started (the upload and handover take minutes); the host's
  * status frame says how it went.
  */

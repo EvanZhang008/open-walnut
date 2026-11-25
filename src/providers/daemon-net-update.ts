@@ -38,7 +38,7 @@ import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { busyRetryLeftMs, busyRetryWhy, noteBusyRefusal } from './daemon-busy-retry.js'
 import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
-import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs } from './daemon-update-gap.js'
+import { DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateGapHold, daemonUpdateMinGapMs, UpdateGapHold } from './daemon-update-gap.js'
 import { log } from '../logging/index.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import type { HostFileTarget } from '../core/host-server/host-target.js'
@@ -63,126 +63,11 @@ export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateS
 /** How long a service set look waits for an update round in flight on the link. */
 const PROVISION_WAIT_MS = 10 * 60_000
 
-export type NetUpdateSkip =
-  | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
-  | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'recent' | 'platform-unknown' | 'no-binary'
-  // Service sets: the daemon there is another Walnut's while this one has its own set, or the set is not known yet.
-  | 'service-set'
-  // The task that asked for it may no longer have it run (its grant was revoked, the host closed).
-  | 'refused'
+export { decideNetUpdate, MAX_AUTO_FAILURES, NET_UPDATE_CAPABILITIES, scopeFromStatus, type NetUpdateDecision, type NetUpdateFacts, type NetUpdateSkip } from './daemon-net-update-decide.js'
+import { decideNetUpdate, MAX_AUTO_FAILURES, scopeFromStatus, type NetUpdateDecision, type NetUpdateFacts, type NetUpdateSkip } from './daemon-net-update-decide.js'
 
 /** The one rule of both update paths for the `--walnut` words (service-set-leader.ts). */
 export { setWordsDue }
-
-/** Daemon commands the update runs on the host. */
-export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const
-/** Automatic tries of one build that may fail before only a request tries it again. */
-export const MAX_AUTO_FAILURES = 4
-
-/** This build's daemon for the host: a prebuilt binary, the host's walnut file (gzipped), or why there is none. */
-
-export interface NetUpdateFacts {
-  kind: DaemonLinkKind
-  host: string
-  /** An ephemeral server, or one that only reads a host the real Walnut shares. */
-  testServer: boolean
-  /** A follower (the companion, a host server): it may run another build than the leader. */
-  follower: boolean
-  expected: string | null
-  /** The daemon's own build, from its hello. */
-  running: string | null
-  /** hello cronSupervision.startup: 'service' for a daemon an OS service runs. */
-  startup: string
-  serviceExecutable: string | null
-  has: (capability: string) => boolean
-  /** autofixDisabledReason: 'config' (the host's `autofix: false`), 'env', or null. */
-  autofixOff: string | null
-  /** WALNUT_NET_DAEMON_UPDATE=0. */
-  turnedOff: boolean
-  /** Someone asked for it (host_daemon_update): no autofix hold, no cooldown. */
-  requested: boolean
-  lastAttempt: { expected: string; at: number } | null
-  /** This server put `expected` there, and the host came back on another build since. */
-  contested?: boolean
-  /** Why the running daemon is kept: another Walnut uses it and this build brings nothing it lacks (daemon-shared.ts). */
-  shared?: string | null
-  /** Automatic tries of `expected` that failed. */
-  failedTries?: number
-  now: number
-  cooldownMs: number
-  /** How long the running daemon has run (its hello's startedAt), and the gap between replacements (daemon-update-gap.ts). */
-  daemonAgeMs?: number | null
-  minGapMs?: number
-  /** How long this build's update has been held by the gap already (it waits one gap at most). */
-  gapHeldForMs?: number
-  /** A switch of the host's mode alone is due (one-service-mode.ts serviceModeDue): an update on the current build. */
-  modeDue?: boolean
-  /** Looked up only when everything above allows an update: undefined = not yet. */
-  target?: HostFileTarget | null
-  source?: NetUpdateSource | { missing: string }
-}
-
-export type NetUpdateDecision =
-  | { go: true; source: NetUpdateSource; target: HostFileTarget }
-  | { go: 'lookup' }
-  | { go: false; skip: NetUpdateSkip; why: string; retryInMs?: number }
-
-const no = (skip: NetUpdateSkip, why: string, retryInMs?: number): NetUpdateDecision => ({ go: false, skip, why, ...(retryInMs ? { retryInMs } : {}) })
-
-/** Whether this connect updates the host's daemon, from what is known; pure. */
-export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
-  if (f.kind === 'local' || f.host === '__local__') return no('local', 'this Mac\'s own daemon is updated by LocalDaemon')
-  if (f.kind !== 'net') return no('not-net', `a ${f.kind} host has its own update path (daemon-update-paths.ts)`)
-  if (f.testServer) return no('test-server', 'a test server never changes a host\'s daemon')
-  if (f.follower) return no('follower', 'only the leader updates a host\'s daemon: two servers of different builds would undo each other')
-  if (!f.expected) return no('no-build-version', 'this server runs from source and names no daemon build')
-  if (f.running === f.expected && !f.modeDue) return no('current', `its daemon is this build (${f.expected})`)
-  if (f.startup !== 'service' || !f.serviceExecutable || !f.has('service-update-v1')) {
-    return no('unmanaged', 'its daemon is not a service Walnut can update (no service-update-v1 service)')
-  }
-  const missing = NET_UPDATE_CAPABILITIES.filter((c) => !f.has(c))
-  if (missing.length) return no('old-daemon', `its daemon lacks ${missing.join(', ')}; update Walnut on that machine once`)
-  if (!f.requested && f.turnedOff) return no('turned-off', 'WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off')
-  if (!f.requested && f.autofixOff) {
-    return no('held', f.autofixOff === 'config'
-      ? `the host's setting says autofix: false, so it is updated only on request (host_daemon_update ${f.host})`
-      : f.autofixOff === 'config-unreadable'
-        ? `the config could not be read, so whether the host allows it is unknown; it is updated only on request (host_daemon_update ${f.host})`
-        : `automatic host fixes are off (WALNUT_HOST_AUTOFIX), so it is updated only on request (host_daemon_update ${f.host})`)
-  }
-  if (!f.requested && f.shared) {
-    return no('shared', `${f.shared}, so it keeps running; it is updated on request (host_daemon_update ${f.host})`)
-  }
-  if (!f.requested && f.contested) {
-    return no('contested', `something on that machine (its own Walnut) put another build back after this server updated it to ${f.expected}; `
-      + `updating again would swap them back and forth, so it is updated only on request (host_daemon_update ${f.host})`)
-  }
-  if (!f.requested && (f.failedTries ?? 0) >= MAX_AUTO_FAILURES) {
-    return no('gave-up', `${f.failedTries} automatic updates to ${f.expected} failed; it is tried again on request (host_daemon_update ${f.host}) or with the next build`)
-  }
-  if (!f.requested && f.lastAttempt?.expected === f.expected && f.now - f.lastAttempt.at < f.cooldownMs) {
-    return no('cooldown', `an update to ${f.expected} was tried ${Math.round((f.now - f.lastAttempt.at) / 1000)} s ago`,
-      f.cooldownMs - (f.now - f.lastAttempt.at))
-  }
-  // The gap is between builds (as on the SSH path): a switch of the mode alone does not wait for it.
-  const gapWait = f.requested || f.running === f.expected ? 0 : daemonUpdateWaitMs(f.daemonAgeMs, f.minGapMs ?? 0, f.gapHeldForMs ?? 0)
-  if (gapWait > 0) return no('recent', daemonUpdateGapWhy(f.daemonAgeMs!, gapWait), gapWait)
-  if (f.target === undefined || f.source === undefined) return { go: 'lookup' }
-  // Both may pass (a probe that timed out, a download that failed): asked again after a cooldown.
-  if (!f.target) return no('platform-unknown', 'Walnut does not know which system and processor that machine has', f.cooldownMs)
-  if ('missing' in f.source) return no('no-binary', f.source.missing, f.cooldownMs)
-  return { go: true, source: f.source, target: f.target }
-}
-
-/** The scope `walnut daemon status` names, when Walnut may update it there; pure. */
-export function scopeFromStatus(output: string): { scope: 'user' | 'cron' } | { why: string } {
-  let s: { installed?: unknown; foreign?: unknown; scope?: unknown }
-  try { s = JSON.parse(output.slice(output.indexOf('{'))) } catch { return { why: 'walnut daemon status gave no answer Walnut could read' } }
-  if (s.installed !== true) return { why: 'no service of Walnut\'s is installed there' }
-  if (s.foreign === true) return { why: 'its service config is not Walnut\'s own' }
-  if (s.scope !== 'user' && s.scope !== 'cron') return { why: `its ${String(s.scope)} service needs an administrator` }
-  return { scope: s.scope }
-}
 
 export interface NetUpdateLink extends NetUpdateConn {
   readonly host: string
@@ -240,6 +125,8 @@ export interface NetUpdaterDeps {
   sameDaemon?: () => Promise<string[]>
   /** The gap between automatic replacements (daemon-update-gap.ts); default from the env. */
   minGapMs?: number
+  /** The connection's gap state, shared with its SSH path and its capability checks (DaemonConnection); its own by default. */
+  gap?: UpdateGapHold
   autofixOff?: () => Promise<string | null>
   /** The host's target, read with host-target.ts's probe over exec.run (as the SSH path reads it). */
   target?: (run: (command: string, timeoutMs?: number) => Promise<string>) => Promise<HostFileTarget | null>
@@ -270,7 +157,11 @@ export interface NetServiceModeDeps {
 }
 
 export type NetUpdatePhase = 'idle' | 'checking' | 'running' | 'updated' | 'failed' | 'skipped' | 'held' | 'postponed'
-export interface NetUpdateState { phase: NetUpdatePhase; host: string; running: string | null; expected: string | null; message: string; at: number; skip?: NetUpdateSkip }
+export interface NetUpdateState {
+  phase: NetUpdatePhase; host: string; running: string | null; expected: string | null; message: string; at: number; skip?: NetUpdateSkip
+  /** While held by a wait with a known end (the update gap), when it ends (ms epoch). */
+  until?: number
+}
 
 const MAX_BACKOFF_MS = 6 * 3600_000
 /** Uploads the link cut while the host stays on one build before the next cut is a failure (Walnut Health's "3 times or more"). */
@@ -313,8 +204,8 @@ export class NetDaemonUpdater {
   private notServing: BuildBackoffEntry | null | undefined = undefined
   private skipNoted: string | null = null
   private overdueNoted: string | null = null
-  /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
-  private gapHeld: { expected: string; since: number } | null = null
+  /** The update gap (daemon-update-gap.ts): since when a build has been held, and whether it holds it now. */
+  private readonly gap: UpdateGapHold
   private stopped = false
   private waiters: Array<() => void> = []
   /** The update this server started there, until its record is read (daemon-net-update-record.ts), and the read's timer. */
@@ -326,6 +217,7 @@ export class NetDaemonUpdater {
 
   constructor(private readonly d: NetUpdaterDeps) {
     this.state = { phase: 'idle', host: d.conn.host, running: null, expected: null, message: '', at: 0 }
+    this.gap = d.gap ?? new UpdateGapHold()
     this.launched = new LaunchedNetUpdate(d.conn.host, () => (d.now ?? Date.now)(), (expected, reason) => this.buildDidNotStay(expected, reason))
   }
 
@@ -459,10 +351,12 @@ export class NetDaemonUpdater {
   private set(phase: NetUpdatePhase, message: string, extra: Partial<NetUpdateState> = {}): NetUpdateState {
     const c = this.d.conn
     this.state = { phase, host: c.host, running: c.daemonVersion, expected: this.d.expectedVersion(), message, at: (this.d.now ?? Date.now)(), ...extra }
+    // Only the gap's own skip keeps it held: any other answer decided past it, or on another hold.
+    if (phase !== 'checking' && extra.skip !== 'recent') this.gap.release()
     const kind = waitKindOf(phase, extra.skip)
     if (kind !== 'keep') {
       const expected = this.state.expected
-      this.waiting = kind && expected ? noteUpdateWait(c.host, kind, message, expected, this.state.at) : null
+      this.waiting = kind && expected ? noteUpdateWait(c.host, kind, message, expected, this.state.at, extra.until) : null
       if (!kind && (phase === 'updated' || extra.skip === 'current')) endUpdateWait(c.host)
     }
     if (phase !== 'checking') for (const w of this.waiters.splice(0)) w()
@@ -477,9 +371,10 @@ export class NetDaemonUpdater {
     return run
   }
 
-  private async facts(trigger: 'auto' | 'request', modeDue: boolean): Promise<NetUpdateFacts> {
+  private async facts(trigger: 'auto' | 'request', modeDue: boolean, overdue: boolean): Promise<NetUpdateFacts> {
     const c = this.d.conn
     const env = this.d.env ?? process.env
+    const expected = this.d.expectedVersion()
     return {
       kind: this.d.kind(), host: c.host, testServer: this.d.testServer(),
       follower: await (this.d.follower ? Promise.resolve(this.d.follower()) : defaultFollower()), expected: this.d.expectedVersion(),
@@ -492,7 +387,8 @@ export class NetDaemonUpdater {
       failedTries: this.failed && this.failed.expected === this.d.expectedVersion() ? this.failed.count : 0,
       daemonAgeMs: c.daemonStartedAt ? (this.d.now ?? Date.now)() - c.daemonStartedAt : null,
       minGapMs: this.d.minGapMs ?? daemonUpdateMinGapMs(env),
-      gapHeldForMs: this.gapHeld && this.gapHeld.expected === this.d.expectedVersion() ? (this.d.now ?? Date.now)() - this.gapHeld.since : 0,
+      gapHeldForMs: expected ? this.gap.heldForMs(expected, (this.d.now ?? Date.now)()) : 0,
+      overdue, capNeeded: expected ? this.gap.needs(expected) : null,
     }
   }
 
@@ -509,11 +405,12 @@ export class NetDaemonUpdater {
     await this.readBack(true)
     // The mode as decided now, from this link's hello (never a version read over SSH: there is none).
     const mode: Awaited<ReturnType<NetServiceModeDeps['read']>> = c.connected && this.d.mode ? await this.d.mode.read().catch(() => ({ due: false })) : { due: false }
-    const facts = await this.facts(trigger, mode.due)
     // The bound on the whole update (daemon-update-behind.ts), read before any skip so a round that
-    // skips (a cooldown, the gap) still counts as seen: behind this long, the writes in flight and
-    // the host_exec runs no longer hold it, and the daemon goes over its own work.
-    const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!facts.expected && !!c.daemonVersion && c.daemonVersion !== facts.expected, (this.d.now ?? Date.now)())
+    // skips (a cooldown, the gap) still counts as seen: behind this long, the gap, the writes in
+    // flight and the host_exec runs no longer hold it, and the daemon goes over its own work.
+    const expectedNow = this.d.expectedVersion()
+    const behind = daemonUpdateOverdue(c.host, c.daemonVersion ?? '', !!expectedNow && !!c.daemonVersion && c.daemonVersion !== expectedNow, (this.d.now ?? Date.now)())
+    const facts = await this.facts(trigger, mode.due, behind.overdue)
     if (this.notServing === undefined) this.notServing = await readBuildBackoff(`net:${c.host}`)
     if (trigger === 'auto' && facts.expected && buildBackedOff(this.notServing, facts.expected, (this.d.now ?? Date.now)())) {
       this.retryAt = Math.max(this.retryAt, this.notServing!.at + BUILD_BACKOFF_MS)
@@ -739,8 +636,9 @@ export class NetDaemonUpdater {
     // pass) is decided again when it ends, not at the next reconnect, which a steady link never makes.
     if (d.retryInMs && !this.stopped) {
       const expected = this.d.expectedVersion()
-      if (d.skip === 'recent' && expected && this.gapHeld?.expected !== expected) this.gapHeld = { expected, since: (this.d.now ?? Date.now)() }
-      this.later(d.retryInMs + 5_000)
+      if (d.skip === 'recent' && expected && d.until) this.gap.held(expected, d.until, (this.d.now ?? Date.now)())
+      // A gap is decided again at least every DAEMON_UPDATE_GAP_RECHECK_MS, so the 3 h bound's clock stays seen.
+      this.later(d.skip === 'recent' ? Math.min(d.retryInMs + 5_000, DAEMON_UPDATE_GAP_RECHECK_MS) : d.retryInMs + 5_000)
     }
     // Said once per reason and build: a link that comes back every few minutes would say it every time.
     const noted = `${d.skip}:${this.d.expectedVersion()}`
@@ -750,7 +648,7 @@ export class NetDaemonUpdater {
         host: c.host, running: c.daemonVersion, expected: this.d.expectedVersion(), skip: d.skip, why: d.why, trigger,
       })
     }
-    return this.set('skipped', d.why, { skip: d.skip })
+    return this.set('skipped', d.why, { skip: d.skip, ...(d.until ? { until: d.until } : {}) })
   }
 
   private hostBusy(): Promise<string | null> {

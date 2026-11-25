@@ -22,8 +22,8 @@ costs open windows seconds of timeouts (2026-10-28: up to 76 a day); `WALNUT_DEV
 deploys anyway. Deploys are queued (`scripts/lib/deploy-queue.sh`, 2026-11-03: 31 restarts in a
 day): production restarts at most once per 5 minutes (`WALNUT_DEPLOY_MIN_GAP_SECS`, 10 until 2026-11-23, when a deploy's stop fell under 5 s; the next build starts up to 3 minutes before that, `WALNUT_DEPLOY_PREBUILD_SECS` less the 125 s attempt gap, and only its stop of the old server waits for the gap to pass), and on a Mac whose load is over 4 per CPU it waits for the load to ease, up to 20 minutes after the last restart (`WALNUT_DEPLOY_BUSY_GAP_SECS`, 2026-11-09: four deploys an hour with an iOS build took the load to 400) (critical memory pressure alone waits up to 10 minutes, `WALNUT_DEPLOY_MEM_GAP_SECS`; pressure at warn and a full swap hold nothing: 2026-11-24, the Mac sat at warn with its swap 96% used for hours, and every deploy that waited for it waited its whole bound), a call
 inside the gap waits and goes out with the newest commit of then, and it exits 0 only once
-production serves a build containing its commit (it says which); a host's daemon is replaced at
-most once per 20 minutes (`src/providers/daemon-update-gap.ts`). Never wait for the tree to be clean, and never stash, revert or commit
+production serves a build containing its commit (it says which); a host's daemon is replaced
+automatically at most once every 2 hours, `host_daemon_update <host>` to have it now (`docs/reference/session-daemon.md`). Never wait for the tree to be clean, and never stash, revert or commit
 their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
 what it names or report it as the blocker. Never end with "committed, not deployed, say
 deploy". Scope the commit to your own changes only (never sweep up other agents'

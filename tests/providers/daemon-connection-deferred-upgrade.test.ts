@@ -373,7 +373,7 @@ describe('the background update of a service-managed daemon', () => {
       throw new Error('Managed daemon update failed: service.handover: running host_exec jobs must finish first; the old service config was put back')
     })
     live(c)
-    await expect(priv(c).recheckPostponedUpgrade()).resolves.toBeUndefined()
+    await expect(priv(c).recheckPostponedUpgrade()).resolves.toBe(false)
     expect(state(c)._handoverUntil).toBe(0)
     expect(state(c).upgradeRecheckTimer).not.toBeNull()
     expect(state(c)._lastUpgradeAttempt).toBeNull()

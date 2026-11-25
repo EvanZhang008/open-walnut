@@ -758,6 +758,30 @@ runtime names the area uses, under the same names (`daemon-module-deps.ts`), and
 
 **Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, it puts the new daemon on the host while the old one still serves: this build's `daemon-linux-<arch>` binary (gzipped, one stream, else 256 KB chunks each over its own SSH connection, which bypasses proxies that kill large transfers), else the walnut file in the same slot (the host downloads it from the release itself, else a delta, else an upload that resumes). The new daemon's fold checkpoints are prepared from that staged file (`--prewarm-folds`) before the swap, and the staged daemon runs in a trial first. A host where neither file can be had gets an error that says why (a Walnut that runs from an uncommitted checkout, a host that is not Linux, no room); a host needs no bun, node or `ws`. Just `bun run build && bash scripts/build-daemon.sh && bun run dev:prod`: the next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
+## A host's daemon is replaced automatically at most once every 2 hours
+
+**A host's daemon is replaced automatically at most once every 2 hours** (`src/providers/daemon-update-gap.ts`;
+2026-11-24: one host's daemon was replaced 19 times in 24 hours, each swap cutting both of its links). This
+is the one rule; other docs point here. A daemon that started less than 2 hours ago keeps serving after a
+deploy, and its update is decided again when the gap ends, with the build the server runs then, so the
+builds in between are never pushed. The same rule on both paths that replace a remote daemon from here,
+SSH and the host network, whether the host runs the daemon or its one Walnut service; while it waits the
+host's status and `host_get` (the daemon row's `expected` and `update`) say why and until when. One build
+is held one gap at most in all (a crash loop always looks young), and a held update is decided again every
+15 minutes so the 3 hour bound below keeps its clock. Not held: a host with no daemon (a start); an update
+past the 3 hour bound; a capability this server asks the connection for that this build's daemon has and
+the running one lacks (decided again at once, once per build); and an update someone asks for.
+
+To have it now (a task that just fixed host-side code): `host_daemon_update <host>` (POST
+`/api/v1/hosts/:host/daemon-update`), for an SSH host and a host network machine alike. It goes past the
+gap, a shared daemon kept, the busy clock, the cooldown after a try and a build's day off, never past
+writes in flight, host_exec runs, open ACP turns, an update still running there, its probation or another
+host name of the same daemon updating it. Its answer names `running` (the build there now), `expected`
+(this server's build), and while it waits `message` and `until`. This Mac's own daemon is replaced when
+Walnut restarts, and the cloud box's by the companion's own build (`daemonUpdateHowSentence`);
+`tests/providers/daemon-update-paths-ratchet.test.ts` fails for a new kind of link that neither waits out
+the gap with a request path nor says why not. `WALNUT_DAEMON_UPDATE_MIN_GAP_MS` sets the gap (0 turns it off).
+
 ## Every hold on that update has an end
 
 **Every hold on that update has an end** (`src/providers/daemon-update-behind.ts`; 2026-11-05: a host

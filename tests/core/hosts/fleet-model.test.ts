@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   type FleetBootStart,
-  buildFleetHost, longRunningReasons, recordedSpan, withPlacement, SERVER_PHASE_WORDS, type FleetHost, type FleetInputs,
+  buildFleetHost, fleetDaemonUpdate, longRunningReasons, recordedSpan, withPlacement, SERVER_PHASE_WORDS, type FleetHost, type FleetInputs,
 } from '../../../src/core/hosts/fleet-model.js'
 import type { HostVitals } from '../../../src/providers/host-vitals-core.js'
 import type { HostProfile } from '../../../src/core/hosts/host-profile.js'
@@ -158,6 +158,20 @@ describe('the card', () => {
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+
+// host_get shows which build a host runs, which this server would put there, and, while held, why and until when.
+describe('the daemon row\'s update to come', () => {
+  const T = new Date(2026, 10, 25, 13, 0).getTime()
+  it('names the expected build, and the wait while it holds that build', () => {
+    const w = { kind: 'postponed' as const, why: 'the gap', since: T, until: T + 60 * 60_000, expected: 'build-b' }
+    expect(fleetDaemonUpdate('Dev box', 'build-a', 'build-b', w, T)).toEqual({
+      expected: 'build-b', update: { waits: 'The daemon update on Dev box waits (since 13:00, until 14:00): the gap', since: T, until: T + 60 * 60_000 },
+    })
+    expect(fleetDaemonUpdate('Dev box', 'build-b', 'build-b', w, T)).toEqual({ expected: 'build-b' })
+    expect(fleetDaemonUpdate('Dev box', 'build-a', 'build-c', w, T)).toEqual({ expected: 'build-c' })
+    expect(fleetDaemonUpdate('Dev box', 'build-a', null, w, T)).toEqual({})
+  })
+})
 
 describe('words, never codes', () => {
   // Every phase the host server manager can be in, read from its type, so a new phase fails here.

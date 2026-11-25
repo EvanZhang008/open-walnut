@@ -117,7 +117,8 @@ const CLASSIFIED: Record<string, Record<string, Class>> = {
     'dialLinkPortForward socket': 'outside', 'dialPortForward process': 'outside',
     'pipeSingleStream process': 'call', 'pipeSingleStream timer': 'call', 'pipeChunk process': 'call', 'pipeChunk timer': 'call',
     'holdUpgradeForFoldPrewarm timer': 'call', 'holdUpgrade timer': 'call',
-    'postponeUpgrade timer': 'link', 'startDeferredUpgrade timer': 'link', 'openHandoverWindow timer': 'link',
+    // gapGivesWayFor: a capability check (maybe in a person's call) decides the held update again, under outsidePersonCall.
+    'gapGivesWayFor timer': 'outside', 'postponeUpgrade timer': 'link', 'startDeferredUpgrade timer': 'link', 'openHandoverWindow timer': 'link',
     'waitOverBusySwap timer': 'call', 'noteLinkDown timer': 'no-send',
     '_sendHandshake timer': 'call', 'announceProbeRole timer': 'call',
     'scheduleStayCheck timer': 'link', 'fetchWalnutFileOnHost timer': 'call', 'pipeChunked timer': 'call', 'pipeChunked timer #2': 'call',

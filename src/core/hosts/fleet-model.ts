@@ -11,6 +11,7 @@ import type { HostLoadView } from './placement.js'
 import type { HostServerPhase } from '../host-server/manager.js'
 import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
 import { bootStartWords } from '../../providers/remote-boot-start.js'
+import { daemonUpdateWaitSentence, type DaemonUpdateWait } from '../../providers/daemon-update-wait.js'
 import { hostFlapOf } from './host-problem.js'
 import { CLOUD_BOX_HOST_SERVER_NOTE } from './cloud-box-host.js'
 
@@ -106,6 +107,10 @@ export interface FleetHost {
      * this Walnut's server in one program, said "Walnut service". Absent: the session helper on its own.
      */
     serves?: 'walnut-serve'
+    /** The build this server would put there, as its last update decision read it: one other than `version` is an update to come. */
+    expected?: string
+    /** While that update waits: the one sentence (daemon-update-wait.ts), since when, and until when if its end is known. */
+    update?: FleetDaemonUpdate
   } | null
   placement: {
     /**
@@ -247,6 +252,15 @@ function fleetSessions(i: FleetInputs): FleetHost['sessions'] {
     : !i.status.connected ? 'Walnut is not connected to it'
     : 'not read yet'
   return { running: null, source: null, why }
+}
+
+export interface FleetDaemonUpdate { waits: string; since: number; until: number | null }
+
+/** The daemon row's update to come: the expected build, and the wait while one holds it (fields only, never a host call). */
+export function fleetDaemonUpdate(label: string, version: string | null, expected: string | null | undefined, wait: DaemonUpdateWait | null | undefined, now: number = Date.now()): { expected?: string; update?: FleetDaemonUpdate } {
+  if (!expected) return {}
+  const w = wait && wait.expected === expected && version !== expected ? wait : null
+  return { expected, ...(w ? { update: { waits: daemonUpdateWaitSentence(label, w, now), since: w.since, until: w.until ?? null } } : {}) }
 }
 
 function fleetDaemon(d: NonNullable<FleetInputs['daemon']>, kind: FleetConnectionKind): NonNullable<FleetHost['daemon']> {

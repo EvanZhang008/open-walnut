@@ -159,7 +159,7 @@ describe('a terminal the host cannot open yet: the tab stays and says why', () =
 
   it('shows the server\'s sentence of how the daemon updates when the frame has one, and keeps the button where one exists', async () => {
     const said = {
-      devbox: 'Walnut updates the daemon on Dev box by itself the next time it connects there over SSH',
+      devbox: 'Walnut updates the daemon on Dev box by itself over SSH, and a feature that needs the newer daemon starts that update',
       studio: 'Walnut updates the daemon on Studio by itself after a deploy (unless its automatic fixes are off), or use "Update the daemon" in Settings › Hosts to do it now',
       __cloudbox__: 'Deploying the cloud companion updates the daemon there (it starts that daemon from its own build)',
     }

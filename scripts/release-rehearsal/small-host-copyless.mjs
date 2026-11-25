@@ -49,7 +49,7 @@ const IMAGE = 'walnut-rehearsal-small-host:1'
 const HOST = `walnut-rh-small-${nonce}`
 const LEADER = `walnut-rh-leader-${nonce}`
 const PORT = 3977
-/** A host's daemon is replaced at most once per 20 minutes (daemon-update-gap.ts): a minute here, so a stage need not wait out the gap. */
+/** A host's daemon is replaced automatically at most once every 2 hours (daemon-update-gap.ts): a minute here, so a stage need not wait out the gap. */
 const UPDATE_GAP_MS = 60_000
 const DOCKERFILE = `FROM debian:bookworm-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-server openssh-client cron ca-certificates procps curl git >/dev/null \\

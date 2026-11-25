@@ -34,7 +34,7 @@ const KNOWN: Record<string, { count: number; why: string }> = {
     count: 4,
     why: 'refusals of a read-only test server (relays, an off host): the Demo has its own isolated daemons, never attached read only',
   },
-  'src/providers/daemon-net-update.ts': { count: 1, why: 'a skip reason for logs; a Demo host is not a host-network member' },
+  'src/providers/daemon-net-update-decide.ts': { count: 1, why: 'a skip reason for logs; a Demo host is not a host-network member' },
   'src/providers/acp-session.ts': { count: 1, why: 'readOnlyRemote only: the Demo\'s hosts run its own isolated daemon' },
   'src/providers/daemon-standalone.ts': {
     count: 1,

@@ -31,7 +31,8 @@ import type { HostVitals } from '../../providers/host-vitals-core.js'
 import { hostStatusFrame } from './host-connect-action.js'
 import { listStatusHosts, type HostDef } from './host-status.js'
 import { probeIsStale, readHostProfile, recordProbedFacts, type HostProfile } from './host-profile.js'
-import { buildFleetHost, withPlacement, type FleetBootStart, type FleetConnectionKind, type FleetHost, type FleetInputs } from './fleet-model.js'
+import { buildFleetHost, fleetDaemonUpdate, withPlacement, type FleetBootStart, type FleetConnectionKind, type FleetHost, type FleetInputs } from './fleet-model.js'
+import type { DaemonUpdateWait } from '../../providers/daemon-update-wait.js'
 import { joinedTwins } from './joined-twins.js'
 import {
   __resetFleetCacheForTesting, cachedSpend, recordFleetFailure, recordFleetLoad, recordFleetSpend, recordFleetVitals,
@@ -105,6 +106,8 @@ export interface VitalsConn {
   readonly serviceRoles?: ReadonlyArray<'replica' | 'leader'>
   /** What the hello says runs there (one-service-mode.ts): a host's one Walnut service and whose, or the daemon. */
   readonly servesAs?: { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }
+  /** The build this server would put there, and what its update waits for (DaemonConnection; fields only). */
+  readonly expectedDaemonBuild?: string | null; readonly daemonUpdateWait?: DaemonUpdateWait | null
 }
 
 function fleetBootStart(b: BootStartView | null): FleetBootStart | null {
@@ -394,6 +397,7 @@ export function assembleCard(e: HostEntry, conn: VitalsConn | undefined, parts: 
       // Only this Walnut's service: another Walnut's on the host leaves this Walnut's server a separate program there.
       ...(servesThisWalnut(conn.servesAs, WALNUT_HOME) ? { serves: 'walnut-serve' as const } : {}),
       ...(IS_EPHEMERAL && !e.local ? { throwaway: true } : {}),
+      ...fleetDaemonUpdate(e.label, conn.daemonVersion, conn.expectedDaemonBuild, conn.daemonUpdateWait, got.now),
     } : null,
     declaredCapabilities: e.declared,
     recordedSessions,

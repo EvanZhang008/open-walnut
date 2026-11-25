@@ -542,7 +542,7 @@ service with a whole set of places; neither lists, adopts or stops the other's s
   (cli-owner), so its send or resume goes on with the same conversation. It judges every turn itself,
   from the transcript. The host would judge the same turns too (auto-continue, the retriers, the
   turn-end queue) until its service is replaced by the older build, which the leader's daemon update
-  does minutes after it links (a fresh daemon waits out 20 minutes, an open host_exec run or ACP turn
+  does minutes after it links (a fresh daemon waits out the 2 hour update gap, an open host_exec run or ACP turn
   holds it, every hold gives way after 3 hours). So the host stands down (`old-leader-watch.ts`): when
   its leader answers (the daemon's follower view) and no leader opens the session channel for 3
   minutes (`WALNUT_HOST_OLD_LEADER_MS`; any leader with the channel opens it within seconds of linking,

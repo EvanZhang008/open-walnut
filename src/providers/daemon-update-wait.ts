@@ -35,6 +35,8 @@ export interface DaemonUpdateWait {
   since: number
   /** The build it waits to put there: a host that runs it has no wait. */
   expected: string
+  /** When the wait ends by itself, when that is known (the update gap: daemon-update-gap.ts). */
+  until?: number
 }
 
 /** What a skip says on the host's status; null: no wait to show (nothing to update, or not this path's host). */
@@ -90,10 +92,11 @@ export function sinceTime(at: number, now: number = Date.now()): string {
 }
 
 /** The one sentence a waiting update says, on the host's status and in Walnut Health. */
-export function daemonUpdateWaitSentence(label: string, w: Pick<DaemonUpdateWait, 'kind' | 'why' | 'since'>, now: number = Date.now()): string {
+export function daemonUpdateWaitSentence(label: string, w: Pick<DaemonUpdateWait, 'kind' | 'why' | 'since' | 'until'>, now: number = Date.now()): string {
   const why = w.why.replace(/^waiting:\s*/, '').trim()
   const lead = w.kind === 'postponed' ? `The daemon update on ${label} waits` : SKIP_WAIT_LEADS[w.kind]?.(label) ?? `The daemon update on ${label} waits`
-  return `${lead} (since ${sinceTime(w.since, now)})${why ? `: ${why}` : ''}`
+  const span = w.until && w.until > now ? `since ${sinceTime(w.since, now)}, until ${sinceTime(w.until, now)}` : `since ${sinceTime(w.since, now)}`
+  return `${lead} (${span})${why ? `: ${why}` : ''}`
 }
 
 /** A postponed update this long is past the bound every hold gives way at, and still waits. */
@@ -108,7 +111,9 @@ export const LONG_SKIP_MS = 60 * 60_000
  */
 export const WAIT_HEALTH: Record<DaemonUpdateWaitKind, number | null> = {
   postponed: LONG_POSTPONE_MS,
-  'gave-up': LONG_SKIP_MS, contested: LONG_SKIP_MS, refused: LONG_SKIP_MS, cooldown: LONG_SKIP_MS, recent: LONG_SKIP_MS,
+  'gave-up': LONG_SKIP_MS, contested: LONG_SKIP_MS, refused: LONG_SKIP_MS, cooldown: LONG_SKIP_MS,
+  // The update gap holds one build 2 h at most in all (daemon-update-gap.ts): past the 3 h bound it is no gap.
+  recent: LONG_POSTPONE_MS,
   held: null, 'turned-off': null,
   shared: null, unmanaged: null, 'old-daemon': null, 'platform-unknown': null, 'no-binary': null, 'service-set': null,
   'not-net': null, local: null, 'test-server': null, follower: null, 'no-build-version': null, current: null,
@@ -135,12 +140,12 @@ const prefix = (host: string) => `update-wait:${host}:`
 const ended = new Set<string>()
 
 /** The update of `expected` on `host` waits now: since when it has waited (kept across leader restarts). */
-export function noteUpdateWait(host: string, kind: DaemonUpdateWaitKind, why: string, expected: string, now: number = Date.now()): DaemonUpdateWait {
+export function noteUpdateWait(host: string, kind: DaemonUpdateWaitKind, why: string, expected: string, now: number = Date.now(), until?: number): DaemonUpdateWait {
   const key = `${prefix(host)}${WAIT_CLOCKS[kind]}:${expected}`
   dropHoldClocks(prefix(host), key)
   ended.delete(host)
   const { heldMs } = upgradeHoldClock(key, true, Number.POSITIVE_INFINITY, now, WAIT_STALE_MS)
-  return { kind, why, since: now - heldMs, expected }
+  return { kind, why, since: now - heldMs, expected, ...(until ? { until } : {}) }
 }
 
 /** The host runs the build (its update landed, or there was none to make): no wait is left. */

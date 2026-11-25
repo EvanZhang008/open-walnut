@@ -1,9 +1,12 @@
 /**
  * Update a host's Walnut daemon to this server's build now, on request
- * (`host_daemon_update`, POST /api/v1/hosts/:host/daemon-update). For a machine on
- * the host network whose config says `autofix: false`, this is the only way it is
- * updated (src/providers/daemon-net-update.ts): someone guards that machine and
- * picks the moment. A task's session asks under the same grant rules as host_exec
+ * (`host_daemon_update`, POST /api/v1/hosts/:host/daemon-update): the one way, on every
+ * path that replaces a remote daemon from here (an SSH host: daemon-update-request.ts; a
+ * host network machine: daemon-net-update.ts), to have it before the update gap ends
+ * (a host's daemon is replaced by itself at most once every 2 hours, daemon-update-gap.ts),
+ * e.g. right after a task fixed host-side code. For a machine on the host network whose
+ * config says `autofix: false`, this is the only way it is updated: someone guards that
+ * machine and picks the moment. A task's session asks under the same grant rules as host_exec
  * (the user's grant for the task and host, asked once by letter; a host the user
  * closed refuses); the person at this machine needs none.
  *
@@ -57,5 +60,5 @@ export async function requestHostDaemonUpdate(raw: string, callerSid: string | u
     const { daemonUpdateHowSentence } = await import('../../providers/daemon-update-paths.js')
     throw new HostExecError(`Nothing to ask for ${name}. ${daemonUpdateHowSentence(conn.linkKind, name)}.`, 409, 'updates_itself', { kind: conn.linkKind })
   }
-  return { ...(await run), host }
+  return { ...(await run), host, kind: conn.linkKind }
 }

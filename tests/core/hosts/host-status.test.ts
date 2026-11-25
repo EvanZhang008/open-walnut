@@ -424,7 +424,7 @@ describe('buildHostStatus: how the host\'s daemon gets a newer build, in the one
     const net: HostDef = { hostname: 'studio.walnut-net.invalid', label: 'Studio', transport: 'net' };
     const cloud: HostDef = { hostname: 'box.example.test', label: 'Cloud', cloud_box: true };
     const how = (key: string, def: HostDef) => buildHostStatus(key, def, state('connected'), undefined, AT).daemonUpdateHow;
-    expect(how('devbox', devbox)).toBe('Walnut updates the daemon on Big dev box by itself the next time it connects there over SSH');
+    expect(how('devbox', devbox)).toBe('Walnut updates the daemon on Big dev box by itself over SSH, and a feature that needs the newer daemon starts that update');
     expect(how('studio', net)).toMatch(/^Walnut updates the daemon on Studio by itself after a deploy .*"Update the daemon" in Settings › Hosts/);
     expect(how('__cloudbox__', cloud)).toMatch(/^Deploying the cloud companion updates the daemon there/);
     expect(how('studio', net)).toBe(daemonUpdateHowSentence(hostDaemonLinkKind('studio', net), 'Studio'));

@@ -44,6 +44,12 @@ describe('the sentence a waiting update says', () => {
     expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'ACP turns are open'), T)).toBe('The daemon update on Big dev box waits (since 14:05): ACP turns are open')
   })
 
+  it('a wait with a known end says until when', () => {
+    expect(daemonUpdateWaitSentence(LABEL, { ...wait('postponed', 'the gap'), until: T + 90 * 60_000 }, T))
+      .toBe('The daemon update on Big dev box waits (since 14:05, until 15:35): the gap')
+    expect(daemonUpdateWaitSentence(LABEL, { ...wait('postponed', 'the gap'), until: T - 1 }, T)).toBe('The daemon update on Big dev box waits (since 14:05): the gap')
+  })
+
   it('skipped as shared, held, and every other skip: its own lead, then the why', () => {
     expect(daemonUpdateWaitSentence(LABEL, wait('shared', 'shared, another Walnut uses it'), T))
       .toBe('Big dev box keeps the daemon another Walnut uses there, so this Walnut does not update it (since 14:05): shared, another Walnut uses it')
@@ -54,7 +60,7 @@ describe('the sentence a waiting update says', () => {
 
   it('class guard: every NetUpdatePhase and every NetUpdateSkip in the source says what it is for the wait', () => {
     const phases = unionOf('daemon-net-update.ts', 'NetUpdatePhase') as NetUpdatePhase[]
-    const skips = unionOf('daemon-net-update.ts', 'NetUpdateSkip') as NetUpdateSkip[]
+    const skips = unionOf('daemon-net-update-decide.ts', 'NetUpdateSkip') as NetUpdateSkip[]
     expect(phases.length).toBeGreaterThanOrEqual(8)
     expect(skips.length).toBeGreaterThanOrEqual(16)
     expect(Object.keys(PHASE_WAITS).sort()).toEqual([...phases].sort())

@@ -71,6 +71,7 @@ import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type Unrea
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
+import { RequestedUpdate } from './daemon-update-request.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type NothingChanged, type UpdateClaim } from './daemon-update-claim.js'
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
@@ -164,7 +165,7 @@ import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplica, isHostReplicaProgram, serviceRuntime } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
-import { daemonUpdateGapWhy, daemonUpdateMinGapMs, daemonUpdateWaitMs, parseEtimeMs } from './daemon-update-gap.js'
+import { capabilityNeedWhy, DAEMON_UPDATE_GAP_RECHECK_MS, daemonUpdateMinGapMs, parseEtimeMs, UpdateGapHold } from './daemon-update-gap.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 import { acceptHubStream } from '../core/hosts/hub-ports.js'
@@ -1623,6 +1624,8 @@ export class DaemonConnection {
         return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
       },
       cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
+      // One gap state per connection: its capability checks decide a held update again (hasCapability).
+      gap: this._gap,
       fence: () => this.fenceFileChanges(),
       sameDaemon: () => this.daemonNamesOrOwn(),
       // The host's mode rides this update as it rides the SSH one (one-service-mode.ts): one decision for every link.
@@ -1649,8 +1652,19 @@ export class DaemonConnection {
    * updates another way. `gate` throws once the asker may no longer have it run (the task's grant).
    */
   requestDaemonUpdate(gate?: () => void): Promise<NetUpdateState> | null {
-    return this.netUpdater?.request(undefined, gate) ?? null
+    if (this.netUpdater) return this.netUpdater.request(undefined, gate)
+    if (this.linkKind !== 'ssh' || this.isReadOnlyRemote) return null
+    this._requested ??= new RequestedUpdate({
+      host: this.hostKey,
+      connected: () => this._connected,
+      running: () => this._daemonVersion,
+      expected: () => this.getExpectedDaemonVersion(),
+      run: (expected, g) => this.recheckPostponedUpgrade({ expected, gate: g }),
+      wait: () => this._updateWait,
+    })
+    return this._requested.request(undefined, gate)
   }
+  private _requested: RequestedUpdate | null = null
 
   /** The build that did not stay serving here: in memory, or first after a restart the kept record. */
   private async realDirFailure(): Promise<BuildBackoffEntry | null> {
@@ -1748,8 +1762,28 @@ export class DaemonConnection {
   }
   /** Host key this connection serves ('__local__' for the local daemon). */
   get host(): string { return this.hostKey }
-  /** True when the last `hello` advertised the capability (false pre-handshake). */
-  hasCapability(cap: string): boolean { return this._capabilities?.includes(cap) ?? false }
+  /**
+   * True when the last `hello` advertised the capability (false pre-handshake). A miss while the
+   * update gap holds this host's update, for a capability this build's daemon has, decides that
+   * update again now, once per build (daemon-update-gap.ts UpdateGapHold.need).
+   */
+  hasCapability(cap: string): boolean {
+    const has = this._capabilities?.includes(cap) ?? false
+    if (!has && this._capabilities && this._gap.holds && this._gap.need(cap)) this.gapGivesWayFor(cap)
+    return has
+  }
+
+  /** This server needs `cap` and the running daemon lacks it: the update the gap held is decided now. */
+  private gapGivesWayFor(cap: string): void {
+    log.session.info('DaemonConnection: the daemon update gap gives way', { host: this.hostKey, capability: cap, why: capabilityNeedWhy(cap) })
+    // Never inside the caller's own call: the decision runs on its own turn, outside a person's
+    // mark (the check may run inside one), since it serves every later caller of this link.
+    setTimeout(() => outsidePersonCall(() => {
+      if (this._destroyed) return
+      if (this.upgradeRecheckTimer) { clearTimeout(this.upgradeRecheckTimer); this.upgradeRecheckTimer = null }
+      void this.recheckPostponedUpgrade()
+    }), 0).unref?.()
+  }
   /** False until a `hello` handshake has SUCCEEDED on this connection. All
    *  connect paths attempt it, so false = the daemon answered no hello. */
   get capabilitiesKnown(): boolean { return this._capabilities !== null }
@@ -5668,21 +5702,18 @@ export class DaemonConnection {
 
       // Another Walnut uses this daemon and this build brings nothing it lacks: keep it,
       // or each server would put its own build back on every connect (daemon-shared.ts).
-      if (remoteVersion && remoteVersion !== expected && await this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
+      if (remoteVersion && remoteVersion !== expected && !this.asked(expected) && await this.keepSharedDaemon(runningServes, remoteVersion, expected)) return false
       // The bound on the whole update (daemon-update-behind.ts): behind this long, every hold below gives way.
       this.noteOverdue(expected, remoteVersion, daemonUpdateOverdue(this.hostKey, remoteVersion, !!remoteVersion && remoteVersion !== expected))
       // One replacement per host per gap: the update is decided again when it ends,
       // with the build of then (daemon-update-gap.ts). A host with no daemon is a start.
-      if (remoteVersion && remoteVersion !== expected) {
-        const since = this._gapHeld?.expected === expected ? this._gapHeld.since : Date.now()
-        const waitMs = daemonUpdateWaitMs(daemonAgeMs, daemonUpdateMinGapMs(), Date.now() - since)
-        if (waitMs > 0 && !this._overdueMs) {
-          this._gapHeld = { expected, since }
-          this.postponeUpgrade(daemonUpdateGapWhy(daemonAgeMs!, waitMs), expected, remoteVersion, { delayMs: waitMs + 5_000 })
-          return false
-        }
+      const gap = remoteVersion && remoteVersion !== expected && !this.asked(expected)
+        ? this._gap.decide(expected, { host: this.hostKey, ageMs: daemonAgeMs, gapMs: daemonUpdateMinGapMs(), overdue: this._overdueMs > 0 })
+        : (this._gap.release(), null)
+      if (gap) {
+        this.postponeUpgrade(gap.why, expected, remoteVersion, { delayMs: Math.min(gap.waitMs + 5_000, DAEMON_UPDATE_GAP_RECHECK_MS), until: gap.until })
+        return false
       }
-      this._gapHeld = null
 
       if (takeover.managed) {
         // A switch of the host's mode rides the update (one-service-mode.ts): read on a live link only, whose hello is current.
@@ -5691,7 +5722,7 @@ export class DaemonConnection {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
           // Before the claim: a wait that tries nothing holds no other name of the daemon.
-          if (this.busyClockHolds(expected, remoteVersion)) return false
+          if (!this.asked(expected) && this.busyClockHolds(expected, remoteVersion)) return false
           if (await this.claimOrHold(expected, remoteVersion, held)) return false
           const updated = await this.updateManagedDaemon(takeover, expected, gate, remoteVersion)
           // Nothing changed on the host and this name asks again. Refused BY the host ('held': busy, deferred,
@@ -5725,7 +5756,8 @@ export class DaemonConnection {
       // Killing the daemon again won't converge — keep the running daemon
       // alive and scream instead of looping.
       if (
-        this._lastUpgradeAttempt
+        !this.asked(expected)
+        && this._lastUpgradeAttempt
         && this._lastUpgradeAttempt.expected === expected
         && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS
       ) {
@@ -5756,7 +5788,7 @@ export class DaemonConnection {
         }
       }
       const failedHere = await this.realDirFailure()
-      if (failedHere && buildBackedOff(failedHere, expected)) {
+      if (failedHere && buildBackedOff(failedHere, expected) && !this.asked(expected)) {
         // Asked again when its day off ends (a newer build is tried at once), never left until the link drops.
         this.postponeUpgrade(`this build did not stay serving on the host, so the running daemon keeps serving; asked again when its day off ends (${failedHere.reason.slice(0, 200)})`, expected, remoteVersion,
           { delayMs: backoffLeftMs(failedHere) })
@@ -6083,13 +6115,16 @@ export class DaemonConnection {
     })
   }
 
-  /** Since when this build's update has been held by the update gap (daemon-update-gap.ts). */
-  private _gapHeld: { expected: string; since: number } | null = null
+  /** The update gap on this connection, for both paths (daemon-update-gap.ts; the net updater gets the same one). */
+  private readonly _gap = new UpdateGapHold()
+  /** The update someone asked for now (host_daemon_update, requestedUpdate): the soft holds give way for that build. */
+  private _asked: { expected: string; gate?: () => void } | null = null
+  private asked(expected: string): boolean { return this._asked?.expected === expected }
   /** The pending re-run of a postponed daemon update, and how many times it has been put off. */
   private upgradeRecheckTimer: ReturnType<typeof setTimeout> | null = null
   private _upgradeRecheckAttempt = 0
-  /** The re-run in progress: a reconnect waits for it, so the two never stop or deploy at once. */
-  private _upgradeRecheckInFlight: Promise<void> | null = null
+  /** The re-run in progress (true: it went ahead): a reconnect waits for it, so the two never stop or deploy at once. */
+  private _upgradeRecheckInFlight: Promise<boolean> | null = null
   /** The unmanaged daemon this connection last stopped itself, and where (see checkDaemonRunning). */
   private _stoppedUnmanaged: { at: number; dir: string } | null = null
   /** Bumped on every connected/disconnected flip, so a re-check can tell its connection is gone. */
@@ -6102,9 +6137,11 @@ export class DaemonConnection {
    * never reached a remote host), an ACP turn open at connect, a version read that
    * timed out. Nothing else re-ran the check until some later reconnect.
    */
-  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number; delayMs?: number } = {}): void {
+  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number; delayMs?: number; until?: number } = {}): void {
     if (this.isReadOnlyRemote || this._destroyed) return
-    this._updateWait = noteUpdateWait(this.hostKey, 'postponed', reason, expected)
+    // Any other hold decides now; only the gap's own postpone keeps it held (daemon-update-gap.ts).
+    if (opts.until === undefined) this._gap.release()
+    this._updateWait = noteUpdateWait(this.hostKey, 'postponed', reason, expected, Date.now(), opts.until)
     // Work in progress ends on its own: ask again every minute. No answer may
     // last a while: back off. A known wait (the update gap) is its own clock.
     const delays = UPGRADE_RECHECK_DELAYS_MS
@@ -6146,18 +6183,22 @@ export class DaemonConnection {
    * new build, the same as after a server restart. A connection that is down
    * needs nothing here: the reconnect that brings it back runs the decision.
    */
-  private recheckPostponedUpgrade(): Promise<void> {
+  private recheckPostponedUpgrade(asked?: { expected: string; gate?: () => void }): Promise<boolean> {
     // No SSH to this host: its update (a new build or a switch of its mode) runs over the link, by
     // the host network's updater, or by its companion (the cloud box). The SSH check would only fail
     // here, every minute (2026-11-22: a mode due on a host network machine).
-    if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve() }
+    if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve(false) }
     if (this._upgradeRecheckInFlight) {
+      // Someone's ask waits for the decision in flight, then runs its own past the soft holds.
+      if (asked) return this._upgradeRecheckInFlight.then(() => this.recheckPostponedUpgrade(asked), () => this.recheckPostponedUpgrade(asked))
       // Asked while one runs (a reconnect onto the old daemon during the upload,
       // whose own run will find its connection gone): run again after it.
       this._upgradeRecheckAgain = true
-      return this._upgradeRecheckInFlight
+      return this._upgradeRecheckInFlight.then(() => false)
     }
+    this._asked = asked ?? null
     const run = this.runUpgradeRecheck().finally(() => {
+      this._asked = null
       this._upgradeRecheckInFlight = null
       // A swap that never dropped the link (the update failed, or was held): the host reads as it is.
       // Attached during it: the swap is done once the link is up, whatever the update said.
@@ -6174,24 +6215,27 @@ export class DaemonConnection {
 
   private _upgradeRecheckAgain = false
 
-  private async runUpgradeRecheck(): Promise<void> {
-    if (this._destroyed || this.isReadOnlyRemote) return
+  private async runUpgradeRecheck(): Promise<boolean> {
+    if (this._destroyed || this.isReadOnlyRemote) return false
     // A connect or reconnect still dialling may already be past its own
     // decision (the one that postponed this): ask again once it settles.
     if (this._connecting || this._reconnectInFlight) {
       const expected = this.getExpectedDaemonVersion()
       if (expected) this.postponeUpgrade('a connect was in progress', expected, '(not read)', { steady: true })
-      return
+      return false
     }
     // Down with nothing dialling: the reconnect loop's next attempt decides.
-    if (!this._connected) return
+    if (!this._connected) return false
     const epoch = this._connectionEpoch
     const live = () => !this._destroyed && this._connected && this._connectionEpoch === epoch
       && !this._connecting && !this._reconnectInFlight && !this.reconnectTimer
     // Asked right before the stop: the ssh round trips above it take seconds,
     // and the connection may have dropped (or work started) meanwhile.
+    const askGate = this._asked?.gate
     const gate = (): UpgradeHold => {
       if (!live()) return UPGRADE_STALE
+      // The asker may no longer have it run (its grant was revoked, the host closed): nothing stops.
+      try { askGate?.() } catch (err) { return `the update asked for was refused (${err instanceof Error ? err.message : String(err)})` }
       const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
       if (writes > 0) return `${writes} daemon command(s) that change a session or a file are in flight`
       return null
@@ -6211,12 +6255,13 @@ export class DaemonConnection {
       } else if (expected && live()) {
         this.postponeUpgrade(`the check failed (${msg.split('\n')[0].slice(0, 200)})`, expected, '')
       }
-      return
+      return false
     }
-    if (!goAhead) return
+    if (!goAhead) return false
     log.session.info('DaemonConnection: postponed daemon update going ahead; reconnecting to the new build', { host: this.hostKey })
     // The stop usually drops the socket first, and that loss already scheduled the reconnect.
     if (this._connected && this._connectionEpoch === epoch) this.handleConnectionLost()
+    return true
   }
 
   /**
@@ -6448,13 +6493,13 @@ export class DaemonConnection {
       this.postponeUpgrade('the previous daemon update is still running on the host', expected, remoteVersion, { steady: true })
       return 'held'
     }
-    const sinceTry = this._lastUpgradeAttempt?.expected === expected ? Date.now() - this._lastUpgradeAttempt.at : Infinity
+    const sinceTry = this._lastUpgradeAttempt?.expected === expected && !this.asked(expected) ? Date.now() - this._lastUpgradeAttempt.at : Infinity
     if (sinceTry < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) {
       // A try of this build that did not finish (its daemon never answered as the new build) is
       // asked again when its cooldown ends, not left until the link next drops.
       // This name swapped the shared daemon within the cooldown (the attempt is stamped at the swap), so it is
       // the host's recent event, not only this name's state. Still 'own-path': the daemon that swap restarted
-      // holds every name for the 20 min min gap (daemon-update-gap.ts), longer than this cooldown, and an
+      // holds every name for the update gap (daemon-update-gap.ts), longer than this cooldown, and an
       // overdue name passes a 'held' claim anyway; a swap still running there is the record's check above.
       this.postponeUpgrade(`an update to this build was tried ${Math.round(sinceTry / 60_000)} min ago; asked again when its cooldown ends`, expected, remoteVersion,
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS - sinceTry + 5_000 })
@@ -6463,7 +6508,7 @@ export class DaemonConnection {
     // A build that answered ok and then did not stay serving there: a day, not the 10 min cooldown
     // (2026-11-04 review: each try stopped the daemon and put the previous one back).
     const failedHere = await this.realDirFailure()
-    if (failedHere && buildBackedOff(failedHere, expected)) {
+    if (failedHere && buildBackedOff(failedHere, expected) && !this.asked(expected)) {
       this.postponeUpgrade(`this build did not stay serving on the host, so the running daemon keeps serving; asked again when its day off ends (${failedHere.reason.slice(0, 200)})`, expected, remoteVersion,
         { delayMs: backoffLeftMs(failedHere) })
       return 'held'
@@ -6731,11 +6776,15 @@ export class DaemonConnection {
   private getExpectedDaemonVersion(): string | null {
     try {
       const v = resolveDaemonSourceVersion()
-      return v && v !== 'dev-source' ? v : null
+      return (this._expectedSeen = v && v !== 'dev-source' ? v : null)
     } catch {
       return null
     }
   }
+
+  private _expectedSeen: string | null = null
+  /** The build this server would put on the host, as its last update decision read it; fields only (the fleet card reads it). */
+  get expectedDaemonBuild(): string | null { return this._expectedSeen }
 
   /**
    * Send one command directly on this.ws, bypassing the _connected gate that
