@@ -71,6 +71,10 @@ Object.assign(process.env, {
   WALNUT_BUNDLED_STORE_DIR: path.join(root, 'bundled-store'),
   MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(root, '.claude/projects'),
   MOCK_CLAUDE_PLAIN_ECHO: '1',
+  // This spec replaces the separate daemon program (the path of a server with in_process_daemon off);
+  // since that experiment is on by default the server would run its daemon in process, with no old
+  // program to drain. A deploy's restart of an in-process server is server-restart-upload.spec.ts.
+  WALNUT_IN_PROCESS_DAEMON: '0',
 })
 process.argv.push('--_ephemeral-child')
 fs.mkdirSync(path.join(root, 'bundled-store'), { recursive: true })
