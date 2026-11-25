@@ -1,6 +1,14 @@
 /**
  * The tail window of a big transcript, kept between reads and grown by what the CLI
- * appended (readSessionHistoryTail: the minute transcript sweep, search indexing).
+ * appended. Every tail window read of a session's transcript goes through here
+ * (session-history.ts readHistoryWindow): the minute transcript sweep, the history route's
+ * bounded cold read, the over-ceiling tail, the open preview, search indexing.
+ *
+ * 2026-11-25: the route's cold read had a copy of its own that never looked here. Its parse
+ * cache holds about ten windows, and the background readers walk more sessions than that, so
+ * every read of a host's big transcript found its entry gone and pulled 4 MB over the link
+ * again (80 of 80 slow reads logged `prior: none`; 5 to 14 s each on a busy link, the p95
+ * of GET /history). A read that finds a window here moves only what changed.
  *
  * Before this, every read of a transcript over the window size moved its last 4 MB over
  * the host's link again, changed or not, and the sweep reads every live session each
@@ -33,7 +41,7 @@ interface TailWindow {
   lastLine: Buffer
   /** The complete lines held, ending at `end`, at most the window size. */
   lines: Buffer
-  messages: unknown[]
+  value: unknown
 }
 
 /** At most this many windows are kept, least recently used out first. */
@@ -115,24 +123,47 @@ function lastLineOf(complete: Buffer): { start: number; line: Buffer } {
   return { start: prev + 1, line: complete.subarray(prev + 1) }
 }
 
+/** A window read: the parse, the text it parsed, and where that text starts in the file. */
+export interface TailWindowRead<R> {
+  value: R
+  /** The window's own lines from its first line start (may end in a partial line), decoded on
+   *  first ask: a window held answers with no decode unless its caller needs the text. */
+  text: () => string
+  /** The window ends at a line end (no partial line after its last complete one). */
+  endsWithLine: boolean
+  /** Absolute file offset where `text` begins. */
+  startByte: number
+  /** How it was answered: from the window held (no bytes), grown by the appended bytes, or read fresh. */
+  how: 'held' | 'grown' | 'fresh'
+  /** Bytes this read moved from the file (over the link, for a host's file). */
+  movedBytes: number
+}
+
+/** `parse` gets the window text and where it starts in the file. */
+type WindowParse<R> = (text: string, startByte: number) => Promise<R>
+
 /**
  * The parse of the newest `window` bytes of `path` (line-aligned), reading only what
- * changed since the last call for the same key. `parse` gets the window text and
- * returns its messages (session-history parseHistoryWindowText). null: unreadable.
+ * changed since the last call for the same key. null: unreadable.
+ *
+ * `key` null: read fresh and keep nothing (a parse with options of its own). `keep`
+ * false: a window held for the key still answers and grows, but a fresh read is not kept
+ * (a one-off reader must not push out the windows of the sessions read again and again).
  */
-export async function readTailWindow<M>(
-  key: string,
+export async function readTailWindowRead<R>(
+  key: string | null,
   reader: TailReader,
   path: string,
   st: { mtimeMs: number; size: number; epoch?: string },
   window: number,
-  parse: (text: string) => Promise<M[]>,
-): Promise<M[] | null> {
-  const held = windows.get(key)
-  if (held && held.path === path && held.epoch === st.epoch) {
+  parse: WindowParse<R>,
+  opts: { keep?: boolean } = {},
+): Promise<TailWindowRead<R> | null> {
+  const held = key === null ? undefined : windows.get(key)
+  if (key !== null && held && held.path === path && held.epoch === st.epoch) {
     if (held.mtimeMs === st.mtimeMs && held.end === st.size) {
       touch(key, held)
-      return held.messages as M[]
+      return { value: held.value as R, text: decodeOnce(held.lines), endsWithLine: true, startByte: held.end - held.lines.length, how: 'held', movedBytes: 0 }
     }
     // Equal size is growth only when the last read went past its stat (an append that
     // landed between the two): then its last line is read again and checked. Any other
@@ -143,13 +174,19 @@ export async function readTailWindow<M>(
       if (grown) return grown
     }
   }
-  return fresh(key, reader, path, st, window, parse)
+  return fresh(key, reader, path, st, window, parse, opts.keep !== false)
 }
 
-async function grow<M>(
+/** The text of `buf`, decoded once and only if asked. */
+function decodeOnce(buf: Buffer): () => string {
+  let text: string | undefined
+  return () => (text ??= buf.toString('utf-8'))
+}
+
+async function grow<R>(
   key: string, held: TailWindow, reader: TailReader, st: { mtimeMs: number; size: number; epoch?: string },
-  window: number, parse: (text: string) => Promise<M[]>,
-): Promise<M[] | null> {
+  window: number, parse: WindowParse<R>,
+): Promise<TailWindowRead<R> | null> {
   const res = await reader.readFileRangeBuffer(held.path, held.lastLineStart, st)
   if (res === null) { drop(key); return null }
   const buf = res.buf
@@ -161,8 +198,10 @@ async function grow<M>(
   }
   const { complete, partial } = split(buf.subarray(held.lastLine.length))
   const lines = trimToWindow(Buffer.concat([held.lines, complete]), window)
-  const messages = await parse(Buffer.concat([lines, partial]).toString('utf-8'))
   const end = held.end + complete.length
+  const startByte = end - lines.length
+  const text = Buffer.concat([lines, partial]).toString('utf-8')
+  const value = await parse(text, startByte)
   const last = complete.length > 0 ? lastLineOf(complete) : null
   keep(key, {
     path: held.path,
@@ -172,28 +211,32 @@ async function grow<M>(
     lastLineStart: last ? held.end + last.start : held.lastLineStart,
     lastLine: last ? Buffer.from(last.line) : held.lastLine,
     lines: Buffer.from(lines),
-    messages,
+    value,
   })
-  return messages
+  return { value, text: () => text, endsWithLine: partial.length === 0, startByte, how: 'grown', movedBytes: buf.length }
 }
 
-async function fresh<M>(
-  key: string, reader: TailReader, path: string, st: { mtimeMs: number; size: number; epoch?: string },
-  window: number, parse: (text: string) => Promise<M[]>,
-): Promise<M[] | null> {
-  drop(key)
+async function fresh<R>(
+  key: string | null, reader: TailReader, path: string, st: { mtimeMs: number; size: number; epoch?: string },
+  window: number, parse: WindowParse<R>, keepIt: boolean,
+): Promise<TailWindowRead<R> | null> {
+  // A window held for the key no longer answers this file: it goes, kept anew or not.
+  if (key !== null) drop(key)
   const start = Math.max(0, st.size - window)
   const res = await reader.readFileRangeBuffer(path, start, st)
   if (res === null) return null
   let buf = res.buf
   // Skip the first (almost certainly partial) line when the read did not start at 0.
-  if (start > 0) {
-    const nl = buf.indexOf(0x0a)
-    buf = nl < 0 ? Buffer.alloc(0) : buf.subarray(nl + 1)
-  }
+  // The skip drops whatever runs from `start` to its first newline: a line begun before
+  // `start`, or a WHOLE line when `start` is a line's first byte. Either way the window
+  // owns exactly the lines starting after it (jsonl-window.ts).
+  const skipped = start > 0 ? (buf.indexOf(0x0a) + 1 || buf.length) : 0
+  buf = buf.subarray(skipped)
+  const startByte = start + skipped
   const { complete, partial } = split(buf)
-  const messages = await parse(buf.toString('utf-8'))
-  if (complete.length > 0) {
+  const text = buf.toString('utf-8')
+  const value = await parse(text, startByte)
+  if (key !== null && keepIt && complete.length > 0) {
     // Offsets counted from the bytes the read reached (raw bytes, never a decode).
     const end = start + res.buf.length - partial.length
     const last = lastLineOf(complete)
@@ -201,8 +244,8 @@ async function fresh<M>(
       path, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}),
       mtimeMs: start + res.buf.length === st.size ? st.mtimeMs : null, end,
       lastLineStart: end - last.line.length, lastLine: Buffer.from(last.line),
-      lines: Buffer.from(complete), messages,
+      lines: Buffer.from(complete), value,
     })
   }
-  return messages
+  return { value, text: () => text, endsWithLine: partial.length === 0, startByte, how: 'fresh', movedBytes: res.buf.length }
 }

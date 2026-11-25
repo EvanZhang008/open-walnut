@@ -373,7 +373,8 @@ describe('a window with a frozen prefix', () => {
     expect(plain.map((m) => m.text)).toContain('big answer');
     expect(_historyCacheGetForTesting(sid)!.inc!.window!.startByte).toBe(startAt);
 
-    // The pending tool's result lands: the frozen prefix cannot take it, so a fresh window is read.
+    // The pending tool's result lands: the frozen prefix cannot take it, so a fresh window is read
+    // (a local transcript keeps no tail window: session-history-window-reuse.test.ts has a host's).
     await append(sid, [toolResult('toolu_pending_padpad', 'finally done')]);
     reads.ranges.length = 0;
     const settled = await readSessionHistory(sid, CWD, undefined, undefined, big);

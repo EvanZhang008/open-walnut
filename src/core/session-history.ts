@@ -36,10 +36,11 @@ import { findImagePaths, findRelativeImageNames } from '../providers/session-io.
 import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
-import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
+import { _resetTailWindowsForTesting, dropTailWindows, readTailWindowRead, setTailWindowShedding } from './history-tail-window.js';
 import { isByteCeilingError } from './byte-ceiling.js';
 import { registerMemoryHolder } from './observability/memory-ledger.js';
 import { noteTranscriptLinesParsed } from '../providers/line-parse-count.js';
+import { HISTORY_OPEN_PREVIEW_BYTES } from './history-open-preview.js';
 import { keptHostHistoryOf, keptHostHistoryState, shareHistoryBudget, shedKeptHostHistory, viaJudgingHost } from './sessions/host-history-reads.js';
 
 // The parser itself (parseSessionMessages and the row types) lives in history-parse.ts, pure, so
@@ -1358,16 +1359,16 @@ export async function parseHistoryWindowText(
   parseOpts?: ParseSessionMessagesOptions,
   start?: HistoryWindowStart,
 ): Promise<SessionHistoryMessage[]> {
-  return (await parseHistoryWindow(sessionId, windowText, parseOpts, start)).messages;
+  return (await parseHistoryWindowParts(sessionId, windowText, parseOpts, start)).messages;
 }
 
-/** parseHistoryWindowText, with the text it parsed (the injected lines merged in), which a state seed needs. */
-async function parseHistoryWindow(
+/** parseHistoryWindowText, with the injected lines it merged after the window's own (what a state seed parses again). */
+async function parseHistoryWindowParts(
   sessionId: string,
   windowText: string,
   parseOpts?: ParseSessionMessagesOptions,
   start?: HistoryWindowStart,
-): Promise<{ messages: SessionHistoryMessage[]; merged: string }> {
+): Promise<{ messages: SessionHistoryMessage[]; synthetic: string }> {
   const merged = await mergeSyntheticUserEvents(sessionId, windowText);
   const parsed = parseSessionMessages(merged, { ...parseOpts, startsMidFile: true });
   // Echo-claim binding — same as the full-read path (:1572). Its absence here
@@ -1381,7 +1382,8 @@ async function parseHistoryWindow(
     bindEchoClaims(sessionId, parsed);
   } catch { /* best-effort — text dedup remains the fallback */ }
   markWindowedRead(parsed, start);
-  return { messages: parsed, merged };
+  // The merge only appends after the window's text.
+  return { messages: parsed, synthetic: merged.slice(windowText.length) };
 }
 
 /**
@@ -1421,68 +1423,92 @@ export function readSessionHistoryTailWindow(
   parseOpts?: ParseSessionMessagesOptions,
 ): Promise<SessionHistoryMessage[] | null> {
   return viaJudgingHost(sessionId, host, 'readSessionHistoryTailWindow', [maxTailBytes, parseOpts],
-    async () => (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, parseOpts))?.messages ?? null);
+    async () => (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, { parseOpts, keep: false }))?.messages ?? null);
 }
 
 /** A tail window as read: its parse, and the bytes the parse came from (for seeding incremental state). */
 interface HistoryWindowRead {
   messages: SessionHistoryMessage[];
-  /** The window's own lines, whole lines from the first line start, through the end of the read (may end in a partial line). */
-  text: string;
-  /** `text` with the injected lines merged in, as parsed. */
-  merged: string;
+  /** The window's own lines, whole lines from the first line start, through the end of the read
+   *  (may end in a partial line). Decoded when asked: a held window answers without it. */
+  text: () => string;
+  /** No partial line after the window's last complete one. */
+  endsWithLine: boolean;
+  /** The injected lines the parse merged after `text` (usually none). */
+  synthetic: string;
   /** Absolute byte where `text` begins. */
   startByte: number;
   path: string;
   epoch?: string;
+  /** From the window kept for the session (history-tail-window.ts), grown by the appended bytes, or read fresh. */
+  how: 'held' | 'grown' | 'fresh';
+  /** Bytes this read moved (over the link, for a host's transcript). */
+  movedBytes: number;
 }
 
+/** The stat a caller already took of the transcript, so the window read does not take another. */
+interface KnownTranscriptStat { path: string; mtimeMs: number; size: number; epoch?: string }
+
+/**
+ * The parse of the last `maxTailBytes` of the transcript, through the window kept for the
+ * session (history-tail-window.ts): one held for this stat answers with no read, one the file
+ * grew past reads only the new bytes, else a fresh window. `parseOpts` (a filter of this
+ * caller's own) never answers from a kept window nor keeps one; `keep: false` reads through
+ * a kept window but keeps no new one (a one-off reader). Null when the window can't be read;
+ * `rethrow`: a failed read throws instead, for a caller with a fallback of its own.
+ */
 async function readHistoryWindow(
   sessionId: string,
   cwd: string | undefined,
   host: string | undefined,
   maxTailBytes: number,
-  parseOpts?: ParseSessionMessagesOptions,
+  opts: { parseOpts?: ParseSessionMessagesOptions; keep?: boolean; known?: KnownTranscriptStat; rethrow?: boolean } = {},
 ): Promise<HistoryWindowRead | null> {
   const daemonHost = host ?? '__local__';
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
-    const statPath = await resolveHistoryWindowPath(sessionId, cwd, daemonHost, reader);
+    const statPath = opts.known?.path ?? await resolveHistoryWindowPath(sessionId, cwd, daemonHost, reader);
     if (!statPath) return null;
-    const st = await reader.stat(statPath);
+    const st = opts.known ?? await reader.stat(statPath);
     if (!st) return null;
     // Clamp the window to the reader's own ceiling. Without this, a ceiling set
     // BELOW the tail size makes the degradation path itself get refused, so the
     // fallback for an oversized file silently returns nothing — the fallback must
     // never be able to exceed the limit that triggered it.
     const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
-    const start = Math.max(0, st.size - window);
-    // Shared with a read of the same window already in flight (the transcript
-    // sweep's, say): one transfer for both. Read as BYTES: the window's first byte
-    // is kept as a file offset, which a decoded string cannot give (a character
-    // cut at `start` decodes to a replacement of another length).
-    const res = await reader.readFileRangeBuffer(statPath, start, st);
-    if (res === null) return null;
-    // Skip the first (almost certainly partial) line when we didn't start at 0.
-    // The skip drops whatever runs from `start` to its first newline: a line begun
-    // before `start`, or a WHOLE line when `start` is a line's first byte. Either way the
-    // window owns exactly the lines starting after it, so its own lines begin where that
-    // newline ends (and at 0 when it read from the top), which is where a page of the bytes
-    // before it must stop (jsonl-window.ts: a window owns the lines starting inside it).
-    const skipped = start > 0 ? (res.buf.indexOf(0x0a) + 1 || res.buf.length) : 0;
-    const text = res.buf.subarray(skipped).toString('utf-8');
-    const startByte = start + skipped;
-    const { messages, merged } = await parseHistoryWindow(sessionId, text, parseOpts,
-      { byte: startByte, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) });
-    return { messages, text, merged, startByte, path: statPath, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) };
+    // Read as BYTES (the reader joins a read of the same window already in flight): the
+    // window's first byte is kept as a file offset, which a decoded string cannot give.
+    const key = opts.parseOpts ? null : `${cacheKey(sessionId, host)}|${window}`;
+    const at = { mtimeMs: st.mtimeMs, size: st.size, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) };
+    const read = await readTailWindowRead(key, reader, statPath, at, window,
+      (text, startByte) => parseHistoryWindowParts(sessionId, text, opts.parseOpts,
+        { byte: startByte, ...(st.epoch !== undefined ? { epoch: st.epoch } : {}) }),
+      { keep: opts.keep !== false });
+    if (!read) return null;
+    return {
+      messages: read.value.messages, synthetic: read.value.synthetic, text: read.text, endsWithLine: read.endsWithLine,
+      startByte: read.startByte, path: statPath,
+      ...(st.epoch !== undefined ? { epoch: st.epoch } : {}), how: read.how, movedBytes: read.movedBytes,
+    };
   } catch (err) {
+    if (opts.rethrow) throw err;
     log.session.debug('tail window read failed', {
       sessionId, host: daemonHost,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }
+}
+
+/**
+ * Whether a window read of this session is kept for the next (history-tail-window.ts keeps at
+ * most MAX_TAIL_WINDOWS). Only a host's transcript, whose window costs a transfer over its link
+ * to read again, and wider than a first-paint preview: a local one reads from disk in
+ * milliseconds, and a preview is read once per open. Both still read through a window kept.
+ */
+function keepsTailWindow(host: string | undefined, windowBytes: number): boolean {
+  return !!host && host !== '__local__' && windowBytes > HISTORY_OPEN_PREVIEW_BYTES;
 }
 
 /**
@@ -1495,8 +1521,11 @@ async function readHistoryWindow(
  * stays a plain window, and the next change reads a fresh one.
  */
 async function seedWindowIncrementalState(sessionId: string, win: HistoryWindowRead, windowBytes: number): Promise<HistoryIncrementalState | undefined> {
-  if (!win.text || !win.text.endsWith('\n')) return undefined;
-  const st = await seedIncrementalStateAt(sessionId, win.startByte, win.merged, win.text.length, win.messages, win.path, undefined, win.startByte > 0);
+  if (!win.endsWithLine) return undefined;
+  const text = win.text();
+  if (!text) return undefined;
+  // The text as parsed (the injected lines it merged after it): never kept beside the window.
+  const st = await seedIncrementalStateAt(sessionId, win.startByte, text + win.synthetic, text.length, win.messages, win.path, undefined, win.startByte > 0);
   if (!st) return undefined;
   // A window read never filters rewinds (a session with in-place rewinds skips it).
   st.cutsKey = rewindCutsKey(undefined);
@@ -1715,15 +1744,11 @@ async function readSessionHistoryTailHere(
         // the rewound-away branch as live. Fall through to the full
         // (cut-filtering) read instead.
         if (!(await getInPlaceRewinds(sessionId))) {
-          if (!opts?.poll) return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
           // Kept between reads and grown by the appended bytes: an unchanged
-          // transcript moves nothing, a grown one about what was added.
-          const { readTailWindow } = await import('./history-tail-window.js');
-          const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
-          return await readTailWindow(
-            `${cacheKey(sessionId, host)}|${window}`, reader, st.path, st, window,
-            (text) => parseHistoryWindowText(sessionId, text),
-          );
+          // transcript moves nothing, a grown one about what was added. A one-off
+          // reader reads through a kept window but keeps no new one.
+          // A failed read throws to the full read below, never answers an empty history.
+          return (await readHistoryWindow(sessionId, cwd, host, maxTailBytes, { known: st, keep: opts?.poll === true, rethrow: true }))?.messages ?? null;
         }
       }
     } catch (err) {
@@ -1832,6 +1857,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   let mtimeMs: number | undefined;
   let statSize: number | undefined;
   let statPath: string | undefined;
+  let statEpoch: string | undefined;
   // Set when the LOCAL daemon failed to answer the stat at all (timeout, no
   // connection), as opposed to answering with an error.
   let localDaemonDown: string | undefined;
@@ -1846,6 +1872,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         if (statResult) {
           mtimeMs = statResult.mtimeMs;
           statSize = statResult.size;
+          statEpoch = statResult.epoch;
           // The stat SUCCEEDED — the transcript file exists on disk, whatever the
           // parse yields. Every return below this point inherits that fact.
           sourceFound = true;
@@ -1961,6 +1988,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // return — so the common case (no recorded rewind) pays this one PK SELECT
   // only when a real read is happening anyway.
   const rewindCuts = await getInPlaceRewinds(sessionId);
+  // The stat taken above: the window reads below are for it, as the entries they keep are.
+  const knownStat: KnownTranscriptStat | undefined = statPath && mtimeMs !== undefined && statSize !== undefined
+    ? { path: statPath, mtimeMs, size: statSize, ...(statEpoch !== undefined ? { epoch: statEpoch } : {}) } : undefined;
 
   if (options?.maxColdReadBytes && !rewindCuts && statPath && statSize !== undefined
       && statSize > options.maxColdReadBytes) {
@@ -1969,13 +1999,16 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // window's incremental state exists to save): what the cache held for the session.
     const before = cacheGet(sessionId, host);
     const prior = !before ? 'none' : !before.windowed ? 'full' : !before.inc ? 'window-no-state' : 'window-state-unused';
-    const read = await readHistoryWindow(sessionId, cwd, host, options.maxColdReadBytes);
+    const read = await readHistoryWindow(sessionId, cwd, host, options.maxColdReadBytes, {
+      known: knownStat, keep: keepsTailWindow(host, options.maxColdReadBytes),
+    });
     const win = read?.messages;
     if (read && win) {
+      // `window`: the kept window answered (held), grew by `movedBytes`, or was read whole (fresh).
       log.session.info('history cold read bounded to tail window', {
         sessionId, host: host ?? '__local__', fileSize: statSize,
         windowBytes: options.maxColdReadBytes, messages: win.length, windowReadMs: Date.now() - windowAt,
-        prior, ...(read.text.endsWith('\n') ? {} : { partialLastLine: true }),
+        prior, window: read.how, movedBytes: read.movedBytes, ...(read.endsWithLine ? {} : { partialLastLine: true }),
       });
       if (mtimeMs !== undefined) {
         // A full-width window of a file past the whole-file ceiling is the very tail the
@@ -2052,7 +2085,10 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // bytes. Re-reading and re-parsing 4 MB per request (about 8 MB of strings each,
     // up to 100 an hour on the maintainer's 940 MB session) was the largest single
     // source of the server's uncollected garbage (heap snapshot, 2026-11-21).
-    const read = await readHistoryWindow(sessionId, cwd, host, OVER_CEILING_TAIL_BYTES, tailParseOpts);
+    const read = await readHistoryWindow(sessionId, cwd, host, OVER_CEILING_TAIL_BYTES, {
+      ...(tailParseOpts ? { parseOpts: tailParseOpts } : {}), ...(fileSize === statSize ? { known: knownStat } : {}),
+      keep: keepsTailWindow(host, OVER_CEILING_TAIL_BYTES),
+    });
     if (read) {
       // Keyed by the stat this read began from; a read refused without one is not kept.
       // A rewound session's tail is kept only when the daemon's dead set filtered it
