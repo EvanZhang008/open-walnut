@@ -35,6 +35,7 @@ import { askKey, FOLDABLE_SOURCES } from '../../src/core/same-ask.js'
 import { setReplyTag } from '../../src/core/org/reply-card-switch.js'
 import { bindDecisionOwnerNow } from '../../src/core/decision-owner.js'
 import { cardDecisionId } from '../../src/core/org/thread-report-ask.js'
+import { keepThreadDecisions } from '../../src/core/org/thread-popup-rules.js'
 import type { OrgThread, ThreadMessage } from '../../src/core/org/threads-model.js'
 import type { Task } from '../../src/core/types.js'
 
@@ -223,6 +224,28 @@ describe('a fold under a decision its holder carries on a needs thread', () => {
     holderThreads(thread(TH, { state: 'needs', ask: 'Orchard fence: two metres tall, or three?' }))
     tasks = await settle(tasks, NOW + 60_000)
     expect(of(tasks, 'mate').user_status).toMatchObject({ state: 'waiting', sameAsk: { id: 'holder' } })
+  })
+
+  it('N1: the thread, still in needs, asks another question: the teammate shows his decision again, and the answer to the other is no answer to his', async () => {
+    setReplyTag(true)
+    let tasks = await foldedFirst('session (its words)', EN)
+    tasks = swap(tasks, (t) => moved(t, EN.ask))
+    const onThread = thread(TH, { state: 'needs', ask: EN.onThread, askId: D })
+    holderThreads(onThread)
+    tasks = await settle(tasks, NOW + 60_000)
+    expect(of(tasks, 'mate').user_status).toMatchObject({ state: 'waiting', sameAsk: { id: 'holder' } })
+    // A thread_update makes it ask the gate colour, staying in needs: the store's write judges its id again.
+    const file = (threads: OrgThread[]) => ({ version: 1 as const, taskId: 'holder', threads })
+    const gate = keepThreadDecisions(file([onThread]), file([{ ...onThread, ask: EN.other }])).threads[0]!
+    expect(gate.askId).not.toBe(D)
+    holderThreads(gate)
+    tasks = await settle(tasks, NOW + 2 * 60_000)
+    expect(of(tasks, 'mate').user_status, 'the fence height shows nowhere').toMatchObject({ state: 'needs', ask: EN.ask })
+    // He answers the colour there; the thread leaves needs: the fence height is still unanswered.
+    holderThreads({ ...gate, state: 'working', messages: [his(REPLIED)] })
+    tasks = await settle(tasks, LATER)
+    expect(of(tasks, 'mate').user_status?.sameAsk?.answered).toBeUndefined()
+    expect(of(tasks, 'mate').user_status).toMatchObject({ state: 'needs', ask: EN.ask })
   })
 
   it('C5: his message on another thread of the holder is no answer to it; on the thread that carried it, it is', async () => {

@@ -69,13 +69,19 @@ const UP_ASK_MAX = 160;
  * The question's part on the decisions the task's own threads already carry in needs
  * (org/thread-report-ask.ts askedOnThreads; a card line put them up): '' for none. 2026-11-25: a
  * session that had put a decision up with its line said it again as FOR_USER_ASK, and he saw it
- * twice. The question says it is up, so the session need not say it twice; said again all the
- * same, Walnut keeps it on the thread only (askOnNeedsThread). Pure.
+ * twice. The question says it is up, so the session need not say it twice. Said again all the same,
+ * the session names the card's decision id (FOR_USER_ASK_ID), and Walnut keeps it on the thread
+ * only by that id (askOnNeedsThread), however it was worded (review 2026-11-25, N2: "Wood or
+ * plastic for the compost bin?" and "Should the compost bin be wood or plastic?" are one decision
+ * that no strict word rule joins). Pure.
  */
-export function decisionsUpPart(asks: readonly string[]): string {
-  const quoted = asks.slice(0, UP_MAX).map((a) => { const w = a.replace(/\s+/g, ' ').trim(); return `"${w.slice(0, cutEnd(w, UP_ASK_MAX))}"`; });
+export function decisionsUpPart(asks: ReadonlyArray<{ ask: string; id?: string }>): string {
+  const quoted = asks.slice(0, UP_MAX).map((a) => {
+    const w = a.ask.replace(/\s+/g, ' ').trim();
+    return `"${w.slice(0, cutEnd(w, UP_ASK_MAX))}"${a.id ? ` (${a.id})` : ''}`;
+  });
   if (!quoted.length) return '';
-  return `\nYour threads' cards already ask him: ${quoted.join('; ')}. A decision up there stays out of FOR_USER_ASK, which is for another decision only; FOR_USER_STATE is needs-you while one waits on him.`;
+  return `\nYour threads' cards already ask him: ${quoted.join('; ')}. A decision up there stays out of FOR_USER_ASK, which is for another decision only (your earlier ask too, once a card asks it); named there anyway, FOR_USER_ASK_ID is that card's id. FOR_USER_STATE is needs-you while one waits on him.`;
 }
 
 /** Tests only. */

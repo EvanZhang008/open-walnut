@@ -113,7 +113,7 @@ describe('one decision is shown once: a card line and the task\'s own ask', () =
       expect(ownAsk(t)).toEqual([])
     }, { timeout: 10_000, interval: 200 })
     // And the question said it was up already, so a session need not say it twice.
-    expect(q.prompt).toContain('Your threads\' cards already ask him: "Raised bed or planting straight in the ground for the tomatoes?". A decision up there stays out of FOR_USER_ASK')
+    expect(q.prompt).toMatch(/Your threads' cards already ask him: "Raised bed or planting straight in the ground for the tomatoes\?" \(ask-[a-z0-9]+\)\. A decision up there stays out of FOR_USER_ASK/)
   }, 60_000)
 
   it('a later turn while the decision is still up: said again word for word, or left out, it stays one card', async () => {

@@ -176,13 +176,12 @@ export function threadDecisionsOf(task: Pick<Task, 'org_role' | 'threads_on'> | 
 }
 
 /**
- * The decisions the task's own threads carry in needs now, in their words, for the status question
- * (sessions/status-thread-asked.ts decisionsUpPart): none with the experiment off, or for Main and
- * the leads, whose asks never place. Pure.
+ * The decisions the task's own threads carry in needs now, their words and their decision ids, for
+ * the status question (sessions/status-thread-asked.ts decisionsUpPart): none with the experiment
+ * off, or for Main and the leads, whose asks never place. Pure.
  */
-export function askedOnThreads(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, threads: readonly OrgThread[]): string[] {
-  if (!replyTagNow() || !placesAskOnThread(task)) return [];
-  return threads.filter(asksHim).map((t) => threadAskText(t)?.trim() ?? '').filter(Boolean);
+export function askedOnThreads(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, threads: readonly OrgThread[]): Array<{ ask: string; id?: string }> {
+  return threadDecisionsOf(task, threads).filter((d) => d.open).map((d) => ({ ask: d.ask, ...(d.id ? { id: d.id } : {}) }));
 }
 
 /**

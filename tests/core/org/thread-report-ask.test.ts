@@ -375,15 +375,26 @@ describe('a decision a thread already carries in needs is that thread\'s (thread
     expect(withoutOwnAsk(report)).toEqual({ state: 'needs', at: T(10), now: 'The choice is laid out.', next: 'He picks.', needs_since: T(5) })
   })
 
-  it('the question names the decisions that are up, for a task only, at most three, each cut', () => {
+  it('the question names the decisions that are up, for a task only, at most three, each cut, with the decision id a card stores', () => {
     setReplyTag(true)
-    expect(askedOnThreads({ threads_on: true }, [needs, other])).toEqual([ASK])
+    expect(askedOnThreads({ threads_on: true }, [needs, other])).toEqual([{ ask: ASK }])
+    expect(askedOnThreads({ threads_on: true }, [{ ...needs, askId: 'ask-aaaa01' }, other])).toEqual([{ ask: ASK, id: 'ask-aaaa01' }])
     expect(askedOnThreads({ threads_on: true, org_role: 'lead' }, [needs, other])).toEqual([])
+    const TAIL = ' A decision up there stays out of FOR_USER_ASK, which is for another decision only (your earlier ask too, once a card asks it); named there anyway, FOR_USER_ASK_ID is that card\'s id. FOR_USER_STATE is needs-you while one waits on him.'
     expect(decisionsUpPart([])).toBe('')
-    expect(decisionsUpPart([ASK])).toBe(`\nYour threads' cards already ask him: "${ASK}". A decision up there stays out of FOR_USER_ASK, which is for another decision only; FOR_USER_STATE is needs-you while one waits on him.`)
-    const many = decisionsUpPart(['One?', 'Two?', 'Three?', 'Four?', 'x'.repeat(400)])
+    expect(decisionsUpPart([{ ask: ASK }])).toBe(`\nYour threads' cards already ask him: "${ASK}".${TAIL}`)
+    // Review 2026-11-25, N2: the card's id, so the same decision said again in other words is joined by it.
+    expect(decisionsUpPart([{ ask: ASK, id: 'ask-aaaa01' }])).toBe(`\nYour threads' cards already ask him: "${ASK}" (ask-aaaa01).${TAIL}`)
+    const many = decisionsUpPart(['One?', 'Two?', 'Three?', 'Four?', 'x'.repeat(400)].map((ask) => ({ ask })))
     expect(many).toContain('"One?"; "Two?"; "Three?".')
     expect(many).not.toContain('Four?')
-    expect(Buffer.byteLength(decisionsUpPart(['x'.repeat(400)]))).toBeLessThanOrEqual(175 + 160 + 2)
+    expect(Buffer.byteLength(decisionsUpPart([{ ask: 'x'.repeat(400), id: 'ask-aaaaaaaaaaaa' }]))).toBeLessThanOrEqual(275 + 160 + 19)
+  })
+
+  it('N2: a status answer naming a card\'s id asks no decision of its own, whatever its words; with no id the strict rule stays', () => {
+    setReplyTag(true)
+    const card = thread('th-aaaaaa05', { state: 'needs', ask: 'Wood or plastic for the compost bin?', askId: 'ask-b1ab1a' })
+    expect(needsThreadOf([card], { id: 'ask-b1ab1a', ask: 'Should the compost bin be wood or plastic?' })?.id).toBe('th-aaaaaa05')
+    expect(needsThreadOf([card], { ask: 'Should the compost bin be wood or plastic?' })).toBeNull()
   })
 })

@@ -5,6 +5,11 @@
  *    before, and counts as naming no decision: only its words do;
  *  - markThreadDecision names it on an open needs thread, the store keeps it through later writes,
  *    and a new stretch of needs leaves it behind; threads_pop_up's stamp keeps the id a write set;
+ *  - every write that leaves a needs thread asking another question gives it a new id (review
+ *    2026-11-25, N1), whichever writer it is: the rule runs in mutateThreads, the one place a
+ *    threads file is written (tests/core/org/thread-needs-push-guard.test.ts holds that), and the
+ *    writers here are each that can change a needs thread's question;
+ *  - an id held only while the thread asks it in needs holds the task's ask item (thread-holds.ts, N3);
  *  - with the experiment off nothing names one, and a write moves no id.
  * The field is not new: older builds read and write it already (normalizeThread spreads it).
  */
@@ -22,6 +27,9 @@ import { markThreadDecision, needsThreadOf, threadDecisionsOf } from '../../../s
 import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
 import { setThreadsPopUp } from '../../../src/core/org/thread-popup-rules.js'
 import type { OrgThread, ThreadsFile } from '../../../src/core/org/threads-model.js'
+import { HELD_BY_THREAD } from '../../../src/core/org/thread-holds.js'
+import fs from 'node:fs'
+import path from 'node:path'
 
 const T0 = '2026-11-25T09:00:00.000Z'
 const ASK = 'Wood or plastic for the compost bin?'
@@ -99,3 +107,90 @@ for (const [name, onDb] of [['JSON files', false], ['threads_sqlite', true]] as 
     })
   })
 }
+
+const FENCE = 'Should the orchard fence be two metres tall or three?'
+const GATE = 'Should the orchard fence gate be painted green or brown?'
+const KIND = { user_kind: 'spending', user_kind_why: 'the taller fence costs twice the budget he set' } as const
+const BG = 'The fence posts arrive Friday; the taller fence needs a permit, the gate needs paint ordered.'
+
+for (const [name, onDb] of [['JSON files', false], ['threads_sqlite', true]] as const) {
+  describe(`a needs thread that asks another question gets another decision id, on ${name} (N1)`, () => {
+    const node = `node-n1-${onDb ? 'db' : 'json'}`
+    beforeEach(() => _resetThreadsBackendForTesting(onDb))
+
+    /** A needs thread carrying the fence decision under D. */
+    async function fence(id: string, extra: Partial<OrgThread> = {}): Promise<void> {
+      await put(`${node}-${id}`, [thread(id, { state: 'needs', ask: FENCE, ...extra })])
+      expect(await markThreadDecision(`${node}-${id}`, id, D)).toBe(true)
+    }
+
+    it('thread_update (patchThread): another question, a new id; the same question reworded, or a new summary only, the same id', async () => {
+      setReplyTag(true)
+      await fence('th-c0b1d011')
+      const n = `${node}-th-c0b1d011`
+      await store.patchThread(n, 'th-c0b1d011', { reply: `${BG} Still waiting.` }, 'task:t-1')
+      expect((await read(n, 'th-c0b1d011')).askId).toBe(D)
+      await store.patchThread(n, 'th-c0b1d011', { ask: 'Orchard fence: two metres tall, or three?', ...KIND }, 'task:t-1')
+      expect((await read(n, 'th-c0b1d011')).askId).toBe(D)
+      await store.patchThread(n, 'th-c0b1d011', { ask: GATE, reply: BG, ...KIND }, 'task:t-1')
+      const after = await read(n, 'th-c0b1d011')
+      expect(after).toMatchObject({ state: 'needs', ask: GATE })
+      expect(after.askId).toMatch(/^ask-[a-z0-9]+$/)
+      expect(after.askId).not.toBe(D)
+    })
+
+    it('the same question reworded with the same worded choices keeps the id; other choices on another question do not', async () => {
+      setReplyTag(true)
+      const options = [{ label: 'Two metres', recommended: true }, { label: 'Three metres' }]
+      await fence('th-c0b1d012', { options })
+      const n = `${node}-th-c0b1d012`
+      await set(n, 'th-c0b1d012', { ask: 'Two metres or three for the orchard fence?' })
+      expect((await read(n, 'th-c0b1d012')).askId).toBe(D)
+      await set(n, 'th-c0b1d012', { ask: GATE, options: [{ label: 'Green', recommended: true }, { label: 'Brown' }] })
+      expect((await read(n, 'th-c0b1d012')).askId).not.toBe(D)
+    })
+
+    it('Walnut\'s own writes (writeThreadsFor) and a merge into it are held to the same rule', async () => {
+      setReplyTag(true)
+      await fence('th-c0b1d013')
+      const n = `${node}-th-c0b1d013`
+      // A merge of another subject into it changes no question: the id stays.
+      await store.writeThreadsFor(n, (cur: ThreadsFile) => ({ file: { ...cur, threads: [...cur.threads, thread('th-c0b1d014', { title: 'Orchard gate' })] }, out: undefined }))
+      await store.mergeThread(n, 'th-c0b1d014', 'th-c0b1d013', 'human')
+      expect((await read(n, 'th-c0b1d013')).askId).toBe(D)
+      await set(n, 'th-c0b1d013', { ask: GATE })
+      expect((await read(n, 'th-c0b1d013')).askId).not.toBe(D)
+    })
+
+    it('with the experiment off another question moves no id, as before', async () => {
+      setReplyTag(true)
+      await fence('th-c0b1d015')
+      setReplyTag(false)
+      const n = `${node}-th-c0b1d015`
+      await set(n, 'th-c0b1d015', { ask: GATE })
+      expect((await read(n, 'th-c0b1d015')).askId).toBe(D)
+    })
+  })
+}
+
+describe('the rule sits in the one write of a threads file (N1: no writer goes around it)', () => {
+  it('mutateThreads runs keepThreadDecisions on every write, before the pop-up stamp', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/core/org/threads-store.ts'), 'utf8')
+    expect(src).toMatch(/async function mutateThreads[\s\S]*?const step = \(read: ThreadsFile\): ThreadsFile => \{[\s\S]*?const res = mutate\(cur\);[\s\S]*?replyTagNow\(\) \? keepThreadDecisions\(cur, res\.file\) : res\.file;[\s\S]*?stampAskIds\(cur, file\)/)
+    // Every function of the store that writes goes through it (no other updateJsonFile or db write).
+    expect(src.match(/updateJsonFile/g)?.length).toBe(2)
+    expect(src.match(/dbMutateThreads\(/g)?.length).toBe(1)
+  })
+})
+
+describe('a decision id holds the task\'s ask item only while its thread asks it in needs (N3)', () => {
+  const holds = HELD_BY_THREAD.ask!
+  const item = { id: D }
+  it('needs and open: holds; answered, working or closed: holds nothing; the read view\'s heldAsk still holds', () => {
+    expect(holds(item, { id: 't', title: 'x', askId: D, state: 'needs' })).toBe(true)
+    for (const state of ['answered', 'working', 'pending']) expect(holds(item, { id: 't', title: 'x', askId: D, state }), state).toBe(false)
+    expect(holds(item, { id: 't', title: 'x', askId: D, state: 'needs', closed: { how: 'acked' } })).toBe(false)
+    expect(holds(item, { id: 't', title: 'x', heldAsk: { id: D }, state: 'answered' })).toBe(true)
+  })
+})
+

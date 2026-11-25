@@ -5,7 +5,8 @@
  */
 import crypto from 'node:crypto';
 import { experimentalEnabled } from '../experimental.js';
-import { isDecisionId } from '../ask-decision.js';
+import { isDecisionId, mintAskId, sameOwnDecision } from '../ask-decision.js';
+import { threadAskText } from './thread-task-ask.js';
 import type { OrgThread, ThreadsFile } from './threads-model.js';
 
 let popUp = false;
@@ -45,19 +46,40 @@ export function stampAskIds(before: ThreadsFile, after: ThreadsFile): ThreadsFil
   return changed ? { ...after, threads } : after;
 }
 
+/** A thread's question and choices, as one task's decision is compared (ask-decision.ts sameOwnDecision). */
+const questionOf = (t: OrgThread) => ({ ask: threadAskText(t), ...(t.options?.length ? { options: t.options.map((o) => o.label) } : {}) });
+
 /**
  * threads_reply_tag: a report's decision id on a thread (OrgThread.askId, thread-report-ask.ts
- * markThreadDecision) names the decision it carries only for the stretch of needs it was written
- * in. A thread that enters needs again in this write leaves the old one behind; the write that puts
- * a decision up names its id again. Pure.
+ * markThreadDecision) names the decision it carries only while the thread asks that decision. Run
+ * on every write of a threads file (threads-store.ts mutateThreads, the one place one is written),
+ * so every writer is held to it: a thread_update, a card line, a status line, a merge, Walnut's own
+ * writes.
+ *  - A thread that enters needs again leaves the old id behind; the write that puts a decision up
+ *    names its id again.
+ *  - A thread that stays in needs and now asks another question (its `ask`; not the same decision in one
+ *    task's words rule) gets a new id: a teammate folded under the first decision is shown it
+ *    again, and his answer to the second is never read as an answer to the first (review
+ *    2026-11-25, N1: the fence height kept its id after the thread asked the gate colour).
+ * Pure but for the new id.
  */
-export function dropCarriedDecisions(before: ThreadsFile, after: ThreadsFile): ThreadsFile {
+export function keepThreadDecisions(before: ThreadsFile, after: ThreadsFile, mint: () => string = mintAskId): ThreadsFile {
   const was = new Map(before.threads.map((t) => [t.id, t] as const));
   let changed = false;
   const threads = after.threads.map((t) => {
     const prev = was.get(t.id);
     if (!prev || t.closed || t.state !== 'needs' || !isDecisionId(t.askId) || t.askId !== prev.askId) return t;
-    if (!prev.closed && prev.state === 'needs') return t;
+    const stayed = !prev.closed && prev.state === 'needs';
+    if (stayed) {
+      // A question only in its summary (no `ask` written either time) is not judged: a summary's
+      // first line is no stable question.
+      if (!prev.ask?.trim() && !t.ask?.trim()) return t;
+      const asked = questionOf(prev);
+      const asks = questionOf(t);
+      if ((asked.ask ?? '').trim() === (asks.ask ?? '').trim() || sameOwnDecision(asked, asks)) return t;
+      changed = true;
+      return { ...t, askId: mint() };
+    }
     changed = true;
     const { askId: _carried, ...rest } = t;
     return rest as OrgThread;

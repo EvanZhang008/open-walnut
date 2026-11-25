@@ -130,8 +130,15 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   thread in needs, and its status answer's `FOR_USER_ASK`, which Walnut places on a thread
   (`thread-report-ask.ts`). The thread stores the id of the decision it carries (`askId`, a
   report's `ask-...` id): a card line's write gives it the task's own decision id when the line asks
-  that decision, else a new one (`cardDecisionId`, `markThreadDecision`); a new stretch of needs
-  leaves an old id behind. A decision an open thread of the task stores in needs is that thread's
+  that decision, else a new one (`cardDecisionId`, `markThreadDecision`). Every write of a threads
+  file (`mutateThreads`, `keepThreadDecisions`) keeps the id only while the thread asks that
+  decision: a new stretch of needs leaves it behind, and a write that leaves the thread in needs
+  asking another question (its `ask`, judged by one task's words rule) gives it a new id, whoever
+  writes it (a `thread_update`, a card line, Walnut's own writes). An id holds the task's ask item
+  in the top bar only while its thread asks it in needs (`thread-holds.ts`). The status question
+  quotes each card's decision id ("Your threads' cards already ask him: "..." (ask-...)"), and a
+  status answer that asks it again names that id as `FOR_USER_ASK_ID`, so the same decision in
+  other words with no choices is still one card. A decision an open thread of the task stores in needs is that thread's
   (`needsThreadOf`): by that id, or by one task's words rule (`sameOwnDecision`: the same content
   words, or the same question reworded offering the same choices with words of their own); when
   `askNowOnThread` takes the report's ask off for it, the thread takes the report's id. Shared words alone never make one decision (review 2026-11-25:
@@ -204,7 +211,7 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   more); the hint then names no `thread_update` for the title or the merge, its related threads
   included (their join is the line's merge, 26 bytes fewer than the op), so the title is asked
   for in one place. The status question adds one line while a thread of a task waits on him for a
-  decision (176 bytes and each question, at most 3 of 160 characters), and with
+  decision (275 bytes and each question, at most 3 of 160 characters, with its card's decision id), and with
   `threads_kept_by_walnut` off its thread block takes the card form that switch already gives
   (1,396 bytes for three threads instead of 796; no change where that switch is on). A send-back
   ends with 101 bytes (one line) or 132 (several). Off, no text names the tag and nothing reads it.

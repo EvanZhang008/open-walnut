@@ -14,7 +14,8 @@
  * And a decision a card line put on its thread, which the report never asked, is still its task's
  * to hold (review 2026-11-25, B1): the thread stores the decision's id, and a teammate reporting the
  * same decision with same_as binds to it (before, task_report_set answered 409) and shows no card
- * of its own.
+ * of its own. And the status question names each card's decision id, so a status answer that says
+ * the same decision again in other words, with no choices, names it and adds no card (N2).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -125,5 +126,30 @@ describe('a decision line later than the status answer\'s read', () => {
       expect(holder.user_status).toMatchObject({ state: 'needs', source: 'thread' })
       expect(other.user_status).toMatchObject({ state: 'waiting', sameAsk: { id: flow.taskId, ask: ASK_BIN, decision: th.askId } })
     }, { timeout: 15_000, interval: 200 })
+  }, 60_000)
+
+  it('N2: the status answer asks the card\'s decision again in other words, no choices: it names the card\'s id, one card', async () => {
+    await say('Should the pond get a pump? Put it to me as a decision.')
+    const rows = await cliTakes()
+    const pond = filedUnder(rows[0])
+    const CARD = 'Add a pump to the pond?'
+    // The session repeats it as FOR_USER_ASK, in its own words, naming the id the question gave the card.
+    flow.statusAnswer = (prompt: string) => [
+      'FOR_USER_STATE: needs-you', 'FOR_USER_ASK: Should the pond get a pump?',
+      `FOR_USER_ASK_ID: ${new RegExp(`"${CARD.replace('?', '\\?')}" \\((ask-[a-z0-9]+)\\)`).exec(prompt)?.[1] ?? 'none'}`,
+      'FOR_USER_ASK_OWN: spending: the pump costs twice the budget he set', 'FOR_USER_NOW: The pump choice waits for him.', 'FOR_USER_NEXT: He picks, then I order.',
+    ].join('\n')
+    const endedAt = await turnEnds(rows, `A pump keeps the water clear.\n\n<walnut-card thread="${pond}" state="needs" title="Pond pump" ask="${CARD}" summary="A pump keeps the pond water clear all summer; it costs twice the budget he set, and nobody else is touched." options="Buy the pump (recommended); Leave the pond as it is" kind="spending" why="the pump costs twice the budget he set"/>`)
+    const q = await questionAfter(endedAt)
+    const th = (await readThreads(flow.taskId)).threads.find((t) => t.id === pond)!
+    expect(th.askId).toMatch(/^ask-[a-z0-9]+$/)
+    expect(q.prompt).toContain(`"${CARD}" (${th.askId})`)
+    // The report asks nothing of its own: the decision lives on the card only.
+    await vi.waitFor(async () => {
+      const t = (await getTask(flow.taskId))!
+      expect(t.status_report?.ask).toBeUndefined()
+      expect((t.user_status?.actions ?? []).filter((i) => i.kind === 'ask')).toEqual([])
+    }, { timeout: 10_000, interval: 200 })
+    expect((await readThreads(flow.taskId)).threads.filter((t) => t.reportAsk)).toEqual([])
   }, 60_000)
 })
