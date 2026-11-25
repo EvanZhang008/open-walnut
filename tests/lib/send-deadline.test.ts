@@ -103,6 +103,32 @@ describe('sendWithin', () => {
     await expect(p).resolves.toEqual({ status: 'stored' });
     expect(String(late[0])).toContain('a hint write failed');
   });
+
+  it('a send that fails before its deadline once its row is stored is stored: an error would have it sent twice', async () => {
+    const late: Array<{ err: unknown; stored: boolean; answered: string }> = [];
+    const p = sendWithin(8_000, async (g) => { g.inTime(); g.stored(); throw new Error('a note after the store failed'); }, {
+      onLateError: (err, l) => late.push({ err, stored: l.stored, answered: l.answered }),
+    });
+    await expect(p).resolves.toEqual({ status: 'stored' });
+    expect(late).toHaveLength(1);
+    expect(late[0]).toMatchObject({ stored: true, answered: 'stored' });
+  });
+
+  it('a late error says what happened: a send its deadline dropped stored nothing, one answered unconfirmed was never stored', async () => {
+    vi.useFakeTimers();
+    const seen: Array<{ stored: boolean; answered: string; level: string; words: string }> = [];
+    const onLateError = (_err: unknown, l: { stored: boolean; answered: string; level: string; words: string }) => seen.push(l);
+    const dropped = sendWithin(8_000, async (g) => { await later(10_000); if (!g.inTime()) throw new Error('send no longer wanted'); return 'row'; }, { onLateError });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(dropped).resolves.toEqual({ status: 'timed_out' });
+    expect(seen[0]).toMatchObject({ stored: false, answered: 'timed_out', level: 'info' });
+    expect(seen[0].words).toMatch(/nothing was stored/);
+    const unsure = sendWithin(8_000, async (g) => { g.inTime(); await later(200_000); throw new Error('the disk said no'); }, { storeBoundMs: 90_000, onLateError });
+    await vi.advanceTimersByTimeAsync(200_000);
+    await expect(unsure).resolves.toEqual({ status: 'unconfirmed' });
+    expect(seen[1]).toMatchObject({ stored: false, answered: 'unconfirmed', level: 'warn' });
+    expect(seen[1].words).toMatch(/never stored/);
+  });
 });
 
 describe('a dropped send takes its marks back', () => {
@@ -123,6 +149,51 @@ describe('a dropped send takes its marks back', () => {
     notePeerNote('d', 'b', now + 2);
     stale(); // a later stamp came since: kept
     expect(latestSenderTo('b', 60_000, now + 2)).toBe('d');
+  });
+
+  it('marks are taken back by identity, in any order: the same millisecond, and A, B, A undo, B undo', async () => {
+    const { undoableMarks } = await import('../../src/lib/undoable-marks.js');
+    const m = undoableMarks<number>(10);
+    m.set('t', 1);
+    const a = m.set('t', 5);
+    const b = m.set('t', 5); // a second send in the same millisecond
+    a();
+    expect(m.get('t')).toBe(5); // b's mark stands
+    b();
+    expect(m.get('t')).toBe(1);
+    const c = m.set('u', 10);
+    const d = m.set('u', 11);
+    c();
+    d();
+    expect(m.get('u')).toBeUndefined(); // c's refused mark never comes back
+    const e = m.set('v', 20);
+    const f = m.set('v', 21);
+    f();
+    expect(m.get('v')).toBe(20);
+    e();
+    expect(m.get('v')).toBeUndefined();
+    e(); // twice is a no-op
+    m.set('w', 1);
+    expect(m.get('t')).toBe(1);
+  });
+
+  it('the task input clock and the lead traffic use those marks', async () => {
+    const { noteTaskInput, lastTaskInputAt, resetTaskInputClockForTest } = await import('../../src/core/sessions/task-input-clock.js');
+    resetTaskInputClockForTest();
+    const a = noteTaskInput('task-x', 7);
+    const b = noteTaskInput('task-x', 7);
+    a();
+    expect(lastTaskInputAt('task-x')).toBe(7);
+    b();
+    expect(lastTaskInputAt('task-x')).toBeUndefined();
+    const { noteSent, workerToldLead, _resetLeadTrafficForTesting } = await import('../../src/core/org/lead-traffic.js');
+    _resetLeadTrafficForTesting();
+    const first = noteSent('worker', 'lead', 3_000);
+    const second = noteSent('worker', 'lead', 3_000);
+    first();
+    expect(workerToldLead('worker', 'lead')).toBe(true);
+    second();
+    expect(workerToldLead('worker', 'lead')).toBe(false);
   });
 });
 

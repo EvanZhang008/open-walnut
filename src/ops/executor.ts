@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod'
+import { answerErrorCode, unconfirmedWrite } from '../lib/unconfirmed-write.js'
 import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER } from '../lib/cli-sender.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
@@ -296,7 +297,9 @@ async function rawRequest(
   }
 
   if (!res.ok) {
-    if (res.status >= 500 || res.status === 408 || res.status === 429) prov.unsettled = true
+    // A write that may still apply on its own (lib/unconfirmed-write.ts) is settled: a copy of the
+    // call gets this answer again, and never runs the write a second time.
+    if ((res.status >= 500 || res.status === 408 || res.status === 429) && !unconfirmedWrite(answerErrorCode(parsed))) prov.unsettled = true
     const body = parsed as { error?: { code?: unknown; message?: unknown } | string; code?: unknown } | undefined
     const e = body?.error
     // Two shapes answer an error: { error: { code, message } } and { error: "<message>", code }.

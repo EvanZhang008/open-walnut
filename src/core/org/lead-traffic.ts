@@ -15,10 +15,13 @@
  * In memory only: after a restart nothing is known, and every wait is told as before.
  */
 
-const lastSent = new Map<string, number>();
-/** One task's peer note to another (work handed on, never a reply or Walnut's notice): to -> {from, at}. */
-const lastHandedBy = new Map<string, { from: string; at: number }>();
+import { undoableMarks } from '../../lib/undoable-marks.js';
+
 const MAX_PAIRS = 5_000;
+/** `from>to` -> when `from`'s newest message to `to` was queued. */
+const lastSent = undoableMarks<number>(MAX_PAIRS);
+/** One task's peer note to another (work handed on, never a reply or Walnut's notice): to -> {from, at}. */
+const lastHandedBy = undoableMarks<{ from: string; at: number }>(MAX_PAIRS);
 
 const OPEN = /^\s*<walnut-message\b[^>]*>/;
 const attr = (open: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(open)?.[1] ?? '';
@@ -40,21 +43,10 @@ function key(from: string, to: string): string {
 
 const NOTHING = (): void => {};
 
-/** Stamp one task's message to another; the function returned takes the stamp back. */
+/** Stamp one task's message to another; the function returned takes this stamp back. */
 export function noteSent(fromTaskId: string, toTaskId: string, atMs = Date.now()): () => void {
   if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return NOTHING;
-  const k = key(fromTaskId, toTaskId);
-  const before = lastSent.get(k);
-  lastSent.delete(k);
-  lastSent.set(k, atMs);
-  // Oldest first in insertion order: drop the oldest pairs past the cap.
-  while (lastSent.size > MAX_PAIRS) lastSent.delete(lastSent.keys().next().value!);
-  return () => {
-    // A later message stamped since keeps its own.
-    if (lastSent.get(k) !== atMs) return;
-    if (before === undefined) lastSent.delete(k);
-    else lastSent.set(k, before);
-  };
+  return lastSent.set(key(fromTaskId, toTaskId), atMs);
 }
 
 /**
@@ -85,19 +77,10 @@ export function workerToldLead(workerTaskId: string, leadTaskId: string): boolea
   return up > (lastSent.get(key(leadTaskId, workerTaskId)) ?? -Infinity);
 }
 
-/** Stamp one task's peer note to another: work it handed on. */
+/** Stamp one task's peer note to another: work it handed on. The function returned takes it back. */
 export function notePeerNote(fromTaskId: string, toTaskId: string, atMs = Date.now()): () => void {
   if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return NOTHING;
-  const before = lastHandedBy.get(toTaskId);
-  const stamp = { from: fromTaskId, at: atMs };
-  lastHandedBy.delete(toTaskId);
-  lastHandedBy.set(toTaskId, stamp);
-  while (lastHandedBy.size > MAX_PAIRS) lastHandedBy.delete(lastHandedBy.keys().next().value!);
-  return () => {
-    if (lastHandedBy.get(toTaskId) !== stamp) return;
-    if (before === undefined) lastHandedBy.delete(toTaskId);
-    else lastHandedBy.set(toTaskId, before);
-  };
+  return lastHandedBy.set(toTaskId, { from: fromTaskId, at: atMs });
 }
 
 /** The task whose peer note to `toTaskId` came last, within `withinMs` (title-topic-notice.ts). A reply is no hand-off. */

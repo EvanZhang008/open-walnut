@@ -30,6 +30,8 @@ let applied: Array<{ id: string; body: unknown }> = [];
 let release: (() => void) | null = null;
 let hold = false;
 let failNext = 0;
+/** The next N writes store their row and answer 504 delivery_unconfirmed (a store past its bound). */
+let unconfirmedNext = 0;
 let server: Server;
 let base = '';
 let clock = 1_000_000_000_000;
@@ -41,6 +43,12 @@ function app(opts: Parameters<typeof opIdMiddleware>[0] = {}): express.Express {
   a.post('/api/tasks/:id', async (req, res) => {
     if (hold) await new Promise<void>((r) => { release = r; });
     if (failNext > 0) { failNext--; res.status(500).json({ error: 'disk hiccup' }); return; }
+    if (unconfirmedNext > 0) {
+      unconfirmedNext--;
+      applied.push({ id: req.params.id, body: req.body });
+      res.status(504).json({ error: { code: 'delivery_unconfirmed', message: 'may arrive: do not send it again' } });
+      return;
+    }
     applied.push({ id: req.params.id, body: req.body });
     res.status(201).json({ ok: true, n: applied.length });
   });
@@ -66,6 +74,7 @@ beforeEach(() => {
   hold = false;
   release = null;
   failNext = 0;
+  unconfirmedNext = 0;
 });
 
 afterEach(async () => {
@@ -146,6 +155,18 @@ describe('op id middleware', () => {
     const b = await post('/api/tasks/t4', { 'x-walnut-op-id': 'op-retry-500' });
     expect(b.status).toBe(201);
     expect(b.headers.get('x-walnut-op-replayed')).toBeNull();
+    expect(applied).toHaveLength(1);
+  });
+
+  it('a 504 delivery_unconfirmed is kept: the write may still land, so a retry with the same id gets that answer and never applies again', async () => {
+    await listen(app());
+    unconfirmedNext = 1;
+    const a = await post('/api/tasks/t4u', { 'x-walnut-op-id': 'op-unconfirmed-504' });
+    expect(a.status).toBe(504);
+    const b = await post('/api/tasks/t4u', { 'x-walnut-op-id': 'op-unconfirmed-504' });
+    expect(b.status).toBe(504);
+    expect(b.headers.get('x-walnut-op-replayed')).toBe('1');
+    expect(((await b.json()) as { error: { code: string } }).error.code).toBe('delivery_unconfirmed');
     expect(applied).toHaveLength(1);
   });
 

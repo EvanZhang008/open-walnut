@@ -265,6 +265,14 @@ describe('a quiet turn and the lines that go out (sessions/quiet-turn.ts)', () =
     await sendMessageToSession('sess-q', 'hello again', { source: 'peer', taskId: 'task-mark' });
     expect(lastTaskInputAt('task-mark')).toBeGreaterThan(1_000);
   });
+
+  it('a send a delivery guard refuses leaves no mark either', async () => {
+    const { lastTaskInputAt, resetTaskInputClockForTest } = await import('../../src/core/sessions/task-input-clock.js');
+    resetTaskInputClockForTest();
+    // A router wake into a session that is no router session: refused before anything is stored.
+    await expect(sendMessageToSession('sess-q', 'wake', { source: 'router-runtime', taskId: 'task-refused' })).rejects.toThrow(/not delivered into an area session/);
+    expect(lastTaskInputAt('task-refused')).toBeUndefined();
+  });
 });
 
 describe('markNextProcessing', () => {

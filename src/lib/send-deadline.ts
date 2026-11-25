@@ -21,6 +21,9 @@
  * - past the deadline, the store itself has not ended within `storeBoundMs`: `unconfirmed`. The
  *   row may still land, so its sender must not send it again. `storeBoundMs: null` waits for the
  *   store's own end instead (a caller whose own wait is bounded elsewhere and tracks the attempt).
+ * A send that fails once its row is stored is `stored` too, whenever it fails: the row stands, and
+ * an error would have its sender store it again. An error that comes after the answer goes to
+ * `onLateError`, with what the answer said and whether a row was stored.
  * A raw enqueueMessage starts its store at once, so it takes no deadline at all.
  *
  * Ratchet: tests/lib/send-deadline.test.ts.
@@ -45,15 +48,31 @@ export interface SendGate {
  */
 export const STORE_BOUND_MS = 90_000;
 
+/** A send's error after its answer: what the answer said, whether a row was stored, and words for a log line. */
+export interface LateError {
+  answered: 'timed_out' | 'stored' | 'unconfirmed';
+  stored: boolean;
+  level: 'info' | 'warn';
+  /** Ends "a send <words>" (or a letter's answer, a trigger's fire). */
+  words: string;
+}
+
+function lateError(answered: LateError['answered'], stored: boolean): LateError {
+  if (stored) return { answered, stored, level: 'warn', words: 'failed after its row was stored: the row stands' };
+  if (answered === 'timed_out') return { answered, stored, level: 'info', words: 'its deadline answered timed out ended: nothing was stored' };
+  return { answered, stored, level: 'warn', words: 'answered unconfirmed failed: its row was never stored' };
+}
+
 export function sendWithin<T>(
   ms: number,
   run: (gate: SendGate) => Promise<T>,
-  opts: { storeBoundMs?: number | null; onLateError?: (err: unknown) => void } = {},
+  opts: { storeBoundMs?: number | null; onLateError?: (err: unknown, late: LateError) => void } = {},
 ): Promise<SendOutcome<T>> {
   return new Promise<SendOutcome<T>>((resolve, reject) => {
     let phase: 'open' | 'committed' | 'expired' = 'open';
     let rowStored = false;
     let late = false;
+    let answered: Exclude<SendOutcome<T>['status'], 'sent'> | undefined;
     let settled = false;
     let bound: ReturnType<typeof setTimeout> | undefined;
     const finish = (): boolean => {
@@ -63,7 +82,11 @@ export function sendWithin<T>(
       clearTimeout(bound);
       return true;
     };
-    const settle = (outcome: SendOutcome<T>): void => { if (finish()) resolve(outcome); };
+    const settle = (outcome: SendOutcome<T>): void => {
+      if (!finish()) return;
+      if (outcome.status !== 'sent') answered = outcome.status;
+      resolve(outcome);
+    };
     const gate: SendGate = {
       inTime: () => {
         if (phase === 'expired') return false;
@@ -95,8 +118,10 @@ export function sendWithin<T>(
     sending.then(
       (value) => settle({ status: 'sent', value }),
       (err) => {
-        if (finish()) reject(err);
-        else opts.onLateError?.(err);
+        // Its row is stored: that is the answer, and the error is a late one (a note, a hint, an emit).
+        if (rowStored) settle({ status: 'stored' });
+        if (finish()) { reject(err); return; }
+        if (answered) opts.onLateError?.(err, lateError(answered, rowStored));
       },
     );
   });

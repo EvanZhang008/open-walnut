@@ -587,7 +587,7 @@ export async function deliverToSession(
     inTime: gate.inTime,
     onStored: (m) => { storedId = m.id; gate.stored(); },
   }), {
-    onLateError: (err) => log.session.warn('a send whose row was stored failed after its answer', { sessionId: sid, error: err instanceof Error ? err.message : String(err) }),
+    onLateError: (err, late) => log.session[late.level](`a send ${late.words}`, { sessionId: sid, ...(storedId ? { messageId: storedId } : {}), error: err instanceof Error ? err.message : String(err) }),
   });
   if (outcome.status === 'sent') return { delivery: 'queued', messageId: outcome.value.id };
   if (outcome.status === 'stored') return { delivery: 'queued', ...(storedId ? { messageId: storedId } : {}) };

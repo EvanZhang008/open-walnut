@@ -55,6 +55,8 @@ let releasedUses = 0
 let dropPath = ''
 /** When set, the next POST /messages sends its headers and then breaks its body. */
 let cutBody = false
+/** The next message is stored but answered 504 delivery_unconfirmed (its store ran past its bound). */
+let unconfirmedNext = false
 
 // Test ops: a bulk handler that catches each row's failure, and a write answering a secret.
 defineOp({
@@ -114,6 +116,7 @@ beforeEach(async () => {
   releasedUses = 0
   dropPath = ''
   cutBody = false
+  unconfirmedNext = false
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
@@ -147,6 +150,11 @@ beforeEach(async () => {
     sent += 1
     const n = sent
     if (holdMs) { const ms = holdMs; holdMs = 0; await new Promise((r) => setTimeout(r, ms)) }
+    if (unconfirmedNext) {
+      unconfirmedNext = false
+      res.status(504).json({ error: { code: 'delivery_unconfirmed', message: 'the message is still being stored and may arrive: do not send it again' } })
+      return
+    }
     // wake=false: the server holds the note for the target's next message (quiet-notes.ts).
     if (req.body.wake === false) {
       res.status(202).json({ delivery: 'held', messageId: `qm-held-${n}`, targetSessionId: 'sess-target', targetTaskId: req.body.to })
@@ -240,6 +248,21 @@ describe('a write call runs at most once per call id', () => {
     expect(read.ok).toBe(true)
     expect(read.ok && read.result).toMatchObject({ call_id: callId, state: 'done', op: 'task_send', ok: true, repeats: 1 })
     expect(read.ok && (read.result as { result: { messageId: string } }).result.messageId).toBe('qm-1')
+  })
+
+  it('a send answered 504 delivery_unconfirmed may still land: a copy under the same id gets that answer and sends nothing, also after a restart', async () => {
+    const callId = newCallId()
+    unconfirmedNext = true
+    const first = await run('task_send', { to: 'task-a', text: 'maybe', expect_reply: false }, callId)
+    expect(first.ok).toBe(false)
+    expect(!first.ok && first.retry).toBeUndefined()
+    expect(!first.ok && first.message).toMatch(/do not send it again/)
+    const again = await run('task_send', { to: 'task-a', text: 'maybe', expect_reply: false }, callId)
+    expect(again).toEqual(first)
+    _resetOpCallsForTesting() // a restart: only the ledger is left
+    const later = await run('task_send', { to: 'task-a', text: 'maybe', expect_reply: false }, callId)
+    expect(later.ok).toBe(false)
+    expect(sent).toBe(1)
   })
 
   it('a copy arriving while the first still runs waits for it and runs nothing', async () => {

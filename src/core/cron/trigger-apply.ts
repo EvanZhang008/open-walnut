@@ -647,7 +647,7 @@ export async function applyTriggerFired(
       stillWanted: gate.inTime,
       markSent: async (info) => { sent ??= info ?? {}; gate.stored(); },
     }), {
-      onLateError: (err) => state.deps.log.warn('a fire whose work went out failed after its delivery was answered', { jobId: job.id, error: err instanceof Error ? err.message : String(err) }),
+      onLateError: (err, late) => state.deps.log[late.level](`a trigger fire ${late.words}`, { jobId: job.id, error: err instanceof Error ? err.message : String(err) }),
     });
     if (outcome.status === 'sent') result = outcome.value;
     else if (outcome.status === 'stored') {

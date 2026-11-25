@@ -47,8 +47,9 @@ export function createMainAgentExecutor(deps: MainAgentExecutorDeps): ExecutorDe
       await deps.broadcastCronNotification(message, job.name, { agentWillRespond: false });
       if (job.wakeMode === 'now') {
         // Delivered through the session executor, which marks the run sent when the row is stored (ctx.markSent).
-        // A trigger fire's gate rides along (cron/trigger-apply.ts): one its deadline calls timed out stores nothing.
-        await deps.runMainAgentWithPrompt(message, job.name, job, ctx && { slotMs: ctx.slotMs, markSent: ctx.markSent, stillWanted: ctx.stillWanted });
+        // A trigger fire's gate and message id ride along (cron/trigger-apply.ts): one its deadline calls timed out
+        // stores nothing, and a replay of a fire that may have landed is the same row, never a second one.
+        await deps.runMainAgentWithPrompt(message, job.name, job, ctx && { slotMs: ctx.slotMs, messageId: ctx.messageId, markSent: ctx.markSent, stillWanted: ctx.stillWanted });
       } else {
         deps.queueCronNotificationForAgent?.(message, job.name);
       }

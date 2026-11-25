@@ -524,7 +524,7 @@ export async function deliverLetterToOrigin(
       // No bound on a store under way: this attempt stays in flight until it ends, so a repeat waits
       // for it (humanReplyAndDeliver), and the route's own wait answers `pending` (answerWhenDue).
       storeBoundMs: null,
-      onLateError: (err) => log.notif.warn('human-inbox: an answer whose row was stored failed after it', { letterId: letter.id, sessionId: sid, error: errMsg(err) }),
+      onLateError: (err, late) => log.notif[late.level](`human-inbox: a letter's answer ${late.words}`, { letterId: letter.id, sessionId: sid, error: errMsg(err) }),
     });
     if (outcome.status === 'timed_out') {
       // Nothing was stored: a retry is safe.

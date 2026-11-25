@@ -7,21 +7,14 @@
  * its task" three times in four minutes about a worker nobody had written to, whose background
  * subagent was still working).
  */
-const lastInputAt = new Map<string, number>();
-const MAX_TASKS = 5000;
+import { undoableMarks } from '../../lib/undoable-marks.js';
 
-/** Stamp it; the function returned takes the stamp back (a send that then stored nothing). */
+const lastInputAt = undoableMarks<number>(5000);
+
+/** Stamp it; the function returned takes this stamp back (a send that then stored nothing). */
 export function noteTaskInput(taskId: string | null | undefined, at = Date.now()): () => void {
   if (!taskId) return () => {};
-  if (lastInputAt.size >= MAX_TASKS && !lastInputAt.has(taskId)) lastInputAt.clear();
-  const before = lastInputAt.get(taskId);
-  lastInputAt.set(taskId, at);
-  return () => {
-    // A later input stamped since keeps its own.
-    if (lastInputAt.get(taskId) !== at) return;
-    if (before === undefined) lastInputAt.delete(taskId);
-    else lastInputAt.set(taskId, before);
-  };
+  return lastInputAt.set(taskId, at);
 }
 
 export function lastTaskInputAt(taskId: string): number | undefined {

@@ -158,6 +158,16 @@ describe('executor validate()', () => {
     expect(def.validate({ instructions: '  ' }).ok).toBe(false);
     expect(def.validate({ instructions: 'hello' }).ok).toBe(true);
   });
+
+  it('main-agent hands a trigger fire its message id, gate and sent mark, so a replay is the same row', async () => {
+    const runMainAgentWithPrompt = vi.fn(async () => {});
+    const def = createMainAgentExecutor({ broadcastCronNotification: vi.fn(async () => {}), runMainAgentWithPrompt });
+    const markSent = vi.fn(async () => {});
+    const stillWanted = () => true;
+    const job = { id: 'j-main', name: 'Fire', wakeMode: 'now' } as CronJob;
+    await def.run(job, { type: 'main-agent', config: { instructions: 'go' } }, 'go', { messageId: 'fire-msg-1', slotMs: 5, markSent, stillWanted });
+    expect(runMainAgentWithPrompt).toHaveBeenCalledWith('go', 'Fire', job, { slotMs: 5, messageId: 'fire-msg-1', markSent, stillWanted });
+  });
 });
 
 // ── claude-code: the walnut-agent fields (S12) ──

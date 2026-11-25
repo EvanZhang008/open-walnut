@@ -36,6 +36,7 @@
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import { answerErrorCode, unconfirmedWrite } from '../../lib/unconfirmed-write.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { LOCAL_HOST, lookupApplied, lookupDrained, opInFlight, recordApplied, reserveOp, type LedgerEntry, type LedgerKey, type LedgerOutcome } from '../../core/offline-merge/ledger.js';
@@ -127,9 +128,15 @@ function reused(res: Response, opId: string, first: string, now: string, hostKey
   refuse(res, 409, 'op_id_reused', `${OP_ID_HEADER} ${opId} was already used for ${first}; send a new id for this write`);
 }
 
-/** A status a duplicate must get again (applied or refused by this server); 5xx, 408 and 429 may apply on retry. */
-function settles(status: number): boolean {
-  return status >= 200 && status < 500 && status !== 408 && status !== 429;
+/**
+ * A status a duplicate must get again (applied or refused by this server); 5xx, 408 and 429 may
+ * apply on retry, except a write that may still apply on its own (lib/unconfirmed-write.ts): its
+ * answer is kept, so a retry under the same op id is answered it and never runs the write again.
+ */
+function settles(status: number, body: string | undefined): boolean {
+  if (status >= 200 && status < 500 && status !== 408 && status !== 429) return true;
+  if (status < 500 || body === undefined) return false;
+  try { return unconfirmedWrite(answerErrorCode(JSON.parse(body))); } catch { return false; }
 }
 
 /**
@@ -245,7 +252,7 @@ export function opIdMiddleware(opts: OpIdOptions = {}): RequestHandler {
       if (orphan) clearTimeout(orphan);
       const status = answer.status ?? 0;
       const recorded: LedgerOutcome = { ...answer, source: 'http', route };
-      if (settles(status)) recordApplied(key, recorded, now());
+      if (settles(status, answer.body)) recordApplied(key, recorded, now());
       // A waiter gets this answer either way; only a settled one is kept for later retries.
       held.finish(recorded);
     });

@@ -413,244 +413,252 @@ export async function sendMessageToSession(
    * unsent row is already taken back; the next idle turn end schedules another).
    */
   const dropMarks = (): void => { unnoteTraffic(); unnoteInput(); };
-  // The router's wake passes only inside router/wake.ts's own grant, into a router session.
-  const { assertAreaDelivery } = await import('./router/delivery-scope.js');
-  const scopedArea = assertAreaDelivery(areaRecord, sessionId, opts?.source, opts?.messageId);
-  await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
-  // Its task is moving to another host: the row is held here and goes with the task.
-  const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
-  const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;
-  // A message lined up for after the running turn waits in the queue, parked, until that turn ends.
-  const { AFTER_TURN_REASON, holdsForRunningTurn, noteAfterTurnHold } = await import('./sessions/queue-after-turn.js');
-  const heldForTurn = !heldForMove && opts?.afterTurn === true && opts?.interrupt !== true && await holdsForRunningTurn(sessionId)
-    ? AFTER_TURN_REASON : undefined;
-  // A task that moved since its session was told rides a place note on this
-  // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
-  const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
-  const place = scopedArea ? null : await pendingPlaceNotice(sessionId);
-  // A restart that killed the session's process rides the same way, on
-  // whichever message reaches it first (sessions/restart-notice.ts).
-  const { pendingRestartNotice } = await import('./sessions/restart-notice.js');
-  const restart = await pendingRestartNotice(sessionId);
-  // A session Walnut moved out of a folder that was gone hears so the same way (sessions/folder-gone.ts).
-  const { pendingFolderMovedNotice } = await import('./sessions/folder-gone.js');
-  const folderMoved = await pendingFolderMovedNotice(sessionId);
-  // An engine switch with no message ran no turn: the context it carried leads this message (sessions/engine-switch-io.ts).
-  const { pendingSwitchContext } = await import('./sessions/engine-switch-io.js');
-  const switchContext = scopedArea ? null : await pendingSwitchContext(sessionId);
-  // One task's message to another is stamped first, so a lead's team note never repeats what this
-  // message tells it (org/lead-traffic.ts).
-  const { noteQueuedMessage } = await import('./org/lead-traffic.js');
-  if (!scopedArea) unnoteTraffic = await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
-  // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
-  const { pendingOrgDigest } = await import('./org/org-store.js');
-  const digest = scopedArea ? null : await pendingOrgDigest(sessionId);
-  // A status change of a task it asked something rides the same way (sessions/status-push.ts).
-  const { pendingLiveStatusNote } = await import('./sessions/status-push.js');
-  const statusNote = scopedArea ? null : await pendingLiveStatusNote(sessionId);
-  // Every message is escaped, and a turn nobody typed still carries the message
-  // hints a human send would (hints/hint-send.ts), unless its sender composed them.
-  const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');
-  const rawBody = opts?.enqueueMessage ?? message;
-  // What a plugin App shows (an editor, a test run) rides the same way: what
-  // changed since this session last read it, never a turn (sessions/app-state.ts).
-  const { pendingAppState } = await import('./sessions/app-state.js');
-  const appState = scopedArea ? null : await pendingAppState(sessionId, rawBody);
-  // A peer's message into a waiting task says the wait comes back (task-wait-resume.ts).
-  const { waitNoteFor } = await import('./task-wait-resume.js');
-  const waitNote = await waitNoteFor(sessionId, opts?.source, opts?.endsWait === true);
-  // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
-  const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
-  const retiredNote = scopedArea ? null : await pendingRetiredLeadNote(sessionId, rawBody);
-  // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
-  const { pendingHeldNotices } = await import('./sessions/held-notices.js');
-  const heldNotes = scopedArea ? null : await pendingHeldNotices(sessionId);
-  // An answer given for the user that was taken back, which its task has not heard yet (sessions/ask-withdraw.ts).
-  const { pendingWithdrawnNote } = await import('./sessions/ask-withdraw.js');
-  const withdrawn = await pendingWithdrawnNote(sessionId);
-  // Whatever a person did not type is framed here, so the transcript says who sent it (sessions/send-frame.ts).
-  const framedBody = frameForSource(rawBody, opts?.source);
-  const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
-  const body = outputMode?.enqueueText ?? framedBody;
-  // A slash command must start its line or the CLI no longer reads it as one: Walnut's notes wait
-  // for the next message (each is told only when the row holds it, below).
-  const slashCommand = body.trimStart().startsWith('/');
-  // A line that goes as it is, with no note of Walnut's in front of it (a slash command, or a quiet
-  // turn's line, opts.bare): those notes, and the held rows a send puts back in line, wait for the next message.
-  const bare = slashCommand || opts?.bare === true;
-  // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
-  // Every word of Walnut's notes sits inside an envelope: loose words in front of the body read as the
-  // person's (sessions/send-frame.ts frameLooseText). A note with nothing loose is unchanged.
-  const rider = (t: string | null | undefined): string | undefined => (t ? frameLooseText(t) : undefined);
-  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].map(rider).filter(Boolean).join('\n\n');
-  const lead = [notes, rider(switchContext?.text)].filter(Boolean).join('\n\n');
-  const enqueueText = lead && !bare ? `${lead}\n\n${body}` : body;
-  /** Mark told each note `carrier` (stored as row `rowId`) holds; App state and held notices it does not are put back. */
-  const tellCarried = async (carrier: string, rowId?: string): Promise<void> => {
-    // Each note as the row holds it (framed where it had loose words).
-    const holds = (t: string): boolean => !!t && carrier.includes(rider(t)!);
-    if (place?.text && carrier.startsWith(rider(place.text)!)) await place.markTold();
-    if (digest && holds(digest.text)) await digest.markTold();
-    if (restart && holds(restart.text)) await restart.markTold();
-    if (folderMoved && holds(folderMoved.text)) await folderMoved.markTold();
-    if (switchContext && holds(switchContext.text)) await switchContext.markTold();
-    if (statusNote && holds(statusNote.text)) statusNote.markTold();
-    if (withdrawn && holds(withdrawn.text)) await withdrawn.markTold();
-    if (appState) {
-      if (holds(appState.text)) appState.markTold();
-      else appState.release();
-    }
-    if (heldNotes) {
-      // Off the file once the row that carries them is stored (held-notices.ts): never awaited.
-      if (carrier && holds(heldNotes.text)) heldNotes.markTold(rowId);
-      else heldNotes.release();
-    }
-  };
-  // Nothing but notices that ask nothing: never written to the CLI on its own, not even into a running
-  // turn (a line that reaches the CLI as its turn ends starts a turn of its own: 2026-11-16, three
-  // waiting / stopped notices into the Walnut VP 1 to 5 s after its last words, each an agent-ack
-  // turn). It is held and rides in front of the session's next message (sessions/wake-policy.ts);
-  // Walnut's other notes and hints wait, as they are, for that message.
-  const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
-  // A person's words, and a browser under automation's (an agent's now, still a message to act on),
-  // are never held for later: not as a riding notice, not for a cold session's next wake.
-  const personWords = PERSON_SEND_SOURCES.has(opts?.source ?? '') || opts?.source === AUTOMATED_SEND_SOURCE
-    || queueSentBy(opts?.source) === 'person';
-  if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn && !personWords && rowRides(framedBody)) {
-    await tellCarried('');
-    if (opts?.stillWanted && !opts.stillWanted()) { dropMarks(); throw new SendNoLongerWantedError(); }
-    // Held in memory now and written to the held-notices file behind it, never awaited.
-    void holdRidingNotice(sessionId, framedBody);
-    log.session.info('notice rides the next message: it asks nothing', { sessionId, source: opts?.source });
-    const now = new Date();
-    return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0 };
-  }
-  // Cache-aware delivery (sessions/cold-hold.ts): a message that can wait, to a session gone cold, is
-  // held for its next wake. Any other send first puts the held ones back in line in front of it, so
-  // they go out with it in one line.
-  const coldHold = await import('./sessions/cold-hold.js');
-  const { waitsWhenCold } = await import('./sessions/wake-policy.js');
-  const mayWait = !opts?.wakeReason && !opts?.interrupt && !opts?.closesPrompt && !heldForMove && !heldForTurn && !scopedArea
-    && !slashCommand && !personWords
-    && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody, opts?.source);
-  const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
-  // Not in front of a slash command (it must start its line), nor for a move or a running turn's
-  // hold: those rows wait for the next line that goes, or the sweep sends them.
-  const released = heldCold || heldForMove || heldForTurn || bare ? null : await coldHold.releaseColdHolds(sessionId, 'a message that goes now');
-  let msg: QueuedMessage;
+  // Every throw from here until the row is stored (a refusal below, a note that failed, a gate
+  // the deadline shut) takes the marks back; one after it keeps them, the row went in.
+  let stored = false;
   try {
-    if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
-    msg = await enqueueMessage(sessionId, enqueueText, {
-      id: opts?.messageId,
-      recentText: message,
-      ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
-      ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
-      ...(opts?.relayTaken ? { relayTaken: true } : {}),
-      ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
-      ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
-      ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
-      ...(opts?.dictation && queueSentBy(opts?.source) === 'person' ? { dictation: opts.dictation } : {}),
-      ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
-      ...(heldCold ? { heldReason: heldCold, coldSend: { source: opts?.source ?? 'unknown', ...(opts?.endsWait ? { endsWait: true as const } : {}) } } : {}),
-      ...(opts?.source ? { source: opts.source } : {}), ...(opts?.taskId ? { taskId: opts.taskId } : {}),
-    });
+    // The router's wake passes only inside router/wake.ts's own grant, into a router session.
+    const { assertAreaDelivery } = await import('./router/delivery-scope.js');
+    const scopedArea = assertAreaDelivery(areaRecord, sessionId, opts?.source, opts?.messageId);
+    await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
+    // Its task is moving to another host: the row is held here and goes with the task.
+    const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
+    const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;
+    // A message lined up for after the running turn waits in the queue, parked, until that turn ends.
+    const { AFTER_TURN_REASON, holdsForRunningTurn, noteAfterTurnHold } = await import('./sessions/queue-after-turn.js');
+    const heldForTurn = !heldForMove && opts?.afterTurn === true && opts?.interrupt !== true && await holdsForRunningTurn(sessionId)
+      ? AFTER_TURN_REASON : undefined;
+    // A task that moved since its session was told rides a place note on this
+    // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
+    const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
+    const place = scopedArea ? null : await pendingPlaceNotice(sessionId);
+    // A restart that killed the session's process rides the same way, on
+    // whichever message reaches it first (sessions/restart-notice.ts).
+    const { pendingRestartNotice } = await import('./sessions/restart-notice.js');
+    const restart = await pendingRestartNotice(sessionId);
+    // A session Walnut moved out of a folder that was gone hears so the same way (sessions/folder-gone.ts).
+    const { pendingFolderMovedNotice } = await import('./sessions/folder-gone.js');
+    const folderMoved = await pendingFolderMovedNotice(sessionId);
+    // An engine switch with no message ran no turn: the context it carried leads this message (sessions/engine-switch-io.ts).
+    const { pendingSwitchContext } = await import('./sessions/engine-switch-io.js');
+    const switchContext = scopedArea ? null : await pendingSwitchContext(sessionId);
+    // One task's message to another is stamped first, so a lead's team note never repeats what this
+    // message tells it (org/lead-traffic.ts).
+    const { noteQueuedMessage } = await import('./org/lead-traffic.js');
+    if (!scopedArea) unnoteTraffic = await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
+    // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
+    const { pendingOrgDigest } = await import('./org/org-store.js');
+    const digest = scopedArea ? null : await pendingOrgDigest(sessionId);
+    // A status change of a task it asked something rides the same way (sessions/status-push.ts).
+    const { pendingLiveStatusNote } = await import('./sessions/status-push.js');
+    const statusNote = scopedArea ? null : await pendingLiveStatusNote(sessionId);
+    // Every message is escaped, and a turn nobody typed still carries the message
+    // hints a human send would (hints/hint-send.ts), unless its sender composed them.
+    const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');
+    const rawBody = opts?.enqueueMessage ?? message;
+    // What a plugin App shows (an editor, a test run) rides the same way: what
+    // changed since this session last read it, never a turn (sessions/app-state.ts).
+    const { pendingAppState } = await import('./sessions/app-state.js');
+    const appState = scopedArea ? null : await pendingAppState(sessionId, rawBody);
+    // A peer's message into a waiting task says the wait comes back (task-wait-resume.ts).
+    const { waitNoteFor } = await import('./task-wait-resume.js');
+    const waitNote = await waitNoteFor(sessionId, opts?.source, opts?.endsWait === true);
+    // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
+    const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
+    const retiredNote = scopedArea ? null : await pendingRetiredLeadNote(sessionId, rawBody);
+    // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
+    const { pendingHeldNotices } = await import('./sessions/held-notices.js');
+    const heldNotes = scopedArea ? null : await pendingHeldNotices(sessionId);
+    // An answer given for the user that was taken back, which its task has not heard yet (sessions/ask-withdraw.ts).
+    const { pendingWithdrawnNote } = await import('./sessions/ask-withdraw.js');
+    const withdrawn = await pendingWithdrawnNote(sessionId);
+    // Whatever a person did not type is framed here, so the transcript says who sent it (sessions/send-frame.ts).
+    const framedBody = frameForSource(rawBody, opts?.source);
+    const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
+    const body = outputMode?.enqueueText ?? framedBody;
+    // A slash command must start its line or the CLI no longer reads it as one: Walnut's notes wait
+    // for the next message (each is told only when the row holds it, below).
+    const slashCommand = body.trimStart().startsWith('/');
+    // A line that goes as it is, with no note of Walnut's in front of it (a slash command, or a quiet
+    // turn's line, opts.bare): those notes, and the held rows a send puts back in line, wait for the next message.
+    const bare = slashCommand || opts?.bare === true;
+    // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
+    // Every word of Walnut's notes sits inside an envelope: loose words in front of the body read as the
+    // person's (sessions/send-frame.ts frameLooseText). A note with nothing loose is unchanged.
+    const rider = (t: string | null | undefined): string | undefined => (t ? frameLooseText(t) : undefined);
+    const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].map(rider).filter(Boolean).join('\n\n');
+    const lead = [notes, rider(switchContext?.text)].filter(Boolean).join('\n\n');
+    const enqueueText = lead && !bare ? `${lead}\n\n${body}` : body;
+    /** Mark told each note `carrier` (stored as row `rowId`) holds; App state and held notices it does not are put back. */
+    const tellCarried = async (carrier: string, rowId?: string): Promise<void> => {
+      // Each note as the row holds it (framed where it had loose words).
+      const holds = (t: string): boolean => !!t && carrier.includes(rider(t)!);
+      if (place?.text && carrier.startsWith(rider(place.text)!)) await place.markTold();
+      if (digest && holds(digest.text)) await digest.markTold();
+      if (restart && holds(restart.text)) await restart.markTold();
+      if (folderMoved && holds(folderMoved.text)) await folderMoved.markTold();
+      if (switchContext && holds(switchContext.text)) await switchContext.markTold();
+      if (statusNote && holds(statusNote.text)) statusNote.markTold();
+      if (withdrawn && holds(withdrawn.text)) await withdrawn.markTold();
+      if (appState) {
+        if (holds(appState.text)) appState.markTold();
+        else appState.release();
+      }
+      if (heldNotes) {
+        // Off the file once the row that carries them is stored (held-notices.ts): never awaited.
+        if (carrier && holds(heldNotes.text)) heldNotes.markTold(rowId);
+        else heldNotes.release();
+      }
+    };
+    // Nothing but notices that ask nothing: never written to the CLI on its own, not even into a running
+    // turn (a line that reaches the CLI as its turn ends starts a turn of its own: 2026-11-16, three
+    // waiting / stopped notices into the Walnut VP 1 to 5 s after its last words, each an agent-ack
+    // turn). It is held and rides in front of the session's next message (sessions/wake-policy.ts);
+    // Walnut's other notes and hints wait, as they are, for that message.
+    const { rowRides, holdRidingNotice } = await import('./sessions/wake-policy.js');
+    // A person's words, and a browser under automation's (an agent's now, still a message to act on),
+    // are never held for later: not as a riding notice, not for a cold session's next wake.
+    const personWords = PERSON_SEND_SOURCES.has(opts?.source ?? '') || opts?.source === AUTOMATED_SEND_SOURCE
+      || queueSentBy(opts?.source) === 'person';
+    if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn && !personWords && rowRides(framedBody)) {
+      await tellCarried('');
+      if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
+      stored = true;
+      // Held in memory now and written to the held-notices file behind it, never awaited.
+      void holdRidingNotice(sessionId, framedBody);
+      log.session.info('notice rides the next message: it asks nothing', { sessionId, source: opts?.source });
+      const now = new Date();
+      return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0 };
+    }
+    // Cache-aware delivery (sessions/cold-hold.ts): a message that can wait, to a session gone cold, is
+    // held for its next wake. Any other send first puts the held ones back in line in front of it, so
+    // they go out with it in one line.
+    const coldHold = await import('./sessions/cold-hold.js');
+    const { waitsWhenCold } = await import('./sessions/wake-policy.js');
+    const mayWait = !opts?.wakeReason && !opts?.interrupt && !opts?.closesPrompt && !heldForMove && !heldForTurn && !scopedArea
+      && !slashCommand && !personWords
+      && !opts?.messageId?.startsWith('qm-inbox-') && !opts?.messageId?.startsWith('qm-route-') && waitsWhenCold(framedBody, opts?.source);
+    const heldCold = mayWait && await coldHold.sessionIsCold(sessionId) ? coldHold.COLD_HOLD_REASON : undefined;
+    // Not in front of a slash command (it must start its line), nor for a move or a running turn's
+    // hold: those rows wait for the next line that goes, or the sweep sends them.
+    const released = heldCold || heldForMove || heldForTurn || bare ? null : await coldHold.releaseColdHolds(sessionId, 'a message that goes now');
+    let msg: QueuedMessage;
+    try {
+      if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
+      msg = await enqueueMessage(sessionId, enqueueText, {
+        id: opts?.messageId,
+        recentText: message,
+        ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
+        ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+        ...(opts?.relayTaken ? { relayTaken: true } : {}),
+        ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
+        ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
+        ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
+        ...(opts?.dictation && queueSentBy(opts?.source) === 'person' ? { dictation: opts.dictation } : {}),
+        ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
+        ...(heldCold ? { heldReason: heldCold, coldSend: { source: opts?.source ?? 'unknown', ...(opts?.endsWait ? { endsWait: true as const } : {}) } } : {}),
+        ...(opts?.source ? { source: opts.source } : {}), ...(opts?.taskId ? { taskId: opts.taskId } : {}),
+      });
+    } catch (err) {
+      appState?.release();
+      heldNotes?.release();
+      // Held rows this send put back in line go out on their own.
+      if (released?.count) coldHold.sendReleased(sessionId, released);
+      throw err;
+    }
+    stored = true;
+    if (opts?.onStored) {
+      try { opts.onStored(msg); } catch (err) { log.session.warn('onStored hook threw', { sessionId, messageId: msg.id, error: err instanceof Error ? err.message : String(err) }); }
+    }
+    const source = opts?.source ?? 'unknown';
+    // An ask into a lead's team from outside it (the user, the main agent, another team) is the
+    // lead's to know: its next team note lists it (org/team-asks.ts). Fire and forget.
+    // A test run's words are never the user's (test-run.ts): read now, while the request is surely open.
+    if (!scopedArea && ambientTestRun() === undefined) {
+      void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
+    }
+    // A repeat collapsed onto the row already queued: only the row that holds the note counts.
+    await tellCarried(msg.message, msg.id);
+    if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
+
+    // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
+    // the record profile is consumed exactly when this send triggers a cold
+    // --resume (resolveResumeArgs); a fire-and-forget would lose that race and
+    // ship the stale persona one more spawn. Cheap by construction: an ordinary
+    // session pays one indexed record read and early-returns; only a real
+    // Ask-Walnut session rebuilds, at most once per TTL. Never fails a send —
+    // the helper catches everything internally.
+    try {
+      const { refreshWalnutSessionProfile } = await import('./sessions/personal-ai-lane.js');
+      await refreshWalnutSessionProfile(sessionId);
+    } catch { /* stale persona until next attempt */ }
+
+    // Again at the edge itself: a quiet turn begun while this send was on its way is no longer quiet
+    // when any reader of this edge asks.
+    noteQuietTurnSend(sessionId, opts?.source);
+    // A repeat collapsed onto a row already queued is no hold of this call.
+    const holdsRow = heldForTurn !== undefined && msg.status === 'parked' && msg.parkedReason === heldForTurn;
+    if (holdsRow) noteAfterTurnHold(sessionId);
+    const holdsCold = heldCold !== undefined && coldHold.isColdHold(msg);
+    const heldShown = holdsCold ? await coldHold.heldViewOf(sessionId, msg.id) : undefined;
+    if (holdsCold) {
+      coldHold.noteColdHold(sessionId);
+      log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
+    }
+    // A row held here is a step of its own in the delivery ledger (sessions/delivery-ledger.ts), so a wait
+    // of up to an hour reads as held, and why, not as queued (2026-11-23 audit).
+    if (holdsCold || holdsRow) {
+      const why = holdsCold ? `held for the session's next wake (it is cold), at the latest ${heldShown?.heldRetryAt ?? 'within the hour'}` : 'held for the end of the running turn';
+      void import('./sessions/delivery-ledger.js').then((l) => l.recordDelivery({ step: 'parked', id: msg.id, sessionId, why })).catch(() => {});
+    }
+
+    // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
+    // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
+    // end the task's wait (a watcher's news) end it with this send.
+    if (!heldForMove && !holdsRow && !holdsCold && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
+    sessionId,
+    taskId: opts?.taskId,
+    message,
+    mode: opts?.mode,
+    interrupt: opts?.interrupt || undefined,
+    ...(opts?.endsWait || released?.endsWait ? { endsWait: true } : {}),
+  }, ['session-runner'], { source });
+    // A session its host runs and judges keeps its holds there: the held row goes to the host now,
+    // whose own queue-after-turn and cold hold release it (sessions/handed-holds.ts). After the emit:
+    // a held row starts no send here, and nothing of this reaches a host before a send that goes.
+    if (holdsRow || holdsCold) {
+      const { handHeldRowsToHost } = await import('./sessions/handed-holds.js');
+      handHeldRowsToHost(sessionId);
+    }
+
+    // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
+    // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.
+    // A kept quiet row carries someone's words: shown like any Walnut notice, so a Stop's Retry reaches it.
+    if (!isQuietRowId(msg.id) || isKeptQuietRowId(msg.id)) bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
+      sessionId,
+      messageId: msg.id,
+      message,
+      source,
+      ledgered: true,
+      ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
+      // An agent's row as stored: a peer's note is enveloped only here (`message`
+      // is its bare text), and the panel shows and folds the card it will become.
+      ...(msg.sentBy === 'agent' && msg.message !== message ? { queuedText: msg.message } : {}),
+      ...(msg.sentBy !== 'agent' && msg.message !== message ? { rowText: msg.message } : {}),
+      // The send's user line: the proof the row is that send's when its answer is lost (web api/session-send.ts).
+      ...(msg.userUuid ? { userUuid: msg.userUuid } : {}),
+      enqueuedAt: msg.enqueuedAt,
+      // Voice Accuracy pairs the box's text with these recordings exactly (stt/learn-from-sends.ts). From
+      // the row: a resend that collapses onto it, hours later, names them too.
+      ...dictationEventFields(msg.dictation),
+      ...(heldShown?.heldReason ? { heldReason: heldShown.heldReason, ...(heldShown.heldRetryAt ? { heldRetryAt: heldShown.heldRetryAt } : {}) } : {}),
+    }, ['main-ai'], { source });
+
+    return msg;
   } catch (err) {
-    appState?.release();
-    heldNotes?.release();
-    // Nothing was stored (a refusal, or a write that never reached the disk): no mark says it went in.
-    dropMarks();
-    // Held rows this send put back in line go out on their own.
-    if (released?.count) coldHold.sendReleased(sessionId, released);
+    if (!stored) dropMarks();
     throw err;
   }
-  if (opts?.onStored) {
-    try { opts.onStored(msg); } catch (err) { log.session.warn('onStored hook threw', { sessionId, messageId: msg.id, error: err instanceof Error ? err.message : String(err) }); }
-  }
-  const source = opts?.source ?? 'unknown';
-  // An ask into a lead's team from outside it (the user, the main agent, another team) is the
-  // lead's to know: its next team note lists it (org/team-asks.ts). Fire and forget.
-  // A test run's words are never the user's (test-run.ts): read now, while the request is surely open.
-  if (!scopedArea && ambientTestRun() === undefined) {
-    void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
-  }
-  // A repeat collapsed onto the row already queued: only the row that holds the note counts.
-  await tellCarried(msg.message, msg.id);
-  if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
-
-  // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
-  // the record profile is consumed exactly when this send triggers a cold
-  // --resume (resolveResumeArgs); a fire-and-forget would lose that race and
-  // ship the stale persona one more spawn. Cheap by construction: an ordinary
-  // session pays one indexed record read and early-returns; only a real
-  // Ask-Walnut session rebuilds, at most once per TTL. Never fails a send —
-  // the helper catches everything internally.
-  try {
-    const { refreshWalnutSessionProfile } = await import('./sessions/personal-ai-lane.js');
-    await refreshWalnutSessionProfile(sessionId);
-  } catch { /* stale persona until next attempt */ }
-
-  // Again at the edge itself: a quiet turn begun while this send was on its way is no longer quiet
-  // when any reader of this edge asks.
-  noteQuietTurnSend(sessionId, opts?.source);
-  // A repeat collapsed onto a row already queued is no hold of this call.
-  const holdsRow = heldForTurn !== undefined && msg.status === 'parked' && msg.parkedReason === heldForTurn;
-  if (holdsRow) noteAfterTurnHold(sessionId);
-  const holdsCold = heldCold !== undefined && coldHold.isColdHold(msg);
-  const heldShown = holdsCold ? await coldHold.heldViewOf(sessionId, msg.id) : undefined;
-  if (holdsCold) {
-    coldHold.noteColdHold(sessionId);
-    log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
-  }
-  // A row held here is a step of its own in the delivery ledger (sessions/delivery-ledger.ts), so a wait
-  // of up to an hour reads as held, and why, not as queued (2026-11-23 audit).
-  if (holdsCold || holdsRow) {
-    const why = holdsCold ? `held for the session's next wake (it is cold), at the latest ${heldShown?.heldRetryAt ?? 'within the hour'}` : 'held for the end of the running turn';
-    void import('./sessions/delivery-ledger.js').then((l) => l.recordDelivery({ step: 'parked', id: msg.id, sessionId, why })).catch(() => {});
-  }
-
-  // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
-  // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
-  // end the task's wait (a watcher's news) end it with this send.
-  if (!heldForMove && !holdsRow && !holdsCold && !demoAdmissionClosed()) bus.emit(EventNames.SESSION_SEND, {
-  sessionId,
-  taskId: opts?.taskId,
-  message,
-  mode: opts?.mode,
-  interrupt: opts?.interrupt || undefined,
-  ...(opts?.endsWait || released?.endsWait ? { endsWait: true } : {}),
-}, ['session-runner'], { source });
-  // A session its host runs and judges keeps its holds there: the held row goes to the host now,
-  // whose own queue-after-turn and cold hold release it (sessions/handed-holds.ts). After the emit:
-  // a held row starts no send here, and nothing of this reaches a host before a send that goes.
-  if (holdsRow || holdsCold) {
-    const { handHeldRowsToHost } = await import('./sessions/handed-holds.js');
-    handHeldRowsToHost(sessionId);
-  }
-
-  // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
-  // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.
-  // A kept quiet row carries someone's words: shown like any Walnut notice, so a Stop's Retry reaches it.
-  if (!isQuietRowId(msg.id) || isKeptQuietRowId(msg.id)) bus.emit(EventNames.SESSION_MESSAGE_QUEUED, {
-    sessionId,
-    messageId: msg.id,
-    message,
-    source,
-    ledgered: true,
-    ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
-    // An agent's row as stored: a peer's note is enveloped only here (`message`
-    // is its bare text), and the panel shows and folds the card it will become.
-    ...(msg.sentBy === 'agent' && msg.message !== message ? { queuedText: msg.message } : {}),
-    ...(msg.sentBy !== 'agent' && msg.message !== message ? { rowText: msg.message } : {}),
-    // The send's user line: the proof the row is that send's when its answer is lost (web api/session-send.ts).
-    ...(msg.userUuid ? { userUuid: msg.userUuid } : {}),
-    enqueuedAt: msg.enqueuedAt,
-    // Voice Accuracy pairs the box's text with these recordings exactly (stt/learn-from-sends.ts). From
-    // the row: a resend that collapses onto it, hours later, names them too.
-    ...dictationEventFields(msg.dictation),
-    ...(heldShown?.heldReason ? { heldReason: heldShown.heldReason, ...(heldShown.heldRetryAt ? { heldRetryAt: heldShown.heldRetryAt } : {}) } : {}),
-  }, ['main-ai'], { source });
-
-  return msg;
 }
 
 /** A send whose `stillWanted` said no before its row was stored: nothing was queued. */
