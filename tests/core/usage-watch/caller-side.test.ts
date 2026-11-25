@@ -101,6 +101,27 @@ describe('Walnut\'s own faults, apart from the caller\'s side', () => {
     expect(after.summary).toContain('failures 8% over 5%; new error code: http_500')
   })
 
+  // 2026-11-25, c1cd699d: its watches failed thread_create at 20.6% ("new error codes: bad_input,
+  // same_ask") and thread_update on "new error code: disk_full", judged under the rule before this one.
+  it('the thread watches that failed on designed refusals and a full disk pass, from the answers the routes give', () => {
+    const shapes: Array<[number, string, number]> = [
+      [409, 'same_ask', 4], [409, 'user_kind', 9], [400, 'bad_input', 8], [409, 'other_open_asks', 7],
+      [409, 'returned_ask', 6], [409, 'same_subject', 4], [404, 'no_thread', 1], [507, 'disk_full', 1],
+    ]
+    calls('thread_update', 'ok', 160)
+    for (const [status, code, n] of shapes) {
+      const f = failureClass({ status, code })
+      calls('thread_update', f.cls, n, f.code)
+    }
+    calls('thread_update', 'bad_args', 2, failureClass({ invalidArgs: true }).code)
+    const v = judge('thread_update')
+    expect(v.state).toBe('passed')
+    expect(v.results[0]!.failPct).toBe(0)
+    expect(v.results[0]!.newCodes).toBeUndefined()
+    // A full disk is neither side's: not a failure, nor the caller's.
+    expect(v.results[0]!.callerSide?.newCodes).not.toContain('disk_full')
+  })
+
   it('the report names the caller\'s side apart from what failed', async () => {
     calls('human_inbox_send', 'ok', 4)
     calls('human_inbox_send', 'bad_args', 2, 'invalid_args')
