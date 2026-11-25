@@ -33,11 +33,12 @@ import { isSignInAsk, readSignInState, signInStateStamp, signInWaitWords, type S
 import { relativeAsksIndex, treeAround } from './same-ask-tree.js';
 import { sameTaskArea } from './router/same-area.js';
 import { askMatter, matterIndex, matterNamedIn, sharedMatter, type MatterIndex } from './ask-matter.js';
-import { resolveDecisionOwner } from './decision-owner.js';
+import { ownerChain, resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import { isProgramRunTask, type Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
-import { holderThreadsOf, holdsOnThread, type HolderThreads } from './org/thread-held-decision.js';
+import { holderThreadsOf, holdsOnThread, repliedOnThread, threadRelatives, type HolderThreads } from './org/thread-held-decision.js';
+import { replyTagNow } from './org/reply-card-switch.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
@@ -284,11 +285,32 @@ async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Ta
   return out;
 }
 
+/** A node's Threads as kept (nodeThreads), read when none is kept; null when unreadable. */
+async function nodeThreadRows(t: Task): Promise<NodeThreadRows | null> {
+  const kept = nodeThreads.get(t.id);
+  if (kept) return kept;
+  const gen = `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`;
+  const read = await safely('threads', async () => {
+    const { readThreads } = await import('./org/threads-store.js');
+    threadFileReads += 1;
+    const threads = (await readThreads(t.id)).threads;
+    const owners = new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])]));
+    // A thread holding the task's own ask reads by that task's status: its own change recounts it.
+    if (threads.some((row) => row.reportAsk)) owners.add(t.id);
+    threadOwners.set(t.id, owners);
+    // An ask an older build left beside the threads goes on its thread once (org/thread-report-ask.ts).
+    void import('./org/thread-report-ask.js').then((m) => m.keepAskOnThread(t, threads)).catch(() => {});
+    return threads;
+  }, null);
+  // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
+  if (read && gen === `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`) nodeThreads.set(t.id, read);
+  return read;
+}
+
 async function readNodeThreads(tasks: readonly Task[], everything?: readonly Task[]): Promise<Map<string, ThreadCounts>> {
   const out = new Map<string, ThreadCounts>();
   const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
-  const { readThreads } = await import('./org/threads-store.js');
   const { threadCounts } = await import('./org/thread-groups.js');
   const { carriedRows, poppedIndex } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
@@ -301,24 +323,7 @@ async function readNodeThreads(tasks: readonly Task[], everything?: readonly Tas
   let all: readonly Task[] | undefined = everything;
   const now = Date.now();
   for (const t of nodes) {
-    let rows = nodeThreads.get(t.id);
-    if (!rows) {
-      const gen = `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`;
-      const read = await safely('threads', async () => {
-        threadFileReads += 1;
-        const threads = (await readThreads(t.id)).threads;
-        const owners = new Set(threads.flatMap((row) => [...(row.tasks ?? []), ...(row.askOwner ? [row.askOwner.task] : [])]));
-        // A thread holding the task's own ask reads by that task's status: its own change recounts it.
-        if (threads.some((row) => row.reportAsk)) owners.add(t.id);
-        threadOwners.set(t.id, owners);
-        // An ask an older build left beside the threads goes on its thread once (org/thread-report-ask.ts).
-        void import('./org/thread-report-ask.js').then((m) => m.keepAskOnThread(t, threads)).catch(() => {});
-        return threads;
-      }, null);
-      // An unreadable file is not cached (the next pass tries again), nor a read a change overtook.
-      if (read && gen === `${threadsGenAll}:${threadsGen.get(t.id) ?? 0}`) nodeThreads.set(t.id, read);
-      rows = read ?? undefined;
-    }
+    const rows = await nodeThreadRows(t);
     if (!rows) continue;
     const threads = rows;
     const counts = await safely('threads', async () => {
@@ -882,7 +887,8 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
   // Name the task a reply is awaited from even when it is not in this pass.
   for (const t of everything) if (!facts.titles.has(t.id)) facts.titles.set(t.id, t.title);
   facts.tasksById = new Map(everything.map((t) => [t.id, t] as const));
-  facts.relativeAsks = relativeAsksIndex(everything);
+  // threads_reply_tag: a decision a needs thread of a teammate carries is a fold target too (org/thread-held-decision.ts).
+  facts.relativeAsks = relativeAsksIndex(everything, replyTagNow() ? (t) => threadRelatives(t, facts.holderThreads?.get(t.id)) : undefined);
   facts.matter = matterIndex(everything);
   facts.shownAsks = everything.filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && !t.plugin_only && !t.org_role
     && t.user_status?.state === 'needs' && !!t.user_status.ask && (t.user_status.source === 'session' || t.user_status.source === 'choice'));
@@ -952,11 +958,10 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
   // A task holding a withdrawal too: a person writing in it after it lifts it (same-ask.ts answerHolds).
   for (const t of targets) if (answersOf(t).some((a) => a.withdrawn)) ids.add(t.id);
   facts.personInputAt = new Map();
-  // threads_reply_tag: a holder whose decision is on a needs thread of its own still holds it, and his
-  // message there is his word to it (org/thread-held-decision.ts). Empty with the experiment off.
-  const named = new Set([...ids, ...targets.flatMap((t) => (t.status_report?.decision_owner ? [t.status_report.decision_owner.taskId] : []))]);
-  facts.holderThreads = await timedRead(took, 'holder-threads', () => holderThreadsOf([...named].map((id) => facts.tasksById?.get(id))));
-  for (const [id, h] of facts.holderThreads) if (h.heAt) facts.personInputAt.set(id, h.heAt);
+  // threads_reply_tag: a decision on a needs thread of a task is still that task's, and a teammate's
+  // same ask folds under it (org/thread-held-decision.ts): the holders folds and pointers name, at
+  // every hop, and every task waiting on him that may carry one. Empty with the experiment off.
+  facts.holderThreads = await timedRead(took, 'holder-threads', () => holderThreadsOf(replyTagNow() ? foldHolders(facts, targets, ids) : [], nodeThreadRows));
   if (!ids.size) return;
   await timedRead(took, 'fold-evidence', () => safely('fold-evidence', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
@@ -975,6 +980,28 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
   }, undefined));
 }
 
+/**
+ * Per holder, the tasks whose fold or pointer names it (threads_reply_tag): a change of its Threads
+ * is theirs to read again, though its own status may not move (ORG_THREADS_CHANGED below).
+ */
+const foldedUnder = new Map<string, Set<string>>();
+
+/** The tasks whose threads a fold reads (readFoldEvidence), and the index above rebuilt. */
+function foldHolders(facts: StatusFacts, targets: readonly Task[], ids: ReadonlySet<string>): Task[] {
+  const byId = facts.tasksById ?? new Map<string, Task>();
+  const named = new Set([...ids, ...targets.flatMap((t) => (t.status_report?.decision_owner ? [t.status_report.decision_owner.taskId] : []))]);
+  foldedUnder.clear();
+  for (const t of byId.values()) {
+    if (t.phase === 'COMPLETE' || t.status === 'done') continue;
+    if (t.user_status?.state === 'needs' && keepsThreads(t) && !t.org_role) named.add(t.id);
+    const holder = t.user_status?.sameAsk?.id ?? (t.status_report?.state === 'needs' ? t.status_report.decision_owner?.taskId : undefined);
+    if (holder) (foldedUnder.get(holder) ?? foldedUnder.set(holder, new Set()).get(holder)!).add(t.id);
+  }
+  const out = new Map<string, Task>();
+  for (const id of named) for (const t of ownerChain(id, byId)) out.set(t.id, t);
+  return [...out.values()];
+}
+
 /** A task's own word on sameness (FOR_USER_ASK_SAME), only while its shown ask is that report's. */
 function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']>, 'same_as' | 'ask_distinct' | 'decision_owner'> | null {
   const r = t?.status_report;
@@ -986,14 +1013,14 @@ function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']
  * Whether a task still holds `ask` while it is not shown as Needs you: its current report still
  * asks it (a turn runs on it), its report is on the way, or it is snoozed with it (same-ask.ts).
  */
-function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now(), held?: HolderThreads): boolean {
+function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now(), held?: HolderThreads, decision?: string): boolean {
   if (!t || t.phase === 'COMPLETE' || t.status === 'done') return false;
   const key = askKey(ask);
   // Answered there for the user (a lead, VP or Main, or the answer reached its own holder): it no
   // longer holds it, and the fold reads answered.
   if (answerFor(answersOf(t), ask, nowMs, answerContextOf(t.status_report)) || answeredThereOf(t)) return false;
   // On a needs thread of its own, where he answers it (org/thread-held-decision.ts).
-  if (holdsOnThread(t, held, ask)) return true;
+  if (holdsOnThread(t, held, ask, decision)) return true;
   const r = t.status_report;
   if (r?.state === 'needs' && askKey(r.ask) === key) {
     if (reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
@@ -1077,7 +1104,9 @@ export function statusOf(
     decisionOwner: explicitDecisionOwner(task, facts),
     declared: (id) => declaredOf(facts.tasksById?.get(id)),
     personInputAt: (id) => facts.personInputAt?.get(id),
-    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs, facts.holderThreads?.get(id)),
+    stillAsks: (id, ask, decision) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs, facts.holderThreads?.get(id), decision),
+    repliedThere: (id, ask, decision) => repliedOnThread(facts.tasksById?.get(id), facts.holderThreads?.get(id), ask, decision),
+    foldsDecision: replyTagNow(),
     nowIso: new Date(nowMs).toISOString(),
     relatives: relativesWithSignIn(task, facts, withAsks),
     selfCreatedAt: task.created_at,
@@ -1632,6 +1661,8 @@ function onEvent(event: { name: string; data: unknown; source?: string; late?: t
       if (typeof d.taskId === 'string') { threadsChanged(d.taskId); markNow(d.taskId); } else { threadsChanged(); markAll(); }
       // A node whose thread names that task may list its result (org/thread-subject-pairs.ts carried).
       if (typeof d.taskId === 'string' && (popUpNow() || oneIdNow())) ownerThreadsChanged(d.taskId, mark);
+      // threads_reply_tag: a fold under a decision its thread carries reads that thread (org/thread-held-decision.ts).
+      if (typeof d.taskId === 'string' && replyTagNow()) for (const id of foldedUnder.get(d.taskId) ?? []) mark(id);
       // letters_as_threads: whether a thread still holds a letter decides whether the letter counts.
       if (lettersAsThreadsNow() && (typeof d.threadId !== 'string' || isLetterThread(d.threadId))) dropSlow('letters');
       // brief_off: whether a thread still holds a Board choice decides whether the choice counts.

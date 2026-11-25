@@ -10,6 +10,11 @@
  * Here the late write is the real one (reply-card.ts applyNeedsCard), run exactly in that window:
  * after askOnNeedsThread read the threads, before the answer is stored. The turn end, the question
  * and the store are the real ones (tests/helpers/reply-card-flow.ts).
+ *
+ * And a decision a card line put on its thread, which the report never asked, is still its task's
+ * to hold (review 2026-11-25, B1): the thread stores the decision's id, and a teammate reporting the
+ * same decision with same_as binds to it (before, task_report_set answered 409) and shows no card
+ * of its own.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -34,7 +39,9 @@ vi.mock('../../src/core/org/thread-report-ask.js', async (importOriginal) => {
   }
 })
 
-import { getTask } from '../../src/core/task-manager.js'
+import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { setTaskReport } from '../../src/core/sessions/report-set.js'
+import { askKey } from '../../src/core/same-ask.js'
 import { readThreads } from '../../src/core/org/threads-store.js'
 import { applyNeedsCard } from '../../src/core/org/reply-card.js'
 import { readCardTags } from '../../src/lib/card-tag.js'
@@ -83,5 +90,40 @@ describe('a decision line later than the status answer\'s read', () => {
       expect(t.user_status).toMatchObject({ state: 'needs', source: 'thread' })
       expect((t.user_status?.actions ?? []).filter((i) => i.kind === 'ask')).toEqual([])
     }, { timeout: 10_000, interval: 200 })
+  }, 60_000)
+
+  it('a card line puts a decision the report never asked on its thread: a teammate\'s same_as binds to it, one card', async () => {
+    await say('Wood or plastic for the compost bin? Put it to me as a decision.')
+    const rows = await cliTakes()
+    const bin = filedUnder(rows[0])
+    flow.statusAnswer = 'FOR_USER_STATE: needs-you\nFOR_USER_NOW: The bin choice waits for him.\nFOR_USER_NEXT: He picks, then I order.'
+    const ASK_BIN = 'Wood or plastic for the compost bin?'
+    const endedAt = await turnEnds(rows, `Both last.\n\n<walnut-card thread="${bin}" state="needs" title="Compost bin" ask="${ASK_BIN}" options="Wood (recommended); Plastic" kind="spending" why="the wooden bin costs twice the budget he set"/>`)
+    await questionAfter(endedAt)
+    // The thread stores the decision it carries; the report never asked it.
+    const th = (await readThreads(flow.taskId)).threads.find((t) => t.id === bin)!
+    expect(th).toMatchObject({ state: 'needs', ask: ASK_BIN })
+    expect(th.askId).toMatch(/^ask-[a-z0-9]+$/)
+    expect((await getTask(flow.taskId))!.status_report?.ask).toBeUndefined()
+
+    // A teammate (the same parent) reports the same decision, naming the holder. The holder has two
+    // decisions up (the tomato bed's too): the teammate's words name which (the same content words).
+    const parent = (await addTask({ title: 'Garden plan', project: 'Garden' })).task.id
+    const mate = (await addTask({ title: 'Compost helper', project: 'Garden' })).task.id
+    for (const id of [flow.taskId, mate]) await updateTaskRaw(id, { parent_task_id: parent }, { source: 'test' })
+    await updateTaskRaw(mate, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    await setTaskReport(mate, {
+      state: 'needs', ask: ASK_BIN, same_as: flow.taskId,
+      ask_kind: 'single', ask_options: [{ label: 'Wood', recommended: true, detail: 'lasts ten years, costs twice the budget' }, { label: 'Plastic', detail: 'cheaper and lighter, cracks in frost' }],
+      ask_more: 'The garden plan needs one compost bin before the autumn leaves. I recommend wood: it lasts longer, but it costs twice the budget he set. Nobody else is touched.',
+      user_kind: 'spending', user_kind_why: 'the wooden bin costs twice the budget he set',
+    }, { taskId: mate, title: 'Compost helper' })
+    expect((await getTask(mate))!.status_report?.decision_owner).toEqual({ taskId: flow.taskId, decisionId: th.askId, askKey: askKey(ASK_BIN) })
+    // One card: the holder's thread; the teammate waits on it.
+    await vi.waitFor(async () => {
+      const [holder, other] = [(await getTask(flow.taskId))!, (await getTask(mate))!]
+      expect(holder.user_status).toMatchObject({ state: 'needs', source: 'thread' })
+      expect(other.user_status).toMatchObject({ state: 'waiting', sameAsk: { id: flow.taskId, ask: ASK_BIN, decision: th.askId } })
+    }, { timeout: 15_000, interval: 200 })
   }, 60_000)
 })

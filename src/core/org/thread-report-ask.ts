@@ -32,12 +32,20 @@
  * that names it is stored asking nothing (askOnNeedsThread), a report that asked it before the
  * line stops asking when the line is written (askNowOnThread), and no place is kept for it
  * (placeAsk). The task still reads Needs you, through the thread (user-status.ts taskThreadNeeds).
+ *
+ * Which decision a thread carries is stored on it, as the report's decision id (OrgThread.askId,
+ * review 2026-11-25): a card line's write names the task's own decision when the line asks it, else
+ * a new one (cardDecisionId, markThreadDecision), and askNowOnThread names it on a thread it finds
+ * by the words, under the report's id. A report and a thread of the task are one decision by that
+ * id, or by the one task's words rule (ask-decision.ts sameOwnDecision: the same content words, or
+ * the same question offering the same choices), never by shared words alone. A teammate's fold
+ * reads the id (thread-held-decision.ts).
  */
 import type { AskOption, StatusReport, UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
 import { openNotWaiting, snoozedNow, type ThreadHeldAsk } from './thread-view.js';
 import type { OrgThread, ThreadsFile } from './threads-model.js';
-import { reportDecision, sameDecisionWords, stampSaidDecision } from '../ask-decision.js';
+import { ASK_MEMORY_MS, isDecisionId, memoryOf, mintAskId, readDeclared, reportDecision, sameOwnDecision, stampSaidDecision, type DecisionWords } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
 import { placesAskOnThread } from '../sessions/status-threads.js';
 import { OWN_ASK_FIELDS } from '../sessions/own-ask-write.js';
@@ -45,6 +53,7 @@ import { log } from '../../logging/index.js';
 import { oneCardNow } from './one-card.js';
 import { replyTagNow, replyTagOn } from './reply-card-switch.js';
 import { threadAskText } from './thread-task-ask.js';
+import type { ThreadDecision } from './thread-held-decision.js';
 
 /** The question kept on the place, for the record. */
 const ASK_KEPT_MAX = 400;
@@ -77,17 +86,93 @@ export function reportAskOf(r: StatusReport | null | undefined): TaskAsk | null 
 }
 
 /** A thread of the task that waits on him for a decision of its own (never a pointer to another task's ask). */
-const asksHim = (t: OrgThread): boolean => !t.closed && !t.movedTo && t.state === 'needs' && !t.askOwner;
+export const asksHim = (t: OrgThread): boolean => !t.closed && !t.movedTo && t.state === 'needs' && !t.askOwner;
+
+/** The decision a thread waits on him for, as the task's own ask is compared with it. */
+const threadWords = (t: OrgThread): DecisionWords => ({ id: t.askId, ask: threadAskText(t), ...(t.options?.length ? { options: t.options.map((o) => o.label) } : {}) });
 
 /**
- * The open thread that already carries this decision in needs, or null (threads_reply_tag on only):
- * its question is the ask's, compared the way one task's ask is over time (ask-decision.ts
- * sameDecisionWords: the same question in other words, never another target, sign, direction or
- * number). Pure.
+ * A thread and the task's own ask are one decision: by the id both store, else by the one task's
+ * words rule (sameOwnDecision). Two ids that differ do not make two decisions here: within one
+ * task each place mints its own until they are linked (a line written while the status answer was
+ * on its way, reply-card-late-line), and the words rule is the strict one.
  */
-export function needsThreadOf(threads: readonly OrgThread[], ask: string | undefined | null): OrgThread | null {
-  if (!replyTagNow() || !ask?.trim()) return null;
-  return threads.find((t) => asksHim(t) && sameDecisionWords(threadAskText(t), ask)) ?? null;
+function sameAsThread(t: OrgThread, ask: DecisionWords): boolean {
+  if (isDecisionId(t.askId) && isDecisionId(ask.id) && t.askId.toLowerCase() === ask.id.toLowerCase()) return true;
+  return sameOwnDecision(threadWords(t), ask);
+}
+
+/** A report's ask as the threads compare it: its decision id, its words, its choices. */
+const reportWords = (r: StatusReport, id: string | undefined): DecisionWords => ({ id, ask: r.ask, ...(r.ask_options?.length ? { options: r.ask_options.map((o) => o.label) } : {}) });
+
+/**
+ * The open thread that already carries this decision in needs, or null (threads_reply_tag on
+ * only): the one that stores its id, or the one asking it in the one task's words rule
+ * (sameAsThread). Pure.
+ */
+export function needsThreadOf(threads: readonly OrgThread[], ask: DecisionWords | null | undefined): OrgThread | null {
+  if (!replyTagNow() || !ask?.ask?.trim()) return null;
+  return threads.find((t) => asksHim(t) && sameAsThread(t, ask)) ?? null;
+}
+
+/**
+ * The decision id a card line's needs write gives its thread (reply-card.ts applyNeedsCard): the
+ * task's own decision when the line asks it (its report's ask, or one it stopped asking within
+ * ASK_MEMORY_MS), else the one the thread already waits on him for when the line asks that again,
+ * else a new one. Pure but for the new id.
+ */
+export function cardDecisionId(
+  before: OrgThread | undefined, card: { ask?: string; options?: readonly string[] }, report: StatusReport | null | undefined, nowMs = Date.now(),
+): string {
+  const line: DecisionWords = { ask: card.ask, ...(card.options?.length ? { options: card.options } : {}) };
+  const own = asksOwn(report) ? memoryOf(report) : null;
+  const last = !own && report?.last_ask && nowMs - Date.parse(report.last_ask.at) <= ASK_MEMORY_MS ? report.last_ask : null;
+  const mem = own ?? last;
+  if (mem && isDecisionId(mem.id) && sameOwnDecision(line, { ask: mem.ask, ...(mem.options?.length ? { options: mem.options } : {}) })) return mem.id;
+  if (before && asksHim(before) && isDecisionId(before.askId) && sameOwnDecision(line, threadWords(before))) return before.askId;
+  return mintAskId();
+}
+
+/**
+ * Store on an open needs thread the decision id it carries (threads_reply_tag on only). Quiet but
+ * for one change event, so a status pass reads it. Never throws; true when it wrote.
+ */
+export async function markThreadDecision(taskId: string, threadId: string, id: string): Promise<boolean> {
+  if (!replyTagNow() || !isDecisionId(id)) return false;
+  try {
+    const { writeThreadsFor } = await import('./threads-store.js');
+    return await writeThreadsFor(taskId, (cur) => {
+      const t = cur.threads.find((x) => x.id === threadId);
+      if (!t || !asksHim(t) || t.askId === id) return { file: cur, out: false };
+      return { file: { ...cur, threads: cur.threads.map((x) => (x.id === threadId ? { ...x, askId: id } : x)) }, out: true, changed: { kind: 'updated', threadId } };
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The decisions the task's threads carry (thread-held-decision.ts): each open needs thread of its
+ * own, and each other one that stores a decision id (his answer there is read by it). Pure.
+ */
+export function threadDecisionsOf(task: Pick<Task, 'org_role' | 'threads_on'> | null | undefined, threads: readonly OrgThread[]): ThreadDecision[] {
+  if (!replyTagNow() || !placesAskOnThread(task)) return [];
+  const out: ThreadDecision[] = [];
+  for (const t of threads) {
+    if (t.movedTo) continue;
+    const open = asksHim(t);
+    const id = isDecisionId(t.askId) ? t.askId : undefined;
+    const ask = threadAskText(t)?.trim() ?? '';
+    if (open ? !ask : !id) continue;
+    let heAt: string | undefined;
+    // His own words only: never an agent's reply on his behalf, nor one that never went.
+    for (const m of t.messages) {
+      if (m.delivery?.state === 'dropped' || (m.delivery?.by && m.delivery.by !== 'human') || m.via === 'import') continue;
+      if (!heAt || m.at > heAt) heAt = m.at;
+    }
+    out.push({ thread: t.id, ask, ...(id ? { id } : {}), open, ...(heAt ? { heAt } : {}) });
+  }
+  return out;
 }
 
 /**
@@ -125,7 +210,7 @@ export function askThreadFor(threads: readonly OrgThread[], named?: string): str
  */
 export function placeAsk(file: ThreadsFile, ask: TaskAsk | null, at: string, named?: string): ThreadsFile {
   // A decision a thread already carries in needs is that thread's: no place beside it (needsThreadOf).
-  if (ask && needsThreadOf(file.threads, ask.ask)) ask = null;
+  if (ask && needsThreadOf(file.threads, taskAskWords(ask))) ask = null;
   const held = ask ? file.threads.find((t) => t.reportAsk?.id === ask.id) : undefined;
   const namedOk = !!ask && !!named && file.threads.some((t) => t.id === named && openNotWaiting(t));
   const target = !ask ? null : namedOk ? named! : held ? held.id : askThreadFor(file.threads);
@@ -143,6 +228,9 @@ export function placeAsk(file: ThreadsFile, ask: TaskAsk | null, at: string, nam
     }),
   };
 }
+
+/** The task's shown ask as the threads compare it. */
+const taskAskWords = (a: TaskAsk): DecisionWords => ({ id: a.id, ask: a.ask, ...(a.options?.length ? { options: a.options.map((o) => o.label) } : {}) });
 
 function withoutPlace(t: OrgThread): OrgThread {
   if (!t.reportAsk) return t;
@@ -197,7 +285,7 @@ export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgTh
     const store = await import('./threads-store.js');
     const list = threads ?? (await store.readThreads(task.id)).threads;
     // One a thread in needs already carries keeps no place (needsThreadOf): it clears like none.
-    const placed = ask && !needsThreadOf(list, ask.ask) ? ask : null;
+    const placed = ask && !needsThreadOf(list, taskAskWords(ask)) ? ask : null;
     if (placed ? list.some((t) => t.reportAsk?.id === placed.id) || !askThreadFor(list) : !list.some((t) => t.reportAsk)) return false;
     return await store.placeTaskAsk(task.id, placed);
   } catch {
@@ -227,7 +315,8 @@ export async function askOnNeedsThread(taskId: string, report: StatusReport): Pr
   if (!asksOwn(report) || !(await replyTagOn())) return report;
   try {
     const { readThreads } = await import('./threads-store.js');
-    const held = needsThreadOf((await readThreads(taskId)).threads, report.ask);
+    // Before stamping: the decision id is the one the session said, if any.
+    const held = needsThreadOf((await readThreads(taskId)).threads, reportWords(report, readDeclared(report.ask_id, undefined).id));
     if (!held) return report;
     log.session.info('status answer: its ask is the decision a thread already carries, kept there only', { taskId, threadId: held.id });
     return withoutOwnAsk(report);
@@ -253,7 +342,7 @@ export async function askNowOnThread(taskId: string): Promise<boolean> {
     const [{ getTask, updateTaskRaw }, store] = await Promise.all([import('../task-manager.js'), import('./threads-store.js')]);
     const task = await getTask(taskId).catch(() => null);
     if (!task || !placesAskOnThread(task) || !asksOwn(task.status_report)) return false;
-    const held = needsThreadOf((await store.readThreads(taskId)).threads, task.status_report.ask);
+    const held = needsThreadOf((await store.readThreads(taskId)).threads, reportWords(task.status_report, task.status_report.ask_id));
     if (!held) return false;
     const was = task.status_report;
     const { changed } = await updateTaskRaw(taskId, (cur) => {
@@ -264,6 +353,9 @@ export async function askNowOnThread(taskId: string): Promise<boolean> {
     }, { emitEvent: true, source: 'status-report' });
     if (!changed) return false;
     log.task.info('reply card lines: the task\'s own ask is the decision the line put up, kept on its thread only', { taskId, threadId: held.id });
+    // The thread carries the report's decision from now on, under the report's id: the one a
+    // teammate's fold or pointer named (thread-held-decision.ts).
+    if (isDecisionId(was.ask_id) && held.askId !== was.ask_id) await markThreadDecision(taskId, held.id, was.ask_id);
     await store.placeTaskAsk(taskId, null);
     return true;
   } catch {

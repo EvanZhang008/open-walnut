@@ -211,7 +211,9 @@ describe('every path that settles an ask for the user reads his words first', ()
       expect(c).toMatch(/export async function askNowOnThread[\s\S]*?const held = needsThreadOf\([\s\S]*?if \(!held\) return false[\s\S]*?updateTaskRaw\(taskId, \(cur\) => \{[\s\S]*?cur\.status_report\?\.ask !== was\.ask\) return null[\s\S]*?status_report: stampSaidDecision\(withoutOwnAsk\(cur\.status_report\), cur\.status_report\)/)
       // Only a thread that waits on him for a decision of the task's own (never closed, moved or a pointer).
       expect(c).toMatch(/const asksHim = \(t: OrgThread\): boolean => !t\.closed && !t\.movedTo && t\.state === 'needs' && !t\.askOwner/)
-      expect(c).toMatch(/export function needsThreadOf[\s\S]*?threads\.find\(\(t\) => asksHim\(t\) && sameDecisionWords\(/)
+      // The same decision by the id the thread stores, else by the one task's words rule (never shared words alone).
+      expect(c).toMatch(/export function needsThreadOf[\s\S]*?threads\.find\(\(t\) => asksHim\(t\) && sameAsThread\(/)
+      expect(c).toMatch(/function sameAsThread[\s\S]*?isDecisionId\(t\.askId\) && isDecisionId\(ask\.id\) && t\.askId\.toLowerCase\(\) === ask\.id\.toLowerCase\(\)\) return true;\s*return sameOwnDecision\(/)
     },
     // The task's own report: stamped with when it began asking, so a reworded ask keeps the time.
     'src/core/sessions/status-question.ts': (c) => {

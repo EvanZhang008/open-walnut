@@ -179,11 +179,16 @@ export async function applyNeedsCard(taskId: string, sessionId: string, card: Ca
   if (why) throw new Error(why);
   const { resolveThreadCaller } = await import('./thread-caller.js');
   const { source } = await resolveThreadCaller(sessionId).catch(() => ({ source: undefined }));
-  await store.patchThread(taskId, card.thread, needsPatch(file.threads.find((t) => t.id === card.thread)!, card), `task:${taskId}`, source);
+  const before = file.threads.find((t) => t.id === card.thread)!;
+  const report = (await (await import('../task-manager.js')).getTask(taskId).catch(() => null))?.status_report;
+  await store.patchThread(taskId, card.thread, needsPatch(before, card), `task:${taskId}`, source);
   // Written: a mark left by an earlier refusal of this thread's decision goes (status-thread-asked.ts).
   noteLineAsks(taskId, [], [card.thread]);
+  const asks = await import('./thread-report-ask.js');
+  // The decision it carries, by id: the task's own when the line asks it, so the folds under it follow it (thread-held-decision.ts).
+  await asks.markThreadDecision(taskId, card.thread, asks.cardDecisionId(before, { ask: cut(card.ask ?? '', THREAD_ASK_MAX), options: card.options }, report));
   // The task's own ask, when it is this decision, is the thread's from now on: shown once (thread-report-ask.ts).
-  await (await import('./thread-report-ask.js')).askNowOnThread(taskId);
+  await asks.askNowOnThread(taskId);
 }
 
 /**

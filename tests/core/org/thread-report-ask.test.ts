@@ -304,17 +304,21 @@ describe('a decision a thread already carries in needs is that thread\'s (thread
   const ASK = 'Raised bed or planting straight in the ground for the tomatoes?'
   const needs = thread('th-aaaaaa01', { state: 'needs', ask: ASK, reply: 'Pick one; the raised bed warms sooner.', options: [{ label: 'Raised bed', recommended: true }, { label: 'In the ground' }] })
   const other = thread('th-aaaaaa02', { title: 'Compost heap', messages: [{ id: 'tm-aaaaaa02', at: T(-5), text: 'When do I start it?', via: 'chat' }] })
-  const reworded = { id: 'ask-aaaa01', ask: 'Pick where the tomatoes go: in a raised bed, or planted straight in the ground?' }
+  const OPTIONS = [{ label: 'Raised bed', recommended: true }, { label: 'In the ground' }]
+  /** The status answer's ask: the same decision reworded, offering the same choices. */
+  const reworded = { id: 'ask-aaaa01', ask: 'Pick where the tomatoes go: in a raised bed, or planted straight in the ground?', options: OPTIONS }
+  /** The same as the threads compare it (its choices' words). */
+  const words = { ...reworded, options: OPTIONS.map((o) => o.label) }
 
   it('off: the ask is placed on the other open thread, as today', () => {
-    expect(needsThreadOf([needs, other], reworded.ask)).toBeNull()
+    expect(needsThreadOf([needs, other], words)).toBeNull()
     expect(placeAsk(file(needs, other), reworded, T(10)).threads.find((t) => t.reportAsk)?.id).toBe('th-aaaaaa02')
     expect(askedOnThreads({ threads_on: true }, [needs, other])).toEqual([])
   })
 
-  it('on: the same question in other words finds the thread, and no place is made beside it', () => {
+  it('on: the same question reworded with the same choices finds the thread, and no place is made beside it', () => {
     setReplyTag(true)
-    expect(needsThreadOf([needs, other], reworded.ask)?.id).toBe('th-aaaaaa01')
+    expect(needsThreadOf([needs, other], words)?.id).toBe('th-aaaaaa01')
     const f = file(needs, other)
     expect(placeAsk(f, reworded, T(10))).toBe(f)
     // A place an earlier answer made for it goes.
@@ -322,21 +326,48 @@ describe('a decision a thread already carries in needs is that thread\'s (thread
     expect(placeAsk(placed, reworded, T(10)).threads.some((t) => t.reportAsk)).toBe(false)
   })
 
+  it('on: the decision id the thread stores decides, whatever the words', () => {
+    setReplyTag(true)
+    const named = { ...needs, askId: 'ask-aaaa01' }
+    expect(needsThreadOf([named, other], { id: 'ask-aaaa01', ask: 'Where do the tomatoes go?' })?.id).toBe('th-aaaaaa01')
+    // Within one task two ids are not yet two decisions (each place mints its own until linked): the words rule still reads.
+    expect(needsThreadOf([named, other], { id: 'ask-bbbb02', ask: ASK })?.id).toBe('th-aaaaaa01')
+    expect(needsThreadOf([named, other], { id: 'ask-bbbb02', ask: 'Where do the tomatoes go?' })).toBeNull()
+    // A thread's own stamp (threads_pop_up) is no decision id: the words decide.
+    expect(needsThreadOf([{ ...needs, askId: 'ak-0123456789' }, other], { id: 'ask-bbbb02', ask: ASK })?.id).toBe('th-aaaaaa01')
+  })
+
+  it('on: shared words alone are no evidence (review 2026-11-25, B2): reworded with no choices, or two decisions of one subject', () => {
+    setReplyTag(true)
+    expect(needsThreadOf([needs, other], { id: 'ask-aaaa01', ask: reworded.ask })).toBeNull()
+    const PAIRS: Array<[string, string]> = [
+      ['Should the orchard fence be two metres tall or three?', 'Should the orchard fence gate be painted green or brown?'],
+      ['Turn the sync toggle on by default?', 'Shorten the sync toggle description?'],
+      // Chinese: turn the sync toggle on by default? / shorten the sync toggle's description?
+      ['\u8981\u4e0d\u8981\u628a\u540c\u6b65\u5f00\u5173\u9ed8\u8ba4\u6253\u5f00\uff1f', '\u8981\u4e0d\u8981\u628a\u540c\u6b65\u5f00\u5173\u7684\u8bf4\u660e\u6539\u77ed\uff1f'],
+    ]
+    for (const [a, b] of PAIRS) {
+      expect(needsThreadOf([thread('th-aaaaaa03', { state: 'needs', ask: a })], { id: 'ask-cccc03', ask: b }), b).toBeNull()
+      // Yes and no are no choices of their own.
+      expect(needsThreadOf([thread('th-aaaaaa03', { state: 'needs', ask: a, options: [{ label: 'Yes' }, { label: 'No' }] })], { id: 'ask-cccc03', ask: b, options: ['Yes', 'No'] }), b).toBeNull()
+    }
+  })
+
   it('on: another decision is still placed by the rule (another target, another number, a "not")', () => {
     setReplyTag(true)
     for (const ask of ['Order 40 or 60 bags of soil for the compost heap?', 'Raised bed or planting straight in the ground for the beans?', 'Do not use a raised bed for the tomatoes?']) {
-      expect(needsThreadOf([needs, other], ask), ask).toBeNull()
+      expect(needsThreadOf([needs, other], { ask, options: words.options }), ask).toBeNull()
       expect(placeAsk(file(needs, other), { id: 'ask-bbbb02', ask }, T(10)).threads.find((t) => t.reportAsk)?.id, ask).toBe('th-aaaaaa02')
     }
   })
 
   it('on: only an open thread that waits on him for its own decision counts', () => {
     setReplyTag(true)
-    expect(needsThreadOf([{ ...needs, state: 'answered' }], ASK)).toBeNull()
-    expect(needsThreadOf([{ ...needs, closed: { how: 'acked', at: T(2), by: 'human' } }], ASK)).toBeNull()
-    expect(needsThreadOf([{ ...needs, askOwner: { task: 'task-b', at: T(2), by: 'task:task-a' } }], ASK)).toBeNull()
+    expect(needsThreadOf([{ ...needs, state: 'answered' }], { ask: ASK })).toBeNull()
+    expect(needsThreadOf([{ ...needs, closed: { how: 'acked', at: T(2), by: 'human' } }], { ask: ASK })).toBeNull()
+    expect(needsThreadOf([{ ...needs, askOwner: { task: 'task-b', at: T(2), by: 'task:task-a' } }], { ask: ASK })).toBeNull()
     // With no ask of its own, its summary's first sentence is what it asks.
-    expect(needsThreadOf([{ ...needs, ask: undefined, reply: `${ASK} I recommend the raised bed.` }], ASK)?.id).toBe('th-aaaaaa01')
+    expect(needsThreadOf([{ ...needs, ask: undefined, reply: `${ASK} I recommend the raised bed.` }], { ask: ASK })?.id).toBe('th-aaaaaa01')
   })
 
   it('the report without its ask keeps its state and words, and every field of the ask goes', () => {

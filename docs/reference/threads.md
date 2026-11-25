@@ -128,9 +128,14 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   question asks the same of the threads no line named.
 - **One decision, shown once.** A task with Threads asks him in two ways: a card line that puts a
   thread in needs, and its status answer's `FOR_USER_ASK`, which Walnut places on a thread
-  (`thread-report-ask.ts`). A decision an open thread of the task stores in needs is that thread's
-  (`needsThreadOf`: the same question in other words, compared as one task's ask is over time,
-  `sameDecisionWords`; never another target, sign, direction or number). The task's ask that is the
+  (`thread-report-ask.ts`). The thread stores the id of the decision it carries (`askId`, a
+  report's `ask-...` id): a card line's write gives it the task's own decision id when the line asks
+  that decision, else a new one (`cardDecisionId`, `markThreadDecision`); a new stretch of needs
+  leaves an old id behind. A decision an open thread of the task stores in needs is that thread's
+  (`needsThreadOf`): by that id, or by one task's words rule (`sameOwnDecision`: the same content
+  words, or the same question reworded offering the same choices with words of their own); when
+  `askNowOnThread` takes the report's ask off for it, the thread takes the report's id. Shared words alone never make one decision (review 2026-11-25:
+  "Turn the sync toggle on by default?" and "Shorten the sync toggle description?"). The task's ask that is the
   same decision is no ask of its own, in either order: a status answer that names it is stored
   asking nothing (`askOnNeedsThread`), a report that asked it before the line stops asking when the
   line is written, before any status answer (`askNowOnThread`, remembering the decision so the same
@@ -140,9 +145,15 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   and as the task's own item). The task reads Needs you through the thread (`taskThreadNeeds`). The
   status question says which decisions are up ("Your threads' cards already ask him: ..."), so a
   session need not say one twice. Another decision in the status answer is still the task's own ask.
-  A teammate's ask folded under that decision stays folded while the thread asks it, and his message
-  on the holder's threads is his answer to the holder, as one in its chat is
-  (`thread-held-decision.ts`, read by `holds` in `decision-owner.ts` and by the fold's `stillAsks`).
+  A decision on a needs thread is still its task's to hold (`thread-held-decision.ts`), whether its
+  report asked it first, never asked it, or asks another decision now: a teammate's same ask folds
+  under the thread (its decision is a fold target, `threadRelatives`), a `same_as` pointer binds to
+  its id (`resolveDecisionOwner`, also at a later hop of a chain of pointers), and a fold keeps the
+  id of the decision it folded under (`SameAskFold.decision`), so it stays folded while a thread
+  carries that id. With no id on one side (a thread or a fold an older build wrote), only the same
+  content words count (`oneDecision`, the rule of every fold between two tasks). His message on the
+  thread that carries the decision is his answer to it (`repliedOnThread`); one on another thread
+  of the holder is not. A change of the holder's Threads re-derives the tasks folded under it.
 - **The send-back.** The session's Stop hook hands Walnut the shape of the reply's last 16 lines
   (`last_lines` of `open_items`: a line of words is `x`, only a card line is whole). The turn is held
   once, with one plain line per thing, when a message of his this turn read was filed under an open
@@ -211,6 +222,8 @@ others, and the request's size), `tests/e2e/reply-card-real-flow.test.ts` (every
 through the runner's own turn-end event and the question the hook arms, on an isolated server),
 `tests/e2e/reply-card-slow-answers.test.ts` (an answers read that takes thirty seconds),
 `tests/e2e/reply-card-one-decision.test.ts` (a decision by a line and the task's ask, both orders),
+`tests/core/fold-on-needs-thread.test.ts` and `tests/core/org/thread-decision-id.test.ts` (a teammate's
+fold under a decision on a thread, and the decision id the thread stores on both stores),
 `tests/e2e/reply-card-stop-quiet.test.ts` (no send-back to tidy threads; his reaction asked in the
 question) and `tests/core/org/stop-checks-guard.test.ts` (every check and text of the Stop hook).
 

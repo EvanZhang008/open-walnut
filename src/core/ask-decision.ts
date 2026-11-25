@@ -18,7 +18,7 @@
  * org-follow.ts, threads-model.ts) compares that key; tests/core/ask-decision-news-guard.test.ts
  * lists them and runs the real rewordings through each. Pure.
  */
-import { askKey, askShape, sameAskReworded, sameDirections, SAME_ASK_MIN_WORDS } from './same-ask.js';
+import { askKey, askShape, sameAskReworded, sameAskText, sameDirections, SAME_ASK_MIN_WORDS } from './same-ask.js';
 import { normalizeText } from './human-inbox/duplicate-letter.js';
 import type { AskKind, StatusReport, UserStatus } from './user-status.js';
 
@@ -186,6 +186,47 @@ function swapsTarget(a: string, b: string): boolean {
   if (!ma || !mb || ma.includes(mb) || mb.includes(ma)) return false;
   const short = (m: string) => m.split(/\s+/).filter(Boolean).length <= 2 && [...m].filter((c) => CJK_WORD.test(c)).length <= 4 && m.length <= 24;
   return short(ma) && short(mb) && p + q >= Math.min(x.length, y.length) / 2;
+}
+
+/** A report's decision id (ask-...), never another mark (a thread's own `ak-` stamp, a Board choice's key). */
+export function isDecisionId(id: string | undefined | null): id is string {
+  return !!id && /^ask-[a-z0-9]{4,12}$/i.test(id);
+}
+
+/** One decision as two places read it: its id when it has one, its words, its choices. */
+export interface DecisionWords { id?: string | null; ask?: string | null; options?: readonly string[] }
+
+/**
+ * Whether two asks are one decision across tasks or places that only share it (a teammate's fold
+ * under a decision its holder carries on a thread, org/thread-held-decision.ts): by their ids when
+ * both have one; else only by the same content words in the same order (same-ask.ts sameAskText,
+ * the rule every fold between two tasks uses), never by shared words (review 2026-11-25: "Should
+ * the orchard fence be two metres tall or three?" and "Should the orchard fence gate be painted
+ * green or brown?" share 40% of their words, and the Chinese for "turn the sync toggle on by
+ * default?" and "shorten the sync toggle's description?" pass even sameAskReworded: two decisions
+ * each). A fold hides an ask; a miss only shows it twice. Pure.
+ */
+export function oneDecision(a: DecisionWords, b: DecisionWords): boolean {
+  if (isDecisionId(a.id) && isDecisionId(b.id)) return a.id.toLowerCase() === b.id.toLowerCase();
+  return sameAskText(a.ask, b.ask);
+}
+
+/**
+ * Whether ONE task's decision, in two of its own places with no id linking them yet (its report's
+ * ask and the question a card line put on a thread of its own, org/thread-report-ask.ts), is one
+ * decision: the same content words (oneDecision), or the same question reworded (sameDecisionWords)
+ * offering the same choices, each with words of its own (2026-11-25: a session put "Raised bed or
+ * planting straight in the ground for the tomatoes?" on a thread and asked "Pick where the tomatoes
+ * go: in a raised bed, or planted straight in the ground?", both with Raised bed and In the
+ * ground). Shared words alone are never enough ("Turn the sync toggle on by default?" and "Shorten
+ * the sync toggle description?"), nor yes and no for choices. Pure.
+ */
+export function sameOwnDecision(a: DecisionWords, b: DecisionWords): boolean {
+  if (oneDecision({ ask: a.ask }, { ask: b.ask })) return true;
+  const oa = a.options ?? [];
+  const ob = b.options ?? [];
+  if (!oa.length || !ob.length || optionsAnswerAsk(oa) || optionsAnswerAsk(ob)) return false;
+  return sameDecisionWords(a.ask, b.ask) && !optionsChanged({ kind: 'single', options: [...oa] }, { ask_kind: 'single', ask_options: ob.map((label, i) => ({ id: `o${i}`, label })) });
 }
 
 /** How the user answers: a choice (single or multi) with its options, or freely (yes or no, text). */

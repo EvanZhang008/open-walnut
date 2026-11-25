@@ -26,7 +26,8 @@ import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerView, pointerTaskIds 
 import { heldCandidate, ownThreadTaskIds } from './thread-subject-pairs.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
 import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
-import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
+import { dropCarriedDecisions, stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
+import { replyTagNow } from './reply-card-switch.js';
 import { liveLetter } from './letter-thread-model.js';
 
 function emit(event: OrgThreadsChangedEvent): void {
@@ -179,8 +180,10 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
     const res = mutate(cur);
     out = res.out;
     entered = enteredNeeds(cur, res.file);
+    // threads_reply_tag: a decision id carried over from an earlier stretch of needs goes (thread-popup-rules.ts).
+    const file = replyTagNow() ? dropCarriedDecisions(cur, res.file) : res.file;
     // A decision waiting on him gets its id, so a reply names the ask it answers (thread-popup.ts).
-    return threadsPopUpNow() ? stampAskIds(cur, res.file) : res.file;
+    return threadsPopUpNow() ? stampAskIds(cur, file) : file;
   };
   const file = threadsFile(taskId);
   // false: the experiment went off before the database write began, so the file takes it.

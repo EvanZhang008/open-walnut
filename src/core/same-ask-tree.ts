@@ -186,13 +186,16 @@ const answeredAsk = (t: Task): boolean => !!t.user_status?.answeredFor?.ask;
 
 /**
  * The status sync's read of teammates: for each task, the asks beside it, the first made first:
- * the ones shown to the user now, and the ones a lead, VP or Main answered there. Pure.
+ * the ones shown to the user now, and the ones a lead, VP or Main answered there. `onThreads`
+ * (threads_reply_tag): the decisions a teammate waiting on him carries on needs threads of its own
+ * (org/thread-held-decision.ts threadRelatives), read when asked. Pure.
  */
-export function relativeAsksIndex(everything: readonly Task[]): (task: Task) => RelativeAsk[] {
-  const of = teammatesIndex(everything, (t) => shownAsk(t) || answeredAsk(t));
-  return (task) => of(task).map((t) => shownAsk(t)
-    ? { id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at, ...(t.user_status!.decision ? { decision: t.user_status!.decision } : {}) }
-    : { id: t.id, title: t.title, ask: t.user_status!.answeredFor!.ask, createdAt: t.created_at, answered: true as const });
+export function relativeAsksIndex(everything: readonly Task[], onThreads?: (t: Task) => RelativeAsk[]): (task: Task) => RelativeAsk[] {
+  const of = teammatesIndex(everything, (t) => shownAsk(t) || answeredAsk(t) || (!!onThreads && t.user_status?.state === 'needs'));
+  const own = (t: Task): RelativeAsk[] => shownAsk(t)
+    ? [{ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at, ...(t.user_status!.decision ? { decision: t.user_status!.decision } : {}) }]
+    : answeredAsk(t) ? [{ id: t.id, title: t.title, ask: t.user_status!.answeredFor!.ask, createdAt: t.created_at, answered: true as const }] : [];
+  return (task) => of(task).flatMap((t) => (onThreads ? [...own(t), ...onThreads(t)] : own(t)));
 }
 
 /** The tasks around `taskId`, each with where it stands to it. Never the task itself. Pure. */

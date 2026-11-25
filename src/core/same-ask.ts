@@ -278,6 +278,9 @@ export interface SameAskFold {
   signIn?: true;
   /** Folded under another team's ask about the same matter (ask-matter.ts): the key both name. */
   matter?: string;
+  /** threads_reply_tag: the id of the decision it folded under, which the holder may carry on a
+   *  needs thread of its own later (org/thread-held-decision.ts). Absent with the experiment off. */
+  decision?: string;
 }
 
 /** What a fold reads of the tasks around it. */
@@ -294,8 +297,14 @@ export interface FoldContext {
   /** When a person last wrote to that task's sessions (ISO): the evidence an answer went there. */
   personInputAt?: (taskId: string) => string | null | undefined;
   /** Whether that task still holds this ask while it is not shown (its turn runs on it, its report
-   *  is on the way, or it is snoozed with it): the fold stays as it is. */
-  stillAsks?: (taskId: string, ask: string) => boolean;
+   *  is on the way, or it is snoozed with it, or a needs thread of its own carries the decision,
+   *  `decision` the id the fold keeps): the fold stays as it is. */
+  stillAsks?: (taskId: string, ask: string, decision?: string) => boolean;
+  /** threads_reply_tag: when the user last wrote on that task's thread that carries this decision
+   *  (org/thread-held-decision.ts repliedOnThread): like a person's message to it, the evidence. */
+  repliedThere?: (taskId: string, ask: string, decision?: string) => string | null | undefined;
+  /** threads_reply_tag: a fold keeps the id of the decision it folds under (SameAskFold.decision). */
+  foldsDecision?: boolean;
   /** Now (ISO), for a new fold's `at`. */
   nowIso?: string;
   /** The open asks of its teammates beside it (never above or below it), each shown as Needs you
@@ -403,12 +412,15 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
   let fold: SameAskFold | null = null;
   if (picked) {
     const { hit } = picked;
-    const at = prev && prev.id === hit.id && prev.key === key && prev.at ? prev.at : (ctx.nowIso ?? new Date().toISOString());
+    const kept = prev && prev.id === hit.id && prev.key === key;
+    const at = kept && prev.at ? prev.at : (ctx.nowIso ?? new Date().toISOString());
+    const decision = ctx.foldsDecision ? hit.decision?.id ?? (kept ? prev.decision : undefined) : undefined;
     fold = {
       id: hit.id, title: hit.title, ask: hit.ask, key, stamp, at,
       ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
       ...(bothSignIn(hit) ? { signIn: true as const } : {}),
       ...((hit as RelativeAsk).matter ? { matter: (hit as RelativeAsk).matter } : {}),
+      ...(decision ? { decision } : {}),
     };
   } else if (!prev || draftStillLocal(prev.ask)) {
     // An answer given there for the user that was taken back since the fold (sessions/ask-withdraw.ts):
@@ -416,13 +428,14 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
     // answer as answered for good).
     const takenAt = prev?.at ? Date.parse(ctx.withdrawnAt?.(prev.id, prev.ask) ?? '') : NaN;
     const takenBack = Number.isFinite(takenAt) && takenAt >= Date.parse(prev!.at);
-    if (prev && prev.key === key && prev.stamp === stamp && prev.at && (!prev.answered || takenBack) && ctx.stillAsks?.(prev.id, prev.ask)) {
+    if (prev && prev.key === key && prev.stamp === stamp && prev.at && (!prev.answered || takenBack) && ctx.stillAsks?.(prev.id, prev.ask, prev.decision)) {
       const { answered: _answered, ...open } = prev;
       fold = open;
     } else if (prev && prev.key === key && prev.stamp === stamp && prev.at) {
       // The answer reached that task: a person wrote to it, or a lead, VP or Main answered it there.
       const since = takenBack ? takenAt : Date.parse(prev.at);
-      const reached = [ctx.personInputAt?.(prev.id), ctx.answeredAt?.(prev.id, prev.ask)].map((v) => Date.parse(v ?? '')).filter(Number.isFinite);
+      const reached = [ctx.personInputAt?.(prev.id), ctx.answeredAt?.(prev.id, prev.ask), ctx.repliedThere?.(prev.id, prev.ask, prev.decision)]
+        .map((v) => Date.parse(v ?? '')).filter(Number.isFinite);
       if ((prev.answered && !takenBack) || ctx.answeredThere?.(prev.id) || reached.some((t) => t >= since)) fold = { ...prev, answered: true };
     }
   }
