@@ -25,7 +25,7 @@ import { THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_PENDING_RULE, THREADS_SU
 import { briefOffNote, setBriefOff } from '../../../src/core/org/brief-off.js'
 import { threadRecheckBody } from '../../../src/core/org/thread-recheck.js'
 import { orgStartMessage } from '../../../src/core/org/org-autostart.js'
-import { THREAD_LINE_CHANNEL } from '../../../src/lib/internal-lines.js'
+import { STATUS_QUESTION, THREAD_LINE_CHANNEL } from '../../../src/lib/internal-lines.js'
 import { dueChanges, parseInstructions, renderDue } from '../../../src/core/sessions/instruction-diff.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 22, 20, min)).toISOString()
@@ -259,13 +259,17 @@ describe('what a thread keeper reads', () => {
     for (const [name, text] of [['recheck', body], ['start', start], ['brief off', briefOffNote()]] as const) {
       expect(text, name).not.toMatch(/thread_update with the summary|bring your Threads up to date|keep each thread current with thread_update|pending if/)
       // Where the lines go, said plainly (2026-11-24: "at this turn's end" was read as the end of the reply).
-      expect(text, name).toContain(THREAD_LINE_CHANNEL)
+      expect(text, name).toContain(STATUS_QUESTION)
     }
   })
   it('every text that asks a thread\'s line says where it goes: Walnut\'s status question, never the reply (2026-11-24)', () => {
     setThreadsKept(true)
+    // Said in full once, in the rule: after the turn, and in the reply only when he asks (review 2026-11-25).
+    expect(THREADS_KEPT_RULE).toContain(THREAD_LINE_CHANNEL)
+    expect(THREAD_LINE_CHANNEL).toMatch(/in your reply only if he asks/)
+    expect(THREAD_LINE_CHANNEL).not.toMatch(/never/)
     for (const [name, text] of [['kept rule', THREADS_KEPT_RULE], ['one place, kept', THREAD_ONE_PLACE_KEPT_RULE], ['task threads', TASK_THREADS_LINE], ['task threads, kept', TASK_THREADS_KEPT_LINE]] as const) {
-      expect(text, name).toContain(THREAD_LINE_CHANNEL)
+      expect(text, name).toContain(STATUS_QUESTION)
       expect(text, name).not.toMatch(/at (?:the|this|each|every) turn(?:'s)? end|at the end of (?:the|this|each|your) turn/i)
     }
   })

@@ -47,27 +47,32 @@
   {
     "label": "kept: a field line with words after it",
     "text": "Done.\nFOR_USER_STATE: working\nI also fixed the tests.",
-    "shown": "Done.\nFOR_USER_STATE: working\nI also fixed the tests."
+    "shown": "Done.\nFOR_USER_STATE: working\nI also fixed the tests.",
+    "mustShow": true
   },
   {
     "label": "kept: a list explaining the fields",
     "text": "The report has these fields:\n- FOR_USER_STATE: one of working or waiting\n- FOR_USER_NOW: what runs\n- Other fields are optional.",
-    "shown": "The report has these fields:\n- FOR_USER_STATE: one of working or waiting\n- FOR_USER_NOW: what runs\n- Other fields are optional."
+    "shown": "The report has these fields:\n- FOR_USER_STATE: one of working or waiting\n- FOR_USER_NOW: what runs\n- Other fields are optional.",
+    "mustShow": true
   },
   {
     "label": "kept: a wrapped value with words after it",
     "text": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n\nAfter it.",
-    "shown": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n\nAfter it."
+    "shown": "Done.\nFOR_USER_ASK: pick one\n  A) keep\n\nAfter it.",
+    "mustShow": true
   },
   {
     "label": "kept: a field in a fenced block, Windows line ends",
     "text": "See:\r\n```\r\nFOR_USER_STATE: working\r\n```\r\nEnd.",
-    "shown": "See:\r\n```\r\nFOR_USER_STATE: working\r\n```\r\nEnd."
+    "shown": "See:\r\n```\r\nFOR_USER_STATE: working\r\n```\r\nEnd.",
+    "mustShow": true
   },
   {
     "label": "kept: a field in a fenced block at the end",
     "text": "See:\n```\nFOR_USER_STATE: working\n```",
-    "shown": "See:\n```\nFOR_USER_STATE: working\n```"
+    "shown": "See:\n```\nFOR_USER_STATE: working\n```",
+    "mustShow": true
   },
   {
     "label": "kept: a version tag in a fenced block",
@@ -82,7 +87,8 @@
   {
     "label": "kept: a mention in a sentence",
     "text": "The side question asks the FOR_USER_STATE line, not the reply.",
-    "shown": "The side question asks the FOR_USER_STATE line, not the reply."
+    "shown": "The side question asks the FOR_USER_STATE line, not the reply.",
+    "mustShow": true
   },
   {
     "label": "kept: a text that is only the report (the answer to Walnut's own question)",
@@ -167,7 +173,7 @@
   },
   {
     "label": "thread lines: id, state and a dot after the answer go",
-    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 the delay is before the upload https://example.com/a\nth-1b2c3d4e5f60: waiting \u00b7 the review is open https://example.com/b",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 the delay is before the upload\nth-1b2c3d4e5f60: waiting \u00b7 the review is open",
     "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
   },
   {
@@ -177,7 +183,7 @@
   },
   {
     "label": "thread lines under a heading go with the heading (Chinese, escaped)",
-    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-2c3d4e5f6071\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5b9a\u3002\n- th-3d4e5f607182\uff1a\u7b49\u4f60\u51b3\u5b9a https://example.com/c",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-2c3d4e5f6071\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5b9a\u3002\n- th-3d4e5f607182\uff1a\u7b49\u4f60\u51b3\u5b9a\u3002",
     "shown": "Done: the report is on the board.\nIt names both delays, with their logs."
   },
   {
@@ -203,17 +209,20 @@
   {
     "label": "a reply that is only a list of his threads stays: he asked where they stand",
     "text": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
-    "shown": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review"
+    "shown": "Threads:\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "mustShow": true
   },
   {
     "label": "a thread named in a sentence, and lines in a code block, stay",
     "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nI merged your note into th-0a1b2c3d4e5f, which holds the delay question.\n\n```\nth-0a1b2c3d4e5f: answered \u00b7 posted\n```",
-    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nI merged your note into th-0a1b2c3d4e5f, which holds the delay question.\n\n```\nth-0a1b2c3d4e5f: answered \u00b7 posted\n```"
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nI merged your note into th-0a1b2c3d4e5f, which holds the delay question.\n\n```\nth-0a1b2c3d4e5f: answered \u00b7 posted\n```",
+    "mustShow": true
   },
   {
     "label": "thread lines with the session's words after them stay",
     "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\n\nTell me which one to do first.",
-    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\n\nTell me which one to do first."
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\n\nTell me which one to do first.",
+    "mustShow": true
   },
   {
     "label": "streaming: a thread line whose state has not come yet is held",
@@ -242,12 +251,14 @@
   {
     "label": "the exception: one lead-in line, then the list: the list is the answer and stays",
     "text": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
-    "shown": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review"
+    "shown": "Here is where they stand:\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "mustShow": true
   },
   {
     "label": "the exception: a lead-in line, a heading and the list stay",
     "text": "Where your threads stand now:\n\n**Thread status:**\n- th-2c3d4e5f6071: working \u00b7 tests run\n- th-3d4e5f607182: answered \u00b7 shipped",
-    "shown": "Where your threads stand now:\n\n**Thread status:**\n- th-2c3d4e5f6071: working \u00b7 tests run\n- th-3d4e5f607182: answered \u00b7 shipped"
+    "shown": "Where your threads stand now:\n\n**Thread status:**\n- th-2c3d4e5f6071: working \u00b7 tests run\n- th-3d4e5f607182: answered \u00b7 shipped",
+    "mustShow": true
   },
   {
     "label": "the exception: a one-sentence answer keeps the block after it (the accepted cost)",
@@ -257,7 +268,8 @@
   {
     "label": "the exception: the list alone stays",
     "text": "th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
-    "shown": "th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review"
+    "shown": "th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "mustShow": true
   },
   {
     "label": "a made-up tag around the list goes, even after one line of words",
@@ -314,9 +326,10 @@
     "shown": "\u62a5\u544a\u5df2\u7ecf\u53d1\u5230\u770b\u677f\u4e0a\u3002\u4e24\u4e2a\u5ef6\u8fdf\u90fd\u5199\u4e86\u65e5\u5fd7"
   },
   {
-    "label": "sentences, not lines: a sentence, then a lead-in ending in a colon",
+    "label": "must show: a lead-in ending in a colon keeps the list, after other sentences too",
     "text": "Done. Here they are:\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
-    "shown": "Done. Here they are:"
+    "shown": "Done. Here they are:\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "mustShow": true
   },
   {
     "label": "a version, a file and line, a time and a URL are no sentence ends: one sentence keeps the block",
@@ -345,29 +358,32 @@
   },
   {
     "label": "items with their state in free words, mixed with known ones, under a heading (escaped)",
-    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff1aposts move\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002https://example.com/r/1\n- th-1b2c3d4e5f60\uff08Seed list\uff09\uff1a\u7b49\u4e00\u4eba\u6279\u51c6\u3002\n- th-2c3d4e5f6071\uff08Path lights\uff09\uff1a\u5df2\u56de\u7b54\u3002",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff1aposts move\uff09\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002\n- th-1b2c3d4e5f60\uff08Seed list\uff09\uff1a\u7b49\u4e00\u4eba\u6279\u51c6\u3002\n- th-2c3d4e5f6071\uff08Path lights\uff09\uff1a\u5df2\u56de\u7b54\u3002",
     "shown": "Done: the report is on the board. It names both delays."
   },
   {
-    "label": "a run of items that all say their state in free words goes",
-    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f: waits for your review https://example.com/r/1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval",
-    "shown": "Done: the report is on the board. It names both delays."
+    "label": "must show: free-word items with no heading, tag or known state are content",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f: waits for your review\n- th-1b2c3d4e5f60 (Seed list): waits for one approval",
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f: waits for your review\n- th-1b2c3d4e5f60 (Seed list): waits for one approval",
+    "mustShow": true
   },
   {
     "label": "one item with free words alone is no thread line: it stays",
     "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002",
-    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002"
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff1a\u7b49\u4f60\u5ba1\uff0c\u63a8\u8350\u53d1\u5e03\u3002",
+    "mustShow": true
   },
   {
     "label": "items naming a thread with no colon after the id stay",
     "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f holds the delay question\n- th-1b2c3d4e5f60 holds the upload question",
-    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f holds the delay question\n- th-1b2c3d4e5f60 holds the upload question"
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f holds the delay question\n- th-1b2c3d4e5f60 holds the upload question",
+    "mustShow": true
   },
   {
-    "label": "streaming: a run of free-word items as it comes in is held",
+    "label": "streaming: free-word items with no heading show as they come in, the last one too",
     "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff08Seed",
     "streaming": true,
-    "shown": "Done: the report is on the board. It names both delays."
+    "shown": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff08Seed"
   },
   {
     "label": "streaming: a made-up tag after one sentence is held while it comes in",
@@ -385,5 +401,158 @@
     "label": "the heading words sessions wrote: \"each thread's status\" and \"threads changed this turn\" (escaped)",
     "text": "Done: the report is on the board. It names both delays.\n\n\u5404 thread \u7684\u72b6\u6001\uff1a\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review\n\n\u672c\u8f6e\u53d8\u4e86\u7684\u7ebf\u7a0b\uff1a\n- th-3d4e5f607182: done \u00b7 merged",
     "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "must show: a list item after a thread line ends the block (escaped)",
+    "text": "\u4fee\u4e86\u4e09\u5904\u3002\u90fd\u5df2\u4e0a\u7ebf\u3002\n\n- \u4fee\u4e86\u767b\u5f55\u3002\n- thread th-0a1b2c3d4e5f: done\n- \u4fee\u4e86\u63a8\u9001\u3002\n- **\u8fd8\u6ca1\u505a\uff1a** iOS \u90a3\u534a\uff0c\u9700\u8981\u4f60\u70b9\u5934\u3002",
+    "shown": "\u4fee\u4e86\u4e09\u5904\u3002\u90fd\u5df2\u4e0a\u7ebf\u3002\n\n- \u4fee\u4e86\u767b\u5f55\u3002\n- thread th-0a1b2c3d4e5f: done\n- \u4fee\u4e86\u63a8\u9001\u3002\n- **\u8fd8\u6ca1\u505a\uff1a** iOS \u90a3\u534a\uff0c\u9700\u8981\u4f60\u70b9\u5934\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a numbered item after a thread line ends the block (escaped)",
+    "text": "\u4e0b\u9762\u662f\u8fd9\u6b21\u7684\u6539\u52a8\u3002\u5171\u4e09\u6761\u3002\n1. \u6539\u4e86 A\u3002\n2. \u767b\u5f55 (th-0a1b2c3d4e5f) done\n3. \u8fd8\u6ca1\u505a B\uff0c\u7b49\u4f60\u51b3\u5b9a\u3002",
+    "shown": "\u4e0b\u9762\u662f\u8fd9\u6b21\u7684\u6539\u52a8\u3002\u5171\u4e09\u6761\u3002\n1. \u6539\u4e86 A\u3002\n2. \u767b\u5f55 (th-0a1b2c3d4e5f) done\n3. \u8fd8\u6ca1\u505a B\uff0c\u7b49\u4f60\u51b3\u5b9a\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a bold item after a closed thread asks him something",
+    "text": "Both are done. The second needs you.\n\n- **thread th-0a1b2c3d4e5f:** closed, nothing left.\n- **The task is not marked done yet:** it still waits on one approval from you.",
+    "shown": "Both are done. The second needs you.\n\n- **thread th-0a1b2c3d4e5f:** closed, nothing left.\n- **The task is not marked done yet:** it still waits on one approval from you.",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a paragraph indented under a bare thread line",
+    "text": "Done. Two things.\n\nth-0a1b2c3d4e5f: done\n  The iOS half still needs your yes before I ship it.",
+    "shown": "Done. Two things.\n\nth-0a1b2c3d4e5f: done\n  The iOS half still needs your yes before I ship it.",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a table row is never a thread line (escaped)",
+    "text": "\u6211\u67e5\u4e86\u6240\u6709\u7ebf\u7a0b\u3002\u4e0b\u9762\u662f\u8868\u683c\u3002\n\n| \u7ebf\u7a0b | \u72b6\u6001 |\n|---|---|\n| \u767b\u5f55\u4fee\u590d (th-0a1b2c3d4e5f) | done |\n| \u63a8\u9001 (th-1b2c3d4e5f60) | working |",
+    "shown": "\u6211\u67e5\u4e86\u6240\u6709\u7ebf\u7a0b\u3002\u4e0b\u9762\u662f\u8868\u683c\u3002\n\n| \u7ebf\u7a0b | \u72b6\u6001 |\n|---|---|\n| \u767b\u5f55\u4fee\u590d (th-0a1b2c3d4e5f) | done |\n| \u63a8\u9001 (th-1b2c3d4e5f60) | working |",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a quote is never a thread line (escaped)",
+    "text": "\u4ed6\u4e4b\u524d\u53d1\u6765\u7684\u6e05\u5355\u662f\u8fd9\u6837\uff0c\u6211\u7167\u7740\u6539\u4e86\u3002\u8bf7\u770b\u3002\n\n> \u767b\u5f55 (th-0a1b2c3d4e5f) done\n> \u63a8\u9001 (th-1b2c3d4e5f60) working",
+    "shown": "\u4ed6\u4e4b\u524d\u53d1\u6765\u7684\u6e05\u5355\u662f\u8fd9\u6837\uff0c\u6211\u7167\u7740\u6539\u4e86\u3002\u8bf7\u770b\u3002\n\n> \u767b\u5f55 (th-0a1b2c3d4e5f) done\n> \u63a8\u9001 (th-1b2c3d4e5f60) working",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a sentence that names a thread in brackets is prose (escaped)",
+    "text": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n\u8fd9\u4ef6\u4e8b\u6211\u8bb0\u5728\u767b\u5f55\u7ebf\u7a0b\uff08th-0a1b2c3d4e5f\uff09\uff0c\u5b8c\u6210\u4e86\u3002",
+    "shown": "\u4fee\u597d\u4e86\u767b\u5f55\u9875\u7684\u5d29\u6e83\uff0c\u6d4b\u8bd5\u90fd\u8fc7\u4e86\u3002\u5df2\u4e0a\u7ebf\u3002\n\n\u8fd9\u4ef6\u4e8b\u6211\u8bb0\u5728\u767b\u5f55\u7ebf\u7a0b\uff08th-0a1b2c3d4e5f\uff09\uff0c\u5b8c\u6210\u4e86\u3002",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a sentence that names a thread in brackets is prose",
+    "text": "Fixed the crash. Tests pass and it is live.\n\nMerged it into the login thread (th-0a1b2c3d4e5f), done.",
+    "shown": "Fixed the crash. Tests pass and it is live.\n\nMerged it into the login thread (th-0a1b2c3d4e5f), done.",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a list of thread ids written as content (escaped)",
+    "text": "\u8fd9\u4e24\u4e2a\u7ebf\u7a0b\u662f\u91cd\u590d\u7684\uff0c\u6211\u628a\u5b83\u4eec\u5408\u5e76\u4e86\u3002\u88ab\u5408\u5e76\u7684\u662f\n- th-0a1b2c3d4e5f\uff1a\u767b\u5f55\u5931\u8d25\n- th-1b2c3d4e5f60\uff1a\u767b\u5f55\u5931\u8d25\uff08\u91cd\u590d\uff09",
+    "shown": "\u8fd9\u4e24\u4e2a\u7ebf\u7a0b\u662f\u91cd\u590d\u7684\uff0c\u6211\u628a\u5b83\u4eec\u5408\u5e76\u4e86\u3002\u88ab\u5408\u5e76\u7684\u662f\n- th-0a1b2c3d4e5f\uff1a\u767b\u5f55\u5931\u8d25\n- th-1b2c3d4e5f60\uff1a\u767b\u5f55\u5931\u8d25\uff08\u91cd\u590d\uff09",
+    "mustShow": true
+  },
+  {
+    "label": "must show: the list he asked for after two sentences and a lead-in (escaped)",
+    "text": "\u6211\u67e5\u4e86\u4e00\u904d\u3002\u73b0\u5728\u7684\u60c5\u51b5\u5982\u4e0b\uff1a\n\n- th-0a1b2c3d4e5f: working \u00b7 \u6b63\u5728\u4fee\u767b\u5f55\n- th-1b2c3d4e5f60: done \u00b7 \u63a8\u9001\u5df2\u4e0a\u7ebf",
+    "shown": "\u6211\u67e5\u4e86\u4e00\u904d\u3002\u73b0\u5728\u7684\u60c5\u51b5\u5982\u4e0b\uff1a\n\n- th-0a1b2c3d4e5f: working \u00b7 \u6b63\u5728\u4fee\u767b\u5f55\n- th-1b2c3d4e5f60: done \u00b7 \u63a8\u9001\u5df2\u4e0a\u7ebf",
+    "mustShow": true
+  },
+  {
+    "label": "must show: the list after sentences that name the threads (escaped)",
+    "text": "\u5171 2 \u4e2a\u7ebf\u7a0b\u30021 \u4e2a\u5728\u505a\uff0c1 \u4e2a\u5b8c\u6210\u3002\n- th-0a1b2c3d4e5f: working\n- th-1b2c3d4e5f60: done",
+    "shown": "\u5171 2 \u4e2a\u7ebf\u7a0b\u30021 \u4e2a\u5728\u505a\uff0c1 \u4e2a\u5b8c\u6210\u3002\n- th-0a1b2c3d4e5f: working\n- th-1b2c3d4e5f60: done",
+    "mustShow": true
+  },
+  {
+    "label": "must show: \"as follows\" before a heading and the list (escaped)",
+    "text": "\u505a\u5b8c\u4e86\u3002\u5177\u4f53\u5982\u4e0b\u3002\n\n**\u7ebf\u7a0b\u72b6\u6001**\n- th-0a1b2c3d4e5f: done",
+    "shown": "\u505a\u5b8c\u4e86\u3002\u5177\u4f53\u5982\u4e0b\u3002\n\n**\u7ebf\u7a0b\u72b6\u6001**\n- th-0a1b2c3d4e5f: done",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a block with a link the reply keeps nowhere else",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 the delay is before the upload https://example.com/a\nth-1b2c3d4e5f60: waiting \u00b7 the review is open https://example.com/b",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\nth-0a1b2c3d4e5f: answered \u00b7 the delay is before the upload https://example.com/a\nth-1b2c3d4e5f60: waiting \u00b7 the review is open https://example.com/b",
+    "mustShow": true
+  },
+  {
+    "label": "must show: a block with a path the reply keeps nowhere else",
+    "text": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n- th-0a1b2c3d4e5f: answered \u00b7 the video is /tmp/acme/proof/run.mp4",
+    "shown": "Done: the report is on the board.\nIt names both delays, with their logs.\n\n- th-0a1b2c3d4e5f: answered \u00b7 the video is /tmp/acme/proof/run.mp4",
+    "mustShow": true
+  },
+  {
+    "label": "must show: thread lines at the end of a longer list",
+    "text": "Done: the report is on the board. It names both delays.\n\n- fixed the login page\n- fixed the push copy\n- th-0a1b2c3d4e5f: done \u00b7 merged",
+    "shown": "Done: the report is on the board. It names both delays.\n\n- fixed the login page\n- fixed the push copy\n- th-0a1b2c3d4e5f: done \u00b7 merged",
+    "mustShow": true
+  },
+  {
+    "label": "a link the reply already holds does not keep the block",
+    "text": "Done: the report is on the board at https://example.com/a. It names both delays.\n\nth-0a1b2c3d4e5f: answered \u00b7 posted https://example.com/a.\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done: the report is on the board at https://example.com/a. It names both delays."
+  },
+  {
+    "label": "a line indented under a thread's list item goes with it",
+    "text": "Done: the report is on the board. It names both delays.\n\n- th-0a1b2c3d4e5f: answered \u00b7 posted\n  the log is attached above\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "streaming: free-word items under a heading are held as they come in (escaped)",
+    "text": "Done: the report is on the board. It names both delays.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60\uff08Seed",
+    "streaming": true,
+    "shown": "Done: the report is on the board. It names both delays."
+  },
+  {
+    "label": "full-width digits are no list mark: the lines stay",
+    "text": "Done. Shipped.\n\n\uff11. th-0a1b2c3d4e5f: answered \u00b7 posted\n\uff12. th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped.\n\n\uff11. th-0a1b2c3d4e5f: answered \u00b7 posted\n\uff12. th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "mustShow": true
+  },
+  {
+    "label": "a title of 45 emoji before the id is still a short title (code points, not UTF-16 units)",
+    "text": "Done. Shipped.\n\n\u7ebf\u7a0b\u72b6\u6001\uff1a\n- \ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\uff08th-0a1b2c3d4e5f\uff09\uff1aanswered\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a title of 100 emoji after the id fits its bound (code points)",
+    "text": "Done. Shipped.\n\n- th-0a1b2c3d4e5f\uff08\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\uff09\uff1aanswered\n- th-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a Walnut tag name right before a Chinese character (escaped)",
+    "text": "Done. Shipped.\n\n<walnut-status\u4e2d thread=\"th-0a1b2c3d4e5f\" state=\"working\"/>",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "streaming with Windows line ends: a heading and the first item coming in are held (escaped)",
+    "text": "Done. Shipped.\r\n\r\n\u7ebf\u7a0b\u72b6\u6001\uff1a\r\n- Seed\uff08",
+    "streaming": true,
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a blank line of U+FEFF is blank, as in JavaScript",
+    "text": "Done. Shipped.\n\ufeff\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a line of U+0085 is not blank, as in JavaScript",
+    "text": "Done. Shipped.\n\u0085\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped.\n\u0085"
+  },
+  {
+    "label": "the Kelvin sign folds to k in a state word",
+    "text": "Done. Shipped.\n\nth-0a1b2c3d4e5f: wor\u212aing \u00b7 tests run\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped."
+  },
+  {
+    "label": "a fence closed with a form feed after its mark",
+    "text": "Done. Shipped.\n```\nx\n```\f\n\nth-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review",
+    "shown": "Done. Shipped.\n```\nx\n```"
   }
 ]

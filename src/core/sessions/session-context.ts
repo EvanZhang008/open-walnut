@@ -98,7 +98,7 @@
 import { ownReadbackEnabled } from './own-readback-mark.js'
 import { keepsThreads } from '../org/keeps-threads.js'
 import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREAD_ONE_PLACE_KEPT_RULE, THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
-import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js'
+import { STATUS_QUESTION } from '../../lib/internal-lines.js'
 import { threadsKeptNow } from '../org/threads-kept.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
@@ -286,7 +286,7 @@ const AWAY_LETTERS_RULE =
 const TASK_THREADS_WHERE = 'the Threads view beside your chat, opened from its ⋮ menu or its Threads chip'
 const taskThreadsLast = (onePlace: string): string => 'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
   + 'lists it and stays yours. A thread in needs makes your task read Needs you, and his phone buzzes when he is away. '
-  + `Progress on a subject goes to its thread (its line in ${THREAD_LINE_CHANNEL}), a letter only for what needs him now. `
+  + `Progress on a subject goes to its thread (its line in ${STATUS_QUESTION}), a letter only for what needs him now. `
   + AWAY_LETTERS_RULE + onePlace
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
 function taskThreadsBlock(rules: string): string {

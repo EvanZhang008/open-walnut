@@ -24,7 +24,7 @@ import type { Task } from '../types.js';
 import { isOrgEnabled, isOrgNode } from './org-enabled.js';
 import { briefOffNow } from './brief-off.js';
 import { threadsKeptNow } from './threads-kept.js';
-import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
+import { STATUS_QUESTION } from '../../lib/internal-lines.js';
 
 /** The start's source: framed as Walnut's own note in the session (send-frame.ts). */
 export const ORG_START_SOURCE = 'org-autostart';
@@ -50,7 +50,7 @@ export function orgStartMessage(task: Pick<Task, 'org_role' | 'title' | 'org_nam
       `Walnut started your session in the background: you are ${who}.`,
       // Walnut keeps the threads from the status answer (threads-kept.ts): reading them is enough.
       threadsKeptNow()
-        ? `First read your teams (org_get) and Threads (thread_list): your line for each goes in ${THREAD_LINE_CHANNEL}.`
+        ? `First read your teams (org_get) and Threads (thread_list): your line for each goes in ${STATUS_QUESTION}.`
         : 'First read your teams with org_get, then bring your Threads up to date (thread_list, thread_update) so the user sees where his requests stand.',
       'Nobody waits on an answer to this note: when that is done, end your turn. The user and your teams reach you here.',
     ].join(' ');

@@ -18,6 +18,7 @@ final class InternalLinesTests: XCTestCase {
         let text: String
         let streaming: Bool?
         let shown: String
+        let mustShow: Bool?
     }
 
     private func cases() throws -> [Case] {
@@ -31,6 +32,19 @@ final class InternalLinesTests: XCTestCase {
         XCTAssertGreaterThan(all.count, 20)
         for c in all {
             XCTAssertEqual(InternalLines.strip(c.text, streaming: c.streaming ?? false), c.shown, c.label)
+        }
+    }
+
+    /// Precision first (review 2026-11-25): the shapes the file marks `mustShow` are the session's own
+    /// words, and every place that draws a finished reply shows them whole. The server's test keeps the
+    /// list of them, so a widening that drops one fails on both sides.
+    func testTheMustShowShapesShowWhole() throws {
+        let marked = try cases().filter { $0.mustShow == true }
+        XCTAssertGreaterThanOrEqual(marked.count, 32)
+        for c in marked {
+            XCTAssertEqual(c.shown, c.text, c.label)
+            XCTAssertEqual(InternalLines.strip(c.text), c.text, c.label)
+            XCTAssertEqual(TimelineTurnMarker.strip(c.text), c.text, c.label)
         }
     }
 
@@ -90,14 +104,15 @@ final class InternalLinesTests: XCTestCase {
 
     /// Thread lines after the words (2026-11-24) never flash up while they stream in, whatever their
     /// shape: after two lines, after two sentences on one line, in a tag the session made up after one
-    /// sentence, as items whose state is said in free words (2026-11-25, the 834 real replies). A list
-    /// that is the answer (one lead-in line, a heading, the list) shows at every step.
+    /// sentence, as items whose state is said in free words under a heading (2026-11-25, the 834 real
+    /// replies). A list that is the answer (one lead-in line, a heading, the list) shows at every step.
     func testAThreadBlockNeverFlashesUpAndTheListThatIsTheAnswerShows() {
         let words = "Done: the report is on the board.\nIt names both delays, with their logs."
         let oneLine = "Done: the report is on the board. It names both delays."
         let block = "th-0a1b2c3d4e5f: answered \u{00B7} posted\nth-1b2c3d4e5f60: waiting \u{00B7} in review"
-        let items = "- th-0a1b2c3d4e5f\u{FF08}Fence review\u{FF09}\u{FF1A}waits for your review https://example.com/r/1\n"
-            + "- th-1b2c3d4e5f60 (Seed list): waits for one approval"
+        // "Thread status:", items whose state is said in free words, then one with a known state.
+        let items = "\u{7EBF}\u{7A0B}\u{72B6}\u{6001}\u{FF1A}\n- th-0a1b2c3d4e5f\u{FF08}Fence review\u{FF09}\u{FF1A}\u{7B49}\u{4F60}\u{5BA1}\n"
+            + "- th-1b2c3d4e5f60 (Seed list): waits for one approval\n- th-2c3d4e5f6071: answered \u{00B7} posted"
         let shapes: [(String, String)] = [
             (words, words + "\n\n" + block),
             (oneLine, oneLine + "\n\n" + block),

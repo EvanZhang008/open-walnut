@@ -17,7 +17,7 @@
  * chat: the node checks its threads against his words before each turn ends (the Stop hook names
  * the answered ones he wrote after, org/thread-summary-stop.ts answeredBeforeHim).
  */
-import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
+import { STATUS_QUESTION, THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
 
 /**
  * With threads_kept_by_walnut on (threads-kept.ts; 2026-11-22, the user, on a VP that wrote a thread
@@ -29,9 +29,9 @@ import { THREAD_LINE_CHANNEL } from '../../lib/internal-lines.js';
 export const THREADS_KEPT_RULE =
   'Walnut keeps your Threads from your chat, in place of the earlier rules that had you write each thread\'s summary, state and '
   + 'known mark with thread_update every turn (those no longer apply): answer him in the chat first and write no thread for each '
-  + `message. Your line for each open thread goes in ${THREAD_LINE_CHANNEL}: its state (working: you are on it `
+  + `message. Your line for each open thread goes in ${THREAD_LINE_CHANNEL}. It gives its state (working: you are on it `
   + 'now; waiting: a team or something outside has it; answered: the result he asked for is in; done: finished) and where it '
-  + 'stands for him, latest first, with the proof\'s path or URL if any. Walnut writes that as the thread\'s state and '
+  + 'stands for him, latest first, with the proof\'s path or URL if any. Walnut writes that as its state and '
   + 'the summary on his card, gives an untitled thread the title you name, and marks your answer known only where you say he '
   + 'reacted to it in his own words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure is not seen). His '
   + 'Threads view shows a thread only when it needs him or its result is in. Call thread_update yourself only for what a line '
@@ -74,7 +74,7 @@ export const THREAD_ONE_PLACE_RULE =
 /** The same with threads_kept_by_walnut on: the thread's update is its line in the status question, not a call. */
 export const THREAD_ONE_PLACE_KEPT_RULE =
   'One place per update, the thread first: a result, answer or update on one of his threads goes to that thread only '
-  + `(its line in ${THREAD_LINE_CHANNEL}; Walnut files your chat reply under his message), whether he is here or away, `
+  + `(its line in ${STATUS_QUESTION}; Walnut files your chat reply under his message), whether he is here or away, `
   + 'never also a letter; a decision about it is its needs state (thread_update with user_kind), not a letter: Walnut buzzes his phone when he is away. His inbox is for '
   + 'what needs him and has no thread.';
 

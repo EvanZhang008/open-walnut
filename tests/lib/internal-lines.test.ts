@@ -21,26 +21,27 @@ const LEAKED = [
   'FOR_USER_NEXT: 核对、评审并上线',
 ].join('\n')
 
+// Every way a reply reaches a screen as text goes through these (turn-end-marker.ts is the web
+// chat's, the thread cards' and the session find's).
+// The server reads a session's rows here: the history every client gets (web, phone, task_history,
+// search, notices), and an ACP engine's; the web chat and the thread cards read through stripTurnMarker.
+const base = { sessionId: 's-1', cwd: '/w', version: '2.1.0' }
+const viaHistory = (t: string) => {
+  const jsonl = [
+    { type: 'user', uuid: 'u-1', parentUuid: null, timestamp: '2026-11-20T01:00:00.000Z', ...base, message: { role: 'user', content: 'hi' } },
+    { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', timestamp: '2026-11-20T01:00:01.000Z', ...base, message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: t }] } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n'
+  return parseSessionMessages(jsonl).filter((m) => m.role === 'assistant').map((m) => m.text).join('\n')
+}
+const SHOWN: Array<[string, (t: string) => string]> = [
+  ['stripInternalLines', (t) => stripInternalLines(t)],
+  ['stripTurnMarker', (t) => stripTurnMarker(t)],
+  ['stripTurnMarker while streaming', (t) => stripTurnMarker(t, true)],
+  ['the session history (history-parse.ts)', viaHistory],
+  ['an ACP engine\'s history', (t) => shownAcpMessages([{ role: 'assistant', text: t, timestamp: '2026-11-20T01:00:01.000Z' }])[0].text],
+]
+
 describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
-  // Every way a reply reaches a screen as text goes through these (turn-end-marker.ts is the web
-  // chat's, the thread cards' and the session find's).
-  // The server reads a session's rows here: the history every client gets (web, phone, task_history,
-  // search, notices), and an ACP engine's; the web chat and the thread cards read through stripTurnMarker.
-  const base = { sessionId: 's-1', cwd: '/w', version: '2.1.0' }
-  const viaHistory = (t: string) => {
-    const jsonl = [
-      { type: 'user', uuid: 'u-1', parentUuid: null, timestamp: '2026-11-20T01:00:00.000Z', ...base, message: { role: 'user', content: 'hi' } },
-      { type: 'assistant', uuid: 'a-1', parentUuid: 'u-1', timestamp: '2026-11-20T01:00:01.000Z', ...base, message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: t }] } },
-    ].map((l) => JSON.stringify(l)).join('\n') + '\n'
-    return parseSessionMessages(jsonl).filter((m) => m.role === 'assistant').map((m) => m.text).join('\n')
-  }
-  const SHOWN: Array<[string, (t: string) => string]> = [
-    ['stripInternalLines', (t) => stripInternalLines(t)],
-    ['stripTurnMarker', (t) => stripTurnMarker(t)],
-    ['stripTurnMarker while streaming', (t) => stripTurnMarker(t, true)],
-    ['the session history (history-parse.ts)', viaHistory],
-    ['an ACP engine\'s history', (t) => shownAcpMessages([{ role: 'assistant', text: t, timestamp: '2026-11-20T01:00:01.000Z' }])[0].text],
-  ]
   const leaksALine = (shown: string) => shown.split('\n').some((l) => /^\s*(?:[-*]\s+)?(?:\*\*)?FOR_USER_[A-Z]/.test(l) || /^\s*\[v[0-9a-f]{8}\]/.test(l))
 
   const CASES: Array<[string, string, string]> = [
@@ -109,8 +110,9 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
     expect(stripTurnMarker('Done.\n\nFOR_', false)).toBe('Done.\n\nFOR_')
   })
 
-  // 2026-11-24: replies ended with one line per open thread. Every screen leaves that block out,
-  // unless it would leave the reply one line or none: then the list is the answer (he asked).
+  // 2026-11-24: replies ended with one line per open thread. Every screen leaves that block out when
+  // it is strictly the reply's end, unless the words before it are one sentence or none, or lead into
+  // it: then the list is the answer (he asked). Precision first (review, 2026-11-25).
   const BLOCK = 'th-0a1b2c3d4e5f: answered \u00b7 posted\nth-1b2c3d4e5f60: waiting \u00b7 in review'
   const WORDS = 'Done: the report is on the board.\nIt names both delays, with their logs.'
   const ANSWER = `Here is where they stand:\n\n**Thread status:**\n- ${BLOCK.replace('\n', '\n- ')}`
@@ -126,11 +128,13 @@ describe('the text as the screen shows it leaves Walnut\'s lines out', () => {
 
   it('while a reply streams in, a thread block after the words never flashes up, and a list that is the answer always shows', () => {
     const ONE_LINE = 'Done: the report is on the board. It names both delays.'
-    const ITEMS = '- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1awaits for your review https://example.com/r/1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval'
+    // "Thread status:", items whose state is said in free words ("waits for your review", "waits for
+    // one approval"), then one with a known state.
+    const ITEMS = '\u7ebf\u7a0b\u72b6\u6001\uff1a\n- th-0a1b2c3d4e5f\uff08Fence review\uff09\uff1a\u7b49\u4f60\u5ba1\n- th-1b2c3d4e5f60 (Seed list): waits for one approval\n- th-2c3d4e5f6071: answered \u00b7 posted'
     for (const [words, hidden] of [
       [WORDS, `${WORDS}\n\n${BLOCK}`],
       // Two sentences on one line; a tag the session made up around the lines after one sentence;
-      // items whose state is said in free words (2026-11-25, the 834 real replies).
+      // free-word items under a heading (2026-11-25, the 834 real replies).
       [ONE_LINE, `${ONE_LINE}\n\n${BLOCK}`],
       ['Done.', `Done.\n\n<walnut-turn-status>\n${BLOCK}\n</walnut-turn-status>`],
       [ONE_LINE, `${ONE_LINE}\n\n${ITEMS}`],
@@ -171,12 +175,61 @@ describe('sentences, not lines (sentenceCount)', () => {
 })
 
 describe('the shared cases (tests/fixtures/internal-lines/cases.json)', () => {
-  const cases: Array<{ label: string; text: string; streaming?: boolean; shown: string }> =
+  const cases: Array<{ label: string; text: string; streaming?: boolean; shown: string; mustShow?: boolean }> =
     JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/internal-lines/cases.json'), 'utf8'))
   it('has cases', () => expect(cases.length).toBeGreaterThan(20))
   it.each(cases.map((c) => [c.label, c] as const))('%s', (_label, c) => {
     expect(stripInternalLines(c.text, c.streaming ?? false)).toBe(c.shown)
   })
+
+  // Precision first (review of 2026-11-25: a filter that hid his content). Each shape here is the
+  // session's own words and shows whole on every screen. A change that widens the filter keeps every
+  // one; a new false positive adds its shape to the file and to this list, never takes one out.
+  const MUST_SHOW = [
+    'kept: a field line with words after it',
+    'kept: a list explaining the fields',
+    'kept: a wrapped value with words after it',
+    'kept: a field in a fenced block, Windows line ends',
+    'kept: a field in a fenced block at the end',
+    'kept: a mention in a sentence',
+    'a reply that is only a list of his threads stays: he asked where they stand',
+    'a thread named in a sentence, and lines in a code block, stay',
+    'thread lines with the session\'s words after them stay',
+    'the exception: one lead-in line, then the list: the list is the answer and stays',
+    'the exception: a lead-in line, a heading and the list stay',
+    'the exception: the list alone stays',
+    'one item with free words alone is no thread line: it stays',
+    'items naming a thread with no colon after the id stay',
+    'must show: a lead-in ending in a colon keeps the list, after other sentences too',
+    'must show: free-word items with no heading, tag or known state are content',
+    'must show: a list item after a thread line ends the block (escaped)',
+    'must show: a numbered item after a thread line ends the block (escaped)',
+    'must show: a bold item after a closed thread asks him something',
+    'must show: a paragraph indented under a bare thread line',
+    'must show: a table row is never a thread line (escaped)',
+    'must show: a quote is never a thread line (escaped)',
+    'must show: a sentence that names a thread in brackets is prose (escaped)',
+    'must show: a sentence that names a thread in brackets is prose',
+    'must show: a list of thread ids written as content (escaped)',
+    'must show: the list he asked for after two sentences and a lead-in (escaped)',
+    'must show: the list after sentences that name the threads (escaped)',
+    'must show: "as follows" before a heading and the list (escaped)',
+    'must show: a block with a link the reply keeps nowhere else',
+    'must show: a block with a path the reply keeps nowhere else',
+    'must show: thread lines at the end of a longer list',
+    'full-width digits are no list mark: the lines stay',
+  ]
+  it('every must-show shape is still in the file, marked, and shown as written', () => {
+    const marked = cases.filter((c) => c.mustShow)
+    expect(marked.map((c) => c.label).sort()).toEqual([...MUST_SHOW].sort())
+    for (const c of marked) expect(c.shown, c.label).toBe(c.text)
+  })
+  const finished = SHOWN.filter(([fn]) => !fn.includes('streaming'))
+  for (const [fn, show] of finished) {
+    it.each(cases.filter((c) => c.mustShow).map((c) => [c.label, c] as const))(`${fn} shows it whole: %s`, (_label, c) => {
+      expect(show(c.text)).toBe(c.text)
+    })
+  }
 })
 
 describe('no text Walnut gives a session tells it to write the report in a reply', () => {
@@ -233,7 +286,7 @@ describe('no text Walnut gives a session tells it to write the report in a reply
   // 2026-11-24: the Threads rule said "At the end of each turn the status question lists your open
   // threads and you answer one line for each", and sessions wrote those lines at the end of their
   // replies: a Claude Code session never sees that question in its own chat. Every text that asks a
-  // thread's line now says THREAD_LINE_CHANNEL (tests/core/sessions/status-threads-kept.test.ts).
+  // thread's line now names STATUS_QUESTION (tests/core/sessions/status-threads-kept.test.ts).
   it('no string or skill puts a thread\'s line or the status answer at the turn\'s end', () => {
     const AT_TURN_END = /\bat the end of (?:the|this|each|every|your|its) turn\b|\bat (?:the|this|each|every|your|its) turn(?:\\?'s)? end\b|\bat (?:each|every|the|this) turn end\b/i
     const NAMES_A_LINE = /\bstatus (?:line|answer|question)|\bline for (?:it|each)\b|\bone line (?:for|per)\b|\bwhere each stands\b/i
