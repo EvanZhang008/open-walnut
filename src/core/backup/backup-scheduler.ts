@@ -298,9 +298,30 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     }
   };
 
+  /** The anchor read still going, for the destination in anchorFor. */
+  let anchorRead: Promise<void> | null = null;
+  /**
+   * Read the anchor once per destination. A second caller while the read is going waits
+   * for it: the first check after a start races the read syncDestination begins, and
+   * returning early there left the anchor at 0, so every restart ran a backup (2026-11-25:
+   * 16 backups in a morning of 23 restarts on a 24 h schedule, each a burst of server memory).
+   */
   const readAnchor = async (cfg: BackupConfig): Promise<void> => {
     const at = describe(cfg);
-    if (anchorFor === at) return;
+    if (anchorFor === at) {
+      if (anchorRead) await anchorRead;
+      return;
+    }
+    const read = readAnchorFor(cfg, at);
+    anchorRead = read;
+    try {
+      await read;
+    } finally {
+      if (anchorRead === read) anchorRead = null;
+    }
+  };
+
+  const readAnchorFor = async (cfg: BackupConfig, at: string): Promise<void> => {
     anchorFor = at;
     lastRunAtMs = 0;
     health.destination = at;
