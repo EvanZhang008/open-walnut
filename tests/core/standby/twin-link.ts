@@ -104,8 +104,12 @@ export async function bootStandbyTwin(dir: string, bun: string): Promise<Standby
     async connect() {
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         if (!proc) throw markLinkFailure(new Error('the daemon is not running'), 'no-link')
-        ws = await open()
-        const hello = await link(ws).send('hello', {}, 10_000).catch(() => ({}))
+        const sock = await open()
+        ws = sock
+        const hello = await link(sock).send('hello', {}, 10_000).catch(() => ({}))
+        // A drop or kill during the hello clears `ws` (or leaves this socket closed): that is a
+        // link failure the caller handles, never a link over a socket that is gone.
+        if (ws !== sock || sock.readyState !== WebSocket.OPEN) throw markLinkFailure(new Error('the link went during the hello'), 'lost')
         caps = Array.isArray((hello as { capabilities?: unknown }).capabilities) ? (hello as { capabilities: string[] }).capabilities : []
       }
       return link(ws)
