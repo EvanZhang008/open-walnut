@@ -547,7 +547,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/host-runtime-types.ts',
   'src/providers/codex-outside-core.ts',
   'src/providers/claude-outside-core.ts',
-  // The mark of a locked or hidden note (host replica and offline host copies read it), and the text
+  // The mark of a locked or hidden note, which the host replica and offline host copies read, and the text
   // helpers a daemon bundle imports.
   'src/core/notes/locked-note.ts',
   'src/core/notes/locked-note-format.ts',

@@ -16,6 +16,7 @@
 import { threeWayMerge } from '@open-walnut/three-way-merge';
 import { lockedNotesApi, type LockedNoteText } from '@/api/locked-notes';
 import { VaultApiError, isLockedError, onVaultSessionChange, vaultSession } from '@/api/vault';
+import '@/api/vault-live';
 import { holdUnsavedWork } from '@/utils/unsaved-work';
 import { operationErrorWords } from '@/utils/operation-error-words';
 import { log } from '@/utils/log';
