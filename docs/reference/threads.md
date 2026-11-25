@@ -549,23 +549,30 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   turn ended on an interim reply, kept under his message, and the real answer came 17 minutes later
   in a turn a teammate's result started, with no line for the thread). After every stored turn-end
   status answer (`status-question.ts` `saveStatusAnswer`, the node's own lines first; a quiet turn
-  asks no status and runs nothing), the turn's last words are read from the node's chat, and each
-  thread his question opened that still reads new or working (not needs, waiting, closed, moved or
-  snoozed; nothing of his on it after the reply) is judged by one fast-model call: does this reply
-  give the answer, or only promise, report progress or speak of something else? Only a clear
-  ANSWERED writes, by Walnut in one locked write: the reply replaces the interim answer under his
-  message, the thread reads answered (his Done), and the summary written while it read working is
-  cleared, so the card's line is Walnut's stand-in from the answer itself (`thread-view.ts`
-  `cardView`). Bounds: 3 threads a turn (newest question first), one judgement per thread and reply,
-  6 in a thread's life (in memory), the reply cut to 3,000 characters (a call reads about 1.5 KB
-  typically, at most about 5,800 characters), none for an agent acknowledgement or a reply under 40
-  characters. One log line per verdict (`org threads: answered check`). The model can be wrong both
-  ways: a real answer judged NOT_YET stays working until the node's line or the 30-minute overdue
-  reminder moves it (as before); an interim reply judged ANSWERED shows in his Done with that reply
-  as the answer, until the node's thread_update moves it (a line keeps an answer he has not read in
-  his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
-  `tests/core/org/thread-answered-check-guard.test.ts` (every caller of `applyStatusAnswer(`, and the
-  save reaching the check), `tests/e2e/thread-answered-check.test.ts`.
+  asks no status and runs nothing), the turn's last words are read from the node's chat, and ONE
+  fast-model call per reply reads them beside the list of his questions whose threads he does not
+  see (new, working or waiting; not needs or answered, not closed, moved, snoozed or acknowledged with
+  its result; nothing of his on it after the reply), and answers `ANSWERED: 2, 5` or `NONE`: a
+  question is named only when the reply clearly gives its answer, not when it only promises, reports
+  progress or speaks of something else. Per reply, never per thread: a cap per thread was used up on
+  a busy lead's replies about other matters before the real answer came (review 2026-11-25). Each
+  question named gets one locked write by Walnut: the reply replaces the interim answer under his
+  message, the thread reads answered (his Done), and the summary written while it was out of his
+  sight is cleared, so the card's line is Walnut's stand-in from the answer itself (`thread-view.ts`
+  `cardView`). Bounds: one call per reply (each reply judged once per node, in memory, bounded), at
+  most 12 questions in the list (newest first; older ones wait until newer ones are answered or
+  closed), each title cut to 200 characters, his question to 300, his last later word there to 200,
+  the reply to 3,000; none for an agent acknowledgement or a reply under 40 characters. A call reads
+  about 1.8 KB typically (two questions, a 600-character reply) and at most about 13,100 characters
+  (12 questions at their cuts, a full reply). One log line per reply (`org threads:
+  answered check`: the candidates, the threads named and marked, the call's ms). The model can be
+  wrong both ways: a real answer it leaves out stays out of his sight until the node's line or the
+  30-minute overdue reminder moves it (as before); an interim reply it names shows in his Done with
+  that reply as the answer, until the node's thread_update moves it (a line keeps an answer he has
+  not read in his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
+  `tests/core/org/thread-answered-check-guard.test.ts` (every caller of `applyStatusAnswer(`, the save
+  reaching the check, one call per reply), `tests/e2e/thread-answered-check.test.ts` (a busy node
+  among them).
 - Off: everything as before. Guards: `tests/core/org/thread-each-question.test.ts`,
   `tests/core/org/thread-each-question-guard.test.ts` (every call of `mergeThreads(` and
   `splitMessageInto(`, and every join kind of `fileMessage`, listed with its test),

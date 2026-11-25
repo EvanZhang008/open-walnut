@@ -34,13 +34,28 @@ const NOTICE = '<walnut-message kind="notification" from="Walnut: subtask" outco
 const INTERIM = 'I am looking into it: a subagent is reading the Saturday timetable now, and I will come back with the answer.'
 const REAL = 'The 7:10 from the central station reaches the coast at 8:42: it is the only train before nine on Saturday.'
 
-/** What the model was asked, and what it said: NOT_YET to the interim reply, ANSWERED to the real one. */
+/** The replies that answer a question, by a few words of each: the model's stand-in names that question's number. */
+const ANSWERS: Array<[reply: string, question: string]> = [
+  ['reaches the coast at 8:42', 'Which train reaches the coast'],
+  ['closes at five on Sunday', 'When does the hardware shop'],
+]
+
+/** The number of the listed question whose words hold `q` (the list is "<n>. ..." entries); 1 when the input lists one question unnumbered. */
+function numberOf(input: string, q: string): number {
+  const entries = [...input.matchAll(/^(\d+)\. ([\s\S]*?)(?=^\d+\. |^<<)/gm)]
+  if (!entries.length) return 1
+  return Number(entries.find((e) => e[2].includes(q))?.[1] ?? 0)
+}
+
+/** What the model was asked, and what it said: the number of the question a reply answers, else NONE. */
 const judged: Array<{ input: string; said: string }> = []
 
 beforeAll(async () => {
   await startFlow({ sid: SID, title: 'Weekend trip helper', project: 'Trips' })
   setAnsweredJudgeOverride(async (input) => {
-    const said = input.includes('reaches the coast at 8:42') ? 'ANSWERED' : 'NOT_YET'
+    const hit = ANSWERS.find(([reply]) => input.includes(reply))
+    const n = hit ? numberOf(input, hit[1]) : 0
+    const said = n ? `ANSWERED: ${n}` : 'NONE'
     judged.push({ input, said })
     return said
   })
@@ -81,7 +96,7 @@ describe('a reply that answers his question marks its thread answered', () => {
     const id = await askAndPromise('Which train reaches the coast before nine on Saturday?')
     // The interim reply was judged once, and not an answer: the thread stays as the line wrote it.
     await vi.waitFor(() => { expect(judged).toHaveLength(1) }, { timeout: 10_000 })
-    expect(judged[0].said).toBe('NOT_YET')
+    expect(judged[0].said).toBe('NONE')
     expect(judged[0].input).toContain('Which train reaches the coast before nine on Saturday?')
     let t = await thread(id)
     expect(t).toMatchObject({ state: 'working', reply: 'Checking the Saturday timetable for him.' })
@@ -92,7 +107,7 @@ describe('a reply that answers his question marks its thread answered', () => {
     await questionAfter(await noticeTurnEnds(NOTICE, REAL))
     await vi.waitFor(async () => { expect((await thread(id)).state).toBe('answered') }, { timeout: 10_000 })
     expect(judged).toHaveLength(2)
-    expect(judged[1].said).toBe('ANSWERED')
+    expect(judged[1].said).toBe('ANSWERED: 1')
     t = await thread(id)
     expect(t.messages[0].answer).toMatchObject({ text: REAL, sid: SID })
     // The working summary is gone: his card's line is the answer's own.
@@ -107,13 +122,28 @@ describe('a reply that answers his question marks its thread answered', () => {
     expect(judged).toHaveLength(2)
   }, 90_000)
 
+  it('a busy node: eight replies about other matters, then the real answer in a turn he did not start, still marks his thread answered', async () => {
+    const id = await askAndPromise('When does the hardware shop near the station close on Sunday?')
+    flow.statusAnswer = WORKING
+    for (let i = 1; i <= 8; i++) {
+      await questionAfter(await noticeTurnEnds(NOTICE, `Plot ${i} update: the larch fence posts for plot ${i} are ordered and arrive on Thursday morning by van.`))
+    }
+    const before = judged.length
+    const real = 'The hardware shop near the station closes at five on Sunday and opens again at nine on Monday.'
+    await questionAfter(await noticeTurnEnds(NOTICE, real))
+    await vi.waitFor(async () => { expect((await thread(id)).state).toBe('answered') }, { timeout: 10_000 })
+    expect(judged.length).toBe(before + 1)
+    expect((await thread(id)).messages[0].answer?.text).toBe(real)
+  }, 240_000)
+
   it('flag off: the same flow changes nothing and asks no model', async () => {
     await switches(false)
+    const before = judged.length
     const id = await askAndPromise('Which bike shop near the north fence is open on Sunday?')
     flow.statusAnswer = WORKING
     await questionAfter(await noticeTurnEnds(NOTICE, 'The shop by the north fence opens at ten on Sunday and closes at four, the only one open that day.'))
     await new Promise((r) => setTimeout(r, 2000))
-    expect(judged).toHaveLength(2)
+    expect(judged).toHaveLength(before)
     const t = await thread(id)
     expect(t).toMatchObject({ state: 'working', reply: 'Checking the Saturday timetable for him.' })
     expect(t.messages[0].answer?.text).toBe(INTERIM)

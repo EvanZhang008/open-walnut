@@ -5,6 +5,7 @@
  * reply to the answered check (org/thread-answered-check.ts checkTurnAnswers) after the node's own
  * thread lines. Enumerated from the source, so a new way to store a turn's status answer fails here
  * until it is listed, and the check cannot drop out of the save or sit behind the ask's own condition.
+ * And its unit of work stays the reply: one model call per reply, whatever the number of threads.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -51,5 +52,15 @@ describe('every stored turn-end status answer reaches the answered check', () =>
     // Only a mid-turn answer (no turn ended) skips it; never the org-node condition of the ask's place.
     expect(line).toMatch(/if \(!opts\.midTurn\)/)
     expect(line).not.toMatch(/taskLike/)
+  })
+
+  it('one model call per reply, never one per thread (2026-11-25 review: a busy node used a per-thread cap up on other replies)', () => {
+    const src = read('src/core/org/thread-answered-check.ts')
+    const body = src.slice(src.indexOf('async function checkOnce('), src.indexOf('export function checkTurnAnswers('))
+    // The one call, on the whole list, after the reply's dedupe and before the loop over what it named.
+    expect(body.match(/\bjudge\(/g)).toHaveLength(1)
+    expect(body).toMatch(/judgedBefore\(taskId, replyKey\(row\)\)[\s\S]*await judge\(listed, prose, taskId\)[\s\S]*for \(const n of named\)/)
+    expect(body.slice(0, body.indexOf('await judge('))).not.toMatch(/\bfor \(/)
+    expect(src).not.toMatch(/PER_THREAD_MAX|PER_TURN_MAX/)
   })
 })
