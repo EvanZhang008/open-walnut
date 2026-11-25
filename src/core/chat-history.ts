@@ -14,6 +14,7 @@ import { getContextThreshold } from '../model/model.js';
 import type { ChatHistoryStore, ChatEntry, DisplayMessage } from './types.js';
 import { CHAT_HISTORY_FILE, chatHistoryFile, conversationFile } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
+import { forgetKeptJson, readJsonFileKept } from '../utils/json-kept.js';
 import { estimateMessagesTokens, estimateTokens, compactDailyLog, formatDateKey } from './daily-log.js';
 import { getWorkingMemory, isWorkingMemoryEmpty, truncateWorkingMemoryForCompact, snapshotWorkingMemory } from './working-memory.js';
 import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens, getLaneWindow } from './token-truth.js';
@@ -218,25 +219,19 @@ function migrateV1toV2(store: ChatHistoryStore): ChatHistoryStore {
   };
 }
 
-async function readStore(agentId?: string, conversationId?: string): Promise<ChatHistoryStore> {
-  const filePath = resolveStorePath(agentId, conversationId);
-  const raw = await readJsonFile<ChatHistoryStore>(filePath, freshStore());
+/** A store an older version wrote that readStore rewrites on read: v1 (parallel lists). */
+function isV1Store(raw: ChatHistoryStore): boolean {
+  return raw.version === 1 || (!raw.entries && !!(raw.apiMessages || raw.displayMessages));
+}
 
-  // Migrate v1 → v2
-  if (raw.version === 1 || (!raw.entries && (raw.apiMessages || raw.displayMessages))) {
-    const migrated = migrateV1toV2(raw);
-    await writeStore(migrated, agentId, conversationId);
-    return migrated;
-  }
-
-  // Ensure entries array exists
-  if (!raw.entries) raw.entries = [];
-
-  // Migration: clean ALL orphan tool_result entries in non-compacted AI entries.
-  // An orphan is a user message with tool_result blocks whose tool_use_ids
-  // don't match any tool_use in the preceding non-compacted AI assistant message.
-  let orphanCleaned = false;
-  const ncAi = raw.entries.filter((e) => e.tag === 'ai' && !e.compacted);
+/**
+ * The orphan tool_result entries readStore slims: a non-compacted AI user message with
+ * tool_result blocks whose tool_use_ids don't match any tool_use in the preceding
+ * non-compacted AI assistant message. Pure: it only names them.
+ */
+function orphanToolResultEntries(entries: readonly ChatEntry[]): ChatEntry[] {
+  const orphans: ChatEntry[] = [];
+  const ncAi = entries.filter((e) => e.tag === 'ai' && !e.compacted);
   for (let idx = 0; idx < ncAi.length; idx++) {
     const entry = ncAi[idx];
     if (entry.role !== 'user' || !Array.isArray(entry.content)) continue;
@@ -255,21 +250,71 @@ async function readStore(agentId?: string, conversationId?: string): Promise<Cha
     }
 
     // Check if ANY tool_result is orphaned
-    const hasOrphan = blocks.some(
-      (b) => b.type === 'tool_result' && (b.tool_use_id == null || !prevTuIds.has(b.tool_use_id)),
-    );
-    if (hasOrphan) {
-      entry.compacted = true;
-      entry.content = slimContent(entry.content);
-      orphanCleaned = true;
+    if (blocks.some((b) => b.type === 'tool_result' && (b.tool_use_id == null || !prevTuIds.has(b.tool_use_id)))) {
+      orphans.push(entry);
     }
   }
-  if (orphanCleaned) {
+  return orphans;
+}
+
+/**
+ * The store as a writer needs it: its own parse, free to change and write back. Every
+ * caller is a writer (or hands the result to one that changes it); a reader that only
+ * looks takes readStoreShared (tests/core/chat-history-boot-reads.test.ts holds the list).
+ */
+async function readStore(agentId?: string, conversationId?: string): Promise<ChatHistoryStore> {
+  const filePath = resolveStorePath(agentId, conversationId);
+  const raw = await readJsonFile<ChatHistoryStore>(filePath, freshStore());
+
+  // Migrate v1 → v2
+  if (isV1Store(raw)) {
+    const migrated = migrateV1toV2(raw);
+    await writeStore(migrated, agentId, conversationId);
+    return migrated;
+  }
+
+  // Ensure entries array exists
+  if (!raw.entries) raw.entries = [];
+
+  // Migration: clean ALL orphan tool_result entries in non-compacted AI entries.
+  const orphans = orphanToolResultEntries(raw.entries);
+  for (const entry of orphans) {
+    entry.compacted = true;
+    entry.content = slimContent(entry.content);
+  }
+  if (orphans.length > 0) {
     log.agent.info('Cleaned orphan tool_result entries from chat history');
     await writeStore(raw, agentId, conversationId);
   }
 
   return raw;
+}
+
+/** How long a shared parse outlives its last read: a boot's readers come within ~30 s. */
+const SHARED_STORE_KEEP_MS = 60_000;
+/** The fallback every shared read of a missing store passes (json-kept keeps the first one). */
+const MISSING_STORE: ChatHistoryStore = Object.freeze({
+  version: 2, lastUpdated: new Date(0).toISOString(), compactionCount: 0, compactionSummary: null, entries: [],
+}) as ChatHistoryStore;
+/** Shared parses already checked as needing no rewrite (the orphan scan runs once per parse). */
+const sharedClean = new WeakSet<object>();
+
+/**
+ * The store for a reader that only looks: one parse per version of the file, shared by
+ * every such reader for a minute after the last one, and frozen (utils/json-kept.ts).
+ * 2026-11-25: the live server parsed the 18 MB main conversation three times at every
+ * boot (the orphan check here, then the conversation-bodies copy's messages and its
+ * summary), about 60 MB of text and objects each. A store readStore would rewrite (v1,
+ * orphan tool results) is read the writing way, so it reads the same as before.
+ */
+async function readStoreShared(agentId?: string, conversationId?: string): Promise<Readonly<ChatHistoryStore>> {
+  const filePath = resolveStorePath(agentId, conversationId);
+  const raw = await readJsonFileKept<ChatHistoryStore>(filePath, MISSING_STORE, { keepMs: SHARED_STORE_KEEP_MS });
+  if (!sharedClean.has(raw)) {
+    if (isV1Store(raw) || orphanToolResultEntries(raw.entries ?? []).length > 0) return readStore(agentId, conversationId);
+    sharedClean.add(raw);
+  }
+  return raw.entries ? raw : { ...raw, entries: [] };
 }
 
 async function writeStore(store: ChatHistoryStore, agentId?: string, conversationId?: string): Promise<void> {
@@ -279,7 +324,9 @@ async function writeStore(store: ChatHistoryStore, agentId?: string, conversatio
     delete store.apiMessages;
     delete store.displayMessages;
   }
-  await writeJsonFile(resolveStorePath(agentId, conversationId), store);
+  const filePath = resolveStorePath(agentId, conversationId);
+  await writeJsonFile(filePath, store);
+  forgetKeptJson(filePath);
 }
 
 // ── Public API: reading ──
@@ -457,7 +504,7 @@ export async function hydrateImagePaths(msgs: MessageParam[]): Promise<MessagePa
  * Get the compaction summary (or null if no compaction has occurred).
  */
 export async function getCompactionSummary(agentId?: string, conversationId?: string): Promise<string | null> {
-  const store = await readStore(agentId, conversationId);
+  const store = await readStoreShared(agentId, conversationId);
   return store.compactionSummary;
 }
 
@@ -534,7 +581,7 @@ export async function getDisplayEntries(
   agentId?: string,
   conversationId?: string,
 ): Promise<PaginatedEntries> {
-  const store = await readStore(agentId, conversationId);
+  const store = await readStoreShared(agentId, conversationId);
   return pageDisplayEntries(store.entries ?? [], page, pageSize);
 }
 
@@ -632,7 +679,7 @@ function entryToDisplayMessage(entry: ChatEntry): DisplayMessage {
  * Used by enrichTaskContext to determine which content fields changed.
  */
 export async function getLastContextHashes(agentId?: string, conversationId?: string): Promise<Record<string, string>> {
-  const store = await readStore(agentId, conversationId);
+  const store = await readStoreShared(agentId, conversationId);
   const entries = store.entries ?? [];
   const merged: Record<string, string> = {};
 
@@ -799,7 +846,7 @@ export async function addUserMessage(
  */
 export async function recoverOrphanedUserMessage(agentId?: string, conversationId?: string): Promise<void> {
   return withWriteLock(async () => {
-    const store = await readStore(agentId, conversationId);
+    const store = await readStoreShared(agentId, conversationId);
     const entries = store.entries ?? [];
 
     // Find the last AI-tagged entry (skip trailing UI notifications)
@@ -908,7 +955,7 @@ export async function listStoreTurns(
   agentId: string,
   conversationId: string,
 ): Promise<StoreTurnRef[]> {
-  const store = await readStore(agentId, conversationId);
+  const store = await readStoreShared(agentId, conversationId);
   const entries = store.entries ?? [];
 
   const starts: number[] = [];
@@ -1160,7 +1207,7 @@ export async function listAdoptedTurnIds(
 ): Promise<string[]> {
   if (turnIds.length === 0) return [];
   const wanted = new Set(turnIds);
-  const store = await readStore(agentId, conversationId);
+  const store = await readStoreShared(agentId, conversationId);
   const found = new Set<string>();
   for (const entry of store.entries ?? []) {
     if (entry.turnId && wanted.has(entry.turnId)) found.add(entry.turnId);

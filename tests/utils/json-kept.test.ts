@@ -3,7 +3,7 @@
  * frozen (2026-11-21: session-requests.json was parsed about 1,000 times in 10 minutes on the
  * live server while it changed a dozen times).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,6 +80,29 @@ describe('readJsonFileKept', () => {
     expect(() => { v.rows[0]!.tags.push('y'); }).toThrow(TypeError);
     expect(() => { v.rows.push({ id: 'b', tags: [] }); }).toThrow(TypeError);
     expect((await readJsonFileKept(file, { rows: [] as { id: string }[] })).rows[0]!.id).toBe('a');
+  });
+
+  it('keepMs: a burst of reads shares one parse, and the value is let go that long after the last read', async () => {
+    await writeJsonFile(file, { rows: [{ id: 'a' }] });
+    await settle();
+    // The let-go clock is a timer: drive it, so a loaded machine cannot move the result.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const first = await readJsonFileKept(file, { rows: [] }, { keepMs: 2000 });
+      vi.advanceTimersByTime(1500);
+      // A read inside the window is a hit and starts the window again.
+      expect(await readJsonFileKept(file, { rows: [] }, { keepMs: 2000 })).toBe(first);
+      vi.advanceTimersByTime(1500);
+      expect(await readJsonFileKept(file, { rows: [] }, { keepMs: 2000 })).toBe(first);
+      expect(reads()).toBe(1);
+      vi.advanceTimersByTime(2001);
+      const again = await readJsonFileKept(file, { rows: [] }, { keepMs: 2000 });
+      expect(again).not.toBe(first);
+      expect(again).toEqual(first);
+      expect(reads()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a corrupt file throws and is never kept', async () => {
