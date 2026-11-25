@@ -67,11 +67,14 @@ export async function stopStillRunning(p: { pid: number; start: string | null },
  * machine keeps a witness of the list (the standby keeps that witness's door up), and/or its server ran the
  * machine's session daemon in its own process (the standby holds that runtime again: its sessions are
  * adopted, the new leader reaches the machine as a host). Null when neither: nothing of the old machine
- * waits on the standby (a daemon program of its own outlived the server).
+ * waits on the standby (a daemon program of its own outlived the server). Null too for a host's one Walnut
+ * service: its launcher starts the service again, which boots as the standby and holds both the runtime and
+ * the witness door; a second process the switch started beside it would race it for the home and the dir.
  */
-export function oldMachineStandbyReasons(witnesses: LeaderSwitchSettings['witnesses'], st: Pick<SwitchState, 'from' | 'sourceDaemonInProcess'>): { kept: string; lost: string } | null {
+export function oldMachineStandbyReasons(witnesses: LeaderSwitchSettings['witnesses'], st: Pick<SwitchState, 'from' | 'sourceDaemonShape'>): { kept: string; lost: string } | null {
+  if (st.sourceDaemonShape === 'service') return null
   const witness = witnesses.some((w) => isRemoteWitness(w) && w.machine === st.from)
-  const daemon = st.sourceDaemonInProcess === true
+  const daemon = st.sourceDaemonShape === 'in-process'
   if (!witness && !daemon) return null
   return {
     kept: [...(witness ? ['its witness door up'] : []), ...(daemon ? ['its sessions\' daemon kept'] : [])].join(', '),
@@ -393,8 +396,8 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   if (!running) problems.push(`the old leader's server is not running on ${st.sourceHome}: start it first (only the process that holds the permission can hand it over)`)
   else {
     const s = await src.api('GET', '/api/leader/status').catch(() => null)
-    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string }; homeOnHosts?: SwitchState['sourceHomeOnHosts']; daemonInProcess?: boolean } | null
-    st.sourceDaemonInProcess = j?.daemonInProcess === true
+    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string }; homeOnHosts?: SwitchState['sourceHomeOnHosts']; daemonShape?: SwitchState['sourceDaemonShape'] } | null
+    st.sourceDaemonShape = j?.daemonShape === 'service' || j?.daemonShape === 'in-process' ? j.daemonShape : 'program'
     if (typeof j?.homeOnHosts?.home === 'string' && j.homeOnHosts.home) st.sourceHomeOnHosts = { home: j.homeOnHosts.home, formerHomes: Array.isArray(j.homeOnHosts.formerHomes) ? j.homeOnHosts.formerHomes : [] }
     else if (j?.permit) problems.push('the old leader does not say which data dir its hosts know it by (a program older than this switch): its hosts could not follow the new leader')
     if (!j?.permit) problems.push('the old leader runs without the write permission wired (start it with the experiment on and leader_switch set)')

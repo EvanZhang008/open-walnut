@@ -41,9 +41,11 @@ leaderSwitchRouter.get('/status', async (_req, res) => {
   // WALNUT_LEADER_SWITCH_FAKE_VERSION: the rehearsal's way to start a server that claims an older program.
   const version = process.env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion()
   const homeOnHosts = await homeOnHostsNow().catch(() => null)
-  // This server runs the machine's session daemon in its own process: its stop stops it too (the switch's source job reads it).
+  // Who holds the machine's session runtime (standby-service.ts daemonShapeNow): the switch's source job reads it to
+  // know who brings the runtime back after the stop. `daemonInProcess`: a runtime runs in this process now.
   const daemonInProcess = (await import('../../providers/in-process-daemon.js')).inProcessDaemonRunning()
-  res.json({ version, machine: p?.machine ?? null, trial: p?.trial ?? false, permit: p?.runtime.status() ?? null, daemonInProcess, ...(homeOnHosts ? { homeOnHosts } : {}) })
+  const daemonShape = await (await import('../standby-service.js')).daemonShapeNow()
+  res.json({ version, machine: p?.machine ?? null, trial: p?.trial ?? false, permit: p?.runtime.status() ?? null, daemonInProcess, daemonShape, ...(homeOnHosts ? { homeOnHosts } : {}) })
 })
 
 const thisMachineOnly = (req: Request, res: Response, next: NextFunction) => {

@@ -35,8 +35,36 @@ let holding: Promise<boolean> | null = null
 /** Counts the stops: a hold that a stop overtook reports nothing held, whatever its start answered. */
 let releases = 0
 
-/** What this standby holds, for its status (handed-over.ts); null before the hold ran. */
-export function standbyRuntimeState(): StandbyRuntime | null { return state }
+/**
+ * What this standby holds, for its status (handed-over.ts); null before the hold ran. Read live: a
+ * runtime that ended itself since (another daemon took its dir, as a daemon update's handover does)
+ * is held no more. The standby does not start it again: the daemon that took the dir serves it now.
+ */
+export function standbyRuntimeState(): StandbyRuntime | null {
+  if (state && state.held && !runtimeRunning()) return { held: false, why: `the runtime on ${state.dir} ended itself (another daemon took its dir, or it was asked to stop)` }
+  return state
+}
+
+let runtimeRunning: () => boolean = () => true
+
+/**
+ * Who holds this machine's session runtime, as a switch reads it before the old leader stops
+ * (routes/leader-switch.ts, source-job.ts), each shape with its own way back after the stop:
+ *   'service'     a host's one Walnut service (`--service`, serviceRuntime()): its launcher starts the
+ *                 service again, which boots as the standby and holds the runtime (holdRuntime below).
+ *                 Nothing else may start a second process for that home;
+ *   'in-process'  a plain server (`walnut web`, the Mac's launchd `web`) that runs the daemon in its own
+ *                 process, by its boot's decision (not declined to a program): the switch starts the
+ *                 old home as the standby, which holds it again;
+ *   'program'     a daemon program of its own, which outlives the server.
+ * By the decision rather than by a runtime running right now: a runtime that ended itself a moment ago
+ * starts again at the next dial, and is still this server's.
+ */
+export async function daemonShapeNow(): Promise<'service' | 'in-process' | 'program'> {
+  if (serviceRuntime()) return 'service'
+  const [{ inProcessDaemonWantedNow }, { localDaemon }] = await Promise.all([import('../providers/in-process-daemon.js'), import('../providers/local-daemon.js')])
+  return inProcessDaemonWantedNow() === true && !localDaemon.inProcessDeclined ? 'in-process' : 'program'
+}
 
 /**
  * Starts the runtime the server before this standby held (and, for a service, the launcher's beat
@@ -45,7 +73,9 @@ export function standbyRuntimeState(): StandbyRuntime | null { return state }
  */
 export async function holdServiceRuntimeInStandby(port: number): Promise<boolean> {
   const at = releases
-  const hold = holdRuntime(port)
+  const { inProcessDaemonRunning } = await import('../providers/in-process-daemon.js')
+  runtimeRunning = inProcessDaemonRunning
+  const hold = holdRuntime(port, () => releases !== at)
   holding = hold
   try {
     const ok = await hold
@@ -56,16 +86,25 @@ export async function holdServiceRuntimeInStandby(port: number): Promise<boolean
   } finally { if (holding === hold) holding = null }
 }
 
-async function holdRuntime(port: number): Promise<boolean> {
+async function holdRuntime(port: number, overtaken: () => boolean): Promise<boolean> {
   const rt = serviceRuntime()
   if (!rt) return holdPlainRuntime()
-  const { startInProcessDaemon } = await import('../providers/in-process-daemon.js')
-  const started = await startInProcessDaemon({
-    dir: rt.dir, env: { ...rt.env, WALNUT_DAEMON_DIR: rt.dir },
-    service: { home: rt.home, ...(rt.leads ? { leads: rt.leads } : {}) },
-  })
+  const { startInProcessDaemon, InProcessDaemonClosedError } = await import('../providers/in-process-daemon.js')
+  let started: Awaited<ReturnType<typeof startInProcessDaemon>>
+  try {
+    started = await startInProcessDaemon({
+      dir: rt.dir, env: { ...rt.env, WALNUT_DAEMON_DIR: rt.dir },
+      service: { home: rt.home, ...(rt.leads ? { leads: rt.leads } : {}) },
+    })
+  } catch (err) {
+    // The standby's own stop overtook the start (it closed the runtime for good): nothing to hold, no error.
+    if (err instanceof InProcessDaemonClosedError) return false
+    throw err
+  }
   // As the leading boot does (server.ts): a service without its runtime serves nothing it is for.
   if (started.kind === 'existing') throw new Error(`another daemon holds ${rt.dir} (port ${started.port || 'none'}): this standby has no session runtime`)
+  // A stop that came while the start ran: no ready beat after it (the stop stops what the start brought up).
+  if (overtaken()) return false
   held = 'service'
   state = { held, dir: rt.dir }
   log.web.info('leader switch: this standby keeps the machine\'s session runtime', { dir: rt.dir })

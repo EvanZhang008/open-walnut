@@ -377,6 +377,8 @@ export class LocalDaemon {
     if (this.runsInProcess) return null
     return this._spawnedPid ?? this.readPidFile()
   }
+  /** This server's in-process start declined, and a daemon program serves the dir instead (it outlives the server). */
+  get inProcessDeclined(): boolean { return this._inProcessDeclined }
   /** The daemon runs inside this server's process (in-process-daemon.ts). */
   get runsInProcess(): boolean { return !!this.inProcess && !this._inProcessDeclined && inProcessDaemonRunning() }
   /** This instance is the runtime of a host's one Walnut service (server-role.ts serviceRuntime): its dir, its home. */

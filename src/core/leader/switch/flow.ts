@@ -61,11 +61,12 @@ export interface SwitchState {
   sourceVersion: string
   sourceWasRunning: boolean
   /**
-   * The old leader's server ran this machine's session daemon in its own process (experiment
-   * `in_process_daemon`): its switch stop stops that runtime too, so the switch starts the old home
-   * again as the standby, which holds it (web/standby-service.ts).
+   * Who held the old machine's session runtime when the switch began (web/standby-service.ts daemonShapeNow):
+   * 'in-process' (a plain server running it in its own process: its switch stop stops it, so the switch starts
+   * the old home again as the standby, which holds it), 'service' (a host's one Walnut service: its launcher
+   * starts the service again as the standby, and the switch starts no second process), or 'program'.
    */
-  sourceDaemonInProcess?: boolean
+  sourceDaemonShape?: 'service' | 'in-process' | 'program'
   step: SourceStep
   log: StepLog[]
   handover?: number

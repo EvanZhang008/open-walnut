@@ -10,25 +10,43 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   wanted: true,
+  wantedNow: true as boolean | null,
+  declined: false,
+  running: true,
   hold: null as null | (() => Promise<{ kind: 'in-process'; url: string } | { kind: 'declined'; why: string }>),
+  start: null as null | (() => Promise<{ kind: 'started' | 'existing'; port?: number }>),
   stops: [] as Array<{ reason: string; budgetMs?: number; forGood?: boolean }>,
+  beats: [] as Array<{ port: number; standby?: boolean }>,
   ensureRunning: 0,
 }))
 
-vi.mock('../../../../src/providers/in-process-daemon.js', () => ({
-  inProcessDaemonWanted: async () => m.wanted,
-  stopInProcessDaemon: async (reason: string, budgetMs?: number, opts: { forGood?: boolean } = {}) => { m.stops.push({ reason, budgetMs, forGood: opts.forGood }); return 0 },
-  startInProcessDaemon: async () => { throw new Error('a plain server never starts the service runtime') },
-}))
+vi.mock('../../../../src/providers/in-process-daemon.js', () => {
+  class InProcessDaemonClosedError extends Error {}
+  return {
+    InProcessDaemonClosedError,
+    inProcessDaemonWanted: async () => m.wanted,
+    inProcessDaemonWantedNow: () => m.wantedNow,
+    inProcessDaemonRunning: () => m.running,
+    stopInProcessDaemon: async (reason: string, budgetMs?: number, opts: { forGood?: boolean } = {}) => { m.stops.push({ reason, budgetMs, forGood: opts.forGood }); return 0 },
+    startInProcessDaemon: async () => {
+      if (!m.start) throw new Error('a plain server never starts the service runtime')
+      return m.start()
+    },
+  }
+})
 vi.mock('../../../../src/providers/local-daemon.js', () => ({
   localDaemon: {
     dir: '/tmp/d',
     holdInProcess: () => m.hold!(),
+    get inProcessDeclined() { return m.declined },
     // The program path is never taken by the standby.
     ensureRunning: async () => { m.ensureRunning++; return 0 },
   },
 }))
-vi.mock('../../../../src/web/serve-launcher-beat.js', () => ({ startServeLauncherBeat: () => {}, serveLauncherLeaving: () => {} }))
+vi.mock('../../../../src/web/serve-launcher-beat.js', () => ({
+  startServeLauncherBeat: (port: number, opts: { standby?: boolean } = {}) => { m.beats.push({ port, standby: opts.standby }) },
+  serveLauncherLeaving: () => {},
+}))
 
 async function load() {
   vi.resetModules()
@@ -37,6 +55,11 @@ async function load() {
 
 beforeEach(() => {
   m.wanted = true
+  m.wantedNow = true
+  m.declined = false
+  m.running = true
+  m.start = null
+  m.beats = []
   m.hold = async () => ({ kind: 'in-process', url: 'in-process://daemon' })
   m.stops = []
   m.ensureRunning = 0
@@ -91,5 +114,72 @@ describe('a plain server\'s standby and this machine\'s session runtime', () => 
     finish()
     expect(await hold).toBe(false)
     expect(s.standbyRuntimeState()).toBeNull()
+  })
+
+  it('a runtime that ended itself since the hold is reported as held no more', async () => {
+    const s = await load()
+    expect(await s.holdServiceRuntimeInStandby(0)).toBe(true)
+    m.running = false
+    expect(s.standbyRuntimeState()).toMatchObject({ held: false, why: expect.stringMatching(/\/tmp\/d ended itself/) })
+    m.running = true
+    expect(s.standbyRuntimeState()).toEqual({ held: 'in-process', dir: '/tmp/d' })
+  })
+})
+
+describe('the daemon shape a switch reads before the old leader stops', () => {
+  it('names a service, an in-process plain server, and a program (off, undecided, or declined to a program)', async () => {
+    let s = await load()
+    expect(await s.daemonShapeNow()).toBe('in-process')
+    m.declined = true
+    expect(await s.daemonShapeNow()).toBe('program')
+    m.declined = false
+    m.wantedNow = false
+    expect(await s.daemonShapeNow()).toBe('program')
+    m.wantedNow = null
+    expect(await s.daemonShapeNow()).toBe('program')
+    s = await load()
+    const role = await import('../../../../src/core/server-role.js')
+    role.holdServiceRuntime({ dir: '/tmp/svc', home: '/tmp/home', env: {} })
+    try {
+      expect(await s.daemonShapeNow()).toBe('service')
+    } finally { role._resetServiceRuntimeForTesting() }
+  })
+})
+
+describe('a service\'s standby and its runtime', () => {
+  async function serviceLoad() {
+    const s = await load()
+    const role = await import('../../../../src/core/server-role.js')
+    role.holdServiceRuntime({ dir: '/tmp/svc', home: '/tmp/home', env: {} })
+    return s
+  }
+
+  it('holds the service runtime and beats the launcher for the standby on its port', async () => {
+    m.start = async () => ({ kind: 'started' })
+    const s = await serviceLoad()
+    expect(await s.holdServiceRuntimeInStandby(4321)).toBe(true)
+    expect(s.standbyRuntimeState()).toEqual({ held: 'service', dir: '/tmp/svc' })
+    expect(m.beats).toEqual([{ port: 4321, standby: true }])
+  })
+
+  it('a stop while the start runs: no ready beat after the stop, nothing held', async () => {
+    let finish!: () => void
+    m.start = () => new Promise((resolve) => { finish = () => resolve({ kind: 'started' }) })
+    const s = await serviceLoad()
+    const hold = s.holdServiceRuntimeInStandby(4321)
+    await new Promise((r) => setTimeout(r, 10))
+    await s.releaseServiceRuntimeInStandby('SIGTERM', 4_000)
+    finish()
+    expect(await hold).toBe(false)
+    expect(m.beats).toEqual([])
+    expect(s.standbyRuntimeState()).toBeNull()
+  })
+
+  it('a start the stop refused (closed for good) is no error: the hold answers false', async () => {
+    const s = await serviceLoad()
+    const { InProcessDaemonClosedError } = await import('../../../../src/providers/in-process-daemon.js')
+    m.start = async () => { throw new InProcessDaemonClosedError('closed') }
+    expect(await s.holdServiceRuntimeInStandby(4321)).toBe(false)
+    expect(m.beats).toEqual([])
   })
 })

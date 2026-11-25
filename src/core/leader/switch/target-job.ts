@@ -35,8 +35,20 @@ import { notesAccessOf, writeSwitchNote, type NotesAccess } from './switch-notes
 import { applyServiceRole, serviceLeadRefusalHere, writeSwitchPointer, type SetServiceRole } from './service-role.js'
 import { instanceIdAt } from '../../device-store.js'
 import { clause } from '../../../utils/format.js'
+import { serviceInstallRoot } from '../../server-role.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * A rolled-back target's handed-over home runs as its standby again, started by this job: only when it is
+ * handed over (its marker back in place) and no host's one Walnut service runs this machine. A service
+ * (this job's env names its install root, as the service-role step reads it) is started again by its
+ * launcher, boots as the standby and holds the runtime itself; a second process the job started beside it
+ * would race it for the home and the daemon dir.
+ */
+export function standbyAfterRollback(home: string, installRoot: () => string | null = serviceInstallRoot): boolean {
+  return readMarker(home)?.state === 'handed-over' && !installRoot()
+}
 /** The candidate's copy must hold a batch at most this old (its moment by the old leader's clock). */
 const RECENT_BATCH_S = 5 * 60
 /**
@@ -391,7 +403,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           // it held: this machine's witness door, and its session runtime when its server ran the daemon in its
           // own process (web/standby-service.ts). Without it the old leader's copy link and this machine's
           // sessions would have no daemon here.
-          const standby = readMarker(s.targetHome)?.state === 'handed-over' ? await side.startStandby().catch((err: Error) => ({ ok: false, why: err.message })) : null
+          const standby = standbyAfterRollback(s.targetHome) ? await side.startStandby().catch((err: Error) => ({ ok: false, why: err.message })) : null
           if (standby && !standby.ok) out(`the handed-over home here did not start again as the standby (${standby.why}): its witness door and its sessions' daemon are down until it does`)
           save('rolled-back', `${s.rollbackWhy ?? ''}${d.keptAt ? `; the tried home is kept at ${d.keptAt}` : ''}${standby ? (standby.ok ? '; the handed-over home here runs as the standby again' : `; its standby did not start (${standby.why})`) : ''}`)
           await note('gave-up', s.rollbackWhy)
