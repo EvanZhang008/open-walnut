@@ -165,24 +165,24 @@ export async function sendHeld(
     // judge now waits; the ones the session took up since are settled, not sent.
     const snapshot = ((await readReflectionState(node.id, nowMs)).held ?? []).filter((h) => h.taskId === taskId);
     const checked: HeldCorrection[] = [];
-    let unjudged = false;
     for (const h of snapshot) {
       if (h.checked) { checked.push(h); continue; }
       const g = await checkCached(node.id, h.text, checkStepOf(deps), nowMs).catch(() => ({ steps: [], why: '', by: 'failed' as const }));
-      if (verdictOf(g) === 'failed') { unjudged = true; break; }
+      // One the check cannot judge now stays held for a later pass; the others go.
+      if (verdictOf(g) === 'failed') continue;
       checked.push({ ...h, checked: true, ...(g.steps.length ? { text: gatedPoint(g.steps) } : {}) });
     }
-    if (unjudged || !checked.length) continue;
+    if (!checked.length) continue;
+    // A chat's hourly send is taken before any model call: within the hour nothing is asked (given back when nothing goes).
+    if (isChat(task!) && !(await takeChatSend(task!.id, nowMs))) continue;
     const { keep, done } = await stillNeeded(checked, await sessionNowOf(task!, deps).catch(() => ''), deps, node.id).catch(() => ({ keep: checked, done: [] as HeldCorrection[] }));
     const same = (a: HeldCorrection, b: HeldCorrection) => a.taskId === b.taskId && a.entryAt === b.entryAt && a.at === b.at;
     if (done.length) {
       const gone = await takeOut(node.id, (h) => done.some((d) => same(d, h)), nowMs);
       await settle(node, nodeName, taskId, gone, 'heldDropped', (n) => `Held corrections dropped: ${n} for ${task!.title} (${taskId}), the session took ${n === 1 ? 'it' : 'them'} up since.`, nowMs);
     }
-    if (!keep.length) continue;
-    if (isChat(task!) && !(await takeChatSend(task!.id, nowMs))) continue;
     // Taken out only now, with the checked texts: only those snapshot items still held.
-    const out = await takeOut(node.id, (h) => keep.some((k) => same(k, h)), nowMs);
+    const out = keep.length ? await takeOut(node.id, (h) => keep.some((k) => same(k, h)), nowMs) : [];
     const items = keep.filter((k) => out.some((h) => same(k, h)));
     if (!items.length) {
       if (isChat(task!)) await giveBackChatSend(task!.id, nowMs);

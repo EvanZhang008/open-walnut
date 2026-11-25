@@ -97,7 +97,7 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
 /** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice), or to hand over held notes: the wait they
  *  interrupt comes back at the turn end whatever held it, its clock included, because nothing the
  *  task waited for came (2026-10-31: a look at a parked lead lost the clock it had set). */
-const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'thread-audit', 'idle-compact', 'context-compact', 'held-notes', 'org-reflection']);
+const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck', 'thread-recheck', 'thread-audit', 'idle-compact', 'context-compact', 'held-notes']);
 
 /**
  * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.

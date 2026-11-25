@@ -95,7 +95,7 @@ export const verdictOf = (g: GateResult): 'pass' | 'held' | 'failed' => (g.by ==
 
 const keyOf = (text: string) => crypto.createHash('sha256').update(normalizeForQuote(text)).digest('hex').slice(0, 16);
 /** Verdicts kept per node (state.ts stepChecked), newest last. */
-export const STEP_CHECKS_KEPT = 2000;
+export const STEP_CHECKS_KEPT = 600;
 
 /**
  * The check with its verdict kept on the node's state: the same text is never asked twice (2026-11-25

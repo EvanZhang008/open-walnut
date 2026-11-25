@@ -264,7 +264,7 @@ describe('a wait interrupted only to ask for words', () => {
   it('comes back at the turn end with its clock, with no trigger to hold it', async () => {
     const { resumableWait } = await import('../../src/core/task-wait-resume.js')
     const leftAt = '2026-10-31T10:00:00.000Z'
-    for (const source of ['brief-refresh', 'choice-recheck', 'org-reflection']) {
+    for (const source of ['brief-refresh', 'choice-recheck']) {
       resetInterruptedWaitsForTest()
       expect(waitExitCause('session:input', source), source).toBe('message')
       noteInterruptedWait('lead1', { waitUntil: '2026-10-31T15:00:00.000Z', leftAt, sessionId: 's1', cause: 'message', source })

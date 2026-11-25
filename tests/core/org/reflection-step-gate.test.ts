@@ -201,6 +201,19 @@ describe('lines already in the guidance', () => {
 })
 
 describe('held corrections kept before the check existed', () => {
+  it('one the check cannot judge stays held; the others of its task go', async () => {
+    await updateReflectionState(vp.id, (s) => { s.held = [
+      { taskId: worker.id, at: iso(30), date: localDate(NOW), entryAt: iso(30), text: 'Unchecked point.' },
+      { taskId: worker.id, at: iso(20), date: localDate(NOW), entryAt: iso(20), text: 'Checked point.', checked: true },
+    ] }, NOW)
+    const { d, sent } = deps({ checkStep: async () => ({ steps: [], why: 'down', by: 'failed' }) })
+    await sendHeld(vp, 'Marina VP', [vp, worker], new Set(), d, NOW)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('Checked point.')
+    expect(sent[0].text).not.toContain('Unchecked point.')
+    expect((await readReflectionState(vp.id, NOW)).held!.map((h) => h.text)).toEqual(['Unchecked point.'])
+  })
+
   it('pass it at their send', async () => {
     await updateReflectionState(vp.id, (s) => { s.held = [{ taskId: worker.id, at: iso(30), date: localDate(NOW), entryAt: iso(30), text: `Do it yourself: ${BROWSER_ZH}` }] }, NOW)
     const { d, sent } = deps()

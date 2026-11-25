@@ -158,8 +158,13 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
  * deletes it. Each line is asked about once (checkCached). True when the node was told.
  */
 export async function tellHeldLines(node: Task, nodeName: string, deps: TidyDeps, nowMs: number): Promise<boolean> {
+  // Once a day: a line the reflection writes passed the check already, and the file changes rarely.
+  const date = localDate(nowMs);
+  const state = await readReflectionState(node.id, nowMs);
+  if (state.linesChecked === date) return false;
+  await updateReflectionState(node.id, (s) => { s.linesChecked = date; }, nowMs);
   const lines = (await readGuidance(node.id)).map((l) => l.text);
-  const told = new Set((await readReflectionState(node.id, nowMs)).linesHeldTold ?? []);
+  const told = new Set(state.linesHeldTold ?? []);
   const held: Array<{ line: number; text: string; steps: string }> = [];
   for (const [i, text] of lines.entries()) {
     if (told.has(normalizeForQuote(text))) continue;
@@ -172,7 +177,7 @@ export async function tellHeldLines(node: Task, nodeName: string, deps: TidyDeps
   const note = [
     `${held.length} line${held.length === 1 ? '' : 's'} of your team guidance would have sessions take a step that is not an agent's on a reviewer's word:`,
     ...held.map((h) => `- line ${h.line} (it would have them ${h.steps}): ${h.text}`),
-    `Rewrite each so the step is asked of the person the rules name, or delete it, in ${guidanceFileOf(node.id)} (on the machine Walnut's server runs on). This is your team's routine upkeep: do it yourself, and do not report it to the user. No reply is needed.`,
+    `A line that only states one of the user's own standing rules (his rules let agents take that step themselves) stays as it is. Any other: rewrite it so the step is asked of the person the rules name, or delete it, in ${guidanceFileOf(node.id)} (on the machine Walnut's server runs on). This is your team's routine upkeep: do it yourself, and do not report it to the user. No reply is needed.`,
   ].join('\n');
   const ok = await deps.send(node, note, `Team guidance: ${held.length} line(s) to rewrite`).catch(() => false);
   if (ok) await updateReflectionState(node.id, (s) => { s.linesHeldTold = [...new Set([...(s.linesHeldTold ?? []), ...held.map((h) => normalizeForQuote(h.text))])].slice(-500); }, nowMs);

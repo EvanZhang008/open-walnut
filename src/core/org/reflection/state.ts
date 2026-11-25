@@ -66,6 +66,8 @@ export interface ReflectionState {
   stepHeld?: string[];
   /** Guidance lines the step check held that the node was told about (normalized), once each. */
   linesHeldTold?: string[];
+  /** The local date the guidance lines were last run through the step check (guidance-tidy.ts tellHeldLines): once a day. */
+  linesChecked?: string;
   /** Waiting lessons a guidance line, his rules or an org skill already says (guidance-tidy.ts settleCovered), normalized: never waiting again. */
   covered?: string[];
   /** The local date settleCovered last ran: once a day. */
@@ -155,6 +157,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
     ...(r.stepChecked && typeof r.stepChecked === 'object' ? { stepChecked: r.stepChecked } : {}),
     ...(Array.isArray(r.stepHeld) ? { stepHeld: r.stepHeld.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
+    ...(typeof r.linesChecked === 'string' ? { linesChecked: r.linesChecked } : {}),
     ...(Array.isArray(r.linesHeldTold) ? { linesHeldTold: r.linesHeldTold.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(Array.isArray(r.covered) ? { covered: r.covered.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
     ...(typeof r.coveredChecked === 'string' ? { coveredChecked: r.coveredChecked } : {}),
