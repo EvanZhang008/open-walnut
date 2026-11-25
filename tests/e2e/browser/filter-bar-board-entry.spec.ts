@@ -3,7 +3,7 @@
  * 6.8; checklist C51, C59, C62, C65, C67, C69, C70). Split from
  * filter-bar-board.spec.ts so each file stays under 500 lines.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
 import { draftComposer, openDraft } from './draft-helpers'
 import { openHome } from './home-navigation-helpers'
@@ -85,17 +85,20 @@ test.describe('board entry points', () => {
     // Wait the grace out (TodoPanel GRACE_MS is 3150ms from completed_at): a fast boot
     // (the built SPA) otherwise opens the list while the done row is still in grace.
     await page.waitForTimeout(Math.max(0, 3_600 - (Date.now() - doneAt)))
-    await boot(page, baseURL!, { 'walnut-todo-filters': filtersRecord({ projects: [garden] }) })
+    // Status narrower than Open: no status sections, so Status is what hides a completed task (under
+    // Open the Completed section draws it, and no line may say Status hides it: 2026-11-25).
+    await boot(page, baseURL!, { 'walnut-todo-filters': filtersRecord({ projects: [garden], status: ['TODO', 'IN_PROGRESS'] }) })
     try {
       await expect(filterChip(page, 'project')).toContainText(garden)
       await expect(page.getByTitle('No task has this value now')).toHaveCount(0, { timeout: 20_000 })
-      // Open a task the chips hide (a search hit click is a locate, like a deep link).
-      await locateBySearch(page, `g done ${stamp}`, done)
+      // Open a task the chips hide by its link (the search applies a Status the user picked, so it
+      // cannot find it).
+      await openHome(page, `${baseURL}/?task=${done}`, 90_000)
       const reasons = row(page, done).getByTestId('filter-override-reasons')
-      await expect(reasons).toContainText('Hidden by Status: Open', { timeout: 20_000 })
+      await expect(reasons).toContainText('Hidden by Status: Not started, Working', { timeout: 20_000 })
       expect((await reasons.textContent()) ?? '').not.toMatch(/\u2260|phase| \u00B7 /)
-      await reasons.getByRole('button', { name: 'Show tasks hidden by Status: Open' }).click()
-      await expect(filterChip(page, 'status')).toContainText('Open, Complete')
+      await reasons.getByRole('button', { name: 'Show tasks hidden by Status: Not started, Working' }).click()
+      await expect(filterChip(page, 'status')).toContainText('Not started, Working, Completed')
       await expect(row(page, done).getByTestId('filter-override-reasons')).toHaveCount(0)
 
       // Search honors the Project chip the user added (5.7), so the Home task opens by its link.
@@ -170,17 +173,59 @@ test.describe('the "Hidden by" line says only what is true, quietly (2026-11-25)
       }
     })
   }
-})
 
-/** Search for a title, click its hit (a user locate), then clear the search. */
-async function locateBySearch(page: Page, title: string, id: string): Promise<void> {
-  await page.locator('.todo-search-input').fill(title)
-  const hitRow = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${id}"]`)
-  await expect(hitRow).toBeVisible({ timeout: 15_000 })
-  await hitRow.locator('.todo-item-title, .todo-panel-item-title').first().click()
-  await page.locator('.todo-search-clear').click()
-  await expect(page.locator('.todo-search-results')).toHaveCount(0)
-}
+  // 2026-11-25 acceptance on the user's data: a Waiting task past a Project chip read "Hidden by
+  // Status: Open, Hidden by Project" though the status sections draw Waiting tasks, and its first
+  // Show left the row gone; a task of no tier, opened on the Focus tab, was drawn there with a
+  // reason, and Show then dropped it.
+  for (const design of ['project', 'status'] as const) {
+    test(`${design}: a Waiting task past a chip names only that chip, and Show keeps it in view; a task of another tab gets no line`, async ({ page, baseURL }) => {
+      const stamp = runStamp()
+      const home = `Home ${stamp}`
+      const garden = `Garden ${stamp}`
+      const [parked, loose] = await seed(page, garden, [
+        { title: `w parked ${stamp}`, phase: 'WAITING' }, { title: `g done ${stamp}`, phase: 'COMPLETE' },
+      ])
+      const [homeFocus] = await seed(page, home, [{ title: `h focus ${stamp}`, pin: 'focus' }])
+      await boot(page, baseURL!, { 'walnut-todo-panel-design': design })
+      try {
+        // 1. The Pinned tab, no chip: a completed task of no tier, clicked in a search, is not this
+        //    tab's: no "Hidden by" line (the search clears back to the Pinned tab).
+        await selectTab(page, 'Pinned')
+        await page.locator('.todo-search-input').fill(`g done ${stamp}`)
+        const hit = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${loose}"]`)
+        await expect(hit).toBeVisible({ timeout: 15_000 })
+        await hit.locator('.todo-item-title').first().click()
+        await page.locator('.todo-search-clear').click()
+        await expect(page.locator('.todo-search-results')).toHaveCount(0)
+        await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
+        await page.waitForTimeout(800)
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(0)
+        // 2. All, Project chip: the Waiting task opened by its link says only the chip that hides it.
+        await selectTab(page, 'All')
+        await filterProjects(page, [home])
+        await openHome(page, `${baseURL}/?task=${parked}`, 90_000)
+        // A link opens no fold (a page-load restore keeps the person's folds): open Waiting by hand.
+        if (design === 'status') {
+          const waitingHead = page.getByTestId('status-section-waiting').locator('button[aria-expanded]').first()
+          await expect(waitingHead).toBeVisible({ timeout: 20_000 })
+          if ((await waitingHead.getAttribute('aria-expanded')) === 'false') await waitingHead.click()
+        }
+        const reasons = anyRow(page, parked).getByTestId('filter-override-reasons')
+        await expect(reasons).toHaveText(`Hidden by Project: ${home}Show`, { timeout: 20_000 })
+        // 3. Show lets it in, and the row stays drawn and on screen where the wider list puts it.
+        await reasons.getByRole('button', { name: `Show tasks hidden by Project: ${home}` }).click()
+        await expect(filterChip(page, 'project')).toContainText(`${home}, ${garden}`)
+        await expect(anyRow(page, parked).first()).toBeInViewport({ timeout: 15_000 })
+        // Its fold holds a match now: no "No tasks match these filters" over it.
+        await expect(page.getByTestId('todo-filter-empty')).toHaveCount(0)
+        await expect(page.getByTestId('filter-override-reasons')).toHaveCount(0)
+      } finally {
+        await cleanup(page, [parked, loose, homeFocus])
+      }
+    })
+  }
+})
 
 /** A stored v1 filter record (4.8) with these overrides. */
 function filtersRecord(over: Record<string, unknown>): string {

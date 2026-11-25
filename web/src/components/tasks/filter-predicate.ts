@@ -210,6 +210,21 @@ export interface HiddenReason {
 }
 
 /**
+ * The rule a list applies to the chips, one source for what it draws and for the reasons it gives:
+ *  - `search`: every chip the user added, none of the defaults nobody chose (5.7, D11);
+ *  - `sections`: the status sections (a Status pick holding every open phase) draw every phase
+ *    somewhere (Waiting, Completed, a project's fold), so Status never hides a task there, nor
+ *    does the Date default, whose snoozed tasks wait in Waiting / snoozed;
+ *  - `board`: every chip.
+ */
+export type ViewRule = 'search' | 'sections' | 'board';
+export function viewRuleOptions(ctx: FilterEvalContext, rule: ViewRule): FailingOptions {
+  if (rule === 'search') return { bypassDefaults: true };
+  if (rule === 'sections') return { except: ctx.state.date === 'now' ? ['status', 'date'] : 'status' };
+  return {};
+}
+
+/**
  * Why a focus-override row is outside the filters (5.12), one entry per dim. `opts` is the rule
  * of the list that draws the row: a search passes `bypassDefaults`, as its own hits do, so a row
  * the search shows never says a default it ignores hides it.

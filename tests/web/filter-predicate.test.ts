@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import type { Task } from '../../src/core/types';
 import { DEFAULT_FILTER_STATE as S0, type FilterState } from '../../web/src/components/tasks/filter-bar-types';
 import {
-  buildFilterEvalContext, failingDims, hiddenByReasons, hiddenByText, passesChips, showValueFor,
+  buildFilterEvalContext, failingDims, hiddenByReasons, hiddenByText, passesChips, showValueFor, viewRuleOptions,
 } from '../../web/src/components/tasks/filter-predicate';
 import { matchesDateFilter } from '../../web/src/components/tasks/task-date-filter';
 
@@ -134,6 +134,23 @@ describe('failingDims and reasons (5.12)', () => {
     // A chip the user chose still names itself.
     const garden = buildFilterEvalContext(all, { ...S0, projects: ['Garden'] }, NOW);
     expect(hiddenByReasons(waiting, garden, undefined, { bypassDefaults: true }).map((x) => x.text)).toEqual(['Hidden by Project: Garden']);
+  });
+  it('the status sections name no Status or Date default: they draw Waiting, Completed and snoozed tasks (2026-11-25)', () => {
+    const waiting = mk({ title: 'waiting', phase: 'WAITING', project: 'Home' });
+    const all = [...tasks, waiting];
+    const ctx = buildFilterEvalContext(all, { ...S0, projects: ['Garden'] }, NOW);
+    const rule = viewRuleOptions(ctx, 'sections');
+    for (const t of all) expect(hiddenByReasons(t, ctx, undefined, rule).map((x) => x.text)).toEqual(['Hidden by Project: Garden']);
+    // The reasons and the sections read one rule: no reason exactly when the sections draw it.
+    const plain = buildFilterEvalContext(all, S0, NOW);
+    for (const t of all) {
+      expect(hiddenByReasons(t, plain, undefined, viewRuleOptions(plain, 'sections'))).toEqual(
+        passesChips(t, plain, viewRuleOptions(plain, 'sections')) ? [] : expect.anything(),
+      );
+    }
+    // A Date the user picked still hides there.
+    const today = buildFilterEvalContext(all, { ...S0, date: 'overdue' }, NOW);
+    expect(viewRuleOptions(today, 'sections')).toEqual({ except: 'status' });
   });
   it('Show widens exactly that dimension so the task becomes a hit', () => {
     let s: FilterState = { ...S0, projects: ['Garden'] };

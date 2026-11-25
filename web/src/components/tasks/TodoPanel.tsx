@@ -141,9 +141,9 @@ import {
 } from './list-order';
 import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
-import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
+import type { DisplayMenuProps, FilterBarController, FilterDim, FilterOrigin, FilterState } from './filter-bar-types';
 import { OPEN_PHASES, hasAllOpen, isDefaultStatus } from './filter-bar-model';
-import { buildFilterEvalContext, dimPasses, hiddenByReasons, hiddenByText, passesChips, type FilterEvalContext } from './filter-predicate';
+import { buildFilterEvalContext, dimPasses, hiddenByReasons, hiddenByText, passesChips, viewRuleOptions, type FilterEvalContext } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
@@ -435,8 +435,10 @@ function overFits(activeId: string, over: DroppableContainer, rulesFor: SlotRule
  */
 function sectionRulesFor(ctx: FilterEvalContext): { passes: (t: Task) => boolean; snoozed?: (t: Task) => boolean } {
   const dateDefault = ctx.state.date === 'now';
+  // The same rule the "Hidden by" reasons read (viewRuleOptions), so the two cannot drift.
+  const rule = viewRuleOptions(ctx, 'sections');
   return {
-    passes: (t) => passesChips(t, ctx, { except: dateDefault ? ['status', 'date'] : 'status' }),
+    passes: (t) => passesChips(t, ctx, rule),
     snoozed: dateDefault ? (t) => !dimPasses(t, 'date', ctx) : undefined,
   };
 }
@@ -3521,16 +3523,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   const pinnedTasksLive = useMemo(() => {
     if (pinnedIdsWithGrace.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    // The task shown past the chips (a locate, 5.12) keeps its card in its tier whatever its state,
+    // when a chip really hides it there (the rule its tier's folds read): the Waiting or Completed
+    // fold that would draw it is then one the chips hide too. One no chip hides stays in its fold.
+    const overrideIds = new Set([focusOverrideRef.current, fadingOverrideRef.current].filter(Boolean));
+    const keptPastChips = (t: Task) => overrideIds.has(t.id)
+      && !passesChips(t, filterEvalCtx, viewRuleOptions(filterEvalCtx, statusOnSections ? 'sections' : 'board'));
     return [...pinnedIdsWithGrace]
       .map((id) => taskMap.get(id))
       .filter((t): t is Task => !!t
-        && (isSearchMode
+        && (keptPastChips(t) || ((isSearchMode
           || showCompleted
           || (t.status !== 'done' && t.phase !== 'COMPLETE')
           || keepWhileCompleting(t))
-        && (isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t))
+        && (isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t))))
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
-  }, [tasks, pinnedIdsWithGrace, hiddenGroups, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, isSearchMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
+  }, [tasks, pinnedIdsWithGrace, hiddenGroups, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, isSearchMode, _overrideTick, filterEvalCtx, statusOnSections]);
   const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
@@ -5087,25 +5096,45 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
     if (!overrideReasonTaskId) return undefined;
     const task = tasks.find((t) => t.id === overrideReasonTaskId);
     if (!task) return undefined;
-    // A search shows every task past the defaults nobody chose (searchMatches below), so its
-    // reasons skip them too: a hit the user clicked in a search is no override there.
+    // The reasons read the rule of the list that draws the row (viewRuleOptions): a search shows
+    // every task past the defaults nobody chose, and the status sections draw every phase, so
+    // neither names a chip that does not hide the task there (a clicked hit, a Waiting task).
     const reasons = isSearchMode
-      ? hiddenByReasons(task, filterEvalCtx, homeFilters.lists, { bypassDefaults: true })
-      : hiddenByReasons(task, boardEvalCtx, homeFilters.lists);
+      ? hiddenByReasons(task, filterEvalCtx, homeFilters.lists, viewRuleOptions(filterEvalCtx, 'search'))
+      : sectionsActive
+        ? hiddenByReasons(task, filterEvalCtx, homeFilters.lists, viewRuleOptions(filterEvalCtx, 'sections'))
+        : hiddenByReasons(task, boardEvalCtx, homeFilters.lists);
     if (reasons.length === 0) return undefined;
     return { task, reasons };
-  }, [overrideReasonTaskId, tasks, isSearchMode, filterEvalCtx, boardEvalCtx, homeFilters.lists]);
+  }, [overrideReasonTaskId, tasks, isSearchMode, sectionsActive, filterEvalCtx, boardEvalCtx, homeFilters.lists]);
   // A locate of a task someone else just made shows the reasons; only a creation here gets the pill.
   const overrideCreated = !!filterOverrideReasons && createdOverrideRef.current === filterOverrideReasons.task.id
     && isJustCreated(filterOverrideReasons.task.created_at);
   const { showTask } = homeFilters;
+  // Show widens the chip, then locates the task again where the wider list draws it: that opens
+  // the fold or section holding it and scrolls to it, so the row stays in view (it may move, as a
+  // row past the chips leads its section and a hit takes its place in it).
+  // The override goes at once (no fade): while it still drew the row, the locate would take the
+  // row for one on screen and leave the fold the wider list puts it in shut. A reason left (two
+  // chips hid it) brings the override back with that reason alone.
+  // One way in for every Show (the row's line, the created-outside toast). A search draws the hit
+  // itself, and a row fading out belongs to a task no longer open: neither locates again.
+  const showPastChips = useLeanCallback((task: Task, dims: readonly FilterDim[], origin: FilterOrigin) => {
+    showTask(task, dims, origin);
+    if (isSearchMode || task.id !== focusedTaskId) return;
+    if (fadingTimerRef.current) { clearTimeout(fadingTimerRef.current); fadingTimerRef.current = null; }
+    focusOverrideRef.current = null;
+    fadingOverrideRef.current = null;
+    setOverrideTick((n) => n + 1);
+    startTransition(() => setRelocateTick((n) => n + 1));
+  }, [showTask, isSearchMode, focusedTaskId]);
   const showOverrideDim = useLeanCallback((dim: FilterDim) => {
-    if (filterOverrideReasons) showTask(filterOverrideReasons.task, [dim], 'override');
-  }, [filterOverrideReasons, showTask]);
+    if (filterOverrideReasons) showPastChips(filterOverrideReasons.task, [dim], 'override');
+  }, [filterOverrideReasons, showPastChips]);
   const filterOverrideNode = filterOverrideReasons
     ? <FilterOverrideReasons reasons={filterOverrideReasons.reasons} created={overrideCreated} onShow={showOverrideDim} />
     : undefined;
-  useCreatedOutsideToast(overrideCreated ? filterOverrideReasons : undefined, showTask);
+  useCreatedOutsideToast(overrideCreated ? filterOverrideReasons : undefined, showPastChips);
 
   // --- Search filtering: search spans the WHOLE task set ---
   // Search honors every chip the user added and bypasses only the defaults
@@ -7711,8 +7740,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   const filterCount = loading ? null
     : isSearchMode ? (effectiveSection === 'recent' ? visibleRecentTasks.length : (searchResultCount ?? 0))
     : (sectionCounts[effectiveSection] ?? 0);
-  // 5.3: chips are set and nothing matches: say so, with one way back.
-  const showFilterEmpty = !isSearchMode && filterCount === 0 && homeFilters.chips.length > 0;
   const toggleIncludeComplete = useLeanCallback(() => setShowDoneResults((v) => !v), []);
   // The view name rides in the filter row whenever no tab shows it: the bar is
   // hidden, or the view is Projects, which the bar never draws (F36).
@@ -7804,10 +7831,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   const overrideSection = useMemo((): DrawnSectionKey | null => {
     const t = filterOverrideReasons?.task;
     if (!flatSections || !t) return null;
+    // Only a task this view holds (a tier tab its members): one in another tier or in none is not
+    // hidden by a chip here, and the locate says where it is instead (the off-view note).
+    if (!sectionScope.some((x) => x.id === t.id)) return null;
     const m = baseSectionModel;
     if ([m.watching, m.needs, m.working, m.waiting, m.notstarted, m.background, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
     return isBackground(t) ? 'background' : drawnSectionOf(t, regionRules.snoozed);
-  }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules]);
+  }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules, sectionScope]);
   const shownSectionModel = useMemo(() => {
     const t = filterOverrideReasons?.task;
     if (!t || !overrideSection) return baseSectionModel;
@@ -7940,6 +7970,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
   /** Some section draws rows of this view, so an empty list under Working is no "No tasks in this view". */
   const sectionRowsDrawn = sectionModel.watching.length + sectionModel.needs.length + sectionModel.waiting.length
     + sectionModel.notstarted.length + sectionModel.background.length + sectionModel.done.length + sectionModel.doneUnloaded > 0;
+  // 5.3: chips are set and nothing matches: say so, with one way back. The count holds the list's
+  // hits and the top sections; a match the folds at the bottom hold (Waiting, Not started,
+  // Background, Completed, a project's Waiting fold) is a match too, and the empty state would
+  // hide it (2026-11-25: a Waiting task let in by Show vanished behind "No tasks match"). The
+  // task shown past the chips is not a match: the state stays above its row.
+  // Only the folds this view draws: a tier tab its own tier, Pinned every tier, Projects the list.
+  const viewFoldRegions = effectiveSection === 'all' ? [...foldRegions.keys()]
+    : effectiveSection === 'pinned' ? [...foldRegions.keys()].filter((k) => k !== 'list')
+    : effectiveSection === 'tasks' ? ['list'] : [effectiveSection];
+  const foldsHoldMatch = baseSectionModel.waiting.length + baseSectionModel.notstarted.length
+    + baseSectionModel.background.length + baseSectionModel.done.length > 0
+    || (projectFoldsOn && viewFoldRegions.some((k) => [...(foldRegions.get(k)?.values() ?? [])].some((f) => f.waiting.length > 0)));
+  const showFilterEmpty = !isSearchMode && filterCount === 0 && homeFilters.chips.length > 0 && !foldsHoldMatch;
   // A stable ref callback: an inline one is detached (set to null) on every commit,
   // which left FilterBar's scroll keeper reading a null list scroller.
   const listScrollRef = homeFilters.listScrollRef;
