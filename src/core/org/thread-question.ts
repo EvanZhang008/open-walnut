@@ -39,13 +39,23 @@ const DETERMINER = 'the|a|an|my|your|our|his|her|their|its|any|some|all|every|ea
 const SUBJECT = String.raw`(?:(?:${PRONOUN})\b|(?:${DETERMINER})\s+[a-z0-9])`;
 const NEGATED = "isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|can't|couldn't|wouldn't|shouldn't|haven't|hasn't";
 /**
- * The English interrogatives at a clause start. why/how/what/which/who/whose/whom ask by
- * themselves; when/where only before an auxiliary ("when will", "where is"), since "when it ends,
- * tell me" is an instruction; an auxiliary asks before its subject ("is the build green", "can you"),
- * and do/have only before i, you, we or they, since "do the dishes" and "have it run" are orders.
+ * The English interrogatives. why/how/what/which/who/whose/whom ask wherever they stand ("hey why
+ * is it red", "the build is red why", "tell me which train is faster"): a statement that holds one
+ * ("that is what I meant") only makes one more thread. The rest ask at a clause start: when/where
+ * only before an auxiliary ("when will", "where is"), since "when it ends, tell me" is an
+ * instruction; an auxiliary asks before its subject ("is the build green", "can you"), and do/have
+ * only before i, you, we or they, since "do the dishes" and "have it run" are orders.
  */
-const EN_QUESTION = new RegExp(CLAUSE + String.raw`(?:(?:why|how|what|which|who|whose|whom)\b`
-  + String.raw`|(?:when|where)(?:'s|\s+(?:is|are|was|were|will|would|can|could|should|do|does|did|has|have)\b)`
+const EN_WH = /\b(?:why|how|what|which|who|whose|whom)\b/i;
+/**
+ * An auxiliary before a pronoun asks wherever it stands ("for the charts is there a way to show
+ * it", typed or spoken with no comma), and so does a closing tag ("it is still working right").
+ * Not is/are before this or that ("the problem is that ..."), not do/have before it ("let's do it").
+ */
+const EN_AUX_ANYWHERE = new RegExp(String.raw`\b(?:(?:can|could|would|should|will|shall|does|did|${NEGATED})\s+(?:i|you|u|we|they|it|he|she|there|this|that)`
+  + String.raw`|(?:is|are|was|were)\s+(?:i|you|u|we|they|it|he|she|there)|(?:do|have)\s+(?:i|you|u|we|they))\b`, 'i');
+const EN_TAG = /\b(?:right|correct|or not)\s*[.!]*$/i;
+const EN_QUESTION = new RegExp(CLAUSE + String.raw`(?:(?:when|where)(?:'s|\s+(?:is|are|was|were|will|would|can|could|should|do|does|did|has|have)\b)`
   + String.raw`|(?:can|could|would|should|will|shall|may|might|is|are|was|were|am|does|did|has|${NEGATED})\s+${SUBJECT}`
   + String.raw`|(?:do|have)\s+(?:i|you|we|they)\b)`, 'i');
 /**
@@ -70,14 +80,14 @@ function standsAlone(text: string): boolean {
 
 /**
  * Whether his message is a question of its own: a question mark (a link's or code's left aside), an
- * interrogative at a clause start, or a Chinese question form; long enough to stand alone; never a
+ * English interrogative, or a Chinese question form; long enough to stand alone; never a
  * plain reaction. By form only, no model. Leans towards yes: a statement read as a question only
  * makes one more thread, a question read as a statement loses its thread. Pure.
  */
 export function asksQuestion(text: string): boolean {
   const t = text.replace(LINK_OR_CODE, ' ').trim();
   if (!t || isPlainReaction(t) || !standsAlone(t)) return false;
-  return /[?\uff1f]/.test(t) || EN_QUESTION.test(t) || ZH_QUESTION.test(t);
+  return /[?\uff1f]/.test(t) || EN_WH.test(t) || EN_AUX_ANYWHERE.test(t) || EN_TAG.test(t) || EN_QUESTION.test(t) || ZH_QUESTION.test(t);
 }
 
 /**
