@@ -2,7 +2,8 @@
  * POST /api/v1/tasks/:id/threads/:thread/split with its two options (src/web/routes/org-threads-v1.ts):
  * a split into a new thread answers 201, one straight into another open thread (`merge_into`)
  * answers 200 with `merged_into`; a bad merge_into or keep_open is a 400, a target that is not
- * there a 404, and a refused merge leaves the node's threads as they were.
+ * there a 404, and a refused merge leaves the node's threads as they were. The thread_split op
+ * titles the new thread in the same call (2026-11-24: a split with a title was refused bad_args).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -17,6 +18,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
+import { executeOp } from '../../src/ops/index.js'
 
 let base = ''
 let leadId = ''
@@ -99,5 +101,29 @@ describe('the split route', () => {
     const same = await split(a.thread.id, { message: second.message.id, merge_into: a.thread.id })
     expect(same.status).toBe(400)
     expect(await kept()).toBe(before)
+  })
+})
+
+describe('the thread_split op on this server', () => {
+  const op = async (args: Record<string, unknown>) => {
+    const out = await executeOp('thread_split', { ...args, task: leadId }, { apiBase: base, origin: '__local__', callerMode: 'human' })
+    if (!out.ok) throw new Error(out.message)
+    return out.result as { thread: OrgThread; next: string; not_applied?: string[] }
+  }
+
+  it('a title names the new thread in the same call; with merge_into the thread it joins keeps its own', async () => {
+    const a = await file('Repot the basil')
+    const second = await file('and the mint', a.thread.id)
+    const third = await file('and the rosemary', a.thread.id)
+    const made = await op({ id: a.thread.id, message: second.message.id, title: 'Mint pots', keep_open: true })
+    expect(made.thread).toMatchObject({ title: 'Mint pots', titled: true })
+    expect(made.not_applied).toBeUndefined()
+    expect(made.next).not.toContain('Give it a title')
+    const stored = (await threads()).find((t) => t.id === made.thread.id)!
+    expect(stored).toMatchObject({ title: 'Mint pots', messages: [expect.objectContaining({ id: second.message.id })] })
+
+    const into = await op({ id: a.thread.id, message: third.message.id, merge_into: made.thread.id, title: 'Herb pots' })
+    expect(into.not_applied).toEqual(['title'])
+    expect((await threads()).find((t) => t.id === made.thread.id)).toMatchObject({ title: 'Mint pots' })
   })
 })

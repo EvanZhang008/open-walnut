@@ -9,7 +9,7 @@
  * left without saying so, and a split then a merge took two calls each answering the whole thread.
  */
 import { describe, expect, it } from 'vitest'
-import { getOp } from '../../src/ops/index.js'
+import { getOp, parseOpArgs } from '../../src/ops/index.js'
 import { agentAnswer as answerOn, CONTENT_MAX_CHARS, RECEIPT_MAX_CHARS } from '../../src/ops/answer.js'
 import { withOutcome } from '../../src/ops/outcome.js'
 import * as model from '../../src/core/org/threads-model.js'
@@ -210,6 +210,83 @@ describe('thread_split says when it closed the thread it left, and can move stra
     expect(merged.calls.at(-1)!.body).toEqual({ message: 'tm-100027', merge_into: 'th-c0c0c0', keep_open: true })
     expect(String(merged.answer.outcome)).toContain('Moved tm-100027 into th-c0c0c0')
     expect(size(merged.answer)).toBeLessThanOrEqual(RECEIPT_MAX_CHARS)
+  })
+})
+
+describe('thread_split takes a title for the thread it makes (real use, 2026-11-24: a split with a title was refused bad_args, and the answer then asked for a second call)', () => {
+  /** A new thread as a split makes it: titled by Walnut from its message, not by anyone. */
+  const made = (): model.OrgThread => {
+    const { titled: _titled, ...t } = longThread('th-e0e0e0', 1)
+    return { ...t, title: 'A line of what he asked' }
+  }
+  const from = longThread('th-a0a0a0', 39)
+  /** The split route answers `split`; the thread's PATCH (thread_update's write) answers it with the title. */
+  const routes = (split: Record<string, unknown>, patch?: () => never) => ({
+    'POST /tasks/vp-1/threads/': { task_id: 'vp-1', from, ...split },
+    'PATCH /tasks/vp-1/threads/': patch ?? ((path: string, b: unknown) => ({ task_id: 'vp-1', thread: { ...made(), id: path.split('/').at(-1), title: (b as { title: string }).title, titled: true } })),
+  })
+  const sent = (calls: Array<{ method: string; path: string; body?: unknown }>) => calls.filter((c) => c.path !== '/me').map((c) => `${c.method} ${c.path} ${JSON.stringify(c.body)}`)
+
+  it('the call as it was refused now validates; a title over thread_update\'s limit is refused the same way', () => {
+    const split = getOp('thread_split')!
+    expect(parseOpArgs(split, { id: 'th-a0a0a0', message: 'tm-100027', title: 'Seed trays' }).ok).toBe(true)
+    const long = 'x'.repeat(121)
+    expect(parseOpArgs(split, { id: 'th-a0a0a0', message: 'tm-100027', title: long }).ok).toBe(false)
+    expect(parseOpArgs(getOp('thread_update')!, { id: 'th-a0a0a0', title: long }).ok).toBe(false)
+  })
+
+  it('a split with a title: the new thread has it, written by thread_update\'s own PATCH, and the answer asks for nothing more', async () => {
+    const { calls, answer } = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027', title: 'Seed trays' }, routes({ thread: made() }))
+    // The split route's body is as before: the title goes through the thread's PATCH.
+    expect(sent(calls)).toEqual([
+      'POST /tasks/vp-1/threads/th-a0a0a0/split {"message":"tm-100027"}',
+      'PATCH /tasks/vp-1/threads/th-e0e0e0 {"title":"Seed trays"}',
+    ])
+    expect(answer.thread).toMatchObject({ id: 'th-e0e0e0', title: 'Seed trays' })
+    expect(answer.not_applied).toBeUndefined()
+    expect(String(answer.outcome)).toContain('The message is its own thread now: th-e0e0e0 "Seed trays".')
+    expect(`${String(answer.outcome)} ${String(answer.next)}`).not.toContain('Give it a title')
+    expect(answer.next).toBe('No further action is required.')
+  })
+
+  it('with merge_into the title is not applied (the thread it joins keeps its own), and the answer says so in not_applied', async () => {
+    const target = longThread('th-c0c0c0', 41)
+    const { calls, answer } = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027', merge_into: 'th-c0c0c0', title: 'Seed trays' }, routes({ thread: target, merged_into: 'th-c0c0c0' }))
+    expect(sent(calls)).toEqual(['POST /tasks/vp-1/threads/th-a0a0a0/split {"message":"tm-100027","merge_into":"th-c0c0c0"}'])
+    expect(answer.not_applied).toEqual(['title'])
+    expect(answer.thread).toMatchObject({ id: 'th-c0c0c0', title: 'Release the bakery app' })
+    expect(String(answer.outcome)).toContain('Moved tm-100027 into th-c0c0c0')
+    expect(String(answer.outcome)).toContain('title was not applied: with merge_into the message goes into th-c0c0c0, which keeps its own title.')
+    expect(String(answer.next)).toBe('Update th-c0c0c0 with thread_update {"id":"th-c0c0c0",...} if its title or summary changed.')
+  })
+
+  it('without a title the split answers as before: no PATCH, and the next call gives it a title', async () => {
+    const { calls, answer } = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027' }, routes({ thread: made() }))
+    expect(sent(calls)).toEqual(['POST /tasks/vp-1/threads/th-a0a0a0/split {"message":"tm-100027"}'])
+    expect(answer.not_applied).toBeUndefined()
+    expect(String(answer.outcome)).toContain('The message is its own thread now: th-e0e0e0.')
+    expect(answer.next).toBe('Give it a title with thread_update {"id":"th-e0e0e0","title":"..."}.')
+  })
+
+  it('already split by Walnut: an untitled thread takes the title; one with a title keeps it, named in not_applied', async () => {
+    const untitled = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027', title: 'Seed trays' }, routes({ thread: made(), already_split: true }))
+    expect(sent(untitled.calls).at(-1)).toBe('PATCH /tasks/vp-1/threads/th-e0e0e0 {"title":"Seed trays"}')
+    expect(String(untitled.answer.outcome)).toContain('it is its own thread th-e0e0e0 "Seed trays".')
+    expect(untitled.answer.next).toBe('No further action is required.')
+    const titled = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027', title: 'Seed trays' }, routes({ thread: { ...made(), title: 'Potting soil', titled: true }, already_split: true }))
+    expect(sent(titled.calls)).toEqual(['POST /tasks/vp-1/threads/th-a0a0a0/split {"message":"tm-100027"}'])
+    expect(titled.answer.not_applied).toEqual(['title'])
+    expect(String(titled.answer.outcome)).toContain('title was not applied: th-e0e0e0 has a title already, "Potting soil".')
+    expect(titled.answer.next).toBe('thread_update {"id":"th-e0e0e0","title":"..."} if yours should replace it.')
+  })
+
+  it('a title the server refuses leaves the split done and says so, with the call that titles it', async () => {
+    const refusal = Object.assign(new Error('title: too long.'), { status: 400, code: 'bad_request' })
+    const { answer } = await run('thread_split', { id: 'th-a0a0a0', message: 'tm-100027', title: 'Seed trays' }, routes({ thread: made() }, () => { throw refusal }))
+    expect(answer.thread).toMatchObject({ id: 'th-e0e0e0', title: 'A line of what he asked' })
+    expect(answer.not_applied).toEqual(['title'])
+    expect(String(answer.outcome)).toContain('title was not applied: title: too long.')
+    expect(answer.next).toBe('Give it a title with thread_update {"id":"th-e0e0e0","title":"..."}.')
   })
 })
 

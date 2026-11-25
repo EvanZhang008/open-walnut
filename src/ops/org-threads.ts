@@ -14,7 +14,7 @@ import { CONTENT_MAX_CHARS } from './answer.js'
 import type { OpCall } from './core.js'
 import { WORD_TO_USER_RULE, THREADS_OPTIONS_RULE, THREADS_MOVE_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
-import { THREAD_STATES } from '../core/org/threads-model.js'
+import { THREAD_STATES, THREAD_TITLE_MAX } from '../core/org/threads-model.js'
 import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
 import { USER_KINDS, USER_KIND_WHY_MIN } from '../core/org/user-kind.js'
 
@@ -63,7 +63,7 @@ const OPTIONS_WHY = 'With needs: the choices, your pick first; [] takes them off
 
 const TASK_ARG = z.string().min(1).optional().describe('Main, a lead or a task with Threads on (id or unique prefix); default: your own task')
 
-interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; watched?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
+interface ThreadView { id: string; title: string; titled?: boolean; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string }; watched?: { by: string }; askedIn?: { task: string; title: string }; ackPlaced?: { to: string } }
 
 /**
  * The asking arguments of thread_update and thread_create, each cut to what it means and its
@@ -87,6 +87,8 @@ const SUPERSEDES_ARG = z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12
 const SEPARATE_REASON_ARG = z.string().max(300).optional().describe('After 409 other_open_asks or same_subject: why it is apart (10+)')
 
 const THREAD_ID = z.string().regex(/^th-[a-f0-9]{6,32}$/)
+/** A thread's title as thread_update, thread_create and thread_split take it (the store clips to the same). */
+const THREAD_TITLE = z.string().min(1).max(THREAD_TITLE_MAX)
 
 /** How an agent reads a thread whole after a receipt (answer.ts `whole`). */
 const READ_WHOLE = 'thread_get {"id":"<id>"}'
@@ -304,10 +306,18 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 })
 
+/** A type, not an interface: withOutcome takes it as a Record. */
+type PatchAnswer = { thread: ThreadView; merged?: string; merged_on?: { task: string; title: string } }
+
+/** Thread_update's one write (PATCH the thread, org-threads-v1.ts); thread_split titles the thread it made with it too. */
+async function patchThreadCall(call: OpCall, taskId: string, threadId: string, patch: Record<string, unknown>): Promise<PatchAnswer> {
+  return await call('PATCH', `/tasks/${encodeURIComponent(taskId)}/threads/${encodeURIComponent(threadId)}`, patch) as PatchAnswer
+}
+
 /** Thread_update's arguments, named here so a refusal can list them. */
 const UPDATE_INPUT = {
-  id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
-  title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to him'),
+  id: THREAD_ID.describe('The thread (th-...)'),
+  title: THREAD_TITLE.optional().describe('A few words, in the language you write to him'),
   ask: z.string().max(400).optional().describe('One line: what he wants ("" clears it)'),
   // `waiting` is the status question's word for pending (2026-11-23: agents told the line states sent it here and were refused).
   // One enum, not a union: a union's schema costs every load (tests/core/org/thread-op-size.test.ts).
@@ -361,9 +371,9 @@ defineOp({
       throw new Error(`merge_into goes alone: this thread is gone after the merge, so ${Object.keys(rest).join(', ')} would be lost. `
         + `Two calls: thread_update ${JSON.stringify({ id: threadId, merge_into: patch.merge_into })}, then thread_update ${callArgs({ id: patch.merge_into, ...rest })}.`)
     }
-    let body: { thread: ThreadView; merged?: string; merged_on?: { task: string; title: string } }
+    let body: PatchAnswer
     try {
-      body = await call('PATCH', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(threadId))}`, patch) as { thread: ThreadView; merged?: string; merged_on?: { task: string; title: string } }
+      body = await patchThreadCall(call, id, String(threadId), patch)
     } catch (err) { withCorrectedCall('thread_update', args as Record<string, unknown>, keysOf(UPDATE_INPUT), err) }
     const long = longTextHint(typeof patch.reply === 'string' ? patch.reply : undefined)
     return withOutcome(
@@ -386,7 +396,7 @@ defineOp({
 
 /** Thread_create's arguments, named here so a refusal can list them. */
 const CREATE_INPUT = {
-  title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
+  title: THREAD_TITLE.describe('A few words, in the language you write to the user'),
   text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
   reply: z.string().max(2000).optional().describe('The card\'s summary: first what he decides and what you recommend, then the key points and evidence paths. Without it the card shows the post\'s first line, and a needs thread with a longer post is refused'),
   from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
@@ -430,7 +440,34 @@ const SPLIT_INPUT = {
   message: z.string().regex(/^tm-[a-f0-9]{6,32}$/).describe('The message to take out (thread_get shows the ids)'),
   merge_into: THREAD_ID.optional().describe('Move it straight into this open thread instead of a new one'),
   keep_open: z.boolean().optional().describe('Keep the thread it leaves open even when nothing is left open on it (by default that one closes, as acked)'),
+  // 2026-11-24: a node sent a title with its split and was refused bad_args, then needed a second call.
+  title: THREAD_TITLE.optional().describe('The new thread\'s title (not with merge_into)'),
   task: TASK_ARG,
+}
+
+type SplitAnswer = { thread: ThreadView; from?: ThreadView; from_closed?: boolean; merged_into?: string; already_split?: boolean }
+
+/** What became of a split's `title`: `thread` is the thread with it; `words` say why it was not applied. */
+interface SplitTitle { thread?: ThreadView; words: string; next?: string }
+
+/**
+ * Thread_split's `title`, written after the split with thread_update's own write, so the split
+ * route keeps its contract. Only on the thread the message is alone in now: with merge_into it
+ * joins a thread that keeps its own title, and a thread Walnut split out before this call
+ * (already_split) keeps a title someone already gave it. A refused title leaves the split done.
+ */
+async function titleSplitThread(taskId: string, args: Record<string, unknown>, body: SplitAnswer, call: OpCall): Promise<SplitTitle> {
+  if (typeof args.title !== 'string') return { words: '' }
+  if (typeof args.merge_into === 'string') return { words: `title was not applied: with merge_into the message goes into ${args.merge_into}, which keeps its own title.` }
+  const t = body.thread
+  if (body.already_split && t.titled) {
+    return { words: `title was not applied: ${t.id} has a title already, "${t.title}".`, next: `thread_update {"id":"${t.id}","title":"..."} if yours should replace it.` }
+  }
+  try {
+    return { thread: (await patchThreadCall(call, taskId, t.id, { title: args.title })).thread, words: '' }
+  } catch (err) {
+    return { words: `title was not applied: ${err instanceof Error ? err.message : String(err)}` }
+  }
 }
 
 /**
@@ -452,7 +489,7 @@ function splitSourceWords(from: ThreadView | undefined, closedBySplit: boolean):
  * lacks `merged_into` (a new thread was made instead) and it may close the source. Said plainly,
  * with the call that finishes what was asked; empty when the server applied what was asked.
  */
-function notAppliedWords(args: Record<string, unknown>, body: { thread: ThreadView; from?: ThreadView; from_closed?: boolean; merged_into?: string }): { words: string; keys: string[] } {
+function notAppliedWords(args: Record<string, unknown>, body: SplitAnswer): { words: string; keys: string[] } {
   const keys: string[] = []
   const parts: string[] = []
   if (typeof args.merge_into === 'string' && !body.merged_into) {
@@ -473,35 +510,48 @@ defineOp({
   title: 'Split a Thread message out',
   description: 'Takes one message (tm-..., thread_get shows the ids) out of one of your Threads: into a new thread of its own (a merge that was wrong), or with merge_into straight into another open thread, in one call. '
     + 'The thread it leaves closes (acked) when nothing is left open on it; keep_open: true keeps it open. '
-    + '{"id":"th-...","message":"tm-..."}, or {"id":"th-...","message":"tm-...","merge_into":"th-...","keep_open":true}. Answers a receipt of both threads.',
+    + '{"id":"th-...","message":"tm-...","title":"..."}, or {"id":"th-...","message":"tm-...","merge_into":"th-...","keep_open":true}. Answers a receipt of both threads.',
   // 2026-11-23: an agent sent `into` for the thread to move it into.
   renamedInput: [{ from: 'into', to: 'merge_into' }],
   input: SPLIT_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)
-    let body: { thread: ThreadView; from?: ThreadView; from_closed?: boolean; merged_into?: string; already_split?: boolean }
+    const given = args as Record<string, unknown>
+    let split: SplitAnswer
     try {
-      body = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(args.id))}/split`, {
+      split = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(args.id))}/split`, {
         message: args.message,
         ...(typeof args.merge_into === 'string' ? { merge_into: args.merge_into } : {}),
         ...(args.keep_open === true ? { keep_open: true } : {}),
-      }) as typeof body
-    } catch (err) { withCorrectedCall('thread_split', args as Record<string, unknown>, keysOf(SPLIT_INPUT), err) }
+      }) as SplitAnswer
+    } catch (err) { withCorrectedCall('thread_split', given, keysOf(SPLIT_INPUT), err) }
+    const title = await titleSplitThread(id, given, split, call)
+    const body: SplitAnswer = title.thread ? { ...split, thread: title.thread } : split
+    const named = title.thread ? ` "${title.thread.title}"` : ''
+    const titleWords = title.words ? ` ${title.words}` : ''
+    /** The answer, naming what was asked and not applied. */
+    const marked = (keys: string[] = []) => {
+      const all = [...keys, ...(title.words ? ['title'] : [])]
+      return all.length ? { ...body, not_applied: all } : body
+    }
+    const giveTitle = (ifNone = '') => title.thread ? 'No further action is required.'
+      : title.next ?? `Give it a title with thread_update {"id":"${body.thread.id}","title":"..."}${ifNone}.`
     // Walnut took it out when it was filed (its subject check), before this call: done, nothing moved twice.
     if (body.already_split && !body.merged_into) {
-      return withOutcome(body, `Already done: Walnut split ${String(args.message)} out when it was filed; it is its own thread ${body.thread.id}.`, `Give it a title with thread_update {"id":"${body.thread.id}","title":"..."} if it has none.`)
+      return withOutcome(marked(), `Already done: Walnut split ${String(args.message)} out when it was filed; it is its own thread ${body.thread.id}${named}.${titleWords}`, giveTitle(' if it has none'))
     }
     const source = splitSourceWords(body.from, body.from_closed === true)
-    const ignored = notAppliedWords(args as Record<string, unknown>, body)
+    const ignored = notAppliedWords(given, body)
     if (ignored.keys.length) {
-      return withOutcome({ ...body, not_applied: ignored.keys }, `The message is its own thread now: ${body.thread.id}.${source} ${ignored.words}`,
-        ignored.keys.includes('merge_into') ? `thread_update {"id":"${body.thread.id}","merge_into":"${String(args.merge_into)}"}` : `Give it a title with thread_update {"id":"${body.thread.id}","title":"..."}.`)
+      return withOutcome(marked(ignored.keys), `The message is its own thread now: ${body.thread.id}${named}.${source} ${ignored.words}${titleWords}`,
+        ignored.keys.includes('merge_into') ? `thread_update {"id":"${body.thread.id}","merge_into":"${String(args.merge_into)}"}`
+          : title.thread && body.from ? `thread_update {"id":"${body.from.id}","reopen":true} if it should stay open.` : giveTitle())
     }
     if (body.merged_into) {
-      return withOutcome(body, `Moved ${String(args.message)} into ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages, ${body.thread.state}).${source}`,
-        `Update ${body.thread.id} with thread_update {"id":"${body.thread.id}",...} if its summary changed.`)
+      return withOutcome(marked(), `Moved ${String(args.message)} into ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages, ${body.thread.state}).${source}${titleWords}`,
+        `Update ${body.thread.id} with thread_update {"id":"${body.thread.id}",...} if its ${title.words ? 'title or ' : ''}summary changed.`)
     }
-    return withOutcome(body, `The message is its own thread now: ${body.thread.id}.${source}`, `Give it a title with thread_update {"id":"${body.thread.id}","title":"..."}.`)
+    return withOutcome(marked(), `The message is its own thread now: ${body.thread.id}${named}.${source}${titleWords}`, giveTitle())
   },
   answer: {
     kind: 'receipt', whole: READ_WHOLE,
@@ -518,7 +568,7 @@ defineOp({
     + 'as a new thread or under thread. Quote his words; never your own. A new thread then gets a short title with thread_update.',
   input: {
     text: z.string().min(1).max(8000).describe('The user\'s words, quoted'),
-    thread: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe('Put it under this thread'),
+    thread: THREAD_ID.optional().describe('Put it under this thread'),
     at: z.string().optional().describe('When he said it (ISO); default now'),
     task: TASK_ARG,
   },
@@ -544,7 +594,7 @@ defineOp({
     + 'with everything on it: his messages, the answers, its state, watch and tasks; it reads "Moved here from" there, and it closes on yours as moved, pointing at it. '
     + `${THREADS_MOVE_RULE} On a task with Threads on, naming thread in a handoff only lists that task and Walnut never moves its threads: only thread_move does.`,
   input: {
-    id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
+    id: THREAD_ID.describe('The thread (th-...)'),
     to: z.string().min(1).describe('Where it goes: a node\'s task id, a task (one with Threads keeps it, else its team\'s node), a project name or the name the user gave a VP'),
     why: z.string().max(400).optional().describe('One line both nodes read: why it moves'),
     task: TASK_ARG,
