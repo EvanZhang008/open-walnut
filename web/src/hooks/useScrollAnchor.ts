@@ -20,7 +20,7 @@
  * happens when something above really moved.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { ANCHOR_SLOP_PX, anchoredScrollTop, enginePull, heldPlace, holdsRows, releaseScrollTop, slackStep, SCROLL_HELD_ATTR, SCROLL_INPUT_EVENTS, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, stepScrollInput, type AnchorMark, type ReadSession, type ScrollInput } from './scroll-anchor';
+import { ANCHOR_SLOP_PX, anchoredScrollTop, endClamp, enginePull, heldPlace, holdsRows, releaseScrollTop, roomBelow, slackStep, SCROLL_HELD_ATTR, SCROLL_INPUT_EVENTS, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, stepScrollInput, type AnchorMark, type ReadSession, type ScrollInput } from './scroll-anchor';
 import { isTypingField } from '@/utils/focus-unless-typing';
 
 interface Anchor extends AnchorMark {
@@ -30,10 +30,10 @@ interface Anchor extends AnchorMark {
   /** The rows right before and after it when it was picked (see `stillInOrder`). */
   prev: Element | null;
   next: Element | null;
-  /** For the row being read: where those two stood then (a row with a box), to hold its place should it leave (heldPlace). */
+  /** Where those two stood then (a row with a box): in a box with `reading`, one holds the place should the row leave (heldPlace). */
   prevTop?: number;
   nextTop?: number;
-  /** A neighbour holding the place of the row being read, which left it: kept until the person moves or scrolls. */
+  /** A neighbour holding the place of a row that left it: kept until the person moves or scrolls. */
   stand?: boolean;
   /** The box sat at the end of its range when it was picked, at `at` (enginePull). */
   atEnd?: boolean;
@@ -85,7 +85,9 @@ function pickAnchor(box: HTMLElement, rows: string, hint: Element | null, readin
     found = { el: list[i], top, prev: list[i - 1] ?? null, next: list[i + 1] ?? null };
     scope = list[i];
   }
-  return found ? { el: found.el, top: found.top, scrollTop: box.scrollTop, prev: found.prev, next: found.next } : null;
+  if (!found) return null;
+  const topOf = (row: Element | null) => (row && hasBox(row) ? row.getBoundingClientRect().top - edge : undefined);
+  return { el: found.el, top: found.top, scrollTop: box.scrollTop, prev: found.prev, next: found.next, prevTop: topOf(found.prev), nextTop: topOf(found.next) };
 }
 
 /**
@@ -117,6 +119,26 @@ function stillInOrder(held: Anchor): boolean {
   return true;
 }
 
+/**
+ * Room kept at one edge of a box for the row being read, as padding on that edge. The box's own
+ * padding there is read once, as the room is first made: a stylesheet change while the room is kept
+ * (a breakpoint) is not seen until the room goes (restoring the inline value is always right).
+ */
+function edgeRoom(side: 'paddingTop' | 'paddingBottom') {
+  let was: { inline: string; px: number } | null = null;
+  const r = {
+    px: 0,
+    set(box: HTMLElement, px: number) {
+      if (px === r.px) return;
+      if (!was) was = { inline: box.style[side], px: parseFloat(getComputedStyle(box)[side]) || 0 };
+      box.style[side] = px > 0 ? `${was.px + px}px` : was.inline;
+      if (px === 0) was = null;
+      r.px = px;
+    },
+  };
+  return r;
+}
+
 interface Attached {
   box: HTMLElement;
   stop: () => void;
@@ -146,11 +168,9 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   const readingRef = useRef(reading);
   readingRef.current = reading;
   const standsDown = (box: HTMLElement) => pausedRef.current || box.hasAttribute(SCROLL_HELD_ATTR);
-  // The room kept at the top for the row being read (px), the box's own top padding before it. That
-  // padding is read once, as the room is first made: a stylesheet change while the room is kept (a
-  // breakpoint) is not seen until the room goes (restoring the inline value is always right).
-  const slack = useRef(0);
-  const padWas = useRef<{ inline: string; px: number } | null>(null);
+  // The room kept at the top and at the bottom for the row being read (edgeRoom). Only a box with
+  // `reading` ever makes any: every other box keeps its layout.
+  const room = useRef({ top: edgeRoom('paddingTop'), bottom: edgeRoom('paddingBottom') }).current;
   // The person at the box since when (a hold), and the scroll this hook wrote last (its own, not theirs).
   const session = useRef<ReadSession | null>(null);
   const own = useRef<number | null>(null);
@@ -165,21 +185,22 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     own.current = to;
     box.scrollTop = to;
   };
-  const setSlack = (box: HTMLElement, px: number) => {
-    if (px === slack.current) return;
-    if (!padWas.current) padWas.current = { inline: box.style.paddingTop, px: parseFloat(getComputedStyle(box).paddingTop) || 0 };
-    box.style.paddingTop = px > 0 ? `${padWas.current.px + px}px` : padWas.current.inline;
-    if (px === 0) padWas.current = null;
-    slack.current = px;
+  // The box's true end: its range without the room at the bottom.
+  const endOf = (box: HTMLElement) => box.scrollHeight - box.clientHeight - room.bottom.px;
+  // The room at the bottom shrinks to what the scroll still stands in: nothing on screen moves.
+  const trimBelow = (box: HTMLElement) => {
+    if (room.bottom.px > 0) room.bottom.set(box, Math.min(room.bottom.px, roomBelow(box.scrollTop, endOf(box))));
   };
-  // At the box or not, read at every pick: leaving lets the room go and may go back to the top.
+  // At the box or not, read at every pick: leaving lets the room at the top go and may go back to
+  // the top; the room at the bottom stays while the view still stands in it (trimBelow).
   const presence = (box: HTMLElement, at: boolean) => {
-    if (at && !session.current) session.current = { fromTop: box.scrollTop <= 0 && slack.current === 0, scrolled: false };
+    if (at && !session.current) session.current = { fromTop: box.scrollTop <= 0 && room.top.px === 0, scrolled: false };
     if (at || !session.current) return;
-    const to = releaseScrollTop(session.current, slack.current, box.scrollTop);
+    const to = releaseScrollTop(session.current, room.top.px, box.scrollTop);
     session.current = null;
-    setSlack(box, 0);
+    room.top.set(box, 0);
     write(box, to);
+    trimBelow(box);
   };
   // Whether the box sat at the end of its range as `a` was picked, and when (enginePull).
   const stampEnd = (box: HTMLElement, a: Anchor | null) => {
@@ -192,40 +213,61 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     if (readingRef.current) presence(box, reading !== null);
     return stampEnd(box, pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, reading));
   };
-  // The neighbour that holds the place of the row being read, held as that row from here (`stand`).
-  const standIn = (box: HTMLElement, el: Element) => {
+  // The row kept as held, measured again: the row he reads, or a neighbour holding the place of a row
+  // that left it (`stand`, the row being read or the top of the view while he is away: `read`).
+  const standIn = (box: HTMLElement, el: Element, read: boolean, stand: boolean) => {
     const a = readAnchor(box, rowsRef.current, el);
-    if (a) a.stand = true;
+    if (a) { a.stand = stand; a.read = read; }
     return stampEnd(box, a);
   };
 
-  // A ref, not a dependency: it is called from the observers attached once per box. `commit`: from
-  // the owner's commit, where a box with `reading` puts back the engine's own pull (enginePull).
-  const keep = useRef((box: HTMLElement, commit = false) => {
+  // A ref, not a dependency: it is called from the observers attached once per box. `from`: the
+  // owner's commit, a child's resize (`mark`: a commit of the list alone) or the owner's repick, where
+  // a box with `reading` puts back the engine's own pull (enginePull); never a scroll.
+  const keep = useRef((box: HTMLElement, from: 'commit' | 'mark' | 'repick' | null = null) => {
     const held = standsDown(box) ? null : anchor.current;
-    // The held row; for the row being read that left its place, the row that stood before it, or after.
-    const place = held ? heldPlace([
-      { el: held.el, top: held.top, ok: drawn(held.el) && stillInOrder(held) },
-      ...(held.read ? [{ el: held.prev, top: held.prevTop, ok: drawn(held.prev) }, { el: held.next, top: held.nextTop, ok: drawn(held.next) }] : []),
-    ]) : null;
+    // The held row; for a row that left its place in a box with `reading`, a neighbour: the row being
+    // read, the one before it, else after it; the top of the view, gone (drawn again in another group),
+    // the one after it (still in view), else before. The top of the view only moved in the order (his
+    // leaving lets the order follow) is let go, as before: holding a neighbour scrolled the list away.
+    const prev = held ? { el: held.prev, top: held.prevTop, ok: drawn(held.prev) } : null;
+    const next = held ? { el: held.next, top: held.nextTop, ok: drawn(held.next) } : null;
+    const near = !held || !readingRef.current ? [] : held.read ? [prev!, next!] : drawn(held.el) ? [] : [next!, prev!];
+    const place = held ? heldPlace([{ el: held.el, top: held.top, ok: drawn(held.el) && stillInOrder(held) }, ...near]) : null;
     if (held && place) {
       const top = place.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
       const max = box.scrollHeight - box.clientHeight;
       // The engine's pull is no scroll of the person's: it is taken out of the mark's scroll.
-      const pull = commit && readingRef.current ? enginePull(held, before.current, box.scrollTop, input.current) : 0;
+      // Measured from the scroll as the owner's render began, or, for a commit of the list alone (no
+      // render of the owner: the ResizeObserver sees it first), as the row was marked (2026-11-25:
+      // WebKit pulled 376px in such a commit, read as his own scroll, and the place moved 193px).
+      const since = from === 'commit' ? before.current : from === 'mark' || from === 'repick' ? held.scrollTop : null;
+      const pull = since !== null && readingRef.current ? enginePull(held, since, box.scrollTop, input.current) : 0;
       const mark = { top: place.top, scrollTop: held.scrollTop - pull };
-      if (held.read) {
-        // The row being read: what no scroll can do, room at the top does.
-        const step = slackStep(slack.current, anchoredScrollTop(mark, top, box.scrollTop, max, -Infinity));
-        setSlack(box, step.slack);
+      if (readingRef.current) {
+        // A box with `reading`: what no scroll can do, room does, at the top for the row being read
+        // and at the bottom for any held row (the top of the view too, while he is away).
+        const end = endOf(box);
+        const raw = anchoredScrollTop(mark, top, box.scrollTop, max, held.read ? -Infinity : 0, Infinity);
+        const step = held.read ? slackStep(room.top.px, raw) : { slack: room.top.px, scrollTop: raw };
+        room.top.set(box, step.slack);
+        room.bottom.set(box, roomBelow(step.scrollTop, end));
         write(box, step.scrollTop);
       } else {
         write(box, anchoredScrollTop(mark, top, box.scrollTop, max));
       }
     }
-    // A neighbour holding his row's place keeps it, with no pick: what is under the pointer now is not
-    // what he read, and the move's line, drawn a commit later above it, would push the place.
-    anchor.current = held && place && (held.stand || place.el !== held.el) ? standIn(box, place.el) ?? pick(box) : pick(box);
+    if (!(held && place)) trimBelow(box);
+    // The row he reads stays the row he reads until he moves, scrolls or leaves: a commit or a child's
+    // resize never reads a still pointer again, since what is under it now is not what he read
+    // (2026-11-25: at the end of the list a card above left, the pointer then rested on the edge of the
+    // card above his, and the move's line drawn next pushed his card 38px). A neighbour standing in for
+    // the top of the view while he is away keeps it the same way (its line would push it). So does a
+    // repick right after his own row left (2026-11-25: he typed in a card that changed group, the focus
+    // followed it into its new group, and holding it there let its move line scroll the list 38px).
+    const stand = !!held && !!place && (held.stand || place.el !== held.el);
+    const still = !!held && !!place && (from === 'commit' || from === 'mark' || (from === 'repick' && place.el !== held.el)) && (held.read ? (readingRef.current?.() ?? null) !== null : stand);
+    anchor.current = still ? standIn(box, place!.el, !!held!.read, stand) ?? pick(box) : pick(box);
   }).current;
 
   useLayoutEffect(() => {
@@ -238,7 +280,7 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     if (!box) return;
     // A child mounted by this commit (the smart group) is watched from now on.
     attached.current?.observeChildren();
-    keep(box, true);
+    keep(box, 'commit');
   });
 
   useEffect(() => () => {
@@ -257,15 +299,27 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       // its own write is spent by this event either way, so an old one never excuses a later scroll.
       const mine = own.current !== null && Math.abs(box.scrollTop - own.current) < 1;
       own.current = null;
+      // The engine's clamp at the end (a row below got shorter): put back from the mark, as a resize.
+      const held = standsDown(box) ? null : anchor.current;
+      if (!mine && held && readingRef.current && endClamp(held, box.scrollTop, box.scrollHeight - box.clientHeight, input.current)) return keep(box, 'mark');
       if (!mine && session.current) session.current.scrolled = true;
-      // His own scroll ends a neighbour's standing in: the row is picked afresh.
+      // His own scroll ends a neighbour's standing in: the row is picked afresh, and the room at the
+      // bottom shrinks as he scrolls up out of it (it never holds him there).
       if (!mine && anchor.current) anchor.current.stand = false;
+      if (!mine) trimBelow(box);
       keep(box);
     };
-    // Picked again because the row being read changed (or the keeper let go): no neighbour stands in.
+    // Picked again because the keeper let go: no neighbour stands in.
     const pickAgain = () => {
       if (anchor.current) anchor.current.stand = false;
       keep(box);
+    };
+    // Picked again because the row being read changed (its owner says so). A pull the engine made in
+    // the same commit is put back from the mark: WebKit blurs a focused box as its card is removed, so
+    // this comes in the middle of that commit, before its keep (2026-11-25: the place moved 193px).
+    const pickRead = () => {
+      if (anchor.current) anchor.current.stand = false;
+      keep(box, 'repick');
     };
     const onInput = (e: Event) => {
       const inField = e.type === 'keydown' && e.target instanceof Element && isTypingField(e.target);
@@ -279,10 +333,10 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     // The keeper that held the box let go: hold the row on screen from here.
     box.addEventListener(SCROLL_RELEASED_EVENT, pickAgain);
     // The row being read changed with nothing scrolled or drawn (its owner says so).
-    box.addEventListener(SCROLL_REPICK_EVENT, pickAgain);
+    box.addEventListener(SCROLL_REPICK_EVENT, pickRead);
     // Fires after layout and before paint, so a correction from here is never drawn as a jump. A
     // scroll changes no size, so the correction cannot feed this observer back.
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => keep(box));
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => keep(box, 'mark'));
     // Observed once each (observing a target again restarts it and costs a callback per commit), and
     // let go once it leaves the box.
     const watched = new Set<Element>();
@@ -307,10 +361,11 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       stop: () => {
         box.removeEventListener('scroll', onScroll);
         box.removeEventListener(SCROLL_RELEASED_EVENT, pickAgain);
-        box.removeEventListener(SCROLL_REPICK_EVENT, pickAgain);
+        box.removeEventListener(SCROLL_REPICK_EVENT, pickRead);
         for (const t of SCROLL_INPUT_EVENTS) window.removeEventListener(t, onInput, true);
         ro?.disconnect();
-        setSlack(box, 0);
+        room.top.set(box, 0);
+        room.bottom.set(box, 0);
         session.current = null;
         watched.clear();
       },

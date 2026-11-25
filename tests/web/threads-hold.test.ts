@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { inHeldOrder, readCard, THREAD_CARD_ROWS } from '../../web/src/components/org/useThreadsHold'
 import { stepHold } from '../../web/src/components/org/hold-order'
-import { anchoredScrollTop, enginePull, heldPlace, holdsRows, releaseScrollTop, SCROLL_INPUT_EVENTS, slackStep, stepScrollInput, type ScrollInput } from '../../web/src/hooks/scroll-anchor'
+import { anchoredScrollTop, endClamp, enginePull, heldPlace, holdsRows, releaseScrollTop, roomBelow, SCROLL_INPUT_EVENTS, slackStep, stepScrollInput, type ScrollInput } from '../../web/src/hooks/scroll-anchor'
 import { THREAD_GROUPS } from '../../src/core/org/thread-groups'
 import type { OrgThread } from '../../web/src/api/org-threads'
 
@@ -149,10 +149,16 @@ describe('a pull at the end of the range that no input made', () => {
     expect(enginePull(mark, 5056, 5056, none)).toBe(0)
     expect(enginePull(mark, 5056, 5200, none)).toBe(0)
   })
-  it('is read on a commit only, in a box that knows the row being read', () => {
+  // 2026-11-25: WebKit pulled 376px in a commit of the list alone, which the ResizeObserver saw first.
+  // WebKit also blurs a focused box as its card is removed: the owner's repick comes in that commit.
+  it('is read on a commit (from the render), on a child\'s resize and on the owner\'s repick (from the mark), never on a scroll, in a box that knows the row being read', () => {
     const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
-    expect(hook).toContain('commit && readingRef.current ? enginePull(held, before.current, box.scrollTop, input.current) : 0')
-    expect(hook.match(/keep\(box, true\)/g)).toHaveLength(1)
+    expect(hook).toContain("const since = from === 'commit' ? before.current : from === 'mark' || from === 'repick' ? held.scrollTop : null;")
+    expect(hook).toMatch(/const pickRead = \(\) => \{[\s\S]{0,80}keep\(box, 'repick'\);/)
+    expect(hook).toContain('box.addEventListener(SCROLL_REPICK_EVENT, pickRead);')
+    expect(hook).toContain('const pull = since !== null && readingRef.current ? enginePull(held, since, box.scrollTop, input.current) : 0;')
+    expect(hook.match(/keep\(box, 'commit'\)/g)).toHaveLength(1)
+    expect(hook).toContain("new ResizeObserver(() => keep(box, 'mark'))")
   })
 })
 
@@ -219,10 +225,16 @@ describe('the place of the card he reads, once that card leaves it', () => {
     expect(heldPlace([])).toBeNull()
   })
   // 2026-11-25: holding the card after a tall one pushed the cards above it down, with room at the top.
-  it('the hook asks for it for the row being read only, the card before it first, and keeps it until he moves or scrolls', () => {
+  // Away (2026-11-25), the card at the top of the view going to another group moved the whole view:
+  // the card after it, still in view, holds it then. Only a box with `reading` (the Threads lists).
+  it('the hook asks for it in a box with `reading` only: the card before the read one first, away the one after; the row he reads, or a stand-in, stays until he moves, scrolls or leaves', () => {
     const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
-    expect(hook).toMatch(/\.\.\.\(held\.read \? \[\{ el: held\.prev, top: held\.prevTop[^\n]*\{ el: held\.next, top: held\.nextTop/)
+    // Away, only a row that is gone: one that only moved in the order (his leaving lets it follow) is let go.
+    expect(hook).toContain('const near = !held || !readingRef.current ? [] : held.read ? [prev!, next!] : drawn(held.el) ? [] : [next!, prev!];')
     expect(hook).toContain('if (!mine && anchor.current) anchor.current.stand = false;')
+    // 2026-11-25: a commit read a still pointer again, picked the card above his, and the next line pushed his 38px.
+    expect(hook).toContain("const still = !!held && !!place && (from === 'commit' || from === 'mark' || (from === 'repick' && place.el !== held.el)) && (held.read ? (readingRef.current?.() ?? null) !== null : stand);")
+    expect(hook).toContain('anchor.current = still ? standIn(box, place!.el, !!held!.read, stand) ?? pick(box) : pick(box);')
   })
 })
 
@@ -311,5 +323,59 @@ describe('room at the top for the card he reads', () => {
     expect(releaseScrollTop({ fromTop: false, scrolled: false }, 0, 800)).toBe(800)
     // The room goes with the hold: the scroll takes it out, so the rows stay where they are.
     expect(releaseScrollTop({ fromTop: false, scrolled: true }, 100, 640)).toBe(540)
+  })
+})
+
+// 2026-11-25, the lead: at the end of the list the card he read went to another group, the list got
+// 186px shorter below the place he read, and every card above it moved down by 380px (useScrollAnchor).
+describe('room at the bottom for the card he reads', () => {
+  it('holds the place past the true end: the scroll with no ceiling, the room what the end lacks', () => {
+    // At the end (4749), his place needs 380px more scroll than the list has below it.
+    const raw = anchoredScrollTop({ top: 97, scrollTop: 4749 }, 477, 4749, 4749, -Infinity, Infinity)
+    expect(raw).toBe(5129)
+    expect(roomBelow(raw, 4749)).toBe(380)
+    // Capped at the end (every other box), the same hold falls short.
+    expect(anchoredScrollTop({ top: 97, scrollTop: 4749 }, 477, 4749, 4749)).toBe(4749)
+  })
+  it('is none while the scroll stays inside the true end', () => {
+    expect(roomBelow(4000, 4749)).toBe(0)
+    expect(roomBelow(4749, 4749)).toBe(0)
+  })
+  it('shrinks to what the view still stands in, so giving it back moves nothing on screen', () => {
+    // A line of 38px drawn below: the true end grows, the room shrinks by as much.
+    expect(roomBelow(5129, 4787)).toBe(342)
+    // He scrolls up 200px out of it: what is left below his view goes.
+    expect(Math.min(342, roomBelow(4929, 4787))).toBe(142)
+    expect(Math.min(142, roomBelow(4700, 4787))).toBe(0)
+  })
+  it('is made by a box that knows the row being read only, and trimmed on his own scroll', () => {
+    const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
+    expect(hook).toContain('room.bottom.set(box, roomBelow(step.scrollTop, end));')
+    expect(hook).toContain('if (!mine) trimBelow(box);')
+    // Only a box with `reading` makes room; any other box keeps its layout (its corrections stay capped).
+    expect(hook.match(/room\.bottom\.set\(box, roomBelow/g)).toHaveLength(1)
+    expect(hook).toMatch(/if \(readingRef\.current\) \{[\s\S]{0,300}const end = endOf\(box\);/)
+    expect(hook).toContain('write(box, anchoredScrollTop(mark, top, box.scrollTop, max));')
+  })
+})
+
+// 2026-11-25: the line of the card he answered faded at the end of the list; WebKit clamped the box
+// to its new end and sent that scroll before the ResizeObserver saw the line go, and the card above
+// moved 38px, read as his own scroll.
+describe('the engine clamp at the end is no scroll of his', () => {
+  const still: ScrollInput = { at: 100, down: false }
+  const mark = { top: 107, scrollTop: 5056, atEnd: true, at: 200 }
+  it('is a clamp when the mark sat at the end, nothing he did came since, and the box sits at its new end', () => {
+    expect(endClamp(mark, 5018, 5018, still)).toBe(true)
+  })
+  it('is his scroll when he scrolled since the mark, pressed, or left the end', () => {
+    expect(endClamp(mark, 5018, 5018, { at: 300, down: false })).toBe(false)
+    expect(endClamp(mark, 5018, 5018, { at: 100, down: true })).toBe(false)
+    expect(endClamp(mark, 4600, 5056, still)).toBe(false)
+    expect(endClamp({ ...mark, atEnd: false }, 5018, 5018, still)).toBe(false)
+  })
+  it('is put back from the mark, in a box with reading only', () => {
+    const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
+    expect(hook).toContain("if (!mine && held && readingRef.current && endClamp(held, box.scrollTop, box.scrollHeight - box.clientHeight, input.current)) return keep(box, 'mark');")
   })
 })

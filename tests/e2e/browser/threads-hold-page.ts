@@ -3,7 +3,8 @@
  * where the pointer rests, the card's top as each frame paints it, the list's scroll position, and
  * the page's own socket. Everything here runs in the page or drives it; nothing writes a thread.
  */
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
+import { loadHome, seedColumns } from './draft-helpers'
 
 export type Pos = 'top' | 'little' | 'middle' | 'end'
 /** The pointer on a card, on a fold's head below every card (`head`), between two cards (`gap`); typing; away. */
@@ -87,7 +88,8 @@ export function pickReading(page: Page, a: { box: string; presence: Presence; gr
     // The place he reads should his card go: the card drawn right before it, else right after it (copies too).
     const all = [...box.querySelectorAll<HTMLElement>('[data-testid="org-thread"]')]
     const k = all.indexOf(cards[pick])
-    const stand = [all[k - 1], all[k + 1]].find((el) => el && shown(el))
+    // Away, the card after the one at the top of the view first: that one is still in view.
+    const stand = (a.presence === 'away' ? [all[k + 1], all[k - 1]] : [all[k - 1], all[k + 1]]).find((el) => el && shown(el))
     return {
       id: cards[pick].dataset.threadId!, group: groupOf(cards[pick]), above: above?.dataset.threadId ?? null, aboveGroup: above ? groupOf(above) : null, at,
       stand: stand ? { id: stand.dataset.threadId!, copy: stand.dataset.copy ?? null } : null,
@@ -130,6 +132,10 @@ export async function settled(page: Page, box: string): Promise<void> {
 }
 
 export async function setPosition(page: Page, box: string, pos: Pos): Promise<void> {
+  // From the very top first, as a person who left the end and comes back: room the list kept at its
+  // bottom for the last cell's card goes as the view leaves it, so the end is the list's true end.
+  await page.evaluate((b) => { document.querySelector<HTMLElement>(b)!.scrollTop = 0 }, box)
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
   await page.evaluate(({ box, pos }) => {
     const el = document.querySelector<HTMLElement>(box)!
     el.scrollTop = pos === 'top' ? 0 : pos === 'little' ? 60 : pos === 'end' ? el.scrollHeight : Math.round((el.scrollHeight - el.clientHeight) / 2)
@@ -156,4 +162,39 @@ export async function keepSocket(page: Page): Promise<void> {
     for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'] as const) Object.defineProperty(Kept, k, { value: Native[k] })
     window.WebSocket = Kept
   })
+}
+
+/** The pointer away, every move line faded and the list drawn, then at `pos`: a clean start for each step of a proof. */
+export async function freshAt(page: Page, box: string, pos: Pos): Promise<void> {
+  await page.mouse.move(5, 5, { steps: 6 })
+  await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 15_000 })
+  await settled(page, box)
+  await setPosition(page, box, pos)
+}
+
+/** The list is drawn once it holds this many of the 14 seeded cards: the matrix run before the proof moves a card or two out of Done. */
+const LIST_MIN = 10
+
+/** The session pane's Threads of session `sid`, drawn: its scroll box. */
+export async function openPaneOf(page: Page, sid: string): Promise<string> {
+  await seedColumns(page, [sid])
+  await loadHome(page)
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
+  const chip = panel.getByTestId('session-threads-chip')
+  await expect(chip).toBeVisible({ timeout: 30_000 })
+  if ((await chip.getAttribute('aria-pressed')) !== 'true') await chip.click()
+  await expect.poll(() => panel.getByTestId('session-threads-pane').locator('[data-testid="org-thread"]').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(LIST_MIN)
+  return `.main-page-session-column .session-panel[data-session-id="${sid}"] .session-threads-body`
+}
+
+/** The Org page's rail of the lead of `project`, its groups drawn: its scroll box. */
+export async function openRailOf(page: Page, project: string): Promise<string> {
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await expect(page.getByTestId('org-page')).toBeVisible()
+  await page.locator(`[data-testid="org-channel"][data-key="project:${project.trim().toLowerCase()}"]`).click()
+  await expect(page.getByTestId('org-detail').getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
+  await expect.poll(() => page.locator('[data-testid="org-thread-group"][data-group="read"] [data-testid="org-thread"]').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(LIST_MIN)
+  return '[data-testid="org-rail"] .org-rail-body:has(> .org-threads)'
 }

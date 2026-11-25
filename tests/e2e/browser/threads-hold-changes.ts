@@ -30,8 +30,9 @@ export interface Change {
   /** It acts on the card right above the one he reads. */
   target?: boolean
   /**
-   * It acts on the card he reads itself: the card that stood right before it (else right after it)
-   * is the one judged, the place he was reading. Only where he reads by the pointer.
+   * It acts on the card he reads itself: the card that stood right before it (else right after it;
+   * away, the one after it first) is the one judged, the place he was reading. Typing, the box he
+   * typed in goes with the card, so only the place is judged.
    */
   self?: boolean
   /** He reads a card of this group (the rail): a folded group's head only stands above an opened fold's cards. */
@@ -169,8 +170,7 @@ export const CHANGES: Change[] = [
   },
   // 2026-11-25, a review: the card he reads (a Needs you card he answers) goes to Done, and with it
   // the hold let go with no correction, so every card he saw moved by its new height. At the end of
-  // the range it runs in the whole matrix only: the list there gets shorter below the place he
-  // read, with no scroll left to hold it (that needs room at the bottom, not built).
+  // the range the list gets shorter below the place he read: the box keeps room at its bottom.
   {
     name: 'the card he reads moves to another group', on: ['rail'], self: true, readIn: 'needs',
     run: (c) => toOtherGroup(c),

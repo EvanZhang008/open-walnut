@@ -19,10 +19,12 @@
  * and passes when the card he reads (the one under the pointer, the one right above it below every
  * card, the one right below it between cards, the one he types in, or, away, the one at the top of
  * the view; when that card itself moves away, the card that stood right before it, else right after
- * it) stays where it was on screen to under 1 px in EVERY frame of the
+ * it, and away the one after it, still in view) stays where it was on screen to under 1 px in EVERY frame of the
  * change (sampled after each frame's paint, so a move put back a frame later still fails), and the
  * box he types in keeps the focus and the caret. Away at the very top nothing is held (new cards
- * show at the top, as before): those cells are recorded, not judged. What stands above got shorter
+ * show at the top, as before): those cells are recorded, not judged, and so is the card at the top of
+ * the view going away while less is scrolled above it than it took (the list starts at its top). At
+ * the end of the list, what got shorter below the place he reads is kept as room at the bottom. What stands above got shorter
  * than the box can scroll up (a card above leaving near the top): the box keeps room at its top while
  * he is at the list, so those cells are judged too. A change with a `leave` check judges his leaving
  * as well: begun at the very top, the list goes back to the top and what arrived shows; elsewhere
@@ -45,9 +47,8 @@
 import fs from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { CHANGES, STAMP, call, nodeThread, patchThread, sel, selRef, toOtherGroup, type Change, type Ctx, type Node } from './threads-hold-changes'
-import { keepSocket, pickReading, setPosition, settled, startSampling, stopSampling, typingState, type Pos, type Presence } from './threads-hold-page'
+import { freshAt, keepSocket, openPaneOf, openRailOf, pickReading, setPosition, settled, startSampling, stopSampling, typingState, type Pos, type Presence } from './threads-hold-page'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
 import { pinPageFlags } from './page-flags'
@@ -94,7 +95,6 @@ const inputOf = (box: string, id: string) => `${sel(box, id)} [data-testid="org-
 async function runCell(page: Page, request: APIRequestContext, surface: 'pane' | 'rail', node: Node, box: string, pos: Pos, presence: Presence, ch: Change): Promise<Cell> {
   const cell: Cell = { surface, pos, presence, change: ch.name, verdict: 'NA', maxDev: 0, final: 0, frames: 0 }
   if (ch.scrolledOnly && pos === 'top') return { ...cell, note: 'nothing of the kind stands above a card at the very top' }
-  if (ch.self && (presence === 'typing' || presence === 'away')) return { ...cell, note: 'his own card moving is judged where he reads by the pointer' }
   await page.mouse.move(5, 5)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
   await page.waitForTimeout(250)
@@ -135,13 +135,16 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
   const before = presence === 'typing' ? await typingState(page, input) : null
   const startTop = await page.evaluate((b) => document.querySelector<HTMLElement>(b)!.scrollTop, box)
   const y0 = (await judgedCard.boundingBox())!.y
+  // Away, his card's own height: with less scrolled above it, no scroll can keep the card after it.
+  const selfHeight = ch.self ? (await card.boundingBox())?.height ?? 0 : 0
   await startSampling(page, box, ch.self ? selRef(box, r.stand!) : sel(box, r.id))
   const run = await ch.run(ctx)
   await expect.poll(run.done, { timeout: 20_000, message: `${surface} ${pos} ${presence}: ${ch.name}` }).toBe(true)
   await page.waitForTimeout(600)
   const ys = await stopSampling(page)
   const yEnd = (await judgedCard.boundingBox())?.y ?? NaN
-  const after = presence === 'typing' ? await typingState(page, input) : null
+  // His own card gone, the box he typed in went with it: only the place is judged (the focus goes to its group's head).
+  const after = presence === 'typing' && !ch.self ? await typingState(page, input) : null
   const endTop = await page.evaluate((b) => document.querySelector<HTMLElement>(b)!.scrollTop, box)
   const devs = [...ys, yEnd].map((y) => (Number.isNaN(y) ? Infinity : y - y0))
   const worst = devs.reduce((m, d) => (Math.abs(d) > Math.abs(m) ? d : m), 0)
@@ -150,7 +153,12 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
   cell.frames = ys.length
   if (before && after) { cell.focus = after.focus; cell.caret = after.caret === before.caret }
   const held = Math.abs(worst) < 1 && (!after || (after.focus && cell.caret))
-  cell.verdict = presence === 'away' && pos === 'top' ? 'INFO' : held ? 'PASS' : 'FAIL'
+  // Away, the card at the top of the view going so near the very top that the card after it could only
+  // stay with the list scrolled above its start: the list starts at its top, as away at the very top
+  // (room there while he is away would stay as a blank band until his own scroll gave it back).
+  const aboveStart = presence === 'away' && !!ch.self && !held && startTop < selfHeight
+  cell.verdict = (presence === 'away' && pos === 'top') || aboveStart ? 'INFO' : held ? 'PASS' : 'FAIL'
+  if (aboveStart) cell.note = 'away, his card went from the top of the view with less scrolled above it than it took: the list starts at its top'
   cell.scroll = `${startTop}->${endTop}`
   if (run.leave && presence !== 'away') {
     // He leaves: the pointer goes, the box he typed in is left.
@@ -182,7 +190,7 @@ async function runMatrix(page: Page, request: APIRequestContext, surface: 'pane'
     }
     for (const pos of POSITIONS) {
       for (const presence of PRESENCES) {
-        if (!inRun(pos, presence) || (!WHOLE && ch.self && pos === 'end')) continue
+        if (!inRun(pos, presence)) continue
         const c = await runCell(page, request, surface, node, box, pos, presence, ch)
         console.log(`[cell] ${surface} ${c.verdict} ${pos} ${presence} ${ch.name}: dev ${c.maxDev} scroll ${c.scroll ?? ''} ${c.reading ?? ''} ${c.note ?? ''}`)
         cells.push(c)
@@ -238,30 +246,8 @@ test.afterAll(async ({ request }) => {
 /** His flags as this page reads them, whatever the server says meanwhile (page-flags.ts). */
 const pinHisFlags = (page: Page) => pinPageFlags(page, HIS_FLAGS)
 
-/** The list is drawn once it holds this many of the 14 seeded cards: the matrix run before the proof moves a card or two out of Done. */
-const LIST_MIN = 10
-
-async function openPane(page: Page): Promise<string> {
-  await seedColumns(page, [ids.sid])
-  await loadHome(page)
-  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.sid}"]`)
-  const chip = panel.getByTestId('session-threads-chip')
-  await expect(chip).toBeVisible({ timeout: 30_000 })
-  if ((await chip.getAttribute('aria-pressed')) !== 'true') await chip.click()
-  await expect.poll(() => panel.getByTestId('session-threads-pane').locator('[data-testid="org-thread"]').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(LIST_MIN)
-  return `.main-page-session-column .session-panel[data-session-id="${ids.sid}"] .session-threads-body`
-}
-
-async function openRail(page: Page): Promise<string> {
-  await loadHome(page)
-  await page.getByTestId('sidebar-org').click()
-  await expect(page.getByTestId('org-page')).toBeVisible()
-  await page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.trim().toLowerCase()}"]`).click()
-  await expect(page.getByTestId('org-detail').getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
-  await expect(page.getByTestId('org-thread-groups')).toBeVisible({ timeout: 20_000 })
-  await expect.poll(() => page.locator('[data-testid="org-thread-group"][data-group="read"] [data-testid="org-thread"]').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(LIST_MIN)
-  return '[data-testid="org-rail"] .org-rail-body:has(> .org-threads)'
-}
+const openPane = (page: Page) => openPaneOf(page, ids.sid)
+const openRail = (page: Page) => openRailOf(page, PROJECT)
 
 const judged = (cells: Cell[]) => cells.filter((c) => c.verdict === 'FAIL').map((c) => `${c.surface} / ${c.pos} / ${c.presence} / ${c.change}: moved ${c.maxDev}px${c.focus === false ? ', focus lost' : ''}${c.caret === false ? ', caret moved' : ''}${c.note ? `, ${c.note}` : ''}`)
 
@@ -386,14 +372,6 @@ test('a new card that came above while he read at the very top shows once he lea
   await video.stop('threads-hold-new-card-shows-after')
 })
 
-/** The pointer away, every move line faded and the list drawn, then at `pos`: a clean start for each step of a proof. */
-async function freshAt(page: Page, box: string, pos: Pos) {
-  await page.mouse.move(5, 5, { steps: 6 })
-  await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 15_000 })
-  await settled(page, box)
-  await setPosition(page, box, pos)
-}
-
 /**
  * 2026-11-25, the review's item a: the pointer resting off the cards (a group's head) while a card
  * above changes group, and the pointer on a Needs you card he answers, which goes to Done; then the
@@ -464,4 +442,76 @@ test('a card changing group, or a new one, moves nothing he sees while the point
   await video.caption('A new card arrived in Needs you above: nothing he sees moved')
   await video.hold(2500)
   await video.stop('threads-hold-group-head')
+})
+
+/**
+ * 2026-11-25, the lead: the list still moved at its end. His own card there goes to Needs you: the
+ * card before it holds and the list keeps room at its bottom; his wheel up moves the cards by his
+ * scroll alone as the room goes, and the end he scrolls back to is the list's own end. Away, the card
+ * at the top of the view going to another group moves nothing either.
+ */
+test('at the end of the list, his own card leaving or the top card changing group moves nothing he sees', async ({ page, request }) => {
+  const video = await startProofVideo(page)
+  await isolateUiPrefs(page)
+  await pinHisFlags(page)
+  const box = await openRail(page)
+  const ctx = (target: string, targetGroup: string | null): Ctx => ({ page, request, node: { task: ids.lead, sid: ids.leadSid }, target, targetGroup, box })
+  const yOf = async (s: string) => (await page.locator(s).boundingBox())!.y
+  const state = () => page.evaluate((b) => { const el = document.querySelector<HTMLElement>(b)!; return { top: el.scrollTop, end: el.scrollHeight - el.clientHeight, room: el.style.paddingBottom } }, box)
+
+  await freshAt(page, box, 'end')
+  const a = (await pickReading(page, { box, presence: 'pointer', group: 'read', scope: null }))!
+  const ab = (await page.locator(sel(box, a.id)).boundingBox())!
+  await page.mouse.move(ab.x + 6, ab.y + Math.min(48, ab.height / 2), { steps: 10 })
+  await video.caption('At the end of the list, the pointer on a Done card')
+  await video.hold(1500)
+  const stand = selRef(box, a.stand!)
+  const y0 = await yOf(stand)
+  const moved = await toOtherGroup(ctx(a.id, a.group))
+  await expect.poll(moved.done, { timeout: 20_000 }).toBe(true)
+  await page.waitForTimeout(600)
+  expect(Math.abs((await yOf(stand)) - y0)).toBeLessThan(1)
+  expect((await state()).room).not.toBe('')
+  await video.caption('It went to Needs you: the card above it held, and the list keeps room at its end')
+  await video.hold(2500)
+  // Its line fades where it stood, at the end too: the card above still holds (else that fade could
+  // also come in the middle of his wheel below, and the room it makes would be read as his).
+  await expect(page.locator(`${box} [data-testid="org-thread-move-note"]`)).toHaveCount(0, { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  expect(Math.abs((await yOf(stand)) - y0)).toBeLessThan(1)
+  // His wheel up: the cards move by his scroll alone, and the room goes as the view leaves it.
+  const s1 = await state()
+  const y1 = await yOf(stand)
+  await page.mouse.wheel(0, -500)
+  await page.waitForTimeout(800)
+  const s2 = await state()
+  expect(s1.top - s2.top).toBeGreaterThan(100)
+  expect(Math.abs((await yOf(stand)) - y1 - (s1.top - s2.top))).toBeLessThan(1)
+  expect(s2.room).toBe('')
+  await video.caption('He scrolls up: the cards move with his wheel only, and the room is gone')
+  await video.hold(1500)
+  await page.mouse.wheel(0, 4000)
+  await page.waitForTimeout(800)
+  const s3 = await state()
+  expect(s3.room).toBe('')
+  expect(s3.top).toBeGreaterThanOrEqual(s3.end - 1)
+  await video.caption('Back down: the end is the list\'s own end')
+  await video.hold(1500)
+  await moved.cleanup!()
+
+  // Away from the list: the card at the top of the view goes to another group.
+  await freshAt(page, box, 'end')
+  const c = (await pickReading(page, { box, presence: 'away', group: null, scope: null }))!
+  const below = selRef(box, c.stand!)
+  const yc = await yOf(below)
+  await video.caption('Away from the list, at its end')
+  await video.hold(1200)
+  const top = await toOtherGroup(ctx(c.id, c.group))
+  await expect.poll(top.done, { timeout: 20_000 }).toBe(true)
+  await page.waitForTimeout(600)
+  expect(Math.abs((await yOf(below)) - yc)).toBeLessThan(1)
+  await video.caption('The card at the top of the view changed group: nothing he sees moved')
+  await video.hold(2500)
+  await top.cleanup!()
+  await video.stop('threads-hold-end-of-list')
 })

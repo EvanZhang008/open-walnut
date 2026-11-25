@@ -31,14 +31,28 @@ export function anchorDrift(mark: AnchorMark, top: number, scrollTop: number): n
  * its end, the browser has already pulled the position up by the lost height, and that pull is part
  * of `scrollTop`. Adding the drift on top would count the same rows twice (a 28px row leaving above
  * the view at the end of the list threw every row 28px down). So at the end, after a pull, the
- * position is worked out from the mark's instead, and capped at the end.
+ * position is worked out from the mark's instead, and capped at the end (`ceil`, the end itself
+ * unless the caller makes room past it: roomBelow).
  */
-export function anchoredScrollTop(mark: AnchorMark, top: number, scrollTop: number, max: number, floor = 0): number {
+export function anchoredScrollTop(mark: AnchorMark, top: number, scrollTop: number, max: number, floor = 0, ceil = max): number {
   const drift = anchorDrift(mark, top, scrollTop);
   if (Math.abs(drift) < ANCHOR_SLOP_PX) return scrollTop;
   const clamped = scrollTop >= max - ANCHOR_SLOP_PX && scrollTop < mark.scrollTop;
   const target = clamped ? mark.scrollTop + drift : scrollTop + drift;
-  return Math.max(floor, Math.min(max, target));
+  return Math.max(floor, Math.min(ceil, target));
+}
+
+/**
+ * Room at the bottom of a box, for the row being read when what stands below it got shorter at the
+ * end of the range (2026-11-25, the Threads list: the card he read went to another group from the
+ * end of the list, the list got 186px shorter below the place he read, and every card above it moved
+ * down by 380px). `scrollTop` is the scroll that holds the row, `end` the box's true end (its range
+ * without the room): the room is what the end lacks. The hook makes it while he reads there, and
+ * otherwise only lets it shrink to this, so giving it back never moves what is on screen: the room
+ * goes as he scrolls up out of it or the list grows below. Pure.
+ */
+export function roomBelow(scrollTop: number, end: number): number {
+  return Math.max(0, scrollTop - end);
 }
 
 /**
@@ -112,6 +126,19 @@ export function enginePull(mark: { atEnd?: boolean; at?: number }, before: numbe
   if (!mark.atEnd || before === null || input.down || input.at > (mark.at ?? 0)) return 0;
   const pull = before - scrollTop;
   return pull > ANCHOR_SLOP_PX ? pull : 0;
+}
+
+/**
+ * Whether a scroll the hook did not write is the engine's clamp at the end and no scroll of the
+ * person's: the mark sat at the end with no input since (enginePull, measured from the mark's own
+ * scroll), and the box now sits at its new, lower end. WebKit sends that scroll before the
+ * ResizeObserver sees the row that got shorter, so read as his scroll it moved what he read by the
+ * lost height (2026-11-25, the Threads list: the line of the card he answered faded at the end of
+ * the list, and the card above it moved 38px). A scroll the page makes itself from the end lands at
+ * its end only when the end itself moved up. Pure.
+ */
+export function endClamp(mark: AnchorMark & { atEnd?: boolean; at?: number }, scrollTop: number, max: number, input: ScrollInput): boolean {
+  return scrollTop >= max - ANCHOR_SLOP_PX && enginePull(mark, mark.scrollTop, scrollTop, input) > 0;
 }
 
 /**
