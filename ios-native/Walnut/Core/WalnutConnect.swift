@@ -148,6 +148,12 @@ final class WalnutConnect: @unchecked Sendable {
 
     private static func isKey(_ s: String) -> Bool { s.count == 64 && s.allSatisfy(\.isHexDigit) }
 
+    /// A fresh install: the key an earlier install left in the Keychain goes with its pairing
+    /// (iOS keeps the Keychain when the app is deleted); the next pairing brings its own.
+    static func removeKeyLeftByEarlierInstall() {
+        KeychainHelper.delete(keyAccount)
+    }
+
     /// This phone's network id: what it registers with the Mac.
     func endpointID() -> String? {
         guard isAvailable else { return nil }

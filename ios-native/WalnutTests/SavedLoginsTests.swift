@@ -238,7 +238,7 @@ final class SavedLoginsTests: XCTestCase {
                 if source.contains("KeychainHelper.set(") { writers.append(url.lastPathComponent) }
             }
         }
-        XCTAssertEqual(Set(writers), ["AppConfig.swift", "SavedLogins.swift"],
+        XCTAssertEqual(Set(writers), ["AppConfig.swift", "SavedLogins.swift", "WalnutConnect.swift"],
                        "a new KeychainHelper item: remove it in InstallMarker.removeKeychainItemsLeftByEarlierInstall and list it here")
 
         SavedLogins.remember(serverURL: "https://wn.example.net", routes: [], token: "t", deviceName: nil)
@@ -246,6 +246,7 @@ final class SavedLoginsTests: XCTestCase {
         let marker = try String(contentsOf: root.appendingPathComponent("Walnut/Core/InstallMarker.swift"), encoding: .utf8)
         XCTAssertTrue(marker.contains("SavedLogins.removeAll()"))
         XCTAssertTrue(marker.contains("AppConfig.removeTokenLeftByEarlierInstall()"))
+        XCTAssertTrue(marker.contains("WalnutConnect.removeKeyLeftByEarlierInstall()"))
         SavedLogins.removeAll()
         XCTAssertTrue(SavedLogins.all().isEmpty)
     }

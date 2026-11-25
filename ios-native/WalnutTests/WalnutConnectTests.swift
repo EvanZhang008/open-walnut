@@ -186,6 +186,18 @@ final class WalnutConnectTests: XCTestCase {
         }
     }
 
+    // MARK: - The key
+
+    /// iOS keeps the Keychain when the app is deleted: a fresh install drops the key with the
+    /// pairing it belonged to (InstallMarker calls this; SavedLoginsTests checks it does).
+    func testAFreshInstallRemovesTheKeyAnEarlierInstallLeft() {
+        let hex = String(repeating: "0f", count: 32)
+        WalnutConnect.shared.commitKey(hex)
+        XCTAssertEqual(KeychainHelper.read(WalnutConnect.keyAccount), .value(hex))
+        WalnutConnect.removeKeyLeftByEarlierInstall()
+        XCTAssertEqual(KeychainHelper.read(WalnutConnect.keyAccount), .missing)
+    }
+
     // MARK: - The library
 
     func testTheAppLinksTheRealLibrary() throws {

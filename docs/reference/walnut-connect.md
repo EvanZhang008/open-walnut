@@ -23,7 +23,8 @@ Mac: the connect door (src/web/connect-door.ts), the same Walnut server app
 ```
 
 - **The phone library** (`native/walnut-connect`, iroh 1.5): holds an iroh endpoint with the
-  phone's own Ed25519 key (the Keychain, this device only) and listens on a port of
+  phone's own Ed25519 key (the Keychain, this device only; a fresh install removes the one an
+  earlier install left, as it does the token) and listens on a port of
   127.0.0.1 inside the app. Every TCP connection there becomes a stream to the Mac. To the
   app this is one more address of its Walnut (route kind `connect`), so every request, SSE
   stream, image load and route probe works through it unchanged.

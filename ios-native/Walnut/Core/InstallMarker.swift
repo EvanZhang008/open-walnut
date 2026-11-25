@@ -82,11 +82,12 @@ enum InstallMarker {
         return outcome
     }
 
-    /// A fresh install: the token and the characteristic salt an earlier install
-    /// left in the Keychain go. A new salt is made the first time Health syncs.
+    /// A fresh install: the token, the Walnut Connect key and the characteristic salt an
+    /// earlier install left in the Keychain go. A new salt is made the first time Health syncs.
     static func removeKeychainItemsLeftByEarlierInstall() {
         AppConfig.removeTokenLeftByEarlierInstall()
         SavedLogins.removeAll()
+        WalnutConnect.removeKeyLeftByEarlierInstall()
         HealthCharacteristicSalt.shared.delete()
     }
 
