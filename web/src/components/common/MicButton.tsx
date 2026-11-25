@@ -83,9 +83,10 @@ function MicWaveform({ level }: { level: number }) {
   return (
     <span className="mic-waveform" aria-hidden="true">
       {weights.map((w, i) => {
-        // Idle floor so columns are always faintly visible; scale up with level.
+        // Idle floor so columns are always faintly visible; scale up with level. Each column is the
+        // meter's full height, scaled: a transform the compositor runs, never a layout per frame.
         const h = 3 + Math.min(1, level * w) * 15;
-        return <span key={i} className="mic-waveform-bar" style={{ height: `${h}px` }} />;
+        return <span key={i} className="mic-waveform-bar" style={{ transform: `scaleY(${(h / 18).toFixed(3)})` }} />;
       })}
     </span>
   );

@@ -50,6 +50,8 @@ export interface MenuPlacement {
   maxWidth?: number;
   /** Only with `beside`: where the popover's arrow sits, pointing at the anchor. */
   arrow?: PlacementArrow;
+  /** The side of its anchor it opened to: it grows from that edge as it opens (motion.css). */
+  side?: 'up' | 'down';
 }
 
 export interface MenuPlacementOptions {
@@ -547,7 +549,7 @@ export function useMenuPlacement(
         prev && prev.top === next.top && prev.right === next.right && prev.maxHeight === next.maxHeight
           && prev.maxWidth === next.maxWidth && sameArrow(prev.arrow, next.arrow)
           ? prev
-          : { top: next.top, right: next.right, maxHeight: next.maxHeight, ...(next.maxWidth !== undefined ? { maxWidth: next.maxWidth } : {}), ...(next.arrow ? { arrow: next.arrow } : {}) });
+          : { top: next.top, right: next.right, maxHeight: next.maxHeight, ...(next.maxWidth !== undefined ? { maxWidth: next.maxWidth } : {}), ...(next.arrow ? { arrow: next.arrow } : {}), ...(stacked && !besideAt ? { side: stacked.side } : {}) });
     };
 
     place();
@@ -641,7 +643,13 @@ export function menuPlacementStyle(p: MenuPlacement | null): CSSProperties {
     // be measurable. pointerEvents:none because an element at left:-9999 is
     // still hit-testable and still matches Playwright's `:visible`, so without
     // it a click could land on the unplaced frame.
-    return { position: 'fixed', top: 0, left: -9999, zIndex: 'var(--z-menu)', pointerEvents: 'none' };
+    // Transparent too, so its opening fade (overlay-family.css) starts the frame it is placed,
+    // never spent off screen while a slow frame measures it.
+    return { position: 'fixed', top: 0, left: -9999, zIndex: 'var(--z-menu)', pointerEvents: 'none', opacity: 0 };
   }
-  return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, ...(p.maxWidth !== undefined ? { maxWidth: p.maxWidth } : {}), zIndex: 'var(--z-menu)' };
+  return {
+    position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, ...(p.maxWidth !== undefined ? { maxWidth: p.maxWidth } : {}), zIndex: 'var(--z-menu)',
+    // It grows out of the edge that touches its key.
+    ...(p.side ? { transformOrigin: p.side === 'up' ? 'bottom center' : 'top center' } : {}),
+  };
 }

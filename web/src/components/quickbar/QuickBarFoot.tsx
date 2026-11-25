@@ -107,7 +107,8 @@ export function Waveform({ level }: { level: number }) {
   const weights = [0.4, 0.7, 1, 0.8, 0.55, 0.9, 0.45];
   return (
     <span className="qb-wave" aria-hidden="true">
-      {weights.map((w, i) => <span key={i} style={{ height: `${4 + Math.min(1, level * w * 1.4) * 16}px` }} />)}
+      {/* Each bar is 20 px, scaled to the level: a transform, never a layout per frame. */}
+      {weights.map((w, i) => <span key={i} style={{ transform: `scaleY(${((4 + Math.min(1, level * w * 1.4) * 16) / 20).toFixed(3)})` }} />)}
     </span>
   );
 }

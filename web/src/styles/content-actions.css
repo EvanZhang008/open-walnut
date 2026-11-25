@@ -27,7 +27,8 @@
   top: 18vh;
   max-height: calc(82vh - 16px);
   left: 50%;
-  transform: translateX(-50%);
+  /* `translate`, not `transform`: the opening grow's `scale` would scale a transform's offset. */
+  translate: -50% 0;
 }
 .ceo-composer-head {
   display: flex;

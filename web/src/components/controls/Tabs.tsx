@@ -9,7 +9,8 @@
  * large square cards (an icon, a title, a line), for a choice between two kinds of the same
  * thing at the top of a form (the new task draft's Start task / Quick chat); the keys stay.
  */
-import { type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useCallback, useRef, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useSelectionSlide } from '@/utils/selection-slide'
 import { segmentIndexForKey } from '../settings/inputs/SegmentedControl'
 import '@/styles/choice-controls.css'
 
@@ -59,10 +60,20 @@ function onListKey(e: KeyboardEvent<HTMLElement>) {
 /** `wrap`: wider than a phone, the tabs wrap into a grid of columns instead of scrolling sideways
  *  (tabs with a detail line under the label read in one or two lines that way); a phone keeps
  *  the one scrolling row. */
-export function TabList({ className, flush, tiles, wrap, children, onKeyDown, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; tiles?: boolean; wrap?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
+export function TabList({ className, flush, tiles, wrap, children, onKeyDown, ref, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; tiles?: boolean; wrap?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
+  // The picked tab's capsule slides to the new pick (utils/selection-slide.ts). Tiles keep their
+  // edge, and a strip that wraps onto rows jumps.
+  const own = useRef<HTMLDivElement | null>(null)
+  useSelectionSlide(own, ':scope > [role="tab"][aria-selected="true"]', !tiles && !wrap)
+  const setRef = useCallback((el: HTMLDivElement | null) => {
+    own.current = el
+    if (typeof ref === 'function') ref(el)
+    else if (ref) (ref as { current: HTMLDivElement | null }).current = el
+  }, [ref])
   return (
     <div
       role="tablist"
+      ref={setRef}
       {...rest}
       className={`wn-tabs${flush || tiles ? ' wn-tabs-flush' : ''}${tiles ? ' wn-tabs-tiles' : ''}${wrap ? ' wn-tabs-wrap' : ''}${className ? ` ${className}` : ''}`}
       onKeyDown={(e) => { onKeyDown?.(e); if (!e.defaultPrevented) onListKey(e) }}

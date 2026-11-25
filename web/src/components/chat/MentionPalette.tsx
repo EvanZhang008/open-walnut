@@ -557,7 +557,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           />
         )}
         {!tabAnswer && tabLoading && (
-          <div className="mention-skeleton"><span className="sk-icon" /><span className="sk-line" /></div>
+          <div className="mention-skeleton"><span className="sk-icon wn-shimmer" /><span className="sk-line wn-shimmer" /></div>
         )}
         {tabAnswer && !tabAnswer.error && !tabLoading && sourceRows.length === 0 && (
           <EmptyState
@@ -607,7 +607,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
         </div>
         {filesError && <UnavailableState size="row" role="presentation" testId="mention-empty" title="Couldn't list files here" detail={filesError} />}
         {!filesError && filesLoading && entries.length === 0 && (
-          <div className="mention-skeleton"><span className="sk-icon" /><span className="sk-line" /></div>
+          <div className="mention-skeleton"><span className="sk-icon wn-shimmer" /><span className="sk-line wn-shimmer" /></div>
         )}
         {!filesError && !filesLoading && fileRows.length === 0 && (
           <EmptyState size="row" role="presentation" testId="mention-empty" title="No matching file" />

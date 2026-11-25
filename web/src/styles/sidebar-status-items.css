@@ -111,14 +111,6 @@
   font-size: var(--font-size-md);
   overflow-y: auto;
   overscroll-behavior: contain;
-  animation: status-item-pop 0.16s ease-out;
-}
-@keyframes status-item-pop {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .status-item-popover { animation: none; }
 }
 
 .status-item-popover-head {

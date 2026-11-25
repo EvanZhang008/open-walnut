@@ -81,7 +81,7 @@ async function savedCount(page: Page): Promise<string | undefined> {
  * horizontally (the panel-left placement runs from the task panel's edge across the trigger).
  */
 async function expectMenuUnderTrigger(page: Page): Promise<void> {
-  // The menu slides in from 4px up over 120ms (`tp-pop-in`): measure the resting box.
+  // A menu grows in as it opens (styles/overlay-family.css): measure the resting box.
   await expect.poll(() => viewMenu(page).evaluate((el) => el.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0)
   // No chip, no view name (All) and no search: the filter row has nothing to say, and opening Display adds none.
   await expect(page.locator('.todo-panel .fb-row')).toHaveCount(0)

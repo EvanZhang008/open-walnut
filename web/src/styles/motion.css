@@ -1,0 +1,74 @@
+/* Motion: ONE set of durations and curves for everything that moves (2026-11-25, the user: "the
+   transition, I want it very smooth ... learn from Apple"). A new transition takes its timing from
+   here (or, in script, from utils/motion.ts's copy of them), never a duration or curve of its own;
+   tests/web/motion.test.ts holds the family to it.
+
+   What moves, and how (each is one place):
+     - a menu, popover, hover card or tooltip opens: it fades in and grows from 96 % toward the key
+       that opened it, and fades out when it closes (overlay-family.css, utils/overlay-exit.ts);
+     - a dialog or sheet opens: its scrim fades, its panel fades and grows from 94 %; it closes
+       the same way, quicker;
+     - a page opens at once, as a sidebar section does in Apple's own apps: no fade that would
+       hold its first frame back (measured 2026-11-25: a fade from 0 kept Settings blank for two
+       more frames after its 185 ms mount);
+     - the picked tab or segment changes: the capsule slides to it (utils/selection-slide.ts);
+     - a fold its heading opens: its rows slide down into place under the heading (utils/reveal.ts);
+     - the sidebar slides (utils/layout-slide.ts).
+
+   Only opacity and transform move (the compositor runs them off the page's thread); a property
+   that lays the page out again never does (tests/web/layout-animation-guard.test.ts).
+   Reduce Motion (the system setting) keeps the fades and drops every grow and slide. */
+
+:root {
+  /* A hover, a press, a closing fade. */
+  --motion-fast: 120ms;
+  /* A menu or popover opening, a tab's capsule. */
+  --motion-base: 200ms;
+  /* A dialog or sheet opening. */
+  --motion-slow: 280ms;
+
+  /* Fast out of the gate, a long soft landing: what is on its way reads as already there. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Leaving: starts slowly, then goes. */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /* From one rest to another (a capsule moving between tabs). */
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+  /* A light spring (damping 0.72), Apple's popover grow: it lands a hair past and settles.
+     Engines without linear() take the soft landing above. */
+  --ease-spring: var(--ease-out);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, 0.065, 0.211, 0.387, 0.559, 0.708, 0.827, 0.914, 0.974, 1.011, 1.03, 1.038, 1.038, 1.033, 1.027, 1.02, 1.014, 1.008, 1.005, 1.002, 1, 0.999, 0.999, 0.999, 1);
+  }
+}
+
+/* A ring that widens and fades from a key that is listening (the mic while it records or
+   transcribes, the quick bar's mic): transform and opacity only, so it never repaints. */
+@keyframes wn-ring {
+  from { opacity: 1; transform: scale(0.9); }
+  to { opacity: 0; transform: scale(1.35); }
+}
+
+/* A waiting placeholder (a skeleton bar): its own fill, and a lighter band (--shimmer-glow) that
+   sweeps across it. The band moves by transform inside the bar, so the bar never repaints. */
+.wn-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.wn-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, var(--shimmer-glow, rgba(255, 255, 255, 0.5)) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: wn-shimmer 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes wn-shimmer {
+  to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wn-shimmer::after { animation: none; opacity: 0; }
+}

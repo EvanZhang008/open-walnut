@@ -33,9 +33,9 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
     return (
       <div className="mail-reader-body mail-reader-column">
         <div className="mail-paper mail-skeleton" data-testid="mail-body-skeleton" aria-hidden="true">
-          <div className="mail-skeleton-bar w-body" />
-          <div className="mail-skeleton-bar w-body" />
-          <div className="mail-skeleton-bar w-body-short" />
+          <div className="mail-skeleton-bar wn-shimmer w-body" />
+          <div className="mail-skeleton-bar wn-shimmer w-body" />
+          <div className="mail-skeleton-bar wn-shimmer w-body-short" />
         </div>
       </div>
     );

@@ -13,6 +13,8 @@ import './working-pulse.css';
 import './chat-palette.css';
 import './home-navigation.css';
 import './overlay-glass.css';
+// The one set of durations and curves (before the family, which reads them).
+import './motion.css';
 import './overlay-family.css';
 import './fullscreen-tab.css';
 import './chat-reading.css';

@@ -11,12 +11,6 @@ import path from 'node:path'
  * and sit on rare or short-lived surfaces. Remove a name once it is converted.
  */
 const KNOWN_REPAINTING: Record<string, string> = {
-  'mail-skeleton-sweep': 'mail list skeleton, only while the first page loads',
-  mentionShimmer: 'the @-mention picker while it searches',
-  'mic-pulse': 'the mic button while recording',
-  'mic-transcribe-pulse': 'the mic button while a clip is transcribed',
-  'todo-group-pulse': 'a task group drop target during a drag',
-  'todo-nest-pulse': 'a nest drop target during a drag',
   'wf-stage-flow': 'the workflow graph page',
   'wf-stage-slide': 'the workflow graph page',
   'wn-phone-sync': 'the phone pairing screen',

@@ -164,6 +164,49 @@ html .wn-dialog {
   border-radius: var(--dialog-radius);
 }
 
+/* ── Opening (motion.css): every member of the family comes in the same way, whoever draws it.
+   A menu, popover or hover card fades in and grows from 96 % toward its key (menuPlacementStyle
+   sets the origin on the side it opened to); a dialog grows from 94 % from its middle; a scrim and
+   a tooltip only fade. `scale` and `opacity` only: the compositor runs them, and `scale` adds to a
+   `transform` an overlay places itself with instead of replacing it. A menu placed by
+   useMenuPlacement is parked off screen, transparent, until it is measured; it starts its fade the
+   frame it is placed, so its first frame is never spent off screen. Closing is
+   utils/overlay-exit.ts. Reduce Motion sets data-motion="reduced" (utils/motion.ts): the fades
+   stay, nothing grows; a browser under automation sets "off": nothing moves. */
+:root {
+  --overlay-enter-scale: 0.96;
+  --dialog-enter-scale: 0.94;
+}
+:root:is([data-motion='reduced'], [data-motion='off']) {
+  --overlay-enter-scale: 1;
+  --dialog-enter-scale: 1;
+}
+
+html .wn-overlay {
+  transform-origin: top center;
+  transition: opacity var(--motion-base) var(--ease-out), scale var(--motion-base) var(--ease-spring);
+}
+html .wn-dialog {
+  transition: opacity var(--motion-slow) var(--ease-out), scale var(--motion-slow) var(--ease-spring);
+}
+html .wn-scrim {
+  transition: opacity var(--motion-base) var(--ease-out);
+}
+html .wn-tip {
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+html[data-motion='off'] :is(.wn-overlay, .wn-dialog, .wn-scrim, .wn-tip) {
+  transition: none;
+}
+
+@starting-style {
+  html .wn-overlay { opacity: 0; scale: var(--overlay-enter-scale); }
+  html .wn-dialog { opacity: 0; scale: var(--dialog-enter-scale); }
+  html .wn-scrim,
+  html .wn-tip { opacity: 0; }
+}
+
 html .wn-scrim {
   position: fixed;
   inset: 0;

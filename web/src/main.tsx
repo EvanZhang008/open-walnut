@@ -30,6 +30,8 @@ import { initTurnSpeedStore } from './stores/turn-speed-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { installMenuPressFocus } from './utils/menu-press-focus';
+import { installMotionMode } from './utils/motion';
+import { installOverlayExit } from './utils/overlay-exit';
 import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
 import { installVideoControls } from '../../src/lib/video-controls';
@@ -220,6 +222,10 @@ function bootApp(): void {
   // A press on a menu item focuses it without a scroll, so WebKit never moves a capped
   // menu's cut row out from under the pointer between mousedown and mouseup.
   installMenuPressFocus();
+  // How much the app moves (data-motion on <html>: Reduce Motion and automation make it
+  // "reduced"), and the closing fade of every menu, popover and dialog (styles/motion.css).
+  installMotionMode();
+  installOverlayExit();
   // A chat image drawn again (a reply's persisted row replacing its stream blocks)
   // keeps its box while it decodes, so nothing around it moves for a frame.
   installImageSizeHold();

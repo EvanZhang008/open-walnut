@@ -410,6 +410,43 @@
   box-shadow: 0 0 0 1px var(--border);
 }
 
+/* ── The capsule on its way (utils/selection-slide.ts): while the pick moves, the picked look is
+   one capsule under the items, sliding from the old pick to the new; the two items draw none of
+   their own meanwhile. The strip is the capsule's offsetParent. ── */
+.wn-tabs,
+.wn-seg {
+  position: relative;
+}
+
+.wn-slide-thumb {
+  position: absolute;
+  pointer-events: none;
+  border-radius: var(--radius-full);
+}
+
+.wn-tabs > .wn-slide-thumb {
+  background: var(--accent-subtle);
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-slide-thumb {
+  border-radius: var(--radius-md);
+}
+
+.wn-seg > .wn-slide-thumb {
+  border-radius: var(--choice-radius-inner);
+  background: var(--choice-thumb);
+  box-shadow: var(--choice-lift);
+}
+
+.wn-tab[data-slide-to],
+.wn-tab[data-slide-from],
+.wn-seg-item[data-slide-to],
+.wn-seg-item[data-slide-from] {
+  /* Over every picked and hovered look of theirs, for the 200 ms the capsule moves. */
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 /* One segment that can't be picked now (its title says why). */
 .wn-seg:not([aria-disabled='true']) .wn-seg-item[aria-disabled='true'] {
   opacity: 0.55;

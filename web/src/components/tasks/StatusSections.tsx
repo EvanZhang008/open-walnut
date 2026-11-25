@@ -10,7 +10,8 @@
  * the one list the user orders: its rows drag (WatchingRows; 2026-11-09, the user: "I want this
  * watch to be able to reorder by drag"), in a DndContext of their own, outside the tiers'.
  */
-import { memo, useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useRevealOnMount } from '@/utils/reveal';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DraggableAttributes, type DraggableSyntheticListeners } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy, type AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -444,7 +445,7 @@ function focusRowAt(tasks: readonly Task[], handlers: SectionRowHandlers): numbe
  * row in two lines, its project on the small top line; a project's own fold (By
  * project) draws one-line rows, since the project heading above names it already.
  */
-export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, inProject = false }: {
+export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, inProject = false, reveal = false, onRevealed }: {
   sectionKey: StatusSectionKey;
   tasks: readonly Task[];
   /** The section's full count (Completed includes tasks not loaded yet). */
@@ -454,7 +455,12 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
   archiveLeft?: boolean;
   /** The rows sit under their project's heading (a By project fold). */
   inProject?: boolean;
+  /** Just opened by its heading: the rows slide down into place once (utils/reveal.ts). */
+  reveal?: boolean;
+  onRevealed?: () => void;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  useRevealOnMount(listRef, reveal, onRevealed);
   const [asked, setAsked] = useState(false);
   const [shown, setShown] = useState(STATUS_SECTION_BATCH);
   // A located (focused) row past the batch grows the batch to it, so Locate can scroll
@@ -468,7 +474,7 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
   const twoLine = !inProject && !!handlers.twoLine;
   const reorder = sectionKey === 'watching' ? handlers.onReorderWatching : undefined;
   return (
-    <div className="todo-pinned-list status-section-list" data-testid={`status-section-${sectionKey}-rows`}>
+    <div ref={listRef} className="todo-pinned-list status-section-list" data-testid={`status-section-${sectionKey}-rows`}>
       {reorder
         ? <WatchingRows rows={head} all={tasks} handlers={handlers} twoLine={twoLine} onReorder={reorder} />
         : head.map((task) => <SectionCard key={task.id} task={task} sectionKey={sectionKey} handlers={handlers} twoLine={twoLine} />)}
@@ -617,6 +623,12 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
     return new Set(sectionRowsOf(model, 'needs').tasks.flatMap((t) => (t.user_status?.actions ?? []).filter((i) => i.kind === 'approval').map((i) => i.id)));
   }, [model, open.needs]);
   const waiting = approvals ? pending.filter((p) => !onRows.has(p.id)) : [];
+  // The section its heading just opened: its rows slide down into place, once.
+  const [revealing, setRevealing] = useState<StatusSectionKey | null>(null);
+  const toggle = (key: StatusSectionKey) => {
+    setRevealing(open[key] ? null : key);
+    onToggle(key);
+  };
   const alone = approvals === 'alone' && !keys.includes('needs');
   const shownKeys: readonly StatusSectionKey[] = alone && waiting.length > 0
     ? (keys[0] === 'watching' ? ['watching', 'needs', ...keys.slice(1)] : ['needs', ...keys])
@@ -636,12 +648,13 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
         if (count === 0 && !archiveLeft) return null;
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]} {...{ [FOLD_KEY_ATTR]: key }}>
-            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft}
+            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={toggle} more={archiveLeft}
               limited={key === 'waiting' ? tasks.filter((t) => limitedLine(t.user_status)).length : 0}
               asks={key === 'background' ? backgroundNeedsCount(tasks) : 0} />
             {/* A folded Needs you still shows its approvals: a script is blocked on each, for minutes. */}
             {extra && <ApprovalRows list={waiting} variant="home" />}
-            {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft} />}
+            {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft}
+              reveal={revealing === key} onRevealed={() => setRevealing(null)} />}
           </section>
         );
       })}

@@ -68,11 +68,6 @@
 /* Popover shell (Filter, Display, chip menus): a soft two-layer shadow, 10px corners. */
 .tp-pop {
   color: var(--fg);
-  animation: tp-pop-in 120ms ease-out;
-}
-@keyframes tp-pop-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 /* One focus ring for every new control, both themes. */
@@ -89,6 +84,3 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tp-pop { animation-duration: 0ms; }
-}

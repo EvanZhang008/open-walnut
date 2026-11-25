@@ -90,7 +90,7 @@
   inset: -4px;
   border-radius: 50%;
   border: 2px solid rgba(255, 69, 58, 0.45);
-  animation: qb-ring 1.4s ease-out infinite;
+  animation: wn-ring 1.4s var(--ease-out) infinite;
 }
 
 .qb-mic-off { opacity: 0.45; cursor: default; }
@@ -169,9 +169,11 @@
 .qb-wave span {
   display: block;
   width: 3px;
+  height: 20px;
   border-radius: 2px;
   background: #ff5a52;
-  transition: height 80ms linear;
+  /* The level scales the bar (Waveform): a transform, no layout on each of its frames. */
+  transition: transform 80ms linear;
 }
 
 .qb-shots {
@@ -394,7 +396,6 @@ html.qb-panel-doc #root {
 @keyframes qb-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes qb-slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 @keyframes qb-count { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes qb-ring { from { opacity: 1; transform: scale(0.9); } to { opacity: 0; transform: scale(1.35); } }
 @keyframes qb-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes qb-heard { 0% { box-shadow: 0 0 0 0 var(--accent-subtle-hover); } 40% { box-shadow: 0 0 0 6px var(--accent-subtle); } 100% { box-shadow: 0 0 0 0 transparent; } }
 

@@ -35,6 +35,14 @@ show inline after the open ones, other completed hits that show the query fold i
   A slide starts at the click, ahead of the layout it follows (`createLeadSlide`): a transform
   created after a 150 ms layout reaches the screen with most of its way behind it, and jumps.
   Ratchet: `tests/web/layout-animation-guard.test.ts`.
+- **Motion has one set of timings and one way per kind of thing** (`styles/motion.css`): every
+  menu, popover, hover card, tooltip and dialog opens through the overlay family (fade and grow,
+  `overlay-family.css`) and closes through `utils/overlay-exit.ts` (a fading copy in its place),
+  never with an animation of its own; a picked tab or segment's capsule slides
+  (`utils/selection-slide.ts`). A new transition takes the `--motion-*` and `--ease-*` tokens.
+  A browser under automation sets `data-motion="off"` (nothing moves); a spec that checks the
+  motion sets `localStorage['walnut.motion'] = 'full'`. Ratchets: `tests/web/motion.test.ts`,
+  `tests/e2e/browser/motion.spec.ts`.
 - **A press keeps its control** (`components/settings/inputs/press-keeps-target.ts`). The browser
   clicks only what is under both the press and the release; a Settings row that changes height
   between them (a receipt's few seconds running out) moves the control from under a still

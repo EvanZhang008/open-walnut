@@ -546,17 +546,13 @@
 
 .mail-skeleton { gap: 10px; }
 
+/* A waiting bar: its own fill, and a lighter band sweeping across it (the shared shimmer,
+   .wn-shimmer in motion.css, moved by transform so it never repaints). */
 .mail-skeleton-bar {
   height: 11px;
   border-radius: 6px;
-  background: linear-gradient(
-    90deg,
-    var(--bg-tertiary) 0%,
-    var(--bg-hover) 50%,
-    var(--bg-tertiary) 100%
-  );
-  background-size: 200% 100%;
-  animation: mail-skeleton-sweep 1.4s ease-in-out infinite;
+  background: var(--bg-tertiary);
+  --shimmer-glow: var(--bg-hover);
 }
 
 .mail-reader-head.mail-skeleton .mail-skeleton-bar + .mail-skeleton-bar { margin-top: 10px; }
@@ -591,16 +587,13 @@
 }
 
 .mail-paper.mail-skeleton .mail-skeleton-bar {
-  background: linear-gradient(90deg, #ededf0 0%, #f7f7f9 50%, #ededf0 100%);
-  background-size: 200% 100%;
+  /* The paper is light in both themes: the shimmer's own white band. */
+  background: #ededf0;
+  --shimmer-glow: initial;
 }
 
 .mail-paper.mail-skeleton .mail-skeleton-bar + .mail-skeleton-bar { margin-top: 12px; }
 
-@keyframes mail-skeleton-sweep {
-  from { background-position: 140% 0; }
-  to { background-position: -40% 0; }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .mail-skeleton-bar { animation: none; }

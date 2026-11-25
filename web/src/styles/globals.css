@@ -490,6 +490,11 @@ textarea::placeholder { max-width: 100%; }
 .app-shell.is-sliding > .main-content {
   background: var(--bg);
   pointer-events: none;
+  /* Closing the rail, the page starts sliding left before the layout widens it (layout-slide.ts
+     `lead`): its right edge left a strip of the window's own colour for up to 150 ms (measured
+     2026-11-23). A copy of its surface, drawn once beside it and moved with it, covers that strip;
+     the window's edge clips the rest. */
+  box-shadow: 400px 0 0 var(--bg);
 }
 
 .sidebar-collapse-btn { flex-shrink: 0; }
@@ -3508,7 +3513,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fullscreen-fade-in 0.15s ease-out;
 }
 .wf-modal {
   display: flex;
@@ -3517,7 +3521,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   height: 90vh;
   max-width: 1100px;
   overflow: hidden;
-  animation: fullscreen-enter 0.15s ease-out;
 }
 .wf-modal-header {
   display: flex;
@@ -6240,7 +6243,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   min-width: 180px;
   /* The raised surface every overlay paints (overlay-glass.css); --bg is pure black in dark. */
   padding: 4px;
-  animation: contextBarSlideIn 0.12s ease;
 }
 /* A row of the composer's menus: the one menu row of every menu (the task menu's .task-kebab-item,
    ContextMenu's .wn-context-menu-item): 6 px 12 px, icon and words 8 px apart, 12 px words, the
@@ -6421,13 +6423,11 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mention-skeleton { display: flex; align-items: center; gap: 9px; padding: 8px 10px; }
 .mention-skeleton .sk-icon, .mention-skeleton .sk-line {
   border-radius: var(--radius-xs);
-  background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-tertiary) 50%, var(--bg-secondary) 75%);
-  background-size: 200% 100%;
-  animation: mentionShimmer 1.2s infinite;
+  background: var(--bg-secondary);
+  --shimmer-glow: var(--bg-tertiary);
 }
 .mention-skeleton .sk-icon { width: 14px; height: 14px; }
 .mention-skeleton .sk-line { width: 55%; height: 10px; }
-@keyframes mentionShimmer { to { background-position: -200% 0; } }
 
 /* A purely semantic hit has no highlighted characters: the snippet says WHY. */
 .mention-summary { opacity: 0.85; font-style: italic; }
@@ -6479,7 +6479,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .chat-send-caret:hover { color: var(--accent); background: var(--accent-subtle); }
 .chat-send-menu {
   min-width: 180px;
-  animation: contextBarSlideIn 0.12s ease;
 }
 
 /* ── Image attachment styles ── */
@@ -6524,7 +6523,31 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mic-recording {
   color: var(--error) !important;
   border-color: var(--error) !important;
-  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+/* The recording ring: a ring that widens and fades, the quick bar's (wn-ring, motion.css), moved
+   by transform and opacity on the compositor (it was a box-shadow repainted every frame). */
+.mic-recording::after,
+.mic-transcribing::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 2px solid color-mix(in srgb, var(--error) 45%, transparent);
+  pointer-events: none;
+  animation: wn-ring 1.4s var(--ease-out) infinite;
+}
+.mic-transcribing::after {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  animation-duration: 1.5s;
+}
+.mic-btn.mic-starting::after,
+.mic-recording-silent::after {
+  content: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mic-recording::after,
+  .mic-transcribing::after { animation: none; opacity: 0.6; }
 }
 
 /* Live waveform meter shown inside the button while recording */
@@ -6538,11 +6561,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 .mic-waveform-bar {
   width: 2px;
-  min-height: 3px;
+  height: 100%;
   border-radius: 1px;
   background: currentColor;
-  /* Smooth the per-frame height changes so motion reads as fluid, not jittery */
-  transition: height 0.08s linear;
+  /* The level scales the column (MicWaveform); smooth the per-frame changes so motion reads as
+     fluid, not jittery. A transform: no layout on each of the meter's frames. */
+  transition: transform 0.08s linear;
 }
 .mic-btn-sm .mic-waveform {
   width: 14px;
@@ -6997,16 +7021,10 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mic-transcribing {
   color: var(--accent);
   border-color: var(--accent);
-  animation: mic-transcribe-pulse 1.5s ease-in-out infinite;
 }
 
 .mic-spinner {
   animation: mic-spin 1s linear infinite;
-}
-
-@keyframes mic-transcribe-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
 }
 
 /* Mic button wrapper — positions retry chip + dropdown */
@@ -7129,11 +7147,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   padding: 4px 10px;
   max-height: 72px;
   overflow-y: auto;
-}
-
-@keyframes mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(255, 59, 48, 0); }
 }
 
 @keyframes mic-spin {
@@ -8139,11 +8152,6 @@ body.walnut-dragging {
   to   { opacity: 1; }
 }
 
-@keyframes fullscreen-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
 /* --- Plan Card Header: the disclosure (controls/Disclosure.tsx) + the expand button as siblings --- */
 
 /* --- Plan Card Expand Button --- */
@@ -8174,7 +8182,6 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: lightbox-fade-in 0.15s ease-out;
 }
 
 .plan-popup-container {
@@ -8240,8 +8247,7 @@ body.walnut-dragging {
 
 @media (prefers-reduced-motion: reduce) {
   .open-walnut-fullscreen-backdrop,
-  .open-walnut-fullscreen,
-  .plan-popup-overlay { animation: none; }
+  .open-walnut-fullscreen { animation: none; }
 }
 
 
@@ -8547,7 +8553,6 @@ body.walnut-dragging {
   position: fixed;
   display: flex; flex-direction: column;
   overflow: hidden;
-  animation: contextBarSlideIn 0.12s ease-out;
 }
 
 /* Search bar spanning the panel */
@@ -11286,7 +11291,6 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: notes-popup-fade-in 0.15s ease-out;
 }
 
 .notes-popup-container {
@@ -11331,15 +11335,6 @@ body.walnut-dragging {
   padding: 16px;
   display: flex;
   flex-direction: column;
-}
-
-@keyframes notes-popup-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .notes-popup-overlay { animation: none; }
 }
 
 /* ===== Todo Panel Tabs ===== */
@@ -12297,16 +12292,17 @@ body.walnut-dragging {
 }
 .todo-panel-item-nest-target .todo-row-pill {
   box-shadow: inset 0 0 0 2px var(--accent);
-  animation: todo-nest-pulse 1.1s ease-in-out infinite;
+  animation: todo-drop-breathe 1.1s ease-in-out infinite;
+}
+
+/* The drop target's ring and tint breathe while the dragged task is over it: its opacity, on the
+   compositor (it used to grow a box-shadow halo, repainted every frame). */
+@keyframes todo-drop-breathe {
+  50% { opacity: 0.6; }
 }
 
 .todo-panel-item-nest-target:hover {
   --row-pill-bg: var(--accent-subtle);
-}
-
-@keyframes todo-nest-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 2px var(--accent); }
-  50%      { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 2px var(--accent-subtle); }
 }
 
 /* ===== Drop-intent: GROUP together (left zone of a main-list row) =====
@@ -12319,11 +12315,7 @@ body.walnut-dragging {
  * row it is in lights instead (.task-group-chip-drop). */
 .todo-panel-item-group-target .todo-row-pill {
   box-shadow: inset 0 0 0 1.5px var(--accent);
-  animation: todo-group-pulse 1.1s ease-in-out infinite;
-}
-@keyframes todo-group-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 1.5px var(--accent); }
-  50%      { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 2px var(--accent-subtle); }
+  animation: todo-drop-breathe 1.1s ease-in-out infinite;
 }
 
 /* ===== Focus override: task temporarily shown outside current filters ===== */
@@ -21353,7 +21345,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: lightbox-fade-in 0.12s ease-out;
 }
 .app-modal {
   width: min(420px, calc(100vw - 48px));
@@ -25805,7 +25796,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   position: fixed;
   top: 12vh;
   left: 50%;
-  transform: translateX(-50%);
+  /* `translate`, not `transform`: the opening grow's `scale` (overlay-family.css) would scale a
+     transform's offset too and drift the panel sideways as it grows. */
+  translate: -50% 0;
   width: min(560px, 90vw);
   /* A fixed height: the panel is the same box whether its list is loading, short or long,
      so it never grows under the pointer when the list lands or shrinks as you type. */

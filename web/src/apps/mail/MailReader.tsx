@@ -102,17 +102,17 @@ export function MailReader({ open, narrow, accounts, providers }: ReaderProps) {
 function HeadSkeleton() {
   return (
     <div className="mail-reader-head mail-reader-column mail-skeleton" data-testid="mail-reader-skeleton" aria-hidden="true">
-      <div className="mail-skeleton-bar w-subject" />
+      <div className="mail-skeleton-bar wn-shimmer w-subject" />
       <div className="mail-skeleton-sender">
         <div className="mail-skeleton-circle" />
         <div className="mail-skeleton-lines">
-          <div className="mail-skeleton-bar w-name" />
-          <div className="mail-skeleton-bar w-address" />
+          <div className="mail-skeleton-bar wn-shimmer w-name" />
+          <div className="mail-skeleton-bar wn-shimmer w-address" />
         </div>
       </div>
-      <div className="mail-skeleton-bar w-body" />
-      <div className="mail-skeleton-bar w-body" />
-      <div className="mail-skeleton-bar w-body-short" />
+      <div className="mail-skeleton-bar wn-shimmer w-body" />
+      <div className="mail-skeleton-bar wn-shimmer w-body" />
+      <div className="mail-skeleton-bar wn-shimmer w-body-short" />
     </div>
   );
 }
