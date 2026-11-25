@@ -266,14 +266,14 @@ export async function applyTriggerChecked(
           atMs, outcome: event.outcome, reason: event.reason, durationMs, error, warnings: event.warnings, limitSeconds: limitS,
           ...(isMachineFaultKind(event.fault) ? { fault: event.fault } : {}),
         }), TRIGGER_CHECK_LOG_MAX);
-        if (job.state.checkLog !== before) await persist(state);
+        if (job.state.checkLog !== before) await persistRecord(state);
         return { found: true, disabled: false, ignored: true };
       }
       // A restart re-arms the clock even when its latest check was already recorded.
       if (event.replay && atMs === lastAt && job.enabled && Number.isFinite(event.nextRunAtMs)
         && event.nextRunAtMs > state.deps.nowMs() && event.nextRunAtMs !== job.state.nextRunAtMs) {
         job.state.nextRunAtMs = event.nextRunAtMs;
-        await persist(state);
+        await persistRecord(state);
         emit(state, { jobId: job.id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
       }
       return { found: true, disabled: false, ignored: true };
@@ -379,10 +379,10 @@ export async function applyTriggerChecked(
       disabled = true;
     }
 
-    const routine = event.outcome === 'quiet' && !event.replay && !disabled && !warningsToTell && !budgetHeld
+    // A replayed quiet check (one its host ran while no server was here) is as routine as a live one.
+    const routine = event.outcome === 'quiet' && !disabled && !warningsToTell && !budgetHeld
       && Object.keys(health).length === 0 && before.errors === 0 && before.lastError === undefined && before.faultSince === undefined;
-    // On a host replica persist refuses (the Mac writes the routines): it still refuses at once.
-    if (routine && !state.stopped && !isHostReplicaProgram()) persistRoutineCheck(state);
+    if (routine) await persistRecord(state);
     else await persist(state);
     // 'updated' is what the Routines card listens to (cron:job-updated): without
     // it a quiet check only shows up after a manual reload. A quiet check carries the
@@ -437,6 +437,20 @@ export function persistRoutineCheck(state: CronServiceState): void {
   if (state.routineWriteTimer) return;
   state.routineWriteTimer = setTimeout(() => { void flushRoutineChecks(state); }, ROUTINE_WRITE_DELAY_MS);
   state.routineWriteTimer.unref?.();
+}
+
+/**
+ * Record what only a trigger's check record changed (its latest check, its history rows, the next
+ * check its host reported): readers can wait ROUTINE_WRITE_DELAY_MS for it, so it shares the routine
+ * write. A boot is where this counts (2026-11-25, the live server: 87 to 225 full rewrites of the
+ * 1.1 MB cron-state.json in its first one or two minutes): every host's first configure replays each
+ * trigger's latest check, with the next run the in-process daemon's boot re-arm moved (one write per
+ * local trigger), and the checks a host ran while the server was down (one write each). A stopped
+ * engine writes at once; on a host replica persist refuses (the Mac writes the routines), at once too.
+ */
+async function persistRecord(state: CronServiceState): Promise<void> {
+  if (!state.stopped && !isHostReplicaProgram()) persistRoutineCheck(state);
+  else await persist(state);
 }
 
 /** Write what routine checks left waiting, under the store lock (also on stop). */

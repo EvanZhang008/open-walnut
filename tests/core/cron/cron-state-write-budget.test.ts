@@ -159,6 +159,79 @@ describe('a quiet check cycle rewrites cron-state.json at most once per ROUTINE_
 })
 
 /**
+ * A boot: every host's first configure replays each trigger's latest check (daemon-trigger-set.ts
+ * cmdTriggersConfigure, replayChecks), the in-process daemon's with the next run its boot re-arm
+ * moved, and a remote host's after the checks it ran while no server was here. 2026-11-25, the live
+ * server: each of those replays rewrote the 1.1 MB sidecar at once, 87 to 225 times in the first one
+ * or two minutes after a restart. They change only the check record, so they share the routine write.
+ */
+describe('a boot\'s replayed checks share the routine write', () => {
+  it('200 triggers reporting in after a restart write the sidecar a handful of times, the final state on disk', async () => {
+    // Before the restart: every trigger's check recorded, and written by the stop.
+    const old = makeState()
+    const ids = await addTriggers(old, 200)
+    for (const id of ids) await applyTriggerChecked(old, quiet(id, now.value))
+    await ops.stop(old)
+    const recordedAt = now.value
+
+    // The new process, on the files the old one left.
+    tick(20 * SEC)
+    const state = makeState()
+    const sidecar = cronStatePath(state.deps.storePath)
+    const runTimer = writeTimer(state)
+    _resetJsonIoForTesting()
+    const startAt = now.value
+    let writes = 0
+    const want = new Map<string, { atMs: number; nextRunAtMs: number; rows: number[] }>()
+    const errorId = ids[150]!
+    for (const [i, id] of ids.entries()) {
+      tick(200)
+      if (i < 100) {
+        // The in-process daemon's trigger: its latest check is recorded, its next run moved.
+        const nextRunAtMs = now.value + 15 * SEC
+        await applyTriggerChecked(state, { ...quiet(id, recordedAt), nextRunAtMs, replay: true })
+        want.set(id, { atMs: recordedAt, nextRunAtMs, rows: [recordedAt] })
+      } else {
+        // A remote host's: a check kept from before the recorded one, the two it ran while the
+        // server was down, then its latest check again with the next run it holds.
+        const kept = [recordedAt - 30 * SEC, recordedAt + 5 * SEC, recordedAt + 15 * SEC]
+        for (const atMs of kept) await applyTriggerChecked(state, { ...quiet(id, atMs), replay: true })
+        const nextRunAtMs = now.value + 40 * SEC
+        await applyTriggerChecked(state, { ...quiet(id, kept[2]!), nextRunAtMs, replay: true })
+        want.set(id, { atMs: kept[2]!, nextRunAtMs, rows: [...kept, recordedAt] })
+      }
+      if (id === errorId) {
+        // A live error in the middle of the burst still writes at once, its count on disk.
+        tick(SEC)
+        await applyTriggerChecked(state, { ...quiet(id, now.value), outcome: 'error', error: 'exit 1', reason: undefined, consecutiveErrors: 1 })
+        const onDisk = JSON.parse(await fs.readFile(sidecar, 'utf-8')) as { states: Record<string, { consecutiveErrors?: number }> }
+        expect(onDisk.states[id]?.consecutiveErrors, 'the error count is written at once').toBe(1)
+        want.delete(id)
+      }
+      await runTimer()
+      writes += writesOf(sidecar)
+      _resetJsonIoForTesting()
+    }
+    const spanMs = now.value - startAt
+    await ops.stop(state)
+    writes += writesOf(sidecar)
+
+    // The burst's shared writes, the error's own, and the stop's.
+    expect(writes, 'sidecar writes during the boot burst').toBeLessThanOrEqual(Math.ceil(spanMs / ROUTINE_WRITE_DELAY_MS) + 2)
+    // Nothing a reader needs is lost: each trigger's latest check, its next run and every row.
+    const onDisk = JSON.parse(await fs.readFile(sidecar, 'utf-8')) as {
+      states: Record<string, { lastCheck?: { atMs: number }; nextRunAtMs?: number; checkLog?: Array<{ atMs: number }> }>
+    }
+    for (const [id, w] of want) {
+      const s = onDisk.states[id]
+      expect(s?.lastCheck?.atMs, id).toBe(w.atMs)
+      expect(s?.nextRunAtMs, id).toBe(w.nextRunAtMs)
+      expect((s?.checkLog ?? []).map((e) => e.atMs).sort((a, b) => a - b), id).toEqual([...w.rows].sort((a, b) => a - b))
+    }
+  })
+})
+
+/**
  * Every write of the routines store goes through store.ts persist(); these are its call sites. A
  * new one (or one more in a file) fails here: decide what it records. A write that only records a
  * quiet routine check calls persistRoutineCheck (it shares the delayed write); an event a reader or
@@ -169,9 +242,10 @@ describe('a quiet check cycle rewrites cron-state.json at most once per ROUTINE_
 describe('the writers of the routines store are enumerated', () => {
   const ROOT = path.resolve(__dirname, '../../..')
   const PERSIST_CALLS: Record<string, number> = {
-    // persistRoutineCheck's flush, a replayed or older check, and the fire paths; the routine
-    // quiet check itself waits (persistRoutineCheck).
-    'src/core/cron/trigger-apply.ts': 9,
+    // persistRoutineCheck's flush, a check that is no routine record, persistRecord on a stopped
+    // engine, and the fire paths; a quiet check, live or replayed, and a replay's history row or
+    // re-armed next run wait (persistRoutineCheck).
+    'src/core/cron/trigger-apply.ts': 8,
     // Adds, edits, removals, runs, boot catch-up, recomputes that changed a next run.
     'src/core/cron/ops.ts': 16,
     // A due run's marks and results, the tick's recompute when it changed something.

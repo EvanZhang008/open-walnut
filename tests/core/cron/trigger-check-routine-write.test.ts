@@ -182,8 +182,8 @@ describe('routine trigger checks share one write', () => {
 
 /**
  * A check its host ran while no server took it comes later than a newer one (providers/
- * trigger-unsent-checks.ts): it goes into the history in its time place, once, and is written;
- * the latest check stays the newer one. 2026-11-25: a four-hour hole in a trigger's checkLog.
+ * trigger-unsent-checks.ts): it goes into the history in its time place, once, and is written
+ * with the routine write (persistRecord); the latest check stays the newer one. 2026-11-25: a four-hour hole in a trigger's checkLog.
  */
 describe('a replayed check older than the latest goes into the history in its place', () => {
   const at = (n: number) => Date.UTC(2026, 10, 25, 4, 40, 0) + n * 30 * MIN
@@ -216,8 +216,12 @@ describe('a replayed check older than the latest goes into the history in its pl
     expect(s.checkLog?.find((e) => e.atMs === at(2))).toMatchObject({ outcome: 'error', error: 'exit 1' })
     expect(s.lastCheck).toMatchObject({ atMs: at(7), outcome: 'quiet' })
     expect(s.consecutiveErrors ?? 0, 'a replayed error is never counted').toBe(0)
-    // Written at once, not left for the routine write.
-    expect(stateWrites(state)).toBe(3)
+    // History rows only (no count, no latest check): they share the routine write, as a boot
+    // replays many (cron-state-write-budget.test.ts). That one write lands every row.
+    expect(stateWrites(state)).toBe(0)
+    expect(state.routineWriteDue).toBe(true)
+    await flushRoutineChecks(state)
+    expect(stateWrites(state)).toBe(1)
     expect((await logOnDisk(state, job.id)).map((e) => e.atMs)).toEqual([at(7), at(3), at(2), at(1), at(0)])
 
     // The same replay again (a second configure, a resend): no second row, no write.
