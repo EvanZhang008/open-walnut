@@ -12,7 +12,7 @@
 import { ownFollowerDirs } from '../core/host-server/own-follower-dirs.js'
 import { parseServes, SERVES_FILE, walnutKeyOf, type DaemonServes } from './daemon-serves.js'
 import { otherWalnutKeys } from './daemon-shared.js'
-import { shq } from './remote-sh.js'
+import { shq } from './service-set.js'
 
 export interface SharedMacSlotFacts {
   system: 'linux' | 'darwin'
