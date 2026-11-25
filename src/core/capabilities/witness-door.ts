@@ -34,6 +34,7 @@ export const witnessDoor = defineCapability({
     },
   ],
   reads: [
+    'src/core/leader/switch/leader-relay-door.ts',
     'src/web/server.ts',
   ],
 })
