@@ -61,6 +61,8 @@ export function insertAuditByTime(
   const base = Array.isArray(list) ? list : [];
   if (base.some((e) => e.atMs === entry.atMs && e.outcome === entry.outcome)) return base;
   const at = base.findIndex((e) => e.atMs < entry.atMs);
+  // Older than every row of a full list: it would be cut at once, so nothing changes (and nothing is written).
+  if (at < 0 && base.length >= Math.max(1, max)) return base;
   const next = at < 0 ? [...base, entry] : [...base.slice(0, at), entry, ...base.slice(at)];
   return next.slice(0, Math.max(1, max));
 }

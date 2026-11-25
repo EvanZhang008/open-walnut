@@ -75,12 +75,15 @@ export class TriggerDaemon {
   events: Array<Record<string, unknown>> = []
   private nextId = 1
   private waiters = new Map<number, (reply: Record<string, unknown>) => void>()
+  /** A server asleep with its socket open: it reads nothing and answers nothing (freeze). */
+  private frozen = false
   private constructor(readonly child: ChildProcess, private ws: WebSocket, private readonly runDir: string) {
     this.attach(ws)
   }
 
   private attach(ws: WebSocket): void {
     ws.on('message', (data: Buffer | string) => {
+      if (this.frozen) return
       const msg = JSON.parse(typeof data === 'string' ? data : data.toString()) as Record<string, unknown>
       if (typeof msg.ev === 'string') { this.events.push(msg); return }
       const waiter = typeof msg.id === 'number' ? this.waiters.get(msg.id) : undefined
@@ -94,9 +97,21 @@ export class TriggerDaemon {
     await new Promise<void>((r) => { this.ws.once('close', () => r()); this.ws.close() })
   }
 
+  /**
+   * The server falls asleep with its socket left open (a Mac's lid shut over an SSH forward): it
+   * stops reading, so it answers no ping, and what the daemon sends meanwhile is never read. The
+   * daemon closes such a socket after its silent beats; `reconnect` drops it on this side.
+   */
+  freeze(): void {
+    this.frozen = true
+    this.ws.pause()
+  }
+
   /** A server comes back: a new socket to the same daemon (events keep accumulating in `events`). */
   async reconnect(): Promise<void> {
+    if (this.frozen && this.ws.readyState !== WebSocket.CLOSED) await new Promise<void>((r) => { this.ws.once('close', () => r()); this.ws.terminate() })
     await this.disconnect()
+    this.frozen = false
     this.ws = await connectDaemon(this.child, this.runDir, 'standalone')
     this.attach(this.ws)
   }

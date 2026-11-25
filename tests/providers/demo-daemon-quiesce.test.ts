@@ -566,7 +566,7 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts', () => {
       checkRunCaller: () => ({ env: {}, release: () => {} }),
       persistTriggerState: (_h: string, id: string) => { persisted.push(id) },
       sendTriggerEvent: (_h: string, kind: string) => { events.push(kind); return true },
-      sendTriggerFire: () => true, logMsg: () => {},
+      sendTriggerFire: () => true, logMsg: () => {}, settleChecks: () => false,
       replayPendingFires: () => { events.push('replay') },
       fireHolders: () => holders,
       hostDeliveryGraceMs: () => 0, hostDeliveriesInFlight: new Map(),

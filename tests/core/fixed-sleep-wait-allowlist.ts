@@ -565,6 +565,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/utils/user-file-lock.test.ts", sleep: "await new Promise((resolve) => setTimeout(resolve, 80));", reason: "negative: the symlinked writer does not enter while the real path is held" },
   { file: "tests/web/api-client-admission.test.ts", sleep: "await new Promise((r) => setTimeout(r, 400));", reason: "time under test: held in the queue past its own 150ms timeout; negative: still queued" },
   { file: "tests/web/daemon-tunnel.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: another credential revoked does not close the tunnel" },
+  { file: "tests/web/daemon-tunnel.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500)) // the ping went out at 100 ms: nothing answers it", reason: "negative: a Mac that reads nothing gives the daemon no pong, and the relay gives none for it" },
   { file: "tests/web/daemon-tunnel.test.ts", sleep: "await new Promise((r) => setTimeout(r, 500)) // two beats, answered", reason: "time under test: two heartbeats pass; negative: tunnel stays open" },
   { file: "tests/web/daemon-tunnel.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1_100)) // five heartbeats", reason: "time under test: five heartbeats pass; negative: tunnel stays open" },
   { file: "tests/web/daemon-tunnel.test.ts", sleep: "await sleep(50)", reason: "time under test: manual-beat window length; negative: tunnel stays open" },

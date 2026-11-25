@@ -36,7 +36,7 @@ export interface InProcessClientDeps<Ws> {
   /** The client left: the runtime's disconnect (subscriptions, relays). */
   unregister(ws: Ws): void
   /** Proof of life (the runtime's keepalive). */
-  heardFrom(ws: Ws): void
+  heardFrom(ws: Ws, readThrough?: number): void
   warn(msg: string, data: Record<string, unknown>): void
   /** Freeze every frame and report one JSON would change (tests). */
   checkFrames?: boolean
@@ -135,7 +135,8 @@ export function createInProcessClient<Ws>(
       return payload.length || 1
     },
     // Nothing between: a ping is answered at once (the keepalive hears it).
-    ping(): void { deps.heardFrom(socket) },
+    // Frames go over at once, so everything sent before the ping has been handed over (readThroughAt).
+    ping(): void { deps.heardFrom(socket, Date.now()) },
     terminate(): void { ws.close() },
     close(): void {
       if (ws.readyState !== OPEN) return

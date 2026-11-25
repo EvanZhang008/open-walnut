@@ -9,7 +9,7 @@
  * as it was; deps carry the runtime's own names.
  */
 import type { CheckCallers, PendingFire, TriggerDef, TriggerHostState } from './trigger-check-core.js'
-import { keepUnsentCheck, takeUnsentChecks } from './trigger-unsent-checks.js'
+import { keepUnsentCheck } from './trigger-unsent-checks.js'
 import type { ClockHostStart } from './clock-host-start-core.js'
 import type { createFollowerTriggerDelivery } from './follower-trigger-delivery-core.js'
 import type { ChildProcessUse } from './daemon-child-spawn.js'
@@ -44,7 +44,7 @@ export interface DaemonTriggerRunsDeps {
 export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
   const { daemonEnv, triggerStore, demoQuiesce, childUse, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, followerTriggers, clockHostStart, setInterval, clearInterval, logMsg } = deps
   const { hostBatch, markHostBatch, applyCheckError, applyCheckOutcome, applyClockFire, buildCheckStdin, checkErrorOf, decideCheck, checkIdleOf, fireDueOnHost, markHostDelivered, parseCheckStdout, runCheckProcess, CHECK_ERROR_BACKOFF_MS, HOST_DELIVERY_GRACE_MS, HOST_DELIVERY_RETRY_MS, MAX_CONSECUTIVE_CHECK_ERRORS, PENDING_FIRE_REPLAY_MS, applyMachineFault, checkCallerEnv, buildScheduledMessage, buildTriggerMessage, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, createClockSchedule } = deps.judge
-  const { TRIGGER_TICK_MS, armedTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerKey, heldTrigger, fireHolders, readTriggerState, persistTriggerState, sendTriggerEvent, sendTriggerFire } = triggerStore
+  const { TRIGGER_TICK_MS, armedTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerKey, heldTrigger, fireHolders, readTriggerState, persistTriggerState, sendTriggerEvent, sendTriggerFire, sendCheck, settleChecks, checksToSendAgain } = triggerStore
 
   // The clock: startTriggers (Main) sets it, stopTriggers (cleanup) clears it.
   let triggerTickTimer: ReturnType<typeof setInterval> | null = null
@@ -145,20 +145,18 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
   }
 
   /**
-   * Report a check to the servers of its trigger's Walnut. One no server took goes into the trigger's
-   * file, for the next configure (trigger-unsent-checks.ts); with a server here again, those kept go
-   * first, oldest first, so the record, which takes only what is newer than it holds, keeps each.
+   * Report the latest check (entry.state.lastCheck, kept by the caller before it persisted) to the
+   * servers of its trigger's Walnut. A report stays kept until a server is known to have read it
+   * (trigger-unsent-checks.ts: a socket it went on answered a later ping); the kept ones on no open
+   * socket go first, oldest first, so the record, which takes only what is newer than it holds, keeps each.
    */
   function reportCheck(entry: ArmedTrigger, fields: Record<string, unknown>): void {
-    const kept = entry.state.unsentChecks ?? []
-    if (kept.length && sendTriggerEvent(entry.home, 'trigger.checked', { ...kept[0], replay: true })) {
-      for (const c of kept.slice(1)) sendTriggerEvent(entry.home, 'trigger.checked', { ...c, replay: true })
-      takeUnsentChecks(entry.state)
-      persistTriggerState(entry.home, entry.def.id, entry.state)
-    }
-    if (sendTriggerEvent(entry.home, 'trigger.checked', fields) || !entry.state.lastCheck) return
-    keepUnsentCheck(entry.state, entry.state.lastCheck)
-    persistTriggerState(entry.home, entry.def.id, entry.state)
+    const latest = entry.state.lastCheck
+    if (!latest) return
+    const now = Date.now()
+    settleChecks(entry)
+    for (const c of checksToSendAgain(entry, latest.atMs)) if (!sendCheck(entry, { ...c, replay: true }, now).length) break
+    sendCheck(entry, { ...fields, atMs: latest.atMs }, now)
   }
 
   async function runTrigger(entry: ArmedTrigger): Promise<{ outcome: 'fired' | 'quiet' | 'error'; reason?: string; error?: string }> {
@@ -203,6 +201,9 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
           type: 'trigger.checked', id: entry.def.id, atMs: now, outcome: 'error', error, durationMs: proc.durationMs,
           nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
         }
+        // Kept until a server is known to have read it (reportCheck), written with the run.
+        keepUnsentCheck(entry.state, entry.state.lastCheck)
+        settleChecks(entry)
         persistTriggerState(entry.home, entry.def.id, entry.state)
         logMsg('warn', 'trigger run', {
           id: entry.def.id, outcome: 'error', error, durationMs: proc.durationMs,
@@ -227,6 +228,9 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
         durationMs: proc.durationMs, nextRunAtMs: entry.nextRunAtMs, consecutiveErrors: entry.state.consecutiveErrors,
         ...(output.warnings?.length ? { warnings: output.warnings } : {}),
       }
+      // Kept until a server is known to have read it (reportCheck), written with the run.
+      if (!fire && entry.state.lastCheck) keepUnsentCheck(entry.state, entry.state.lastCheck)
+      settleChecks(entry)
       persistTriggerState(entry.home, entry.def.id, entry.state)
       logMsg('info', 'trigger run', {
         id: entry.def.id, outcome: fire ? 'fired' : 'quiet',
@@ -392,6 +396,10 @@ export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
     }
     deliverUnclaimedFires(now)
     replayPendingFires(now)
+    // The kept check reports a server has read since go from the trigger's file (one small write a
+    // report, when its read is proven; a report the file still held after a restart is sent once more,
+    // which the server takes as nothing).
+    for (const entry of armedTriggers.values()) if (settleChecks(entry)) persistTriggerState(entry.home, entry.def.id, entry.state)
   }
 
   /** walnut-trigger clock (Main): a tick that starts a check while the daemon exits would outlive it, so stopTriggers ends it. */

@@ -276,8 +276,10 @@ describe.skipIf(!BUN)('latest trigger check replayed on the real standalone daem
     expect(stateOf(T_DIES).lastCheck).toMatchObject({ outcome: 'quiet', atMs: healed.atMs, consecutiveErrors: 0 })
     const mark = s.events.length
     expect(await s.cmd({ cmd: 'triggers.configure', probe: true, hash: 'ph-1', home: HOME, replayChecks: true })).toMatchObject({ ok: true, held: true })
-    const r = await waitFor(() => s.events.slice(mark).find((e) => e.ev === 'trigger.checked' && e.id === T_DIES && e.replay === true), 2_000, 'the replayed check')
-    expect(r.atMs).toBeGreaterThanOrEqual(healed.atMs)
+    // Reports no server is known to have read yet go first, oldest first (trigger-unsent-checks.ts); the latest comes last.
+    const replayed = () => s.events.slice(mark).filter((e) => e.ev === 'trigger.checked' && e.id === T_DIES && e.replay === true)
+    const r = await waitFor(() => replayed().find((e) => e.atMs >= healed.atMs), 2_000, 'the replayed check')
+    expect(replayed().at(-1)!.atMs, 'the latest goes last').toBe(r.atMs)
     expect(r.outcome).toBe('quiet')
   }, 90_000)
 

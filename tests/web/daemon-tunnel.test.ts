@@ -329,6 +329,9 @@ describe('an open tunnel', () => {
   let streamer: WebSocketServer
   /** The 'manual' tunnel's heartbeat, run by the test. */
   let manualBeat: (() => void) | null = null
+  /** A daemon that pings the Mac as the real one's keepalive does; the pongs it got, by payload. */
+  let pinger: WebSocketServer
+  const pongs: string[] = []
 
   beforeAll(async () => {
     // The "daemon": echoes every frame, the way a reply comes back on the real one.
@@ -344,6 +347,13 @@ describe('an open tunnel', () => {
     })
     await new Promise<void>((resolve) => streamer.once('listening', () => resolve()))
     DEPS.streaming = { heartbeatMs: 200, ensureDaemon: async () => `ws://127.0.0.1:${(streamer.address() as { port: number }).port}` }
+    pinger = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: false })
+    pinger.on('connection', (s) => {
+      s.on('pong', (d) => pongs.push(d.toString()))
+      setTimeout(() => { try { s.ping('1795635000000') } catch { /* closed */ } }, 100)
+    })
+    await new Promise<void>((resolve) => pinger.once('listening', () => resolve()))
+    DEPS.pinged = { heartbeatMs: 60_000, ensureDaemon: async () => `ws://127.0.0.1:${(pinger.address() as { port: number }).port}` }
     server = http.createServer()
     server.on('upgrade', (req, socket, head) => {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? ''
@@ -364,6 +374,24 @@ describe('an open tunnel', () => {
     await new Promise<void>((resolve) => daemon.close(() => resolve()))
     for (const c of streamer.clients) c.terminate()
     await new Promise<void>((resolve) => streamer.close(() => resolve()))
+    for (const c of pinger.clients) c.terminate()
+    await new Promise<void>((resolve) => pinger.close(() => resolve()))
+  })
+
+  // The daemon's pong is how it knows a check report was read (trigger-unsent-checks.ts): only the
+  // Mac may give it. 2026-11-25: a sleeping Mac's open socket took reports that were never read.
+  it("the daemon's ping goes on to the Mac, and only the Mac's pong comes back to it", async () => {
+    pongs.length = 0
+    const awake = await open('pinged')
+    try {
+      await vi.waitFor(() => expect(pongs, 'the Mac answered the ping, with its payload').toEqual(['1795635000000']), { timeout: 3_000 })
+    } finally { awake.terminate() }
+    pongs.length = 0
+    const asleep = await open('pinged', { autoPong: false })
+    try {
+      await new Promise((r) => setTimeout(r, 500)) // the ping went out at 100 ms: nothing answers it
+      expect(pongs, 'a Mac that reads nothing answers nothing, and the relay does not answer for it').toEqual([])
+    } finally { asleep.terminate() }
   })
 
   async function open(token: string, opts: { autoPong?: boolean } = {}): Promise<WebSocket> {

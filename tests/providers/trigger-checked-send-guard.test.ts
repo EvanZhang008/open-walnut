@@ -1,11 +1,14 @@
 /**
- * Guard: a daemon's check report is never dropped on the floor. `sendTriggerEvent` returns whether
- * any server of the trigger's Walnut took the event; a `trigger.checked` send that ignores it loses
- * the check when no server is there (2026-11-25: a clouddev trigger's checks from 05:09 to 08:40Z
- * while the Mac slept, a four-hour hole in its record). `reportCheck` (daemon-trigger-runs.ts) is
- * the one send path: it keeps a check no server took for the next configure
- * (trigger-unsent-checks.ts). Any other `trigger.checked` send in src/providers/daemon-trigger-*.ts
- * must use the return value (or, better, go through reportCheck).
+ * Guard: a daemon's check report is never dropped on the floor. A report on the wire is not a report
+ * read: it is kept in the trigger's file until a socket it went on answers a later ping
+ * (trigger-unsent-checks.ts settleChecksOnWire), and `sendCheck` (daemon-trigger-store.ts) is what
+ * marks it so. Every `trigger.checked` send in src/providers/daemon-trigger-*.ts goes through
+ * sendCheck (reportCheck in daemon-trigger-runs.ts and the configure replay both do).
+ *
+ * 2026-11-25: a clouddev trigger's checks from 05:09 to 08:40Z were dropped while the Mac slept (no
+ * server took them). Then 18:12 to 19:25Z, with the Mac's lid shut, checks sent into a socket left
+ * open but silent after a dark wake, and the configure replay of 19:22:07 ten seconds before the Mac
+ * slept again, were all lost: each was counted as taken because the send itself succeeded.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -14,10 +17,11 @@ import ts from 'typescript'
 
 const ROOT = path.resolve(__dirname, '../..')
 const DIR = path.join(ROOT, 'src/providers')
-/** The function allowed to send without reading every return: it reads the one that decides. */
-const ALLOWED_FN = 'reportCheck'
+/** The one function a check report may go on the wire from: the one that marks it. */
+const ALLOWED_FNS = new Set(['sendCheck'])
+const SENDERS = new Set(['sendTriggerEvent', 'sendTriggerEventTo', 'sendEvent'])
 
-interface Send { line: number; fn: string | undefined; ignored: boolean }
+interface Send { line: number; fn: string | undefined }
 
 function nameOf(node: ts.Node): string | undefined {
   if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node)) && node.name) return node.name.getText()
@@ -37,25 +41,14 @@ function enclosingFn(node: ts.Node): string | undefined {
   return undefined
 }
 
-/** Whether the call's value goes nowhere: a statement of its own, `void`, or the left of a comma. */
-function valueIgnored(call: ts.CallExpression): boolean {
-  let n: ts.Node = call
-  while (ts.isParenthesizedExpression(n.parent)) n = n.parent
-  const p = n.parent
-  if (ts.isExpressionStatement(p) || ts.isVoidExpression(p)) return true
-  if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.CommaToken && p.left === n) return true
-  return false
-}
-
-/** Every `sendTriggerEvent(_, 'trigger.checked', ...)` in `source`. */
+/** Every send of a `trigger.checked` event in `source`, by any of the runtime's send functions. */
 function checkedSends(source: string, file = 'x.ts'): Send[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const out: Send[] = []
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'sendTriggerEvent') {
-      const ev = node.arguments[1]
-      if (ev && ts.isStringLiteralLike(ev) && ev.text === 'trigger.checked') {
-        out.push({ line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1, fn: enclosingFn(node), ignored: valueIgnored(node) })
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && SENDERS.has(node.expression.text)) {
+      if (node.arguments.some((a) => ts.isStringLiteralLike(a) && a.text === 'trigger.checked')) {
+        out.push({ line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1, fn: enclosingFn(node) })
       }
     }
     ts.forEachChild(node, visit)
@@ -64,50 +57,39 @@ function checkedSends(source: string, file = 'x.ts'): Send[] {
   return out
 }
 
-/** The sends that would drop a check: their value ignored, outside reportCheck. */
+/** The sends that would lose a check: outside sendCheck. */
 function droppingSends(source: string, file = 'x.ts'): Send[] {
-  return checkedSends(source, file).filter((s) => s.ignored && s.fn !== ALLOWED_FN)
+  return checkedSends(source, file).filter((s) => !ALLOWED_FNS.has(s.fn ?? ''))
 }
 
 const files = fs.readdirSync(DIR).filter((f) => /^daemon-trigger-.*\.ts$/.test(f)).map((f) => path.join(DIR, f))
 
-describe('every trigger.checked send reads whether a server took it', () => {
-  it('finds the daemon trigger files and the sends in reportCheck (the scan still sees them)', () => {
-    expect(files.map((f) => path.basename(f))).toContain('daemon-trigger-runs.ts')
-    const runs = checkedSends(fs.readFileSync(path.join(DIR, 'daemon-trigger-runs.ts'), 'utf8'))
-    expect(runs.length).toBeGreaterThan(0)
-    expect(runs.filter((s) => s.fn === ALLOWED_FN && !s.ignored).length, 'reportCheck reads the return of the send that decides').toBeGreaterThan(0)
+describe('every trigger.checked send is kept until a server read it', () => {
+  it('finds the daemon trigger files and the send in sendCheck (the scan still sees it)', () => {
+    expect(files.map((f) => path.basename(f))).toEqual(expect.arrayContaining(['daemon-trigger-runs.ts', 'daemon-trigger-store.ts', 'daemon-trigger-set.ts']))
+    const store = checkedSends(fs.readFileSync(path.join(DIR, 'daemon-trigger-store.ts'), 'utf8'))
+    expect(store.filter((s) => s.fn === 'sendCheck').length).toBeGreaterThan(0)
   })
 
-  it('no send in src/providers/daemon-trigger-*.ts ignores its return outside reportCheck', () => {
+  it('no trigger.checked send in src/providers/daemon-trigger-*.ts goes around sendCheck', () => {
     const bad = files.flatMap((f) => droppingSends(fs.readFileSync(f, 'utf8'), f).map((s) => `${path.relative(ROOT, f)}:${s.line} (in ${s.fn ?? 'top level'})`))
-    expect(bad, 'send the check through reportCheck (daemon-trigger-runs.ts), which keeps one no server took').toEqual([])
+    expect(bad, 'send a check report with sendCheck (daemon-trigger-store.ts), which keeps it until a server read it').toEqual([])
   })
 
-  it('the scan flags a send that drops its result (synthetic samples)', () => {
+  it('the scan flags a send around sendCheck (synthetic samples)', () => {
     const sample = [
       "function runTrigger(entry) {",
       "  sendTriggerEvent(entry.home, 'trigger.checked', { ...entry.state.lastCheck })",
       "}",
       "const replayAll = (entry) => { void sendTriggerEvent(entry.home, \"trigger.checked\", {}) }",
-      "function both(entry) { (sendTriggerEvent(entry.home, `trigger.checked`, {})), keep() }",
-      "function inLoop(list) { for (const c of list) sendTriggerEvent(c.home, 'trigger.checked', c) }",
-    ].join('\n')
-    expect(droppingSends(sample).map((s) => [s.line, s.fn])).toEqual([
-      [2, 'runTrigger'], [4, 'replayAll'], [5, 'both'], [6, 'inLoop'],
-    ])
-  })
-
-  it('the scan passes a send whose result is read, one in reportCheck, and other events', () => {
-    const sample = [
+      "function configure(ws, c) { sendEvent(ws, `trigger.checked`, { ...c, replay: true }) }",
       "function a(e) { if (!sendTriggerEvent(e.home, 'trigger.checked', {})) keepUnsentCheck(e.state, e.state.lastCheck) }",
-      "function b(e) { const took = sendTriggerEvent(e.home, 'trigger.checked', {}); return took }",
-      "function c(e) { return sendTriggerEvent(e.home, 'trigger.checked', {}) || keep() }",
+      "function sendCheck(e, f) { return sendTriggerEventTo(e.home, 'trigger.checked', f) }",
       "function reportCheck(e) { for (const k of e.kept) sendTriggerEvent(e.home, 'trigger.checked', k) }",
       "function d(e) { sendTriggerEvent(e.home, 'trigger.fired', {}) }",
       "function f(e) { other.sendTriggerEvent(e.home, 'trigger.checked', {}) }",
     ].join('\n')
-    expect(checkedSends(sample).length).toBe(4)
-    expect(droppingSends(sample)).toEqual([])
+    expect(checkedSends(sample).length).toBe(6)
+    expect(droppingSends(sample).map((s) => s.fn)).toEqual(['runTrigger', 'replayAll', 'configure', 'a', 'reportCheck'])
   })
 })

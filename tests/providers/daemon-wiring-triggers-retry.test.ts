@@ -139,7 +139,9 @@ describe('walnut-trigger', () => {
   // server whose fresh socket arrived while the old one was still draining) never
   // saw it. The fan-out is safe because the server dedups on (id, epoch, seq).
   it('daemon: fan trigger events out to every trusted client, never to the bridge', () => {
-    const start = standaloneSrc.indexOf('function sendTriggerEvent(')
+    // sendTriggerEvent says whether any took it; sendTriggerEventTo (which it calls) names the sockets.
+    expect(standaloneSrc).toMatch(/function sendTriggerEvent\([^)]*\)[^{]*\{\s*return sendTriggerEventTo\(/)
+    const start = standaloneSrc.indexOf('function sendTriggerEventTo(')
     expect(start).toBeGreaterThan(-1)
     const body = standaloneSrc.slice(start, standaloneSrc.indexOf('\n}', start))
     // A server client is neither the bridge nor a host server (a follower).
@@ -149,8 +151,8 @@ describe('walnut-trigger', () => {
     expect(isServer).toMatch(/origin !== 'follower'/)
     expect(isServer).toMatch(/origin !== 'lane'/)
     expect(body).toMatch(/sendEvent\(client, ev, fields\)/)
-    expect(body).toMatch(/delivered = true/)
-    expect(body).toMatch(/return delivered/)
+    expect(body).toMatch(/to\.push\(client\)/)
+    expect(body).toMatch(/return to\b/)
     expect(body, 'returning inside the client loop stops the fan-out').not.toMatch(/\n\s+return true/)
   })
 

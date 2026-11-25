@@ -12,7 +12,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { TriggerHold, createOfflineHostCore } from './offline-host-core.js'
 import type { TriggerDef, TriggerHostState } from './trigger-check-core.js'
-import { takeUnsentChecks } from './trigger-unsent-checks.js'
 import type { ClockReport } from './trigger-clock-core.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { ArmedTrigger, TriggerSocket, createDaemonTriggerStore } from './daemon-trigger-store.js'
@@ -37,7 +36,7 @@ export interface DaemonTriggerSetDeps<W extends TriggerSocket> extends DaemonRep
 export function createDaemonTriggerSet<W extends TriggerSocket>(deps: DaemonTriggerSetDeps<W>) {
   const { triggerStore, triggerRuns, offlineHost, walnutScope, gatewayClientHomes, sendEvent, logMsg, sendOk, sendError } = deps
   const { triggersSetHash, validateTriggerDef, validateTriggerSet, applyTriggersDelta } = deps.judge
-  const { TRIGGERS_BASE_DIR, TRIGGERS_FILE, TRIGGER_STATE_DIR, TRIGGER_TICK_MS, armedTriggers, drainingTriggers, triggerScopes, triggersConfigureGate, triggerKey, heldTrigger, fireHolders, triggerScopeOf, triggerStatePath, mtimeOf, readTriggerState, persistTriggerState, pruneTriggerStateFiles, persistTriggersFile, sendTriggerFire, canonicalTriggerDef, triggerOwnerOf } = triggerStore
+  const { TRIGGERS_BASE_DIR, TRIGGERS_FILE, TRIGGER_STATE_DIR, TRIGGER_TICK_MS, armedTriggers, drainingTriggers, triggerScopes, triggersConfigureGate, triggerKey, heldTrigger, fireHolders, triggerScopeOf, triggerStatePath, mtimeOf, readTriggerState, persistTriggerState, pruneTriggerStateFiles, persistTriggersFile, sendTriggerFire, sendCheck, canonicalTriggerDef, triggerOwnerOf } = triggerStore
   const { newArmedTrigger, armClock } = triggerRuns
 
   // A newly armed trigger waits before its first run: configure arrives in a burst
@@ -401,18 +400,20 @@ export function createDaemonTriggerSet<W extends TriggerSocket>(deps: DaemonTrig
     // A quiet host kept checking too. Only a server that dedups checked replays asks for them.
     if (cmd.replayChecks === true) {
       for (const entry of armedOf(home)) {
-        // The checks it ran with no server here go first, oldest first: the record keeps each one, and
-        // takes only what is newer than what it holds (trigger-unsent-checks.ts).
-        const unsent = takeUnsentChecks(entry.state).filter((c) => c.id === entry.def.id)
-        for (const c of unsent) sendEvent(ws, 'trigger.checked', { ...c, replay: true })
-        if (unsent.length) persistTriggerState(entry.home, entry.def.id, entry.state)
+        // The checks no server is known to have read go first, oldest first: the record keeps each one,
+        // and takes only what is newer than what it holds. Each stays kept until this socket is heard a
+        // beat later (trigger-unsent-checks.ts): a Mac that sleeps again right after it connected read none.
         const checked = entry.state.lastCheck
+        const sentAt = Date.now()
+        for (const c of entry.state.unsentChecks ?? []) {
+          if (c.id === entry.def.id && c.atMs !== checked?.atMs) sendCheck(entry, { ...c, replay: true }, sentAt, ws)
+        }
         if (entry.def.check && checked?.id === entry.def.id) {
           // A failed offline check gets another chance within this interval, not the outage's backoff.
           if (checked.outcome === 'error' && !entry.running) {
             entry.nextRunAtMs = Math.min(entry.nextRunAtMs, now + Math.min(TRIGGER_FIRST_RUN_DELAY_MS, entry.def.everyMs - TRIGGER_TICK_MS))
           }
-          sendEvent(ws, 'trigger.checked', { ...checked, nextRunAtMs: entry.nextRunAtMs, replay: true })
+          sendCheck(entry, { ...checked, nextRunAtMs: entry.nextRunAtMs, replay: true }, sentAt, ws)
         }
       }
     }

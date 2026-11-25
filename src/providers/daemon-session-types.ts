@@ -206,6 +206,11 @@ export interface WsData {
   bridgeHome?: string
   /** When this socket last sent anything (a frame, a ping, a pong). See heardFrom. */
   lastHeardAt?: number
+  /**
+   * When the newest daemon ping this socket answered was sent: every frame sent to it before then has
+   * been read (one stream, in order). What proves a check report read (trigger-unsent-checks.ts).
+   */
+  readThroughAt?: number
   /** When this socket was last told the companion leads its Walnut (see heardFrom). */
   leaderNudgedAt?: number
   /** Keepalive beats in a row this trusted socket stayed silent (0 once heard again). */

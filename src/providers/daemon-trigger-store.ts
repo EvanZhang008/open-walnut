@@ -10,13 +10,14 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import type { PendingFire, TriggerDef, TriggerHostState } from './trigger-check-core.js'
+import type { PendingFire, TriggerCheckedEvent, TriggerDef, TriggerHostState } from './trigger-check-core.js'
+import { checksToResend, settleChecksOnWire, type CheckOnWire, type CheckWireView } from './trigger-unsent-checks.js'
 import { DaemonSessionGate } from './daemon-cron-runtime.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { DaemonEnv, DaemonLog, DaemonSendEvent, HostTriggerJudge } from './daemon-module-deps.js'
 
 /** The runtime's socket as the triggers see it: the Walnut it configured triggers for. */
-export interface TriggerSocket { data?: { triggerScope?: string } }
+export interface TriggerSocket { data?: { triggerScope?: string; readThroughAt?: number } }
 
 export interface ArmedTrigger {
   /** The Walnut whose set holds it ('' = a push that named none). */
@@ -31,6 +32,8 @@ export interface ArmedTrigger {
    * exactly what at-least-once wants.
    */
   fireSentAt: Map<number, number>
+  /** Each kept check report on the wire, by its time (trigger-unsent-checks.ts). In-memory only, as fireSentAt. */
+  checksOnWire?: Map<number, CheckOnWire>
   /** When this daemon armed it: fires left from before give the server a fresh grace. */
   armedAtMs: number
 }
@@ -367,15 +370,52 @@ export function createDaemonTriggerStore<W extends TriggerSocket>(deps: DaemonTr
    * Walnut's. Returns whether anyone received it.
    */
   function sendTriggerEvent(home: string, ev: 'trigger.fired' | 'trigger.checked', fields: Record<string, unknown>): boolean {
+    return sendTriggerEventTo(home, ev, fields).length > 0
+  }
+
+  /** The same, naming the sockets it went on. */
+  function sendTriggerEventTo(home: string, ev: 'trigger.fired' | 'trigger.checked', fields: Record<string, unknown>): W[] {
     const everyone = !home && triggerScopes.get('')?.inherited === true
-    let delivered = false
+    const to: W[] = []
     for (const client of wsClients) {
       if (isServerClient(client) && (everyone || triggerClientOf(client, home))) {
         sendEvent(client, ev, fields)
-        delivered = true
+        to.push(client)
       }
     }
-    return delivered
+    return to
+  }
+
+  const checkWire: CheckWireView = {
+    open: (ws) => wsClients.has(ws as W),
+    readThrough: (ws) => (ws as W).data?.readThroughAt,
+  }
+
+  /**
+   * A check report on the wire: kept until a socket it went on answers a later ping, then dropped
+   * (settleChecks); `to` none = no server took it, kept to send again. `ws`: to that socket only (a
+   * configure's replay), else to every server of the trigger's Walnut. A report already on other open
+   * sockets stays on them too, from this send on.
+   */
+  function sendCheck(entry: ArmedTrigger, fields: Record<string, unknown> & { atMs: number }, now: number, ws?: W): W[] {
+    let to: W[]
+    if (ws) { sendEvent(ws, 'trigger.checked', fields); to = [ws] }
+    else to = sendTriggerEventTo(entry.home, 'trigger.checked', fields)
+    if (!to.length) return to
+    const wire = (entry.checksOnWire ??= new Map())
+    const before = wire.get(fields.atMs)?.to.filter((s: object) => checkWire.open(s) && !to.includes(s as W)) ?? []
+    wire.set(fields.atMs, { sentAt: now, to: [...before, ...to] })
+    return to
+  }
+
+  /** Drop the kept reports a server read; true when the kept list changed (the caller persists it). */
+  function settleChecks(entry: ArmedTrigger): boolean {
+    return entry.checksOnWire ? settleChecksOnWire(entry.state, entry.checksOnWire, checkWire) : false
+  }
+
+  /** The kept reports on no open socket, oldest first, but the latest (`except`), which goes on its own. */
+  function checksToSendAgain(entry: ArmedTrigger, except?: number): TriggerCheckedEvent[] {
+    return checksToResend(entry.state, entry.checksOnWire ?? new Map(), checkWire, except)
   }
 
   /**
@@ -426,6 +466,6 @@ export function createDaemonTriggerStore<W extends TriggerSocket>(deps: DaemonTr
     armedTriggers, drainingTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerScopes, triggersConfigureGate,
     triggerKey, heldTrigger, triggerFor, fireHolders, triggerScopeOf,
     triggerStateDirOf, triggerStatePath, mtimeOf, readTriggerState, persistTriggerState, pruneTriggerStateFiles, persistTriggersFile,
-    sendTriggerEvent, sendTriggerFire, canonicalTriggerDef, triggerOwnerOf,
+    sendTriggerEvent, sendTriggerFire, sendCheck, settleChecks, checksToSendAgain, canonicalTriggerDef, triggerOwnerOf,
   }
 }

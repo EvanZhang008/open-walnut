@@ -1178,9 +1178,11 @@ const wsClients = new Set<ServerWebSocket<WsData>>()
 // (sub-second beats); production leaves it unset. Parsed once, here, with the
 // floor every daemon timer knob has (envTimerMs).
 const TRUSTED_CLIENT_BEAT_MS = envTimerMs(daemonEnv.WALNUT_TRUSTED_CLIENT_BEAT_MS, 15_000, 100)
-function heardFrom(ws: ServerWebSocket<WsData>): void {
+function heardFrom(ws: ServerWebSocket<WsData>, readThrough?: number): void {
   const wasSilent = (ws.data?.missedBeats ?? 0) > 0
   if (ws.data) { ws.data.lastHeardAt = Date.now(); ws.data.missedBeats = 0 }
+  // A pong to a keepalive ping (its payload: when that ping was sent): it read all sent before then.
+  if (ws.data && readThrough !== undefined && Number.isFinite(readThrough) && readThrough > (ws.data.readThroughAt ?? 0)) ws.data.readThroughAt = readThrough
   if (!isServerClient(ws)) return
   // A trusted socket tagged with a Walnut's home is that Walnut's primary: this
   // host is a witness of whether it is still there (leader-core.ts).
@@ -6509,7 +6511,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
       heardFrom(ws)
       handleCommand(ws, text)
     },
-    heard: (ws) => heardFrom(ws),
+    heard: (ws, pong) => heardFrom(ws, pong && pong.length ? Number(Buffer.from(pong).toString()) : undefined),
     // Socket buffer drained: flush what Bun dropped (send() === 0) while saturated (safeSend/enqueueForDrain).
     drain: (ws) => flushSendQueue(ws),
     close: (ws) => handleDisconnect(ws),
@@ -6546,7 +6548,8 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     for (const ws of wsClients) {
       if (ws.data?.origin === 'bridge') continue
       if (clientKeepaliveExpired(ws)) continue
-      try { ws.ping() } catch {}
+      // Its send time rides the ping, so the pong says how far the socket has read (readThroughAt).
+      try { ws.ping(String(Date.now())) } catch {}
     }
   }, TRUSTED_CLIENT_BEAT_MS).unref?.()
 
@@ -6831,7 +6834,7 @@ function openInProcessClient(onFrame: (frame: DaemonFrame) => void, onClose?: ()
     direct: { has: (cmd) => answerFnOf(cmd) !== null, call: (socket, frame) => callCommand(socket, frame) },
     register: (socket) => { wsClients.add(socket); inProcessClients.add(socket) },
     unregister: (socket) => { inProcessClients.delete(socket); handleDisconnect(socket) },
-    heardFrom: (socket) => heardFrom(socket),
+    heardFrom: (socket, readThrough) => heardFrom(socket, readThrough),
     warn: (msg, data) => logMsg('warn', msg, data),
     checkFrames: daemonEnv.WALNUT_IN_PROCESS_FRAME_CHECK === '1',
   }, onFrame, onClose)

@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  UNSENT_CHECKS_MAX, keepUnsentCheck, takeUnsentChecks,
+  UNSENT_CHECKS_MAX, checksToResend, keepUnsentCheck, settleChecksOnWire, type CheckOnWire,
 } from '../../src/providers/trigger-unsent-checks.js'
 import { coerceHostState, coerceUnsentChecks, emptyHostState, type TriggerCheckedEvent, type TriggerHostState } from '../../src/providers/trigger-check-core.js'
 
@@ -55,15 +55,60 @@ describe('keepUnsentCheck', () => {
   })
 })
 
-describe('takeUnsentChecks', () => {
-  it('hands the kept reports on oldest first and empties the list', () => {
+describe('settleChecksOnWire: a report on the wire is kept until a server read it', () => {
+  // 2026-11-25 19:22:07Z: the Mac connected in a dark wake, took the configure replay, was last
+  // heard 1 s later and slept again; its socket closed silent at 19:24:17. Nothing of it was read.
+  // Read = the socket answered a daemon ping sent at or after the report (readThrough).
+  const sock = (name: string) => ({ name })
+  const setup = () => {
     const s = fresh()
-    keepUnsentCheck(s, check(T0 + HALF_HOUR))
-    keepUnsentCheck(s, check(T0))
-    expect(times(takeUnsentChecks(s))).toEqual([T0, T0 + HALF_HOUR])
+    for (let i = 0; i < 3; i++) keepUnsentCheck(s, check(T0 + i * HALF_HOUR))
+    return s
+  }
+
+  it('answered a ping sent after the report: read, dropped from the kept list and from the wire', () => {
+    const s = setup(); const a = sock('a'); const sentAt = T0 + 3 * HALF_HOUR
+    const wire = new Map<number, CheckOnWire>(times(s.unsentChecks).map((t) => [t, { sentAt, to: [a] }]))
+    expect(settleChecksOnWire(s, wire, { open: () => true, readThrough: () => sentAt + 1 })).toBe(true)
     expect(s.unsentChecks).toBeUndefined()
-    expect('unsentChecks' in s).toBe(false)
-    expect(takeUnsentChecks(s)).toEqual([])
+    expect(wire.size).toBe(0)
+  })
+
+  it('its newest answered ping was sent before the report (heard, but by its own ping or an older pong): still kept', () => {
+    const s = setup(); const a = sock('a'); const sentAt = T0 + 3 * HALF_HOUR
+    const wire = new Map<number, CheckOnWire>(times(s.unsentChecks).map((t) => [t, { sentAt, to: [a] }]))
+    expect(settleChecksOnWire(s, wire, { open: () => true, readThrough: () => sentAt - 1 })).toBe(false)
+    expect(times(s.unsentChecks)).toEqual([T0, T0 + HALF_HOUR, T0 + 2 * HALF_HOUR])
+    expect(wire.size).toBe(3)
+  })
+
+  it('its socket closed unanswered: kept, the mark goes, so it is sent again', () => {
+    const s = setup(); const a = sock('a'); const sentAt = T0 + 3 * HALF_HOUR
+    const wire = new Map<number, CheckOnWire>([[T0, { sentAt, to: [a] }]])
+    expect(settleChecksOnWire(s, wire, { open: () => false, readThrough: () => sentAt + 60_000 })).toBe(false)
+    expect(wire.size).toBe(0)
+    expect(times(checksToResend(s, wire, { open: () => false }))).toEqual([T0, T0 + HALF_HOUR, T0 + 2 * HALF_HOUR])
+  })
+
+  it('sent to two servers: read when either open one answered a later ping; only the reports read go', () => {
+    const s = setup(); const a = sock('a'); const b = sock('b'); const sentAt = T0 + 3 * HALF_HOUR
+    const wire = new Map<number, CheckOnWire>([[T0, { sentAt, to: [a, b] }], [T0 + HALF_HOUR, { sentAt, to: [a] }]])
+    const heard = new Map<object, number>([[a, sentAt - 2_000], [b, sentAt]])
+    expect(settleChecksOnWire(s, wire, { open: () => true, readThrough: (ws) => heard.get(ws) })).toBe(true)
+    expect(times(s.unsentChecks)).toEqual([T0 + HALF_HOUR, T0 + 2 * HALF_HOUR])
+    expect([...wire.keys()]).toEqual([T0 + HALF_HOUR])
+  })
+})
+
+describe('checksToResend', () => {
+  it('the kept reports on no open socket, oldest first, but the latest', () => {
+    const s = fresh()
+    for (let i = 0; i < 4; i++) keepUnsentCheck(s, check(T0 + i * HALF_HOUR))
+    const live = { name: 'live' }; const gone = { name: 'gone' }
+    const wire = new Map<number, CheckOnWire>([[T0, { sentAt: T0, to: [live] }], [T0 + HALF_HOUR, { sentAt: T0, to: [gone] }]])
+    const open = (ws: object) => ws === live
+    expect(times(checksToResend(s, wire, { open }, T0 + 3 * HALF_HOUR))).toEqual([T0 + HALF_HOUR, T0 + 2 * HALF_HOUR])
+    expect(checksToResend(fresh(), wire, { open })).toEqual([])
   })
 })
 

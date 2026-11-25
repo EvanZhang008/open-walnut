@@ -12,8 +12,8 @@
 export interface DoorHandlers<W> {
   open(ws: W): void
   message(ws: W, text: string): void
-  /** Any frame back (ping, pong) is proof of life. */
-  heard(ws: W): void
+  /** Any frame back (ping, pong) is proof of life; a pong carries back the payload of the ping it answers. */
+  heard(ws: W, pong?: Uint8Array): void
   /** The socket's buffer drained: send what waited. */
   drain(ws: W): void
   close(ws: W): void
@@ -37,7 +37,7 @@ interface BunServeOptions<W> {
     open(ws: W): void
     message(ws: W, msg: string | Uint8Array): void
     ping(ws: W): void
-    pong(ws: W): void
+    pong(ws: W, data: Uint8Array): void
     drain(ws: W): void
     close(ws: W): void
   }
@@ -59,7 +59,7 @@ export function openDaemonDoor<W>(handlers: DoorHandlers<W>, data: () => unknown
       open: (ws) => handlers.open(ws),
       message: (ws, msg) => handlers.message(ws, typeof msg === 'string' ? msg : Buffer.from(msg).toString()),
       ping: (ws) => handlers.heard(ws),
-      pong: (ws) => handlers.heard(ws),
+      pong: (ws, data) => handlers.heard(ws, data),
       drain: (ws) => handlers.drain(ws),
       close: (ws) => handlers.close(ws),
     },

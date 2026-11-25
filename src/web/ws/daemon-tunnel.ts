@@ -97,7 +97,10 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
 
 function openLoopback(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, { perMessageDeflate: false, maxPayload: MAX_FRAME_BYTES, handshakeTimeout: LOOPBACK_OPEN_DEADLINE_MS })
+    // autoPong off: the daemon's pings go on to the Mac and only the Mac's pong answers one, so a pong
+    // says the Mac read what came before it (a check report's read proof: trigger-unsent-checks.ts),
+    // not that this relay did.
+    const ws = new WebSocket(url, { perMessageDeflate: false, maxPayload: MAX_FRAME_BYTES, handshakeTimeout: LOOPBACK_OPEN_DEADLINE_MS, autoPong: false })
     ws.once('open', () => resolve(ws))
     ws.once('error', (err) => reject(err))
   })
@@ -231,6 +234,21 @@ export async function handleDaemonTunnelUpgrade(
       ws.on('message', (data, isBinary) => { if (daemon.readyState === WebSocket.OPEN) daemon.send(data, { binary: isBinary }) })
       ws.on('ping', (data) => { if (daemon.readyState === WebSocket.OPEN) daemon.ping(data) })
       daemon.on('pong', (data) => { if (ws.readyState === WebSocket.OPEN) ws.pong(data) })
+      // And the other way: the daemon's pings to the Mac, and the Mac's answers to those (not to this
+      // relay's own heartbeat) back to the daemon. A few in flight at most: the daemon pings once a beat.
+      const daemonPings: string[] = []
+      daemon.on('ping', (data) => {
+        if (ws.readyState !== WebSocket.OPEN) return
+        daemonPings.push(data.toString('latin1'))
+        if (daemonPings.length > 16) daemonPings.shift()
+        try { ws.ping(data) } catch { /* closing */ }
+      })
+      ws.on('pong', (data) => {
+        const at = daemonPings.indexOf(data.toString('latin1'))
+        if (at < 0) return
+        daemonPings.splice(0, at + 1)
+        if (daemon.readyState === WebSocket.OPEN) daemon.pong(data)
+      })
 
       // The Mac is alive while it makes PROGRESS: a pong, any byte from it (its
       // own pings, on the bulk tunnel too, and its commands), or data of ours
