@@ -12,7 +12,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-thread-carded'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { cardedNow, cardsWritten, CARDS_WAIT_MAX_MS, noteCarded, queueCardWrite, resetCarded } from '../../../src/core/sessions/status-thread-carded.js'
+import { cardedNow, cardsWritten, CARD_WRITE_HOLD_MS, CARDS_WAIT_MAX_MS, noteCarded, queueCardWrite, resetCarded } from '../../../src/core/sessions/status-thread-carded.js'
 import { threadQuestionFor } from '../../../src/core/sessions/status-threads.js'
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
@@ -141,6 +141,19 @@ describe('the question waits for the turn\'s card write', () => {
     await queueCardWrite(SID, async () => { ran = true })
     expect(ran).toBe(true)
     expect(await cardsWritten(SID, 5)).toBe(true)
+  })
+
+  // Review 2026-11-25: one hung write held every later write of its session, with no bound.
+  it('a write that hangs holds the next one at most its bound (the question\'s own wait), then the next one runs', async () => {
+    expect(CARD_WRITE_HOLD_MS).toBe(CARDS_WAIT_MAX_MS)
+    let finish = () => {}
+    void queueCardWrite(SID, () => new Promise<void>((r) => { finish = r }), 60)
+    let ran = false
+    const next = queueCardWrite(SID, async () => { ran = true })
+    await Promise.race([next, later(3_000)])
+    expect(ran).toBe(true)
+    expect(await cardsWritten(SID, 5)).toBe(true)
+    finish()
   })
 
   it('no write, another session\'s write, or no session named: no wait', async () => {

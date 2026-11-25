@@ -25,10 +25,18 @@ export function noteLineAsks(taskId: string, dropped: readonly string[], written
   if (asked.size > TASKS_MAX) asked.delete(asked.keys().next().value!);
 }
 
-/** The task's threads whose last line asked him and was dropped, newer than NAMED_MS. */
-export function linesThatAsked(taskId: string, now = Date.now()): Set<string> {
+/**
+ * The task's threads whose last line asked him and was dropped, newer than NAMED_MS. `threads`: the
+ * task's threads as read now; a mark of one closed, moved or gone since is forgotten (review
+ * 2026-11-25: a mark nothing cleared was asked about at every reminder for a day).
+ */
+export function linesThatAsked(taskId: string, now = Date.now(), threads?: ReadonlyArray<{ id: string; closed?: unknown; movedTo?: unknown }>): Set<string> {
   const cur = asked.get(taskId);
-  return new Set([...(cur ?? new Map<string, number>())].filter(([, at]) => now - at <= NAMED_MS).map(([id]) => id));
+  if (cur && threads) {
+    const open = new Set(threads.filter((t) => !t.closed && !t.movedTo).map((t) => t.id));
+    noteLineAsks(taskId, [], [...cur.keys()].filter((id) => !open.has(id)), now);
+  }
+  return new Set([...(asked.get(taskId) ?? new Map<string, number>())].filter(([, at]) => now - at <= NAMED_MS).map(([id]) => id));
 }
 
 /** The mark beside such a thread in the question. */

@@ -184,8 +184,8 @@ async function saveTaskReport(
   let parsed = reportOfChange(raw, by, known && by !== 'self' ? known.title : undefined, nowMs);
   if (parsed.same_as) {
     const { listTasks } = await import('../task-manager.js');
-    const { bindDecisionOwner } = await import('../decision-owner.js');
-    const bound = bindDecisionOwner(task, parsed, await listTasks());
+    const { bindDecisionOwnerNow } = await import('../decision-owner.js');
+    const bound = await bindDecisionOwnerNow(task, parsed, await listTasks());
     if (!bound) throw new ReportChangeError('same_as must name the open task in this team that owns the decision, not another pointer.', 'same_ask', 409);
     parsed = bound;
   }

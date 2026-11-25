@@ -37,7 +37,7 @@ import type { AskOption, StatusReport, UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
 import { openNotWaiting, snoozedNow, type ThreadHeldAsk } from './thread-view.js';
 import type { OrgThread, ThreadsFile } from './threads-model.js';
-import { memoryOf, reportDecision, sameDecisionWords } from '../ask-decision.js';
+import { reportDecision, sameDecisionWords, stampSaidDecision } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
 import { placesAskOnThread } from '../sessions/status-threads.js';
 import { OWN_ASK_FIELDS } from '../sessions/own-ask-write.js';
@@ -241,7 +241,11 @@ export async function askOnNeedsThread(taskId: string, report: StatusReport): Pr
  * applyNeedsCard), and its stored report already asked that decision. The report stops asking it
  * now, not at its next status answer (one may never come), remembering the decision so the same
  * ask later keeps its id; its place goes with it. Its times stay, so the turn's own status answer
- * still replaces it. Never throws; true when the report changed.
+ * still replaces it. Also run right after a status answer is stored (sessions/status-question.ts):
+ * a line written while that answer was on its way (askOnNeedsThread read the threads before it)
+ * meets it there, whichever lands last. Nothing is settled for him here: the decision still waits
+ * on him, on the thread that asks it, so none of his words can go unread (sessions/user-spoke.ts).
+ * Never throws; true when the report changed.
  */
 export async function askNowOnThread(taskId: string): Promise<boolean> {
   if (!(await replyTagOn())) return false;
@@ -253,10 +257,10 @@ export async function askNowOnThread(taskId: string): Promise<boolean> {
     if (!held) return false;
     const was = task.status_report;
     const { changed } = await updateTaskRaw(taskId, (cur) => {
-      // Another report came meanwhile: that one is judged when it is stored.
+      // Another report came meanwhile: that one is judged when it is stored (status-question.ts runs this again then).
       if (cur.phase === 'COMPLETE' || cur.status === 'done' || cur.status_report?.at !== was.at || cur.status_report?.ask !== was.ask) return null;
-      const memory = memoryOf(cur.status_report);
-      return { status_report: { ...withoutOwnAsk(cur.status_report), ...(memory ? { last_ask: memory } : {}) } };
+      // Asking nothing of its own, stamped as every report is (ask-decision.ts): the decision stays as last_ask.
+      return { status_report: stampSaidDecision(withoutOwnAsk(cur.status_report), cur.status_report) };
     }, { emitEvent: true, source: 'status-report' });
     if (!changed) return false;
     log.task.info('reply card lines: the task\'s own ask is the decision the line put up, kept on its thread only', { taskId, threadId: held.id });

@@ -6,6 +6,8 @@
  * thread he wrote in since (a message newer than the one the line saw) is asked again. After a
  * restart nothing is kept and the question asks every thread once more, so nothing is lost.
  */
+import { log } from '../../logging/index.js';
+
 const TASKS_MAX = 500;
 /** Per task: thread id -> its newest message's id ('' for none) that the line saw. */
 const carded = new Map<string, Map<string, string>>();
@@ -45,9 +47,30 @@ const writing = new Map<string, Promise<void>>();
  */
 export const CARDS_WAIT_MAX_MS = 10_000;
 
-/** Run `write` after the session's write still on its way, if any; the question waits for both. Never rejects. */
-export function queueCardWrite(sessionId: string, write: () => Promise<unknown>): Promise<void> {
-  const run: Promise<void> = (writing.get(sessionId) ?? Promise.resolve()).then(write).then(() => {}, () => {});
+/**
+ * The longest one write holds the session's chain: the bound the question waits, so a write the
+ * question no longer waits for holds no later write either (review 2026-11-25: one hung write held
+ * every later turn's lines of that session). It goes on by itself; its lines land when it ends.
+ */
+export const CARD_WRITE_HOLD_MS = CARDS_WAIT_MAX_MS;
+
+/** `write`, done for the chain when it ends or at the bound, whichever is first. Never rejects. */
+function heldAtMost(sessionId: string, write: () => Promise<unknown>, maxMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ran = Promise.resolve().then(write).then(() => {}, () => {});
+  const bound = new Promise<void>((r) => {
+    timer = setTimeout(() => {
+      log.session.warn('reply card lines: a write ran past its bound, the next one goes on', { sessionId, boundMs: maxMs });
+      r();
+    }, maxMs);
+    timer.unref?.();
+  });
+  return Promise.race([ran, bound]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+/** Run `write` after the session's write still on its way, if any (each one held at most CARD_WRITE_HOLD_MS); the question waits for both. Never rejects. */
+export function queueCardWrite(sessionId: string, write: () => Promise<unknown>, holdMs = CARD_WRITE_HOLD_MS): Promise<void> {
+  const run: Promise<void> = (writing.get(sessionId) ?? Promise.resolve()).then(() => heldAtMost(sessionId, write, holdMs));
   writing.delete(sessionId);
   writing.set(sessionId, run);
   if (writing.size > TASKS_MAX) writing.delete(writing.keys().next().value!);

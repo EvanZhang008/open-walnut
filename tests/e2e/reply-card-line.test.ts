@@ -28,6 +28,12 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-reply-card-line'))
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
+// This file plays the session's CLI itself (it takes the queued rows), so the server's runner takes
+// no row here (tests/core/hand-played-cli-guard.test.ts).
+vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/session-message-queue.js')>()
+  return { ...real, markProcessing: (async () => []) as typeof real.markProcessing }
+})
 
 import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
@@ -41,6 +47,7 @@ import { prepareHintedSend } from '../../src/core/hints/hint-send.js'
 import { threadsKeptNow } from '../../src/core/org/threads-kept.js'
 import { replyTagNow } from '../../src/core/org/reply-card-switch.js'
 import { cardTagLine } from '../../src/lib/card-tag.js'
+import { beginQuietTurn, endQuietTurn } from '../../src/core/sessions/quiet-turn.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
 
 const LEAD_SID = '77777777-6666-4777-8888-999999999999'
@@ -197,6 +204,25 @@ describe('a reply is its thread\'s reply', () => {
       expect(all.find((t) => t.id === gate && !t.closed && !t.mergedInto)).toBeUndefined()
       expect(all.find((t) => t.id === fence)!.messages.map((m) => m.text)).toContain(GATE_ASK)
     }, { timeout: 20_000, interval: 300 })
+  }, 40_000)
+
+  // A quiet turn (Walnut's own upkeep, sessions/quiet-turn.ts) runs no turn-end hook, so its words
+  // are no reply to him and their card lines are never written (session-hooks/derive/session.ts).
+  it('a quiet turn\'s card line writes nothing; the same turn end once it is not quiet does', async () => {
+    const asRead = await typeIntoChat('Where should the compost bin stand?')
+    const bin = filedUnder(asRead)
+    const line = `<walnut-card thread="${bin}" state="answered" title="Compost bin place" summary="By the hedge."/>`
+    beginQuietTurn(LEAD_SID, 'idle-compact', 'idle-compaction')
+    try {
+      await turn(asRead, `By the hedge.\n\n${line}`)
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(await threadOf(bin)).toMatchObject({ state: 'new' })
+      expect((await threadOf(bin)).titled).toBeFalsy()
+    } finally {
+      endQuietTurn(LEAD_SID, 'test')
+    }
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: LEAD_SID, taskId: leadId, result: `By the hedge.\n\n${line}`, isError: false }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+    await vi.waitFor(async () => { expect(await threadOf(bin)).toMatchObject({ title: 'Compost bin place', titled: true, state: 'answered' }) }, { timeout: 20_000, interval: 300 })
   }, 40_000)
 
   it('switch off: the hint asks for no line, a line a session still writes changes no thread, and it stays hidden', async () => {

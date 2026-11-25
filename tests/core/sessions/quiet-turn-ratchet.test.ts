@@ -26,6 +26,7 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/event-types.ts': 'defines the payload',
   'src/core/phase.ts': 'applySessionPhase itself refuses a quiet turn\'s session edges, and handBackTaskOnSessionEnd its clean end',
   'src/core/session-hooks/dispatcher.ts': 'hands the event to derive/session.ts, which skips a quiet turn',
+  'src/core/session-hooks/builtins.ts': 'its onTurnComplete hooks (the status question, the card lines of threads_reply_tag) only compare the payload\'s event name; derive/session.ts never fires them for a quiet turn (tests/e2e/reply-card-line.test.ts)',
   'src/core/session-channel/host-resend.ts': 'stamps the turn end it keeps with the retrier that took it; each retrier decides about quiet turns itself',
   'src/core/sessions/turn-end-edge.ts': 'names the phase edge a host turn end says; the boot reconcile applies it through applySessionPhase, which refuses a quiet turn\'s edges',
   'src/core/session-channel/fact-log.ts': 'notes on the told line whether its facts held a turn end, so a replay after a restart owes that turn end\'s idle; it sends nothing and decides nothing about the turn',

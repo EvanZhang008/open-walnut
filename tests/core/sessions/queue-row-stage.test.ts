@@ -244,6 +244,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/session-title-reconciler.ts': 1,
   'core/user-status-sync.ts': 1,
   'core/org/retired-lead.ts': 1,
+  'core/org/reply-card.ts': 1, // queuedThreads: which threads still have his line waiting, so a card line for them is fenced out; nothing is listed to a person
   'core/sessions/queue-after-turn.ts': 1,
   'core/sessions/cold-hold.ts': 2, // releaseColdHolds: is any row held (a read before the write); heldViewOf: one held row's note, through presentColdHolds
   'core/sessions/session-lifecycle.ts': 6, // Restart's held rows, before and after the respawn; the pending count

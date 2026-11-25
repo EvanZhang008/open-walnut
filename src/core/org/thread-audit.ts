@@ -291,15 +291,34 @@ export async function runThreadAuditPass(now = Date.now()): Promise<string[]> {
   return done;
 }
 
-let timer: ReturnType<typeof setInterval> | null = null;
+/** The clock running now, by the handle that started it. */
+let clock: { first: ReturnType<typeof setTimeout>; every: ReturnType<typeof setInterval> } | null = null;
 
-/** The clock, on the leader; nothing on an ephemeral server (its threads are a copy) or with WALNUT_THREAD_AUDIT=0. */
+function stopClock(): void {
+  if (!clock) return;
+  clearTimeout(clock.first);
+  clearInterval(clock.every);
+  clock = null;
+}
+
+/**
+ * The clock, on the leader; nothing on an ephemeral server (its threads are a copy) or with
+ * WALNUT_THREAD_AUDIT=0. A start replaces a clock left running (review 2026-11-25: one left by a
+ * server stopped before its start ran made every later start a no-op), and a handle's stop stops
+ * only its own clock.
+ */
 export function startThreadAudit(opts: { ephemeral?: boolean } = {}): { stop: () => void } {
-  if (opts.ephemeral || process.env.WALNUT_THREAD_AUDIT === '0' || timer) return { stop: () => {} };
+  if (opts.ephemeral || process.env.WALNUT_THREAD_AUDIT === '0') return { stop: () => {} };
+  stopClock();
   const tick = () => { void runThreadAuditPass(); };
-  const first = setTimeout(tick, FIRST_TICK_MS);
-  first.unref?.();
-  timer = setInterval(tick, TICK_MS);
-  timer.unref?.();
-  return { stop: () => { clearTimeout(first); if (timer) clearInterval(timer); timer = null; } };
+  const mine = { first: setTimeout(tick, FIRST_TICK_MS), every: setInterval(tick, TICK_MS) };
+  mine.first.unref?.();
+  mine.every.unref?.();
+  clock = mine;
+  return { stop: () => { if (clock === mine) stopClock(); } };
+}
+
+/** Tests: whether a clock runs. */
+export function threadAuditClockRuns(): boolean {
+  return clock !== null;
 }

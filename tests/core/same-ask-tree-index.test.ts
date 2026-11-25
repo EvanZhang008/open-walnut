@@ -118,7 +118,7 @@ describe('no tree read is handed a fresh copy of the board', () => {
   })
 
   /** Which argument of each tree read is the task list. */
-  const LIST_ARG: Record<string, number> = { treeAround: 1, teammatesIndex: 0, relativeAsksIndex: 0, resolveDecisionOwner: 2, bindDecisionOwner: 2 }
+  const LIST_ARG: Record<string, number> = { treeAround: 1, teammatesIndex: 0, relativeAsksIndex: 0, resolveDecisionOwner: 2, bindDecisionOwner: 2, bindDecisionOwnerNow: 2 }
   /** The top-level arguments of the call that opens at `from` (just past its parenthesis). */
   const argsAt = (src: string, from: number): string[] => {
     const out: string[] = []

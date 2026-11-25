@@ -101,7 +101,9 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   question (`applyThreadLines`), a decision is `patchThread` (every refusal of `thread_update`
   holds), a merge is `merge_into`. A message of his the session has not answered when the turn ends
   (its line is still in the session's queue, or it was filed after the turn's end) fences the line
-  out of its thread, and the question then asks about that thread as before.
+  out of its thread, and the question then asks about that thread as before. A decision the store
+  refuses is named by the next status questions until a decision line for that thread is written,
+  or the thread is closed, moved or gone (`noteLineAsks`, `linesThatAsked`).
 - **The order.** The write starts in the turn-complete hook, in the step that arms that turn's status
   question (`turnEndedWith`, then `armStatusQuestion`), and the question waits for it before it
   lists the threads (`cardsWritten` in `threadQuestionFor`). It needs nothing slower than the words
@@ -109,7 +111,9 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   finishes late and an isolated one (`dev:ephemeral`) never starts (2026-11-25: the write once
   followed that read, and on an isolated server no line was ever written). The wait is at most 10
   seconds; at that bound the question is built as with the switch off (no thread is left out, a
-  warning is logged), and the write still lands when it ends. In the log, `reply card lines applied`
+  warning is logged), and the write still lands when it ends. The same bound caps how long one
+  write holds the session's next one (`queueCardWrite`): a write past it is logged and the next goes
+  on. In the log, `reply card lines applied`
   names each turn's lines, `reply card lines: threads kept current` the threads they changed, and
   `status question: threads their card line spoke for are left out` what the question skipped and
   what it still listed. A status answer's own write says how many thread lines it held (`lines`),
@@ -130,11 +134,15 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   same decision is no ask of its own, in either order: a status answer that names it is stored
   asking nothing (`askOnNeedsThread`), a report that asked it before the line stops asking when the
   line is written, before any status answer (`askNowOnThread`, remembering the decision so the same
-  ask later keeps its id), and `placeAsk` keeps no place for it, so it never lands on another open
+  ask later keeps its id; it runs again right after each status answer is stored, so a line that
+  lands while the answer is on its way meets it there), and `placeAsk` keeps no place for it, so it never lands on another open
   thread (2026-11-25: a decision put up by a line also showed on the thread about another subject
   and as the task's own item). The task reads Needs you through the thread (`taskThreadNeeds`). The
   status question says which decisions are up ("Your threads' cards already ask him: ..."), so a
   session need not say one twice. Another decision in the status answer is still the task's own ask.
+  A teammate's ask folded under that decision stays folded while the thread asks it, and his message
+  on the holder's threads is his answer to the holder, as one in its chat is
+  (`thread-held-decision.ts`, read by `holds` in `decision-owner.ts` and by the fold's `stillAsks`).
 - **The send-back.** The session's Stop hook hands Walnut the shape of the reply's last 16 lines
   (`last_lines` of `open_items`: a line of words is `x`, only a card line is whole). The turn is held
   once, with one plain line per thing, when a message of his this turn read was filed under an open
@@ -144,8 +152,9 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   and is named beside another thing that does. Each thing is named at most twice. A message this turn read is one filed after the
   newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
   the session answered in before is not asked for a line again while nothing keeps the answer under
-  that message (an isolated server, a slow read); after a restart it is, as before, any message of
-  the last 6 hours with no answer kept. A decision that passes is written right then, and one
+  that message (an isolated server, a slow read); after a restart, the task's stored report says
+  when this session's last turn ended (`turn_ended_at`), and only a message filed after it is owed a
+  line (`readBefore`). A decision that passes is written right then, and one
   already up with the same question and choices is left as it is, at the check and at the turn's end
   (`askedAlready`), so a hold that was lost (a slow check, a restart) never asks it twice.
 - **No thread bookkeeping in his chat.** Whatever a session writes after a hook sends its turn back
@@ -403,7 +412,9 @@ fixed per kind, model calls and their milliseconds. Read them with `GET /api/v1/
 (`?days=`, `?task=`) or the op `thread_audit`; `POST /api/v1/thread-audit/run {task}` (op
 `thread_audit` with `run: true`) checks one node now. One log line per pass, counts only.
 
-Leader only, never on an ephemeral server (`WALNUT_THREAD_AUDIT=0` turns the clock off), the switch
+Leader only, never on an ephemeral server (`WALNUT_THREAD_AUDIT=0` turns the clock off), one clock
+per process (a start replaces a clock left running; the server awaits its start, so a stop always
+finds it), the switch
 read at every node, skipped while background AI is off; a check run by hand does nothing while the
 org is off. A node tried is not tried again for 6 hours in that process, even when it had no open
 thread or its counts could not be written. A tree that could not be read finds no repeat and counts

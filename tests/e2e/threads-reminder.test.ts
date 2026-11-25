@@ -29,6 +29,12 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-threads-reminder'))
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
+// This file plays the session's CLI itself (it takes the queued rows), so the server's runner takes
+// no row here (tests/core/hand-played-cli-guard.test.ts).
+vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/session-message-queue.js')>()
+  return { ...real, markProcessing: (async () => []) as typeof real.markProcessing }
+})
 
 import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'

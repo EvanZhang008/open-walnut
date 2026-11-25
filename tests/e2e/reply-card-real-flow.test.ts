@@ -224,9 +224,11 @@ describe('a real turn end on an isolated server: the line is written before the 
     await say('Where does the compost heap go?')
     const rows = await cliTakes()
     const compost = filedUnder(rows[0])
-    // The session's write before this one hangs for longer than the question waits.
+    // The session's write before this one hangs for longer than the question waits, holding the
+    // chain all that time (its own hold given: by default one write holds it no longer than the
+    // question waits, tests/core/sessions/status-thread-carded.test.ts).
     const hangMs = STATUS_SETTLE_MS + CARDS_WAIT_MAX_MS + 2_000
-    void queueCardWrite(SID, () => new Promise((r) => setTimeout(r, hangMs)))
+    void queueCardWrite(SID, () => new Promise((r) => setTimeout(r, hangMs)), hangMs)
     const endedAt = await turnEnds(rows, `Behind the shed, out of the wind.\n\n<walnut-card thread="${compost}" state="answered" title="Compost heap place"/>`)
     const q = await questionAfter(endedAt, STATUS_SETTLE_MS + CARDS_WAIT_MAX_MS + 10_000)
     // It waited its whole bound, then asked about the thread: nothing was noted for it yet.

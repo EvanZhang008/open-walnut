@@ -4395,7 +4395,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { startThreadAnswers } = await import('../core/org/thread-answers.js')
       threadAnswersHandle = startThreadAnswers()
       // The thread check (experiment threads_audit): a small model reads each node's open threads every few hours (core/org/thread-audit.ts).
-      void import('../core/org/thread-audit.js').then((m) => { threadAuditHandle?.stop(); threadAuditHandle = m.startThreadAudit({ ephemeral: IS_EPHEMERAL }) }).catch(() => {})
+      // Awaited, as the jobs beside it are: a start left to a promise could land after stopServer and keep its clock.
+      threadAuditHandle?.stop()
+      threadAuditHandle = (await import('../core/org/thread-audit.js')).startThreadAudit({ ephemeral: IS_EPHEMERAL })
 
       // The session's current turn (sessions/turn-run.ts): every reader of "is Walnut retrying this
       // turn" asks it; its attempts start over at any send that is not a retrier's. Primary only.

@@ -121,7 +121,7 @@ export async function threadQuestionFor(task: Pick<Task, 'id' | 'org_role' | 'th
     const file = await readThreads(task.id);
     const remind = remindOn ? { rec: lastReminder(task.id), ...(at.sessionId ? { sid: at.sessionId } : {}), ...(at.compactedAt ? { compactedAt: at.compactedAt } : {}) } : undefined;
     const carded = replyTagNow() && written ? cardedNow(task.id, file.threads) : new Set<string>();
-    const out = threadQuestionOf(file, task, { carded, dropped: linesThatAsked(task.id), last: lastListed(task.id), ...(remind ? { remind } : {}) }, langName, readAt);
+    const out = threadQuestionOf(file, task, { carded, dropped: linesThatAsked(task.id, readAt, file.threads), last: lastListed(task.id), ...(remind ? { remind } : {}) }, langName, readAt);
     // Which threads the reply's own lines spoke for, so the log shows what this question did not ask.
     if (carded.size) log.session.info('status question: threads their card line spoke for are left out', { taskId: task.id, sessionId: at.sessionId, leftOut: [...carded], listed: [...out.refs.values()].map((r) => r.id) });
     noteListed(task.id, [...out.refs.values()].map((r) => r.id), readAt);

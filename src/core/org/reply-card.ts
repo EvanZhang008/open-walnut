@@ -92,9 +92,17 @@ export function seenUpTo(t: OrgThread, saw: ReplySaw): string {
 const readUpTo = new Map<string, string>();
 const READ_MAX = 500;
 
-/** His messages to this session filed up to then were read by a turn that has ended. Undefined: nothing known (a restart). */
-export function readBefore(sessionId: string): string | undefined {
-  return readUpTo.get(sessionId);
+/**
+ * His messages to this session filed up to then were read by a turn that has ended. Kept in memory;
+ * after a restart (nothing kept yet) the task's stored report says when this session's last turn
+ * ended (`turn_ended_at`, written by its status answer), and what was filed before that was that
+ * turn's (review 2026-11-25: after a restart every message of the last six hours with no answer
+ * kept counted as owed, and the check sent a turn back for threads it never touched). One filed
+ * before then that this turn read from its queue is owed no line here: the status question asks
+ * its thread, as with the switch off. Undefined: nothing known, for a session with no report of its own.
+ */
+export function readBefore(sessionId: string, report?: Pick<StatusReport, 'session_id' | 'turn_ended_at'> | null): string | undefined {
+  return readUpTo.get(sessionId) ?? (report?.session_id === sessionId ? report.turn_ended_at : undefined);
 }
 
 function noteRead(sessionId: string, file: ThreadsFile, saw: ReplySaw): void {
@@ -172,6 +180,8 @@ export async function applyNeedsCard(taskId: string, sessionId: string, card: Ca
   const { resolveThreadCaller } = await import('./thread-caller.js');
   const { source } = await resolveThreadCaller(sessionId).catch(() => ({ source: undefined }));
   await store.patchThread(taskId, card.thread, needsPatch(file.threads.find((t) => t.id === card.thread)!, card), `task:${taskId}`, source);
+  // Written: a mark left by an earlier refusal of this thread's decision goes (status-thread-asked.ts).
+  noteLineAsks(taskId, [], [card.thread]);
   // The task's own ask, when it is this decision, is the thread's from now on: shown once (thread-report-ask.ts).
   await (await import('./thread-report-ask.js')).askNowOnThread(taskId);
 }
@@ -289,7 +299,12 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     const current = needs.length ? (await store.readThreads(task.id)).threads : [];
     for (const c of needs) {
       const t = current.find((x) => x.id === c.thread);
-      if (mine.asked.has(needsKey(c)) || (t && askedAlready(t, c))) { applied.push(c.thread); continue; }
+      if (mine.asked.has(needsKey(c)) || (t && askedAlready(t, c))) {
+        // Up already (the check before the turn's end wrote it): no mark of a refusal stays.
+        noteLineAsks(task.id, [], [c.thread]);
+        applied.push(c.thread);
+        continue;
+      }
       try {
         await applyNeedsCard(task.id, sessionId, c);
         applied.push(c.thread);

@@ -203,6 +203,16 @@ describe('every path that settles an ask for the user reads his words first', ()
       expect(c).toMatch(/asks_answered: kept\.length \? kept : null/)
       expect(c).not.toMatch(/answers_ask|ask_answered: answer\b/)
     },
+    // A task's own ask taken off its report only for the thread of its own that asks the same
+    // decision in needs (threads_reply_tag): nothing is settled for him, the decision still waits on
+    // him there, so none of his words can go unread. Judged in the write against the report as it
+    // is then, and stamped (the decision kept as last_ask), so the same ask asked again keeps its id.
+    'src/core/org/thread-report-ask.ts': (c) => {
+      expect(c).toMatch(/export async function askNowOnThread[\s\S]*?const held = needsThreadOf\([\s\S]*?if \(!held\) return false[\s\S]*?updateTaskRaw\(taskId, \(cur\) => \{[\s\S]*?cur\.status_report\?\.ask !== was\.ask\) return null[\s\S]*?status_report: stampSaidDecision\(withoutOwnAsk\(cur\.status_report\), cur\.status_report\)/)
+      // Only a thread that waits on him for a decision of the task's own (never closed, moved or a pointer).
+      expect(c).toMatch(/const asksHim = \(t: OrgThread\): boolean => !t\.closed && !t\.movedTo && t\.state === 'needs' && !t\.askOwner/)
+      expect(c).toMatch(/export function needsThreadOf[\s\S]*?threads\.find\(\(t\) => asksHim\(t\) && sameDecisionWords\(/)
+    },
     // The task's own report: stamped with when it began asking, so a reworded ask keeps the time.
     'src/core/sessions/status-question.ts': (c) => {
       expect(c).toMatch(/needsSinceOf\(report, prev\)[\s\S]*?needs_since: needsSince[\s\S]*?status_report: report/)

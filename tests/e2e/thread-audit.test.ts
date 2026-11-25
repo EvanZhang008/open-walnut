@@ -24,7 +24,7 @@ import { executeOp } from '../../src/ops/index.js'
 import { fileThreadMessage, readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { _resetOrgEnabledForTesting } from '../../src/core/org/org-enabled.js'
-import { runThreadAuditPass, setAuditJudgeOverride, THREAD_AUDIT_SOURCE } from '../../src/core/org/thread-audit.js'
+import { runThreadAuditPass, setAuditJudgeOverride, startThreadAudit, threadAuditClockRuns, THREAD_AUDIT_SOURCE } from '../../src/core/org/thread-audit.js'
 import { pendingRiding, ridingKeys, ridingLine } from '../../src/core/sessions/status-riding.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
 
@@ -198,4 +198,34 @@ describe('the thread check', () => {
     await setSwitch(false)
     expect((await api('POST', '/api/v1/thread-audit/run', { task: lead.id })).json).toMatchObject({ ran: false, why: 'off' })
   })
+})
+
+// Review 2026-11-25: the clock was started inside a promise the server did not wait for, so a stop
+// that came first left it running, and the module's mark then made every later start a no-op.
+describe('the clock\'s start and stop', () => {
+  it('the server\'s start has its clock running before it returns', () => {
+    expect(threadAuditClockRuns()).toBe(true)
+  })
+
+  it('a start replaces a clock left running, and a stop stops only its own: none is left behind', () => {
+    const left = startThreadAudit()
+    const next = startThreadAudit()
+    expect(threadAuditClockRuns()).toBe(true)
+    // The replaced handle's stop leaves the new clock alone.
+    left.stop()
+    expect(threadAuditClockRuns()).toBe(true)
+    next.stop()
+    expect(threadAuditClockRuns()).toBe(false)
+    // An ephemeral server starts none.
+    startThreadAudit({ ephemeral: true })
+    expect(threadAuditClockRuns()).toBe(false)
+  })
+
+  it('a server stopped and started again runs one clock, and its stop leaves none', async () => {
+    await stopServer()
+    expect(threadAuditClockRuns()).toBe(false)
+    server = await startServer({ port: 0, dev: true })
+    root = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    expect(threadAuditClockRuns()).toBe(true)
+  }, 60_000)
 })

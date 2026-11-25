@@ -37,6 +37,7 @@ import { resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import { isProgramRunTask, type Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
+import { holderThreadsOf, holdsOnThread, type HolderThreads } from './org/thread-held-decision.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
@@ -190,6 +191,8 @@ export interface StatusFacts {
   undelivered?: Map<string, { reason: string; at: string }>;
   /** Main, a lead or a task with Threads on -> what its Threads hold for the user (org/thread-groups.ts threadCounts). */
   threads?: Map<string, ThreadCounts>;
+  /** threads_reply_tag: what a fold's holder's threads carry (org/thread-held-decision.ts; readFoldEvidence). */
+  holderThreads?: Map<string, HolderThreads>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -949,6 +952,11 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
   // A task holding a withdrawal too: a person writing in it after it lifts it (same-ask.ts answerHolds).
   for (const t of targets) if (answersOf(t).some((a) => a.withdrawn)) ids.add(t.id);
   facts.personInputAt = new Map();
+  // threads_reply_tag: a holder whose decision is on a needs thread of its own still holds it, and his
+  // message there is his word to it (org/thread-held-decision.ts). Empty with the experiment off.
+  const named = new Set([...ids, ...targets.flatMap((t) => (t.status_report?.decision_owner ? [t.status_report.decision_owner.taskId] : []))]);
+  facts.holderThreads = await timedRead(took, 'holder-threads', () => holderThreadsOf([...named].map((id) => facts.tasksById?.get(id))));
+  for (const [id, h] of facts.holderThreads) if (h.heAt) facts.personInputAt.set(id, h.heAt);
   if (!ids.size) return;
   await timedRead(took, 'fold-evidence', () => safely('fold-evidence', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
@@ -978,12 +986,14 @@ function declaredOf(t: Task | undefined): Pick<NonNullable<Task['status_report']
  * Whether a task still holds `ask` while it is not shown as Needs you: its current report still
  * asks it (a turn runs on it), its report is on the way, or it is snoozed with it (same-ask.ts).
  */
-function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now()): boolean {
+function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now(), held?: HolderThreads): boolean {
   if (!t || t.phase === 'COMPLETE' || t.status === 'done') return false;
   const key = askKey(ask);
   // Answered there for the user (a lead, VP or Main, or the answer reached its own holder): it no
   // longer holds it, and the fold reads answered.
   if (answerFor(answersOf(t), ask, nowMs, answerContextOf(t.status_report)) || answeredThereOf(t)) return false;
+  // On a needs thread of its own, where he answers it (org/thread-held-decision.ts).
+  if (holdsOnThread(t, held, ask)) return true;
   const r = t.status_report;
   if (r?.state === 'needs' && askKey(r.ask) === key) {
     if (reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
@@ -1067,7 +1077,7 @@ export function statusOf(
     decisionOwner: explicitDecisionOwner(task, facts),
     declared: (id) => declaredOf(facts.tasksById?.get(id)),
     personInputAt: (id) => facts.personInputAt?.get(id),
-    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs),
+    stillAsks: (id, ask) => stillAsksOf(facts.tasksById?.get(id), ask, nowMs, facts.holderThreads?.get(id)),
     nowIso: new Date(nowMs).toISOString(),
     relatives: relativesWithSignIn(task, facts, withAsks),
     selfCreatedAt: task.created_at,
@@ -1117,7 +1127,7 @@ function explicitDecisionOwner(task: Task, facts: StatusFacts): RelativeAsk | un
   const ref = task.status_report?.decision_owner;
   if (!reportIsCurrent({ report: task.status_report, phaseChangedAt: task.phase_changed_at })) return undefined;
   if (!ref || !facts.tasksById) return undefined;
-  return resolveDecisionOwner(task, ref.taskId, tasksListOf(facts.tasksById), ref);
+  return resolveDecisionOwner(task, ref.taskId, tasksListOf(facts.tasksById), ref, (id) => facts.holderThreads?.get(id));
 }
 
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */

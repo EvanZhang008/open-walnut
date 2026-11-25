@@ -29,6 +29,7 @@
  */
 import { cardTagLine, CARD_TAG_FORM, readCardTags, type CardTag } from '../../lib/card-tag.js';
 import { asksThreads } from '../sessions/status-threads.js';
+import { clause } from '../../utils/format.js';
 import { applyNeedsCard, askedAlready, holdCards, needsKey, noteStopCheck, notOpenReason, queuedThreads, readBefore } from './reply-card.js';
 import { replyTagOn } from './reply-card-switch.js';
 import { mergeThreads, type OrgThread, type ThreadMessage } from './threads-model.js';
@@ -52,8 +53,9 @@ export interface CardStop {
 
 /**
  * His newest message on `t` that this session read and has not answered yet (the turn that is ending
- * answers it). `readBefore`: one filed up to then was read by a turn that has ended (reply-card.ts),
- * so it is not this turn's, with or without its answer kept under it. Pure.
+ * answers it). `readBefore`: one filed up to then was read by a turn that has ended (reply-card.ts
+ * readBefore, which a restart does not empty), so it is not this turn's, with or without its answer
+ * kept under it. Pure.
  */
 export function owedMessage(t: OrgThread, sid: string, nowMs: number, readBefore?: string): ThreadMessage | null {
   for (let i = t.messages.length - 1; i >= 0; i--) {
@@ -79,7 +81,7 @@ export const CARD_STOP_LINES = {
   /** A line that could not be read (lib/card-tag.ts readCardTags names what is wrong). */
   unread: (error: string) => `a card line of your reply was not read: ${period(error)} Its form: ${CARD_TAG_FORM}`,
   /** A line that names no open thread of the task (reply-card.ts notOpenReason). */
-  gone: (why: string) => `${why}. That line is not written; give no line for it.`,
+  gone: (why: string) => `${clause(why)}. That line is not written; give no line for it.`,
   merge: (thread: string, why: string) => `${thread} was not merged: ${period(why)} Give it a line with its own state, or merge it into a thread that takes it.`,
   needs: (thread: string, why: string) => `the decision on ${thread} was not put to him. ${period(why)}${/\buser_kind\b/.test(why) ? ' In a card line user_kind is kind="..." and user_kind_why is why="...".' : ''} Its card line again, with that fixed.`,
   /** His message went to a thread the reply gave no line. */
@@ -144,7 +146,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   for (const t of file.threads) {
     // A line for it that was not read is named above already.
     if (t.closed || t.movedTo || named.has(t.id) || queued.has(t.id) || read.errors.some((e) => e.includes(t.id))) continue;
-    const m = owedMessage(t, sid, nowMs, readBefore(sid));
+    const m = owedMessage(t, sid, nowMs, readBefore(sid, task.status_report));
     if (!m) continue;
     things.push({ key: `missing:${t.id}:${m.id}`, kind: 'missing', thread: t.id, line: CARD_STOP_LINES.missing(t) });
   }

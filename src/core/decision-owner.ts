@@ -4,19 +4,26 @@ import type { StatusReport } from './user-status.js';
 import { askKey, FOLDABLE_SOURCES, type RelativeAsk } from './same-ask.js';
 import { tasksByIdOf, treeAround } from './same-ask-tree.js';
 import { sameTaskArea } from './router/same-area.js';
-import { reportDecision } from './ask-decision.js';
+import { reportDecision, type AskMemory } from './ask-decision.js';
+import { decisionOnThread, holderThreadsOf, type HolderThreads } from './org/thread-held-decision.js';
 
 type Ref = NonNullable<StatusReport['decision_owner']>;
+/** What a fold reads of a holder's threads (org/thread-held-decision.ts), by task id. */
+export type HolderThreadsOf = (taskId: string) => HolderThreads | undefined;
 
-/** Stored decision identity still belongs to this task, even while its visible status is a pointer. */
-function holds(task: Task, ref: Ref): boolean {
+/**
+ * Stored decision identity still belongs to this task, even while its visible status is a pointer,
+ * or while an open needs thread of its own carries it (`onThread`, org/thread-held-decision.ts).
+ */
+function holds(task: Task, ref: Ref, onThread: AskMemory | null): boolean {
+  if (onThread && (ref.decisionId ? onThread.id === ref.decisionId : askKey(onThread.ask) === ref.askKey)) return true;
   const s = task.user_status;
   const decision = s?.decision ?? reportDecision(task.status_report, task.due_date);
   const ask = s?.state === 'needs' ? s.ask : task.status_report?.state === 'needs' ? task.status_report.ask : undefined;
   return !!ask && (ref.decisionId ? decision?.id === ref.decisionId : askKey(ask) === ref.askKey);
 }
 
-export function resolveDecisionOwner(task: Task, ownerId: string, all: readonly Task[], binding?: Ref): RelativeAsk | undefined {
+export function resolveDecisionOwner(task: Task, ownerId: string, all: readonly Task[], binding?: Ref, threadsOf?: HolderThreadsOf): RelativeAsk | undefined {
   const byId = tasksByIdOf(all);
   // A completed root can still hold an answered decision. Include it only for team membership.
   const allowed = new Set(treeAround(task.id, all, { allOpen: true }).map((row) => row.task.id));
@@ -26,8 +33,9 @@ export function resolveDecisionOwner(task: Task, ownerId: string, all: readonly 
   let settled: RelativeAsk | undefined;
   for (let hops = 0; hops < 12; hops++) {
     const owner = byId.get(id);
+    const onThread = owner ? decisionOnThread(owner, threadsOf?.(id)) : null;
     if (!owner || seen.has(id) || !allowed.has(id) || !sameTaskArea(task, owner)
-      || (ref && !holds(owner, ref))) return undefined;
+      || (ref && !holds(owner, ref, onThread))) return undefined;
     seen.add(id);
     if (settled) return owner.user_status?.state === 'needs' ? undefined : { ...settled, id: owner.id, title: owner.title };
     if (owner.phase === 'COMPLETE' || owner.status === 'done') return undefined;
@@ -43,16 +51,25 @@ export function resolveDecisionOwner(task: Task, ownerId: string, all: readonly 
     if (owner.status_report?.state === 'needs' && owner.status_report.same_as) {
       id = owner.status_report.same_as; ref = undefined; continue;
     }
+    // Its decision is on its own thread now, where he answers it: still the one to wait on.
+    if (onThread) return { id: owner.id, title: owner.title, ask: onThread.ask, decision: { id: onThread.id, key: onThread.id } };
     if (s?.state !== 'needs' || !s.ask || !s.source || !FOLDABLE_SOURCES.has(s.source)) return undefined;
     return { id: owner.id, title: owner.title, ask: s.ask, ...(s.decision ? { decision: s.decision } : {}) };
   }
   return undefined;
 }
 
-export function bindDecisionOwner(task: Task, report: StatusReport, all: readonly Task[]): StatusReport | null {
+export function bindDecisionOwner(task: Task, report: StatusReport, all: readonly Task[], threadsOf?: HolderThreadsOf): StatusReport | null {
   if (!report.same_as || report.state !== 'needs') return report;
-  const owner = resolveDecisionOwner(task, report.same_as, all);
+  const owner = resolveDecisionOwner(task, report.same_as, all, undefined, threadsOf);
   if (!owner || owner.answered) return null;
   return { ...report, same_as: owner.id, decision_owner: { taskId: owner.id,
     ...(owner.decision?.id ? { decisionId: owner.decision.id } : {}), askKey: askKey(owner.ask) } };
+}
+
+/** bindDecisionOwner with what the named task's threads carry: a decision it put on a needs thread of its own binds too. */
+export async function bindDecisionOwnerNow(task: Task, report: StatusReport, all: readonly Task[]): Promise<StatusReport | null> {
+  if (!report.same_as || report.state !== 'needs') return report;
+  const held = await holderThreadsOf([all.find((t) => t.id === report.same_as)]);
+  return bindDecisionOwner(task, report, all, (id) => held.get(id));
 }

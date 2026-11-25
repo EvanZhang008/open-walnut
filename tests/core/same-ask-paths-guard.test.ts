@@ -67,6 +67,9 @@ describe('every write that asks the user is checked', () => {
       // The turn-end report is the task's own words: the question lists its tree's asks first, and
       // the shown status folds whatever it still asks twice.
       'src/core/sessions/status-question.ts': /sameAskQuestionFor\(/,
+      // Puts no ask on the user: it takes a task's own ask off its report (asking nothing of its
+      // own, withoutOwnAsk) for the needs thread of its own that asks the same decision.
+      'src/core/org/thread-report-ask.ts': /status_report: stampSaidDecision\(withoutOwnAsk\(cur\.status_report\)/,
     }
     expect(writers, 'a new writer of task.status_report: run refuseSameAsk or list it here').toEqual(Object.keys(CHECKED).sort())
     for (const [f, re] of Object.entries(CHECKED)) expect(code(f), f).toMatch(re)

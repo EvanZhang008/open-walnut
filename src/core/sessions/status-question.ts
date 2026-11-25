@@ -161,9 +161,9 @@ async function saveStatusAnswer(
   if (!admitted) return false;
   report = admitted;
   if (report.same_as) {
-    const { bindDecisionOwner } = await import('../decision-owner.js');
+    const { bindDecisionOwnerNow } = await import('../decision-owner.js');
     const { listTasks } = await import('../task-manager.js');
-    const bound = bindDecisionOwner(current, report, await listTasks());
+    const bound = await bindDecisionOwnerNow(current, report, await listTasks());
     if (bound) report = bound;
     else {
       // An invalid pointer cannot hide an ask. Keep the task's words without the reference.
@@ -184,6 +184,10 @@ async function saveStatusAnswer(
   if (newerMeanwhile) return false;
   // Only a task that is no Org node places its ask on a thread (status-threads.ts placesAskOnThread).
   await applyThreadLines(taskId, threadFields, taskLike ? report : null);
+  // A card line that put this decision up after askOnNeedsThread read the threads (a write past the
+  // question's wait): read again now that the answer is stored, so the two meet without waiting for
+  // the next status answer (org/thread-report-ask.ts askNowOnThread; review 2026-11-25).
+  if (taskLike) await (await import('../org/thread-report-ask.js')).askNowOnThread(taskId);
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).

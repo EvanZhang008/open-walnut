@@ -24,6 +24,12 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-reply-card-stop'))
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
+// This file plays the session's CLI itself (it takes the queued rows), so the server's runner takes
+// no row here (tests/core/hand-played-cli-guard.test.ts).
+vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/session-message-queue.js')>()
+  return { ...real, markProcessing: (async () => []) as typeof real.markProcessing }
+})
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
@@ -35,11 +41,12 @@ import { getQueue, markNextProcessing, removeProcessed, sendMessageToSession } f
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js'
 import { threadsKeptNow } from '../../src/core/org/threads-kept.js'
 import { replyTagNow } from '../../src/core/org/reply-card-switch.js'
-import { readThreads } from '../../src/core/org/threads-store.js'
+import { readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { applyReplyCards, holdCards, noteStopCheck, resetHeldCards } from '../../src/core/org/reply-card.js'
 import { cardStopEnd, MAX_CARD_NUDGES, resetCardNudges } from '../../src/core/org/reply-card-stop.js'
 import { resetCarded } from '../../src/core/sessions/status-thread-carded.js'
-import { linesThatAsked } from '../../src/core/sessions/status-thread-asked.js'
+import { linesThatAsked, noteLineAsks } from '../../src/core/sessions/status-thread-asked.js'
+import { threadQuestionFor } from '../../src/core/sessions/status-thread-question.js'
 import { cardTagLine, CARD_TAG_FORM, readCardTags } from '../../src/lib/card-tag.js'
 import { executeOp } from '../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
@@ -158,6 +165,24 @@ describe('the card lines at a turn\'s end', () => {
   it('a hook that sends no last lines (an older one, another engine) is never held for a line', async () => {
     fresh()
     expect(JSON.stringify(await stop())).not.toContain('card line')
+  })
+
+  // Review 2026-11-25: after a restart nothing in memory said which messages a turn that ended had
+  // read, and every one of the last six hours with no answer kept was owed a line.
+  it('after a restart, a message the session\'s last turn already read owes no line: its stored report says when that turn ended', async () => {
+    fresh()
+    const ended = new Date().toISOString()
+    await updateTaskRaw(taskId, { status_report: { state: 'working', now: 'Measuring the orchard.', at: ended, turn_ended_at: ended, session_id: SID, rule: 2 } }, { source: 'test' })
+    try {
+      expect(JSON.stringify(await stop('x\n\nx'))).not.toContain('card line')
+      // Another session's report says nothing of this one's turns: as before, the message is owed.
+      fresh()
+      await updateTaskRaw(taskId, { status_report: { state: 'working', now: 'Measuring the orchard.', at: ended, turn_ended_at: ended, session_id: 'another-session', rule: 2 } }, { source: 'test' })
+      expect((await stop('x\n\nx')).reason).toContain(cardTagLine(FENCE))
+    } finally {
+      await updateTaskRaw(taskId, { status_report: undefined } as never, { source: 'test' })
+      fresh()
+    }
   })
 
   it('a good line: no hold', async () => {
@@ -325,5 +350,29 @@ describe('the card lines at a turn\'s end', () => {
     end()
     expect((await applyReplyCards({ task, sessionId: SID, reply: 'Nothing new.' })).applied).toEqual([])
     expect((await threadOf(SEEDS)).reply).toBe('The first crate arrived.')
+  })
+
+  // Review 2026-11-25: a refusal left its mark for a day and nothing took it off, so with the
+  // reminder on the thread was asked about at every turn.
+  it('a decision refused once and written at the next turn leaves no mark; nor does a thread closed or gone since', async () => {
+    fresh()
+    const task = await getTask(taskId) as Task
+    const bare = `<walnut-card thread="${SEEDS}" state="needs" ask="Which supplier for the spring seeds?" options="Larch Seeds; Oak Seeds"/>`
+    const refused = await applyReplyCards({ task, sessionId: SID, reply: `Two suppliers carry them.\n\n${bare}` })
+    expect(refused.refused.map((r) => r.thread)).toContain(SEEDS)
+    expect(linesThatAsked(taskId).has(SEEDS)).toBe(true)
+    const good = `<walnut-card thread="${SEEDS}" state="needs" ask="Which supplier for the spring seeds?" options="Larch Seeds; Oak Seeds" kind="spending" why="Oak Seeds costs twice the budget he set"/>`
+    const done = await applyReplyCards({ task, sessionId: SID, reply: `Two suppliers carry them.\n\n${good}` })
+    expect(done.refused).toEqual([])
+    expect(await threadOf(SEEDS)).toMatchObject({ state: 'needs', ask: 'Which supplier for the spring seeds?' })
+    expect(linesThatAsked(taskId).has(SEEDS)).toBe(false)
+
+    // A mark on a thread closed since, or on one that is gone, is forgotten when the question reads the threads.
+    const GONE = 'th-0dd0dd01'
+    noteLineAsks(taskId, [FENCE, GONE], [])
+    await writeThreadsFor(taskId, (cur) => ({ file: { ...cur, threads: cur.threads.map((t) => (t.id === FENCE ? { ...t, closed: { how: 'acked', at: new Date().toISOString(), by: 'user' } } : t)) }, out: undefined }))
+    await threadQuestionFor(task)
+    expect(linesThatAsked(taskId).has(FENCE)).toBe(false)
+    expect(linesThatAsked(taskId).has(GONE)).toBe(false)
   })
 })
