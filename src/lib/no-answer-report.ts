@@ -147,11 +147,12 @@ function readSpool(file: string): Kept[] {
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
     const st = ownFile(fd)
     if (!st) return []
-    const from = Math.max(0, st.size - SPOOL_READ_BYTES)
+    // From one byte before the tail: a tail that starts right after a newline keeps its first line.
+    const from = Math.max(0, st.size - SPOOL_READ_BYTES - 1)
     const buf = Buffer.alloc(st.size - from)
     const n = fs.readSync(fd, buf, 0, buf.length, from)
     let text = buf.subarray(0, n).toString('utf-8')
-    // Read from its middle: the first line is a part of one.
+    // Read from its middle: up to the first newline is a part of a line (or that newline alone).
     if (from > 0) text = text.slice(text.indexOf('\n') + 1)
     return text.split('\n').flatMap((l) => {
       try { const k = keptOf(JSON.parse(l)); return k ? [k] : [] } catch { return [] }
@@ -184,34 +185,44 @@ function appendLines(file: string, items: readonly Kept[]): number {
  * two leaves its `.taking` file, which the next take puts back (reclaimTaking).
  */
 function rewrite(file: string, keep: (items: Kept[]) => Kept[]): void {
-  const taking = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.taking`
+  const taking = takingName(file)
   try { fs.renameSync(file, taking) } catch { return }
   try {
+    // Its time is when it was moved aside, not the spool's last write: what reclaimTaking judges by.
+    try { const t = new Date(); fs.utimesSync(taking, t, t) } catch { /* judged by its old time */ }
     appendLines(file, keep(readSpool(taking)))
   } finally {
     try { fs.rmSync(taking, { force: true }) } catch { /* gone */ }
   }
 }
 
-function pidAlive(pid: number): boolean {
-  // Signal 0 only asks whether the process is there; never a group or a broadcast pid.
-  if (!Number.isInteger(pid) || pid <= 1) return false
-  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+function takingName(file: string): string {
+  return `${file}.${process.pid}.${randomBytes(4).toString('hex')}.taking`
 }
 
-/** Put back what a process that ended mid-rewrite left aside (`<file>.<pid>.<n>.taking`). */
-function reclaimTaking(file: string): void {
+/**
+ * A file moved aside this long ago is a rewrite whose process ended before it put the lines back: a
+ * rewrite is one synchronous step of milliseconds. Judged by time, never by its pid, which another
+ * process may reuse or another pid namespace may not see (2026-11-25 review).
+ */
+const LEFTOVER_MS = 30_000
+/** `<file>.<pid>.<hex>.taking`, and `.taking.<pid>`, the name an older reclaim left. */
+const TAKING_RE = /^\d+\.[0-9a-f]+\.taking(?:\.\d+)?$/
+
+/** Put back what a process that ended mid-rewrite left aside. */
+function reclaimTaking(file: string, now = Date.now()): void {
   const dir = path.dirname(file)
   const base = `${path.basename(file)}.`
   let names: string[] = []
   try { names = fs.readdirSync(dir) } catch { return }
   for (const name of names) {
-    const m = name.startsWith(base) ? /^(\d+)\.[0-9a-f]+\.taking$/.exec(name.slice(base.length)) : null
-    if (!m || (Number(m[1]) !== process.pid && pidAlive(Number(m[1])))) continue
+    if (!name.startsWith(base) || !TAKING_RE.test(name.slice(base.length))) continue
     const left = path.join(dir, name)
-    // Moved once more first, so two takers never both put it back.
-    const mine = `${left}.${process.pid}`
+    try { if (now - fs.lstatSync(left).mtimeMs < LEFTOVER_MS) continue } catch { continue }
+    // Moved once more first, so two takers never both put it back; the new name is one this reads again.
+    const mine = takingName(file)
     try { fs.renameSync(left, mine) } catch { continue }
+    try { const t = new Date(); fs.utimesSync(mine, t, t) } catch { /* judged by its old time */ }
     appendLines(file, readSpool(mine))
     try { fs.rmSync(mine, { force: true }) } catch { /* gone */ }
   }
@@ -225,7 +236,7 @@ function sweepEnded(dir: string, now: number): void {
   let names: string[] = []
   try { names = fs.readdirSync(dir) } catch { return }
   for (const name of names) {
-    if (!/\.ndjson(?:\.\d+\.[0-9a-f]+\.taking(?:\.\d+)?)?$/.test(name)) continue
+    if (!/\.ndjson(?:\.\d+\.[0-9a-f]+\.taking(?:\.\d+)?|\.sending)?$/.test(name)) continue
     const file = path.join(dir, name)
     try {
       const st = fs.lstatSync(file)
@@ -270,7 +281,7 @@ export function spoolHoldsNoAnswers(file: string | null): boolean {
   if (!file) return false
   try { if (fs.lstatSync(file).isFile()) return true } catch { /* none */ }
   const base = `${path.basename(file)}.`
-  try { return fs.readdirSync(path.dirname(file)).some((n) => n.startsWith(base) && n.endsWith('.taking')) } catch { return false }
+  try { return fs.readdirSync(path.dirname(file)).some((n) => n.startsWith(base) && TAKING_RE.test(n.slice(base.length))) } catch { return false }
 }
 
 /**
@@ -284,21 +295,58 @@ export function hubAnswered(r: { ok: boolean; result?: unknown } | null | undefi
   return r?.ok === true && (r.result as { offline?: unknown } | null | undefined)?.offline !== true
 }
 
+/** Spools this process is telling now: one report of a spool at a time (2026-11-25 review). */
+const sending = new Set<string>()
+/** A `.sending` mark older than this is one whose process ended mid-send (a send waits at most a few seconds). */
+const SENDING_STALE_MS = 10_000
+
+/**
+ * Hold the spool's one send across processes: `<file>.sending`, made only if absent. A mark left by a
+ * process that ended is taken over once it is stale. Null when another sender holds it.
+ */
+function holdSending(file: string, now = Date.now()): (() => void) | null {
+  const mark = `${file}.sending`
+  const c = fs.constants
+  for (let tries = 0; tries < 2; tries++) {
+    try {
+      fs.closeSync(fs.openSync(mark, c.O_WRONLY | c.O_CREAT | c.O_EXCL | (c.O_NOFOLLOW ?? 0), 0o600))
+      return () => { try { fs.rmSync(mark, { force: true }) } catch { /* gone */ } }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') return null
+      try {
+        const st = fs.lstatSync(mark)
+        if (!st.isFile() || now - st.mtimeMs < SENDING_STALE_MS) return null
+        fs.rmSync(mark, { force: true })
+      } catch { /* gone meanwhile: try again */ }
+    }
+  }
+  return null
+}
+
 /**
  * Tell what the session's spool holds with `send`; the lines leave the file only when the server
- * took them. A send that timed out keeps them, and if it landed after all, the next send of the
- * same lines is counted once (their ids, usage-watch/record.ts). Never throws.
+ * took them. One report of a spool at a time, in this process and across the session's clients: two
+ * calls ending together would otherwise both send the same lines, and a server older than the ids
+ * counts each (2026-11-25 review). The other caller leaves them for the next call. A send that timed
+ * out keeps them, and if it landed after all, the next send of the same lines is counted once (their
+ * ids, usage-watch/record.ts). Never throws.
  */
 export async function tellSpooledNoAnswers(
   file: string | null,
   send: (report: NoAnswer[]) => Promise<{ ok: boolean; result?: unknown }>,
 ): Promise<void> {
-  if (!spoolHoldsNoAnswers(file)) return
-  const { report, told: done } = takeSpooledNoAnswers(file)
-  if (!report.length) return
+  if (!file || sending.has(file) || !spoolHoldsNoAnswers(file) || !ownPrivateDir(path.dirname(file))) return
+  sending.add(file)
+  const release = holdSending(file)
   try {
+    if (!release) return
+    const { report, told: done } = takeSpooledNoAnswers(file)
+    if (!report.length) return
     if (hubAnswered(await send(report))) done()
-  } catch { /* kept for the next call */ }
+  } catch { /* kept for the next call */ } finally {
+    release?.()
+    sending.delete(file)
+  }
 }
 
 /** The no-answer failures a client's report names (hub side), or [] when it names none. */

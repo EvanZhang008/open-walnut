@@ -32,7 +32,7 @@ import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { withToolUseId } from '../lib/tool-use-id.js'
-import { NoAnswerLog, hubAnswered, spoolHoldsNoAnswers, spoolNoAnswer, takeSpooledNoAnswers } from '../lib/no-answer-report.js'
+import { NoAnswerLog, hubAnswered, spoolNoAnswer, tellSpooledNoAnswers } from '../lib/no-answer-report.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -379,17 +379,18 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   const noAnswers = new NoAnswerLog()
   const spool = deps.noAnswerSpool ?? null
   const noAnswer = (op: string, code: string) => { if (!spoolNoAnswer(spool, op, code, 'mcp')) noAnswers.note(op, code, 'mcp') }
+  // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
+  const sendReport = (report: unknown[]) => deps.request('tools.list', { report: { no_answer: report } }, MCP_SHORT_REPORT_MS)
   const tellNoAnswers = () => {
-    if (!noAnswers.size && !spoolHoldsNoAnswers(spool)) return
+    // The spool's lines leave the file only once the server took them, one report of a spool at a
+    // time across the session's clients (lib/no-answer-report.ts tellSpooledNoAnswers).
+    void tellSpooledNoAnswers(spool, sendReport)
+    // What only this process holds (its spool could not be written): kept again unless a server took it.
+    if (!noAnswers.size) return
     const here = noAnswers.take()
-    // The spool's lines stay in the file until the server took them (their ids count them once).
-    const kept = takeSpooledNoAnswers(spool)
-    const report = [...kept.report, ...here.report]
     // Nothing left to tell (each one past its age): dropped, never kept again.
-    if (!report.length) return
-    // A word for the monitor, never waited on: an older hub ignores `report` and answers its catalog.
-    void deps.request('tools.list', { report: { no_answer: report } }, MCP_SHORT_REPORT_MS)
-      .then((r) => { if (hubAnswered(r)) kept.told(); else here.putBack() }, () => here.putBack())
+    if (!here.report.length) return
+    void sendReport(here.report).then((r) => { if (!hubAnswered(r)) here.putBack() }, () => here.putBack())
   }
 
   // Calls still running, by the client's request id: `notifications/cancelled` aborts one.

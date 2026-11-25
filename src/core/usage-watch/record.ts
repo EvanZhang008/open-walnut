@@ -11,7 +11,7 @@
 import { count } from '../observability/metrics.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
-import { addEvents, addHours, addToolErrors, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
+import { addClientFailures, addEvents, addHours, addToolErrors, clientFailureKnown, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
 import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
 import { ASLEEP_CODE, TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
@@ -191,10 +191,16 @@ const CLIENT_IDS_KEEP_MS = 24 * 3_600_000
 const CLIENT_IDS_MAX = 20_000
 let clientIdsTold = new Map<string, number>()
 
+/** Ids told since the last flush, written with its rows (store.ts client_failures): a restart keeps them. */
+let clientIdsToWrite: Array<{ sid: string; id: string; at: number }> = []
+
 function sameClientIdTold(sid: string, id: string): boolean {
   const key = `${sid}\t${id}`
   if (clientIdsTold.has(key)) return true
   const now = Date.now()
+  // Told to the server before this one started: its store says so.
+  if (clientFailureKnown(sid, id)) { clientIdsTold.set(key, now); return true }
+  clientIdsToWrite.push({ sid, id, at: now })
   if (clientIdsTold.size >= CLIENT_IDS_MAX) {
     for (const [k, t] of clientIdsTold) if (now - t > CLIENT_IDS_KEEP_MS || clientIdsTold.size >= CLIENT_IDS_MAX) clientIdsTold.delete(k); else break
   }
@@ -366,12 +372,17 @@ export function flushUsage(now = Date.now()): void {
   toolErrors = []
   if (rowSink) {
     rowSink(rows)
+    // A replica keeps no store: its told ids stay in memory only.
+    clientIdsToWrite = []
     for (const [route, at] of routeTroubleAt) if (now - at > HOUR_MS) routeTroubleAt.delete(route)
     return
   }
   addHours(rows)
   addEvents(evs)
   addToolErrors(errs)
+  const ids = clientIdsToWrite
+  clientIdsToWrite = []
+  addClientFailures(ids)
   markAlive(now)
   if (now - lastPrune > HOUR_MS) { lastPrune = now; pruneStore(now) }
   for (const [route, at] of routeTroubleAt) if (now - at > HOUR_MS) routeTroubleAt.delete(route)
@@ -430,6 +441,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0, sink: type
   toolErrors = []
   noAnswerSeen = []
   clientIdsTold = new Map()
+  clientIdsToWrite = []
   routeTroubleAt.clear()
   badArgGauges.clear()
   lastPrune = 0

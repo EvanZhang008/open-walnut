@@ -146,6 +146,20 @@ describe('the recorder and the hook', () => {
     expect(rows().map((r) => r.op)).toEqual(['task_get', 'task_get'])
   })
 
+  it('a resend after a server restart is counted once: the ids outlive the process (B2)', async () => {
+    const report = { no_answer: [{ op: 'task_get', code: 'hub_unreachable', client: 'cli', ms: 300_000, id: 'abcdef0123456789' }] }
+    expect(await recordNoAnswers(SID, 'local', report, taskOf)).toBe(1)
+    flushUsage()
+    // A restart, told in the new server's first seconds, before its recorder starts (it keeps what it is
+    // told then): nothing of the old process is in memory and no start time to match the store by.
+    _resetUsageRecorderForTesting(false, 0)
+    expect(await recordNoAnswers(SID, 'local', report, taskOf)).toBe(0)
+    // And once it runs.
+    _resetUsageRecorderForTesting(true, Date.now())
+    expect(await recordNoAnswers(SID, 'local', report, taskOf)).toBe(0)
+    expect(rows()).toHaveLength(1)
+  })
+
   it('other codes are never matched away: each failure the hook reads counts', () => {
     recordToolError({ sid: SID, host: 'local', op: 'search', client: 'mcp', code: 'bad_args' })
     recordToolError({ sid: SID, host: 'local', op: 'search', client: 'mcp', code: 'bad_args' }, 'client')
@@ -273,18 +287,79 @@ describe('the CLI keeps them beside the daemon socket, one file per session', ()
     expect(takeSpooledNoAnswers(file).report.map((r) => r.id)).toEqual(report.map((r) => r.id))
   })
 
-  it('what a process that ended mid-rewrite left aside is put back, and a living one\'s is left alone', () => {
+  it('what a rewrite left aside is put back once it is old, whatever its pid; a fresh one is a rewrite in progress', () => {
     const file = noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)!
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const line = (op: string) => JSON.stringify({ at: Date.now() - 1_000, op, code: 'no_daemon', client: 'mcp', id: `id${op.replace(/_/g, '')}0000` }) + '\n'
-    // A pid that cannot be a live process of this user (never 0 or 1: signal 0 only asks).
-    fs.writeFileSync(`${file}.999999999.ab12.taking`, line('task_dead'), { mode: 0o600 })
-    fs.writeFileSync(`${file}.${process.ppid}.cd34.taking`, line('task_alive'), { mode: 0o600 })
+    const aged = (f: string, ms: number) => { const t = new Date(Date.now() - ms); fs.utimesSync(f, t, t) }
+    // A pid that is alive (this test's parent) or reused does not keep an old one forever (B5).
+    fs.writeFileSync(`${file}.${process.ppid}.ab12.taking`, line('task_alive_pid'), { mode: 0o600 })
+    aged(`${file}.${process.ppid}.ab12.taking`, 60_000)
+    // The name an earlier reclaim left (`.taking.<pid>`) is read too (B4).
+    fs.writeFileSync(`${file}.999999999.cd34.taking.4242`, line('task_old_name'), { mode: 0o600 })
+    aged(`${file}.999999999.cd34.taking.4242`, 60_000)
+    // Moved aside a moment ago: another process's rewrite, left alone whatever its pid.
+    fs.writeFileSync(`${file}.999999999.ef56.taking`, line('task_fresh'), { mode: 0o600 })
     expect(spoolHoldsNoAnswers(file)).toBe(true)
     const { report } = takeSpooledNoAnswers(file)
-    expect(report.map((r) => r.op)).toEqual(['task_dead'])
-    expect(fs.existsSync(`${file}.999999999.ab12.taking`)).toBe(false)
-    expect(fs.existsSync(`${file}.${process.ppid}.cd34.taking`)).toBe(true)
+    expect(report.map((r) => r.op).sort()).toEqual(['task_alive_pid', 'task_old_name'])
+    expect(fs.existsSync(`${file}.${process.ppid}.ab12.taking`)).toBe(false)
+    expect(fs.existsSync(`${file}.999999999.cd34.taking.4242`)).toBe(false)
+    expect(fs.existsSync(`${file}.999999999.ef56.taking`)).toBe(true)
+  })
+
+  it('a tail that starts right at a line keeps that line (B3)', () => {
+    const file = noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)!
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    // Lines of exactly 128 bytes: the 64 KB tail of 600 of them starts exactly at line 88.
+    const t0 = Date.now() - 3_600_000
+    const lineOf = (i: number) => {
+      const base = { at: t0 + i, op: `op_${String(i).padStart(4, '0')}`, code: 'no_daemon', client: 'cli', id: `x${String(i).padStart(5, '0')}` }
+      const bare = JSON.stringify(base)
+      return JSON.stringify({ ...base, id: `x${String(i).padStart(5, '0')}${'a'.repeat(127 - bare.length)}` })
+    }
+    const lines = Array.from({ length: 600 }, (_, i) => lineOf(i))
+    expect(lines.every((l) => l.length === 127)).toBe(true)
+    fs.writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 })
+    const { report, told } = takeSpooledNoAnswers(file)
+    expect(report).toHaveLength(50)
+    told()
+    // The tail held lines 88 to 599: 512, of which 50 were told.
+    const left = fs.readFileSync(file, 'utf-8').trim().split('\n').map((l) => JSON.parse(l).op as string)
+    expect(left).toHaveLength(462)
+    expect(left[0]).toBe('op_0088')
+  })
+
+  it('one report of a spool at a time: two calls ending together send it once (B1)', async () => {
+    const file = noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)
+    spoolNoAnswer(file, 'task_get', 'hub_unreachable', 'mcp', Date.now() - 5_000)
+    const sent: unknown[] = []
+    let let_go: () => void = () => {}
+    const slow = new Promise<void>((r) => { let_go = r })
+    const send = async (report: unknown) => { sent.push(report); await slow; return { ok: true, result: { recorded: true } } }
+    const first = tellSpooledNoAnswers(file, send)
+    const second = tellSpooledNoAnswers(file, send)
+    await second
+    let_go()
+    await first
+    expect(sent).toHaveLength(1)
+    expect(spoolHoldsNoAnswers(file)).toBe(false)
+  })
+
+  it('another process sending holds the spool; a mark it left when it ended is taken over (B1)', async () => {
+    const file = noAnswerSpoolFile(path.join(dir, 'agent-gateway.sock'), SID)!
+    spoolNoAnswer(file, 'task_get', 'hub_unreachable', 'cli', Date.now() - 5_000)
+    const sent: unknown[] = []
+    const send = async (report: unknown) => { sent.push(report); return { ok: true, result: { recorded: true } } }
+    fs.writeFileSync(`${file}.sending`, '', { mode: 0o600 })
+    await tellSpooledNoAnswers(file, send)
+    expect(sent).toHaveLength(0)
+    expect(spoolHoldsNoAnswers(file)).toBe(true)
+    const t = new Date(Date.now() - 20_000)
+    fs.utimesSync(`${file}.sending`, t, t)
+    await tellSpooledNoAnswers(file, send)
+    expect(sent).toHaveLength(1)
+    expect(fs.existsSync(`${file}.sending`)).toBe(false)
   })
 
   it('never writes through a link planted where the file goes', () => {

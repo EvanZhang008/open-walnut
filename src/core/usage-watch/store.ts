@@ -76,6 +76,7 @@ function create(file: string): DB {
       host TEXT NOT NULL, op TEXT NOT NULL, client TEXT NOT NULL, code TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS tool_errors_at ON tool_errors (at);
     CREATE TABLE IF NOT EXISTS companion_batches (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS client_failures (sid TEXT NOT NULL, id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (sid, id));
   `)
   return d
 }
@@ -202,6 +203,23 @@ export function addToolErrors(rows: readonly ToolErrorRow[]): void {
   })
 }
 
+/**
+ * The ids of failures a session's client reported (lib/no-answer-report.ts), kept as long as a
+ * client may send one again, so a resend after a restart is counted once (2026-11-25 review). Its
+ * own table: an older Walnut opening the file never reads it.
+ */
+export function clientFailureKnown(sid: string, id: string): boolean {
+  return withStore(false, (d) => !!d.prepare('SELECT 1 FROM client_failures WHERE sid = ? AND id = ?').get(sid, id))
+}
+
+export function addClientFailures(rows: ReadonlyArray<{ sid: string; id: string; at: number }>): void {
+  if (!rows.length) return
+  withStore(undefined, (d) => {
+    const put = d.prepare('INSERT OR IGNORE INTO client_failures (sid, id, at) VALUES (?, ?, ?)')
+    d.transaction(() => { for (const r of rows) put.run(r.sid, r.id, r.at) })()
+  })
+}
+
 /** The failed calls since `since`, newest first, at most `limit`, of one session (an id or its start) when named. */
 export function readToolErrors(filter: { since: number; session?: string; limit?: number }): ToolErrorRow[] {
   return withStore([], (d) => {
@@ -247,6 +265,8 @@ export function pruneStore(now = Date.now()): void {
     d.prepare('DELETE FROM alive WHERE hour < ?').run(now - RETAIN_HOURS * 3_600_000)
     // A batch older than the rows a companion still sends (companion-uses.ts KEEP_HOURS) is never resent.
     d.prepare('DELETE FROM companion_batches WHERE at < ?').run(now - 8 * 86_400_000)
+    // A client tells a failure at most a day after it (NO_ANSWER_MAX_AGE_MS): two days of ids cover any resend.
+    d.prepare('DELETE FROM client_failures WHERE at < ?').run(now - 2 * 86_400_000)
     d.prepare('DELETE FROM tool_errors WHERE at < ?').run(now - RETAIN_EVENT_DAYS * 86_400_000)
     d.prepare('DELETE FROM tool_errors WHERE id NOT IN (SELECT id FROM tool_errors ORDER BY at DESC LIMIT ?)').run(MAX_TOOL_ERRORS)
   })

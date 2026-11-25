@@ -190,6 +190,8 @@ let modelFlag = null;
 let safeguardRefuseUnless = null;
 // Servers added live with mcp_set_servers (real CLI 2.1.312): named in the next results.
 let liveMcpServers = [];
+// Whether an mcp_status request was answered yet (MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST).
+let mcpStatusAnswered = false;
 let effortFlag = null;
 let dangerouslySkipPermissions = false;
 
@@ -439,9 +441,14 @@ if (inputFormat === 'stream-json') {
             const tools = Array.from({ length: n }, (_, i) => ({ name: `tool_${i}`, annotations: { readOnly: i % 2 === 0 } }));
             return { name, status, serverInfo: { name, version: '1' }, tools };
           };
+          // MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST=1: the first ask is answered with an error (a busy CLI).
+          const failFirst = process.env.MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST === '1' && !mcpStatusAnswered;
+          mcpStatusAnswered = true;
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { mcpServers: liveMcpServers.map(row) } },
+            response: failFirst
+              ? { subtype: 'error', request_id: parsed.request_id, error: 'busy' }
+              : { subtype: 'success', request_id: parsed.request_id, response: { mcpServers: liveMcpServers.map(row) } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
           // side_question: the answer as a real model writes it (mock-claude-side-answer.mjs).

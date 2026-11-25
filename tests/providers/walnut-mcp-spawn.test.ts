@@ -363,6 +363,36 @@ describe('a process whose Walnut MCP server is gone is counted once per drop', (
     }
   }, 60_000)
 
+  // 2026-11-25 review: the ask's time was taken when it went out, so a first answer that failed
+  // (a busy CLI, a timeout) used up the check for the whole gap.
+  it('a first ask that got no usable answer is asked again at the next turn end', async () => {
+    const { setUsageWatchFile, closeUsageWatchStore, readToolErrors } = await import('../../src/core/usage-watch/store.js')
+    const { _resetUsageRecorderForTesting, flushUsage } = await import('../../src/core/usage-watch/record.js')
+    setUsageWatchFile(path.join(WALNUT_HOME, 'usage-watch.sqlite'))
+    _resetUsageRecorderForTesting(true, Date.now() - 60_000)
+    process.env.MOCK_CLAUDE_MCP_STATUS = 'walnut=failed'
+    process.env.MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST = '1'
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const asked = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_status')).length
+    const gone = () => { flushUsage(); return readToolErrors({ since: 0, limit: 20 }).filter((r) => r.code === 'tools_gone') }
+    try {
+      const { session } = await spawnMcpConfig('t-mount-retry', { message: 'snapshot-clean-turn:one' })
+      await waitUntil(() => results >= 1 && asked() >= 1, 15000, 'first ask')
+      expect(gone()).toEqual([])
+      expect(await session.writeMessage('snapshot-clean-turn:two')).toBe(true)
+      await waitUntil(() => gone().length >= 1, 15000, 'second ask judged')
+      expect(asked()).toBe(2)
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      delete process.env.MOCK_CLAUDE_MCP_STATUS
+      delete process.env.MOCK_CLAUDE_MCP_STATUS_FAIL_FIRST
+      closeUsageWatchStore()
+      setUsageWatchFile(null)
+      _resetUsageRecorderForTesting(false)
+    }
+  }, 60_000)
+
   it('a healthy mount is asked and counts nothing', async () => {
     const { setUsageWatchFile, closeUsageWatchStore, readToolErrors } = await import('../../src/core/usage-watch/store.js')
     const { _resetUsageRecorderForTesting, flushUsage } = await import('../../src/core/usage-watch/record.js')

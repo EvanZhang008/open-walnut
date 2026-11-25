@@ -10716,6 +10716,7 @@ export class ClaudeCodeSession {
   /** When this runner last asked a process for its mount, and which process (the turn-end gap). */
   private _mountAskedAt = 0
   private _mountAskedPid: number | null = null
+  private _mountAsking = false
 
   /**
    * A turn end asks again only this long after the last ask in one process. The CLI's answer names
@@ -10736,18 +10737,24 @@ export class ClaudeCodeSession {
     const sid = this.claudeSessionId
     if (!this._transport || pid === null || !sid) return
     if (!this._requestedMcpServers.includes('walnut') || this._walnutMountVerdict === 'blocked') return
-    if (this._mountAskedPid === pid && Date.now() - this._mountAskedAt < ClaudeCodeSession.TURN_END_MOUNT_GAP_MS) return
-    this._mountAskedPid = pid
-    this._mountAskedAt = Date.now()
+    if (this._mountAsking || (this._mountAskedPid === pid && Date.now() - this._mountAskedAt < ClaudeCodeSession.TURN_END_MOUNT_GAP_MS)) return
+    this._mountAsking = true
     try {
       const reply = await this.readControlPayload('mcp-status', 'mcp_status', 10_000)
       if (!reply || this.pid !== pid) return
-      const { judgeWalnutMount, recordToolsGone } = await import('../core/usage-watch/mount-watch.js')
+      const { judgeWalnutMount, recordToolsGone, walnutMountStatus } = await import('../core/usage-watch/mount-watch.js')
+      // Only an answer that says something uses up the ask: a timeout or an empty one is asked again
+      // at the next turn end (2026-11-25 review: a slow first answer skipped the check for 15 minutes).
+      if (!walnutMountStatus(reply)) return
+      this._mountAskedPid = pid
+      this._mountAskedAt = Date.now()
       const fresh = this._walnutMountSeen === undefined
       const { seen, gone } = judgeWalnutMount(this._walnutMountSeen, pid, reply)
       this._walnutMountSeen = seen
       if (gone) recordToolsGone({ sid, taskId: this.taskId, host: this._host, why: gone, fresh })
-    } catch { /* a count only */ }
+    } catch { /* a count only */ } finally {
+      this._mountAsking = false
+    }
   }
 
   private ensureLiveWalnutMount(): Promise<void> {
