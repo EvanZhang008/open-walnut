@@ -7,7 +7,6 @@ import UIKit
 /// asks again, so an avatar he changed shows on the next open of the page. A 404 (the "Org
 /// avatars" experiment is off) is remembered the same way, so the app keeps its own look and lists
 /// do not ask again on every row. A failed read keeps what was shown and is tried on the next view.
-@Observable
 @MainActor
 final class OrgAvatarLoader {
     static let shared = OrgAvatarLoader()
@@ -21,12 +20,20 @@ final class OrgAvatarLoader {
         let pixels: Int
     }
 
-    private struct Entry {
-        let image: UIImage?
-        let at: Date
+    /// One key's picture, observed on its own. An answer for one avatar redraws only the views that
+    /// show that one, and an answer the same as the last redraws nothing. With one observed table, every
+    /// avatar on screen redrew whenever any answer came in: opening the drawer's Directors fold (each
+    /// Director row loads its own avatar since 1c98f414e5) redrew every VP row too, the rows a long
+    /// press for their menu lands on.
+    @Observable
+    @MainActor
+    final class Slot {
+        fileprivate(set) var image: UIImage?
+        @ObservationIgnored fileprivate var data: Data?
+        @ObservationIgnored fileprivate var answeredAt: Date?
     }
 
-    private var entries: [Key: Entry] = [:]
+    @ObservationIgnored private var slots: [Key: Slot] = [:]
     @ObservationIgnored private var inflight: [Key: Task<Void, Never>] = [:]
     private let fetch: (String, Int) async throws -> Data?
     private let now: () -> Date
@@ -52,12 +59,20 @@ final class OrgAvatarLoader {
     }
 
     /// What to show now: the last image read for the key, nil while there is none (or the server
-    /// said there is none).
-    func image(_ key: Key) -> UIImage? { entries[key]?.image }
+    /// said there is none). A view that reads it is redrawn only when this key's picture changes.
+    func image(_ key: Key) -> UIImage? { slot(key).image }
+
+    /// The key's slot, made on first use (not observed itself: the slot's picture is).
+    private func slot(_ key: Key) -> Slot {
+        if let slot = slots[key] { return slot }
+        let slot = Slot()
+        slots[key] = slot
+        return slot
+    }
 
     /// Reads the avatar again unless a fresh answer is already here or a read is under way.
     func refresh(_ key: Key, scale: CGFloat) async {
-        if let entry = entries[key], Self.isFresh(entry.at, now: now()) { return }
+        if let at = slots[key]?.answeredAt, Self.isFresh(at, now: now()) { return }
         if let running = inflight[key] { return await running.value }
         let fetch = self.fetch
         let task = Task { @MainActor in
@@ -66,8 +81,12 @@ final class OrgAvatarLoader {
                 let data = try await fetch(key.taskId, key.pixels)
                 // Erased meanwhile (Disconnect): this answer belongs to the pairing that left.
                 guard !Task.isCancelled else { return }
-                let image = data.flatMap { UIImage(data: $0, scale: max(scale, 1)) }
-                self.entries[key] = Entry(image: image, at: self.now())
+                let slot = self.slot(key)
+                slot.answeredAt = self.now()
+                // The same answer again (a 404 again, the same picture) changes nothing on screen.
+                guard data != slot.data else { return }
+                slot.data = data
+                slot.image = data.flatMap { UIImage(data: $0, scale: max(scale, 1)) }
             } catch {
                 // Not an answer about the avatar: keep what shows, ask again on the next view.
             }
@@ -80,7 +99,8 @@ final class OrgAvatarLoader {
     func eraseAll() {
         for task in inflight.values { task.cancel() }
         inflight = [:]
-        entries = [:]
+        for slot in slots.values { slot.image = nil }
+        slots = [:]
     }
 }
 

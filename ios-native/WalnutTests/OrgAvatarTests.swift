@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 import UIKit
 @testable import Walnut
@@ -72,5 +73,32 @@ final class OrgAvatarTests: XCTestCase {
         await loader.refresh(key, scale: 3)
         XCTAssertNil(loader.image(key))
         XCTAssertEqual(calls, 1)
+    }
+
+    /// An answer redraws only the views showing that avatar, and an answer the same as the last
+    /// redraws none: a list's rows are not all redrawn as another row's avatar comes in.
+    func testAnAnswerRedrawsOnlyItsOwnAvatar() async {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { ctx in
+            UIColor.systemTeal.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        let loader = OrgAvatarLoader(fetch: { id, _ in id == "vp" ? nil : png }, now: { clock })
+        let vp = OrgAvatarLoader.Key(server: "s", taskId: "vp", pixels: 68)
+        let director = OrgAvatarLoader.Key(server: "s", taskId: "d1", pixels: 66)
+        await loader.refresh(vp, scale: 2)
+
+        var vpRedrawn = false
+        withObservationTracking { _ = loader.image(vp) } onChange: { vpRedrawn = true }
+        var directorRedrawn = false
+        withObservationTracking { _ = loader.image(director) } onChange: { directorRedrawn = true }
+
+        await loader.refresh(director, scale: 2)
+        XCTAssertTrue(directorRedrawn, "the Director's own avatar did not redraw when it came in")
+        XCTAssertFalse(vpRedrawn, "the VP's avatar redrew for the Director's answer")
+
+        clock += 61
+        await loader.refresh(vp, scale: 2)
+        XCTAssertFalse(vpRedrawn, "the same 404 again redrew the VP's avatar")
     }
 }

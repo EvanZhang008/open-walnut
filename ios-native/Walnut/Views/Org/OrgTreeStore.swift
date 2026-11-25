@@ -15,6 +15,7 @@ final class OrgTreeStore {
     private(set) var tree: OrgTreeWire?
     /// false: this server has no org (an older one).
     private(set) var available = true
+    /// A read runs while nothing is shown yet (only the empty placeholder reads it).
     private(set) var loading = false
     /// The last read failed (what was shown, if anything, stays).
     private(set) var failure: String?
@@ -37,27 +38,32 @@ final class OrgTreeStore {
     }
 
     /// Only the newest read writes, so a read cancelled by a newer one can neither block it nor
-    /// leave its error behind.
+    /// leave its error behind. A read that brings what is shown writes nothing: every write
+    /// redraws each surface showing the org, and a drawer row redrawn under a finger loses the
+    /// long-press menu it was about to show (the VP's New Director, a Director's Remove). The
+    /// store reads again on every status that moves while it is shown, so most reads change
+    /// nothing.
     func load() async {
         generation &+= 1
         let gen = generation
-        loading = true
-        defer { if gen == generation { loading = false } }
+        if tree == nil, !loading { loading = true }
+        defer { if gen == generation, loading { loading = false } }
         do {
             let fetched = try await read()
             guard gen == generation else { return }
-            answered = true
+            if !answered { answered = true }
             guard let fetched else {
-                available = false
+                if available { available = false }
                 return
             }
-            available = true
+            if !available { available = true }
             if fetched != tree { tree = fetched }
-            failure = nil
+            if failure != nil { failure = nil }
         } catch {
             guard gen == generation, !SessionConversationStore.isCancellation(error) else { return }
-            answered = true
-            failure = error.localizedDescription
+            if !answered { answered = true }
+            let message = error.localizedDescription
+            if failure != message { failure = message }
             AppLog.info("org", "org tree load failed", ["error": error.localizedDescription])
         }
     }

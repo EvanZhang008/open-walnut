@@ -346,7 +346,12 @@ struct ChatDrawer: View {
     private func loadOrg() async {
         Task { await directors.refresh() }
         await org.load()
-        if orgTree != nil, orgOrderFollowsData || orgOrder.isEmpty { orgOrder = currentOrgOrder() }
+        // An order that did not change is not written: every write here redraws the whole list,
+        // and a row redrawn under a finger loses the long-press menu it was about to show.
+        if orgTree != nil, orgOrderFollowsData || orgOrder.isEmpty {
+            let order = currentOrgOrder()
+            if order != orgOrder { orgOrder = order }
+        }
     }
 
     // MARK: - Directors

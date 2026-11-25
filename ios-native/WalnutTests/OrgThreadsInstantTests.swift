@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import Walnut
 
@@ -407,6 +408,39 @@ final class OrgThreadsInstantTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(box.n, 2, "three moves, one read")
         XCTAssertEqual(org.tree?.counts.needsYou, 2, "the counts follow")
+    }
+
+    /// A read that brings what is shown writes nothing the surfaces observe: the store reads
+    /// again on every status that moves, and a drawer row redrawn under a finger loses the
+    /// long-press menu it was about to show (DirectorsUITests).
+    func testAReadThatChangesNothingRedrawsNothing() async {
+        final class Box: @unchecked Sendable { var needs = 1; var fail = false }
+        let box = Box()
+        let org = OrgTreeStore(read: {
+            if box.fail { throw APIError.badResponse }
+            return OrgTreeWire(main: nil, projects: [], counts: OrgCountsWire(needsYou: box.needs))
+        }, signals: signals)
+        await org.load()
+
+        func redraws(_ body: () async -> Void) async -> Bool {
+            var changed = false
+            withObservationTracking {
+                _ = (org.tree, org.available, org.loading, org.failure, org.answered)
+            } onChange: { changed = true }
+            await body()
+            return changed
+        }
+        let sameAgain = await redraws { await org.load() }
+        XCTAssertFalse(sameAgain, "the same tree again redrew the org's surfaces")
+        box.needs = 2
+        let moved = await redraws { await org.load() }
+        XCTAssertTrue(moved, "a count that moved did not redraw")
+        XCTAssertEqual(org.tree?.counts.needsYou, 2)
+        box.fail = true
+        await org.load()
+        let sameFailure = await redraws { await org.load() }
+        XCTAssertFalse(sameFailure, "the same failure again redrew the org's surfaces")
+        XCTAssertEqual(org.tree?.counts.needsYou, 2, "a failed read keeps what was shown")
     }
 
     func testTheInboxReadsAgainOnTheFeedsWord() async {
