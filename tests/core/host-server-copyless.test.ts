@@ -88,6 +88,25 @@ describe('a host short of memory or disk', () => {
     m2.stop()
   })
 
+  it('turning the experiment on or off re-judges a gated host on the config change (a soft reconcile)', async () => {
+    let on = false
+    const m = createHostServerManager(deps({ copylessWanted: async () => on }))
+    const h = copylessHost()
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
+    // Another config change with the experiment as it was leaves the gate resting.
+    await m.reconcile('devbox', { soft: true })
+    expect(m.view('devbox').phase).toBe('not-eligible')
+    on = true
+    await m.reconcile('devbox', { soft: true })
+    expect(m.view('devbox')).toMatchObject({ phase: 'running', copyless: true })
+    on = false
+    await m.reconcile('devbox', { soft: true })
+    expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
+    expect(m.view('devbox').copyless).toBeUndefined()
+    m.stop()
+  })
+
   it('no build for its system is not answered without a copy', async () => {
     const m = createHostServerManager(deps({ copylessWanted: async () => true }))
     const h = copylessHost()
@@ -122,6 +141,7 @@ describe('a host short of memory or disk', () => {
     on = false
     await m2.reconcile('devbox', { retry: true })
     expect(m2.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
+    expect(m2.view('devbox').copyless).toBeUndefined()
     expect(small.specs.at(-1)).toBeNull()
     expect(runsCopyless('devbox')).toBe(false)
     m2.stop()

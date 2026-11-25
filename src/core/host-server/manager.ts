@@ -578,7 +578,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     // A config change elsewhere (favorites, ordering) does not redo a setup that waits to try again
     // (try-later.ts), nor one that stopped trying by itself or is not eligible, while this host's own
     // settings are the same: the wait keeps its pace, a stop waits for a connect or Retry.
-    const print = JSON.stringify(settings)
+    // The experiment service_without_copy counts as this host's settings: turning it on or off re-judges
+    // a host resting on its memory or disk gate (found over SSH: the config change left it gated).
+    const print = JSON.stringify({ settings, copyless: await wantsCopyless() })
     const resting = (waits && waits !== 'login') || lastWait === 'failed' || view(hostKey).phase === 'not-eligible'
     if (soft && resting && lastSettings.get(hostKey) === print) return
     lastSettings.set(hostKey, print)
@@ -862,11 +864,12 @@ export function createHostServerManager(deps: ManagerDeps) {
       // Waiting does not change it (no build for the system, too little memory in all, this
       // computer): the next connect or a Retry looks again.
       tryLater.clear(hostKey)
-      set(hostKey, { enabled: true, phase: 'not-eligible', message, gate: { reason, checkedAt } })
+      set(hostKey, { enabled: true, phase: 'not-eligible', message, gate: { reason, checkedAt }, copyless: undefined })
       return
     }
     const later = retryingLater(hostKey, o.again, message)
-    set(hostKey, { enabled: true, phase: 'not-eligible', message: later.message, gate: { reason, checkedAt, ...(later.at !== undefined ? { recheckAt: later.at } : {}) } })
+    // A gated host runs no service without a copy (the experiment went off, or it cannot any more).
+    set(hostKey, { enabled: true, phase: 'not-eligible', message: later.message, gate: { reason, checkedAt, ...(later.at !== undefined ? { recheckAt: later.at } : {}) }, copyless: undefined })
   }
 
   function olderNotice(id: string, older: string, why: string): string {
