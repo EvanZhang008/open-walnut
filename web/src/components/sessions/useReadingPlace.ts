@@ -392,7 +392,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     };
   }, [containerRef, boxId]);
   const resized = useLeanCallback(() => { if (hold.current) stopHold(); }, [stopHold]);
-  const keepsEnd = useCallback((): boolean => {
+  const keepsEnd = useLeanCallback((): boolean => {
     const p = shownPlace.current;
     if (!p?.atBottom) return false;
     // The last row the box draws (the timeline's list also holds rows it never draws).

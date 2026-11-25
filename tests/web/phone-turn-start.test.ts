@@ -136,6 +136,6 @@ describe('the open-time landing keeps an end the reader kept (2026-11-25)', () =
     expect(history).toMatch(/phoneTurnStartStep\(\{\s*atBottom: isAtBottom\.current,\s*keptEnd: placeKeepsEnd\(\),/)
     const place = readFileSync(join(root, 'web/src/components/sessions/useReadingPlace.ts'), 'utf8')
     // The timeline's list holds rows it never draws: the last drawn one says whether anything came since.
-    expect(place).toMatch(/const keepsEnd = useCallback[\s\S]{0,400}querySelectorAll<HTMLElement>\('\[data-message-id\]'\)/)
+    expect(place).toMatch(/const keepsEnd = useLeanCallback[\s\S]{0,400}querySelectorAll<HTMLElement>\('\[data-message-id\]'\)/)
   })
 })
