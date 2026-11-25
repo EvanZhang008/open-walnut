@@ -4740,7 +4740,9 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 /* ===== Thinking Block ===== */
 
-.chat-thinking-content {
+/* The lines Walnut hid from a reply (HiddenLinesFold) read as quietly as a thought. */
+.chat-thinking-content,
+.chat-hidden-lines {
   padding: 0 10px 8px;
   font-size: var(--font-size-sm);
   line-height: 1.5;

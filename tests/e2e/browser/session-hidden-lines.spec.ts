@@ -9,6 +9,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { mockSession, open, waitForWs } from './mock-session-harness';
+import { isolateUiPrefs } from './todo-panel-helpers';
 
 const SHOTS = process.env.HIDDEN_LINES_SHOTS ?? `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots`;
 
@@ -111,6 +112,8 @@ test('unset: shown where Walnut runs from its source checkout, hidden on any oth
 });
 
 test('the Settings switch turns the fold on and off in an open chat', async ({ page }) => {
+  // It opens the sidebar to reach Settings: that synced layout pref stays this page's own.
+  await isolateUiPrefs(page);
   await pinConfig(page, false);
   const { hist } = await openChat(page);
   await expect(hist.getByTestId('hidden-lines-fold')).toHaveCount(0);

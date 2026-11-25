@@ -66,10 +66,15 @@ describe('one thinking row', () => {
     expect(foldLine).toBeGreaterThan(-1);
     const foldLineEnd = fn.indexOf('\n  }\n', foldLine);
     const line = fn.slice(foldLine, foldLineEnd);
-    expect(line).toContain('process-fold-chevron');
+    // The fold line is the one FoldLine every fold of the timeline draws (the hidden lines' too):
+    // the chevron, then the words, nothing else.
+    expect(line).toContain('<FoldLine label="Thinking"');
     expect(line).not.toContain('name="thought"');
     expect(line).not.toContain('thinkingFirstLine(');
-    expect(line.indexOf('process-fold-chevron')).toBeLessThan(line.indexOf('>Thinking<'));
+    const foldFn = msg.slice(msg.indexOf('function FoldLine('), msg.indexOf('export function HiddenLinesFold'));
+    expect(foldFn).toContain('process-fold-chevron');
+    expect(foldFn).not.toContain('name="thought"');
+    expect(foldFn.indexOf('process-fold-chevron')).toBeLessThan(foldFn.indexOf('{label}'));
     expect(fn.indexOf('name="thought"')).toBeGreaterThan(foldLineEnd);
     expect(fn.indexOf('thinkingFirstLine(')).toBeGreaterThan(foldLineEnd);
     // The context is off unless a body of opened steps turns it on: a fold's, a run's.
@@ -77,8 +82,17 @@ describe('one thinking row', () => {
     expect(ctx).toMatch(/export const InStepList = createContext\(false\)/);
     const providers = files.flatMap(({ rel, text }) => [...text.matchAll(/<InStepList\.Provider/g)].map(() => rel)).sort();
     expect([...new Set(providers)]).toEqual(['components/sessions/SessionMessage.tsx', 'components/sessions/TurnFolds.tsx']);
-    const providerLines = files.flatMap(({ text }) => [...text.matchAll(/^.*<InStepList\.Provider.*$/gm)].map((m) => m[0]));
-    for (const line of providerLines) expect(line).toMatch(/\{open && <div className="(process-fold-body|tool-run-body)">/);
+    // Each provider sits in an opened body: inline, or as the children of a FoldLine, whose body
+    // is drawn only while open.
+    expect(foldFn).toMatch(/\{open && <div className="process-fold-body">\{children\}<\/div>\}/);
+    const providerLines = files.flatMap(({ text }) => {
+      const lines = text.split('\n');
+      return lines.flatMap((l, i) => (/<InStepList\.Provider/.test(l) ? [{ line: l, before: lines[i - 1] ?? '' }] : []));
+    });
+    for (const { line, before } of providerLines) {
+      if (/<FoldLine /.test(before)) continue;
+      expect(line).toMatch(/\{open && <div className="(process-fold-body|tool-run-body)">/);
+    }
   });
 
   it('the main chat\'s thinking row shows no words until opened', () => {

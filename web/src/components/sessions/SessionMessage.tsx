@@ -362,7 +362,7 @@ export function HiddenLinesFold({ text, disclosureId }: { text: string; disclosu
   if (!text.trim()) return null;
   return (
     <FoldLine label="Hidden by Walnut" open={open} onToggle={() => setOpen((p) => !p)} testId="hidden-lines-fold">
-      <div className="chat-thinking-content" data-testid="hidden-lines-text" data-find-skip="">{text}</div>
+      <div className="chat-hidden-lines" data-testid="hidden-lines-text" data-find-skip="">{text}</div>
     </FoldLine>
   );
 }
