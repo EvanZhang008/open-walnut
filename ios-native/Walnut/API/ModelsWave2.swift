@@ -673,10 +673,14 @@ struct ServerConfigInfo: Codable {
     struct ClientSettings: Equatable, Sendable {
         var showWalnutAdditions = false
         var experimental: [String: Bool] = [:]
+        /// `ui.show_hidden_lines`, as the server resolved it; nil when it does not say (an older
+        /// server, or a replica while the switch is unset and the Mac is away).
+        var showHiddenLines: Bool? = nil
     }
 
     var clientSettings: ClientSettings {
-        ClientSettings(showWalnutAdditions: showWalnutAdditions, experimental: config.experimental ?? [:])
+        ClientSettings(showWalnutAdditions: showWalnutAdditions, experimental: config.experimental ?? [:],
+                       showHiddenLines: config.ui?.showHiddenLines)
     }
 
     /// The server's `ui.show_walnut_additions`; false when it does not say (an
@@ -687,9 +691,13 @@ struct ServerConfigInfo: Codable {
     struct UI: Codable {
         /// Show what Walnut added to a person's message on every message.
         let showWalnutAdditions: Bool?
+        /// Show, folded under a reply, the lines Walnut hid from it (additive 2026-11-25). The
+        /// server resolves it: unset, on where it runs from its own source checkout (a developer).
+        var showHiddenLines: Bool? = nil
 
         private enum CodingKeys: String, CodingKey {
             case showWalnutAdditions = "show_walnut_additions"
+            case showHiddenLines = "show_hidden_lines"
         }
     }
 

@@ -48,6 +48,8 @@ struct TimelineHost: UIViewControllerRepresentable {
     var showWalnutAdditions: Bool = false
     /// Main's or a lead's chat: replies show the tasks they are about (`TimelineInput`).
     var showMessageAbout: Bool = false
+    /// See `TimelineInput.showHiddenLines`. Defaulted off.
+    var showHiddenLines: Bool = false
     /// Bumped by the store when a layout-shifting mutation should re-assert
     /// the pinned bottom (send, turn-end, streaming re-assert).
     var scrollToBottomSignal: Int
@@ -114,7 +116,8 @@ struct TimelineHost: UIViewControllerRepresentable {
             afterLiveMessageIDs: afterLiveMessageIDs,
             scope: TimelineScope.sanitize(scope),
             showWalnutAdditions: showWalnutAdditions,
-            showMessageAbout: showMessageAbout
+            showMessageAbout: showMessageAbout,
+            showHiddenLines: showHiddenLines
         )
         coordinator.resubmit()
         if scrollToBottomSignal != coordinator.lastScrollSignal {

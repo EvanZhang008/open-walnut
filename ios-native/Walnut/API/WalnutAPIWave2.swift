@@ -188,6 +188,15 @@ extension WalnutAPI {
         try await get("/config")
     }
 
+    private struct ConfigWriteAck: Decodable {}
+
+    /// Write `ui.show_hidden_lines` alone (`PUT /api/v1/config/ui`: the server merges it into its
+    /// config and leaves every other key as it is; a replica carries it to the Mac, or answers 503
+    /// needs_leader). The same value twice is the same write.
+    func setShowHiddenLines(_ on: Bool) async throws {
+        let _: ConfigWriteAck = try await send("PUT", "/config/ui", body: ["show_hidden_lines": on], retrySafe: true)
+    }
+
     /// Personal AI conversation size stats (no conversationId = the active one).
     func chatStats(agentID: String = "general") async throws -> ChatStats {
         try await get("/chat/stats?agentId=\(escape(agentID))")

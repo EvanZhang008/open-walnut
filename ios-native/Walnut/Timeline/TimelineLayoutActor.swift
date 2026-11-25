@@ -39,6 +39,7 @@ actor TimelineLayoutActor {
     private var cacheMentionsVersion = -1
     /// Rows of a reply carry its task pills only in an Org node's chat.
     private var cacheShowAbout = false
+    private var cacheShowHiddenLines = false
     /// The wrapped code blocks the memo was built for: a flip drops only the
     /// entries that drew that block.
     private var cacheWrappedCodeKeys: Set<String> = []
@@ -111,7 +112,8 @@ actor TimelineLayoutActor {
         TimelineTextStyler.adopt(input.sizeCategory)
         let mentionsVersion = TaskMentionResolver.shared.version
         if input.width != cacheWidth || input.sizeCategory != cacheSizeCategory
-            || mentionsVersion != cacheMentionsVersion || input.showMessageAbout != cacheShowAbout {
+            || mentionsVersion != cacheMentionsVersion || input.showMessageAbout != cacheShowAbout
+            || input.showHiddenLines != cacheShowHiddenLines {
             rowCache = [:]
             headCache = nil
             richEntryIdentities.removeAll(keepingCapacity: true)
@@ -119,6 +121,7 @@ actor TimelineLayoutActor {
             cacheSizeCategory = input.sizeCategory
             cacheMentionsVersion = mentionsVersion
             cacheShowAbout = input.showMessageAbout
+            cacheShowHiddenLines = input.showHiddenLines
             aboutKeys = []
         }
         if input.wrappedCodeKeys != cacheWrappedCodeKeys {
@@ -162,7 +165,8 @@ actor TimelineLayoutActor {
             let built = builder.rows(for: message, width: input.width,
                                      expandedRowIDs: input.expandedRowIDs,
                                      scope: input.scope, queued: queued,
-                                     showAbout: input.showMessageAbout)
+                                     showAbout: input.showMessageAbout,
+                                     showHiddenLines: input.showHiddenLines)
             rowCache[key] = (message, built)
             if built.contains(where: { $0.id.hasSuffix("#about") }) { aboutKeys.insert(key) }
             let identities = TimelineRowBuilder.richIdentities(in: built)
@@ -411,7 +415,8 @@ actor TimelineLayoutActor {
                 activity: input.activity, width: input.width,
                 tailRevision: tailRevision, cachedHead: headCache, scope: input.scope,
                 liveThinking: input.liveThinking, liveTools: input.liveTools,
-                expandedRowIDs: input.expandedRowIDs, runFoldedElsewhere: runFoldedElsewhere
+                expandedRowIDs: input.expandedRowIDs, runFoldedElsewhere: runFoldedElsewhere,
+                showHiddenLines: input.showHiddenLines
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)
@@ -532,6 +537,8 @@ actor TimelineLayoutActor {
             if let failedHere = m.uploadFailedID { key += "|uf" + failedHere }
         }
         if expandedRowIDs.contains("\(namespace)#0") { key += "|x" }
+        // The reply's "Hidden by Walnut" row opens on its own id (TimelineRowBuilder.hiddenLinesRows).
+        if expandedRowIDs.contains("\(namespace)#hidden") { key += "|h" }
         return key
     }
 }
