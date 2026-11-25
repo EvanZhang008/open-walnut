@@ -1,8 +1,9 @@
 /**
  * Why a host gets no offer of the one Walnut service (src/providers/one-service-mode.ts), while it
  * is wanted for the host (the offer on for the host, with service_launcher on;
- * service-launcher-flag.ts hostServiceOfferWanted): no follower of this Walnut there, no
- * launcher yet, no walnut file of this build for it, or a switch that did not take. Walnut Health's
+ * service-launcher-flag.ts hostServiceOfferWanted): not a Linux host, no follower of this Walnut
+ * there (never one the person turned off), no launcher yet, no walnut file of this build for it, a
+ * switch that did not take, or an offer left open while another name may be the same machine. Walnut Health's
  * (audience.ts: no needsYou, never a popup), one item per host, said again only when the reason
  * changes; an offer recovers it, and so do the experiments going off: an item this process raised at
  * once, and one an earlier process raised (the experiment turned off, then a leader restart) at the
@@ -28,8 +29,8 @@ export function noServiceOfferItem(hostKey: string, label: string, why: string):
   return {
     kind: 'operation-error',
     severity: 'info',
-    title: `${label} keeps the session helper and its Walnut server as two programs`,
-    body: `Walnut does not run ${label} as one Walnut service: ${why.replace(/\.$/, '')}. Its sessions and its server run as before.`,
+    title: `${label} does not run as one Walnut service`,
+    body: `Walnut does not run ${label} as one Walnut service: ${why.replace(/\.$/, '')}. Its sessions run as before, through its session helper.`,
     detail: `one Walnut service not offered on ${hostKey}: ${why}`,
     dedupKey: serviceOfferKey(hostKey),
     recoveryKey: serviceOfferKey(hostKey),
@@ -48,8 +49,8 @@ export function noteServiceOffer(hostKey: string, w: ServiceModeWant): void {
     void conditions.raise(key, async () => noServiceOfferItem(hostKey, await hostLabel(hostKey), why))
     return
   }
-  // Settled with no reason against it: offered, or the host already serves.
-  if (w.want === 'walnut-serve') {
+  // Settled with no reason to report: offered, the host already serves, or the person turned its server off.
+  if (w.want !== null) {
     lastWhy.delete(hostKey)
     void conditions.recover(key)
   }

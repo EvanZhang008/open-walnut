@@ -5,11 +5,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  serviceModeAsk, serviceModeDue, serviceModeWantNow, servesAsHere, servesFromHello, servesThisWalnut, wantedServiceMode, type ServiceModeFacts,
+  OFFER_NOT_SURE, platformOf, serviceModeAsk, serviceModeDue, serviceModeWantNow, servesAsHere, servesFromHello, servesThisWalnut, wantedServiceMode, type ServiceModeFacts,
 } from '../../src/providers/one-service-mode.js'
 
 const HOME = '/home/someone/.open-walnut'
-const base: ServiceModeFacts = { experiment: true, serves: 'daemon', serviceHome: null, home: HOME, launcher: true, follower: { kind: 'replica' } }
+const base: ServiceModeFacts = { experiment: true, serves: 'daemon', serviceHome: null, home: HOME, launcher: true, platform: 'linux', follower: { kind: 'replica' } }
 const f = (patch: Partial<ServiceModeFacts>): ServiceModeFacts => ({ ...base, ...patch })
 
 describe('wantedServiceMode', () => {
@@ -37,6 +37,37 @@ describe('wantedServiceMode', () => {
     expect(w.why).toMatch(why)
     expect(serviceModeDue(w, 'daemon')).toBe(false)
     expect(serviceModeAsk(w, facts)).toBeUndefined()
+  })
+
+  // Review of the default flip (M1): the walnut file goes into a Linux daemon slot only, so a macOS
+  // host (a laptop such as a person's own MacBook joined as a host) is decided up front: never --serve,
+  // so it never takes an update that fails for it; one whose system is not known yet is left as it is.
+  it('a host that is not Linux is never offered, with the reason; one whose system is not known is left as it is', () => {
+    for (const platform of ['darwin', 'win32', 'freebsd']) {
+      const facts = f({ platform })
+      const w = wantedServiceMode(facts)
+      expect(w.want, platform).toBe('daemon')
+      expect(w.why, platform).toMatch(/runs (macOS|Windows|freebsd), and the one Walnut service runs on Linux hosts only for now/)
+      expect(serviceModeDue(w, 'daemon')).toBe(false)
+      expect(serviceModeAsk(w, facts)).toBeUndefined()
+    }
+    // A service of this Walnut on such a host (never made, but read so) goes back.
+    const serving = f({ platform: 'darwin', serves: 'walnut-serve', serviceHome: HOME })
+    expect(serviceModeAsk(wantedServiceMode(serving), serving)).toEqual({ home: HOME, on: false })
+    for (const serves of ['daemon', 'walnut-serve'] as const) {
+      const w = wantedServiceMode(f({ platform: null, serves, serviceHome: serves === 'walnut-serve' ? HOME : null }))
+      expect(w).toEqual({ want: null })
+    }
+    expect(platformOf('Linux\n')).toBe('linux')
+    expect(platformOf('darwin')).toBe('darwin')
+    for (const bad of [undefined, null, 42, '', 'a b', '../x']) expect(platformOf(bad)).toBeNull()
+  })
+
+  // Review of the default flip (L3): a server the person turned off there is their choice, no Health item.
+  it('a host whose Walnut server the person turned off is not offered, and has nothing to report', () => {
+    const w = wantedServiceMode(f({ follower: { kind: 'none' } }))
+    expect(w).toEqual({ want: 'daemon' })
+    expect(serviceModeDue(w, 'daemon')).toBe(false)
   })
 
   it('a follower not settled yet changes nothing, whichever way the host runs', () => {
@@ -123,7 +154,7 @@ describe('servesFromHello', () => {
 describe('serviceModeWantNow', () => {
   const inputs = (patch: Partial<Parameters<typeof serviceModeWantNow>[0]> = {}) => ({
     serves: 'daemon' as const, serviceHome: null, home: HOME, launcher: true, expected: 'walnut-daemon-new',
-    serveUnfit: null, modeAsked: vi.fn(async () => null),
+    serveUnfit: null, modeAsked: vi.fn(async () => null), platform: vi.fn(async (): Promise<string | null> => 'linux'),
     offerWanted: vi.fn(async () => true), launcherWanted: vi.fn(async () => true),
     follower: vi.fn(async () => ({ kind: 'replica' as const })), note: vi.fn(), noteOff: vi.fn(),
     ...patch,
@@ -153,6 +184,16 @@ describe('serviceModeWantNow', () => {
     await expect(serviceModeWantNow(inputs({ modeAsked: async () => ({ expected: 'walnut-daemon-old', want: 'walnut-serve' as const }) }))).resolves.toEqual({ want: 'walnut-serve' })
     // A record that cannot be read leaves the decision as with none.
     await expect(serviceModeWantNow(inputs({ modeAsked: async () => { throw new Error('unreadable') } }))).resolves.toEqual({ want: 'walnut-serve' })
+  })
+
+  it('the system is read only with the experiments on; macOS is decided before any update, a failed read leaves the mode', async () => {
+    const off = inputs({ offerWanted: vi.fn(async () => false) })
+    await serviceModeWantNow(off)
+    expect(off.platform).not.toHaveBeenCalled()
+    const mac = inputs({ platform: vi.fn(async () => 'darwin') })
+    await expect(serviceModeWantNow(mac)).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/macOS/) })
+    expect(mac.note).toHaveBeenCalledWith(expect.objectContaining({ want: 'daemon' }))
+    await expect(serviceModeWantNow(inputs({ platform: vi.fn(async () => { throw new Error('no profile') }) }))).resolves.toEqual({ want: null })
   })
 
   it('a follower read that fails is not settled', async () => {
@@ -233,7 +274,7 @@ describe('hostServiceOfferWanted', () => {
     await expect(serviceLauncherWanted()).resolves.toBe(true)
     await expect(serviceModeWantNow({
       serves: 'daemon', serviceHome: null, home: HOME, launcher: true, expected: 'walnut-daemon-new', serveUnfit: null,
-      modeAsked: async () => null, offerWanted: () => offer('devbox'), launcherWanted: serviceLauncherWanted,
+      modeAsked: async () => null, offerWanted: () => offer('devbox'), launcherWanted: serviceLauncherWanted, platform: async () => 'linux',
       follower: async () => ({ kind: 'replica' as const }),
     })).resolves.toEqual({ want: 'walnut-serve' })
     // A stored false of the experiment still turns the whole offer off.
@@ -267,8 +308,8 @@ describe('hostServiceOfferWanted', () => {
     }
   })
 
-  // Two names of one machine get one answer: a false of either wins, and while a name with a choice of its
-  // own may be this machine (its id not known yet) and its choice would change the answer: not sure (null).
+  // Two names of one machine get one answer: a false of either wins; only an offer of a name that may be
+  // this machine (its id not known yet) and would change the answer makes it not sure (null).
   it('an opt-out of another name of the same machine keeps this name off too', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     const offer = await withConfig({ hosts: { devbox: { service_offer: false }, 'devbox-alias': {}, 'gpu-box': {}, newbox: {} } })
@@ -276,9 +317,11 @@ describe('hostServiceOfferWanted', () => {
     const idOf = (k: string) => ids[k] ?? null
     await expect(offer('devbox-alias', idOf)).resolves.toBe(false)
     await expect(offer('gpu-box', idOf)).resolves.toBe(true)
-    await expect(offer('newbox', idOf)).resolves.toBeNull()
+    // An opt-out spreads only to a name proven to be its machine (review of the default flip, M2):
+    // this name's machine not known yet, or the opt-out's, is another machine.
+    await expect(offer('newbox', idOf)).resolves.toBe(true)
     ids.devbox = null
-    await expect(offer('gpu-box', idOf)).resolves.toBeNull()
+    await expect(offer('gpu-box', idOf)).resolves.toBe(true)
     // No opt-out anywhere: every name is offered, known machine or not.
     const all = await withConfig({ hosts: { devbox: {}, newbox: {} } })
     await expect(all('newbox', idOf)).resolves.toBe(true)
@@ -310,14 +353,68 @@ describe('hostServiceOfferWanted', () => {
     await expect(offer('devbox-alias')).resolves.toBe(false)
   })
 
-  it('serviceModeWantNow leaves the mode as it is while the offer is not sure', async () => {
+  // Review of the default flip (M2): an offer left open is no longer silent: one Walnut Health item
+  // says why (only while service_launcher is on), and nothing else is read.
+  it('serviceModeWantNow leaves the mode as it is while the offer is not sure, and says so once', async () => {
     const i = {
       serves: 'walnut-serve' as const, serviceHome: HOME, home: HOME, launcher: true, expected: 'walnut-daemon-new',
-      serveUnfit: null, modeAsked: vi.fn(async () => null), offerWanted: vi.fn(async () => null),
+      serveUnfit: null, modeAsked: vi.fn(async () => null), offerWanted: vi.fn(async () => null), platform: vi.fn(async () => 'linux'),
       launcherWanted: vi.fn(async () => true), follower: vi.fn(async () => ({ kind: 'replica' as const })), note: vi.fn(), noteOff: vi.fn(),
     }
     await expect(serviceModeWantNow(i)).resolves.toEqual({ want: null })
-    expect(i.launcherWanted).not.toHaveBeenCalled()
+    expect(i.note).toHaveBeenCalledWith({ want: null, why: OFFER_NOT_SURE })
+    expect(i.follower).not.toHaveBeenCalled()
+    expect(i.platform).not.toHaveBeenCalled()
+    const quiet = { ...i, note: vi.fn(), launcherWanted: vi.fn(async () => false) }
+    await expect(serviceModeWantNow(quiet)).resolves.toEqual({ want: null })
+    expect(quiet.note).not.toHaveBeenCalled()
+  })
+
+  // Review of the default flip (M2): one host kept on two programs whose machine is not known (offline,
+  // asleep, never connected) held every other host at "not sure", silently. It is another machine now.
+  it('an opt-out whose machine is not known is another machine: the other hosts are offered', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ hosts: { box: {}, laptop: { service_offer: false }, other: {} } })
+    const ids: Record<string, string | null> = { box: 'M1', laptop: null, other: 'M2' }
+    const idOf = (k: string) => ids[k] ?? null
+    await expect(offer('box', idOf)).resolves.toBe(true)
+    await expect(offer('other', idOf)).resolves.toBe(true)
+    await expect(offer('laptop', idOf)).resolves.toBe(false)
+    // Once its machine is known: still its own choice only, unless it is the same machine.
+    ids.laptop = 'M3'
+    await expect(offer('box', idOf)).resolves.toBe(true)
+    ids.laptop = 'M1'
+    await expect(offer('box', idOf)).resolves.toBe(false)
+    await expect(offer('other', idOf)).resolves.toBe(true)
+  })
+
+  it('a host row turned off (enabled: false) decides nothing for another name', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ hosts: { box: {}, old: { enabled: false, service_offer: false }, listed: { enabled: false, service_offer: true } }, host_service_offer: ['box'] })
+    const ids: Record<string, string | null> = { box: 'M1', old: 'M1', listed: null, plain: 'M9' }
+    const idOf = (k: string) => ids[k] ?? null
+    await expect(offer('box', idOf)).resolves.toBe(true)
+    // Not listed, and the disabled row that offered and may be this machine is not asked.
+    await expect(offer('plain', idOf)).resolves.toBe(false)
+  })
+
+  // The leader's own config before the flip (task brief, 2026-11-25): a list that chose four hosts keeps its
+  // meaning after it: those four are offered, every other host is not, with and without machine ids.
+  it('an existing list [old-box, cloud-box, home-box, pod-box-0] reads the same after the flip', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const LIST = ['old-box', 'cloud-box', 'home-box', 'pod-box-0']
+    const offer = await withConfig({
+      experimental: { service_launcher: true, in_process_daemon: true },
+      host_service_offer: LIST,
+      hosts: { 'old-box': {}, 'cloud-box': {}, 'home-box': {}, 'pod-box-0': {}, 'marina-macbook': {}, 'gpu-box': {}, newdev: {} },
+    })
+    const ids: Record<string, string> = { 'old-box': 'm-old', 'cloud-box': 'm-cloud', 'home-box': 'm-pc', 'pod-box-0': 'm-eks', 'marina-macbook': 'm-mac', 'gpu-box': 'm-gpu', newdev: 'm-new', 'never-configured': 'm-x' }
+    for (const idOf of [undefined, (k: string) => ids[k] ?? null]) {
+      for (const k of LIST) await expect(offer(k, idOf), k).resolves.toBe(true)
+      for (const k of ['marina-macbook', 'gpu-box', 'newdev', 'never-configured']) await expect(offer(k, idOf), k).resolves.toBe(false)
+    }
+    // A connection whose machine is not known yet may be one of the four: left as it is (null), as before the flip.
+    await expect(offer('unknown-box', (k) => ids[k] ?? null)).resolves.toBeNull()
   })
 
 })

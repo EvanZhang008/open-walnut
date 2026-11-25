@@ -2008,6 +2008,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       // What this machine calls itself: a URL that names it (a session's dev server) is a service
       // here, reached on this loopback (session-service-preview.ts).
       hostname: os.hostname(),
+      // Its system: a leader offers the one Walnut service to a Linux host only (one-service-mode.ts).
+      platform: process.platform,
       // This machine's stable id: the server joins its aliases by it (daemon-twins.ts).
       ...(DAEMON_MACHINE_ID ? { machineId: DAEMON_MACHINE_ID } : {}),
       taskDirRoot: TASK_DIR_ROOT,

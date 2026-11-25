@@ -91,7 +91,8 @@ describe('the follower fact the one Walnut service reads', () => {
     expect(h.modeChecks).toBe(1)
   })
 
-  it('none, with the reason, for a host turned off, the plain host server, or a fallback', async () => {
+  // A host turned off is none with no reason: the person's own choice, nothing for Walnut Health (review of the default flip, L3).
+  it('none, with the reason, for the plain host server or a fallback; none for a host turned off', async () => {
     const m = createHostServerManager(deps())
     const h = host()
     settings = { ...settings, program: 'host-server' }
@@ -104,7 +105,7 @@ describe('the follower fact the one Walnut service reads', () => {
     expect(m.followerFact('devbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/fallback/) })
     settings = { ...settings, enabled: false }
     await m.reconcile('devbox')
-    expect(m.followerFact('devbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/no Walnut server/) })
+    expect(m.followerFact('devbox')).toEqual({ kind: 'none' })
   })
 
   it('a setup still under way is not settled', async () => {
@@ -184,7 +185,7 @@ describe('another name of a daemon kept under another name', () => {
     // The keeper's server goes off: the name reads that too.
     settings = { ...settings, enabled: false }
     await m.reconcile('devbox')
-    expect(m.followerFact('newbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/no Walnut server/) })
+    expect(m.followerFact('newbox')).toEqual({ kind: 'none' })
   })
 
   it('reads its own follower again once it is no longer another name', async () => {
@@ -197,7 +198,7 @@ describe('another name of a daemon kept under another name', () => {
     other.daemonKeeper = async () => 'newbox'
     settings = { ...settings, enabled: false }
     await m.reconcile('newbox')
-    expect(m.followerFact('newbox')).toMatchObject({ kind: 'none', why: expect.stringMatching(/no Walnut server/) })
+    expect(m.followerFact('newbox')).toEqual({ kind: 'none' })
   })
 
   it('keeps its keeper while its link is down or the daemon\'s answer fails', async () => {

@@ -30,10 +30,11 @@ beforeEach(() => {
 
 describe('Walnut Health for a host with no offer', () => {
   it('is one info item per host, in plain words, never a needs-you', () => {
-    const item = noServiceOfferItem('devbox', 'Dev box', 'no Walnut server of this Walnut runs there.')
+    const item = noServiceOfferItem('devbox', 'Dev box', 'the host is not eligible for this Walnut\'s server (too little memory).')
     expect(item).toMatchObject({ kind: 'operation-error', severity: 'info', dedupKey: serviceOfferKey('devbox'), recoveryKey: serviceOfferKey('devbox'), host: 'devbox' })
-    expect(item.title).toBe('Dev box keeps the session helper and its Walnut server as two programs')
-    expect(item.body).toBe('Walnut does not run Dev box as one Walnut service: no Walnut server of this Walnut runs there. Its sessions and its server run as before.')
+    // Review of the default flip (L3): no claim of a server that may not run there.
+    expect(item.title).toBe('Dev box does not run as one Walnut service')
+    expect(item.body).toBe('Walnut does not run Dev box as one Walnut service: the host is not eligible for this Walnut\'s server (too little memory). Its sessions run as before, through its session helper.')
     expect(item).not.toHaveProperty('needsYou')
   })
 
@@ -52,6 +53,17 @@ describe('Walnut Health for a host with no offer', () => {
     expect(recovered).toEqual([])
     noteServiceOffer('devbox', { want: 'walnut-serve' })
     await vi.waitFor(() => expect(recovered).toEqual([[serviceOfferKey('devbox')]]), { timeout: 10_000 })
+  })
+
+  // Review of the default flip (L3): a host whose server the person turned off has no reason to report,
+  // and an item raised for it before (another reason) recovers.
+  it('no reason (the person turned the host\'s server off) raises nothing and recovers an older item', async () => {
+    noteServiceOffer('devbox', { want: 'daemon', why: 'no launcher' })
+    await vi.waitFor(() => expect(raised).toHaveLength(1), { timeout: 10_000 })
+    noteServiceOffer('devbox', { want: 'daemon' })
+    await vi.waitFor(() => expect(recovered).toEqual([[serviceOfferKey('devbox')]]), { timeout: 10_000 })
+    await settle()
+    expect(raised).toHaveLength(1)
   })
 
   // a3b land 2 review L1: an item an earlier process raised (the experiment turned off, then a

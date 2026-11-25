@@ -1169,6 +1169,7 @@ describe('the host\'s mode rides the managed update', () => {
       vi.spyOn(priv(c), 'handleConnectionLost').mockImplementation(() => { state(c)._connected = false })
       managedUpdate.mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: Opts) => ((await opts?.onStaged?.()) === false ? 'held' : 'applied'))
       state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+      state(c)._platform = 'linux'
       state(c)._servesAs = serves
       live(c)
       return { c, source: vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' }) }
@@ -1236,6 +1237,7 @@ describe('the host\'s mode rides the managed update', () => {
     await experiments(true)
     followerFact.mockReturnValue({ kind: 'replica' })
     state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+    state(c)._platform = 'linux'
     vi.spyOn(priv(c), 'deployWalnutFile').mockImplementation(async () => priv(c).walnutFileUnfit('no such target'))
     live(c)
     await priv(c).recheckPostponedUpgrade()
@@ -1287,6 +1289,7 @@ describe('the host\'s mode rides the managed update', () => {
       followerFact.mockReturnValue({ kind: 'replica' })
       const c = managedHost(EXPECTED)
       state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+      state(c)._platform = 'linux'
       vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: null, existing: '/slot/walnut' })
       live(c)
       return c

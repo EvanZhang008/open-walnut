@@ -634,7 +634,13 @@ config items (not experiments), read in this order by `serviceOfferFor`:
 `host_service_offer: [<host key>, ...]` list is there (the keys of `hosts`, set with `PUT /api/config`,
 kept from when the offer went to chosen hosts only), only the hosts it names are offered, and `[]`
 offers none; with neither, every host is. Two config names of one machine get one answer, a false of
-either wins. An offered host gets all of the offer, whatever `in_process_daemon` says (still with
+either wins, but only for a name proven to be that machine (both machine ids known and equal): an
+opt-out row whose machine is not known (offline, asleep) and a row with `enabled: false` hold no
+other host. Only a listed name that may be this machine leaves the answer open ("not sure": the mode
+stays as it is), with one Walnut Health item saying so. The offer goes to Linux hosts only (the
+walnut file goes only into a Linux daemon slot): a host whose hello or connect probe says another
+system (a macOS laptop joined as a host) is decided up front, never asked to switch, with the reason
+in Walnut Health; one whose system is not known yet is left as it is. An offered host gets all of the offer, whatever `in_process_daemon` says (still with
 `service_launcher` on): the walnut file staged in its slot, `--serve`, and its Walnut Health items. The
 offer turns nothing else on: with `in_process_daemon` off the Mac's own runtime stays a program, and
 home-move declarations and same-machine aliases stay off (so move the data dir only with the host kept

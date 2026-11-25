@@ -206,7 +206,7 @@ describe('DaemonConnection: a host network machine with a mode due', () => {
     const p = c as unknown as Record<string, (...a: unknown[]) => unknown>
     Object.assign(st, {
       _connected: true, _daemonVersion: NEW, _daemonStartup: 'service', _serviceExecutable: EXE, _capabilities: [...CAPS],
-      _launcher: { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }, _servesAs: serves,
+      _launcher: { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }, _platform: 'linux', _servesAs: serves,
     })
     vi.spyOn(p, 'getExpectedDaemonVersion').mockReturnValue(NEW)
     const sshOnly = ['sshExec', 'pipeChunk', 'deployWalnutFile', 'getRemoteDaemonPath', 'shouldUpgradeDaemon', 'updateManagedDaemon', 'serviceDaemonSource', 'runUpgradeRecheck']

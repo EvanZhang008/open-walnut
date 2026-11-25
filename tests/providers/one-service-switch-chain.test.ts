@@ -100,8 +100,8 @@ function hostRuns(line: string, stateDir: string, stagedExe: string): { note?: s
 }
 
 /** A managed host on the current build, its daemon under the launcher, as the hello says. */
-function leaderOf(serves: { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }): DaemonConnection {
-  const c = new DaemonConnection('devbox', TARGET)
+function leaderOf(serves: { serves: 'daemon' | 'walnut-serve'; serviceHome: string | null }, hostKey = 'devbox', platform: string | null = 'linux'): DaemonConnection {
+  const c = new DaemonConnection(hostKey, TARGET)
   conns.push(c)
   stub(c, { probe: MANAGED, version: EXPECTED })
   const ssh = priv(c).sshExec as unknown as ReturnType<typeof vi.fn>
@@ -114,6 +114,8 @@ function leaderOf(serves: { serves: 'daemon' | 'walnut-serve'; serviceHome: stri
   vi.spyOn(log.session, 'info').mockImplementation(() => {})
   vi.spyOn(log.session, 'warn').mockImplementation(() => {})
   state(c)._launcher = { current: '/v/b/daemon', good: '/v/a/daemon', phase: 'committed', since: 1 }
+  // A Linux host, as its hello says (one-service-mode.ts: only a Linux host is offered).
+  state(c)._platform = platform
   state(c)._servesAs = serves
   state(c)._connected = true
   return c
@@ -267,4 +269,64 @@ describe('a host named in host_service_offer, with in_process_daemon off', () =>
     await priv(leaderOf({ serves: 'daemon', serviceHome: null })).recheckPostponedUpgrade()
     expect(lines).toEqual([])
   })
+})
+
+// The default flip (2026-11-25): with no list every host is offered, so the host's system is decided up
+// front. The walnut file goes into a Linux daemon slot only (daemon-connection.ts deployWalnutFile), so a
+// macOS host (a person's MacBook joined as a host) gets no --serve and no update at all for the mode: it
+// never sees an attempt that fails for it. And a list stored before the flip keeps its meaning.
+describe('the default offer: which hosts are asked to switch', () => {
+  let config: Record<string, unknown> = {}
+  beforeEach(() => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    process.env.WALNUT_SERVICE_LAUNCHER = '1'
+    vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      getConfig: async () => config,
+    }))
+  })
+  afterEach(() => { vi.doUnmock('../../src/core/config-manager.js') })
+
+  // First in this describe: an update that went through here (the Linux host below) may finish after its test ends,
+  // with that test's mocks gone, and its line would land in the next test's record.
+  it('a list stored before the flip ([old-box, cloud-box, home-box, pod-box-0]) offers those four and no other host', async () => {
+    config = { experimental: { service_launcher: true, in_process_daemon: true }, host_service_offer: ['old-box', 'cloud-box', 'home-box', 'pod-box-0'] }
+    for (const key of ['plain-box', 'gpu-box', 'marina-macbook']) {
+      await priv(leaderOf({ serves: 'daemon', serviceHome: null }, key, key === 'marina-macbook' ? 'darwin' : 'linux')).recheckPostponedUpgrade()
+      expect(lines, key).toEqual([])
+    }
+    for (const [i, key] of ['old-box', 'cloud-box', 'home-box', 'pod-box-0'].entries()) {
+      await priv(leaderOf({ serves: 'daemon', serviceHome: null }, key)).recheckPostponedUpgrade()
+      expect(lines, key).toHaveLength(i + 1)
+      expect(lines[i]).toContain(' --launcher --serve ')
+    }
+  })
+  it('a macOS host is never asked: no update line, no walnut file sent; a Linux host beside it is', async () => {
+    config = { experimental: { service_launcher: true, in_process_daemon: true } }
+    const mac = leaderOf({ serves: 'daemon', serviceHome: null }, 'marina-macbook', 'darwin')
+    const source = vi.spyOn(priv(mac), 'serviceDaemonSource')
+    const deploy = vi.spyOn(priv(mac), 'deployWalnutFile')
+    await priv(mac).recheckPostponedUpgrade()
+    await priv(mac).checkServiceMode()
+    expect(lines).toEqual([])
+    expect(source).not.toHaveBeenCalled()
+    expect(deploy).not.toHaveBeenCalled()
+    await expect(priv(mac).serviceModeWant()).resolves.toMatchObject({ want: 'daemon', why: expect.stringMatching(/runs macOS/) })
+    // The host-server manager's word agrees: a macOS host is not meant to be one service.
+    const hostView = mac.hostServerHandle()
+    await expect(hostView.oneServiceWanted()).resolves.toBe(false)
+    // Its system not known yet (no hello word, no profile): left as it is, still no line.
+    const unknown = leaderOf({ serves: 'daemon', serviceHome: null }, 'marina-macbook', null)
+    vi.spyOn(priv(unknown), 'hostPlatform').mockResolvedValue(null)
+    await priv(unknown).recheckPostponedUpgrade()
+    expect(lines).toEqual([])
+
+    // Host keys of their own in this describe: a host's update records live on disk per host key, in
+    // the test home every test here shares, and another test's devbox record may still be fresh.
+    const linux = leaderOf({ serves: 'daemon', serviceHome: null }, 'linux-box', 'linux')
+    await priv(linux).recheckPostponedUpgrade()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(' --launcher --serve ')
+  })
+
 })

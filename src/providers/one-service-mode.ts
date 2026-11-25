@@ -9,7 +9,9 @@
  *
  * Offered only with the experiment service_launcher on and the offer on for the host (every host
  * unless the config keeps it on two programs, read live, per host: service-launcher-flag.ts
- * hostServiceOfferWanted), to a host whose
+ * hostServiceOfferWanted), to a Linux host (the walnut file goes only into a Linux daemon slot,
+ * daemon-connection.ts deployWalnutFile: a macOS host is never asked, so it never sees an update
+ * that fails for it) whose
  * daemon already runs under the launcher, that runs this Walnut's full follower (`web --replica`,
  * the spec the service starts from), and that can take this build's walnut file (the daemon-only
  * binary holds no server). Otherwise no offer, with the reason for Walnut Health. With the
@@ -22,7 +24,8 @@ export type ServesAs = 'daemon' | 'walnut-serve'
 /** What the host-server manager knows of this Walnut's follower on the host (manager.ts followerFact). */
 export type FollowerFact =
   | { kind: 'replica' }
-  | { kind: 'none'; why: string }
+  /** `why` for Walnut Health; none for a server the person turned off there (their choice, nothing to report). */
+  | { kind: 'none'; why?: string }
   /** Not settled yet (no reconcile this process, a setup or a restart under way): nothing changes. */
   | { kind: 'unknown' }
 
@@ -37,6 +40,8 @@ export interface ServiceModeFacts {
   home: string
   /** The daemon already runs under the service launcher (hello `launcher`). */
   launcher: boolean
+  /** The host's system as its daemon or the connect probe said it (`linux`, `darwin`, ...), null when not known yet. */
+  platform: string | null
   follower: FollowerFact
   /** Why this build's walnut file cannot go to the host, when an earlier try found it could not. */
   walnutFileUnfit?: string | null
@@ -82,11 +87,25 @@ function wantedNow(f: ServiceModeFacts): ServiceModeWant {
   // Another Walnut's service: only its own leader may change it (service-entry.ts nextServiceMode).
   if (f.serves === 'walnut-serve' && !servesThisWalnut(f, f.home)) return { want: null }
   if (!f.experiment) return f.serves === 'walnut-serve' ? { want: 'daemon' } : { want: null }
+  // Decided before any update is asked: the walnut file goes into a Linux daemon slot only.
+  if (f.platform === null) return { want: null }
+  if (f.platform !== 'linux') return { want: 'daemon', why: `it runs ${platformName(f.platform)}, and the one Walnut service runs on Linux hosts only for now` }
   if (!f.launcher) return { want: 'daemon', why: 'its session helper does not run under the service launcher yet (it does after its next update)' }
   if (f.follower.kind === 'unknown') return { want: null }
-  if (f.follower.kind === 'none') return { want: 'daemon', why: f.follower.why }
+  if (f.follower.kind === 'none') return { want: 'daemon', ...(f.follower.why ? { why: f.follower.why } : {}) }
   if (f.walnutFileUnfit) return { want: 'daemon', why: `this build's walnut file cannot go to the host: ${f.walnutFileUnfit}` }
   return { want: 'walnut-serve' }
+}
+
+function platformName(p: string): string {
+  return p === 'darwin' ? 'macOS' : p === 'win32' ? 'Windows' : p
+}
+
+/** A host system as a hello or a probe says it: lower case, a plain word, else not known (null). */
+export function platformOf(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const p = value.trim().toLowerCase()
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(p) ? p : null
 }
 
 /** An update is due for the mode alone: the host runs as the other one. */
@@ -142,6 +161,8 @@ export interface ServiceModeInputs {
   serviceHome: string | null
   home: string
   launcher: boolean
+  /** The host's system (platformOf), null when not known yet. */
+  platform(): Promise<string | null>
   expected: string | null
   serveUnfit: { expected: string; why: string } | null
   /** The switch this host was last asked (ServiceModeAsk): read only when the mode is decided. */
@@ -160,23 +181,31 @@ export interface ServiceModeInputs {
   noteOff?(): void
 }
 
+/** Walnut Health's words for an offer left open (service-launcher-flag.ts serviceOfferFor answered null). */
+export const OFFER_NOT_SURE = 'another name in Walnut\'s hosts may be this same machine and decides the one Walnut service otherwise; its mode stays as it is until that name connects once and the machine is known'
+
 /**
  * The mode wanted for the host now. With the experiments off and a host that runs as the daemon,
  * nothing else is read: the answer is "leave it".
  */
 export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceModeWant> {
   const offer = await i.offerWanted()
-  if (offer === null) return { want: null }
+  if (offer === null) {
+    // Left as it is, and said once in Walnut Health while the service is wanted at all.
+    if (await i.launcherWanted()) i.note?.({ want: null, why: OFFER_NOT_SURE })
+    return { want: null }
+  }
   const experiment = offer && (await i.launcherWanted())
   if (!experiment) {
     i.noteOff?.()
     if (i.serves !== 'walnut-serve') return { want: null }
   }
+  const platform = experiment ? await i.platform().catch(() => null) : null
   const follower: FollowerFact = experiment ? await i.follower().catch((): FollowerFact => ({ kind: 'unknown' })) : { kind: 'unknown' }
   const now = i.expected
   const asked = now ? await i.modeAsked().catch(() => null) : null
   const w = wantedServiceMode({
-    experiment, serves: i.serves, serviceHome: i.serviceHome, home: i.home, launcher: i.launcher, follower,
+    experiment, serves: i.serves, serviceHome: i.serviceHome, home: i.home, launcher: i.launcher, platform, follower,
     walnutFileUnfit: now && i.serveUnfit?.expected === now ? i.serveUnfit.why : null,
     askedAndRefused: asked && asked.expected === now ? asked : null,
   })

@@ -59,18 +59,22 @@ type OfferConfig = { hosts?: Record<string, unknown> | null; host_service_offer?
 
 /**
  * The offer for one host from the leader's config (pure). Two entries can be one machine (two names
- * for one box, the same hello machine id): the machine gets one answer, a false of any of its names
- * wins, and while a name with a choice of its own may be this machine (its id not known yet) and its
- * choice would change the answer, the answer is "not sure" (null), so the box is never switched back
- * and forth.
+ * for one box, the same hello machine id): the machine gets one answer, and a false of any of its
+ * names wins. An opt-out spreads only to a name proven to be its machine (both ids known and equal):
+ * a row whose machine is not known (offline, asleep, never connected) is another machine, so one
+ * host kept on two programs never holds every other host (review of the default flip, M2). A row
+ * turned off (`enabled: false`) reaches no machine and decides nothing for another name. Only a name
+ * that offers (a list kept from before) and may be this machine, while it would change the answer,
+ * makes the answer "not sure" (null), so the box is never switched back and forth between its names.
  */
 export function serviceOfferFor(config: OfferConfig, hostKey: string, machineIdOf?: (hostKey: string) => string | null): boolean | null {
   // A hand-edited file may hold anything here: only a list of names counts.
   const rawList = config.host_service_offer
   const listed = Array.isArray(rawList) ? rawList.filter((k): k is string => typeof k === 'string') : null
   const hosts = config.hosts && typeof config.hosts === 'object' ? config.hosts : {}
+  const row = (k: string) => hosts[k] as { service_offer?: unknown; enabled?: unknown } | null | undefined
   const choiceOf = (k: string): boolean | undefined => {
-    const own = (hosts[k] as { service_offer?: unknown } | null | undefined)?.service_offer
+    const own = row(k)?.service_offer
     if (typeof own === 'boolean') return own
     return listed?.includes(k) ? true : undefined
   }
@@ -78,18 +82,19 @@ export function serviceOfferFor(config: OfferConfig, hostKey: string, machineIdO
   const fallback = listed === null
   const own = choiceOf(hostKey)
   if (own === false) return false
-  const others = [...new Set([...Object.keys(hosts), ...(listed ?? [])])].filter((k) => k !== hostKey && choiceOf(k) !== undefined)
+  const others = [...new Set([...Object.keys(hosts), ...(listed ?? [])])]
+    .filter((k) => k !== hostKey && row(k)?.enabled !== false && choiceOf(k) !== undefined)
   if (others.length === 0 || !machineIdOf) return own ?? fallback
   const mine = machineIdOf(hostKey)
   let decided: boolean | undefined = own
-  const maybe: boolean[] = []
+  let maybeOffer = false
   for (const k of others) {
     const theirs = mine ? machineIdOf(k) : null
     const c = choiceOf(k) as boolean
     if (mine && theirs === mine) decided = decided === false || c === false ? false : true
-    else if (!mine || !theirs) maybe.push(c)
+    else if ((!mine || !theirs) && c) maybeOffer = true
   }
   const now = decided ?? fallback
-  const would = (c: boolean): boolean => decided === false || c === false ? false : true
-  return maybe.every((c) => would(c) === now) ? now : null
+  // An offer of a name that may be this machine changes the answer only where it would be "no".
+  return maybeOffer && decided !== false && !now ? null : now
 }

@@ -64,7 +64,7 @@ import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { bootLines } from './daemon-update-shell.js'
 import { parseProbing, probingCheckScript } from './daemon-update-probation.js'
 import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
-import { serviceModeAsk, serviceModeDue, serviceModeWantNow, servesAsHere, servesFromHello, type ServesAs, type ServiceModeAsk, type ServiceModeWant } from './one-service-mode.js'
+import { platformOf, serviceModeAsk, serviceModeDue, serviceModeWantNow, servesAsHere, servesFromHello, type ServesAs, type ServiceModeAsk, type ServiceModeWant } from './one-service-mode.js'
 import { hostServiceOfferWanted, serviceLauncherWanted } from './service-launcher-flag.js'
 import { readBackUpdate, sshUpdateHost, unreadUpdates, type ReadBack, type UnreadUpdate } from './daemon-update-readback.js'
 import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
@@ -1301,6 +1301,8 @@ export class DaemonConnection {
 
   /** Cached remote arch (detected once per connection). */
   private _remoteArch: string | null = null
+  /** The host's system: the hello's word (a daemon of this build or later), else the ssh connect's probe (one-service-mode.ts platformOf). */
+  private _platform: string | null = null
   /** SSH ControlMaster socket path — all SSH commands multiplex through one connection. */
   private _controlPath: string | null = null
   /** ControlMaster SSH process — kept alive for the lifetime of this DaemonConnection. */
@@ -4436,6 +4438,9 @@ export class DaemonConnection {
       // and a daemon not under the service launcher cannot become one before an update.
       oneServiceWanted: async () => {
         if (conn.isCloudTunnel || !conn._launcher) return false
+        // A host that is not Linux is never meant to be one (one-service-mode.ts wantedNow); not known yet: as offered.
+        const platform = await conn.hostPlatform()
+        if (platform !== null && platform !== 'linux') return false
         const offer = await hostServiceOfferWanted(conn.hostKey, pooledMachineIdOf)
         return offer === false ? false : (await serviceLauncherWanted()) ? offer : false
       },
@@ -4453,13 +4458,23 @@ export class DaemonConnection {
     if (this.isCloudTunnel) return Promise.resolve({ want: null })
     return serviceModeWantNow({
       ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
-      serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(),
+      serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(), platform: () => this.hostPlatform(),
       offerWanted: () => hostServiceOfferWanted(this.hostKey, pooledMachineIdOf),
       launcherWanted: () => serviceLauncherWanted(),
       follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
       note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },
       noteOff: () => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOfferOff(this.hostKey)).catch(() => {}) },
     })
+  }
+
+  /**
+   * The host's system: what this connection heard (hello, ssh probe), else what its daemon last
+   * reported for the host profile; null when Walnut has not seen it.
+   */
+  private async hostPlatform(): Promise<string | null> {
+    if (this._platform) return this._platform
+    const { readHostProfile } = await import('../core/hosts/host-profile.js')
+    return platformOf((await readHostProfile(this.hostKey).catch(() => null))?.probed?.os?.platform)
   }
 
   /** A switch of the mode alone due on this live link, and the words the update carries for it (the same for every link). */
@@ -5039,6 +5054,7 @@ export class DaemonConnection {
     // file it cannot run (exit 127). Say so once, as its own kind (not_linux), and never upload.
     const os = probe.os?.trim()
     if (os && os.toLowerCase() !== 'linux') throw new Error(notLinuxSentence(this.hostKey, os))
+    this._platform = platformOf(os) ?? this._platform
     if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
     if (probe.home) this._remoteHome = probe.home
     // This Walnut's own service set there, once its sessions moved (service-set-move.ts): its runtime dir.
@@ -6619,6 +6635,7 @@ export class DaemonConnection {
       const exe = res.serviceExecutable
       this._serviceExecutable = typeof exe === 'string' && exe.startsWith('/') && exe.length < 1024 && !/[\u0000-\u001f]/.test(exe) ? exe : null
       this._launcher = launcherFactsFrom(res.launcher)
+      this._platform = platformOf(res.platform) ?? this._platform
       this._serviceRoles = serviceRolesFrom(res.serviceRoles)
       if (this._launcher?.rollback) void noteLauncherRollback(this.hostKey, this._launcher)
       this._servesAs = servesFromHello(res)

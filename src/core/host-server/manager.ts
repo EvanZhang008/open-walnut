@@ -958,8 +958,11 @@ export function createHostServerManager(deps: ManagerDeps) {
         why: v.program === 'fallback' ? 'its Walnut server runs its fallback program after a crash loop' : 'its Walnut server is the plain host server, not the full follower',
       }
     }
-    if (v.phase === 'off') return { kind: 'none', why: 'no Walnut server of this Walnut runs there' }
-    if (v.phase === 'not-eligible' || v.phase === 'unsupported') return { kind: 'none', why: v.message ?? 'no Walnut server of this Walnut runs there' }
+    // Turned off there by the person: their choice, nothing for Walnut Health.
+    if (v.phase === 'off') return { kind: 'none' }
+    const said = v.message?.trim().replace(/\.$/, '')
+    if (v.phase === 'not-eligible') return { kind: 'none', why: `the host is not eligible for this Walnut's server${said ? ` (${said})` : ''}` }
+    if (v.phase === 'unsupported') return { kind: 'none', why: `this Walnut's server cannot run there${said ? ` (${said})` : ''}` }
     return { kind: 'unknown' }
   }
 
