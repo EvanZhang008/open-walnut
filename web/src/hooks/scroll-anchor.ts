@@ -68,6 +68,33 @@ export function releaseScrollTop(session: ReadSession, slack: number, scrollTop:
   return Math.max(0, scrollTop - slack);
 }
 
+/** What the person did that scrolls (a wheel, a key, a pointer or a touch): when last, and a pointer held down now. */
+export interface ScrollInput { at: number; down: boolean }
+
+/**
+ * How far the engine pulled the box up during one commit (px, 0 for none): the mark sat at the end of
+ * the range (`atEnd`, taken at `at`), the box is higher now than as the commit's render began
+ * (`before`), and no input that scrolls came since the mark. WebKit pulls a box at its end up by the
+ * height of a row moved in the DOM above the view (out, then in again: a reorder, a row going to
+ * another group) and never gives it back; the hook would read that as the person's own scroll
+ * (2026-11-25, the Threads list: leaving it let its order follow again, and every card on screen
+ * moved 386px). A scroll the page made before the render is in `before`, so it is never undone. Pure.
+ */
+export function enginePull(mark: { atEnd?: boolean; at?: number }, before: number | null, scrollTop: number, input: ScrollInput): number {
+  if (!mark.atEnd || before === null || input.down || input.at > (mark.at ?? 0)) return 0;
+  const pull = before - scrollTop;
+  return pull > ANCHOR_SLOP_PX ? pull : 0;
+}
+
+/**
+ * Whether `el` is the box itself or holds rows: a container, never the row being read. Its own top
+ * does not move when rows come and go inside it, so holding it would hold nothing (2026-11-25, the
+ * Threads list: the list itself held, a new card above pushed every card on screen). Pure.
+ */
+export function holdsRows(box: Pick<Element, 'querySelector'>, rows: string, el: Pick<Element, 'querySelector'>): boolean {
+  return el === box || el.querySelector(rows) !== null;
+}
+
 /** Under half a pixel is subpixel layout, not a move: correcting it would fight rounding forever. */
 export const ANCHOR_SLOP_PX = 0.5;
 

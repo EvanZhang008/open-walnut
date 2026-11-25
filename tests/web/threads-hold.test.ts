@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { inHeldOrder, readCard, THREAD_CARD_ROWS } from '../../web/src/components/org/useThreadsHold'
 import { stepHold } from '../../web/src/components/org/hold-order'
-import { anchoredScrollTop, releaseScrollTop, slackStep } from '../../web/src/hooks/scroll-anchor'
+import { anchoredScrollTop, enginePull, holdsRows, releaseScrollTop, slackStep } from '../../web/src/hooks/scroll-anchor'
 import { THREAD_GROUPS } from '../../src/core/org/thread-groups'
 import type { OrgThread } from '../../web/src/api/org-threads'
 
@@ -47,11 +47,12 @@ describe('the held order of a Threads list', () => {
   })
 })
 
-/** A fake card: a box from `top` to `bottom`, inside `root`. */
-function fakeDom(cards: Array<{ id: string; top: number; bottom: number }>) {
-  type El = { id: string; closest: (s: string) => El | null; getBoundingClientRect: () => { top: number; bottom: number } }
+/** A fake card: a box from `top` to `bottom`, inside `root` (`box: false`: drawn with no box, inside a fold). */
+function fakeDom(cards: Array<{ id: string; top: number; bottom: number; box?: boolean }>) {
+  type El = { id: string; closest: (s: string) => El | null; getBoundingClientRect: () => { top: number; bottom: number }; getClientRects: () => unknown[] }
   const els: El[] = cards.map((c) => {
-    const el: El = { id: c.id, closest: (s) => (s === THREAD_CARD_ROWS ? el : null), getBoundingClientRect: () => ({ top: c.top, bottom: c.bottom }) }
+    const none = c.box === false
+    const el: El = { id: c.id, closest: (s) => (s === THREAD_CARD_ROWS ? el : null), getBoundingClientRect: () => (none ? { top: 0, bottom: 0 } : { top: c.top, bottom: c.bottom }), getClientRects: () => (none ? [] : [{}]) }
     return el
   })
   const inner = { id: 'box-in-b', tagName: 'TEXTAREA', closest: (s: string) => (s === THREAD_CARD_ROWS ? els[1] : null) }
@@ -82,12 +83,76 @@ describe('the card he reads', () => {
   it('a focused element that is no card (a fold\'s head) is held itself', () => {
     expect(readCard(d.root, null, d.doc(d.head, under))).toBe(d.head)
   })
-  it('below every card, with the pointer still on the list, is the list itself (he has not left)', () => {
-    expect(readCard(d.root, { x: 5, y: 900 }, d.doc(d.body, under))).toBe(d.root)
+  // 2026-11-25, a review: below every card (a folded group's head under Done) the list itself was
+  // held, whose top never moves, and a new card above pushed everything he saw by its height.
+  it('below every card (a fold\'s head under them), is the card right above the pointer', () => {
+    expect((readCard(d.root, { x: 5, y: 900 }, d.doc(d.body, under)) as unknown as { id: string }).id).toBe('c')
+  })
+  it('below every card, skips a card drawn with no box (inside a folded group)', () => {
+    const f = fakeDom([{ id: 'a', top: 0, bottom: 100 }, { id: 'b', top: 110, bottom: 200 }, { id: 'folded', top: 0, bottom: 0, box: false }])
+    expect((readCard(f.root, { x: 5, y: 400 }, f.doc(f.body, () => f.head)) as unknown as { id: string }).id).toBe('b')
+    // Between cards, a boxless one is never the card below either.
+    const g = fakeDom([{ id: 'a', top: 0, bottom: 100 }, { id: 'folded', top: 0, bottom: 0, box: false }, { id: 'c', top: 210, bottom: 300 }])
+    expect((readCard(g.root, { x: 5, y: 150 }, g.doc(g.body, () => g.head)) as unknown as { id: string }).id).toBe('c')
+  })
+  it('with no card at all (or none with a box), is the list itself: he is still at it', () => {
+    const e = fakeDom([])
+    expect(readCard(e.root, { x: 5, y: 50 }, e.doc(e.body, () => e.head))).toBe(e.root)
+    const f = fakeDom([{ id: 'folded', top: 0, bottom: 0, box: false }])
+    expect(readCard(f.root, { x: 5, y: 50 }, f.doc(f.body, () => f.head))).toBe(f.root)
   })
   it('is nothing when he is at neither: the list holds the top of the view, and nothing at the very top', () => {
     expect(readCard(d.root, null, d.doc(d.body, under))).toBeNull()
     expect(readCard(null, { x: 5, y: 5 }, d.doc(d.body, under))).toBeNull()
+  })
+})
+
+// What readCard returns for "he is at the list" with no card to hold (the list itself) is never held
+// as a row: its top does not move when cards come and go inside it (useScrollAnchor's readAnchor).
+describe('a box or a list of rows is never the row being read', () => {
+  const el = (inner: unknown) => ({ querySelector: (s: string) => (s === THREAD_CARD_ROWS ? inner : null) }) as unknown as Element
+  const box = el({}) as unknown as HTMLElement
+  it('the box itself, or anything holding a row, is a container', () => {
+    expect(holdsRows(box, THREAD_CARD_ROWS, box)).toBe(true)
+    expect(holdsRows(box, THREAD_CARD_ROWS, el({}))).toBe(true)
+  })
+  it('a card (no row inside) or a fold\'s head is a row to hold', () => {
+    expect(holdsRows(box, THREAD_CARD_ROWS, el(null))).toBe(false)
+  })
+})
+
+// WebKit pulls a box at its end up by the height of a card moved in the DOM above the view (his
+// leaving lets the order follow, a card goes to another group), and never gives it back: on a
+// commit, that pull is no scroll of his, and the card goes back where he saw it.
+describe('a pull at the end of the range that no input made', () => {
+  const mark = { atEnd: true, at: 1000 }
+  const none = { at: 500, down: false }
+  it('is the engine\'s when the mark sat at the end, the commit moved the box up, and nothing scrolled since', () => {
+    expect(enginePull(mark, 5056, 4670, none)).toBe(386)
+    // Taken out of the mark's scroll, the card goes back where it stood on screen.
+    expect(anchoredScrollTop({ top: 200, scrollTop: 5056 - 386 }, 586, 4670, 5056)).toBe(5056)
+  })
+  it('a scroll made before the commit\'s render (a jump of the page, a test) is never undone', () => {
+    // Scrolled to the top, then a commit that moved nothing.
+    expect(enginePull(mark, 0, 0, none)).toBe(0)
+    // Scrolled a little up, then a commit that pulled 193 more: only the pull.
+    expect(enginePull(mark, 4800, 4607, none)).toBe(193)
+  })
+  it('is his after a wheel, a key, a touch or with a pointer held down (a scrollbar drag)', () => {
+    expect(enginePull(mark, 5056, 4670, { at: 1200, down: false })).toBe(0)
+    expect(enginePull(mark, 5056, 4670, { at: 500, down: true })).toBe(0)
+  })
+  it('is none when the mark was not at the end, nothing was read before the commit, or the box is not higher', () => {
+    expect(enginePull({ ...mark, atEnd: false }, 5056, 4670, none)).toBe(0)
+    expect(enginePull({}, 5056, 4670, none)).toBe(0)
+    expect(enginePull(mark, null, 4670, none)).toBe(0)
+    expect(enginePull(mark, 5056, 5056, none)).toBe(0)
+    expect(enginePull(mark, 5056, 5200, none)).toBe(0)
+  })
+  it('is read on a commit only, in a box that knows the row being read', () => {
+    const hook = fs.readFileSync(`${process.cwd()}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
+    expect(hook).toContain('commit && readingRef.current ? enginePull(held, before.current, box.scrollTop, input.current) : 0')
+    expect(hook.match(/keep\(box, true\)/g)).toHaveLength(1)
   })
 })
 

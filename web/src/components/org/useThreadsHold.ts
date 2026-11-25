@@ -54,8 +54,12 @@ export function focusReads(el: Element | null): boolean {
 /**
  * The card he reads while he is at the list: the one holding his focus (focusReads), else the one
  * under the pointer, else (the pointer between cards: a group's head, a line) the first card below
- * it, else (below every card) the list itself. Null only when he is at neither: the anchor reads
- * that as his leaving the list (useScrollAnchor's room at the top goes, and the top comes back).
+ * it, else (below every card: a folded group's head under Done) the last card above it, so what is
+ * under the pointer stays still (2026-11-25, a review: the list itself was held there, whose top
+ * never moves, and a new card above pushed everything 265px). Cards with no box (inside a fold) are
+ * skipped. The list itself only with no card at all: he is still at it, with nothing to hold. Null
+ * only when he is at neither: the anchor reads that as his leaving the list (useScrollAnchor's room
+ * at the top goes, and the top comes back).
  */
 export function readCard(root: HTMLElement | null, pointer: { x: number; y: number } | null, doc: Pick<Document, 'activeElement' | 'body' | 'elementFromPoint'> = document): Element | null {
   if (!root) return null;
@@ -65,8 +69,13 @@ export function readCard(root: HTMLElement | null, pointer: { x: number; y: numb
   const hit = doc.elementFromPoint(pointer.x, pointer.y);
   const card = hit && root.contains(hit) ? hit.closest(THREAD_CARD_ROWS) : null;
   if (card) return card;
-  for (const el of root.querySelectorAll(THREAD_CARD_ROWS)) if (el.getBoundingClientRect().bottom > pointer.y) return el;
-  return root;
+  let above: Element | null = null;
+  for (const el of root.querySelectorAll(THREAD_CARD_ROWS)) {
+    if (el.getClientRects().length === 0) continue;
+    if (el.getBoundingClientRect().bottom > pointer.y) return el;
+    above = el;
+  }
+  return above ?? root;
 }
 
 /** What the list's root spreads: the order's hold and where he is reading. */
