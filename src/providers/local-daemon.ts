@@ -63,7 +63,7 @@ import { daemonLaunch, discardPending, isDaemonScript, keepPendingBinary, keepRu
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
-import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type OtherService } from './in-process-daemon.js'
+import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type InProcessVerdict, type OtherService } from './in-process-daemon.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
 import { busyRetryLeftMs, noteBusyRefusal } from './daemon-busy-retry.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
@@ -449,44 +449,66 @@ export class LocalDaemon {
     await this.recoverLostDaemon()
     if (this.inProcess && !this._inProcessDeclined && await this.inProcess()) {
       const service = this.service
-      const verdict = await ensureInProcessDaemon({
-        dir: this.daemonDir,
-        ...(service ? { service: { home: service.home, ...(service.leads ? { leads: service.leads } : {}) } } : {}),
-        readPort: () => this.readPortFile(),
-        alive: async (port) => (await this.ping(port)).alive,
-        // A daemon program still serving the dir hands it over first (SIGTERM: the production dir
-        // and a persistent one keep their sessions for the registry); never two manage one dir.
-        // A daemon a service manager runs is that manager's to stop: this refuses, and the server uses it.
-        stopProgram: () => this.stopDaemon(),
-        prewarm: async () => {
-          if (!(await registryNeedsFoldPrewarm(this.daemonDir))) return
-          const target = inProcessRuntimeTarget()
-          // Bounded (fold-prewarm.ts): the child stops at its own deadline, 20 s before the bound,
-          // saving how far it got; one still running at the bound is killed (SIGTERM). Either way
-          // the start then adopts and folds what is left in process, as with no prewarm.
-          await runFoldPrewarm({ ...target, daemonDir: this.daemonDir, env: await this.buildSpawnEnv(), maxMs: IN_PROCESS_PREWARM_MAX_MS })
-        },
-        env: async () => {
-          const env = await this.buildSpawnEnv()
-          // The server is the parent: nothing of a separate program's watchdog applies.
-          delete env.WALNUT_DAEMON_PARENT_PID
-          return env
-        },
-      })
-      if (verdict.kind === 'in-process') {
-        this._wsUrl = verdict.url
-        this._port = null
-        this._spawnedPid = null
-        this._sessionHostPid = null
-        this._sessionHostApp = null
-        return 0
-      }
+      const verdict = await this.startInProcess()
+      if (verdict.kind === 'in-process') return 0
       // The host's one Walnut service never runs a daemon program beside itself: its next start tries again.
       if (service) throw new Error(`the service's daemon runtime did not start: ${verdict.why}`)
       this._inProcessDeclined = true
       log.session.warn('in-process daemon not started; using the daemon program that serves this dir', { dir: this.daemonDir, why: verdict.why })
     }
     return this.ensureRunningInner()
+  }
+
+  /** The in-process start (ensureInProcessDaemon) with this instance's dir, env and stop rules. */
+  private async startInProcess(): Promise<InProcessVerdict> {
+    const service = this.service
+    const verdict = await ensureInProcessDaemon({
+      dir: this.daemonDir,
+      ...(service ? { service: { home: service.home, ...(service.leads ? { leads: service.leads } : {}) } } : {}),
+      readPort: () => this.readPortFile(),
+      alive: async (port) => (await this.ping(port)).alive,
+      // A daemon program still serving the dir hands it over first (SIGTERM: the production dir
+      // and a persistent one keep their sessions for the registry); never two manage one dir.
+      // A daemon a service manager runs is that manager's to stop: this refuses, and the server uses it.
+      stopProgram: () => this.stopDaemon(),
+      prewarm: async () => {
+        if (!(await registryNeedsFoldPrewarm(this.daemonDir))) return
+        const target = inProcessRuntimeTarget()
+        // Bounded (fold-prewarm.ts): the child stops at its own deadline, 20 s before the bound,
+        // saving how far it got; one still running at the bound is killed (SIGTERM). Either way
+        // the start then adopts and folds what is left in process, as with no prewarm.
+        await runFoldPrewarm({ ...target, daemonDir: this.daemonDir, env: await this.buildSpawnEnv(), maxMs: IN_PROCESS_PREWARM_MAX_MS })
+      },
+      env: async () => {
+        const env = await this.buildSpawnEnv()
+        // The server is the parent: nothing of a separate program's watchdog applies.
+        delete env.WALNUT_DAEMON_PARENT_PID
+        return env
+      },
+    })
+    if (verdict.kind === 'in-process') {
+      this._wsUrl = verdict.url
+      this._port = null
+      this._spawnedPid = null
+      this._sessionHostPid = null
+      this._sessionHostApp = null
+    }
+    return verdict
+  }
+
+  /**
+   * The handed-over standby of a server that ran this daemon in its own process
+   * (web/standby-service.ts): the same in-process start, by the same rules (the posture guard, a
+   * daemon program still serving the dir hands it over first, the fold prewarm), and never a
+   * daemon program in its place. `declined`: why this process holds no runtime.
+   */
+  async holdInProcess(): Promise<InProcessVerdict> {
+    if (isProductionDaemonDir(this.daemonDir)) {
+      const refusal = prodDaemonClaimRefusal(currentProdClaimPosture(), this.daemonDir)
+      if (refusal) return { kind: 'declined', why: refusal }
+    }
+    if (!this.inProcess || !(await this.inProcess())) return { kind: 'declined', why: 'this daemon does not run in process here' }
+    return this.startInProcess()
   }
 
   /**

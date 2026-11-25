@@ -4,7 +4,7 @@
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
  *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
- *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--in-process-daemon default|off] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
@@ -20,7 +20,10 @@
  * stays inside <work dir>; nothing reads ~/.open-walnut or uses :3456.
  * `--remote` is rehearsal (a) of the switch between machines (leader-switch/remote-rehearsal.ts): three
  * machines with their own HOME, machine id and real daemon, the companion, every link a proxy the run cuts
- * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs).
+ * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs). It runs
+ * the default configuration (each server runs its machine's daemon in its own process, experiment
+ * `in_process_daemon`); `--in-process-daemon off` pins the daemon program of its own (the legacy shape).
+ * The header and every TIME line name the setting.
  */
 import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -48,7 +51,7 @@ const all = has('--all')
   const repo = path.resolve(import.meta.dirname, '..')
   const git = (a: string[]) => { try { return execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }) } catch { return '' } }
   const changed = git(['status', '--porcelain', '--untracked-files=no']).split('\n').filter((l) => l.trim())
-  console.log(`REHEARSAL  commit ${git(['rev-parse', 'HEAD']).trim() || 'unknown'}, tree ${changed.length ? `with ${changed.length} changed file(s): ${changed.slice(0, 5).map((l) => l.slice(3)).join(', ')}` : 'clean'}; args ${args.slice(1).join(' ')}; ${new Date().toISOString()}`)
+  console.log(`REHEARSAL  commit ${git(['rev-parse', 'HEAD']).trim() || 'unknown'}, tree ${changed.length ? `with ${changed.length} changed file(s): ${changed.slice(0, 5).map((l) => l.slice(3)).join(', ')}` : 'clean'}; args ${args.slice(1).join(' ')}; in_process_daemon ${process.env.WALNUT_IN_PROCESS_DAEMON === '1' || process.env.WALNUT_IN_PROCESS_DAEMON === '0' ? `forced ${process.env.WALNUT_IN_PROCESS_DAEMON === '1'} by WALNUT_IN_PROCESS_DAEMON` : 'as each rehearsal config says (default true)'}; ${new Date().toISOString()}`)
 }
 const work = path.resolve(root, new Date().toISOString().replace(/[:.]/g, '-'))
 fs.mkdirSync(work, { recursive: true })
@@ -67,8 +70,14 @@ const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 if (has('--remote')) {
   const { rehearseRemote } = await import('./leader-switch/remote-rehearsal.js')
   const onlyAt = args.indexOf('--only')
-  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
-  for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v}`)
+  const ipdAt = args.indexOf('--in-process-daemon')
+  const ipd = ipdAt >= 0 ? args[ipdAt + 1] : 'default'
+  if (ipd !== 'default' && ipd !== 'off') { console.error('--in-process-daemon default|off'); process.exit(2) }
+  const { inProcessDaemonLabel } = await import('./leader-switch/remote-world.js')
+  // Every result of this run is under this setting: the header says it, and so does every measured line.
+  console.log(`REMOTE  under ${inProcessDaemonLabel(ipd)}`)
+  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, inProcessDaemon: ipd, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
+  for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v} (under ${r.inProcessDaemon})`)
   finish()
 }
 

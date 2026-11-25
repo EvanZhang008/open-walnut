@@ -729,6 +729,33 @@ switch to restored data, the update on restart), both of which write in the home
 log in the home gets no line; the rehearsal hashes the whole home (every path and its bytes)
 before and after a standby run, with the witnesses online and with all of them unreachable.
 
+**This machine's sessions.** One process per machine holds the session runtime whatever role it
+boots in, and the runtime does not change hands when the role changes (`src/web/standby-service.ts`).
+When the server before the standby ran the daemon in its own process (experiment `in_process_daemon`,
+on by default), the switch stop stopped that runtime with the server, as any planned stop does: the
+production daemon dir keeps its CLIs running for the next process (as a deploy restart does), and an
+isolated dir (a test, a sandbox) ends them. The standby then holds the runtime again on the same dir,
+by the in-process start's own rules (`LocalDaemon.holdInProcess`: the posture guard, a daemon program
+still serving the dir hands it over first, the fold prewarm) and never a daemon program in its place:
+it adopts the CLIs from the registry and opens the door the new leader dials, so this machine is a
+host of the new leader and its sessions are watched again. This holds for every machine shape: a
+host's one Walnut service whose boot turned standby (`serviceRuntime()`, set only by the `--service`
+entry, `src/binary/service-entry.ts`), and a plain `walnut web` (the Mac's launchd `web --port 3456`,
+a dev box's server; `serviceRuntime()` is null there). A server whose daemon is a program of its own
+holds nothing: that program outlived the stop. `GET /api/leader/status` on the standby says what it
+holds (`sessionRuntime`: `{ held: 'service' | 'in-process', dir }`, or `{ held: false, why }`), and
+the leader's own status says `daemonInProcess`.
+
+Since the runtime comes back only with the standby, the source job starts the old home as the
+standby after the stop whenever the old leader's server ran the daemon in its own process (its
+preflight read `daemonInProcess`), not only when the old machine keeps a witness; a launcher that
+restarts the home does the same, and the second standby starts nothing. Between the stop and the
+standby's hold, and on a switch back between the old machine's standby stop (the trial needs its
+port) and its leader's boot, no process watches that machine's CLIs: they keep running and the next
+holder adopts them. `tests/core/leader/switch/switch-stop-sessions.test.ts` runs these processes one
+after another on one daemon dir (the leader, its switch stop, the standby, the leader again) with a
+fake CLI: the same CLI process answers in each, and the standby leaves the data home byte for byte.
+
 Found through the witnesses instead (no marker: a home that never handed over, say machine B's
 own home started while A leads), the boot reached the instance lock and the permission's first
 line already; the lock is let go and the standby starts. That home was not the fallback copy.
@@ -1312,6 +1339,13 @@ catch-up's batches, and checks the old leader's log: no git line writes the data
 `--gb N` puts the large filler under `artifacts/` (`--filler tracked`, the default: the leader's own git writes
 about as much again into `.git`, the pressure case) or under `voice-archive/` (`--filler ignored`: leader data git
 never takes, as a real home's recordings).
+It runs the default configuration (each server runs its machine's daemon in its own process, and keeps
+its sessions at a stop as the production dir does: `WALNUT_DAEMON_PERSISTENT`), and the main scenario
+checks that the session on A's own daemon keeps its CLI process across the switch stop, A's standby and
+the switch back. `--in-process-daemon off` pins `in_process_daemon: false` (the daemon program of its own,
+the shape before the experiment's default). The header and every `TIME` line name the setting
+(`under in_process_daemon=...`). A link to a machine's daemon dials the port in that machine's
+`daemon.port` at each connect, as a leader's tunnel does: in process the port moves with each holder.
 
 ## Witnesses on other machines
 
@@ -1641,6 +1675,12 @@ witness, above).
   console is served by its host replica of the new leader instead
   ([The old leader's console](./leader-switch-console.md), whose own list of what is not built
   yet starts with the new leader taking the old machine as a host by itself).
+- **This machine's sessions across the switch with the daemon in the server's process** (the default) are
+  [kept by the standby](#standby) on every machine shape, the Mac's plain `web` included. Not run yet on
+  the Mac or between the two dev boxes, only in the remote rehearsal and its tests. A short window
+  remains where no process watches the old machine's CLIs (from the stop to the standby's hold, and on
+  a switch back from that machine's standby stop to its leader's boot); they keep running and the next
+  holder adopts them from the registry. A turn that ends inside that window is not tested on its own.
 - No Settings screen (it needs the user's approval of the design).
 - Backups are not a door: a stopped old leader backs up nothing, but a server that lost the
   permission while running keeps its backup schedule.

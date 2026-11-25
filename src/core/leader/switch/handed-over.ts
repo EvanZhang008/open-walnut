@@ -189,6 +189,11 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
   /** Tests: CONSOLE_ANSWER_WAIT_MS and CONSOLE_LOOK_MS. */
   answerWaitMs?: number
   lookMs?: number
+  /**
+   * What this standby holds of the machine's session runtime (web/standby-service.ts), for its
+   * status: the runtime the server before it held in process (`held`), or none and why.
+   */
+  sessionRuntime?: () => unknown
 }): Promise<StandbyListener> {
   const env = o.env ?? process.env
   // One standby per home: a second process (a launcher's restart beside a live one) starts none.
@@ -227,6 +232,7 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
       record,
       message: s.message,
       permit: { state: 'standby', mayAct: false, remainingMs: 0, record, why: s.why },
+      ...(o.sessionRuntime ? { sessionRuntime: o.sessionRuntime() ?? null } : {}),
     }
   }
   const refusal = () => JSON.stringify({ error: s.message, code: 'handed_over', leader: s.leader, leaderDoors: s.leaderDoors, switchId: s.switchId })

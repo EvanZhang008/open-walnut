@@ -60,6 +60,12 @@ export interface SwitchState {
   targetAccountHome?: string
   sourceVersion: string
   sourceWasRunning: boolean
+  /**
+   * The old leader's server ran this machine's session daemon in its own process (experiment
+   * `in_process_daemon`): its switch stop stops that runtime too, so the switch starts the old home
+   * again as the standby, which holds it (web/standby-service.ts).
+   */
+  sourceDaemonInProcess?: boolean
   step: SourceStep
   log: StepLog[]
   handover?: number

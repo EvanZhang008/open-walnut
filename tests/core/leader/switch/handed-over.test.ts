@@ -62,6 +62,8 @@ describe('the standby of a handed-over home', () => {
     const st = await (await fetch(url(open, '/api/leader/status'))).json()
     // No leader_switch section in this home's config: the marker names the leader, no witness is read.
     expect(st).toMatchObject({ standby: true, leader: 'machine-b', switchId: 's1', machine: 'machine-a', permit: { state: 'standby', mayAct: false } })
+    // No session runtime reader given: the status names none.
+    expect(st).not.toHaveProperty('sessionRuntime')
     // What the Mac app checks before it attaches (desktop/main.swift): a 200 on / and on /api/config.
     const page = await fetch(url(open, '/'))
     expect(page.status).toBe(200)
@@ -111,6 +113,17 @@ describe('the standby of a handed-over home', () => {
     } finally {
       await new Promise<void>((done) => other.close(() => done()))
     }
+  })
+
+  it('its status names the session runtime it holds, read at each request (web/standby-service.ts)', async () => {
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', commit: 5, at: new Date().toISOString() })
+    let runtime: unknown = null
+    open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port: 0, host: '127.0.0.1', env, sessionRuntime: () => runtime })
+    expect((await (await fetch(url(open, '/api/leader/status'))).json()).sessionRuntime).toBeNull()
+    runtime = { held: 'in-process', dir: '/tmp/d' }
+    expect((await (await fetch(url(open, '/api/leader/status'))).json()).sessionRuntime).toEqual({ held: 'in-process', dir: '/tmp/d' })
+    runtime = { held: false, why: 'declined' }
+    expect((await (await fetch(url(open, '/api/leader/status'))).json()).sessionRuntime).toEqual({ held: false, why: 'declined' })
   })
 
   it('a switch still under way says so', () => {

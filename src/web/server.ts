@@ -1370,12 +1370,14 @@ async function serveHandedOverHome(standby: import('../core/leader/switch/handed
   // only this machine's launcher, app and switch command.
   // It shares the port with this machine's console replica (handed-over.ts): it listens only while
   // that replica does not serve the console there, and the process stays either way.
-  handedOverServer = await serveHandedOver(standby, { port, host: serverBindAddress({ replica: false, requested: options.bindAddress }) ?? '127.0.0.1' })
+  const standbyService = await import('./standby-service.js')
+  handedOverServer = await serveHandedOver(standby, { port, host: serverBindAddress({ replica: false, requested: options.bindAddress }) ?? '127.0.0.1', sessionRuntime: standbyService.standbyRuntimeState })
   // The line the Mac app waits for before it loads the page (desktop/main.swift: it stops a
   // started server that never says it, after 180 s): the standby's, or the console's at this port.
   console.log(handedOverServer.line)
-  // A leading service's standby keeps this machine's sessions and tells its launcher it is ready.
-  await (await import('./standby-service.js')).holdServiceRuntimeInStandby(port)
+  // This machine's session runtime stays with this process when the server before it held it (a
+  // leading service's, or a plain server's in-process daemon); a service also tells its launcher it is ready.
+  await standbyService.holdServiceRuntimeInStandby(port)
   bootCompleted = true
   return handedOverServer.server
 }

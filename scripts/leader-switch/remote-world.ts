@@ -71,7 +71,28 @@ function hostMachine(root: string, name: string): Machine {
   return { id: `machine-${name}`, dir, idFile, home: path.join(dir, 'home'), standbyDir: path.join(dir, 'standby'), port: 0, env: { HOME: dir } }
 }
 
-export async function makeRemoteWorld(root: string, opts: { portA: number; portB: number; log?: (s: string) => void }): Promise<RemoteWorld> {
+/**
+ * Where a machine's servers run its session daemon (experiment `in_process_daemon`): 'default' leaves
+ * the setting out of the config (on by default), 'off' pins it false (the daemon program of its own).
+ */
+export type InProcessDaemonSetting = 'default' | 'off'
+
+/** The setting as a run prints it on every result: "in_process_daemon=true (default)" or "in_process_daemon=false". */
+export function inProcessDaemonLabel(setting: InProcessDaemonSetting): string {
+  return setting === 'off' ? 'in_process_daemon=false' : 'in_process_daemon=true (default)'
+}
+
+/** The door port a machine's daemon publishes now (daemon.port): it moves when a server takes the daemon in process, or a standby takes it again. */
+function daemonPortNow(d: MachineDaemon): number {
+  try {
+    const port = Number(fs.readFileSync(path.join(d.dir, 'daemon.port'), 'utf8').trim())
+    if (Number.isInteger(port) && port > 0) return port
+  } catch { /* none published now */ }
+  return d.port
+}
+
+export async function makeRemoteWorld(root: string, opts: { portA: number; portB: number; log?: (s: string) => void; inProcessDaemon?: InProcessDaemonSetting }): Promise<RemoteWorld> {
+  const inProcessDaemon = opts.inProcessDaemon ?? 'default'
   const log = opts.log ?? (() => {})
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const cert = makeLoopbackCert(path.join(root, 'tls'))
@@ -96,9 +117,12 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
   const proxy = (port: () => number) => startSilentLinkProxy(port)
   let replicaPortB = 0
   const wmB = await startWitnessMachine({ host: 'machine-b', root: path.join(w.b.dir, 'leader-witness'), walnutId: null })
+  // A link to a machine's daemon dials the port that daemon publishes now, as a leader's tunnel does
+  // (it reads daemon.port on the host at each connect): with the daemon in a server's process the port
+  // moves each time a process takes the runtime (the server's boot, the standby after a switch).
   const links: RemoteWorld['links'] = {
-    copy: await proxy(() => daemons.b.port), aToH: await proxy(() => daemons.h.port),
-    bToA: await proxy(() => daemons.a.port), bToH: await proxy(() => daemons.h.port),
+    copy: await proxy(() => daemonPortNow(daemons.b)), aToH: await proxy(() => daemonPortNow(daemons.h)),
+    bToA: await proxy(() => daemonPortNow(daemons.a)), bToH: await proxy(() => daemonPortNow(daemons.h)),
     doorA: await proxy(() => w.a.port), doorB: await proxy(() => replicaPortB), doorK: await proxy(() => companion.port),
     aToBService: await proxy(() => wmB.port),
   }
@@ -114,6 +138,12 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
     WALNUT_CAPABILITIES: 'witness-door', WALNUT_LEADER_SWITCH_TEST_KNOBS: '1', NODE_EXTRA_CA_CERTS: cert.certFile,
     WALNUT_DISABLE_SEARCH: '1', WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_NO_AUTO_UPDATE: '1',
     WALNUT_REHEARSAL_DAEMON_ROUTES: JSON.stringify(routes),
+    // The config decides (below), never an inherited per-process override.
+    WALNUT_IN_PROCESS_DAEMON: '',
+    // In process, the runtime keeps its sessions at a stop as the production dir's does (a deploy, a switch
+    // stop), and the next process adopts them; an isolated dir's would be ended with it (daemon-standalone.ts
+    // shouldReapOnExit). A daemon program of its own outlives every server either way.
+    ...(inProcessDaemon === 'off' ? {} : { WALNUT_DAEMON_PERSISTENT: '1' }),
     ...windowEnv(), ...extra,
   })
   const server = (m: Machine) => [process.execPath, path.join(REPO, 'scripts/leader-switch/machine-server.ts'), '--port', String(m.port), '--dev']
@@ -126,7 +156,8 @@ export async function makeRemoteWorld(root: string, opts: { portA: number; portB
   // Where a session on a leader's own daemon works (it becomes a session of the old machine as a host after a switch).
   for (const x of [w.a, w.b]) fs.mkdirSync(path.join(x.dir, 'work'), { recursive: true })
   const cfg = {
-    experimental: { switchable_leader: true },
+    // The default leaves in_process_daemon out (on by default); 'off' pins the daemon program of its own.
+    experimental: { switchable_leader: true, ...(inProcessDaemon === 'off' ? { in_process_daemon: false } : {}) },
     // The copy goes to B over A's link to B's daemon (the copy link kind daemon); B's program runs `standby receive` there.
     standby: { dir: w.b.standbyDir, host: w.b.id, walnut, interval_seconds: 5 },
     hosts: { [w.a.id]: { hostname: w.a.id }, [w.b.id]: { hostname: w.b.id }, [h.id]: { hostname: h.id } },

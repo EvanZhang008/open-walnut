@@ -19,7 +19,7 @@ import { readSwitchState, readTargetState, type SwitchState, type TargetState } 
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
 import { Checks, KILL_POINTS, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, serverLog, startLoad, status, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
-import { makeRemoteWorld, type RemoteWorld } from './remote-world.js'
+import { inProcessDaemonLabel, makeRemoteWorld, type InProcessDaemonSetting, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
 import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
@@ -41,7 +41,23 @@ function recordAt(root: string, walnutId: string, id: string): Held {
 /** Who leads now and who holds its standby copy. */
 interface Roles { leader: Machine; other: Machine }
 
-export interface RemoteResult { checks: Checks; times: Record<string, string> }
+export interface RemoteResult { checks: Checks; times: Record<string, string>; inProcessDaemon: string }
+
+/** The pid of session `sid`'s CLI in a daemon dir's registry (sessions.json), or null. */
+function cliPidOf(daemonDir: string, sid: string): number | null {
+  let doc: unknown
+  try { doc = JSON.parse(fs.readFileSync(path.join(daemonDir, 'sessions.json'), 'utf8')) } catch { return null }
+  let found: number | null = null
+  const walk = (x: unknown, key?: string): void => {
+    if (found !== null || !x || typeof x !== 'object') return
+    const o = x as Record<string, unknown>
+    if ((o.sid === sid || o.sessionId === sid || o.id === sid || key === sid) && typeof o.pid === 'number') { found = o.pid; return }
+    for (const [k, v] of Object.entries(o)) walk(v, Array.isArray(x) ? undefined : k)
+  }
+  walk(doc)
+  return found
+}
+const pidAlive = (pid: number | null) => { if (!pid || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
 
 /** The switch command on the machine that leads: its own process, with that machine's environment. */
 async function switchCmd(w: RemoteWorld, from: Machine, args: string[], env: Record<string, string> = {}): Promise<{ code: number | null; out: string; state: SwitchState | null; target: TargetState | null }> {
@@ -167,21 +183,23 @@ function builtDaemon(): { ok: boolean; why: string } {
   return { ok: !!built && built === source, why: `built ${built ?? 'none'}, source ${source ?? 'unknown'}${built !== source ? ' (bash scripts/build-daemon.sh)' : ''}` }
 }
 
-export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; filler?: FillerPlace; log?: (s: string) => void; only?: string[] }): Promise<RemoteResult> {
+export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; filler?: FillerPlace; log?: (s: string) => void; only?: string[]; inProcessDaemon?: InProcessDaemonSetting }): Promise<RemoteResult> {
   const log = opts.log ?? (() => {})
   const c = new Checks(print)
   const times: Record<string, string> = {}
+  const setting = opts.inProcessDaemon ?? 'default'
+  const inProcessDaemon = inProcessDaemonLabel(setting)
   // A daemon built from older source would rehearse that one: nothing runs on a stale build.
   const daemon = builtDaemon()
-  if (!c.add('boot: the built daemon every machine runs is built from this source', daemon.ok, daemon.why)) return { checks: c, times }
-  const w = await makeRemoteWorld(root, { portA: opts.portA, portB: opts.portB, log })
+  if (!c.add('boot: the built daemon every machine runs is built from this source', daemon.ok, daemon.why)) return { checks: c, times, inProcessDaemon }
+  const w = await makeRemoteWorld(root, { portA: opts.portA, portB: opts.portB, log, inProcessDaemon: setting })
   const roles: Roles = { leader: w.a, other: w.b }
   const want = (name: string) => !opts.only?.length || opts.only.includes(name)
   try {
     if (want('flag-off')) await flagOff(c, w)
     // ---- boot: A leads on the three witnesses (init sets them up as an operator runs it) ----
     const started = await w.side(w.a).startServer('leader', 300_000)
-    if (!c.add('boot: A starts (non-ephemeral, its own daemon, its links to B and H through proxies)', started.ok, started.why ?? '')) return { checks: c, times }
+    if (!c.add('boot: A starts (non-ephemeral, its own daemon, its links to B and H through proxies)', started.ok, started.why ?? '')) return { checks: c, times, inProcessDaemon }
     const walnutId = (await instanceIdAt(w.a.home))!
     await w.startServiceB(walnutId)
     const init1 = await w.cli(w.a.home, ['leader', 'witnesses', 'init'], w.a.env)
@@ -191,7 +209,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     log(init2.out)
     const allThree = await waitFor('the three witnesses to hold A', async () => (['w-a', 'w-b', 'w-k'] as const).every((id) => recordAt(w.witnessRoot[id], walnutId, id)?.holder === w.a.id), 120_000).then(() => true).catch(() => false)
     if (!c.add('boot: init sets up w-a and w-k from nothing, A leads, init again adds w-b over A\'s link to B\'s service; all three hold A', leads === true && init2.code === 0 && allThree,
-      `init 1 exit ${init1.code}, init 2 exit ${init2.code}: ${last(init2.out, 4)}`)) return { checks: c, times }
+      `init 1 exit ${init1.code}, init 2 exit ${init2.code}: ${last(init2.out, 4)}`)) return { checks: c, times, inProcessDaemon }
     if (opts.fillerGb) await writeFiller(w.a.home, opts.fillerGb, log, opts.filler)
     const s = await seed(w, w.a, 8)
     c.add('boot: seed on A (tasks, notes, a plugin file, a routine)', s.tasks.length === 8 && !!s.cronId)
@@ -203,23 +221,24 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log }
     // The command run on B while B is no host of A yet (no host service of this Walnut there): refused, naming A.
     if (want('forwarded')) await forwardNoLink(ctx)
-    if (want('main')) await mainScenario(c, w, roles, s, times, log)
+    if (want('main')) await mainScenario(c, w, roles, s, times, log, setting)
     for (const [name, run] of SCENARIOS) {
       if (!want(name)) continue
       log(`--- ${name}: ${roles.leader.id} leads, ${roles.other.id} holds its copy`)
       await run(ctx).catch((err: unknown) => { c.add(`${name}: ran to its end`, false, err instanceof Error ? err.stack ?? err.message : String(err)) })
     }
-    return { checks: c, times }
+    return { checks: c, times, inProcessDaemon }
   } catch (err) {
     c.add('the rehearsal ran to its end', false, err instanceof Error ? err.stack ?? err.message : String(err))
-    return { checks: c, times }
+    return { checks: c, times, inProcessDaemon }
   } finally {
     await w.stop().catch(() => {})
   }
 }
 
 /** A to B under load, every B2a check with the witnesses and the other side remote, the third host's session, and back. */
-async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, times: Record<string, string>, log: (s: string) => void): Promise<void> {
+async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, times: Record<string, string>, log: (s: string) => void, setting: InProcessDaemonSetting): Promise<void> {
+  const inProcess = setting !== 'off'
   const A = roles.leader
   const B = roles.other
   // A session on H, started through A: its first answer.
@@ -232,6 +251,11 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const own = await sessionTurn(w, A, { taskId: localTask.json?.task?.id, message: 'ROUND own on A', on: 'local' })
   const answeredOwn = own.ok ? await waitFor('the own-daemon answer through A', async () => ((await answersOn(w, A, own.sid)).get('echo: ROUND own on A') ?? 0) > 0, 120_000).then(() => true).catch(() => false) : false
   c.add('main: a session on A\'s own daemon answers', answeredOwn, own.why ?? own.sid)
+  // Its CLI, by the registry of A's daemon: the switch stop must neither kill it nor leave it with nobody watching.
+  const ownPid = cliPidOf(w.daemons.a.dir, own.sid)
+  const leaderStatus = (await w.api(A, 'GET', '/api/leader/status').catch(() => null))?.json as { daemonInProcess?: boolean } | null
+  c.add(`main: A's server runs its machine's daemon ${inProcess ? 'in its own process' : 'as a program of its own'}`, leaderStatus?.daemonInProcess === inProcess && !!ownPid,
+    `daemonInProcess ${leaderStatus?.daemonInProcess}; the own-daemon session's CLI pid ${ownPid}`)
   const late = { rel: 'plugins/rehearsal-plugin/data/late.json', content: JSON.stringify({ late: randomBytes(4).toString('hex') }) }
   fs.writeFileSync(path.join(A.home, late.rel), late.content)
   await waitForBatch(B.standbyDir, Date.now(), 120_000)
@@ -269,6 +293,13 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const sinceDone = tgt?.readyAt ? Date.now() - Date.parse(tgt.readyAt) : NaN
   times['every host connected to the new leader after done'] = followed ? `${(sinceDone / 1000).toFixed(1)} s (waited ${((Date.now() - tHosts) / 1000).toFixed(1)} s after the command returned)` : 'not within 180 s'
   c.add('main: every host (H, and the old machine A) is connected to B', followed, JSON.stringify((await w.api(B, 'GET', '/api/hosts/status').catch(() => null))?.json?.hosts?.map((x: any) => ({ h: x.host ?? x.alias ?? x.key, c: x.connected ?? x.state ?? x.phase })) ?? null))
+  // A's sessions across the switch stop: the standby of A's home holds the machine's runtime again when A's server
+  // held it in process (web/standby-service.ts), so the CLI is the same process and is watched again.
+  const standbyA = (await w.api(A, 'GET', '/api/leader/status').catch(() => null))?.json as { standby?: boolean; sessionRuntime?: { held?: string | false; why?: string } | null } | null
+  c.add(`main: A's standby ${inProcess ? 'holds A\'s session runtime in its own process' : 'holds no runtime (A\'s daemon program outlived the server)'}`,
+    standbyA?.standby === true && (inProcess ? standbyA.sessionRuntime?.held === 'in-process' : standbyA.sessionRuntime?.held === false), JSON.stringify(standbyA?.sessionRuntime ?? null))
+  c.add('main: the switch stop did not kill the CLI of the session on A\'s own daemon (the same process, named by A\'s daemon again)',
+    pidAlive(ownPid) && cliPidOf(w.daemons.a.dir, own.sid) === ownPid, `pid ${ownPid} alive ${pidAlive(ownPid)}; the registry names ${cliPidOf(w.daemons.a.dir, own.sid)}`)
   // The session on H: its facts on B with no loss and no doubling, and a message right after the switch answered once.
   const onB = await answersOn(w, B, first.sid)
   c.add('main: the session\'s turns made through A are on B once each (no loss, no doubling)', onB.get('echo: ROUND one on A') === 1, JSON.stringify([...onB]))
@@ -340,6 +371,9 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   times['downtime B -> A (switch back), copy link unslowed'] = `${((tb?.downtimeMs ?? NaN) / 1000).toFixed(1)} s`
   c.add('main: A leads again', !!(await status(w, A))?.mayAct)
   checkIgnoresKept(c, 'main B -> A', A)
+  const leaderAgain = (await w.api(A, 'GET', '/api/leader/status').catch(() => null))?.json as { daemonInProcess?: boolean } | null
+  c.add(`main: after the switch back A's server runs the daemon ${inProcess ? 'in its own process again' : 'as a program of its own still'}, and the session's CLI is the same process`,
+    leaderAgain?.daemonInProcess === inProcess && pidAlive(ownPid) && cliPidOf(w.daemons.a.dir, own.sid) === ownPid, `daemonInProcess ${leaderAgain?.daemonInProcess}; pid ${ownPid} alive ${pidAlive(ownPid)}; the registry names ${cliPidOf(w.daemons.a.dir, own.sid)}`)
   await checkCarried(c, w, A, B, { tasks: [...s.tasks, ...acked, ...onBWrites], notes: s.notes, pluginFiles: [...s.pluginFiles, late] }, 'main B -> A')
   checkOneLeader(c, 'main B -> A', B, A, { stoppedAt: tb?.stoppedAt, startedAt: back.state?.startedAt })
   c.add('main: A\'s handed-over home is kept beside the new one', fs.existsSync(`${A.home}.before-${back.state!.id}`) && readMarker(`${A.home}.before-${back.state!.id}`)?.state === 'handed-over')

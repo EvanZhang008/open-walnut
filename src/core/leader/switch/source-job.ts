@@ -62,6 +62,23 @@ export async function stopStillRunning(p: { pid: number; start: string | null },
   return Number.isFinite(until) && o.now < until && alive(p.pid)
 }
 
+/**
+ * Why the switch starts the old home again as the standby after its stop, in words for its log: the old
+ * machine keeps a witness of the list (the standby keeps that witness's door up), and/or its server ran the
+ * machine's session daemon in its own process (the standby holds that runtime again: its sessions are
+ * adopted, the new leader reaches the machine as a host). Null when neither: nothing of the old machine
+ * waits on the standby (a daemon program of its own outlived the server).
+ */
+export function oldMachineStandbyReasons(witnesses: LeaderSwitchSettings['witnesses'], st: Pick<SwitchState, 'from' | 'sourceDaemonInProcess'>): { kept: string; lost: string } | null {
+  const witness = witnesses.some((w) => isRemoteWitness(w) && w.machine === st.from)
+  const daemon = st.sourceDaemonInProcess === true
+  if (!witness && !daemon) return null
+  return {
+    kept: [...(witness ? ['its witness door up'] : []), ...(daemon ? ['its sessions\' daemon kept'] : [])].join(', '),
+    lost: [...(witness ? ['its witness is not reached'] : []), ...(daemon ? ['its sessions have no daemon'] : [])].join(' and '),
+  }
+}
+
 export async function runSourceJob(o: SourceJobOptions): Promise<SwitchState> {
   const env = o.env ?? process.env
   const out = o.out ?? (() => {})
@@ -168,12 +185,18 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
     return !(await stopping())
   }
   const cancelAsked = () => { try { return (JSON.parse(fs.readFileSync(sourceCancelFile(home), 'utf8')) as { switchId?: string }).switchId === s.id } catch { return false } }
-  /** The old machine keeps a witness of the list: its home runs again as the handed-over standby, which keeps that witness's door up. */
-  const keepWitnessDoor = async (): Promise<string> => {
-    if (!settings.witnesses.some((w) => isRemoteWitness(w) && w.machine === s.from)) return ''
+  /**
+   * The old home runs again as the handed-over standby, as its launcher would start it, when the old
+   * machine keeps a witness of the list (the standby keeps that witness's door up) or when its server
+   * ran the machine's session daemon in its own process (the standby holds that runtime again: its
+   * sessions are adopted and the new leader reaches the machine as a host; web/standby-service.ts).
+   */
+  const keepOldMachine = async (): Promise<string> => {
+    const why = oldMachineStandbyReasons(settings.witnesses, s)
+    if (!why) return ''
     const r = await side.startStandby()
-    if (r.ok) return '; its home runs as the standby, its witness door up'
-    out(`the old home did not start as the standby (${r.why}): its witness is not reached until it does`)
+    if (r.ok) return `; its home runs as the standby, ${why.kept}`
+    out(`the old home did not start as the standby (${r.why}): ${why.lost} until it does`)
     return `; its standby did not start (${r.why})`
   }
   if (!o.resume) save('preflight')
@@ -250,7 +273,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           if (!res!.ok) fail(`the old leader's final batch: ${res!.why ?? 'failed'}`)
           s.finalBatch = res!.batch
           s.stoppedAt ??= res!.stoppedAt
-          const door = await keepWitnessDoor()
+          const door = await keepOldMachine()
           save('wait-target', `the old leader stopped after its final batch ${res!.batch} (unchanged)${door}`)
           await note('stopped')
           break
@@ -370,7 +393,8 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   if (!running) problems.push(`the old leader's server is not running on ${st.sourceHome}: start it first (only the process that holds the permission can hand it over)`)
   else {
     const s = await src.api('GET', '/api/leader/status').catch(() => null)
-    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string }; homeOnHosts?: SwitchState['sourceHomeOnHosts'] } | null
+    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string }; homeOnHosts?: SwitchState['sourceHomeOnHosts']; daemonInProcess?: boolean } | null
+    st.sourceDaemonInProcess = j?.daemonInProcess === true
     if (typeof j?.homeOnHosts?.home === 'string' && j.homeOnHosts.home) st.sourceHomeOnHosts = { home: j.homeOnHosts.home, formerHomes: Array.isArray(j.homeOnHosts.formerHomes) ? j.homeOnHosts.formerHomes : [] }
     else if (j?.permit) problems.push('the old leader does not say which data dir its hosts know it by (a program older than this switch): its hosts could not follow the new leader')
     if (!j?.permit) problems.push('the old leader runs without the write permission wired (start it with the experiment on and leader_switch set)')
