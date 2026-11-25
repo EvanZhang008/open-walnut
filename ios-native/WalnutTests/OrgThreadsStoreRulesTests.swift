@@ -149,6 +149,11 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
         XCTAssertTrue(OrgThreadsStore.readError(hasThreads: false, fromCache: false).hasPrefix("Couldn't load"))
         XCTAssertTrue(OrgThreadsStore.readError(hasThreads: true, fromCache: true).contains("as the phone last saw them"))
         XCTAssertEqual(OrgThreadsStore.readError(hasThreads: true, fromCache: false), "Couldn't refresh the threads.")
+        // Out of reach, the threads a read of this run brought are the phone's last copy too.
+        let offline = APIError.network(underlying: URLError(.networkConnectionLost))
+        XCTAssertTrue(OrgThreadsStore.readError(hasThreads: true, fromCache: false, cause: offline)
+            .contains("as the phone last saw them"))
+        XCTAssertTrue(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: offline).hasPrefix("Couldn't load"))
     }
 
     func testARefreshWithThreadsOnScreenWaitsForThePrimaryToReturn() async throws {

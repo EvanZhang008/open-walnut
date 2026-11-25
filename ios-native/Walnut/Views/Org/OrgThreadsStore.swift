@@ -340,6 +340,11 @@ final class OrgThreadsStore {
         return "Walnut couldn't reach your Mac for the threads just now."
     }
 
+    nonisolated private static func isOutOfReach(_ cause: APIError) -> Bool {
+        if case .network = cause { return true }
+        return false
+    }
+
     /// What a failed list read says, by what the page still shows.
     nonisolated static func readError(hasThreads: Bool, fromCache: Bool, cause: APIError? = nil) -> String {
         if let cause, cause.isLeaderUnreachableForNow {
@@ -347,7 +352,12 @@ final class OrgThreadsStore {
             return "\(unreachableSentence(cause))\(kept) It will try again automatically."
         }
         if !hasThreads { return "Couldn't load the threads. Pull to try again." }
-        if fromCache { return "These are the threads as the phone last saw them. Pull to try again." }
+        // Out of reach, the threads shown are the phone's last copy whether it came off the disk
+        // or from a read earlier in this run (every surface of a node shares one store since
+        // bfc9160a2e), and the page says what the open's notice says (ThreadPushNavigation Y).
+        if fromCache || cause.map(Self.isOutOfReach) == true {
+            return "These are the threads as the phone last saw them. Pull to try again."
+        }
         return "Couldn't refresh the threads."
     }
 
