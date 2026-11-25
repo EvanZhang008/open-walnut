@@ -24,6 +24,7 @@ import {
   duplicateLetterMessage, findDuplicateLetter, findOpenSameAsk, openAskHint, resendReasonOf, senderKey, type OpenAskHint,
 } from './duplicate-letter.js';
 import { truncatePreview } from './preview.js';
+import { sendWithin } from '../sessions/send-deadline.js';
 import {
   INFO_NOT_INBOX, INFO_NOT_INBOX_MESSAGE, noticeSubjectKey, passesInfoRule, sendInfoNotice, type InfoNotice,
 } from './info-letter-rule.js';
@@ -492,11 +493,9 @@ export async function deliverLetterToOrigin(
       const { assertAreaDelivery } = await import('../router/delivery-scope.js');
       assertAreaDelivery(fresh, sid, human.by ? 'peer' : 'human-inbox', options.messageId);
       const { enqueueMessage } = await import('../session-message-queue.js');
-      const parked = await withTimeout(enqueueMessage(sid, frameForSource(text, human.by ? 'peer' : 'human-inbox'), { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' }), DELIVERY_TIMEOUT_MS, () => null);
-      if (!parked) {
-        log.notif.warn('human-inbox: deferred enqueue timed out', { letterId: letter.id, sessionId: sid });
-        return { status: 'failed', reason: 'timeout', sessionId: sid };
-      }
+      // No deadline: a raw enqueue starts its store at once, and a store under way is answered by
+      // its own outcome, never "timed out" (sessions/send-deadline.ts); the store bounds itself.
+      const parked = await enqueueMessage(sid, frameForSource(text, human.by ? 'peer' : 'human-inbox'), { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' });
       log.notif.info('human-inbox: answer queued without dispatch — origin awaits a permission prompt', {
         letterId: letter.id,
         sessionId: sid,
@@ -508,18 +507,17 @@ export async function deliverLetterToOrigin(
       };
     }
     const { sendMessageToSession } = await import('../session-message-queue.js');
-    const queued = await withTimeout(
-      sendMessageToSession(sid, text, {
-        // A task's answer for the user is another task's message, not the person's words.
-        source: human.by ? 'peer' : 'human-inbox',
-        // The answer its letter waits on: never held for a cold session's next wake (sessions/cold-hold.ts).
-        wakeReason: 'an answer to the session\'s letter to the user',
-        ...(options.messageId ? { messageId: options.messageId } : {}),
-        ...(record.taskId ? { taskId: record.taskId } : {}),
-      }),
-      DELIVERY_TIMEOUT_MS,
-      () => null,
-    );
+    // The deadline ends only a send that stored nothing yet: a row on its way to the disk is the
+    // answer, never "timed out" (a later try would deliver it twice). sessions/send-deadline.ts.
+    const queued = await sendWithin(DELIVERY_TIMEOUT_MS, (inTime) => sendMessageToSession(sid, text, {
+      // A task's answer for the user is another task's message, not the person's words.
+      source: human.by ? 'peer' : 'human-inbox',
+      // The answer its letter waits on: never held for a cold session's next wake (sessions/cold-hold.ts).
+      wakeReason: 'an answer to the session\'s letter to the user',
+      ...(options.messageId ? { messageId: options.messageId } : {}),
+      ...(record.taskId ? { taskId: record.taskId } : {}),
+      stillWanted: inTime,
+    }));
     if (!queued) {
       log.notif.warn('human-inbox: delivery timed out', { letterId: letter.id, sessionId: sid });
       return { status: 'failed', reason: 'timeout', sessionId: sid };

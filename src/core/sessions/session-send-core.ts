@@ -50,6 +50,7 @@ import {
 } from '../session-requests.js';
 import { queueSentBy, sendSourceOf } from './send-sent-by.js';
 import { assertAreaDelivery } from '../router/delivery-scope.js';
+import { sendWithin } from './send-deadline.js';
 import { frameForSource } from './send-frame.js';
 import { isPersonSource } from './send-sent-by.js';
 import { noteRequestDelivering } from './undelivered-requests.js';
@@ -538,29 +539,28 @@ export async function deliverToSession(
     const { enqueueMessage } = await import('../session-message-queue.js');
     const { escapeHintTags } = await import('../hints/hint-format.js');
     const sentBy = queueSentBy(opts.source);
-    const parked = await withTimeout(
-      // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
-      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { recentText: opts.busText, ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) }),
-      DELIVERY_TIMEOUT_MS,
-    );
-    if (!parked) throw new SendError('delivery_failed', 'enqueue timed out — retry', 503);
+    // No deadline: a raw enqueue starts its store at once, and a store under way is answered by
+    // its own outcome, never "timed out, retry" (send-deadline.ts); the store bounds itself.
+    // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
+    const parked = await enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { recentText: opts.busText, ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) });
     return { delivery: 'deferred', messageId: parked.id };
   }
   const { sendMessageToSession } = await import('../session-message-queue.js');
-  const queued = await withTimeout(
-    sendMessageToSession(sid, opts.busText, {
-      source: opts.source,
-      enqueueMessage: opts.enqueueText === opts.busText ? undefined : opts.enqueueText,
-      ...(opts.taskId ? { taskId: opts.taskId } : {}),
-      ...(opts.messageId ? { messageId: opts.messageId } : {}),
-      ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
-      ...(opts.endsWait ? { endsWait: true } : {}),
-      ...(opts.stillWanted ? { stillWanted: opts.stillWanted } : {}),
-      ...(opts.wakeReason ? { wakeReason: opts.wakeReason } : {}),
-      ...(guard ?? {}),
-    }),
-    DELIVERY_TIMEOUT_MS,
-  );
+  // The deadline ends only a send that stored nothing yet (send-deadline.ts): one whose row is on
+  // its way to the disk is answered by its row, never "timed out, retry" (a retry sends it twice).
+  const callerWants = opts.stillWanted;
+  const queued = await sendWithin(DELIVERY_TIMEOUT_MS, (inTime) => sendMessageToSession(sid, opts.busText, {
+    source: opts.source,
+    enqueueMessage: opts.enqueueText === opts.busText ? undefined : opts.enqueueText,
+    ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    ...(opts.messageId ? { messageId: opts.messageId } : {}),
+    ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
+    ...(opts.endsWait ? { endsWait: true } : {}),
+    ...(opts.wakeReason ? { wakeReason: opts.wakeReason } : {}),
+    ...(guard ? { stopFence: guard.stopFence } : {}),
+    // Every reason not to store, the deadline last: passed, the row is committed.
+    stillWanted: () => (!callerWants || callerWants()) && (!guard || guard.stillWanted()) && inTime(),
+  }));
   if (!queued) throw new SendError('delivery_failed', 'delivery timed out — retry', 503);
   return { delivery: 'queued', messageId: (queued as { id?: string }).id };
 }
@@ -641,15 +641,6 @@ export async function noteResultReport(
     });
     return undefined;
   }
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
-  let timer: NodeJS.Timeout | undefined;
-  const onTimeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
-    timer.unref?.();
-  });
-  return Promise.race([p, onTimeout]).finally(() => { if (timer) clearTimeout(timer); });
 }
 
 /**
@@ -983,7 +974,7 @@ async function settleAnswerNotDelivered(
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
   // A send the throttle admitted and that then failed before it reached the queue is taken back
   // from it, so the sender's retry of the same words is admitted (peer-throttle.ts forget). Never
-  // once it was delivered, nor when its enqueue timed out (it may still land).
+  // once it was delivered. A timed-out send stored nothing (send-deadline.ts): it is taken back too.
   const throttled: { undo?: () => void } = {};
   try {
     return await performPlainSendOnce(input, throttled);
@@ -1244,14 +1235,9 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
     // A rejected delivery never landed, so a request row we just created would
     // otherwise sit pending until its deadline and the sweeper would tell the
     // asker "no reply by your deadline" about a send that never happened. A
-    // TIMEOUT is different: withTimeout abandons the enqueue, it does not cancel
-    // it, so the envelope (carrying request="rq-…") may still arrive and the
-    // receiver's reply needs a row to land in. Leave that row to the sweeper.
-    const timedOut = err instanceof SendError && err.code === 'delivery_failed';
-    // The same holds for the throttle: a timed-out enqueue may still land, so the sender's retry
-    // stays a duplicate of it and is refused rather than delivered twice.
-    if (timedOut) throttled.undo = undefined;
-    if (request && !timedOut) {
+    // timeout is such a delivery too: the deadline ends only a send that stored
+    // nothing, and shuts its gate so it never does (send-deadline.ts).
+    if (request) {
       await deletePendingRequest(request.id).catch((e) => {
         log.session.warn('session_send: could not drop the orphaned request row', {
           requestId: request.id, error: e instanceof Error ? e.message : String(e),
