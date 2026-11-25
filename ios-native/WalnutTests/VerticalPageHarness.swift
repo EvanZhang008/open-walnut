@@ -77,11 +77,23 @@ enum VerticalPageHarness {
         return scrollViews(hosted.window).filter { !$0.isHidden && abs($0.bounds.width - width) <= 1 && $0.bounds.height >= 200 }
     }
 
+    /// Every scroll view in the window, for a failure that finds no page scroller: what it is, where
+    /// it sits in the window, its content and whether it is hidden (a CI-only miss is read from this).
+    static func describeScrollViews(_ hosted: Hosted) -> String {
+        let all = scrollViews(hosted.window)
+        guard !all.isEmpty else { return "no scroll view at all" }
+        return all.map { s in
+            let f = s.convert(s.bounds, to: hosted.window)
+            return "\(type(of: s)) at x \(Int(f.minX)) y \(Int(f.minY)) \(Int(f.width))x\(Int(f.height)), content \(Int(s.contentSize.width))x\(Int(s.contentSize.height))\(s.isHidden ? ", hidden" : "")"
+        }.joined(separator: "; ")
+    }
+
     /// Each page scroller's content is no wider than the scroller.
     static func assertPageFits(_ page: String, _ hosted: Hosted, file: StaticString = #filePath, line: UInt = #line) {
         let width = hosted.window.bounds.width
         let pages = pageScrollers(hosted)
-        XCTAssertFalse(pages.isEmpty, "\(page) at \(width) pt: no page-wide scroll view found", file: file, line: line)
+        XCTAssertFalse(pages.isEmpty, "\(page) at \(width) pt: no page-wide scroll view found among \(describeScrollViews(hosted))",
+                       file: file, line: line)
         for s in pages {
             XCTAssertLessThanOrEqual(
                 s.contentSize.width, s.bounds.width + 0.5,
