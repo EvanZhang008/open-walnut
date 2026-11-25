@@ -34,7 +34,7 @@ const SIDE: Record<string, Side> = {
   'router-delivery': 'not', 'router-runtime': 'not', 'start-queue': 'not', 'task-description': 'not', 'session-start': 'not',
   'brief-refresh': 'not', 'choice-recheck': 'not', 'thread-recheck': 'not', 'title-topic': 'not', topic: 'not',
   'app-state': 'not', subagent: 'not', 'subagent-runner': 'not', transfer: 'not', 'notification-fix': 'not', 'health-alarm': 'not',
-  'background-work-ended': 'not', 'pr-watch': 'not', 'change-watch': 'not', 'machine-recovered': 'not', 'org-reflection': 'not',
+  'background-work-ended': 'not', 'pr-watch': 'not', 'change-watch': 'not', 'machine-recovered': 'not', 'org-reflection': 'not', 'thread-audit': 'not',
   'org-autostart': 'not', 'browser-automation': 'not', 'side-thread-digest': 'not', workspace: 'not',
   // A person's words that never reach the run's own session as a send (a side question goes to its
   // fork; a start's first line is no session:input), so they cannot adopt it there.

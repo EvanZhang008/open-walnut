@@ -38,7 +38,7 @@ const MAX_PER_NOTE = 8;
 export const RETRY_MS = 10 * 60_000;
 
 /** The user stopped the node's session himself: it is not woken (his view still says the thread is overdue). */
-function personStopped(s: { process_status?: string; status_reason?: string; status_changed_by?: string }): boolean {
+export function personStopped(s: { process_status?: string; status_reason?: string; status_changed_by?: string }): boolean {
   if (s.process_status === 'running') return false;
   return s.status_changed_by === 'user' || s.status_reason === 'user_stopped' || s.status_reason === 'user_terminated';
 }

@@ -151,6 +151,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   thread_split: macWrite('Splitting a thread'),
   thread_file: macWrite('Filing a thread'),
   thread_move: macWrite('Moving a thread'),
+  thread_audit: leader('the thread check\'s counts and runs live with the threads, on the leader only (needs_leader)'),
   topic_list: read(),
   topic_read: read(),
   topic_create: macWrite('A new topic'),

@@ -43,6 +43,8 @@ const HOLDERS: Record<string, How> = {
   'src/core/sessions/status-riding.ts#riding': { durable: 'status-riding.json' },
   'src/core/sessions/status-riding.ts#toldDecisions': { durable: 'status-riding.json' },
   'src/core/sessions/status-riding.ts#toldNotices': { 'no-text': 'when each notice was told, so a later status line does not say it again; at worst one line repeats after a restart' },
+  'src/core/org/thread-audit.ts#inFlight': { 'no-text': 'which nodes a thread check runs for now; a restart ends the pass, and the next clock tick checks the node again' },
+  'src/core/org/thread-audit.ts#triedAt': { 'no-text': 'when the clock last tried each node in this process; the checked time itself is in org/thread-audit.json, so a restart only tries a node with no open thread once more' },
   'src/core/org/thread-answered-notes.ts#held': { 'no-text': 'a parsed copy of the answered-threads line, which itself rides in status-riding.json and is read back from there (readBack)' },
   'src/core/sessions/status-push.ts#baseline': { 'no-text': 'each task\'s last seen status; read again from the task store at boot (startStatusPush)' },
   'src/core/sessions/status-push.ts#pending': { 'restart-ok': 'status changes settling for SETTLE_MS before they ride (into status-riding.json); the status itself stays on its task, which the Brief and task_get read' },

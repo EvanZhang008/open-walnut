@@ -781,6 +781,7 @@ let laneAskSyncStop: (() => void) | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
+let threadAuditHandle: { stop: () => void } | null = null
 let topicsHandle: { stop: () => void } | null = null
 let standbyHandle: { stop: () => void } | null = null
 /** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
@@ -3147,6 +3148,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/task-actions-v1.js')).taskActionsV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
   app.use('/api/v1', (await import('./routes/org-threads-v1.js')).orgThreadsV1Router)
+  app.use('/api/v1', (await import('./routes/thread-audit-v1.js')).threadAuditV1Router)
   // Topics: group chats of tasks, org nodes and people (core/topics/; experiment topics, 404 while off).
   app.use('/api', (await import('./routes/topics-v1.js')).topicsV1Router)
   // Private tasks: make a synced task local, send a local one to its project's service (core/private-tasks/).
@@ -4392,6 +4394,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // ends, and closed threads are deleted after their week (core/org/thread-answers.ts).
       const { startThreadAnswers } = await import('../core/org/thread-answers.js')
       threadAnswersHandle = startThreadAnswers()
+      // The thread check (experiment threads_audit): a small model reads each node's open threads every few hours (core/org/thread-audit.ts).
+      void import('../core/org/thread-audit.js').then((m) => { threadAuditHandle?.stop(); threadAuditHandle = m.startThreadAudit({ ephemeral: IS_EPHEMERAL }) }).catch(() => {})
 
       // The session's current turn (sessions/turn-run.ts): every reader of "is Walnut retrying this
       // turn" asks it; its attempts start over at any send that is not a retrier's. Primary only.
@@ -8303,6 +8307,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     threadAnswersHandle.stop()
     threadAnswersHandle = null
   }
+  threadAuditHandle?.stop()
+  threadAuditHandle = null
   if (topicsHandle) {
     topicsHandle.stop()
     topicsHandle = null

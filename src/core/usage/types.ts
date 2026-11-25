@@ -34,6 +34,7 @@ export type UsageSource =
   | 'outbound-check' // whether a post or mail about to leave reads as a personal matter (core/outbound)
   | 'ask-check' // whether a task's ask reads on its own before the user sees it (core/sessions/unclear-ask.ts)
   | 'thread-join-check' // whether a message joined to a thread by timing is that thread's subject (core/org/thread-join-check.ts)
+  | 'thread-audit' // the thread check: which open cards are one subject (core/org/thread-audit.ts, experiment threads_audit)
   | 'reply-language' // retired: older rows only (a progress line rewritten in the user's language)
   | 'drawing'      // a drawing turned into a clean diagram, or a description drawn as one
   | 'reflection'   // an org node's reflection judging one moment of a session it manages (core/org/reflection)

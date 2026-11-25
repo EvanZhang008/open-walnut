@@ -84,6 +84,7 @@ export const NOTICE_WAKES: Readonly<Record<string, string>> = {
   trigger_undelivered: 'a fire of the session\'s own trigger keeps failing to reach its task (Walnut keeps trying): only its owner can see why the task takes no message',
   fire_budget_held: 'the session\'s own trigger is holding fires back on its daily budget: only its owner can raise the budget or slow the check',
   'threads-overdue': 'threads wait on this node\'s decision past their time',
+  'threads-audit': 'the thread check found two cards on one subject, or a decision for him outside his Needs you: what he sees is wrong until the node fixes it',
   vp: 'the session was made a VP: it takes up the role',
   handover: 'a project was handed to this lead: it takes up the work',
   'folder-not-moved': 'the session\'s folder is gone and could not be moved: its work cannot go on',

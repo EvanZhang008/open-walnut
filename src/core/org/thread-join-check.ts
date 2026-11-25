@@ -63,27 +63,13 @@ export function readVerdict(answer: string): JoinVerdict | null {
 let override: ((input: string) => Promise<string>) | null = null;
 export function setJoinJudgeOverride(fn: ((input: string) => Promise<string>) | null): void { override = fn; }
 
-async function callFastModel(input: string, taskId: string): Promise<string> {
-  const [{ ambientTestRun }, { backgroundAiDisabled, fastModelFor, fastCallBudgetMs, fastCallText }] = await Promise.all([import('../test-run.js'), import('../cheap-model.js')]);
-  if (ambientTestRun() || backgroundAiDisabled()) throw new Error('the fast model is not available here');
-  const [{ sendMessage }, { getConfig }] = await Promise.all([import('../../model/model.js'), import('../config-manager.js')]);
-  const config = await getConfig();
-  const model = fastModelFor(config);
-  const budget = fastCallBudgetMs(config, 20_000);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), budget);
-  try {
-    const result = await sendMessage({
-      system: 'You sort chat messages into threads by subject. Answer SAME, NEW or UNSURE.',
-      messages: [{ role: 'user', content: input }],
-      // Room for the model's own thinking before its one word (a 5-token cap answered nothing).
-      config: { maxTokens: 1024, ...(model ? { model } : {}) },
-      signal: controller.signal,
-      purpose: 'background',
-      usage: { source: 'thread-join-check', agentId: 'thread-join-check', taskId },
-    });
-    return fastCallText(result, budget);
-  } finally { clearTimeout(timer); }
+/** The fast model's answer, through the one helper every short background check uses (fast-model-call.ts). */
+async function callJoinJudge(input: string, taskId: string): Promise<string> {
+  const { callFastModel } = await import('../fast-model-call.js');
+  return (await callFastModel({
+    system: 'You sort chat messages into threads by subject. Answer SAME, NEW or UNSURE.',
+    input, source: 'thread-join-check', taskId, directMs: 20_000,
+  })).text;
 }
 
 /** The judge's word on message `messageId` of `t`, or null (nothing to judge, or no answer). */
@@ -92,7 +78,7 @@ export async function judgeJoin(t: Pick<OrgThread, 'title' | 'messages'>, messag
   const input = joinJudgeInput(t, messageId, marker);
   if (!input) return null;
   try {
-    return readVerdict(override ? await override(input) : await callFastModel(input, taskId));
+    return readVerdict(override ? await override(input) : await callJoinJudge(input, taskId));
   } catch (err) {
     log.task.debug('thread join check: no answer, the join stays', { taskId, error: err instanceof Error ? err.message : String(err) });
     return null;

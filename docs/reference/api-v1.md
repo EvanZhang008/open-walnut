@@ -1261,6 +1261,14 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `GET /api/v1/tasks/:id/threads` and its thread routes answer as a lead's do; off, they
   answer `409 not_org_node`. A thread push for such a task carries
   `url: /tasks/<id>?view=threads` instead of `/org?node=...`.
+- Thread check (additive, 2026-11-25, experiment `threads_audit`): `GET /api/v1/thread-audit[?days=N][&task=<id>]`
+  answers `{ on, days: [{ date, totals, nodes: { [taskId]: counts } }], totals }`, newest day first
+  (N from 1 to 60, default 7), where counts = `{ passes, found, reported, fixed, calls, callMs }` and
+  found, reported and fixed each hold `{ repeat, unasked, stale, thin }`.
+  `POST /api/v1/thread-audit/run { task }` checks one node now and answers `{ ran, why?, found, told,
+  fixed, delivery, pairs, calls, callMs }` (`ran: false, why: "off"` with the experiment off; `202
+  { running: true }` past 90 s). Both are leader only (`503 primary_only` on a replica); the read
+  answers `503 busy` past 5 s. Op `thread_audit`.
 - Director (additive, 2026-11-20): `PATCH /api/v1/tasks/:id` also accepts `director`:
   `"yes"` makes the task a Director under its VP even with no team, `"no"` keeps a leader
   from being one, `"auto"` or `null` goes back to the default (the field is then absent;

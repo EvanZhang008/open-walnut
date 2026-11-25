@@ -101,6 +101,7 @@ const FEATURE: Record<string, string> = {
   'outbound-check': 'Personal-matter checks before a send',
   'ask-check': 'Readability checks of asks before the user sees them',
   'thread-join-check': 'Subject checks of messages joined to a thread by timing',
+  'thread-audit': 'Thread checks for cards on one subject',
   'reply-language': 'Reply language rewrites',
   drawing: 'Drawing diagrams', reflection: 'Org reflection', avatar: 'Org avatars',
   'voice-accuracy': 'Voice Accuracy judge and clean-up',

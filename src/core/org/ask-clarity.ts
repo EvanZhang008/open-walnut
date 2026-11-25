@@ -229,7 +229,8 @@ function bareOpeningRefusal(text: string): string | null {
     + 'recommend in it ("Store passkeys in the Walnut password extension? I recommend yes: ..."), then the key points and evidence paths.';
 }
 
-function firstSentence(text: string): string {
+/** The first sentence of a text's first non-blank line, Markdown marks off. Pure. */
+export function firstSentence(text: string): string {
   const t = text.trim().split('\n').find((l) => l.trim()) ?? '';
   const m = /^.*?[?\uff1f.!\u3002\uff01](?=\s|$|[^?\uff1f.!\u3002\uff01])/u.exec(t.trim());
   return (m ? m[0] : t).trim().replace(/^[#>*\-\s]+/, '');
