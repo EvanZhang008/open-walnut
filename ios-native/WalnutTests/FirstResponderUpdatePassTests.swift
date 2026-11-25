@@ -80,17 +80,26 @@ final class FirstResponderUpdatePassTests: XCTestCase {
 
     /// `count` open threads, each with its Follow up box, as an org node's Threads page holds them.
     private func openThreads(_ count: Int) throws -> [OrgThread] {
+        // Built one typed piece at a time: one nested `[String: Any]` literal is more than the
+        // CI compiler type-checks in its time limit.
         let at = WideText.isoAgo
-        let all: [[String: Any]] = (0..<count).map { i in
-            [
-                "id": String(format: "th-5ee%05d", i), "title": "Thread \(i): \(WideText.threadTitle)",
-                "state": i % 3 == 0 ? "needs" : "answered", "reply": WideText.markdown, "shown": true,
-                "tasks": [WideText.taskId], "createdAt": at(Double(90 + i)), "updatedAt": at(Double(5 + i)),
-                "messages": [[
-                    "id": String(format: "tm-5ee%05d", i), "at": at(30), "via": "follow-up", "text": WideText.followUp,
-                    "answer": ["text": WideText.plain, "at": at(29)],
-                ]],
-            ]
+        var all: [[String: Any]] = []
+        for i in 0..<count {
+            let answer: [String: Any] = ["text": WideText.plain, "at": at(29)]
+            var message: [String: Any] = ["id": String(format: "tm-5ee%05d", i), "at": at(30)]
+            message["via"] = "follow-up"
+            message["text"] = WideText.followUp
+            message["answer"] = answer
+            var thread: [String: Any] = ["id": String(format: "th-5ee%05d", i)]
+            thread["title"] = "Thread \(i): \(WideText.threadTitle)"
+            thread["state"] = i % 3 == 0 ? "needs" : "answered"
+            thread["reply"] = WideText.markdown
+            thread["shown"] = true
+            thread["tasks"] = [WideText.taskId]
+            thread["createdAt"] = at(Double(90 + i))
+            thread["updatedAt"] = at(Double(5 + i))
+            thread["messages"] = [message]
+            all.append(thread)
         }
         return try JSONDecoder().decode([OrgThread].self, from: JSONSerialization.data(withJSONObject: all))
     }
