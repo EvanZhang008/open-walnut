@@ -14,6 +14,10 @@ breaking changes).
 - On one computer account, the Walnut server runs this computer's sessions in its own process: a second server on the same daemon dir refuses to start and names the running one (pid, port, data dir), and a newer server that finds an older one's daemon program takes it over, its sessions adopted with their conversations
 - With the experiment "Small hosts run the one Walnut service, without a copy of your data", a host's Walnut switch turned off means the service runs there with no copy of your data, no port and no console (about 170 MB of memory against 80 MB for the session helper alone); Linux hosts only for now
 
+### Fixed
+
+- A session daemon that keeps running after its port, pid and instance files were removed (a temp-folder cleanup) is found through its instance lock and used, then updated as usual; sessions no longer fail to start with "port file not created within 10s", on this machine or a remote host
+
 ## [0.6.37] - 2026-11-20
 
 ### Fixed

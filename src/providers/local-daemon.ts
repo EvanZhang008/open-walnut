@@ -66,6 +66,8 @@ import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, typ
 import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type OtherService } from './in-process-daemon.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
 import { busyRetryLeftMs, noteBusyRefusal } from './daemon-busy-retry.js'
+import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
+import { recoverLostDaemonFiles } from './daemon-lost-files.js'
 
 /** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
 const IN_PROCESS_PREWARM_MAX_MS = 120_000
@@ -603,6 +605,12 @@ export class LocalDaemon {
   }
 
   private async ensureRunningInner(revived = false): Promise<number> {
+    // 0. A daemon that runs with its door files gone (a temp cleaner) is found through its
+    // instance lock first, so the probation settled below and the checks after it adopt or
+    // update it: a spawn beside it only exits on that lock, and its port file never comes
+    // (daemon-lost-files.ts).
+    await this.recoverLostDaemon()
+
     // The probation a server before this one started, taken up (a deploy restarted it inside it),
     // before a daemon is chosen to start.
     await this._stay.resume(() => this.stayDue(true))
@@ -1434,6 +1442,31 @@ export class LocalDaemon {
     throw new Error(message)
   }
 
+  /** Writes back the door files of a daemon that runs here without them, from its instance lock. */
+  private async recoverLostDaemon(): Promise<void> {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    if (uid === null) return
+    const lost = await recoverLostDaemonFiles({
+      dir: this.daemonDir, uid,
+      hello: async (port) => {
+        const hello = await this.ping(port, 5000)
+        return hello.alive && hello.instanceId ? hello.instanceId : null
+      },
+    }).catch(() => null)
+    if (lost) log.session.warn('local daemon runs without its door files (removed under it); written back from its instance lock', { daemonDir: this.daemonDir, ...lost })
+  }
+
+  /** Why no port file came: a live daemon holding the dir's instance lock is named, with its pid. */
+  private async lockHolderNote(): Promise<string> {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    if (uid === null) return ''
+    const owner = await readDaemonInstanceOwner({ runtimeDir: this.daemonDir, uid }).catch(() => null)
+    if (!owner) return ''
+    if (owner.inProcess) return ` A Walnut server (pid ${owner.pid}) runs this dir's daemon in its own process, so no daemon program can start here.`
+    return ` A daemon (pid ${owner.pid}${owner.wsPort ? `, port ${owner.wsPort}` : ''}) holds this dir's instance lock, so the new one`
+      + ' exited: the next start adopts it once it answers there; if it never does, stop that pid (SIGTERM) and a new one can start.'
+  }
+
   private isPidAlive(pid: number): boolean {
     try {
       process.kill(pid, 0)
@@ -1932,9 +1965,9 @@ export class LocalDaemon {
         )
       }
       const stale = this.readPortFile()
-      throw new Error(stale
+      throw new Error((stale
         ? `Local daemon failed to start: within 10s nothing answered on port ${stale}, the port its port file names (a dead daemon's files, or a new one that did not come up)`
-        : 'Local daemon failed to start: port file not created within 10s')
+        : 'Local daemon failed to start: port file not created within 10s') + await this.lockHolderNote())
     }
 
     // Verify it responds

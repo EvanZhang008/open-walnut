@@ -116,25 +116,17 @@ async function daemonUp(): Promise<'service' | 'running' | null> {
  */
 export async function recoverLostDaemon(): Promise<number | null> {
   const dir = await daemonDir()
-  if (fs.existsSync(path.join(dir, 'daemon.pid'))) return null
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   if (uid === null) return null
-  const { readDaemonInstanceOwner } = await import('../providers/daemon-instance-lock.js')
-  const owner = await readDaemonInstanceOwner({ runtimeDir: dir, uid })
-  if (!owner || !(owner.pid > 1) || owner.wsPort === null || !owner.instanceId) return null
-  try {
-    const hello = await daemonRpc('hello', {}, 5_000, owner.wsPort)
-    if (hello.ok !== true || hello.instanceId !== owner.instanceId) return null
-  } catch { return null }
-  // The pid file last: it is what says a daemon runs here.
-  for (const [name, text] of [['daemon.port', String(owner.wsPort)], ['daemon.instance', owner.instanceId], ['daemon.pid', String(owner.pid)]]) {
-    try { fs.writeFileSync(path.join(dir, name), text, { flag: 'wx', mode: 0o600 }) } catch (err) {
-      // One that survived must already say the same, never a mix of two daemons.
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null
-      try { if (fs.readFileSync(path.join(dir, name), 'utf8').trim() !== text) return null } catch { return null }
-    }
-  }
-  return owner.pid
+  const { recoverLostDaemonFiles } = await import('../providers/daemon-lost-files.js')
+  const lost = await recoverLostDaemonFiles({
+    dir, uid,
+    hello: async (port) => {
+      const hello = await daemonRpc('hello', {}, 5_000, port)
+      return hello.ok === true && typeof hello.instanceId === 'string' ? hello.instanceId : null
+    },
+  })
+  return lost?.pid ?? null
 }
 
 async function waitDaemon(ms: number): Promise<boolean> {

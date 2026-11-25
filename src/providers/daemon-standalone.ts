@@ -192,6 +192,7 @@ import { readCronBootId } from './daemon-cron-host.js'
 import { askOwnPort, daemonServesCheck, startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
 import { createServiceRolesReader, programServiceRoles, SERVICE_ROLES_FLAG, withGoodRoles } from './service-roles.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
+import { writeBackDoorFiles } from './daemon-lost-files.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { busyOpenWords } from './daemon-busy-words.js'
 import { createDemoDaemonQuiesce } from './demo-daemon-quiesce-core.js'
@@ -6375,6 +6376,17 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
   }
   if (lock.kind === 'existing') {
     if (SERVICE_MODE || lock.owner.wsPort === null) throw new Error('An existing daemon owns this runtime directory; service handover is required')
+    // The live owner's door files are gone (a temp cleaner): every starter that waits for them
+    // (a server's spawn, the remote start's poll) would wait forever, so they are written back
+    // from the lock first (daemon-lost-files.ts).
+    const restored = await writeBackDoorFiles({
+      dir: DAEMON_DIR, owner: lock.owner,
+      hello: async (port) => {
+        const hello = await askOwnPort(port, WebSocket as unknown as Parameters<typeof askOwnPort>[1], 5000)({ cmd: 'hello' })
+        return hello.ok === true && typeof hello.instanceId === 'string' ? hello.instanceId : null
+      },
+    }).catch(() => null)
+    if (restored) logMsg('warn', 'the daemon holding this dir had lost its door files; written back from its instance lock', { pid: restored.pid, port: restored.port })
     return { kind: 'existing', port: String(lock.owner.wsPort) }
   }
   daemonInstanceLock = lock
