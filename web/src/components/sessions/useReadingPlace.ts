@@ -323,8 +323,12 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     // Capture phase: before the click's own handler opens another page.
     const now = () => { if (dirty.current && !moved.current && !hold.current) record(); };
     // A page leaving runs no timer: his last scroll is written before it goes (flushPlaces).
+    // A phone hides a page before it throws it away and seldom says pagehide, and a hidden
+    // page's timers stop: hidden is a leave too.
     const leave = () => { if (recordTimer.current !== undefined && !moved.current) record(); flushPlaces(); };
+    const onHidden = () => { if (document.visibilityState === 'hidden') leave(); };
     window.addEventListener('pagehide', leave);
+    document.addEventListener('visibilitychange', onHidden);
     el.addEventListener('scroll', onScroll, { passive: true });
     el.addEventListener('pointerdown', now, { capture: true, passive: true });
     el.addEventListener('keydown', now, { capture: true, passive: true });
@@ -332,6 +336,7 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     for (const t of PAGE_INPUTS) document.addEventListener(t, onInput, { capture: true, passive: true });
     return () => {
       window.removeEventListener('pagehide', leave);
+      document.removeEventListener('visibilitychange', onHidden);
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('pointerdown', now, { capture: true });
       el.removeEventListener('keydown', now, { capture: true });

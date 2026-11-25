@@ -25,7 +25,7 @@ import '@/styles/session-working.css';
  *    working… ›";
  *  - the turn over, background work still going: one quiet "1 command still running
  *    in the background ›" line in the working line's place;
- *  - its task's workers (subtasks) at work: "3 workers are working…" with each worker, which
+ *  - its task's workers (subtasks) at work: "3 subtasks are working…" with each one, which
  *    opens it, under whichever line shows, its own turn's included, so it never blinks out when
  *    the lead's turn starts; past three it is one folded line (workers-working.ts).
  *
@@ -118,7 +118,7 @@ function WorkersWorkingRow({ sessionId, workers }: { sessionId: string; workers:
   return (
     <ChipGroup className="session-working-row" data-testid="session-workers-working" data-open={open ? 'true' : 'false'}>
       {folds
-        ? <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the workers' : 'Show each worker'} onClick={() => setPicked(!open)}>
+        ? <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the subtasks' : 'Show each subtask'} onClick={() => setPicked(!open)}>
             <span className="session-working-label">{label}</span>
           </DisclosureButton>
         : <span className="session-working-label">{label}</span>}

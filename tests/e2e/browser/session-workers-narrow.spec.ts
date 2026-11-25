@@ -22,6 +22,8 @@ const litter: string[] = []
 let api: KanbanApi
 let lead = ''
 let leadSid = ''
+const PLAN = 'Planned the work in thirteen parts. Each part has its own worker and its own tests, '
+  + 'and each reports back here when it is done. The service parts go first, then the hosts, then the phone app and the docs.'
 const LEAD_TITLE = `Narrow column lead ${Date.now().toString(36)}`
 
 // Titles as long as the user's own workers' titles.
@@ -40,7 +42,8 @@ test.beforeAll(async () => {
   api = kanbanApi(TEST_PORT, fixtureRoot)
   lead = (await task({ title: LEAD_TITLE })).task.id
   litter.push(lead)
-  leadSid = await startSession(api, lead, 'snapshot-clean-turn:Planned the work; the workers run it.')
+  // A reply a few lines long: the chat fits a phone's screen until the open workers line grows it past.
+  leadSid = await startSession(api, lead, `snapshot-clean-turn:${PLAN}`)
   for (const title of TITLES) {
     const id = (await task({ title, parent_task_id: lead })).task.id
     litter.push(id)
@@ -146,6 +149,8 @@ test('on a phone the open list folds with a tap on its line, by itself and insid
   const line = panel.getByTestId('session-workers-working')
   await expect(line).toBeVisible({ timeout: 60_000 })
   const toggle = panel.getByTestId('session-workers-toggle')
+  // Folded, the line says what they are: subtasks, his word for them (2026-11-25).
+  await expect(toggle).toHaveText('13 subtasks are working…')
   if ((await line.getAttribute('data-open')) !== 'true') await toggle.click()
   await expect(line).toHaveAttribute('data-open', 'true')
   await expectTapsLand(panel, 'by itself')
@@ -162,3 +167,52 @@ test('on a phone the open list folds with a tap on its line, by itself and insid
   await toggle.click()
   await expect(line).toHaveAttribute('data-open', 'false')
 })
+
+/** Where the chat stands and whether the last worker's chip shows above the composer, untouched. */
+async function lastChipShows(panel: Locator) {
+  return panel.evaluate((p) => {
+    const box = p.querySelector<HTMLElement>('.session-history')!
+    const chips = [...p.querySelectorAll<HTMLElement>('[data-testid="session-workers-working"] .wn-chip')]
+    const last = chips[chips.length - 1]
+    const r = last.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + 8, r.top + r.height / 2)
+    return {
+      scrollTop: Math.round(box.scrollTop), max: Math.round(box.scrollHeight - box.clientHeight),
+      lastTop: Math.round(r.top), lastBottom: Math.round(r.bottom), boxBottom: Math.round(box.getBoundingClientRect().bottom),
+      hitsLast: last.contains(hit), hit: hit ? `${hit.tagName}.${String(hit.className).slice(0, 40)}` : null,
+    }
+  })
+}
+
+// 2026-11-25: a reader at the end, list open, reloaded and came back with the chat's first message at
+// the top and the last worker under the composer: the phone's reload restore had anchored that
+// message over the reading place, which keeps "at the end" (usePhoneRestore.ts).
+test('on a phone a reload with the list open lands at the chat\'s end, the last worker above the composer', async ({ page }) => {
+  test.setTimeout(180_000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const panel = await openLead(page, true)
+  const line = panel.getByTestId('session-workers-working')
+  await expect(line).toBeVisible({ timeout: 60_000 })
+  if ((await line.getAttribute('data-open')) !== 'true') await panel.getByTestId('session-workers-toggle').click()
+  await expect(line).toHaveAttribute('data-open', 'true')
+  // He reads up a little and back down to the end by hand, the last worker in sight.
+  const box = await panel.locator('.session-history').boundingBox()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await page.mouse.wheel(0, -40)
+  await page.waitForTimeout(400)
+  await page.mouse.wheel(0, 2000)
+  await expect.poll(async () => (await lastChipShows(panel)).hitsLast, { timeout: 10_000 }).toBe(true)
+  // The reading place keeps that he was at the end (reading-place.ts), written as the page leaves.
+  await expect.poll(() => page.evaluate((sid) => {
+    const raw = localStorage.getItem(`walnut:reading-place.v1:${sid}`)
+    return raw ? Object.values(JSON.parse(raw) as Record<string, { atBottom: boolean }>).some((p) => p.atBottom) : false
+  }, leadSid), { timeout: 10_000 }).toBe(true)
+  await page.reload()
+  await expect(line).toHaveAttribute('data-open', 'true', { timeout: 60_000 })
+  // Untouched as the auditor left it: every late layout (the workers line arrives with the task list) has landed.
+  await page.waitForTimeout(9_000)
+  const m = await lastChipShows(panel)
+  expect(m.scrollTop, `back at the end: ${JSON.stringify(m)}`).toBeGreaterThanOrEqual(m.max - 2)
+  expect(m.hitsLast, JSON.stringify(m)).toBe(true)
+})
+

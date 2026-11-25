@@ -45,8 +45,9 @@ describe('workersWorkingOf', () => {
   })
 
   it('counts in words', () => {
-    expect(workersWorkingLabel(1)).toBe('1 worker is working…')
-    expect(workersWorkingLabel(3)).toBe('3 workers are working…')
+    // His word for them, so the folded line says what they are (2026-11-25).
+    expect(workersWorkingLabel(1)).toBe('1 subtask is working…')
+    expect(workersWorkingLabel(3)).toBe('3 subtasks are working…')
   })
 
   it('a long list starts folded, a short one shows its chips', () => {

@@ -2,18 +2,22 @@
  * Back where you were after a reload (spec 4.5 "R", C80). iOS throws a hidden
  * tab away, and stale-assets reloads one that was hidden for 20 s after a
  * deploy, so on a phone the first return after a deploy is a cold start. On
- * `pagehide` and on visibility hidden the open session, the timeline's first
- * visible message (an id, never a pixel offset) and the home list's scrollTop
- * are written to sessionStorage['walnut.phoneRestore']; the next boot reopens
- * the session through the deep-link rule (base entry replaced, layer pushed),
- * anchors the timeline on that message, puts the home list back, and deletes
- * the key.
+ * `pagehide` and on visibility hidden the open session and the home list's
+ * scrollTop are written to sessionStorage['walnut.phoneRestore']; the next boot
+ * reopens the session through the deep-link rule (base entry replaced, layer
+ * pushed), puts the home list back, and deletes the key.
+ *
+ * Where the reader was in the session's timeline is the reading place's
+ * (components/sessions/reading-place.ts), kept for every box and every reload:
+ * its rows, and whether the reader was at the end. This hook once anchored the
+ * timeline on its first visible message too, over the reading place, and a
+ * reader at the end came back with that message at the top: the end of the chat
+ * (the workers line under a lead's chat) sat under the composer (2026-11-25, 390px).
  */
 import { useEffect, useRef } from 'react';
 import { isPhoneLayout } from './usePhoneLayout';
 import { phoneOverlayIds } from './usePhoneOverlayHistory';
 import { log } from '@/utils/log';
-import { READER_SCROLL_EVENT } from '@/components/sessions/phone-session-layer';
 
 export const PHONE_RESTORE_KEY = 'walnut.phoneRestore';
 /** A record older than this belongs to another visit, not to "a moment ago". */
@@ -23,7 +27,6 @@ export interface PhoneRestoreRecord {
   v: 1;
   at: number;
   sessionId: string | null;
-  anchorMessageId: string | null;
   homeScrollTop: number;
 }
 
@@ -37,7 +40,6 @@ export function parsePhoneRestore(raw: string | null, now: number): PhoneRestore
       v: 1,
       at: r.at,
       sessionId: typeof r.sessionId === 'string' && r.sessionId ? r.sessionId : null,
-      anchorMessageId: typeof r.anchorMessageId === 'string' && r.anchorMessageId ? r.anchorMessageId : null,
       homeScrollTop: typeof r.homeScrollTop === 'number' && Number.isFinite(r.homeScrollTop) && r.homeScrollTop > 0
         ? Math.round(r.homeScrollTop) : 0,
     };
@@ -81,19 +83,6 @@ export function homeScroller(): HTMLElement | null {
   return boxes[0] ?? null;
 }
 
-/** First message whose top is inside the open session's timeline. */
-export function firstVisibleMessageId(sessionId: string): string | null {
-  const panel = document.querySelector<HTMLElement>(`.session-panel[data-session-id="${CSS.escape(sessionId)}"]`);
-  const scroller = panel?.querySelector<HTMLElement>('.session-history');
-  if (!scroller) return null;
-  const top = scroller.getBoundingClientRect().top;
-  for (const el of scroller.querySelectorAll<HTMLElement>('[data-message-id]')) {
-    const r = el.getBoundingClientRect();
-    if (r.height > 0 && r.bottom > top + 1) return el.dataset.messageId ?? null;
-  }
-  return null;
-}
-
 export function readPhoneRestore(): PhoneRestoreRecord | null {
   try { return parsePhoneRestore(sessionStorage.getItem(PHONE_RESTORE_KEY), Date.now()); } catch { return null; }
 }
@@ -109,7 +98,6 @@ export function savePhoneRestore(): void {
     v: 1,
     at: Date.now(),
     sessionId,
-    anchorMessageId: sessionId ? firstVisibleMessageId(sessionId) : null,
     homeScrollTop: homeScroller()?.scrollTop ?? 0,
   };
   try { sessionStorage.setItem(PHONE_RESTORE_KEY, JSON.stringify(rec)); } catch { /* storage off */ }
@@ -128,20 +116,6 @@ function waitFor<T>(get: () => T | null, ms: number, cancelled: () => boolean): 
     };
     tick();
   });
-}
-
-function anchorTimeline(sessionId: string, messageId: string): boolean {
-  const panel = document.querySelector<HTMLElement>(`.session-panel[data-session-id="${CSS.escape(sessionId)}"]`);
-  const scroller = panel?.querySelector<HTMLElement>('.session-history');
-  const el = scroller?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
-  if (!scroller || !el) return false;
-  const r = el.getBoundingClientRect();
-  const s = scroller.getBoundingClientRect();
-  if (r.top >= s.top - 1 && r.top < s.bottom - 40) return true;
-  // The reader's own place, not an echo the timeline should undo.
-  scroller.dispatchEvent(new Event(READER_SCROLL_EVENT));
-  scroller.scrollTop += r.top - s.top - 8;
-  return true;
 }
 
 export interface UsePhoneRestoreOptions {
@@ -186,7 +160,7 @@ export function usePhoneRestore(o: UsePhoneRestoreOptions): void {
       await Promise.resolve();
       if (cancelled) return;
       recRef.current = null;
-      const { sessionId, anchorMessageId, homeScrollTop } = rec;
+      const { sessionId, homeScrollTop } = rec;
       if (sessionId && !optsRef.current.isSessionOpen(sessionId)) optsRef.current.openSession(sessionId);
       if (homeScrollTop > 0) {
         const box = await waitFor(() => {
@@ -195,18 +169,7 @@ export function usePhoneRestore(o: UsePhoneRestoreOptions): void {
         }, 8000, isCancelled);
         if (box) box.scrollTop = homeScrollTop;
       }
-      if (sessionId && anchorMessageId) {
-        const ok = await waitFor(() => (anchorTimeline(sessionId, anchorMessageId) ? true : null), 10_000, isCancelled);
-        // The timeline settles in steps (cache, then the fetch): hold the anchor.
-        for (const delay of [250, 800, 1600]) {
-          await new Promise((r) => setTimeout(r, delay));
-          if (cancelled) break;
-          anchorTimeline(sessionId, anchorMessageId);
-        }
-        log.info('phone-restore', 'restored', { sessionId, anchorMessageId, anchored: !!ok, homeScrollTop });
-      } else {
-        log.info('phone-restore', 'restored', { sessionId, homeScrollTop });
-      }
+      log.info('phone-restore', 'restored', { sessionId, homeScrollTop });
       clearPhoneRestore();
     })();
     return () => { cancelled = true; };

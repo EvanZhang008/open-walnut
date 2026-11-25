@@ -591,7 +591,8 @@ test('a reload puts the session, its message and the home scroll back, then forg
   await scrollRowToTop(page, 'u-3')
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })))
   const saved = await page.evaluate(() => sessionStorage.getItem('walnut.phoneRestore'))
-  expect(JSON.parse(saved!)).toMatchObject({ sessionId: SID, anchorMessageId: 'u-3' })
+  // The session; the row is the reading place's (reading-place.ts), kept for every reload.
+  expect(JSON.parse(saved!)).toMatchObject({ sessionId: SID })
   await page.reload()
   await expect(overlay(page)).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => timeline(page).evaluate((el) => {
@@ -622,7 +623,7 @@ test('a reload while hidden (the deploy path) restores the same way (C80)', asyn
     document.dispatchEvent(new Event('visibilitychange'))
   })
   expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem('walnut.phoneRestore')))!))
-    .toMatchObject({ sessionId: SID, anchorMessageId: 'u-4' })
+    .toMatchObject({ sessionId: SID })
   await page.evaluate(() => location.reload())
   await expect(overlay(page)).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => timeline(page).evaluate((el) => {

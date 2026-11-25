@@ -135,3 +135,11 @@ describe('one owner of the reading place', () => {
     expect(landing).toMatch(/setCapture\(\(from, to, pending\) => \{[\s\S]{0,120}keepPlace\?\.\(from\)/)
   })
 })
+
+describe('a hidden page writes the reader\'s place as a leaving one does', () => {
+  it('useReadingPlace records on visibility hidden too', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/useReadingPlace.ts'), 'utf-8')
+    expect(src).toMatch(/addEventListener\('visibilitychange', onHidden\)/)
+    expect(src).toMatch(/visibilityState === 'hidden'\) leave\(\)/)
+  })
+})

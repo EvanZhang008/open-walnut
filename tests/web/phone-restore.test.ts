@@ -1,9 +1,14 @@
 /**
  * Back where you were after a reload on a phone (spec 4.5 "R", C80): the
  * saved record is read strictly, a deep link's base drops only the session
- * params, and the open session comes from the layer stack.
+ * params, and the open session comes from the layer stack. Where the reader was in
+ * the timeline is the reading place's alone (reading-place.ts): this hook once
+ * anchored the timeline on its first visible message over it, and a reader at the
+ * end came back with the end under the composer (2026-11-25).
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   deepLinkBaseUrl, parsePhoneRestore, sessionFromLayerIds, PHONE_RESTORE_KEY, PHONE_RESTORE_MAX_AGE_MS,
 } from '../../web/src/hooks/usePhoneRestore'
@@ -11,11 +16,9 @@ import {
 const NOW = Date.parse('2026-10-14T09:00:00.000Z')
 
 describe('parsePhoneRestore', () => {
-  it('reads a fresh record', () => {
+  it('reads a fresh record, and an older version\'s message anchor is not read', () => {
     const raw = JSON.stringify({ v: 1, at: NOW - 5000, sessionId: 'sess-a', anchorMessageId: 'msg-7', homeScrollTop: 612.4 })
-    expect(parsePhoneRestore(raw, NOW)).toEqual({
-      v: 1, at: NOW - 5000, sessionId: 'sess-a', anchorMessageId: 'msg-7', homeScrollTop: 612,
-    })
+    expect(parsePhoneRestore(raw, NOW)).toEqual({ v: 1, at: NOW - 5000, sessionId: 'sess-a', homeScrollTop: 612 })
   })
 
   it('drops a stale, a future, a foreign and a broken record', () => {
@@ -30,7 +33,7 @@ describe('parsePhoneRestore', () => {
 
   it('normalizes empty and bad fields', () => {
     const raw = JSON.stringify({ v: 1, at: NOW, sessionId: '', anchorMessageId: 3, homeScrollTop: -40 })
-    expect(parsePhoneRestore(raw, NOW)).toEqual({ v: 1, at: NOW, sessionId: null, anchorMessageId: null, homeScrollTop: 0 })
+    expect(parsePhoneRestore(raw, NOW)).toEqual({ v: 1, at: NOW, sessionId: null, homeScrollTop: 0 })
   })
 
   it('uses the key the spec names', () => {
@@ -58,5 +61,12 @@ describe('deepLinkBaseUrl', () => {
     expect(deepLinkBaseUrl('https://walnut.example/?proj=Garden')).toBeUndefined()
     expect(deepLinkBaseUrl('https://walnut.example/notes?s1=abc')).toBeUndefined()
     expect(deepLinkBaseUrl('not a url')).toBeUndefined()
+  })
+})
+
+describe('the timeline\'s place after a reload is the reading place\'s alone', () => {
+  it('the phone restore never moves a timeline', () => {
+    const src = readFileSync(join(__dirname, '../../web/src/hooks/usePhoneRestore.ts'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(src).not.toMatch(/session-history|scrollTop\s*[+-]?=\s*[^=]*message|READER_SCROLL_EVENT|data-message-id/)
   })
 })

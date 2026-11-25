@@ -4,7 +4,7 @@
  * On a phone each Chip's finger target is 44px tall over its drawn 24px (choice-controls.css), so
  * rows of chips must sit 20px apart or a chip's target covers the row above. 2026-11-25: the workers
  * line under a lead's chat stacked its 13 chips with no gap; at 390px the first chip's target
- * covered the "13 workers are working…" toggle, and a tap meant to fold the list opened that worker.
+ * covered the "13 subtasks are working…" toggle, and a tap meant to fold the list opened that worker.
  *
  * The phone rule gives the gap to a ChipGroup and to any row a chip sits in directly. This scan
  * finds, by the syntax tree, every element in web/src that holds a Chip and fails when

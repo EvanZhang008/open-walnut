@@ -28,9 +28,11 @@ export function workersWorkingOf(tasks: readonly Task[], sessionId: string): Wor
     .map((t) => ({ id: t.id, title: t.title }));
 }
 
-/** The line's words: how many are at work. */
+/** The line's words: how many, and what they are (2026-11-25, the user, of the folded line: "Sub
+ *  task is working", then: say how many subtasks, show what these are): his word for them,
+ *  beside the session's own "N subagents are working…". */
 export function workersWorkingLabel(count: number): string {
-  return count === 1 ? '1 worker is working…' : `${count} workers are working…`;
+  return count === 1 ? '1 subtask is working…' : `${count} subtasks are working…`;
 }
 
 /** Whether the line starts folded: a long list does, a short one shows its chips. */
