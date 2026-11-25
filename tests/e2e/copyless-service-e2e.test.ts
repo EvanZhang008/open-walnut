@@ -13,7 +13,8 @@
  *   S1, R1   the Mac away (SIGSTOP past its quiet window): the session's own task answers from the
  *            slice; a read outside it (another task, memory_read, search) answers the `no_copy`
  *            words in under a second.
- *   W1       a task_update while away is journaled and lands once on the Mac when it is back.
+ *   W1       a task_update and a Board post (an append) while away are journaled and land once on
+ *            the Mac when it is back; the team's Board is found from the slice.
  *   G1       no call of that time was answered by the daemon's own away code.
  *   F1 off   the switch turned on again: the spec loses the line, the service keeps a copy again,
  *            both sessions' CLIs are still the same processes, and a new session answers.
@@ -127,6 +128,11 @@ describe.skipIf(!BUN)('a host\'s one service without a copy, end to end', () => 
 
   it('S1, R1, W1, G1: the Mac away, slice reads answer, the rest is no_copy at once, a write lands once', async () => {
     keepLogsOnFailure(() => c, 'copyless-away')
+    // A Board on the worker's task, with one thread: an away post is an append (the Mac gives each
+    // post its own id), so a post applied twice would show twice.
+    const set = await c.mac('PUT', `/api/v1/tasks/${a.task}/board`, { html: '<h2>Plan</h2><walnut-thread id="away"></walnut-thread>' })
+    expect(set.status, JSON.stringify(set.json)).toBeLessThan(300)
+    await sleep(3_000)
     const from = Date.now()
     const slept = c.sleepMac()
     try {
@@ -155,16 +161,37 @@ describe.skipIf(!BUN)('a host\'s one service without a copy, end to end', () => 
       const w = await gatewayCall(c, a.sid, 'task_update', { id: a.task, tags: ['copyless-away'] })
       show('task_update away', w)
       expect(w.ok, JSON.stringify(w)).toBe(true)
+      // The team's Board is found from the slice (its owner and its page), and a post on it is journaled.
+      const board = await waitFor(async () => {
+        const r = await gatewayCall(c, a.sid, 'board_get', { task: a.task })
+        return r.ok === true ? r : null
+      }, 30_000, 'the Board to answer from the slice')
+      expect(JSON.stringify(board)).toContain('walnut-thread')
+      const post = await gatewayCall(c, a.sid, 'board_post', { task: a.task, thread: 'away', text: 'posted while the Mac was away' })
+      show('board_post away', post)
+      expect(post.ok, JSON.stringify(post)).toBe(true)
       // G1: nothing of that time was the daemon's own away answer.
       expect(logSince(c, from).filter((l) => OWN_LINES.includes(String(l.msg))).map((l) => `${l.msg} ${l.op ?? ''}`)).toEqual([])
     } finally {
       if (c.asleep()) c.wakeMac()
     }
     await waitFor(() => (String(macTasks(c).find((t) => t.id === a.task)?.tags ?? '').includes('copyless-away') ? true : null), 180_000, 'the write to land on the Mac')
-    // Once: the drain applied the record one time (the tag is not doubled).
     const tags = String(macTasks(c).find((t) => t.id === a.task)?.tags ?? '')
     show('the task\'s tags on the Mac', tags)
     expect(tags.match(/copyless-away/g) ?? []).toHaveLength(1)
+    // Once: the post, an append, is on the Mac's Board one time.
+    const posts = await waitFor(async () => {
+      const r = await c.mac('GET', `/api/v1/tasks/${a.task}/board`)
+      const list = ((r.json?.threads ?? {}) as Record<string, Array<{ text?: string }>>).away ?? []
+      const mine = list.filter((m) => m.text === 'posted while the Mac was away')
+      return mine.length ? mine : null
+    }, 120_000, 'the away post to land on the Mac')
+    // A while more: a second apply of the same record would come in the same drain or the next.
+    await sleep(10_000)
+    const again = await c.mac('GET', `/api/v1/tasks/${a.task}/board`)
+    const all = (((again.json?.threads ?? {}) as Record<string, Array<{ text?: string }>>).away ?? []).filter((m) => m.text === 'posted while the Mac was away')
+    show('the away posts on the Mac', { first: posts.length, later: all.length })
+    expect(all).toHaveLength(1)
   }, 600_000)
 
   it('F1 off: the switch turned on again keeps a copy, and the sessions are still not cut', async () => {
