@@ -34,7 +34,7 @@ import { GONE_GRACE_MS, readDeliveryLines, settleGone, startDeliveryLedger, trai
 import { _clearHeldNotices } from '../../../src/core/sessions/held-notices.js'
 import { holdQuietNote } from '../../../src/core/sessions/quiet-notes.js'
 import { _resetHeldStoreForTesting, held } from '../../../src/core/sessions/held-notices-store.js'
-import { sweepHeldNotices } from '../../../src/core/sessions/held-notices-sweep.js'
+import { FIRST_LAP_MS, startHeldNotices, stopHeldNotices, sweepHeldNotices } from '../../../src/core/sessions/held-notices-sweep.js'
 import { COLD_HOLD_MAX_MS } from '../../../src/core/sessions/cold-hold.js'
 
 const SID = 'eeeeeeee-1111-4222-8333-555555555555'
@@ -207,6 +207,25 @@ describe('Walnut\'s own notices held for a completed task\'s session', () => {
     expect(held.get(SID)).toBeUndefined()
     await settle()
     expect((await trail('qm-title-topic-1'))?.state).toBe('dropped')
+  })
+})
+
+describe('the held notices\' first lap comes soon after boot', () => {
+  it('a server restarted every few minutes still sweeps (FIRST_LAP_MS, not a whole SWEEP_MS)', async () => {
+    const { task } = await addTask({ title: 'Finished overlay work', project: 'Acme' })
+    await createSessionRecord(SID, task.id, 'Acme', '/tmp', { initialProcessStatus: 'stopped' })
+    await holdQuietNote(SID, { key: 'Walnut (title-topic)', label: 'Walnut' }, { at: Date.now() - COLD_HOLD_MAX_MS - 60_000, text: 'A topic was added to your title.', mid: 'qm-title-topic-2', by: 'walnut', task: task.id })
+    await updateTask(task.id, { phase: 'COMPLETE' } as never)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    try {
+      await startHeldNotices()
+      await vi.advanceTimersByTimeAsync(FIRST_LAP_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+    for (let i = 0; i < 40 && held.get(SID); i++) await settle()
+    expect(held.get(SID)).toBeUndefined()
+    await stopHeldNotices()
   })
 })
 

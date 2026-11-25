@@ -2,7 +2,7 @@
  * The held notices' upkeep (held-notices.ts), on the server that opened their file:
  *  - boot: the file is read (held-notices-store.ts openStore), so what waited before the restart
  *    rides each session's next message;
- *  - every SWEEP_MS (the first lap one SWEEP_MS after boot, once the session store has settled):
+ *  - every SWEEP_MS (the first lap FIRST_LAP_MS after boot, once the session store has settled):
  *      a notice past its age limit (HOLD_MAX_MS) is dropped, never one that holds a task's own
  *      note (held-notices-store.ts keptWhole): that waits for its target's next message however long;
  *      a session that is gone hands what waits for it to the session that took over (an engine
@@ -44,10 +44,17 @@ import { isAcpEngine } from '../agents/engine-registry.js';
 import type { SessionRecord } from '../types.js';
 
 const SWEEP_MS = 10 * 60_000;
+/**
+ * The first lap, this long after boot (the session store has settled by then): production restarts
+ * about every 8 to 13 minutes on a busy day, and a first lap one SWEEP_MS after boot never ran
+ * (2026-11-25: a notice for a completed task stayed held across four restarts in 30 minutes).
+ */
+export const FIRST_LAP_MS = 60_000;
 /** A message that took notices and said nothing for this long did not carry them. */
 const TAKEN_STALE_MS = 10 * 60_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let firstLap: ReturnType<typeof setTimeout> | null = null;
 
 /** Server boot (the leader): read the file, then sweep every SWEEP_MS. Idempotent. */
 export async function startHeldNotices(): Promise<void> {
@@ -59,12 +66,16 @@ export async function startHeldNotices(): Promise<void> {
   if (timer) return;
   timer = setInterval(() => { void sweepHeldNotices(); }, SWEEP_MS);
   timer.unref?.();
+  firstLap = setTimeout(() => { firstLap = null; void sweepHeldNotices(); }, FIRST_LAP_MS);
+  firstLap.unref?.();
 }
 
 /** Server stop: no more sweeps; resolves once what waits is on disk. */
 export async function stopHeldNotices(): Promise<void> {
   if (timer) clearInterval(timer);
   timer = null;
+  if (firstLap) clearTimeout(firstLap);
+  firstLap = null;
   await closeStore();
 }
 
