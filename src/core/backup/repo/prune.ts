@@ -25,6 +25,7 @@ import { log } from '../../../logging/index.js';
 import { loadLiveIndex } from './backup-run.js';
 import { packKey, PACK_TARGET_BYTES, type BlobLocation, type PackInfo } from './format.js';
 import { PackCache, PackWriter, type Repository } from './repository.js';
+import { treeDataBlobIds } from './tree-blobs.js';
 import type { WriterIdentity } from '../local-state.js';
 import { selectKept, type RetentionPolicy } from '../../../lib/retention.js';
 
@@ -90,14 +91,13 @@ export async function pruneRepo(
     return result;
   }
 
-  // Every blob a kept snapshot needs: its tree's blobs and its files' blobs.
+  // Every blob a kept snapshot needs: its tree's blobs and its files' blobs. Kept
+  // snapshots share most tree blobs, so each is read once (tree-blobs.ts).
   const cache = new PackCache(repo.store);
+  const keptSnaps = snapshots.filter((s) => kept.has(s.id));
   const live = new Set<string>();
-  for (const s of snapshots) {
-    if (!kept.has(s.id)) continue;
-    for (const id of s.tree) live.add(id);
-    for (const e of await repo.readTree(s, index, cache)) for (const id of e.b) live.add(id);
-  }
+  for (const s of keptSnaps) for (const id of s.tree) live.add(id);
+  for (const id of await treeDataBlobIds(repo, keptSnaps, index, cache)) live.add(id);
 
   // A kept backup names a part no index lists (a pack the store did not list
   // this time, say): deleting the old indexes now could lose it for good.
