@@ -315,15 +315,14 @@ esac
     }
   })
 
-  it('a nearly full disk holds the deploy until there is room, with no time bound, and says why (2026-11-24 08:31Z)', async () => {
+  it('a nearly full data disk holds the deploy until there is room, at most its bound, and says why (2026-11-24 08:31Z)', async () => {
     // A deploy writes 4 to 5 GB while it builds; on a Mac with about 9.5 GB free it took the data
     // disk under Walnut's 5 GiB write line, and every write answered 507.
     const f = fixture()
     const free = path.join(f.root, 'free-gb')
-    fs.writeFileSync(free, '7\n')
+    fs.writeFileSync(free, '07\n') // a leading zero is decimal, never octal
     const t0 = Math.floor(Date.now() / 1000)
-    // The busy and move bounds are short: the disk hold must outlast them, since it has none of its own.
-    const held = call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '2', WALNUT_DEPLOY_MEM_GAP_SECS: '2', WALNUT_DEPLOY_FREE_GB_TEST: free, WALNUT_DEPLOY_DISK_POLL_SECS: '1' })
+    const held = call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_FREE_GB_TEST: free, WALNUT_DEPLOY_DISK_POLL_SECS: '1', WALNUT_DEPLOY_DISK_HOLD_SECS: '600' })
     await until(() => fs.existsSync(path.join(f.queue, 'disk')), 20_000, 'the disk hold')
     await sleep(6_000)
     expect(deploys(f).filter((d) => d.kind === 'start')).toHaveLength(0)
@@ -334,29 +333,57 @@ esac
     expect(starts).toHaveLength(1)
     expect(starts[0].at).toBeGreaterThanOrEqual(t0 + 6)
     const log = fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')
-    expect(log).toMatch(/the disk is nearly full \(7\.0 GB free, under 11 GB\): the deploy waits for room/)
-    expect(log.match(/the disk is nearly full/g)).toHaveLength(1)
-    expect(log).toMatch(/the disk has room again: the deploy goes/)
-    expect(r.stdout).toMatch(/Deploy queued: the disk is nearly full \(7\.0 GB free, under 11 GB\) and a build would pause every Walnut write/)
+    expect(log).toMatch(/the data disk is nearly full \(7\.0 GiB free, under 11 GiB\): the deploy waits for room, .* until .* at the latest/)
+    expect(log.match(/the data disk is nearly full/g)).toHaveLength(1)
+    expect(log).toMatch(/the data disk has room again: the deploy goes/)
+    expect(r.stdout).toMatch(/Deploy queued: the data disk is nearly full \(7\.0 GiB free, under 11 GiB\) and a build would pause every Walnut write; the next deploy goes once there is room, at .* at the latest/)
     expect(fs.existsSync(path.join(f.queue, 'disk'))).toBe(false)
     await runnerGone(f)
-  }, 90_000)
 
-  it('the disk reading: the volume of the deploy temp dir, under the line or not, and unreadable holds nothing', () => {
+    // A disk that stays low: the deploy goes at the bound, so a fix that frees room still ships.
+    const g = fixture()
+    const t1 = Math.floor(Date.now() / 1000)
+    const bounded = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_FREE_GB_TEST: '3', WALNUT_DEPLOY_DISK_POLL_SECS: '1', WALNUT_DEPLOY_DISK_HOLD_SECS: '5' }).done
+    expect(bounded.code, bounded.stderr).toBe(0)
+    expect(deploys(g).filter((d) => d.kind === 'start')[0].at).toBeGreaterThanOrEqual(t1 + 5)
+    expect(fs.readFileSync(path.join(g.queue, 'runner.log'), 'utf8')).toMatch(/still nearly full \(3\.0 GiB free\) at the end of its 5s hold: the deploy goes/)
+    await runnerGone(g)
+  }, 120_000)
+
+  it('a disk note an earlier runner left behind tells a caller nothing, and goes with the runner', async () => {
+    const f = fixture()
+    fs.mkdirSync(f.queue, { recursive: true })
+    fs.writeFileSync(path.join(f.queue, 'disk'), '4.0 GiB free\n')
+    const r = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1' }).done
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.stdout).not.toMatch(/nearly full/)
+    await runnerGone(f)
+    expect(fs.existsSync(path.join(f.queue, 'disk'))).toBe(false)
+  }, 60_000)
+
+  it('the disk reading: only when the build volume is the data disk, under the line or not; unreadable holds nothing', () => {
     const read = (env: Record<string, string>) => {
-      const e: Record<string, string | undefined> = { ...process.env, TMPDIR: os.tmpdir(), ...env }
+      const e: Record<string, string | undefined> = { ...process.env, TMPDIR: os.tmpdir(), WALNUT_DEPLOY_DATA_DIR_TEST: os.tmpdir(), ...env }
       if (!('WALNUT_DEPLOY_FREE_GB_TEST' in env)) delete e.WALNUT_DEPLOY_FREE_GB_TEST
       const r = spawnSync('bash', ['-c', `. "${SCRIPTS}/lib/deploy-queue.sh"; dq_low_disk`], { env: e as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 10_000 })
       expect(r.status, r.stderr).toBe(0)
       return r.stdout.trim()
     }
-    // This machine's own volume: never under 0 GB, always under a million.
+    // This machine's own volume, the build and the data on it: never under 0, always under a million.
     expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: '0' })).toBe('')
-    expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: '999999' })).toMatch(/^\d+\.\d GB free$/)
-    expect(read({ WALNUT_DEPLOY_FREE_GB_TEST: '10' })).toBe('10.0 GB free')
+    expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: '999999' })).toMatch(/^\d+\.\d GiB free$/)
+    // A data home that cannot be read: nothing to protect that we can see.
+    expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: '999999', WALNUT_DEPLOY_DATA_DIR_TEST: '/nonexistent/walnut-home' })).toBe('')
+    // A build on another volume (a Linux /tmp on tmpfs) cannot fill the data disk.
+    const df = (d: string) => spawnSync('df', ['-Pk', d], { encoding: 'utf8' }).stdout.split('\n')[1]?.split(/\s+/)[0]
+    if (fs.existsSync('/dev/shm') && df('/dev/shm') && df('/dev/shm') !== df(os.tmpdir())) {
+      expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: '999999', TMPDIR: '/dev/shm' })).toBe('')
+    }
+    expect(read({ WALNUT_DEPLOY_FREE_GB_TEST: '10' })).toBe('10.0 GiB free')
     expect(read({ WALNUT_DEPLOY_FREE_GB_TEST: '11' })).toBe('')
+    expect(read({ WALNUT_DEPLOY_FREE_GB_TEST: '09' })).toBe('9.0 GiB free')
     expect(read({ WALNUT_DEPLOY_FREE_GB_TEST: 'garbage' })).toBe('')
-    expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: 'x', WALNUT_DEPLOY_FREE_GB_TEST: '10' })).toBe('10.0 GB free')
+    expect(read({ WALNUT_DEPLOY_MIN_FREE_GB: 'x', WALNUT_DEPLOY_FREE_GB_TEST: '10' })).toBe('10.0 GiB free')
   })
 
   it('a move production runs holds the deploy until it ends, at most the hold; a dead or old marker holds nothing (2026-11-12)', async () => {
