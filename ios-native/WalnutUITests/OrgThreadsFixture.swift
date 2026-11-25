@@ -151,10 +151,14 @@ enum OrgThreadsFixture {
         ]
     }
 
+    /// When the VP's Brief was written: one time for the row's `brief_at` and the letter's `at`, as a
+    /// server's is (a time computed per call would read as a rewrite on every list read).
+    static let briefAt: String = at(15)
+
     private static var vpRow: [String: Any] {
         [
             "id": vpTaskID, "title": vpTitle, "status": "in_progress", "phase": "IN_PROGRESS",
-            "priority": "none", "project": "Growth", "org_role": "lead",
+            "priority": "none", "project": "Growth", "org_role": "lead", "brief_at": briefAt,
             "created_at": at(6000), "updated_at": at(5),
             "user_status": [
                 "state": "waiting", "waitingOn": "its teams", "at": at(5),
@@ -216,7 +220,7 @@ enum OrgThreadsFixture {
         case "\(vp)/brief":
             return (200, ["brief": [
                 "text": "### Needs you\n- \(titles[0]): say yes or no.\n### Working\n- \(workerTitle)\n### Waiting\n- nothing",
-                "at": at(15),
+                "at": briefAt,
             ]])
         case "/org/settings":
             return (200, ["defaultInstructions": ["main": "Lead the org.", "lead": defaultLeadInstructions]])

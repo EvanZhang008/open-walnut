@@ -510,7 +510,7 @@ final class InboxStore {
     // MARK: - Pin / archive (optimistic, reverted on failure)
 
     func setPinned(id: String, pinned: Bool) async {
-        await toggle(id: id, apply: { $0.pinned = pinned }) {
+        await toggle(id: id, apply: { $0.pinned = pinned }, revert: { row, was in row.pinned = was.pinned }) {
             try await self.api.setLetterPinned(id: id, pinned: pinned)
         }
     }
@@ -518,36 +518,8 @@ final class InboxStore {
     /// Archive/unarchive moves the row between the two lists immediately; the
     /// server answer is adopted afterwards, and a failure puts it back.
     func setArchived(id: String, archived: Bool) async {
-        flagWritesOut += 1
-        defer { flagWritesOut -= 1 }
-        let before = (letters, archivedLetters)
-        if archived {
-            if let idx = letters.firstIndex(where: { $0.id == id }) {
-                var row = letters.remove(at: idx)
-                row.archived = true
-                archivedLetters.insert(row, at: 0)
-                archivedLetters = InboxListing.inboxOrder(archivedLetters)
-            }
-        } else {
-            if let idx = archivedLetters.firstIndex(where: { $0.id == id }) {
-                var row = archivedLetters.remove(at: idx)
-                row.archived = false
-                letters.append(row)
-                letters = InboxListing.inboxOrder(letters)
-            }
-        }
-        let asked = stamp()
-        do {
-            let updated = adoptRead(try await api.setLetterArchived(id: id, archived: archived), askedAt: asked)
-            guard isActive, !Task.isCancelled else { return }
-            merge(updated)
-            DiskCache.save(letters, key: "inbox-letters")
-        } catch {
-            guard isActive else { return }
-            if let apiError = error as? APIError, apiError.isCancelled { return }
-            (letters, archivedLetters) = before
-            reportIfNetwork(error)
-            errorMessage = error.localizedDescription
+        await toggle(id: id, apply: { $0.archived = archived }, revert: { row, was in row.archived = was.archived }) {
+            try await self.api.setLetterArchived(id: id, archived: archived)
         }
     }
 
@@ -586,9 +558,14 @@ final class InboxStore {
 
     /// One optimistic toggle: flip locally, call, adopt the server row, revert
     /// the exact field on failure.
+    /// One flag of a letter flipped on the tap (`apply`), the write sent, the server's row adopted.
+    /// A refusal puts back ONLY that flag (`revert`, given the row as it was), on the row as it is
+    /// now: what landed meanwhile (a read, a reply, a list read that brought new letters) stays.
+    /// Never the tap-time snapshot: that put a stale row, or a stale list, over fresher data.
     private func toggle(
         id: String,
         apply: (inout Letter) -> Void,
+        revert: (inout Letter, Letter) -> Void,
         call: () async throws -> Letter
     ) async {
         flagWritesOut += 1
@@ -606,11 +583,11 @@ final class InboxStore {
             DiskCache.save(letters, key: "inbox-letters")
         } catch {
             guard isActive else { return }
-            if let apiError = error as? APIError, apiError.isCancelled {
-                if let before { merge(before) }
-                return
+            if let before, var now = letter(id: id) {
+                revert(&now, before)
+                merge(now)
             }
-            if let before { merge(before) }
+            if let apiError = error as? APIError, apiError.isCancelled { return }
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
         }
@@ -630,26 +607,10 @@ final class InboxStore {
     /// just the row). A body-inlined detail record is stored as-is: the extra
     /// fields are harmless on a row and save the reader a second fetch.
     private func merge(_ letter: Letter) {
-        if let idx = letters.firstIndex(where: { $0.id == letter.id }) {
-            if letter.isArchived {
-                letters.remove(at: idx)
-                archivedLetters = InboxListing.inboxOrder([letter] + archivedLetters)
-            } else {
-                letters[idx] = letter
-                letters = InboxListing.inboxOrder(letters)
-            }
-            return
-        }
-        if let idx = archivedLetters.firstIndex(where: { $0.id == letter.id }) {
-            if letter.isArchived {
-                archivedLetters[idx] = letter
-            } else {
-                archivedLetters.remove(at: idx)
-                letters = InboxListing.inboxOrder(letters + [letter])
-            }
-            return
-        }
-        // Unknown id (deep-linked straight from a push before the list landed).
+        // One row per id across both lists: a list read while an archive was out can have put the
+        // row back in the inbox while the archived copy still stood.
+        letters.removeAll { $0.id == letter.id }
+        archivedLetters.removeAll { $0.id == letter.id }
         if letter.isArchived {
             archivedLetters = InboxListing.inboxOrder([letter] + archivedLetters)
         } else {

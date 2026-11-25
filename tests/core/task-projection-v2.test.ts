@@ -123,6 +123,20 @@ describe('projection envelope (write side)', () => {
     expect(projectTask({ ...base, id: 'l1', org_role: 'lead' } as unknown as Task).org_role).toBe('lead');
     expect(projectTask({ ...base, id: 'w1' } as unknown as Task)).not.toHaveProperty('org_role');
   });
+
+  it('projectTask carries brief_at for an open Org node with a Brief, and omits it elsewhere', () => {
+    const base = {
+      title: 'Row', status: 'todo', phase: 'TODO', priority: 'none', project: 'Marina',
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+      brief: { text: 'Needs you: nothing.', at: '2026-11-25T10:00:00.000Z' },
+    };
+    expect(projectTask({ ...base, id: 'l1', org_role: 'lead' } as unknown as Task).brief_at).toBe('2026-11-25T10:00:00.000Z');
+    expect(projectTask({ ...base, id: 'm1', org_role: 'main' } as unknown as Task).brief_at).toBe('2026-11-25T10:00:00.000Z');
+    // A plain task's note is not a Brief; a closed node's Brief is history.
+    expect(projectTask({ ...base, id: 'w1' } as unknown as Task)).not.toHaveProperty('brief_at');
+    expect(projectTask({ ...base, id: 'l2', org_role: 'lead', status: 'done', phase: 'COMPLETE' } as unknown as Task)).not.toHaveProperty('brief_at');
+    expect(projectTask({ ...base, id: 'l3', org_role: 'lead', brief: undefined } as unknown as Task)).not.toHaveProperty('brief_at');
+  });
 });
 
 describe('done-retention scope', () => {

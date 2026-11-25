@@ -166,6 +166,7 @@ enum LocalDataReset {
         OrgThreadsCache.shared.eraseAll()
         OrgThreadsStore.eraseAll()
         OrgTreeStore.shared.eraseLocalState()
+        OrgBriefSeen.shared.eraseAll()
         OrgNodeLink.shared.forgetPreviews()
         LetterReplyStore.shared.eraseAll()
         InboxItemStore.shared.eraseAll()

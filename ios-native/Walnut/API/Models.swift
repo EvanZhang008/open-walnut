@@ -533,6 +533,10 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// "main" (the CEO) or "lead" (a VP): the session menu offers its memory and
     /// instructions. Absent on other tasks and from an older server (additive, 2026-10).
     var orgRole: String? = nil
+    /// When an Org node's Brief was last written (additive, 2026-11-25; server `brief_at`): the
+    /// Brief tab wears a dot for a rewrite this phone has not read (`OrgBriefSeen`). nil on other
+    /// tasks, a node with no Brief, and from an older server.
+    var briefAt: String? = nil
     /// The user turned Threads on for this task (additive, 2026-11-18; server
     /// `src/core/org/keeps-threads.ts`): its session menu opens them. nil when off, on Main and
     /// the leads (they always keep Threads), and from an older server.
@@ -591,6 +595,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case parentTaskId = "parent_task_id"
         case userStatus = "user_status"
         case orgRole = "org_role"
+        case briefAt = "brief_at"
         case threadsOn = "threads_on"
         case director
         case liveActivity = "live_activity"

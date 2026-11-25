@@ -60,6 +60,8 @@ struct OrgNodePageHost: ViewModifier {
     var uncover: () -> Void = {}
     @Environment(\.orgPagePlace) private var orgPagePlace
     @State private var pages = OrgPagesOnScreen.shared
+    /// Which Brief rewrite was read here: the Brief segment's dot (`OrgBriefSeen`).
+    @State private var briefSeen = OrgBriefSeen.shared
     @State private var restoreTried = false
     /// The route this host pushed for a request: its own push, not a move of his.
     @State private var requested: OrgNodeRoute?
@@ -195,6 +197,8 @@ struct OrgNodePage: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.dismiss) private var dismiss
     @State private var pages = OrgPagesOnScreen.shared
+    /// Which Brief rewrite was read here: the Brief segment's dot (`OrgBriefSeen`).
+    @State private var briefSeen = OrgBriefSeen.shared
     /// This page's place among the Chat tab's pages on the stack (`OrgPagesOnScreen`).
     @State private var stackEntry = OrgPageStackEntry()
     /// Optional: a page hosted where the app's connection is not in the environment (a test's
@@ -229,7 +233,7 @@ struct OrgNodePage: View {
                 case .tasks:
                     OrgNodeTasksView(nodeId: route.nodeId, isMain: route.isMain) { cover = .task($0) }
                 case .brief:
-                    OrgBriefView(taskId: route.nodeId, name: route.name)
+                    OrgBriefView(taskId: route.nodeId, name: route.name, briefAt: node?.briefAt)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -354,6 +358,7 @@ struct OrgNodePage: View {
     }
 
     private func label(_ t: OrgNodeTab) -> String {
+        if t == .brief { return OrgNodeTab.briefLabel(new: briefSeen.isNew(route.nodeId, briefAt: node?.briefAt)) }
         guard t == .threads else { return t.label }
         // The listed ones that wait on him (`counted`), the number the node's badge shows.
         let read = threads.threads.map { OrgThreadModel.sections($0, now: AppClock.now()).open.filter { $0.counted ?? true }.count }
@@ -384,10 +389,12 @@ struct OrgNodeBar: View {
     let node: WalnutTask
     let open: (OrgNodeTab) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var briefSeen = OrgBriefSeen.shared
 
     var body: some View {
         let counts = node.userStatus?.threads
         let compact = OrgNodeBarLayout.collapses(typeSize)
+        let briefNew = briefSeen.isNew(node.id, briefAt: node.briefAt)
         HStack(spacing: 8) {
             ForEach(OrgNodeTab.allCases) { t in
                 Button { open(t) } label: {
@@ -406,6 +413,10 @@ struct OrgNodeBar: View {
                                 // The drawer's count for the same node (ChatDrawerOrg): one colour for one number.
                                 .background(n > 0 ? UserStatePill.color(.needs) : Color(.systemGray3), in: Capsule())
                         }
+                        if t == .brief && briefNew {
+                            // A rewrite not read on this phone: the web's Brief tab dot (OrgNodeDetail briefNew).
+                            Circle().fill(UserStatePill.color(.needs)).frame(width: 7, height: 7)
+                        }
                     }
                     .frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)
                     // One of three keys sharing a line: a small key, so round.
@@ -413,7 +424,7 @@ struct OrgNodeBar: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(t == .threads ? "Threads, \(counts?.shown ?? 0)" : t.label)
+                .accessibilityLabel(t == .threads ? "Threads, \(counts?.shown ?? 0)" : (t == .brief && briefNew ? "Brief, new" : t.label))
                 .accessibilityShowsLargeContentViewer {
                     Label(t == .threads ? "Threads \(counts?.shown ?? 0)" : t.label, systemImage: t.symbol)
                 }

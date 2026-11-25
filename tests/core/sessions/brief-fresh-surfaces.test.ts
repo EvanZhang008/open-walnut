@@ -35,6 +35,7 @@ const PHONE_NOT_A_LETTER: Record<string, string> = {
   'ios-native/Walnut/Views/Org/OrgNodePage.swift': 'names the Brief page and its icon ("doc.text"); OrgBriefView draws the letter',
   'ios-native/WalnutUITests/OrgThreadsFixture.swift': 'the UI tests\' fixture server answers a Brief read; OrgBriefView draws the letter',
   'ios-native/WalnutUITests/VerticalPagesSidewaysDragUITests.swift': 'a UI test drags the Brief page sideways; its fixture serves the letter with its freshness, OrgBriefView draws it',
+  'ios-native/WalnutUITests/ThreadInstantUITests.swift': 'a UI test opens the Brief from the bar and checks its dot went; it only asks that the letter (org.brief.text) appeared, OrgBriefView draws it with its freshness',
 }
 
 describe('every surface that shows a Brief reads its freshness', () => {

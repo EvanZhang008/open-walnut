@@ -65,4 +65,20 @@ final class ThreadInstantUITests: ThreadPushUITestCase {
         fixture?.releaseHeld()
         print("[evidence] every surface read \(total - 1) before the server answered")
     }
+
+    /// The Brief's dot (a rewrite not read on this phone, the web's Brief tab dot) goes the moment
+    /// the Brief is opened, on the page's segment and on the bar under the chat alike.
+    func testOpeningTheBriefDropsItsDotOnTheBarAtOnce() throws {
+        try launchToVPChat("brief")
+        let brief = el("org.bar.brief")
+        XCTAssertTrue(waitLabel(brief, 15) { $0 == "Brief, new" }, "the bar reads \(brief.label): a Brief not read here wears no dot")
+        brief.tap()
+        XCTAssertTrue(el("org.brief.text").waitForExistence(timeout: 15), "Brief on the bar opened no letter")
+        XCTAssertTrue(waitLabel(segment("Brief"), 5) { $0 == "Brief" }, "the segment still reads \(segment("Brief").label)")
+        shot("brief-read")
+        back()
+        XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 10), "Back did not reach the VP chat")
+        XCTAssertTrue(waitLabel(brief, 2) { $0 == "Brief" }, "the bar's dot stayed after the Brief was read: \(brief.label)")
+        print("[evidence] the Brief dot went on the open, on the segment and the bar")
+    }
 }

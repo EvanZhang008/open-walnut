@@ -514,6 +514,51 @@ describe('the status a change predicts', () => {
     }
   })
 
+  it('two changes predicted on one row: the second refused takes back only its own share', () => {
+    const counts = (shown: number) => ({ state: 'needs', threads: { shown, needs: shown } } as unknown as Task['user_status'])
+    const less = (row: Task) => counts((row.user_status?.threads?.shown ?? 0) - 1)
+    const store = mount([task({ phase: 'NEED_ACTION', user_status: counts(14) } as Partial<Task>)])
+    const backFirst = store.predictStatus('task-1', less)
+    const backSecond = store.predictStatus('task-1', less)
+    expect(rows()[0].user_status?.threads?.shown).toBe(12)
+    // The second thread's write is refused: the first one's count stays.
+    backSecond()
+    expect(rows()[0].user_status?.threads?.shown).toBe(13)
+    // The server's echo of the first write has not derived the status again: still 13.
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: counts(14) } as Partial<Task>) })
+    expect(rows()[0].user_status?.threads?.shown).toBe(13)
+    // Its own refusal later takes the last layer, and the server's word is back.
+    backFirst()
+    expect(rows()[0].user_status?.threads?.shown).toBe(14)
+    // Nothing stands: an undo called twice changes nothing.
+    backSecond()
+    expect(rows()[0].user_status?.threads?.shown).toBe(14)
+  })
+
+  it('two changes predicted, the first answered by the server while the second is still out: both layers read over the answer', () => {
+    // The Org page's make counts the list as drawn (statusWithThreads), the same whichever layer runs it.
+    const counts = (shown: number) => ({ state: 'needs', threads: { shown, needs: shown } } as unknown as Task['user_status'])
+    let drawn = 14
+    const asDrawn = (row: Task) => ({ ...row.user_status, threads: { shown: drawn, needs: drawn } } as unknown as Task['user_status'])
+    const store = mount([task({ phase: 'NEED_ACTION', user_status: counts(14) } as Partial<Task>)])
+    let out = 0
+    drawn = 13; out = 1
+    store.predictStatus('task-1', asDrawn, { live: () => out > 0 })
+    drawn = 12; out = 2
+    store.predictStatus('task-1', asDrawn, { live: () => out > 0 })
+    expect(rows()[0].user_status?.threads?.shown).toBe(12)
+    // The server derived the first change (13) while the second is out: the layers read over it.
+    out = 1
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: counts(13) } as Partial<Task>) })
+    expect(rows()[0].user_status?.threads?.shown).toBe(12)
+    // No write out any more: the next server status is the answer as it is.
+    out = 0
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: counts(12) } as Partial<Task>) })
+    expect(rows()[0].user_status?.threads?.shown).toBe(12)
+    eventHandlers.get('task:updated')?.({ task: task({ phase: 'NEED_ACTION', user_status: counts(11) } as Partial<Task>) })
+    expect(rows()[0].user_status?.threads?.shown).toBe(11)
+  })
+
   it('a caller that words a refusal itself hears it, and the store reports nothing', async () => {
     api.updateTask.mockRejectedValueOnce(new ApiError(400, 'No such phase'))
     api.completeTask.mockRejectedValueOnce(new ApiError(409, 'Open subtasks'))

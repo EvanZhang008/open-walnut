@@ -15,13 +15,30 @@ import Foundation
 ///     `predictionSeconds`: the server derived the same status again, so the prediction was wrong
 ///     and its last word goes back.
 struct StatusPrediction {
+    /// One change's share: how to make it again over the status under it.
+    struct Layer {
+        let token: Int
+        let make: (WalnutTask) -> WalnutUserStatus?
+        let live: (() -> Bool)?
+    }
+
     var base: WalnutUserStatus?
     var predicted: WalnutUserStatus?
-    let make: (WalnutTask) -> WalnutUserStatus?
-    let live: (() -> Bool)?
+    /// One layer per change still predicted on the row, oldest first. A refused write takes back
+    /// only its own: the others are made again over the base (two threads acted on, the second
+    /// refused, keeps the first's count).
+    var layers: [Layer]
     let madeAt: Date
-    let token: Int
     var expiry: Task<Void, Never>?
+
+    var live: Bool { layers.contains { $0.live?() == true } }
+
+    /// What the layers read over `over` (a row carrying the status they build on).
+    func remake(over: WalnutTask) -> WalnutUserStatus? {
+        var row = over
+        for layer in layers { row.userStatus = layer.make(row) }
+        return row.userStatus
+    }
 }
 
 extension TasksStore {
@@ -48,8 +65,9 @@ extension TasksStore {
         prior?.expiry?.cancel()
         predictionSeq += 1
         let token = predictionSeq
-        var entry = StatusPrediction(base: prior?.base ?? row.userStatus, predicted: predicted, make: make,
-                                     live: live, madeAt: Date(), token: token)
+        var entry = StatusPrediction(base: prior?.base ?? row.userStatus, predicted: predicted,
+                                     layers: (prior?.layers ?? []) + [.init(token: token, make: make, live: live)],
+                                     madeAt: Date())
         entry.expiry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.predictionSeconds))
             guard !Task.isCancelled else { return }
@@ -60,9 +78,26 @@ extension TasksStore {
         return { [weak self] in self?.withdrawPrediction(id, token: token) }
     }
 
-    /// A refused write: the server's last status comes back on the row.
+    /// A refused write: its own layer goes; the other changes still predicted on the row read
+    /// again over the server's last status, which comes back as it is when none is left.
     func withdrawPrediction(_ id: String, token: Int) {
-        guard let entry = statusPredictions[id], entry.token == token else { return }
+        guard var entry = statusPredictions[id], entry.layers.contains(where: { $0.token == token }) else { return }
+        entry.layers.removeAll { $0.token == token }
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { dropPrediction(id); return }
+        if entry.layers.isEmpty {
+            dropPrediction(id)
+            if tasks[idx].userStatus == entry.predicted { tasks[idx] = Self.withUserStatus(tasks[idx], entry.base) }
+            return
+        }
+        let again = entry.remake(over: Self.withUserStatus(tasks[idx], entry.base))
+        entry.predicted = again
+        statusPredictions[id] = entry
+        tasks[idx] = Self.withUserStatus(tasks[idx], again)
+    }
+
+    /// Every layer of the row's prediction goes, and the server's last status comes back.
+    func dropPrediction(_ id: String) {
+        guard let entry = statusPredictions[id] else { return }
         entry.expiry?.cancel()
         statusPredictions[id] = nil
         if let idx = tasks.firstIndex(where: { $0.id == id }), tasks[idx].userStatus == entry.predicted {
@@ -70,12 +105,12 @@ extension TasksStore {
         }
     }
 
-    /// No answer in time. While its writes are still out it waits on (a slow relay): the write's
-    /// own answer decides then. While the feed is down no answer can come by it: the next list
-    /// read decides (`dropUnansweredPredictions`).
+    /// No answer in time: the server derived the same status again, so every layer was wrong.
+    /// While a write is still out (a slow relay) the write's own answer decides. While the feed is
+    /// down no answer can come by it: the next list read decides (`dropUnansweredPredictions`).
     private func expirePrediction(_ id: String, token: Int) {
-        guard let entry = statusPredictions[id], entry.token == token else { return }
-        if entry.live?() == true || feedState != .live {
+        guard let entry = statusPredictions[id], entry.layers.last?.token == token else { return }
+        if entry.live || feedState != .live {
             var again = entry
             again.expiry = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(Self.predictionSeconds))
@@ -85,7 +120,7 @@ extension TasksStore {
             statusPredictions[id] = again
             return
         }
-        withdrawPrediction(id, token: token)
+        dropPrediction(id)
     }
 
     /// A row the server sent, as the phone draws it: a standing prediction laid over a status it
@@ -97,8 +132,8 @@ extension TasksStore {
         if row.userStatus == p.base { return Self.withUserStatus(row, p.predicted) }
         // More writes of the same kind are still out (a second thread acted on): the server's
         // status is the new base, and the prediction is made again over it, not dropped.
-        if p.live?() == true {
-            let again = p.make(row)
+        if p.live {
+            let again = p.remake(over: row)
             if again != row.userStatus {
                 p.base = row.userStatus
                 p.predicted = again
@@ -115,9 +150,9 @@ extension TasksStore {
     /// change within about 100 ms): a row it still brought with the old status means the server
     /// derived the same one, so the prediction was wrong and goes, as its expiry would.
     func dropUnansweredPredictions(readStartedAt: Date) {
-        for (id, p) in statusPredictions where p.live?() != true
+        for (id, p) in statusPredictions where !p.live
             && readStartedAt.timeIntervalSince(p.madeAt) > Self.deriveSeconds {
-            withdrawPrediction(id, token: p.token)
+            dropPrediction(id)
         }
     }
 

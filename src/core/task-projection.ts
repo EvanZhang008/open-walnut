@@ -118,6 +118,10 @@ export interface ProjectedTask {
   /** A team stop is in force under it (core/sessions/team-stop.ts; additive, 2026-10): the phone
    *  offers Resume the team. Omitted otherwise. */
   team_stop?: { at: string; by: string }
+  /** When an Org node's Brief was last written (Task.brief.at; additive, 2026-11-25): the phone's
+   *  Brief tab wears a dot for a rewrite not yet read there, as the web's does. Open Org nodes
+   *  (Main, a lead) with a Brief only. */
+  brief_at?: string
   /** The outside service the task syncs to; absent for a local task. Additive. */
   source?: string
   /** Why a task in a project that syncs is kept local (Task.sync_hold). Additive. */
@@ -237,6 +241,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
     ...(t.plugin_only ? { plugin_only: t.plugin_only } : {}),
     ...(t.org_role ? { org_role: t.org_role } : {}),
+    ...(t.org_role && t.brief?.at && t.status !== 'done' && t.phase !== 'COMPLETE' ? { brief_at: t.brief.at } : {}),
     ...(t.router_area_id ? { router_area_id: t.router_area_id } : {}),
     ...(t.org_role === 'router' ? { router_links: t.router_links ?? [], router_paused: t.router_paused !== false } : {}),
     ...(t.self_router && !t.org_role ? { self_router: { links: [...(t.self_router.links ?? [])], ...(t.self_router.name ? { name: t.self_router.name } : {}) } } : {}),

@@ -343,6 +343,64 @@ final class OrgThreadsInstantTests: XCTestCase {
         XCTAssertTrue(store.statusPredictions.isEmpty)
     }
 
+    func testTwoChangesPredictedOnOneRowTheSecondRefusedTakesBackOnlyItsOwn() {
+        let store = TasksStore(transport: MockTaskTransport())
+        var row = task("t-two", status: "in_progress", phase: "NEED_ACTION", userState: "needs")
+        row.userStatus?.threads = WalnutThreadCounts(shown: 14, needs: 14)
+        store.tasks = [row]
+        let less: (WalnutTask) -> WalnutUserStatus? = { r in
+            var s = r.userStatus
+            s?.threads = WalnutThreadCounts(shown: (r.userStatus?.threads?.shown ?? 0) - 1, needs: 0)
+            return s
+        }
+        let backFirst = store.predictStatus("t-two", make: less)
+        let backSecond = store.predictStatus("t-two", make: less)
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 12)
+        // The second thread's write is refused: the first one's count stays.
+        backSecond()
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 13, "only the refused change went back")
+        // The server's echo of the first write has not derived the status again: still 13.
+        store._applyFeedMutationsForTesting([.taskUpsert(row)])
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 13)
+        // Its own refusal takes the last layer: the server's word is back, and nothing stands.
+        backFirst()
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 14)
+        XCTAssertTrue(store.statusPredictions.isEmpty)
+        backSecond()
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 14, "an undo called twice changes nothing")
+    }
+
+    func testTwoChangesPredictedTheFirstAnsweredWhileTheSecondIsOutReadOverTheAnswer() {
+        let store = TasksStore(transport: MockTaskTransport())
+        var row = task("t-live", status: "in_progress", phase: "NEED_ACTION", userState: "needs")
+        row.userStatus?.threads = WalnutThreadCounts(shown: 14, needs: 14)
+        store.tasks = [row]
+        // The node's make counts the list as drawn (predictNode), the same whichever layer runs it.
+        var drawn = 14
+        var out = 0
+        let asDrawn: (WalnutTask) -> WalnutUserStatus? = { r in
+            var s = r.userStatus
+            s?.threads = WalnutThreadCounts(shown: drawn, needs: drawn)
+            return s
+        }
+        drawn = 13; out = 1
+        _ = store.predictStatus("t-live", live: { out > 0 }, make: asDrawn)
+        drawn = 12; out = 2
+        _ = store.predictStatus("t-live", live: { out > 0 }, make: asDrawn)
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 12)
+        // The server derived the first change while the second is out: the layers read over it.
+        out = 1
+        var first = row; first.userStatus?.threads = WalnutThreadCounts(shown: 13, needs: 13)
+        store._applyFeedMutationsForTesting([.taskUpsert(first)])
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 12)
+        // No write out any more: the next server status is the answer as it is.
+        out = 0
+        var second = row; second.userStatus?.threads = WalnutThreadCounts(shown: 12, needs: 12)
+        store._applyFeedMutationsForTesting([.taskUpsert(second)])
+        XCTAssertEqual(store.tasks[0].userStatus?.threads?.shown, 12)
+        XCTAssertTrue(store.statusPredictions.isEmpty)
+    }
+
     func testAPhaseSetByHandIsLeftToTheServerWhereItsAnswerDoesNotFollowThePhase() {
         var running = task("t-run", status: "todo", phase: "TODO", userState: "working")
         running.liveActivity = WalnutLiveActivity(kind: "tool", tool: "Read", since: "2026-11-19T10:00:00Z")

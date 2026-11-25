@@ -953,6 +953,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   omitted on every other task: the phone's session menu then offers the agent's
   memory and instructions (`GET /tasks/:id/agent-memory`, `PUT /org/nodes/:id`).
   Additive and optional, so older clients ignore it.
+  `brief_at` (added 2026-11-25) is when an open Org node's Brief was last written
+  (`GET /tasks/:id/brief` → `brief.at`), on `org_role` rows with a Brief only: the phone's
+  Brief tab wears a dot for a rewrite not read on that phone yet, marked read when the Brief
+  is opened (kept on the phone, as the web keeps its own in the browser). Additive and optional.
   `live_activity` (added 2026-10-28) is what a running task's session does now, read by
   the server from the session's stream (never the model's words), on running rows only:
   `{ kind: 'tool' | 'thinking' | 'writing', tool?, target?, since, turnStartedAt?,

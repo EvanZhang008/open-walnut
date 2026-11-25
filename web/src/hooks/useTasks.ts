@@ -139,17 +139,35 @@ export interface WriteReport {
   onError?: (err: Error) => void;
 }
 
-/** A prediction as the store keeps it: how to make it again, and when it was made. */
-interface StandingPrediction extends StatusPrediction {
+/** One change's share of a prediction: how to make it again over the status under it. */
+interface PredictionLayer {
+  token: number;
   make: (row: Task) => UserStatus | undefined;
   /** True while more writes behind it are still out: a server status re-bases it. */
   live?: () => boolean;
   /** True for a server row that has not caught up with the change yet, though its status moved
    *  (an answer still on its way to the session): the prediction is made again over it. */
   holds?: (row: Task) => boolean;
+}
+
+/**
+ * A prediction as the store keeps it: the server's last word (`base`), one layer per change
+ * still predicted on the row, oldest first, and what they read together (`predicted`). A refused
+ * write takes back only its own layer: the others are made again over the base (two threads
+ * acted on, the second refused, keeps the first's count).
+ */
+interface StandingPrediction extends StatusPrediction {
+  layers: PredictionLayer[];
   /** performance.now() when made: a list read that left earlier never answers it. */
   madeAt: number;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/** What the layers read over `over` (a row carrying the status they build on). */
+function remakePrediction(p: StandingPrediction, over: Task): UserStatus | undefined {
+  let row = over;
+  for (const layer of p.layers) row = { ...row, user_status: layer.make(row) } as Task;
+  return row.user_status;
 }
 
 /** Map phases to their corresponding task status (WAITING is a To Do bucket, as on the server). */
@@ -565,6 +583,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // write that cannot read its row at all drops the held edit rather than leave it in force.
   // The statuses this page predicted, until the server derives each again (status-prediction.ts).
   const predictions = useRef(new Map<string, StandingPrediction>());
+  const predictionSeq = useRef(0);
   useEffect(() => () => { for (const p of predictions.current.values()) clearTimeout(p.timer); }, []);
   /**
    * A row the server sent, with a standing prediction laid over a status it has not derived
@@ -580,8 +599,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // More writes of the same kind are still out (a second thread acted on), or the server's
     // row has not caught up with the change yet: the server's status is the new base, and the
     // prediction is made again over it, not dropped.
-    if (p.live?.() || p.holds?.(task)) {
-      const again = p.make(task);
+    if (p.layers.some((l) => l.live?.() || l.holds?.(task))) {
+      const again = remakePrediction(p, task);
       if (statusKey(again) !== statusKey(task.user_status)) {
         p.base = statusKey(task.user_status);
         p.predicted = again;
@@ -1209,19 +1228,36 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const predicted = make(from);
     if (statusKey(predicted) === statusKey(from.user_status)) return () => {};
     if (prior) clearTimeout(prior.timer);
-    const back = () => {
-      if (predictions.current.get(id) !== entry) return;
-      clearTimeout(entry.timer);
+    const layer: PredictionLayer = { token: ++predictionSeq.current, make, live: opts?.live, holds: opts?.holds };
+    // Every layer goes and the server's last word is back on the row.
+    const drop = (cur: StandingPrediction) => {
+      clearTimeout(cur.timer);
       predictions.current.delete(id);
-      const base = JSON.parse(entry.base) as UserStatus | null;
+      const base = JSON.parse(cur.base) as UserStatus | null;
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, user_status: base ?? undefined } as Task : t)));
     };
+    // No answer in time: the server derived the same status again, so it sent nothing and the
+    // prediction was wrong. Its last word goes back; a re-read would also throw away another
+    // write's held edit of this row.
+    const expire = () => {
+      const cur = predictions.current.get(id);
+      if (cur && cur.layers.includes(layer)) drop(cur);
+    };
+    // A refused write: only this change's layer goes; the others read again over the base.
+    const back = () => {
+      const cur = predictions.current.get(id);
+      if (!cur || !cur.layers.includes(layer)) return;
+      cur.layers = cur.layers.filter((l) => l !== layer);
+      if (cur.layers.length === 0) return drop(cur);
+      const base = JSON.parse(cur.base) as UserStatus | null;
+      const now = tasksNow.current.find((t) => t.id === id) ?? row;
+      const again = remakePrediction(cur, { ...now, user_status: base ?? undefined } as Task);
+      cur.predicted = again;
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, user_status: again } as Task : t)));
+    };
     const entry: StandingPrediction = {
-      base: prior?.base ?? statusKey(row.user_status), predicted, make, live: opts?.live, holds: opts?.holds, madeAt: performance.now(),
-      // No answer: the server derived the same status again, so it sent nothing and the
-      // prediction was wrong. Its last word goes back; a re-read would also throw away
-      // another write's held edit of this row.
-      timer: setTimeout(back, opts?.keepMs ?? PREDICTION_MS),
+      base: prior?.base ?? statusKey(row.user_status), predicted, layers: [...(prior?.layers ?? []), layer], madeAt: performance.now(),
+      timer: setTimeout(expire, opts?.keepMs ?? PREDICTION_MS),
     };
     predictions.current.set(id, entry);
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, user_status: predicted } as Task : t)));

@@ -12,6 +12,11 @@ struct OrgBriefView: View {
     let name: String
     /// The brief to show instead of reading it (a test's own); nil reads `GET /tasks/:id/brief` as always.
     var givenReply: OrgBriefReply? = nil
+    /// When the node's row says its Brief was written (`brief_at`): shown here, it is read, so the
+    /// tab's dot goes on the open, not after the letter's own read answers (`OrgBriefSeen`).
+    var briefAt: String? = nil
+    /// Where the mark is kept (a test's own, else the shared one).
+    var seen: OrgBriefSeen = .shared
 
     @State private var reply: OrgBriefReply?
     /// The node `reply` was read for: the view's state outlives a switch to another node.
@@ -56,6 +61,7 @@ struct OrgBriefView: View {
         // The node opened: read at once. The node's threads or status moved since (a turn of its
         // ended, a thread acted on), or the feed reconnected: read again, a moment later so a
         // burst of moves costs one read.
+        .task(id: "seen:\(taskId):\(briefAt ?? "")") { seen.markSeen(taskId, at: briefAt) }
         .task(id: LiveKey(taskId: taskId, generation: signals.generation(of: taskId))) {
             if replyFor == taskId {
                 try? await Task.sleep(for: .milliseconds(400))
@@ -157,6 +163,7 @@ struct OrgBriefView: View {
             reply = givenReply
             replyFor = asked
             loaded = true
+            seen.markSeen(asked, at: givenReply.brief?.at)
             return
         }
         do {
@@ -165,6 +172,8 @@ struct OrgBriefView: View {
             reply = fetched
             replyFor = asked
             error = nil
+            // The letter read is the rewrite he sees: its own time is the mark.
+            seen.markSeen(asked, at: fetched.brief?.at)
         } catch {
             guard !Task.isCancelled else { return }
             if let api = error as? APIError, api.isCancelled { return }

@@ -80,8 +80,13 @@ final class OrderedInboxTransport: InboxTransport, @unchecked Sendable {
     private var answeredWrites = 0
     /// While true, every read waits for `openRead(_:)`; while false it answers at once.
     var holdReads = false
+    /// While true, a pin or archive write is refused once its gate opens (the server kept its row).
+    var refuseFlagWrites = false
 
     init(_ letters: [Letter]) { serverLetters = letters }
+
+    /// A letter that reached the server meanwhile (the next list read brings it).
+    func addServer(_ letter: Letter) { lock.withLock { serverLetters.append(letter) } }
 
     /// Reads asked so far (each one numbered from 0 in the order asked).
     var readsAsked: Int { lock.withLock { gates.count } }
@@ -135,20 +140,22 @@ final class OrderedInboxTransport: InboxTransport, @unchecked Sendable {
     }
 
     func setLetterPinned(id: String, pinned: Bool) async throws -> Letter {
+        let refuse = lock.withLock { refuseFlagWrites }
         let (row, gate) = snapshot({ rows in
-            if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].pinned = pinned }
+            if !refuse, let i = rows.firstIndex(where: { $0.id == id }) { rows[i].pinned = pinned }
         }) { $0.first { $0.id == id } }
         await gate.wait()
-        guard let row else { throw APIError.badResponse }
+        guard let row, !refuse else { throw APIError.badResponse }
         return row
     }
 
     func setLetterArchived(id: String, archived: Bool) async throws -> Letter {
+        let refuse = lock.withLock { refuseFlagWrites }
         let (row, gate) = snapshot({ rows in
-            if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].archived = archived }
+            if !refuse, let i = rows.firstIndex(where: { $0.id == id }) { rows[i].archived = archived }
         }) { $0.first { $0.id == id } }
         await gate.wait()
-        guard let row else { throw APIError.badResponse }
+        guard let row, !refuse else { throw APIError.badResponse }
         return row
     }
 
@@ -451,6 +458,54 @@ final class InboxLandedReadTests: XCTestCase {
         XCTAssertEqual(inbox.letter(id: "a")?.isArchived, false)
         XCTAssertEqual(inbox.letter(id: "a")?.isRead, true, "the unarchive answer undid the read")
         XCTAssertEqual(inbox.unreadCount, 1)
+    }
+
+    /// A refused pin puts back the pin alone: the read that landed while the write was out stays
+    /// (the tap-time snapshot it merged back before undid it; found by the phone review, 2026-11-25).
+    func testARefusedPinPutsOnlyThePinBackAndKeepsTheReadThatLandedMeanwhile() async {
+        let transport = OrderedInboxTransport([letter("a", read: false, minutesAgo: 1), letter("b", read: false, minutesAgo: 2)])
+        let inbox = await orderedStore(transport)
+        transport.refuseFlagWrites = true
+        let base = transport.readsAsked
+
+        let pin = Task { await inbox.setPinned(id: "a", pinned: true) }
+        await waitUntil("pin asked") { transport.readsAsked == base + 1 }
+        XCTAssertEqual(inbox.letter(id: "a")?.pinned, true, "the pin shows on the tap")
+        inbox.mark(id: "a", read: true)
+        await waitUntil("the read landed") { transport.writesAnswered == 1 }
+        await settle()
+        transport.openRead(base)
+        await pin.value
+        XCTAssertEqual(inbox.letter(id: "a")?.pinned ?? false, false, "the refused pin is back")
+        XCTAssertEqual(inbox.letter(id: "a")?.isRead, true, "the read that landed meanwhile stays")
+        XCTAssertEqual(inbox.unreadCount, 1)
+        XCTAssertNotNil(inbox.errorMessage, "the refusal is said")
+    }
+
+    /// A refused archive puts the letter back in the inbox and nothing else: a letter the list
+    /// brought while the write was out is not thrown away with a tap-time copy of the lists.
+    func testARefusedArchivePutsTheLetterBackAndKeepsWhatTheListBroughtMeanwhile() async {
+        let transport = OrderedInboxTransport([letter("a", read: false, minutesAgo: 1), letter("b", read: false, minutesAgo: 2)])
+        let inbox = await orderedStore(transport)
+        transport.refuseFlagWrites = true
+        let base = transport.readsAsked
+
+        let archive = Task { await inbox.setArchived(id: "a", archived: true) }
+        await waitUntil("archive asked") { transport.readsAsked == base + 1 }
+        XCTAssertTrue(inbox.archivedLetters.contains { $0.id == "a" }, "the row moves on the tap")
+        // A new letter reaches the server and a pull reads the list while the write is out.
+        transport.addServer(letter("c", read: false, minutesAgo: 0))
+        let pull = Task { await inbox.refresh() }
+        await waitUntil("the pull asked") { transport.readsAsked == base + 2 }
+        transport.openRead(base + 1)
+        await pull.value
+        XCTAssertNotNil(inbox.letter(id: "c"))
+        transport.openRead(base)
+        await archive.value
+        XCTAssertEqual(inbox.letter(id: "a")?.isArchived, false, "the refused archive is back in the inbox")
+        XCTAssertFalse(inbox.archivedLetters.contains { $0.id == "a" })
+        XCTAssertNotNil(inbox.letter(id: "c"), "the letter the pull brought stays")
+        XCTAssertEqual(inbox.letters.map(\.id).sorted(), ["a", "b", "c"])
     }
 
     // MARK: - The App Store r7 gate's probes P3, P5 and P6
