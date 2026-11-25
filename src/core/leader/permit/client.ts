@@ -71,7 +71,10 @@ export class PermitClient {
   private evidence = new PairEvidence()
   private pending: Pending | null = null
   private lease: { record: PermitRecord; until: number } | null = null
-  /** Set by handover(): acts on nothing until its own cancel is accepted or the handover is known. */
+  /**
+   * Set by handover(): acts on nothing until its own cancel or grant is accepted (either stands above the handover at a
+   * majority, which then never stands) or the handover is known.
+   */
   private frozen = false
   /** Set by release(): this client never acts again, and proposes nothing but its release. */
   private releasing = false
@@ -476,7 +479,9 @@ export class PermitClient {
     if (r.holder === this.id) {
       const until = p.sentAt + holderLeaseMs(this.opts.params)
       if (!this.lease || until > this.lease.until) this.lease = { record: r, until }
-      if (r.kind === 'cancel') this.frozen = false
+      // A cancel, or a grant (the take-back once a cancel can no longer stand: runtime.ts splitOwnRecords): a majority
+      // holds this process's record above the handover, so the handover never stands and this process acts again.
+      if (r.kind === 'cancel' || r.kind === 'grant') this.frozen = false
     } else {
       // Our handover stands: the permission is the other machine's now. Or our release: nobody's.
       this.lease = null

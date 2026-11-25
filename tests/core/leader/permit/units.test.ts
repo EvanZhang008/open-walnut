@@ -395,6 +395,35 @@ describe('assertMayAct', () => {
   })
 })
 
+describe('PermitClient: a handover that did not stand', () => {
+  it('its own grant taken by a majority above it (the take-back when a cancel cannot stand) ends the freeze: it acts again', () => {
+    const h = holderSetup()
+    h.c.requestGrant()
+    h.flush()
+    h.at(1_000)
+    // The handover reaches w1 alone: the other two still hold this process's grant.
+    h.reachOnly(['w1'])
+    h.c.handover('B')
+    h.flush()
+    expect(h.c.mayAct()).toBe(false)
+    h.reachOnly(W)
+    h.at(2_000)
+    // w2 and w3 take it on this process's live grant (rules.ts judge); w1 refuses (its handover).
+    h.c.requestGrant()
+    h.flush()
+    expect(h.c.pendingRecord()).toBeNull()
+    expect(h.c.isFrozen()).toBe(false)
+    expect(h.c.mayAct()).toBe(true)
+    // ... and the handover can never stand now: the new holder's commit is refused where the grant is.
+    const b = h.client('B')
+    b.read()
+    h.flush()
+    b.renew()
+    h.flush()
+    expect(b.mayAct()).toBe(false)
+  })
+})
+
 describe('PermitClient.release', () => {
   function holding() {
     const h = holderSetup()

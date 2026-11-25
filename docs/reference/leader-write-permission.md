@@ -125,8 +125,13 @@ hosts whose time service corrects in steps.
 
 The holder stops acting first (`handover(to)` makes `mayAct()` false at once), then writes the
 handover. The new holder acts only after a renew of its own on top of the handover reaches a
-majority. The old holder resumes only by getting a cancel of its own accepted: "a majority
-still shows my old record" is not enough, since the handover may be half written. A handover
+majority. The old holder resumes only by getting a cancel or a grant of its own accepted: "a
+majority still shows my old record" is not enough, since the handover may be half written. A
+grant serves where the cancel can no longer stand (its records ran out at the others, or a
+cancel landed on one witness only: [Leader switch](./leader-switch.md#restarts), witnesses left
+on different records); either stands above the handover at a majority, so the handover never
+does. (Before, a grant that stood left the client frozen: the server said it led again and never
+acted.) A handover
 and a cancel cannot both stand: at the witness both majorities share, whichever came first
 blocks the other (a cancel never stands on the new holder's renew, and the new holder's renew
 never stands on a cancel).

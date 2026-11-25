@@ -985,7 +985,8 @@ Anything else (another machine's record that may have stood: a committed switch,
 as before: a switch's to settle, never a takeover. The same read runs where a cancel cannot stand any
 more: a take-back (`cancel`) and a handover that did not stand (`lost`, its cancel owed) ask for that
 grant instead of sending the cancel again, since a cancel that lands on one witness only hides what it
-held.
+held. That grant, once a majority holds it, ends the freeze the handover put on the server's permit client,
+as a cancel does (before, the server said it led again and never acted; `retake-after-handover.test.ts`).
 
 `tests/core/leader/switch/split-records-model.test.ts` walks every history of two machines and
 three witnesses up to 6 steps (about 117,000 states; `SPLIT_MODEL_DEPTH` sets it): any record to any set

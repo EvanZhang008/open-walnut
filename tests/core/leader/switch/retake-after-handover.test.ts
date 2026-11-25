@@ -112,6 +112,26 @@ describe('the old leader after a failed trial, one witness out of reach and two 
     expect(again.status().state === 'leading' || again.mayAct()).toBe(true)
   }, 90_000)
 
+  it('a handover that did not stand and could not be cancelled: the server takes the permission back by a grant and acts again', async () => {
+    // Short records (the runtime tests' clocks): the handover's and the cancel's waits outlast them.
+    settings = { ...settings, params: { ...DEFAULT_PERMIT_PARAMS, validMs: 3_000, renewEveryMs: 750, holderMarginMs: 200, witnessMarginMs: 200, minSendRemainingMs: 500, backoffBaseMs: 100, backoffMaxMs: 200 } }
+    const [, w2, w3] = settings.witnesses as [LocalWitnessPlace, LocalWitnessPlace, LocalWitnessPlace]
+    const r = await start('machine-b')
+    expect(r.mayAct()).toBe(true)
+    // Two witnesses out of reach: the handover reaches w1 alone, and so does its cancel (runtime.ts handover: lost, the
+    // cancel owed).
+    for (const w of [w2, w3]) fs.renameSync(w.dir, `${w.dir}.off`)
+    const h = await r.handover('machine-a')
+    expect(h.ok).toBe(false)
+    expect(r.status().state).toBe('lost')
+    for (const w of [w2, w3]) fs.renameSync(`${w.dir}.off`, w.dir)
+    // Every answer leaves it to this machine (its handover at w1, its own records at w2 and w3): a grant takes it back,
+    // and the process that wrote the handover acts again (its client was frozen by the handover: permit/client.ts).
+    const end = Date.now() + 20_000
+    while (!(r.mayAct() && r.status().state === 'leading') && Date.now() < end) await sleep(100)
+    expect({ mayAct: r.mayAct(), state: r.status().state }).toEqual({ mayAct: true, state: 'leading' })
+  }, 90_000)
+
   it('the bounds in seconds: 42.5 s after the last hold ran out, 105.8 s after the restart; the switch waits longer than that for it', () => {
     expect(retakeWithinMs(DEFAULT_PERMIT_PARAMS)).toBe(42_500)
     expect(retakeAfterRestartMs(DEFAULT_PERMIT_PARAMS)).toBe(105_766)
