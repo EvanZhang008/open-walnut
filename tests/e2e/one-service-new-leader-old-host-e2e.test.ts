@@ -38,7 +38,7 @@ const FIRST = 'hello from the new leader'
 const SECOND = 'a second line from the new leader'
 
 type Want = { want: 'walnut-serve' | 'daemon' | null; why?: string }
-interface ModeCase { launcher: string; offer: string; want: Want; now: { due: boolean; serve?: unknown }; connected: boolean; instanceId: string | null }
+interface ModeCase { platform: 'unknown' | 'linux'; launcher: string; offer: string; want: Want; now: { due: boolean; serve?: unknown }; connected: boolean; instanceId: string | null }
 
 interface Report {
   hello: {
@@ -102,16 +102,23 @@ try {
   // The one-service decision for this host, as the connection makes it (its hello's facts), with the
   // experiments off, with only service_launcher on, and with both on and this host offered. Each env
   // pair decides for this process (service-launcher-flag.ts). checkServiceMode is the leader's own
-  // "switch if due" step: it must leave the link and the daemon as they are.
+  // "switch if due" step: it must leave the link and the daemon as they are. The old hello names no
+  // platform, so the decision runs twice (bdc64a8c7e: a host whose system is not known yet is left as
+  // it is): first with nothing known (this direct link has no ssh probe), then with the host profile
+  // naming Linux, as the ssh connect probe of an old host records it (recordProbedFacts).
   const modes = []
-  for (const [launcher, offer] of [['0', '0'], ['1', '0'], ['1', '1']]) {
-    process.env.WALNUT_SERVICE_LAUNCHER = launcher
-    process.env.WALNUT_HOST_SERVICE_OFFER = offer
-    const want = await conn.serviceModeWant()
-    const now = await conn.serviceModeNow()
-    await conn.checkServiceMode()
-    await new Promise((r) => setTimeout(r, 500))
-    modes.push({ launcher, offer, want, now, connected: conn.connected, instanceId: conn.daemonInstanceId })
+  const { recordProbedFacts } = await import(${at('src/core/hosts/host-profile.ts')})
+  for (const platform of ['unknown', 'linux']) {
+    if (platform === 'linux') await recordProbedFacts(${JSON.stringify(HOST)}, { os: { platform: 'linux' } })
+    for (const [launcher, offer] of [['0', '0'], ['1', '0'], ['1', '1']]) {
+      process.env.WALNUT_SERVICE_LAUNCHER = launcher
+      process.env.WALNUT_HOST_SERVICE_OFFER = offer
+      const want = await conn.serviceModeWant()
+      const now = await conn.serviceModeNow()
+      await conn.checkServiceMode()
+      await new Promise((r) => setTimeout(r, 500))
+      modes.push({ platform, launcher, offer, want, now, connected: conn.connected, instanceId: conn.daemonInstanceId })
+    }
   }
   say('REPORT', { hello, leader, before, started, written, results, exits, after, probe, modes })
 } catch (err) {
@@ -256,12 +263,19 @@ describe.skipIf(!BUN || process.platform !== 'linux')('a new leader drives a hos
   })
 
   it('its one-service decision never asks the old host to switch, with the experiments off or on', () => {
-    const byCase = Object.fromEntries(report.modes.map((m) => [`${m.launcher}${m.offer}`, m]))
-    // Off (and service_launcher alone, the offer off): a host that runs as the daemon is left as it is.
-    expect(byCase['00'].want).toEqual({ want: null })
-    expect(byCase['10'].want).toEqual({ want: null })
-    // On and this host offered: no launcher in the old hello, so the daemon stays, with the reason for Walnut Health.
-    expect(byCase['11'].want).toEqual({ want: 'daemon', why: expect.stringMatching(/does not run under the service launcher/) })
+    const byCase = Object.fromEntries(report.modes.map((m) => [`${m.platform}-${m.launcher}${m.offer}`, m]))
+    expect(Object.keys(byCase).sort()).toEqual(['linux-00', 'linux-10', 'linux-11', 'unknown-00', 'unknown-10', 'unknown-11'])
+    for (const p of ['unknown', 'linux']) {
+      // Off (and service_launcher alone, the offer off): a host that runs as the daemon is left as it is.
+      expect(byCase[`${p}-00`].want).toEqual({ want: null })
+      expect(byCase[`${p}-10`].want).toEqual({ want: null })
+    }
+    // On and this host offered, its system not known yet (the old hello says none, no probe on this
+    // link): the mode is left as it is (bdc64a8c7e), never switched on a guess.
+    expect(byCase['unknown-11'].want).toEqual({ want: null })
+    // On and this host offered, known as Linux: no launcher in the old hello, so the daemon stays, with
+    // the reason for Walnut Health.
+    expect(byCase['linux-11'].want).toEqual({ want: 'daemon', why: expect.stringMatching(/does not run under the service launcher/) })
     for (const m of report.modes) {
       // No switch is due and no service words go with an update (`serve` feeds --serve/--no-serve).
       expect(m.now).toEqual({ due: false })
