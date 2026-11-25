@@ -16,9 +16,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import {
-  git, gitSafe, gitAsync, isOwnRepoAt, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
+  git, gitSafe, gitAsync, gitSafeAsync, isOwnRepoAt, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
 } from './git-sync.js';
-import { pushViaBundle } from './git-bundle-client.js';
+import { deliverCompactedChain } from './git-compaction-deliver.js';
 import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import { log } from '../logging/index.js';
 
@@ -215,7 +215,8 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
   const hasRemote = (gitSafe('remote', opts) ?? '').length > 0;
   let remoteHeadBeforeRewrite: string | null = null;
   if (hasRemote) {
-    if (gitSafe('fetch origin main', opts) === null) {
+    // Async: a network op never blocks the process (the hub may even live in it, as in tests).
+    if (await gitSafeAsync('fetch origin main', { ...opts, timeout: 60_000 }) === null) {
       log.git.warn('compaction deferred: remote unreachable (rewriting without pushing would wedge sync)');
       return { skipped: true, before: 0, after: 0 };
     }
@@ -308,70 +309,24 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
     gitSafe('update-ref -d refs/heads/compaction-wip', opts);
     writeState(repoDir, { phase: 'swapped', backup: backupName, startedAt: new Date().toISOString() });
 
-    // 7. Push the rewritten chain to the hub. force-with-lease pinned to the
-    // pre-rewrite remote head: if the cloud box pushed anything between our
-    // fetch (step 0b) and now, the lease fails instead of destroying it — the
-    // next sync tick merges those commits and a later compaction run retries.
-    // Skipping the push entirely is NOT an option once main is rewritten
-    // (non-fast-forward would wedge every subsequent sync), which is why step
-    // 0b refuses to start when the remote is unreachable.
+    // 7. Deliver the rewritten chain to the hub. Skipping it is NOT an option
+    // once main is rewritten (non-fast-forward would wedge every later sync),
+    // which is why step 0b refuses to start when the remote is unreachable.
+    // How, and why not a plain push: git-compaction-deliver.ts.
     if (hasRemote) {
-      const lease = remoteHeadBeforeRewrite
-        ? `--force-with-lease=refs/heads/main:${remoteHeadBeforeRewrite}`
-        : '--force-with-lease';
-      // 120s: pushing the compacted history is one big pack; the default 30s
-      // LOCAL_TIMEOUT is calibrated for local ops, not a full-history upload.
-      if (gitSafe(`push ${lease} origin main`, { ...opts, timeout: 120_000 }) === null) {
-        // The compacted history is one huge pack (full rewritten chain), and
-        // large sustained pushes are exactly what endpoint-security TLS
-        // filters kill mid-stream (2026-08-22: reproducible "bad record mac"
-        // past ~25MB while the hub itself was healthy). Before rolling back —
-        // which re-runs this doomed push every day and strands a quarantine
-        // dir on the hub per attempt — deliver the same ref update through
-        // the chunked bundle channel, which those filters can't touch.
-        log.git.warn('compaction: push failed — attempting chunked bundle delivery');
-        const remoteUrl = gitSafe('remote get-url origin', opts);
-        const bundled = remoteUrl
-          ? await pushViaBundle({
-              repoDir,
-              branch: 'main',
-              remoteUrl,
-              // Same lease semantics as the push: the hub must still be at
-              // the pre-rewrite head or the CAS fails and we roll back.
-              oldValue: remoteHeadBeforeRewrite ?? '',
-              // No basis: the rewritten chain shares no ancestry with what
-              // the hub has, so the bundle must be self-contained.
-              // A rewrite is the one legitimate non-fast-forward swap.
-              allowNonFastForward: true,
-            })
-          : { ok: false as const, bytes: 0, chunks: 0, error: 'no origin url' };
-        if (!bundled.ok) {
-          // leaseKept says whether the hub still holds the chunks we did land:
-          // if the NEXT run builds the identical bundle (nothing new committed
-          // meanwhile) it resumes from there instead of chunk 1. When new
-          // commits land the bundle differs and the lease is simply ignored,
-          // which is why within-run sweeps — not this — are what makes a
-          // 200-chunk delivery converge.
-          log.git.warn('compaction: bundle delivery also failed — restoring pre-compaction main so sync stays consistent with the hub', {
-            error: bundled.error,
-            chunks: bundled.chunks,
-            chunksSent: bundled.chunksSent,
-            sweeps: bundled.sweeps,
-            resumedFromSeq: bundled.resumedFromSeq,
-            leaseKept: bundled.leaseKept,
-          });
-          git(`update-ref refs/heads/main ${backupName}`, opts);
-          gitSafe('reset --mixed HEAD', opts);
-          removeState(repoDir);
-          return { before: commits.length, after: commits.length, error: `push of compacted history failed (${bundled.error ?? 'lease lost or network'}) — rolled back, will retry next run` };
-        }
-        log.git.info('compaction: rewritten history delivered via bundle channel', {
-          bytes: bundled.bytes, chunks: bundled.chunks,
-          chunksSent: bundled.chunksSent, sweeps: bundled.sweeps, resumedFromSeq: bundled.resumedFromSeq,
-        });
-        // The hub ref moved but our remote-tracking ref doesn't know yet —
-        // sync's next fetch would otherwise see a surprise. Update it now.
-        gitSafe('fetch origin main', opts);
+      const delivered = await deliverCompactedChain({
+        repoDir,
+        keptHashes: selected.map((c) => c.hash),
+        oldMain: backupName,
+        newHead,
+        remoteHead: remoteHeadBeforeRewrite,
+      });
+      if (!delivered.ok) {
+        log.git.warn('compaction: delivery failed, restoring pre-compaction main so sync stays consistent with the hub', { error: delivered.error });
+        git(`update-ref refs/heads/main ${backupName}`, opts);
+        gitSafe('reset --mixed HEAD', opts);
+        removeState(repoDir);
+        return { before: commits.length, after: commits.length, error: `push of compacted history failed (${delivered.error}) — rolled back, will retry next run` };
       }
     }
 

@@ -202,9 +202,13 @@ export function bundleEndpointFromRemote(remoteUrl: string): { base: string; aut
 }
 
 /** Run git (list-args, no shell) in repoDir; resolve stdout or reject. */
-function runGit(repoDir: string, args: string[], timeoutMs: number): Promise<string> {
+function runGit(repoDir: string, args: string[], timeoutMs: number, stdin?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: gitChildEnv() })
+    const child = spawn('git', args, { cwd: repoDir, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true, env: gitChildEnv() })
+    if (stdin !== undefined) {
+      child.stdin?.on('error', () => { /* git exited early: its exit code tells */ })
+      child.stdin?.end(stdin)
+    }
     let out = ''
     let err = ''
     const timer = setTimeout(() => {
@@ -323,6 +327,13 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * @param opts.basis     commits already on the remote (bundle prerequisite),
  *                       normally the same as oldValue. When omitted the bundle
  *                       carries FULL history (works, just bigger).
+ * @param opts.remoteHas revisions whose objects the hub already holds (e.g.
+ *                       `<commit>^{tree}`): the bundle leaves them, and all
+ *                       they reach, out. History compaction needs it: its new
+ *                       chain shares no commit with the hub, so `basis` cuts
+ *                       nothing, yet every tree it points at is already there.
+ *                       The hub's fetch checks connectivity, so a wrong entry
+ *                       fails the push instead of landing a broken ref.
  * @param opts.chunkBytes override the chunk size (tests / tuning only). The
  *                       value is declared to the hub, so resume math agrees.
  * @param opts.allowNonFastForward the ref may move to a commit that does not
@@ -338,6 +349,7 @@ export async function pushViaBundle(opts: {
   remoteUrl: string
   oldValue?: string
   basis?: string
+  remoteHas?: string[]
   chunkBytes?: number
   allowNonFastForward?: boolean
 }): Promise<BundlePushResult> {
@@ -360,7 +372,15 @@ export async function pushViaBundle(opts: {
     //    hub doesn't have, so routine pushes stay small even on a big repo.
     const newValue = await runGit(repoDir, ['rev-parse', opts.branch], 30_000)
     const range = opts.basis ? [`^${opts.basis}`, opts.branch] : [opts.branch]
-    await runGit(repoDir, ['bundle', 'create', bundlePath, ...range], 600_000)
+    // A compaction excludes thousands of trees: those go on stdin (git 2.31+).
+    // Every other push keeps argv, so a host on older git still pushes.
+    const remoteHas = opts.remoteHas ?? []
+    if (remoteHas.length > 0) {
+      const revs = [...range, ...remoteHas.map((r) => `^${r}`)]
+      await runGit(repoDir, ['bundle', 'create', bundlePath, '--stdin'], 600_000, `${revs.join('\n')}\n`)
+    } else {
+      await runGit(repoDir, ['bundle', 'create', bundlePath, ...range], 600_000)
+    }
     const { size } = await fsp.stat(bundlePath)
 
     // 2. Whole-file hash for end-to-end integrity (the transport we're

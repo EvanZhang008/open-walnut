@@ -147,10 +147,14 @@ describe('every outward primitive is called only where a door guards it (source)
 
   it('the data repo is pushed only by the guarded sync and the compaction', () => {
     // Any git command string that pushes to origin, with options between (a force-with-lease).
+    // The compaction's delivery lives in git-compaction-deliver.ts, reached only from
+    // compactGitHistory in the worker that compactionDoorRefusal() gates (test below).
     expect(sites(/['"`]push\b[^'"`]*\borigin\b/), NEW_SITE)
-      .toEqual({ 'integrations/git-sync.ts': 1, 'integrations/git-compaction.ts': 1 })
+      .toEqual({ 'integrations/git-sync.ts': 1, 'integrations/git-compaction-deliver.ts': 1 })
     expect(callSites('pushViaBundle'), NEW_SITE)
-      .toEqual({ 'integrations/git-sync.ts': 1, 'integrations/git-compaction.ts': 1 })
+      .toEqual({ 'integrations/git-sync.ts': 1, 'integrations/git-compaction-deliver.ts': 1 })
+    expect(callSites('deliverCompactedChain'), 'only the compaction delivers a rewritten chain')
+      .toEqual({ 'integrations/git-compaction.ts': 1 })
   })
 
   it('the compaction worker is forked only after its door (it ends in a force push, and the worker holds no permission)', () => {
