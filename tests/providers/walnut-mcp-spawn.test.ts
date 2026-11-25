@@ -527,9 +527,30 @@ describe('a hub mount its record kept names this install at every spawn, and rea
       const { readToolErrors } = await import('../../src/core/usage-watch/store.js')
       flushUsage()
       expect(rang).toEqual([MOUNT_OP])
+      // One row: the turn end's check (mount-watch.ts) counts no drop of a mount that never started.
       expect(readToolErrors({ since: 0 })).toEqual([expect.objectContaining({ sid: session.sessionId, taskId: 't-main-gone', op: MOUNT_OP, code: 'mount_failed', client: 'mcp', host: 'local' })])
       await session.gracefulStop(true).catch(() => {})
     } finally { off() }
+  }, 60_000)
+
+  it('a mount still starting at every init and gone at the turn end never started: counted as its start, not as a drop', async () => {
+    const { addObserveTap } = await import('../../src/core/observability/metrics.js')
+    const rang: string[] = []
+    const off = addObserveTap((name, _v, labels) => { if (name === 'usage.op.mount_failed') rang.push(labels?.op ?? '') })
+    process.env.MOCK_CLAUDE_MCP_INIT_PENDING = '1'
+    try {
+      const session = await twoTurns('t-main-slow', '11111111-2222-4333-8444-bbbbbbbbbbbb')
+      const { flushUsage, MOUNT_OP } = await import('../../src/core/usage-watch/record.js')
+      const { readToolErrors } = await import('../../src/core/usage-watch/store.js')
+      await waitUntil(() => rang.length > 0, 8000, 'the mount alarm counter')
+      flushUsage()
+      expect(rang).toEqual([MOUNT_OP])
+      expect(readToolErrors({ since: 0 }).map((r) => `${r.op}:${r.code}`)).toEqual([`${MOUNT_OP}:mount_failed`])
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      off()
+      delete process.env.MOCK_CLAUDE_MCP_INIT_PENDING
+    }
   }, 60_000)
 
   it('a running process whose mount did not start is given this install\'s before its next turn, with no restart', async () => {

@@ -685,6 +685,9 @@ export { shellQuote } from './session-io.js'
 // Exported for testing
 export { outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr }
 
+/** A Walnut mount verdict that started it, or is still starting (recordMountVerdict counts those as working). */
+const MOUNT_STARTED: ReadonlySet<string> = new Set(['connected', 'pending'])
+
 /** A Walnut mount verdict (init, reconcileMcpMountStatus) that leaves the process without the tools. */
 const MOUNT_NOT_HAD: ReadonlySet<string> = new Set(['blocked', 'failed', 'needs-auth'])
 
@@ -7768,11 +7771,7 @@ export class ClaudeCodeSession {
           // Real use counts each process's mount once, on the first init that settled it: the CLI
           // announces itself at every turn's start, and a mount still starting is told by a later one.
           // Never an init read again after a restart, nor a process this server did not start.
-          if (status.walnut && status.walnut !== 'pending' && !this._mountCountedThisProcess && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true) {
-            this._mountCountedThisProcess = true
-            const verdict = { sid: this.claudeSessionId ?? undefined, taskId: this.taskId || undefined, host: this._host && this._host !== '__local__' ? this._host : 'local', status: status.walnut, ms: Date.now() - this._spawnedAtMs }
-            void import('../core/usage-watch/record.js').then(({ recordMountVerdict }) => recordMountVerdict(verdict)).catch(() => {})
-          }
+          if (status.walnut && status.walnut !== 'pending' && this._isReplayedByOffset() !== true) this.countMountStart(status.walnut)
           if (this.claudeSessionId) {
             sessionPort().records.loadTracker().then(({ updateSessionRecord }) =>
               updateSessionRecord(this.claudeSessionId!, { mcpMountStatus: status }).catch(() => {}),
@@ -10737,6 +10736,20 @@ export class ClaudeCodeSession {
     void this.checkWalnutMountHere()
   }
 
+  /**
+   * This process's Walnut mount start, once, in real use (record.ts recordMountVerdict): only a process
+   * this server started. One that did not start is counted here, so the turn-end check counts no drop
+   * of it (it was never up) until the mount is seen connected (mount-watch.ts MountSeen.told).
+   */
+  private countMountStart(status: string): boolean {
+    if (this._mountCountedThisProcess || this._spawnedAtMs <= 0) return false
+    this._mountCountedThisProcess = true
+    const verdict = { sid: this.claudeSessionId ?? undefined, taskId: this.taskId || undefined, host: this._host && this._host !== '__local__' ? this._host : 'local', status, ms: Date.now() - this._spawnedAtMs }
+    if (!MOUNT_STARTED.has(status) && this.pid !== null) this._walnutMountSeen = { pid: this.pid, told: true }
+    void import('../core/usage-watch/record.js').then(({ recordMountVerdict }) => recordMountVerdict(verdict)).catch(() => {})
+    return true
+  }
+
   /** What this runner last saw of its process's Walnut mount (usage-watch/mount-watch.ts). */
   private _walnutMountSeen: import('../core/usage-watch/mount-watch.js').MountSeen | undefined
   /** When this runner last asked a process for its mount, and which process (the turn-end gap). */
@@ -10777,7 +10790,9 @@ export class ClaudeCodeSession {
       const fresh = this._walnutMountSeen === undefined
       const { seen, gone } = judgeWalnutMount(this._walnutMountSeen, pid, reply)
       this._walnutMountSeen = seen
-      if (gone) recordToolsGone({ sid, taskId: this.taskId, host: this._host, why: gone, fresh })
+      // A mount every init so far called still starting, gone now, never started: counted as its start.
+      if (gone && !this.countMountStart(gone)) recordToolsGone({ sid, taskId: this.taskId, host: this._host, why: gone, fresh })
+      else if (!gone && walnutMountStatus(reply)?.status === 'connected') this.countMountStart('connected')
     } catch { /* a count only */ } finally {
       this._mountAsking = false
     }

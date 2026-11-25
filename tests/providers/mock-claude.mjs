@@ -200,7 +200,8 @@ const failedMcpServers = new Set();
 const mcpConfigs = new Map();
 const mcpConfigOf = (srv) => { const { type: _type, ...rest } = srv ?? {}; return JSON.stringify(rest); };
 const fileGone = (p) => typeof p === 'string' && p.startsWith('/') && !p.startsWith('/$bunfs/') && !fs.existsSync(p);
-const mcpServerStatuses = () => liveMcpServers.map((name) => ({ name, status: failedMcpServers.has(name) ? 'failed' : 'connected' }));
+// MOCK_CLAUDE_MCP_INIT_PENDING=1: every init says each server is still starting, as one slower than init does.
+const mcpServerStatuses = () => liveMcpServers.map((name) => ({ name, status: process.env.MOCK_CLAUDE_MCP_INIT_PENDING === '1' ? 'pending' : failedMcpServers.has(name) ? 'failed' : 'connected' }));
 let effortFlag = null;
 let dangerouslySkipPermissions = false;
 
