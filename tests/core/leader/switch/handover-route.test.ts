@@ -52,6 +52,10 @@ vi.mock('../../../../src/core/leader/switch/settings.js', async (orig) => ({ ...
 vi.mock('../../../../src/core/leader/switch/final-stop.js', async (orig) => ({ ...(await orig<object>()), beginRefusal: () => null }))
 const began = vi.hoisted(() => [] as unknown[])
 vi.mock('../../../../src/core/leader/switch/leader-relay-door.js', async (orig) => ({ ...(await orig<object>()), recordBegin: async (o: unknown) => { began.push(o) } }))
+// The standby runner's batches the switch stop's last look takes: each answers the next of `looks` (a caught-up one by default).
+const caughtUp = { ok: true, manifest: {}, commit: { batch: 9, unchanged: false, written: 1, deleted: 0 }, stats: { totalMs: 1_200, sentBytes: 4096 } }
+let looks: unknown[] = []
+vi.mock('../../../../src/core/standby/runner.js', () => ({ standbyRunner: () => ({ runOnce: async () => { calls.push('look'); return looks.shift() ?? caughtUp } }) }))
 vi.mock('../../../../src/core/leader/switch/handover-host-steps.js', () => ({
   beforeHandoverRecord: async () => { calls.push('host steps before'); return { ok: true } },
   afterHandoverRecord: async () => { calls.push('retell'); return { ok: false, why: 'retellNetMembers: not told: box-net-only' } },
@@ -63,6 +67,7 @@ let server: http.Server | null = null
 let base = ''
 beforeEach(async () => {
   calls.length = 0
+  looks = []
   state = 'leading'
   permit = { runtime, machine: 'machine-a', trial: false }
   ;(await import('../../../../src/core/leader/switch/final-stop.js')).forgetHandedOver()
@@ -127,9 +132,39 @@ describe('the switch stop when the copy link cannot be held', () => {
     const r = await fetch(`${base}/api/leader/switch/final-stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ switchId: '20261124T000000-cccccc' }) })
     expect(r.status).toBe(202)
     await until('the stop to be given up', () => handedOverSwitch()?.phase === 'waiting', 5_000)
-    expect(calls).toEqual(['hold'])
+    expect(calls).toEqual(['look', 'hold'])
     expect(calls).not.toContain('switch stop requested')
     expect(unheld).toBe(1)
+  })
+})
+
+describe('the switch stop\'s last look', () => {
+  // The commit window is 120 s here: the look's budget is 30 s.
+  it('a write after the catch-up the copy link cannot carry in time: the stop is refused, nothing stopped, the handover can be taken back', async () => {
+    const { noteHandedOver, handedOverSwitch, beginTakeBack } = await import('../../../../src/core/leader/switch/final-stop.js')
+    state = 'handed-over'
+    noteHandedOver({ switchId: '20261124T000000-ffffff', to: 'machine-b', peer: peer as never, commitDeadline: Date.now() + 120_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    // 1.2 GB written after the catch-up, at 2.5 MB/s: 480 s, then still 450 s.
+    const slow = (ms: number) => ({ ...caughtUp, stats: { totalMs: ms, sentBytes: 1_200_000_000 } })
+    looks = [slow(480_000), slow(480_000)]
+    const r = await fetch(`${base}/api/leader/switch/final-stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ switchId: '20261124T000000-ffffff' }) })
+    expect(r.status).toBe(409)
+    expect(((await r.json()) as { why: string }).why).toMatch(/^the standby fell behind after its catch-up, so the final batch would not fit in the commit window \(nothing stopped; the handover is taken back\): .*falls further behind/)
+    expect(calls).toEqual(['look', 'look'])
+    expect(calls).not.toContain('switch stop requested')
+    // Not in a stop: the cancel the source job sends next takes the handover back.
+    expect(handedOverSwitch()?.phase).toBe('waiting')
+    expect(beginTakeBack().ok).toBe(true)
+  })
+
+  it('caught up (a batch within the budget): the stop goes ahead', async () => {
+    const { noteHandedOver } = await import('../../../../src/core/leader/switch/final-stop.js')
+    state = 'handed-over'
+    noteHandedOver({ switchId: '20261124T000000-gggggg', to: 'machine-b', peer: peer as never, commitDeadline: Date.now() + 120_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    const r = await fetch(`${base}/api/leader/switch/final-stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ switchId: '20261124T000000-gggggg' }) })
+    expect(r.status).toBe(202)
+    await until('the stop', () => calls.includes('switch stop requested'), 5_000)
+    expect(calls[0]).toBe('look')
   })
 })
 

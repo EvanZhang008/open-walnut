@@ -230,7 +230,8 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           const running = side.runningServer() ?? (await stopping() ? { pid: s.stopServer!.pid, port: null } : null)
           if (running && !readFinalStopResult(s.sourceHome, s.id)) {
             if (s.stopServer?.pid !== running.pid) { s.stopServer = { pid: running.pid, start: await processStartMark(running.pid) }; writeDurableJson(switchStateFile(home), s) }
-            const r = await side.api('POST', '/api/leader/switch/final-stop', { switchId: s.id, ...(Object.keys(stopTest).length ? { test: stopTest } : {}) }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
+            // The server's last look first (up to a quarter of the commit window), then its answer.
+            const r = await side.api('POST', '/api/leader/switch/final-stop', { switchId: s.id, ...(Object.keys(stopTest).length ? { test: stopTest } : {}) }, settings.commitWindowMs / 4 + 60_000).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
             const j = r.json as { ok?: boolean; why?: string } | null
             // A resume while the server is in its stop already (it answers so, or its HTTP is closed): wait for it.
             const inStop = j?.why === 'this server is in its switch stop already' || (r.status === 0 && alive(running.pid))

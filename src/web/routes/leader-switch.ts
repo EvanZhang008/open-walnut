@@ -297,6 +297,21 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
     res.status(409).json({ ok: false, why: 'this server cannot stop itself for a switch (it was not started by `walnut web`, or it is stopping already)' })
     return
   }
+  // The last look (catch-up.ts lastLook): what came since the catch-up must stand in one batch within its budget,
+  // else the final batch would not fit the commit window. Refused here, nothing stopped: the source job takes the
+  // handover back and this server leads again at once.
+  const [{ readHomeSwitchConfig }, { lastLook }, { standbyRunner }] = await Promise.all([
+    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/catch-up.js'), import('../../core/standby/runner.js'),
+  ])
+  const window = readHomeSwitchConfig(WALNUT_HOME).settings?.commitWindowMs ?? Math.max(0, begun.sw.commitDeadline - Date.now())
+  const runner = standbyRunner()
+  const look = await lastLook({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: window })
+  log.web[look.ok ? 'info' : 'warn'](`leader switch: the last look before the stop ${look.ok ? 'found the standby caught up' : 'found the standby behind; the stop is refused'}`, { switchId, ms: look.ms, budgetMs: look.budgetMs, batches: look.batches, ...(look.ok ? {} : { why: look.why }) })
+  if (!look.ok) {
+    abandonSwitchStop(begun.sw)
+    res.status(409).json({ ok: false, why: `the standby fell behind after its catch-up, so the final batch would not fit in the commit window (nothing stopped; the handover is taken back): ${look.why}` })
+    return
+  }
   const knobs = testKnobs(req.body?.test)
   const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.pauseAfterFirstBatchMs ? { pauseAfterFirstBatchMs: knobs.pauseAfterFirstBatchMs } : {}) } : undefined
   const abort = new AbortController()

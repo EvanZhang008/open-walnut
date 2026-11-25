@@ -128,3 +128,16 @@ export async function whenStandbyIdle<T>(op: () => Promise<T>, o: { untilMs: num
     }
   }
 }
+
+/**
+ * The last look, right before the switch stop (routes/leader-switch.ts /switch/final-stop): the same rule as the
+ * catch-up, within one budget. The catch-up ran before the handover; between it and the stop the leader may still
+ * write (a large recording, an import, a session's files) while the new leader's job gets ready (up to 30 s).
+ * A batch of what came since that does not stand within the budget means the final batch would not fit either:
+ * the stop is refused while the doors were never closed and nothing stopped, and the source job takes the
+ * handover back (the old leader leads again at once). Without it, a final batch past the window rolls back only
+ * at the commit deadline: minutes with no leader (the 2026-11-24 rehearsal: 6 min 9 s).
+ */
+export function lastLook(o: { runOnce: () => Promise<BatchOutcome | null>; commitWindowMs: number; now?: () => number; voidPauseMs?: number }): Promise<CatchUpOutcome> {
+  return catchUpStandby({ ...o, maxMs: catchUpBudgetMs(o.commitWindowMs) })
+}
