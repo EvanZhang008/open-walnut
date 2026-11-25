@@ -15,6 +15,11 @@ import { shownAcpMessages } from '../../src/providers/acp-journal-projector.js'
 const REPORT = ['Done, the fix is live.', '', 'FOR_USER_STATE: working', 'FOR_USER_NOW: tests run'].join('\n')
 
 describe('hiddenLinesOf', () => {
+  // The cases the phone's port (ios-native/Walnut/Timeline/HiddenLines.swift) runs too.
+  const SHARED = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../fixtures/hidden-lines/cases.json'), 'utf8')) as { cases: { name: string; raw: string; shown: string; hidden: string }[] }
+  for (const c of SHARED.cases) {
+    it(`shared case: ${c.name}`, () => expect(hiddenLinesOf(c.raw, c.shown)).toBe(c.hidden))
+  }
   it('is empty when nothing is hidden', () => {
     expect(hiddenLinesOf('a\nb', 'a\nb')).toBe('')
     expect(hiddenLinesOf('', '')).toBe('')

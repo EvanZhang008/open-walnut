@@ -588,6 +588,9 @@ struct TimelineInput {
     /// The chat of Main or a lead: every reply shows the tasks it is about under it
     /// (`MessageAboutTag`, the web's MessageAboutContext). Off everywhere else.
     var showMessageAbout: Bool = false
+    /// The server's `ui.show_hidden_lines`: a reply shows what Walnut hid from it as one
+    /// closed "Hidden by Walnut" row under it (a developer switch). Defaulted off.
+    var showHiddenLines: Bool = false
     /// Keys of the code blocks wrapped in this timeline (`TimelineCodeBlock.key`).
     /// A changed key moves its block's height, so the memo drops the messages
     /// that hold one.

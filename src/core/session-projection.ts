@@ -489,6 +489,10 @@ export interface ProjectedTranscriptMessage {
    *  excerpt (≤2000 chars) for the expanded card; `text` stays the collapsed
    *  ≤160 line. */
   thinkingText?: string
+  /** Assistant text rows only (additive, `rich`/`full` reads only, 2026-11-25): the lines Walnut
+   *  left out of `text` (its status lines: history-parse `hidden`), which a developer's phone shows
+   *  folded under the reply when `ui.show_hidden_lines` is on. */
+  hidden?: string
   /** kind:'tool' | kind:'thinking' only (additive, `rich`/`full` reads only) —
    *  opaque token for the on-demand FULL text of this row
    *  (`GET /api/v1/activity/detail?ref=…`, see core/activity-detail.ts).
@@ -977,6 +981,8 @@ async function buildSessionTranscriptNow(
         ...(m.thread ? { thread: m.thread } : {}),
         // Claude Code's own error reply, drawn as its error line on the phone (history twin: session-history cliError).
         ...(m.cliError ? { cliError: true as const } : {}),
+        // What Walnut hid from the reply, for a developer's fold (rich reads only: the slim tail rides the bridge).
+        ...(m.role === 'assistant' && wantRich && m.hidden ? { hidden: m.hidden } : {}),
       })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row

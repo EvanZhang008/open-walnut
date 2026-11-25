@@ -7,6 +7,11 @@ import Observation
 /// the context blocks it put first; no message hints since 2026-11-01) on every message. Off, the
 /// chat hides them and each bubble's long-press item shows them for that message
 /// (`TimelineTurnFold.Additions`), as the web chat does.
+/// - `ui.show_hidden_lines` (`showHiddenLines`): whether a reply shows, as one closed "Hidden by
+///   Walnut" row under it, the lines Walnut hid from it (a developer switch, Settings > Advanced).
+///   Written from here too (`setShowHiddenLines`), as the web's switch writes it. A read that does
+///   not name it keeps what the phone had (`offersHiddenLines` says whether a server ever named it:
+///   Settings shows the switch only then, so an older server never takes a write it cannot keep).
 /// - `experimental` (`isOn`): the experiments switched on or off by choice in
 ///   Settings (src/core/experimental.ts). The phone shows what an experiment
 ///   changes only when it is on, as the web does; an id the server does not name
@@ -31,6 +36,10 @@ final class ServerClientSettings {
     static let maxAge: TimeInterval = 300
 
     private(set) var showAll = false
+    /// `ui.show_hidden_lines` as the server resolved it.
+    private(set) var showHiddenLines = false
+    /// The server named `ui.show_hidden_lines` (a server that has the switch).
+    private(set) var offersHiddenLines = false
     /// The experiments chosen on or off on the server (`experimental`).
     private(set) var experimental: [String: Bool] = [:]
     /// When the server last answered, for this server. nil = never in this process.
@@ -40,16 +49,23 @@ final class ServerClientSettings {
     /// The app's own follow the demo scope (`AppPrefs`).
     private var defaults: UserDefaults { AppPrefs.resolve(storedDefaults) }
     @ObservationIgnored private let fetch: () async throws -> ServerConfigInfo.ClientSettings
+    @ObservationIgnored private let writeHiddenLines: (Bool) async throws -> Void
     @ObservationIgnored private let currentServer: () -> String
     @ObservationIgnored private let now: () -> Date
     /// The server `showAll` belongs to.
     @ObservationIgnored private var server: String?
     @ObservationIgnored private var inflight: Task<Void, Never>?
+    /// The newest switch write: an older write's answer, and a read made while one is out, never
+    /// put back a value a newer tap set.
+    @ObservationIgnored private var writeGeneration = 0
+    @ObservationIgnored private var writesOut = 0
 
     private struct Stored: Codable {
         let server: String
         let showAll: Bool
         var experimental: [String: Bool]? = nil
+        var showHiddenLines: Bool? = nil
+        var offersHiddenLines: Bool? = nil
     }
 
     /// Whether the experiment `id` is on (an id from src/core/experimental.ts).
@@ -59,10 +75,12 @@ final class ServerClientSettings {
         defaults: UserDefaults = .standard,
         fetch: @escaping () async throws -> ServerConfigInfo.ClientSettings = { try await WalnutAPI().serverConfig().clientSettings },
         currentServer: @escaping () -> String = { AppConfig.serverURL?.absoluteString ?? "" },
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        writeHiddenLines: @escaping (Bool) async throws -> Void = { try await WalnutAPI().setShowHiddenLines($0) }
     ) {
         self.storedDefaults = defaults
         self.fetch = fetch
+        self.writeHiddenLines = writeHiddenLines
         self.currentServer = currentServer
         self.now = now
         adoptStored()
@@ -95,6 +113,28 @@ final class ServerClientSettings {
         inflight = nil
     }
 
+    /// Flip `ui.show_hidden_lines`: every chat draws it at once, then the server keeps it. A
+    /// refused write puts the value back and says why (the caller shows it).
+    func setShowHiddenLines(_ on: Bool) async throws {
+        let before = showHiddenLines
+        writeGeneration += 1
+        let generation = writeGeneration
+        writesOut += 1
+        defer { writesOut -= 1 }
+        showHiddenLines = on
+        store()
+        do {
+            try await writeHiddenLines(on)
+        } catch {
+            if generation == writeGeneration {
+                showHiddenLines = before
+                store()
+            }
+            AppLog.warn("chat", "show hidden lines write failed", ["error": String(describing: error)])
+            throw error
+        }
+    }
+
     /// A config read made elsewhere (Settings) answers this too.
     func adopt(_ info: ServerConfigInfo) {
         adopt(info.clientSettings, server: currentServer())
@@ -104,9 +144,20 @@ final class ServerClientSettings {
         self.server = server
         if showAll != value.showWalnutAdditions { showAll = value.showWalnutAdditions }
         if experimental != value.experimental { experimental = value.experimental }
+        // A read that crossed a write out still carries the old value: the write's own answer decides.
+        if let shown = value.showHiddenLines, writesOut == 0 {
+            if showHiddenLines != shown { showHiddenLines = shown }
+            if !offersHiddenLines { offersHiddenLines = true }
+        }
         lastRead = now()
-        if let data = try? JSONEncoder().encode(Stored(server: server, showAll: value.showWalnutAdditions,
-                                                       experimental: value.experimental)) {
+        store()
+    }
+
+    private func store() {
+        guard let server else { return }
+        if let data = try? JSONEncoder().encode(Stored(server: server, showAll: showAll,
+                                                       experimental: experimental, showHiddenLines: showHiddenLines,
+                                                       offersHiddenLines: offersHiddenLines)) {
             defaults.set(data, forKey: Self.defaultsKey)
         }
     }
@@ -120,9 +171,13 @@ final class ServerClientSettings {
            stored.server == current {
             showAll = stored.showAll
             experimental = stored.experimental ?? [:]
+            showHiddenLines = stored.showHiddenLines ?? false
+            offersHiddenLines = stored.offersHiddenLines ?? (stored.showHiddenLines != nil)
         } else {
             showAll = false
             experimental = [:]
+            showHiddenLines = false
+            offersHiddenLines = false
         }
     }
 }

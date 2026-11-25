@@ -151,6 +151,10 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// older server, which is why a thinking row must still render from `text`
     /// alone: absent means "no more to show", never "broken row".
     let thinkingText: String?
+    /// An assistant reply (kind == nil) only — the lines Walnut left out of `text` (its status
+    /// lines; additive 2026-11-25, rich reads). Drawn as one closed "Hidden by Walnut" row under
+    /// the reply only while the server's `ui.show_hidden_lines` is on. nil = nothing was hidden.
+    var hidden: String? = nil
     /// kind == .tool only — compact, redacted rendering of the tool INPUT
     /// (additive 2026-09). `detail` is the one-line summary on the capsule;
     /// this is what the expanded card's Input section shows.
@@ -289,7 +293,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
         case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
-        case about, aboutTagged, walnutMessageId, opensTurn, thread
+        case about, aboutTagged, walnutMessageId, opensTurn, thread, hidden
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -1363,6 +1367,9 @@ struct SessionTranscript: Codable {
         /// Any row: the CLI began a turn here on a hidden line (additive 2026-11-19). See
         /// `ChatMessage.opensTurn`.
         var opensTurn: Bool? = nil
+        /// Rich reads, assistant text rows: the lines Walnut left out of the reply
+        /// (additive 2026-11-25). See `ChatMessage.hidden`.
+        var hidden: String? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
@@ -1371,7 +1378,8 @@ struct SessionTranscript: Codable {
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
              sentTo: [SentTarget]? = nil, detailRef: String? = nil,
              about: [String]? = nil, aboutTagged: Bool? = nil, cliError: Bool? = nil,
-             walnutMessageId: String? = nil, opensTurn: Bool? = nil, thread: ReplyThread? = nil) {
+             walnutMessageId: String? = nil, opensTurn: Bool? = nil, thread: ReplyThread? = nil,
+             hidden: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -1395,6 +1403,7 @@ struct SessionTranscript: Codable {
             self.walnutMessageId = walnutMessageId
             self.opensTurn = opensTurn
             self.thread = thread
+            self.hidden = hidden
         }
     }
 

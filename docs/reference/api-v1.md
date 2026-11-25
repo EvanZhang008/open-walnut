@@ -2745,6 +2745,12 @@ directory on that host.
   `textWithoutContext` (the text without those blocks, its notes in front kept) when
   blocks came off. A client hides them unless `GET /api/v1/config` says
   `config.ui.show_walnut_additions: true` or the person asks for that one message.
+  `hidden` (additive, 2026-11-25, `rich` reads only) rides an assistant text row: the lines
+  Walnut left out of its `text` (its status lines). A client draws them as one closed
+  "Hidden by Walnut" row under the reply only while `GET /api/v1/config` says
+  `config.ui.show_hidden_lines: true` (resolved on the primary: unset is on where the server
+  runs from its source checkout, off elsewhere; a replica leaves the key out while it is unset,
+  and a client keeps what it last read); it is set with `PUT /api/v1/config/ui`.
   `injectedAfter` (additive, 2026-10-30) rides any row the CLI put lines in after
   (a loaded skill's text, a hook's added context, a continuation summary):
   `[ { kind: "skill" | "hook" | "context", label, text } ]`, drawn as one closed row each
@@ -4530,8 +4536,13 @@ rejected, 4096-char cap.
   `agent` model fields, `hosts` as `{ label, enabled }` only, `session`
   timeout/modes, `experimental` as `{ <flag id>: boolean }`, additive 2026-11-20). Credentials, API keys, host connection details, and any
   future secret-bearing field are structurally absent, not masked. Works on
-  both boxes (`cloud: true` on a REPLICA). Read-only by design — config
-  WRITE is desktop-only (Class D).
+  both boxes (`cloud: true` on a REPLICA). Config WRITE is desktop-only (Class D),
+  except the phone's own ui switches below.
+- `PUT /api/v1/config/ui` `{ "show_hidden_lines": boolean }` (additive, 2026-11-25) →
+  `200 { "ok": true, "ui" }`: merges those switches into the primary's config (no other key
+  is accepted: `400 invalid_body`). A REPLICA carries it to the primary while it answers and
+  otherwise answers `503 needs_leader`. A client offers the switch only when
+  `GET /api/v1/config` names `config.ui.show_hidden_lines`.
 - `GET /api/v1/usage/overview?start=&end=&source=&model=&agent=&limit=` →
   every usage aggregate under one cross-filter. **REPLICA: `501
   not_supported_cloud`** (the usage DB lives on the primary).
