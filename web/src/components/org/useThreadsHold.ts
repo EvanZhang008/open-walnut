@@ -54,7 +54,8 @@ export function focusReads(el: Element | null): boolean {
 /**
  * The card he reads while he is at the list: the one holding his focus (focusReads), else the one
  * under the pointer, else (the pointer between cards: a group's head, a line) the first card below
- * it. Null when he is at neither.
+ * it, else (below every card) the list itself. Null only when he is at neither: the anchor reads
+ * that as his leaving the list (useScrollAnchor's room at the top goes, and the top comes back).
  */
 export function readCard(root: HTMLElement | null, pointer: { x: number; y: number } | null, doc: Pick<Document, 'activeElement' | 'body' | 'elementFromPoint'> = document): Element | null {
   if (!root) return null;
@@ -65,7 +66,7 @@ export function readCard(root: HTMLElement | null, pointer: { x: number; y: numb
   const card = hit && root.contains(hit) ? hit.closest(THREAD_CARD_ROWS) : null;
   if (card) return card;
   for (const el of root.querySelectorAll(THREAD_CARD_ROWS)) if (el.getBoundingClientRect().bottom > pointer.y) return el;
-  return null;
+  return root;
 }
 
 /** What the list's root spreads: the order's hold and where he is reading. */
@@ -105,6 +106,11 @@ export function useThreadsHold<G extends string>(rootRef: RefObject<HTMLElement 
   const over = useRef<Element | null>(null);
   const repick = () => boxRef.current?.dispatchEvent(new Event(SCROLL_REPICK_EVENT));
   useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current));
+  // A focus that dropped to the page (its card left: no blur is sent) holds the order no longer.
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (rootRef.current && (!active || active === document.body)) hold.onBlur({ currentTarget: rootRef.current, relatedTarget: null });
+  });
   const handlers: ThreadsHoldHandlers = {
     onPointerEnter: (e) => { pointer.current = { x: e.clientX, y: e.clientY }; hold.onPointerEnter(); repick(); },
     onPointerMove: (e) => {

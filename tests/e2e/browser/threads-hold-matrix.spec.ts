@@ -17,8 +17,11 @@
  * one at the top of the view) stays where it was on screen to under 1 px in EVERY frame of the
  * change (sampled after each frame's paint, so a move put back a frame later still fails), and the
  * box he types in keeps the focus and the caret. Away at the very top nothing is held (new cards
- * show at the top, as before): those cells are recorded, not judged. A cell where the content above
- * got shorter than the room the box has to scroll up is LIMIT (no scroll can hold it).
+ * show at the top, as before): those cells are recorded, not judged. What stands above got shorter
+ * than the box can scroll up (a card above leaving near the top): the box keeps room at its top while
+ * he is at the list, so those cells are judged too. A change with a `leave` check judges his leaving
+ * as well: begun at the very top, the list goes back to the top and what arrived shows; elsewhere
+ * nothing on screen moves.
  *
  * A new kind of change above a card is one more entry of CHANGES, and so a new column of cells.
  * The table is written to $WALNUT_TASK_DIR/hold-matrix-<surface>-<engine>.json and the log.
@@ -37,6 +40,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
+import { pinPageFlags } from './page-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -53,9 +57,11 @@ const ids = { task: '', sid: '', lead: '', leadSid: '' }
  * The ones the server itself reads for what this spec writes (a task's threads, his Acknowledge);
  * the rest only choose what the page draws, and the page reads them pinned (pinHisFlags), so they
  * are never set on the server: putting them back at the end changed the view under another Threads
- * spec still running (the groups left thread-groups-folds' rail).
+ * spec still running (the groups left thread-groups-folds' rail). Not ack_means_known: on the server
+ * for this whole run, it made thread-groups-folds' Closed card land in Acknowledged; his Acknowledge
+ * here (the cleanups) leaves no line either way.
  */
-const SERVER_FLAGS = ['task_threads', 'letters_as_threads', 'reply_thread_line', 'ack_means_known', 'org_leaders']
+const SERVER_FLAGS = ['task_threads', 'letters_as_threads', 'reply_thread_line', 'org_leaders']
 let flagsWere: Record<string, boolean> = {}
 let n = 0
 
@@ -74,7 +80,12 @@ const inRun = (pos: Pos, presence: Presence) => WHOLE || (pos === 'top' ? presen
 
 interface Node { task: string; sid: string }
 interface Ctx { page: Page; request: APIRequestContext; node: Node; target: string | null; targetGroup: string | null; box: string }
-interface Run { done: () => Promise<boolean>; cleanup?: () => Promise<void> }
+interface Run {
+  done: () => Promise<boolean>
+  cleanup?: () => Promise<void>
+  /** After the change he leaves the list (the pointer goes, the box is left): a failure says what is wrong. */
+  leave?: (at: { pos: Pos; y0: number }) => Promise<string | null>
+}
 interface Change {
   name: string
   /** Which surface draws it: the plain list has no groups, folds or lines. */
@@ -87,7 +98,7 @@ interface Change {
   scrolledOnly?: boolean
   run: (c: Ctx) => Promise<Run>
 }
-interface Cell { surface: string; pos: Pos; presence: Presence; change: string; verdict: 'PASS' | 'FAIL' | 'LIMIT' | 'INFO' | 'NA'; maxDev: number; final: number; frames: number; focus?: boolean; caret?: boolean; note?: string; scroll?: string; reading?: string }
+interface Cell { surface: string; pos: Pos; presence: Presence; change: string; verdict: 'PASS' | 'FAIL' | 'INFO' | 'NA'; maxDev: number; final: number; frames: number; focus?: boolean; caret?: boolean; note?: string; scroll?: string; reading?: string }
 
 async function call<T>(request: APIRequestContext, method: 'post' | 'put' | 'patch', url: string, data: unknown, sid?: string): Promise<T> {
   const res = await request[method](url, { data, ...(sid ? { headers: { 'x-walnut-caller-sid': sid } } : {}) })
@@ -112,10 +123,35 @@ const sel = (box: string, id: string) => `${box} [data-testid="org-thread"][data
 const present = (c: Ctx, id: string) => async () => (await c.page.locator(sel(c.box, id)).count()) === 1
 const gone = (c: Ctx, id: string) => async () => (await c.page.locator(sel(c.box, id)).count()) === 0
 
+/** Where a card stands in the box: in view or not, and the box's scroll. */
+const placeIn = (c: Ctx, id: string) => c.page.evaluate(({ box, s }) => {
+  const b = document.querySelector<HTMLElement>(box)!
+  const el = document.querySelector(s)
+  const r = el?.getBoundingClientRect()
+  const br = b.getBoundingClientRect()
+  return { scrollTop: b.scrollTop, inView: !!r && r.bottom > br.top + 1 && r.top < br.bottom - 1, top: r?.top ?? NaN }
+}, { box: c.box, s: sel(c.box, id) })
+
 const CHANGES: Change[] = [
   {
     name: 'new card in a group above', on: ['pane', 'rail'],
     run: async (c) => { const id = await nodeThread(c.request, c.node, 'needs'); return { done: present(c, id), cleanup: () => ack(c, id) } },
+  },
+  {
+    // The reviewer's case: held out of view above while he read at the very top, it stayed hidden once he left.
+    name: 'a new card above, then he leaves', on: ['pane', 'rail'],
+    run: async (c) => {
+      const id = await nodeThread(c.request, c.node, 'needs')
+      return {
+        done: present(c, id),
+        cleanup: () => ack(c, id),
+        leave: async ({ pos }) => {
+          const at = await placeIn(c, id)
+          if (pos === 'top') return at.scrollTop < 1 && at.inView ? null : `back at the top with the new card in view (scrollTop ${at.scrollTop}, in view ${at.inView})`
+          return null
+        },
+      }
+    },
   },
   {
     name: 'new card in his group', on: ['pane', 'rail'],
@@ -357,11 +393,20 @@ async function runCell(page: Page, request: APIRequestContext, surface: 'pane' |
   cell.frames = ys.length
   if (before && after) { cell.focus = after.focus; cell.caret = after.caret === before.caret }
   const held = Math.abs(worst) < 1 && (!after || (after.focus && cell.caret))
-  // Content above got shorter than the room there was to scroll up: no scroll can hold it.
-  const limit = !held && worst < 0 && startTop < Math.abs(worst) + 1
-  cell.verdict = presence === 'away' && pos === 'top' ? 'INFO' : held ? 'PASS' : limit ? 'LIMIT' : 'FAIL'
-  if (limit) cell.note = `scrollTop was ${startTop}`
+  cell.verdict = presence === 'away' && pos === 'top' ? 'INFO' : held ? 'PASS' : 'FAIL'
   cell.scroll = `${startTop}->${endTop}`
+  if (run.leave && presence !== 'away') {
+    // He leaves: the pointer goes, the box he typed in is left.
+    const y1 = (await card.boundingBox())?.y ?? NaN
+    await page.mouse.move(5, 5)
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
+    await page.waitForTimeout(500)
+    const wrong = await run.leave({ pos, y0: y1 })
+    // Begun elsewhere, his leaving moves nothing on screen.
+    const moved = pos === 'top' ? null : Math.abs(((await card.boundingBox())?.y ?? NaN) - y1)
+    const fail = wrong ?? (moved !== null && !(moved < 1) ? `the card moved ${Math.round(moved)}px when he left` : null)
+    if (fail) { cell.verdict = 'FAIL'; cell.note = fail }
+  }
   cell.reading = `${r.id}${r.above ? ` under ${r.above} (${r.aboveGroup})` : ''}`
   await page.mouse.move(5, 5)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.())
@@ -448,20 +493,8 @@ async function keepSocket(page: Page): Promise<void> {
   })
 }
 
-/**
- * His flags as this page reads them, whatever the server says meanwhile: they are the server's own,
- * and another Threads spec that ends while this one runs puts them back (the groups left the rail
- * mid-run that way). Only the page's reads: the server keeps what beforeAll set.
- */
-async function pinHisFlags(page: Page): Promise<void> {
-  await page.route('**/api/config', async (route) => {
-    if (route.request().method() !== 'GET') return route.continue()
-    const res = await route.fetch()
-    const body = await res.json() as { config?: { experimental?: Record<string, boolean> } }
-    body.config = { ...body.config, experimental: { ...body.config?.experimental, ...Object.fromEntries(HIS_FLAGS.map((f) => [f, true])) } }
-    await route.fulfill({ response: res, json: body })
-  })
-}
+/** His flags as this page reads them, whatever the server says meanwhile (page-flags.ts). */
+const pinHisFlags = (page: Page) => pinPageFlags(page, HIS_FLAGS)
 
 /** The list is drawn once it holds this many of the 14 seeded cards: the matrix run before the proof moves a card or two out of Done. */
 const LIST_MIN = 10
@@ -488,7 +521,7 @@ async function openRail(page: Page): Promise<string> {
   return '[data-testid="org-rail"] .org-rail-body:has(> .org-threads)'
 }
 
-const judged = (cells: Cell[]) => cells.filter((c) => c.verdict === 'FAIL').map((c) => `${c.surface} / ${c.pos} / ${c.presence} / ${c.change}: moved ${c.maxDev}px${c.focus === false ? ', focus lost' : ''}${c.caret === false ? ', caret moved' : ''}`)
+const judged = (cells: Cell[]) => cells.filter((c) => c.verdict === 'FAIL').map((c) => `${c.surface} / ${c.pos} / ${c.presence} / ${c.change}: moved ${c.maxDev}px${c.focus === false ? ', focus lost' : ''}${c.caret === false ? ', caret moved' : ''}${c.note ? `, ${c.note}` : ''}`)
 
 // Both surfaces in one test, judged together at the end: a surface that fails still lets the other run.
 test('nothing above the card he reads moves it, in the session pane and the Org rail', async ({ page, request }) => {
@@ -547,4 +580,66 @@ test('a new card above does not move the card he reads at the very top, or the b
   await video.caption('Another card arrived above: the box did not move and kept every key')
   await video.hold(2500)
   await video.stop('threads-hold-matrix-new-card-above')
+})
+
+/** The pointer on a Done card that has a card above it, the list at the very top. */
+async function readAtTop(page: Page, box: string) {
+  await page.mouse.move(5, 5)
+  await page.evaluate((b) => { document.querySelector<HTMLElement>(b)!.scrollTop = 0 }, box)
+  await page.waitForTimeout(300)
+  const r = (await pickReading(page, { box, presence: 'pointer', group: 'read', scope: null }))!
+  const card = page.locator(sel(box, r.id))
+  const b = (await card.boundingBox())!
+  await page.mouse.move(b.x + 6, b.y + 40, { steps: 8 })
+  return { r, card }
+}
+
+/** No scroll can hold this one: the box keeps room at its top while he reads, and lets it go when he leaves. */
+test('a card above leaving while he reads near the top does not move his card', async ({ page, request }) => {
+  const video = await startProofVideo(page)
+  await isolateUiPrefs(page)
+  await pinHisFlags(page)
+  const box = await openRail(page)
+  const lead = { task: ids.lead, sid: ids.leadSid }
+  const { r, card } = await readAtTop(page, box)
+  await video.caption('Near the top, reading a Done card with the pointer on it')
+  await video.hold(1500)
+  const y0 = (await card.boundingBox())!.y
+  await call(request, 'patch', `/api/v1/tasks/${lead.task}/threads/${r.above}`, { state: 'pending' }, lead.sid)
+  await expect(page.locator(sel(box, r.above!))).toHaveCount(0, { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  expect(Math.abs((await card.boundingBox())!.y - y0)).toBeLessThan(1)
+  await video.caption('The card above it left: his card did not move (the list keeps the room at its top)')
+  await video.hold(2500)
+  await page.mouse.move(5, 5, { steps: 8 })
+  await page.waitForTimeout(400)
+  expect(await page.evaluate((b) => document.querySelector<HTMLElement>(b)!.style.paddingTop, box)).toBe('')
+  await video.caption('He left the list: the room goes')
+  await video.hold(1500)
+  await video.stop('threads-hold-card-above-leaves')
+})
+
+/** Held out of view above while he read at the very top, the new card shows once he leaves. */
+test('a new card that came above while he read at the very top shows once he leaves', async ({ page, request }) => {
+  const video = await startProofVideo(page)
+  await isolateUiPrefs(page)
+  await pinHisFlags(page)
+  const box = await openRail(page)
+  const lead = { task: ids.lead, sid: ids.leadSid }
+  const { card } = await readAtTop(page, box)
+  await video.caption('At the very top, reading a Done card with the pointer on it')
+  await video.hold(1500)
+  const y0 = (await card.boundingBox())!.y
+  const fresh = await nodeThread(request, lead, 'needs')
+  await expect(page.locator(sel(box, fresh))).toHaveCount(1, { timeout: 15_000 })
+  await page.waitForTimeout(400)
+  expect(Math.abs((await card.boundingBox())!.y - y0)).toBeLessThan(1)
+  await video.caption('A new card came in Needs you: his card held still, the new one is above the view')
+  await video.hold(2000)
+  await page.mouse.move(5, 5, { steps: 8 })
+  await expect.poll(() => page.evaluate((b) => document.querySelector<HTMLElement>(b)!.scrollTop, box)).toBe(0)
+  await expect(page.locator(sel(box, fresh))).toBeInViewport()
+  await video.caption('He left the list: it went back to the top, and the new card shows')
+  await video.hold(2500)
+  await video.stop('threads-hold-new-card-shows-after')
 })

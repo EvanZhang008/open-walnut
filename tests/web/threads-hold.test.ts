@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import { inHeldOrder, readCard, THREAD_CARD_ROWS } from '../../web/src/components/org/useThreadsHold'
 import { stepHold } from '../../web/src/components/org/hold-order'
+import { anchoredScrollTop, releaseScrollTop, slackStep } from '../../web/src/hooks/scroll-anchor'
 import { THREAD_GROUPS } from '../../src/core/org/thread-groups'
 import type { OrgThread } from '../../web/src/api/org-threads'
 
@@ -81,6 +82,9 @@ describe('the card he reads', () => {
   it('a focused element that is no card (a fold\'s head) is held itself', () => {
     expect(readCard(d.root, null, d.doc(d.head, under))).toBe(d.head)
   })
+  it('below every card, with the pointer still on the list, is the list itself (he has not left)', () => {
+    expect(readCard(d.root, { x: 5, y: 900 }, d.doc(d.body, under))).toBe(d.root)
+  })
   it('is nothing when he is at neither: the list holds the top of the view, and nothing at the very top', () => {
     expect(readCard(d.root, null, d.doc(d.body, under))).toBeNull()
     expect(readCard(null, { x: 5, y: 5 }, d.doc(d.body, under))).toBeNull()
@@ -134,12 +138,42 @@ describe('the hold-still matrix covers everything that can stand above a card', 
 
   it('a scroll event puts the row back before it picks again (a commit between the two moved it)', () => {
     const hook = fs.readFileSync(`${root}/web/src/hooks/useScrollAnchor.ts`, 'utf8')
-    expect(hook).toContain('const onScroll = () => keep(box);')
+    expect(hook).toMatch(/const onScroll = \(\) => \{[\s\S]*?\n      keep\(box\);\n    \};/)
     expect(hook).not.toMatch(/const onScroll = \(\) => \{ anchor\.current = pick\(box\); \};/)
   })
 
   it('the Threads list tells the anchor which card he reads', () => {
     const src = fs.readFileSync(`${root}/web/src/components/org/useThreadsHold.ts`, 'utf8')
     expect(src).toContain('useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current))')
+  })
+})
+
+// What no scroll can hold (a card above left while he read near the top) the box holds with room
+// at its top, while he is at the list; leaving lets it go (useScrollAnchor).
+describe('room at the top for the card he reads', () => {
+  it('takes what the scroll lacks, and gives it back first when something above grows again', () => {
+    // At 20px a card of 300px above leaves: the scroll can go up 20px, the room takes the other 280.
+    const raw = anchoredScrollTop({ top: 400, scrollTop: 20 }, 100, 20, 5000, -Infinity)
+    expect(raw).toBe(-280)
+    expect(slackStep(0, raw)).toEqual({ slack: 280, scrollTop: 0 })
+    // Nothing more moved: the room stays.
+    expect(slackStep(280, 0)).toEqual({ slack: 280, scrollTop: 0 })
+    // A new card of 120px above: the room shrinks, nothing scrolls.
+    expect(slackStep(280, 120)).toEqual({ slack: 160, scrollTop: 0 })
+    // One taller than the room: the room goes, the rest is scrolled.
+    expect(slackStep(160, 250)).toEqual({ slack: 0, scrollTop: 90 })
+    // Nothing moved: nothing changes.
+    expect(slackStep(0, 40)).toEqual({ slack: 0, scrollTop: 40 })
+  })
+  it('the usual hold never goes below the top', () => {
+    expect(anchoredScrollTop({ top: 400, scrollTop: 20 }, 100, 20, 5000)).toBe(0)
+  })
+  it('leaving goes back to the very top when he was there and did not scroll; else nothing on screen moves', () => {
+    expect(releaseScrollTop({ fromTop: true, scrolled: false }, 0, 194)).toBe(0)
+    expect(releaseScrollTop({ fromTop: true, scrolled: false }, 300, 0)).toBe(0)
+    expect(releaseScrollTop({ fromTop: true, scrolled: true }, 0, 194)).toBe(194)
+    expect(releaseScrollTop({ fromTop: false, scrolled: false }, 0, 800)).toBe(800)
+    // The room goes with the hold: the scroll takes it out, so the rows stay where they are.
+    expect(releaseScrollTop({ fromTop: false, scrolled: true }, 100, 640)).toBe(540)
   })
 })

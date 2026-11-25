@@ -89,7 +89,9 @@ describe('the Home list is anchored by hand in every box that scrolls it', () =>
     expect(fold).toMatch(/removeAttribute\(SCROLL_HELD_ATTR\)[\s\S]{0,120}dispatchEvent\(new Event\(SCROLL_RELEASED_EVENT\)\)/);
     // The live-update keeper neither holds nor corrects a marked box, and picks again on release.
     expect(hook).toMatch(/box\.hasAttribute\(SCROLL_HELD_ATTR\)/);
-    expect(hook).toMatch(/addEventListener\(SCROLL_RELEASED_EVENT, onScroll\)/);
+    // Released: put back what moved, then pick again (no scroll of the person: not `onScroll`).
+    expect(hook).toMatch(/addEventListener\(SCROLL_RELEASED_EVENT, pickAgain\)/);
+    expect(hook).toMatch(/const pickAgain = \(\) => keep\(box\);/);
   });
 
   it('lets go of a row that moved in the list instead of scrolling after it', () => {

@@ -33,12 +33,39 @@ export function anchorDrift(mark: AnchorMark, top: number, scrollTop: number): n
  * the view at the end of the list threw every row 28px down). So at the end, after a pull, the
  * position is worked out from the mark's instead, and capped at the end.
  */
-export function anchoredScrollTop(mark: AnchorMark, top: number, scrollTop: number, max: number): number {
+export function anchoredScrollTop(mark: AnchorMark, top: number, scrollTop: number, max: number, floor = 0): number {
   const drift = anchorDrift(mark, top, scrollTop);
   if (Math.abs(drift) < ANCHOR_SLOP_PX) return scrollTop;
   const clamped = scrollTop >= max - ANCHOR_SLOP_PX && scrollTop < mark.scrollTop;
   const target = clamped ? mark.scrollTop + drift : scrollTop + drift;
-  return Math.max(0, Math.min(max, target));
+  return Math.max(floor, Math.min(max, target));
+}
+
+/**
+ * Room at the top of a box, for the row being read when what stands above it got shorter than the
+ * box can scroll up (2026-11-25, the Threads list: a card above left while he read near the top, and
+ * no scroll could keep his card where it was). `raw` is the scroll that puts the row back, below 0
+ * when no scroll can (anchoredScrollTop with no floor), with the room there is now (`slack`) counted
+ * in. The room grows by what the scroll lacks, and shrinks first when something above grows again:
+ * the scroll moves only once there is no room left. Pure.
+ */
+export function slackStep(slack: number, raw: number): { slack: number; scrollTop: number } {
+  const next = Math.max(0, slack - raw);
+  return { slack: next, scrollTop: raw + next - slack };
+}
+
+/** What a hold that began at the very top saw, so its end can go back there (releaseScrollTop). */
+export interface ReadSession { fromTop: boolean; scrolled: boolean }
+
+/**
+ * Where the box goes when the person leaves the rows they read: back to the very top when they were
+ * there as the hold began and did not scroll themselves, so what arrived above meanwhile shows (as it
+ * would have, had they not been reading); else where it is, less the room kept at the top, which goes
+ * with the hold, so nothing on screen moves. Pure.
+ */
+export function releaseScrollTop(session: ReadSession, slack: number, scrollTop: number): number {
+  if (session.fromTop && !session.scrolled) return 0;
+  return Math.max(0, scrollTop - slack);
 }
 
 /** Under half a pixel is subpixel layout, not a move: correcting it would fight rounding forever. */

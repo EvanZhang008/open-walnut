@@ -20,10 +20,12 @@
  * happens when something above really moved.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { anchoredScrollTop, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, type AnchorMark } from './scroll-anchor';
+import { anchoredScrollTop, releaseScrollTop, slackStep, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, type AnchorMark, type ReadSession } from './scroll-anchor';
 
 interface Anchor extends AnchorMark {
   el: Element;
+  /** The row the person reads (`reading`): held with room at the top when no scroll can hold it. */
+  read?: boolean;
   /** The rows right before and after it when it was picked (see `stillInOrder`). */
   prev: Element | null;
   next: Element | null;
@@ -83,7 +85,7 @@ function readAnchor(box: HTMLElement, rows: string, el: Element): Anchor | null 
   if (r.bottom <= edge || r.top - edge >= box.clientHeight) return null;
   const list = Array.from(box.querySelectorAll(rows));
   const i = list.indexOf(el);
-  return { el, top: r.top - edge, scrollTop: box.scrollTop, prev: i > 0 ? list[i - 1] : null, next: i >= 0 ? list[i + 1] ?? null : null };
+  return { el, read: true, top: r.top - edge, scrollTop: box.scrollTop, prev: i > 0 ? list[i - 1] : null, next: i >= 0 ? list[i + 1] ?? null : null };
 }
 
 /**
@@ -110,7 +112,10 @@ interface Attached {
  * by transforms, which a correction would read as rows that moved above the view. The same while
  * another keeper holds the box (`SCROLL_HELD_ATTR`, a fold keeping its clicked row in place).
  * `reading` (read at every pick) names the row the person reads now, or null when they are not at
- * the box: that row is held, at the very top too.
+ * the box: that row is held, at the very top too, and when what stands above it got shorter than
+ * the box can scroll up, the box keeps the missing height as room at its top (slackStep) until they
+ * leave; leaving goes back to the very top when they were there as the hold began and did not
+ * scroll themselves (releaseScrollTop). A box with no `reading` is held exactly as before.
  */
 export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false, reading?: () => Element | null): void {
   const anchor = useRef<Anchor | null>(null);
@@ -122,15 +127,55 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   const readingRef = useRef(reading);
   readingRef.current = reading;
   const standsDown = (box: HTMLElement) => pausedRef.current || box.hasAttribute(SCROLL_HELD_ATTR);
-  const pick = (box: HTMLElement) => (standsDown(box) ? null : pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, readingRef.current?.() ?? null));
+  // The room kept at the top for the row being read (px), the box's own top padding before it.
+  const slack = useRef(0);
+  const padWas = useRef<{ inline: string; px: number } | null>(null);
+  // The person at the box since when (a hold), and the scroll this hook wrote last (its own, not theirs).
+  const session = useRef<ReadSession | null>(null);
+  const own = useRef<number | null>(null);
+  const write = (box: HTMLElement, top: number) => {
+    const to = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, top));
+    if (Math.abs(to - box.scrollTop) < 0.5) return;
+    own.current = to;
+    box.scrollTop = to;
+  };
+  const setSlack = (box: HTMLElement, px: number) => {
+    if (px === slack.current) return;
+    if (!padWas.current) padWas.current = { inline: box.style.paddingTop, px: parseFloat(getComputedStyle(box).paddingTop) || 0 };
+    box.style.paddingTop = px > 0 ? `${padWas.current.px + px}px` : padWas.current.inline;
+    if (px === 0) padWas.current = null;
+    slack.current = px;
+  };
+  // At the box or not, read at every pick: leaving lets the room go and may go back to the top.
+  const presence = (box: HTMLElement, at: boolean) => {
+    if (at && !session.current) session.current = { fromTop: box.scrollTop <= 0 && slack.current === 0, scrolled: false };
+    if (at || !session.current) return;
+    const to = releaseScrollTop(session.current, slack.current, box.scrollTop);
+    session.current = null;
+    setSlack(box, 0);
+    write(box, to);
+  };
+  const pick = (box: HTMLElement) => {
+    if (standsDown(box)) return null;
+    const reading = readingRef.current?.() ?? null;
+    if (readingRef.current) presence(box, reading !== null);
+    return pickAnchor(box, rowsRef.current, anchor.current?.el ?? null, reading);
+  };
 
   // A ref, not a dependency: it is called from the observers attached once per box.
   const keep = useRef((box: HTMLElement) => {
     const held = standsDown(box) ? null : anchor.current;
     if (held && held.el.isConnected && held.el.getClientRects().length > 0 && stillInOrder(held)) {
       const top = held.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
-      const target = anchoredScrollTop(held, top, box.scrollTop, box.scrollHeight - box.clientHeight);
-      if (target !== box.scrollTop) box.scrollTop = target;
+      const max = box.scrollHeight - box.clientHeight;
+      if (held.read) {
+        // The row being read: what no scroll can do, room at the top does.
+        const step = slackStep(slack.current, anchoredScrollTop(held, top, box.scrollTop, max, -Infinity));
+        setSlack(box, step.slack);
+        write(box, step.scrollTop);
+      } else {
+        write(box, anchoredScrollTop(held, top, box.scrollTop, max));
+      }
     }
     anchor.current = pick(box);
   }).current;
@@ -159,12 +204,18 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
     // now, its move never put back (2026-11-25: every "Moved to ..." line above the card he read
     // pushed it 38px). So the row is put back first: the person's own scroll since the mark is
     // taken out of the drift (anchorDrift), only what the layout moved is corrected.
-    const onScroll = () => keep(box);
+    const onScroll = () => {
+      // Not this hook's own correction: the person (or a jump they asked for) scrolled.
+      if (own.current !== null && Math.abs(box.scrollTop - own.current) < 1) own.current = null;
+      else if (session.current) session.current.scrolled = true;
+      keep(box);
+    };
+    const pickAgain = () => keep(box);
     box.addEventListener('scroll', onScroll, { passive: true });
     // The keeper that held the box let go: hold the row on screen from here.
-    box.addEventListener(SCROLL_RELEASED_EVENT, onScroll);
+    box.addEventListener(SCROLL_RELEASED_EVENT, pickAgain);
     // The row being read changed with nothing scrolled or drawn (its owner says so).
-    box.addEventListener(SCROLL_REPICK_EVENT, onScroll);
+    box.addEventListener(SCROLL_REPICK_EVENT, pickAgain);
     // Fires after layout and before paint, so a correction from here is never drawn as a jump. A
     // scroll changes no size, so the correction cannot feed this observer back.
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => keep(box));
@@ -191,9 +242,11 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       observeChildren,
       stop: () => {
         box.removeEventListener('scroll', onScroll);
-        box.removeEventListener(SCROLL_RELEASED_EVENT, onScroll);
-        box.removeEventListener(SCROLL_REPICK_EVENT, onScroll);
+        box.removeEventListener(SCROLL_RELEASED_EVENT, pickAgain);
+        box.removeEventListener(SCROLL_REPICK_EVENT, pickAgain);
         ro?.disconnect();
+        setSlack(box, 0);
+        session.current = null;
         watched.clear();
       },
     };

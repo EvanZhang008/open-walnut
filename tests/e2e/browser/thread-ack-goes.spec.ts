@@ -3,30 +3,33 @@
  * ackedBetween; 2026-11-25, the user, of "Moved to Acknowledged ... Show" left under a card he had just
  * acknowledged: "直接消失就好了，不要再显示一个很烦"), while a move the node makes still leaves its line.
  *
- * A lead with his Threads flags (brief_off, ack_means_known), a long Done:
+ * A lead with his Threads flags pinned on the page (page-flags.ts: none is set on the shared server,
+ * so whether his Acknowledge holds the card in Acknowledged or closes it is the server's, and both
+ * are checked to leave no line), a long Done:
  *  1. A click on Acknowledge: the card leaves Done and no move line shows (watched for 2 s, past the
- *     read the server's answer brings); the card it went to (Acknowledged) is folded, counted.
+ *     read the server's answer brings); it went to Acknowledged, or to Closed (ack_means_known off).
  *  2. Acknowledge with the keyboard: the card goes, no line, and the focus goes to the card that took
  *     its place (its head), never to the page.
  *  3. His Acknowledge from another screen (the same write the phone makes, arriving over the event
  *     bus): the card goes, no line.
- *  4. With ack_means_known off his Acknowledge closes the card: it goes to Closed, no line.
- *  5. The node moves a Done card to Waiting: its line shows, as before.
+ *  4. The node moves a Done card to Waiting: its line shows, as before.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
+import { pinPageFlags } from './page-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Orchard ack ${STAMP}`
 const FLAGS = ['brief_off', 'ack_means_known', 'threads_one_card', 'org_leaders'] as const
+/** His Acknowledge as the server kept it: held in Acknowledged, or closed by him. */
+const acked = (t?: { ackedAt?: string; closed?: { how: string; by: string } }) => !!t?.ackedAt || (t?.closed?.how === 'acked' && t.closed.by === 'human')
 const made: string[] = []
 const ids = { lead: '', leadSid: '' }
 const done: string[] = []
-let flagsWere: Record<string, boolean> = {}
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
@@ -63,6 +66,11 @@ const focusAt = (page: Page) => page.evaluate(() => {
 /** The ids of Done's cards, in order. */
 const doneIds = (page: Page) => group(page, 'read').locator('[data-testid="org-thread"]:not([data-copy])').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.threadId!))
 
+async function threadOf(request: APIRequestContext, id: string) {
+  const file = await (await request.get(`/api/v1/tasks/${ids.lead}/threads`)).json() as { threads: Array<{ id: string; ackedAt?: string; closed?: { how: string; by: string } }> }
+  return file.threads.find((t) => t.id === id)
+}
+
 async function openLead(page: Page): Promise<void> {
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
@@ -75,10 +83,6 @@ async function openLead(page: Page): Promise<void> {
 test.beforeAll(async ({ request }) => {
   test.setTimeout(240_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks and threads: run them on a test server, never production')
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  flagsWere = Object.fromEntries(FLAGS.map((f) => [f, cfg.config?.experimental?.[f] === true]))
-  const on = await request.put('/api/config', { data: { experimental: Object.fromEntries(FLAGS.map((f) => [f, true])) } })
-  expect(on.ok(), await on.text()).toBe(true)
   // A project with two teams gets a lead.
   for (const title of [`Label the jars ${STAMP}`, `Sweep the cellar ${STAMP}`]) made.push((await call<{ task: { id: string } }>(request, 'post', '/api/tasks', { title, project: PROJECT, source: 'local' })).task.id)
   ids.lead = (await call<{ task: { id: string } }>(request, 'post', '/api/v1/org/contact', { to: PROJECT })).task.id
@@ -90,7 +94,6 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  await request.put('/api/config', { data: { experimental: flagsWere } })
   for (const id of [...made].reverse()) {
     const t = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (t?.session_id) await request.post(`/api/v1/sessions/${t.session_id}/terminate`, { data: { force: true } })
@@ -103,6 +106,7 @@ test('his Acknowledge takes the card away with no line; the node\'s move still l
   page.on('pageerror', (err) => pageErrors.push(err.message))
   const video = await startProofVideo(page)
   await isolateUiPrefs(page)
+  await pinPageFlags(page, FLAGS)
   await openLead(page)
   await video.caption('A lead\'s Threads: Done holds the results he has not acknowledged')
   await video.hold(1200)
@@ -116,8 +120,7 @@ test('his Acknowledge takes the card away with no line; the node\'s move still l
   await ackButton.click()
   await expect(cardIn(page, 'read', first)).toHaveCount(0, { timeout: 5_000 })
   await noLineFor(page, 2_000)
-  await expect(group(page, 'known')).toHaveAttribute('data-open', 'false')
-  await expect(group(page, 'known').getByTestId('org-thread-group-count')).toHaveText('1')
+  await expect.poll(async () => acked(await threadOf(request, first))).toBe(true)
   await video.caption('The card just goes: no line is left where it stood')
   await video.hold(1500)
 
@@ -142,21 +145,7 @@ test('his Acknowledge takes the card away with no line; the node\'s move still l
   await video.caption('Acknowledged on his phone: the card goes here too, no line')
   await video.hold(1200)
 
-  // 4. ack_means_known off: his Acknowledge closes the card.
-  const off = await request.put('/api/config', { data: { experimental: { ack_means_known: false } } })
-  expect(off.ok(), await off.text()).toBe(true)
-  try {
-    const fourth = (await doneIds(page))[0]!
-    await cardIn(page, 'read', fourth).getByTestId('org-thread-ack').click()
-    await expect(cardIn(page, 'read', fourth)).toHaveCount(0, { timeout: 5_000 })
-    await noLineFor(page, 2_000)
-    await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/threads`)).json()) as { threads: Array<{ id: string; closed?: { how: string; by: string } }> }).threads.find((t) => t.id === fourth)?.closed)
-      .toMatchObject({ how: 'acked', by: 'human' })
-  } finally {
-    await request.put('/api/config', { data: { experimental: { ack_means_known: true } } })
-  }
-
-  // 5. The node moves a Done card on: its line shows.
+  // 4. The node moves a Done card on: its line shows.
   const moved = (await doneIds(page))[0]!
   await call(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${moved}`, { state: 'pending' }, ids.leadSid)
   const line = page.locator(`[data-testid="org-thread-move-note"][data-moved-id="${moved}"]`)
