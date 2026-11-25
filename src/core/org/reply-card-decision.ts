@@ -127,12 +127,16 @@ export async function applyNeedsCard(taskId: string, sessionId: string, card: Ca
 async function openNewDecision(taskId: string, before: OrgThread, card: CardTag, patch: ThreadPatch, source: Parameters<typeof import('./threads-store.js').patchThread>[4]): Promise<string> {
   const store = await import('./threads-store.js');
   const by = `task:${taskId}` as const;
-  if (wroteSinceNeeds(before)) await store.patchThread(taskId, before.id, { state: 'answered', reply: card.since ?? '' }, by, source);
-  const opened = await store.openNodeThread(taskId, {
-    title: card.title ? cut(card.title, THREAD_TITLE_MAX) : before.title, text: patch.ask ?? '', reply: patch.reply, from: 'node', state: 'needs', ask: patch.ask,
+  const input = {
+    title: card.title ? cut(card.title, THREAD_TITLE_MAX) : before.title, text: patch.ask ?? '', reply: patch.reply, from: 'node' as const, state: 'needs' as const, ask: patch.ask,
     ...(patch.options ? { options: patch.options } : {}),
     ...(patch.user_kind ? { user_kind: patch.user_kind } : {}), ...(patch.user_kind_why ? { user_kind_why: patch.user_kind_why } : {}),
     supersedes: [before.id],
-  }, by, source, { sameSubject: true });
+  };
+  // Every refusal of the new thread first: a refused decision leaves his message unanswered here,
+  // never an answered card with no decision behind it (review 2026-11-25).
+  await store.openNodeThreadChecks(taskId, input, by, source, { sameSubject: true });
+  if (wroteSinceNeeds(before)) await store.patchThread(taskId, before.id, { state: 'answered', reply: card.since ?? '' }, by, source);
+  const opened = await store.openNodeThread(taskId, input, by, source, { sameSubject: true });
   return opened.id;
 }

@@ -301,12 +301,32 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
  */
 /** `sameSubject`: thread_create's own door asks its one-subject check (thread-same-subject.ts); Walnut's own opens (a letter, a topic) do not. */
 export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource, opts: { sameSubject?: boolean } = {}): Promise<OrgThread> {
+  const { replaced, elsewhere } = await openNodeThreadChecks(taskId, input, by, source, opts);
+  const { applySupersedes, applyElsewhere } = await import('./thread-supersede.js');
+  const at = new Date().toISOString();
+  const thread = await mutateThreads(taskId, (cur) => {
+    const r = openThread(cur, input, by, at, source);
+    return { file: r.file, out: r.thread };
+  });
+  emit({ taskId, kind: 'opened', threadId: thread.id });
+  await applySupersedes(taskId, replaced, thread, by);
+  await applyElsewhere(elsewhere, thread, by);
+  return thread;
+}
+
+/**
+ * Every refusal of openNodeThread, with nothing written: what it would step aside here (`replaced`)
+ * and on other nodes (`elsewhere`). A caller that writes something else first for the same line
+ * (reply-card-decision.ts openNewDecision) asks this before it, so a refused open leaves nothing
+ * half done (review 2026-11-25: the old thread read answered while its new decision was refused).
+ */
+export async function openNodeThreadChecks(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource, opts: { sameSubject?: boolean } = {}) {
   // The needs_options check below reads the switch as it is now (one-card.ts).
   await oneCardOn();
   const needs = !input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs';
   if (needs) await refuseSameAskThread(taskId, input.title, by, input);
   // The task's other asks: named as replaced, or said to be other decisions (thread-supersede.ts).
-  const { refuseOtherOpenAsks, applySupersedes, namedElsewhere, applyElsewhere, namedRefusal } = await import('./thread-supersede.js');
+  const { refuseOtherOpenAsks, namedElsewhere, namedRefusal } = await import('./thread-supersede.js');
   // The thread's own refusals come first (a missing kind, an unclear card): a dry run on the file as it is.
   if (needs && by !== 'human') openThread(await readThreads(taskId), input, by, new Date().toISOString(), source);
   const replaced = needs ? await refuseOtherOpenAsks(taskId, by, input) : [];
@@ -328,15 +348,7 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
       if (!needs && typeof words === 'string' && asksHimNow(words)) throw new ThreadError('bad_input', 422, ASKS_OUTSIDE_NEEDS);
     }
   }
-  const at = new Date().toISOString();
-  const thread = await mutateThreads(taskId, (cur) => {
-    const r = openThread(cur, input, by, at, source);
-    return { file: r.file, out: r.thread };
-  });
-  emit({ taskId, kind: 'opened', threadId: thread.id });
-  await applySupersedes(taskId, replaced, thread, by);
-  await applyElsewhere(elsewhere, thread, by);
-  return thread;
+  return { replaced, elsewhere };
 }
 
 /**

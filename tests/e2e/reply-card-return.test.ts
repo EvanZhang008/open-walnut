@@ -105,6 +105,21 @@ describe('a decision line after his words on its thread', () => {
     expect((await waitingOnHim()).map((x) => x.id)).toEqual([basil])
   }, 60_000)
 
+  it('decision="new" the store refuses leaves his message unanswered on its thread: no answered card with no decision behind it', async () => {
+    await say('Or should I think about where it stands first?', basil)
+    const rows = await cliTakes()
+    // No kind on the line: thread_create's own door refuses the new thread.
+    const line = `<walnut-card thread="${basil}" state="needs" title="Basil spot" ask="Windowsill or balcony rail for the basil?" options="Balcony rail (recommended); Windowsill" since="Noted that the spot may matter more." decision="new"/>`
+    expect((await stopHook(`x\n\n${line}`)).decision).toBe('block')
+    const after = await threads()
+    expect(of(after, basil)?.state).not.toBe('answered')
+    expect(of(after, basil)?.reply ?? '').not.toContain('Noted that the spot may matter more.')
+    expect(after.filter((t) => t.id !== basil && !t.closed)).toHaveLength(0)
+    // The turn goes on with the old decision asked again: the thread waits on him as before.
+    await questionAfter(await turnEnds(rows, POT_LINE(` since="Noted that the spot may matter more." decision="same"`)))
+    expect((await waitingOnHim()).map((x) => x.id)).toEqual([basil])
+  }, 60_000)
+
   it('decision="new": his message is answered on its thread, and the new decision is its own card that supersedes it', async () => {
     await say('Forget pots. Ask me whether to grow it on the windowsill or the balcony rail.', basil)
     const rows = await cliTakes()
