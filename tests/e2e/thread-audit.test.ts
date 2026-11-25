@@ -21,6 +21,10 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { executeOp } from '../../src/ops/index.js'
+import { getOp } from '../../src/ops/registry.js'
+import { REQUEST_TIMEOUT_MS } from '../../src/ops/executor.js'
+import { RUN_HOLD_MS } from '../../src/web/routes/thread-audit-v1.js'
+import { ANSWER_BY_HEADER } from '../../src/lib/answer-by.js'
 import { fileThreadMessage, readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { _resetOrgEnabledForTesting } from '../../src/core/org/org-enabled.js'
@@ -228,4 +232,42 @@ describe('the clock\'s start and stop', () => {
     root = `http://127.0.0.1:${(server.address() as { port: number }).port}`
     expect(threadAuditClockRuns()).toBe(true)
   }, 60_000)
+})
+
+describe('a run and its caller', () => {
+  it('a run that outlasts its caller answers 202 running in time, and the pass goes on', async () => {
+    // 2026-11-25, the first run in real use: one model call took 11 s, the route held its answer for
+    // 90 s and the op gave up at its 10 s bound with hub_timeout. The hold stays under the op's bound.
+    const opTimeout = getOp('thread_audit')!.timeoutMs
+    const bound = typeof opTimeout === 'function' ? opTimeout({ run: true, task: 'x' }) : opTimeout ?? REQUEST_TIMEOUT_MS
+    expect(RUN_HOLD_MS).toBeLessThanOrEqual(bound - 1_500)
+
+    await setSwitch(true)
+    const slow = await newLead()
+    const a = (await fileThreadMessage(slow.id, { text: 'the plum orchard frost fan starts late', via: 'chat', at: ago(120) })).thread.id
+    const b = (await fileThreadMessage(slow.id, { text: 'frost fan in the plum orchard starting late again', via: 'chat', at: ago(60) })).thread.id
+    await setThread(slow.id, a, { title: 'Plum orchard frost fan starts late', titled: true, state: 'answered', reply: 'The frost fan starts twenty minutes late; its thermostat is being replaced on Monday.' })
+    await setThread(slow.id, b, { title: 'Frost fan starting late in the plum orchard', titled: true, state: 'working', reply: 'Reading the frost fan controller log of the plum orchard.' })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    setAuditJudgeOverride(async () => { await held; return '1 SAME: one frost fan, told twice' })
+    try {
+      // A caller that stops waiting in 1.3 s: the answer comes before that, the model call still out.
+      const res = await fetch(`${root}/api/v1/thread-audit/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json', [ANSWER_BY_HEADER]: String(Date.now() + 1_300) }, body: JSON.stringify({ task: slow.id }),
+      })
+      expect(res.status).toBe(202)
+      expect(await res.json()).toEqual({ running: true, task: slow.id })
+      expect((await api('GET', `/api/v1/thread-audit?task=${slow.id}`)).json.totals.passes).toBe(0)
+      release()
+      await vi.waitFor(async () => {
+        const c = await api('GET', `/api/v1/thread-audit?task=${slow.id}`)
+        expect(c.json.totals).toMatchObject({ passes: 1, calls: 1 })
+        expect(c.json.totals.found.repeat).toBe(1)
+      }, { timeout: 10_000 })
+    } finally {
+      release()
+      setAuditJudgeOverride(async (input) => { judged.push(input); return '1 SAME: one irrigation timer, told twice' })
+    }
+  })
 })

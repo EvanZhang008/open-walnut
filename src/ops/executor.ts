@@ -52,7 +52,8 @@ import { opLinkNotes } from '../lib/missing-links.js'
 import { GATE_SETTING_PATH, REPLY_LANGUAGE_CODE, gateSettingFor, replyLanguageRefusal } from './reply-language-gate.js'
 import { API_ERROR_OPENING, LOCAL_ONLY_CODE, OwnRefusalError, SHORTENED_TEXT_CODE, ownRefusal } from './own-refusal.js'
 
-const REQUEST_TIMEOUT_MS = 10_000
+/** How long an op's call to the server waits by default (an op's own `timeoutMs` replaces it). */
+export const REQUEST_TIMEOUT_MS = 10_000
 /** How long a send waits for the reply-language setting before it goes out unjudged. */
 const GATE_SETTING_TIMEOUT_MS = 3_000
 

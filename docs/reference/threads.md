@@ -410,7 +410,9 @@ Nothing is merged, closed or rewritten by the check.
 Counts per day (UTC) and per node, kept 60 days in `org/thread-audit.json`: passes, found, told and
 fixed per kind, model calls and their milliseconds. Read them with `GET /api/v1/thread-audit`
 (`?days=`, `?task=`) or the op `thread_audit`; `POST /api/v1/thread-audit/run {task}` (op
-`thread_audit` with `run: true`) checks one node now. One log line per pass, counts only.
+`thread_audit` with `run: true`) checks one node now, and answers `running` after 8 s while the
+check goes on (2026-11-25, its first run in real use: one model call took 11 s and the op gave up
+at its 10 s call bound with the route still holding). One log line per pass, counts only.
 
 Leader only, never on an ephemeral server (`WALNUT_THREAD_AUDIT=0` turns the clock off), one clock
 per process (a start replaces a clock left running; the server awaits its start, so a stop always

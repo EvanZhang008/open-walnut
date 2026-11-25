@@ -9,19 +9,34 @@
  *                                                     fixed, delivery, pairs, calls, callMs }; with the switch off { ran: false, why: "off" }
  *
  * Both answer 503 primary_only on a replica (threads live on the leader). The read answers within
- * READ_DEADLINE_MS or 503 busy; the run answers within RUN_DEADLINE_MS or 202 { running: true }
- * (the pass goes on, its counts show on the read).
+ * READ_DEADLINE_MS or 503 busy; the run answers within RUN_HOLD_MS (sooner when its caller stops
+ * waiting sooner) or 202 { running: true }: the pass goes on, its counts show on the read.
  */
 import { Router, type Request, type Response } from 'express'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { ANSWER_BY_HEADER, parseAnswerBy } from '../../lib/answer-by.js'
+import { log } from '../../logging/index.js'
 
 export const threadAuditV1Router = Router()
 
 const READ_DEADLINE_MS = 5_000
-const RUN_DEADLINE_MS = 90_000
+/**
+ * How long a run holds its answer. Under the bound of the op call that asks for it (ops/executor.ts
+ * REQUEST_TIMEOUT_MS): the first run in real use made one model call of 11 s, the route held for 90 s,
+ * and the op answered hub_timeout although the pass ended a second later (2026-11-25).
+ */
+export const RUN_HOLD_MS = 8_000
+/** Left for the answer's way back to a caller that said when it stops waiting. */
+const ANSWER_MARGIN_MS = 1_000
+
+/** The hold of this request: RUN_HOLD_MS, cut to what its caller still waits (lib/answer-by.ts). */
+function runHoldMs(req: Request, now = Date.now()): number {
+  const by = parseAnswerBy(req.get(ANSWER_BY_HEADER), now)
+  return by === undefined ? RUN_HOLD_MS : Math.max(0, Math.min(RUN_HOLD_MS, by - now - ANSWER_MARGIN_MS))
+}
 const TIMED_OUT = Symbol('timed-out')
 
 function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -62,8 +77,14 @@ threadAuditV1Router.post('/thread-audit/run', async (req: Request, res: Response
     if (typeof raw !== 'string' || !raw.trim()) throw new RouteError(400, 'bad_request', '`task` (a task that keeps Threads) is required')
     const task = await resolveTask(raw.trim())
     const { auditNode } = await import('../../core/org/thread-audit.js')
-    const out = await within(auditNode(task.id), RUN_DEADLINE_MS)
-    if (out === TIMED_OUT) { res.status(202).json({ running: true, task: task.id }); return }
+    const pass = auditNode(task.id)
+    const out = await within(pass, runHoldMs(req))
+    if (out === TIMED_OUT) {
+      // The pass goes on; a failure from here on has nobody to answer, so it is logged.
+      pass.catch((err: unknown) => log.task.warn('thread audit: a run failed after its caller left', { taskId: task.id, error: err instanceof Error ? err.message : String(err) }))
+      res.status(202).json({ running: true, task: task.id })
+      return
+    }
     res.json(out)
   } catch (err) { fail(req, res, err) }
 })

@@ -1267,7 +1267,8 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   found, reported and fixed each hold `{ repeat, unasked, stale, thin }`.
   `POST /api/v1/thread-audit/run { task }` checks one node now and answers `{ ran, why?, found, told,
   fixed, delivery, pairs, calls, callMs }` (`ran: false, why: "off"` with the experiment off; `202
-  { running: true }` past 90 s). Both are leader only (`503 primary_only` on a replica); the read
+  { running: true }` past 8 s, or sooner when the caller's `x-walnut-answer-by` is sooner: the
+  check goes on and its counts show on the read). Both are leader only (`503 primary_only` on a replica); the read
   answers `503 busy` past 5 s. Op `thread_audit`.
 - Director (additive, 2026-11-20): `PATCH /api/v1/tasks/:id` also accepts `director`:
   `"yes"` makes the task a Director under its VP even with no team, `"no"` keeps a leader
