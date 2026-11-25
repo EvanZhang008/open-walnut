@@ -3418,6 +3418,8 @@ export class DaemonConnection {
     // A daemon in this process takes the object itself (in-process-daemon-socket.ts): no text, no cap.
     const inProcess = isInProcessDaemonSocket(this.ws)
     const message = inProcess ? '' : JSON.stringify(payload)
+    // Its bytes, counted only where a pacer needs them (below): a Chinese note is three bytes a character.
+    const messageBytes = () => Buffer.byteLength(message)
     // A frame over the daemon's cap closes the socket for every session on the host.
     if (!inProcess) assertFrameFits(message, `the ${cmd} command`, this.hostKey)
 
@@ -3476,8 +3478,8 @@ export class DaemonConnection {
     // ends the link, and only once what is ahead of it has mostly gone up; a relay's answer never
     // waits behind the rest (paced-send-gate.ts; 2026-11-25: a 1.7 MB manifest was cut every two
     // minutes there, with every answer behind it).
-    // What the pacer counts: bytes, not characters (a Chinese note is three bytes a character).
-    const wireBytes = ownUp ? Buffer.byteLength(message) : message.length
+    // What the pacer counts: bytes, not characters.
+    const wireBytes = ownUp ? messageBytes() : message.length
     if (ownUp && upload && !inProcess) {
       const turn = this.pacedGate.admit(wireBytes, { what: cmd, first: cmd === 'gateway-result', stallMs: timeoutMs, maxMs: DaemonConnection.UPLOAD_PROGRESS_CEILING_MS })
       if (turn) {

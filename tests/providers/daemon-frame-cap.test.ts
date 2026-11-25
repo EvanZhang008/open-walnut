@@ -133,6 +133,9 @@ const WRITERS: Record<string, Record<string, string>> = {
   'src/providers/daemon-connection.ts': {
     "ws.send(JSON.stringify({ id, cmd: 'client.role', role: 'probe' }))": 'a fixed frame of a few bytes',
     "ws.send(JSON.stringify({ id, cmd: 'hello', ...serverHello(this.isReadOnlyRemote || this.ownSessionsOnly) }))": 'the hello: a fixed set of small fields',
+    // More than the window above away from its check since the paced send gate (paced-send-gate.ts)
+    // sits between them; `message` is a const, made once, right before assertFrameFits.
+    'if (!isInProcessDaemonSocket(sentOn)) { sentOn.send(message); return }': 'sendOnce\'s frame: assertFrameFits(message) right where it is made, a const never reassigned',
   },
   'src/web/ws/bridge-registry.ts': {
     'send: (frame) => { ws.send(JSON.stringify(frame)) },': 'stream frames: link-stream.ts cuts data into 48 KB pieces',

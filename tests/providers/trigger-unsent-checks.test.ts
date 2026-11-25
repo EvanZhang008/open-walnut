@@ -7,9 +7,9 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  UNSENT_CHECKS_MAX, coerceUnsentChecks, keepUnsentCheck, takeUnsentChecks,
+  UNSENT_CHECKS_MAX, keepUnsentCheck, takeUnsentChecks,
 } from '../../src/providers/trigger-unsent-checks.js'
-import { coerceHostState, emptyHostState, type TriggerCheckedEvent, type TriggerHostState } from '../../src/providers/trigger-check-core.js'
+import { coerceHostState, coerceUnsentChecks, emptyHostState, type TriggerCheckedEvent, type TriggerHostState } from '../../src/providers/trigger-check-core.js'
 
 const T0 = Date.UTC(2026, 10, 25, 5, 9, 0)
 const HALF_HOUR = 30 * 60_000

@@ -83,14 +83,18 @@ describe('follower gateway daemon wiring', () => {
     expect(end).toMatch(/sendGatewayRequest\(capability, callerSid, payload, respond, (\{ \.\.\.plan, ownServerAsked: true \}|Object\.assign\(\{\}, plan, \{ ownServerAsked: true \}\))\)/)
   })
 
-  it('the daemon ends a plugin job\'s waiting call when its caller left or the daemon stops, and never wait while a backup leads', () => {
+  it('the daemon ends a plugin job\'s waiting call when its caller left or the daemon stops, and hands it to this host\'s server while a backup leads', () => {
     const fn = src.slice(src.indexOf('function sendPluginJobGatewayRequest('), src.indexOf('\n}\n', src.indexOf('function sendPluginJobGatewayRequest(')))
     const again = fn.slice(fn.indexOf('again = '), fn.indexOf('followerGateway.routeJob('))
     expect(again).toContain('daemonCommands.closed')
     expect(again).toMatch(/gatewayCallerLeft\.get\(respond\)/)
     // Checked before the call is routed again, so a write is never relayed for a caller gone.
     expect(again.indexOf('gatewayCallerLeft')).toBeLessThan(again.indexOf('sendPluginJobGatewayRequest('))
-    expect(fn).toContain('if (caller && !leaderBook.backupLead(home))')
+    // 2026-11-25: the companion leading skipped this host's server, and every job call was refused.
+    // Its refusal stands: routeJob gets no fallback, so the companion never runs a job's call unnamed.
+    expect(fn).toContain('if (caller) {')
+    expect(fn).not.toMatch(/if \(caller && !leaderBook\.backupLead/)
+    expect(fn.slice(fn.indexOf('followerGateway.routeJob('), fn.indexOf('\n', fn.indexOf('followerGateway.routeJob(')))).not.toContain('fallback')
     // A call that waited and found no one says what it waited for, and that nothing was done.
     expect(fn).toContain('this call waited for it to answer again')
   })

@@ -6,7 +6,9 @@
  * in the trigger's state file, and the configure of a server that dedups checks takes them, oldest
  * first, before the latest one (daemon-trigger-set.ts), so the record has no hole.
  */
-import { coerceCheckedEvent, type TriggerCheckedEvent, type TriggerHostState } from './trigger-check-core.js'
+// Types only: the daemon's trigger area loads no trigger logic of its own (daemon-task-logic-ratchet.test.ts);
+// reading the kept list from disk is trigger-check-core.ts's (coerceUnsentChecks).
+import type { TriggerCheckedEvent, TriggerHostState } from './trigger-check-core.js'
 
 /** The most kept per trigger: a day of a 30-minute trigger; older ones go first. */
 export const UNSENT_CHECKS_MAX = 48
@@ -26,12 +28,4 @@ export function takeUnsentChecks(state: TriggerHostState): TriggerCheckedEvent[]
   const list = state.unsentChecks ?? []
   delete state.unsentChecks
   return list
-}
-
-/** The kept reports as read from disk: each one valid, at most UNSENT_CHECKS_MAX, oldest first. */
-export function coerceUnsentChecks(raw: unknown): TriggerCheckedEvent[] | undefined {
-  if (!Array.isArray(raw)) return undefined
-  const list = raw.slice(-UNSENT_CHECKS_MAX * 2).map(coerceCheckedEvent).filter((c): c is TriggerCheckedEvent => !!c)
-  list.sort((a, b) => a.atMs - b.atMs)
-  return list.length ? list.slice(-UNSENT_CHECKS_MAX) : undefined
 }

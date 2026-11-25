@@ -15,7 +15,7 @@
  * around it, the tests drive it directly. Design: docs/plan/walnut-trigger.md.
  */
 
-import { coerceUnsentChecks } from './trigger-unsent-checks.js';
+import { UNSENT_CHECKS_MAX } from './trigger-unsent-checks.js';
 import { spawn } from 'node:child_process';
 import type { ChildProcessUse } from './daemon-child-spawn.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -454,6 +454,14 @@ export function dayKey(nowMs: number): string {
   const d = new Date(nowMs);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** The kept reports as read from disk: each one valid, at most UNSENT_CHECKS_MAX, oldest first. */
+export function coerceUnsentChecks(raw: unknown): TriggerCheckedEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const list = raw.slice(-UNSENT_CHECKS_MAX * 2).map(coerceCheckedEvent).filter((c): c is TriggerCheckedEvent => !!c)
+  list.sort((a, b) => a.atMs - b.atMs)
+  return list.length ? list.slice(-UNSENT_CHECKS_MAX) : undefined
 }
 
 /** Accept whatever is on disk and fill in the shape; a corrupt file becomes an empty state. */

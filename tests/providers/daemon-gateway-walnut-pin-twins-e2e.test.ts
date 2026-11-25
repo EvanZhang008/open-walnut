@@ -379,7 +379,8 @@ describe.skipIf(!BUN)('a session\'s call stays with its own Walnut, standalone d
     const mainB = await open(port, 'mainB', 'B', 'run-b', HOME_B)
     const bulkB = await open(port, 'bulkB', 'B', 'run-b')
     const two = await external('task_list', 1_000)
-    expect(two).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })
+    // Refused at once as a caller naming no Walnut (gatewayOnlyNamedWalnuts), never after a wait.
+    expect(two).toMatchObject({ ok: false, error: { code: 'unknown_caller' } })
     expect(mainA.requests).toHaveLength(1)
     expect([...mainB.requests, ...bulkB.requests, ...bulkA.requests]).toEqual([])
   }, 60_000)
