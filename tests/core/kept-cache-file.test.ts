@@ -3,7 +3,7 @@
  * one write of the state as it is when the write runs, a write is whole or absent, stop
  * flushes, and a file that does not parse or is of another version reads as none.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,7 +13,6 @@ import { writeFileAtomic } from '../../src/core/config-file-io.js'
 let dir = ''
 beforeEach(async () => { dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-kept-file-')) })
 afterEach(async () => { await fsp.rm(dir, { recursive: true, force: true }) })
-const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('keptCacheFile', () => {
   it('asks inside the delay make one write, of the state when the write runs', async () => {
@@ -21,20 +20,31 @@ describe('keptCacheFile', () => {
     const written: number[] = []
     const kept = keptCacheFile(file, { delayMs: 80, onError: (err) => { throw err }, onWritten: (b) => written.push(b) })
     let state = 0
-    for (let i = 0; i < 20; i++) { state = i; kept.save(() => JSON.stringify({ v: 1, state })) }
-    expect(kept.pending).toBe(true)
-    await tick(20)
-    // Nothing written before the delay: a cache that changes every tick does not write every tick.
-    await expect(fsp.stat(file)).rejects.toThrow()
-    await tick(150)
-    expect(written).toHaveLength(1)
-    expect(await readKeptJson(file, 1)).toEqual({ v: 1, state: 19 })
-    // A later ask starts a new delay: still at most one write per delay.
-    kept.save(() => JSON.stringify({ v: 1, state: 'later' }))
-    kept.save(() => JSON.stringify({ v: 1, state: 'latest' }))
-    await tick(150)
-    expect(written).toHaveLength(2)
-    expect((await readKeptJson(file, 1))?.state).toBe('latest')
+    // The delay is a fake clock; the writes are real, each waited for through flush().
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      for (let i = 0; i < 20; i++) { state = i; kept.save(() => JSON.stringify({ v: 1, state })) }
+      expect(kept.pending).toBe(true)
+      await vi.advanceTimersByTimeAsync(79)
+      // Nothing started before the delay: a cache that changes every tick does not write every tick.
+      expect(kept.pending).toBe(true)
+      await expect(fsp.stat(file)).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(kept.pending).toBe(false)
+      await kept.flush() // the write the delay started
+      expect(written).toHaveLength(1)
+      expect(await readKeptJson(file, 1)).toEqual({ v: 1, state: 19 })
+      // A later ask starts a new delay: still at most one write per delay.
+      kept.save(() => JSON.stringify({ v: 1, state: 'later' }))
+      kept.save(() => JSON.stringify({ v: 1, state: 'latest' }))
+      await vi.advanceTimersByTimeAsync(80)
+      expect(kept.pending).toBe(false)
+      await kept.flush()
+      expect(written).toHaveLength(2)
+      expect((await readKeptJson(file, 1))?.state).toBe('latest')
+    } finally {
+      vi.useRealTimers()
+    }
     // No temp is left beside the file.
     expect(await fsp.readdir(dir)).toEqual(['c.json'])
   })

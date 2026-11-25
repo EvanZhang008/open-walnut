@@ -228,6 +228,7 @@ export const STARTERS: Record<string, [StarterKind, string, string?]> = {
   'src/core/hosts/host-learning.ts': ['gated', 'a session recap arms a 60 s debounce per host whose refresh writes hosts/<alias>.json: maybeLearnHost asks the gate first'],
   'src/core/hosts/local-network-alert.ts': ['stopped', 'Re-arming setTimeout check (darwin only) that sends or archives one letter per episode; stopped with the host wiring off call.', 'unsubscribeHostPhase?.()'],
   'src/core/hosts/ssh-cert-expiry-alert.ts': ['stopped', 'Re-arming setTimeout certificate check plus a presence watcher; sends one letter per episode; stopped with the host wiring off call.', 'unsubscribeHostPhase?.()'],
+  'src/core/history-dead-set-memo.ts': ['none', 'Boot read-back of the over-ceiling dead sets; its later writes go to cache/history-dead-sets.json (rebuildable) and the shutdown flushes them; no timer of its own.'],
   'src/core/human-inbox/complete-archive.ts': ['stopped', 'Bus subscriber on task:phase-changed that archives a completed task\'s letters (edge writes); unsubscribed by its stop call.', 'stopCompleteArchive('],
   'src/core/human-inbox/letter-threads.ts': ['stopped', 'Via startHeldThreads: bus subscriber on letter events plus one 5s first sync; stop unsubscribes and clears the timer.', 'letterThreadsHandle.stop()'],
   'src/core/link-tags-apply.ts': ['once', 'Bus subscriber that tags links only on a person\'s session start or send (a user action), one task write per event; never repeats on its own.'],

@@ -28,7 +28,6 @@ import {
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import type { PersistedHistoryInc } from './history-disk-cache.js';
-import type { SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,6 +37,7 @@ import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, 
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, readTailWindowRead, setTailWindowShedding } from './history-tail-window.js';
 import { isByteCeilingError } from './byte-ceiling.js';
+import { clearDeadSets, deadSetKey, dropDeadSets, getDeadSet, setDeadSet, type DisplayDeadSet } from './history-dead-set-memo.js';
 import { registerMemoryHolder } from './observability/memory-ledger.js';
 import { noteTranscriptLinesParsed } from '../providers/line-parse-count.js';
 import { HISTORY_OPEN_PREVIEW_BYTES } from './history-open-preview.js';
@@ -242,10 +242,9 @@ export async function invalidateSessionHistoryCaches(sessionId: string, host?: s
   if (host) cacheDelete(cacheKey(sessionId, host));
   dropTailWindows(`${cacheKey(sessionId)}|`);
   if (host) dropTailWindows(`${cacheKey(sessionId, host)}|`);
-  // The over-ceiling dead-set memo is keyed on the FILE's identity, which a new
-  // cut does not change — so it has to be dropped explicitly here, or a rewind
-  // of a rewind would keep serving the previous rewind's dead set.
-  displayProbeMemoDrop(sessionId);
+  // The over-ceiling dead-set memo's key holds the cuts too, so a new cut already
+  // misses it; dropped anyway, so its memory and its disk copy do not outlive them.
+  dropDeadSets(sessionId);
   try {
     const { deleteHistoryCache } = await import('./history-disk-cache.js');
     await deleteHistoryCache(sessionId);
@@ -454,64 +453,21 @@ export function _resetHistoryCacheForTesting(): void {
   parsedHistoryCache.clear();
   historyCacheChars = 0;
   historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
-  displayProbeMemo.clear();
+  clearDeadSets();
 }
 
-// ── Over-ceiling DISPLAY dead-set memo ──
+// ── Over-ceiling DISPLAY dead-set memo ── (history-dead-set-memo.ts)
 // The byte-ceiling branch below deliberately writes NO history cache entry, so a
 // rewound over-ceiling session would re-ask its host daemon on EVERY read, and
 // each ask makes that host stream and parse the whole transcript (seconds of CPU
 // and hundreds of MB of transient RSS on a very large one) inside a route with no
-// deadline. The answer is a pure function of (recorded cuts, file bytes), so it is
-// memoized on the file's identity: an appended transcript re-probes, a quiet one
-// never does. Bounded, and dropped for a session whenever its history caches are
-// (a new cut changes the answer without changing the file).
-//
-// ONLY the display path memoizes. The rewind gate/commit probes keep fresh-read
-// semantics on purpose — they decide what to persist.
+// deadline. The answer is memoized on the file's identity and the recorded cuts,
+// and kept on disk across restarts.
 
-interface DisplayDeadSet {
-  deadUuids: string[];
-  queueDeadKeys: string[];
-  skippedCuts: SkippedRewindCut[];
-  truncated: boolean;
-}
-const displayProbeMemo = new Map<string, DisplayDeadSet>();
-const DISPLAY_PROBE_MEMO_MAX = 32;
 /** A short, dedicated deadline: this call sits in a route with none of its own,
  *  and a slow answer must degrade to the unfiltered tail rather than pin the
  *  request. The rewind-path calls keep their own (much longer) budget. */
 const DISPLAY_PROBE_TIMEOUT_MS = 10_000;
-
-const displayProbeKey = (sessionId: string, host: string | undefined, mtimeMs: number, size: number): string =>
-  `${sessionId}|${host ?? '__local__'}|${mtimeMs}|${size}`;
-
-function displayProbeMemoGet(key: string): DisplayDeadSet | undefined {
-  const hit = displayProbeMemo.get(key);
-  if (hit) { // LRU touch
-    displayProbeMemo.delete(key);
-    displayProbeMemo.set(key, hit);
-  }
-  return hit;
-}
-
-function displayProbeMemoSet(key: string, value: DisplayDeadSet): void {
-  displayProbeMemo.delete(key);
-  displayProbeMemo.set(key, value);
-  while (displayProbeMemo.size > DISPLAY_PROBE_MEMO_MAX) {
-    const oldest = displayProbeMemo.keys().next().value;
-    if (oldest === undefined) break;
-    displayProbeMemo.delete(oldest);
-  }
-}
-
-/** Drop every memoized dead set for a session (its cuts changed). */
-function displayProbeMemoDrop(sessionId: string): void {
-  const prefix = `${sessionId}|`;
-  for (const key of [...displayProbeMemo.keys()]) {
-    if (key.startsWith(prefix)) displayProbeMemo.delete(key);
-  }
-}
 
 /**
  * The dead set for an over-ceiling rewound transcript: memo first, else one
@@ -532,10 +488,10 @@ async function resolveOverCeilingDeadSet(
   size?: number,
 ): Promise<DisplayDeadSet | null> {
   const callerKey = mtimeMs !== undefined && size !== undefined
-    ? displayProbeKey(sessionId, host, mtimeMs, size)
+    ? deadSetKey(sessionId, host, mtimeMs, size, rewindCuts)
     : null;
   if (callerKey) {
-    const hit = displayProbeMemoGet(callerKey);
+    const hit = await getDeadSet(callerKey);
     if (hit) {
       log.session.debug('over-ceiling dead set served from the memo (no RPC)', {
         sessionId, host: host ?? '__local__', deadUuids: hit.deadUuids.length,
@@ -556,10 +512,7 @@ async function resolveOverCeilingDeadSet(
       skippedCuts: probe.skippedCuts ?? [],
       truncated: probe.truncated === true,
     };
-    displayProbeMemoSet(
-      callerKey ?? displayProbeKey(sessionId, host, probe.mtimeMs, probe.size),
-      value,
-    );
+    setDeadSet(callerKey ?? deadSetKey(sessionId, host, probe.mtimeMs, probe.size, rewindCuts), value);
     return value;
   } catch (err) {
     log.session.debug('rewind probe failed on the byte-ceiling path', {

@@ -10,9 +10,10 @@
  *  - stop flushes what is still asked (the caller bounds the wait, see shutdown-steps.ts);
  *  - a file that does not parse or carries another version reads as none, never an error.
  *
- * Users: the change watcher's next reads (changes/due-file.ts) and the slash palette's host scans
- * (web/routes/slash-commands-disk.ts). The history tail windows (history-tail-window-disk.ts)
- * append to their files instead, so they have a writer of their own.
+ * Users: the change watcher's next reads (changes/due-file.ts), the slash palette's host scans
+ * (web/routes/slash-commands-disk.ts) and the over-ceiling dead sets (history-dead-set-memo.ts).
+ * The history tail windows (history-tail-window-disk.ts) append to their files instead, so they
+ * have a writer of their own.
  * A copy read back is only a hint: each user validates it against the source before it answers.
  */
 import fsp from 'node:fs/promises'

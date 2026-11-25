@@ -62,6 +62,7 @@ const CACHE_ENTRIES: readonly HomeEntry[] = [
   rebuild('cache.history-archive-due', 'cache/history-archive-due.json', 'file', 'When the transcript archive sweep is next due'),
   rebuild('cache.change-watch-due', 'cache/change-watch-due.json', 'file', 'When the change watcher reads each change next; lost, it reads them all once'),
   rebuild('cache.slash-palette', 'cache/slash-palette.json', 'file', 'The slash palette\'s last host scans and stream looks; lost, the first palette after a restart scans the host again'),
+  rebuild('cache.history-dead-sets', 'cache/history-dead-sets.json', 'file', 'Which lines of rewound transcripts too big to read whole are abandoned; lost, the first read after a restart asks the host again'),
   rebuild('cache.history-tail-windows', 'cache/history-tail-windows', 'dir', 'Tail windows of remote sessions\' transcripts; lost, the first read after a restart moves the whole window again'),
   rebuild('cache.attachment-hashes', 'cache/attachment-hashes.json', 'file', 'File hashes of the notes\' pictures and files the attachments copy sends; lost, it hashes them all once'),
   rebuild('cache.projections', 'cache/projections', 'dir', 'Session and task list snapshots'),
