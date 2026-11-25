@@ -61,7 +61,8 @@ export async function rehearseOldHost({ older, out, hostLines = [...NET_HOST_LIN
     const answered = await waitFor(() => streamCounts(h, sid, [`echo: ${words}`])[`echo: ${words}`] > 0, 120_000, 'the legacy answer').then(() => true, () => false)
     r.checks.start = { sid, answered, judge: await h.mac(`/judge?sid=${sid}`), history: await L.answers(sid, `echo: ${words}`), channelEvents: (await h.mac(`/events?sid=${sid}`)).filter((e) => e.source === 'host-channel').length }
     if (!answered) fail('the start on the older host was not answered')
-    if (r.checks.start.judge.judge !== 'legacy') fail(`the start is judged ${JSON.stringify(r.checks.start.judge)}`)
+    // This tree's judge name for a session the leader judges itself ('legacy' until 2026-11-24, sessions/judge-of.ts).
+    if (r.checks.start.judge.judge !== 'here') fail(`the start is judged ${JSON.stringify(r.checks.start.judge)}`)
     if (r.checks.start.channelEvents) fail(`the start has ${r.checks.start.channelEvents} channel events`)
     const again = 'AGAIN old host'
     const sent = await L.send(sid, again)

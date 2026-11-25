@@ -383,7 +383,8 @@ async function rehearsePerHostOff({ out, mode }) {
     const next = await startOn(h, 'After the per-host rollback', 'ROUND legacy next')
     const legacyAnswer = await waitFor(() => streamCounts(h, next.sid, ['ROUND legacy next'])['ROUND legacy next'] > 0, 120_000, 'the legacy answer').then(() => true, () => false)
     r.checks.nextStart = { sid: next.sid, judge: await h.mac(`/judge?sid=${next.sid}`), answered: legacyAnswer, channelEvents: (await h.mac(`/events?sid=${next.sid}`)).filter((e) => e.source === 'host-channel').length }
-    if (r.checks.nextStart.judge.judge !== 'legacy') fail(`the next start is judged ${JSON.stringify(r.checks.nextStart.judge)}`)
+    // This tree's judge name for a session the leader judges itself ('legacy' until 2026-11-24, sessions/judge-of.ts).
+    if (r.checks.nextStart.judge.judge !== 'here') fail(`the next start is judged ${JSON.stringify(r.checks.nextStart.judge)}`)
     if (!legacyAnswer) fail('the next start was not answered')
     if (r.checks.nextStart.channelEvents) fail(`the legacy start has ${r.checks.nextStart.channelEvents} channel events`)
   } catch (err) {

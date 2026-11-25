@@ -65,7 +65,8 @@ async function rehearseVariant({ older, out, variant }) {
       const c = { side, start, stored: storedOff(d, variant) }
       if (side.judges) fail(`${label}: the leader hands the host starts (${JSON.stringify(side)})`)
       if (!start.answered) fail(`${label}: the start was not answered`)
-      if (start.judge !== 'legacy') fail(`${label}: the start is judged ${JSON.stringify(start.judge)}, not legacy`)
+      // This tree's judge name for a session the leader judges itself ('legacy' until 2026-11-24, sessions/judge-of.ts).
+      if (start.judge !== 'here') fail(`${label}: the start is judged ${JSON.stringify(start.judge)}, not here`)
       if (c.stored !== false) fail(`${label}: config.yaml holds ${JSON.stringify(c.stored)} for the switch, not false`)
       return c
     }
