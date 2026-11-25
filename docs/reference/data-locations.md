@@ -233,6 +233,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/feature-nodes/` | machine | no | Connection journal of feature nodes |
 | `~/.open-walnut/local/runtime/` | machine | no | The runtime tree of this install |
 | `~/.open-walnut/local/running-switches/` | machine | no | Engine switches this server is running |
+| `~/.open-walnut/local/held-session-marks.json` | machine | no | Engine switch marks waiting for their new session's row to arrive from its host |
 | `~/.open-walnut/local/planned-restart.json` | machine | no | A restart this server planned |
 | `~/.open-walnut/local/last-planned-stop.json` | machine | no | Why the last server stopped, for the next boot |
 | `~/.open-walnut/local/spawn-journal.jsonl` | machine (daemon state) | no | Sessions this host's daemon started |
