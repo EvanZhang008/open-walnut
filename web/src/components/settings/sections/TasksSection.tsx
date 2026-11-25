@@ -132,7 +132,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
         )}
         <SettingsRow
           label="Go to the next task after completing one"
-          help={`Completing a task from its session column, or with ${isMacPlatform() ? '⌘⇧D' : 'Ctrl+Shift+D'}, moves you to the next task that needs you: its column when it is open, else its row in the list. Nothing opens in the completed column's place.`}
+          help={`Completing a task in its column, or with ${isMacPlatform() ? '⌘⇧D' : 'Ctrl+Shift+D'}, moves you to the next one that needs you. No column opens.`}
           htmlFor="settings-next-after-complete"
           control={
             <ToggleSwitch
