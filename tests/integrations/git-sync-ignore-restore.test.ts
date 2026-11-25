@@ -1,12 +1,13 @@
 /**
- * A data repo whose .gitignore is gone gets it back at boot (ensureRepo), before anything stages.
+ * A data repo whose .gitignore is gone gets the template back (ensureCriticalIgnores, which
+ * returned when the file was missing), at boot and before every `add -A`.
  *
- * Found by a 20 GB leader switch rehearsal between machines (2026-11-24): the standby copy leaves
- * the .gitignore out (rebuildable, home-entries.ts data-repo-ignore) while it copies `.git`, so a
- * promoted home is an existing repo with no ignore list. Nothing wrote it back (the self-heal
- * returns when the file is missing), and the new leader's auto-commit took in tmp/ (the standby's
- * own spool, whose chunks vanished under `git add` every 30 s), /voice-archive/ and the
- * machine-local stores, and committed the .gitignore's deletion. Real git, temp dirs only.
+ * Found by a 20 GB leader switch rehearsal between machines (2026-11-24): the standby copy left
+ * the .gitignore out (then rebuildable, home-entries.ts data-repo-ignore) while it copied `.git`,
+ * so a promoted home was an existing repo with no ignore list. Nothing wrote it back, and the new
+ * leader's auto-commit took in tmp/ (the standby's own spool, whose chunks vanished under `git add`
+ * every 30 s), /voice-archive/ and the machine-local stores, and committed the .gitignore's
+ * deletion. Real git, temp dirs only.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -27,7 +28,7 @@ vi.mock('../../src/constants.js', async () => {
   return createMockConstants('walnut-ignore-restore', { WALNUT_HOME: dirs.home });
 });
 
-import { commitIfDirty, endGitQuiet, ensureRepo, git, quietGitWriters, restoreMissingGitignore } from '../../src/integrations/git-sync.js';
+import { commitIfDirty, endGitQuiet, ensureCriticalIgnores, ensureRepo, git, quietGitWriters } from '../../src/integrations/git-sync.js';
 
 const ignored = (rel: string): boolean => {
   try { execFileSync('git', ['-C', dirs.home, 'check-ignore', '-q', rel]); return true; } catch { return false; }
@@ -44,16 +45,10 @@ afterEach(() => {
 });
 
 describe('a data repo without its .gitignore at boot', () => {
-  it('a promoted copy (the .gitignore committed, gone from disk): the committed one comes back byte for byte, no change to commit', async () => {
+  it('a promoted copy (a .git, the .gitignore gone): the template comes back at boot, before the first commit', async () => {
     expect(await ensureRepo()).toEqual({ available: true });
     const gi = path.join(dirs.home, '.gitignore');
-    // A rule of the user's own, committed: the restore keeps it (the template would drop it).
-    fs.appendFileSync(gi, '\n# mine\n/scratch-of-mine/\n');
-    // As a boot leaves it (the plugin-files block kept last), then committed.
-    expect(await ensureRepo()).toEqual({ available: true });
-    git('add -- .gitignore');
-    git('commit -q -m "my rule"');
-    const committed = fs.readFileSync(gi);
+    const template = fs.readFileSync(gi);
     fs.rmSync(gi);
     fs.mkdirSync(path.join(dirs.home, 'tmp', 'standby-spool'), { recursive: true });
     fs.writeFileSync(path.join(dirs.home, 'tmp', 'standby-spool', 'chunk'), 'x');
@@ -62,11 +57,10 @@ describe('a data repo without its .gitignore at boot', () => {
 
     expect(await ensureRepo()).toEqual({ available: true });
 
-    expect(fs.readFileSync(gi).equals(committed)).toBe(true);
+    expect(fs.readFileSync(gi).equals(template)).toBe(true);
     expect(git('status --porcelain -- .gitignore')).toBe('');
     expect(ignored('tmp/standby-spool/chunk')).toBe(true);
     expect(ignored('voice-archive/a.webm')).toBe(true);
-    expect(ignored('scratch-of-mine/x')).toBe(true);
   });
 
   it('an existing repo that never had one (made by a bare `git init`): the template', async () => {
@@ -80,7 +74,7 @@ describe('a data repo without its .gitignore at boot', () => {
     expect(ignored('notes/a.md')).toBe(false);
   });
 
-  it('a HEAD that committed its deletion: the template', async () => {
+  it('a HEAD that committed its deletion: the template too', async () => {
     expect(await ensureRepo()).toEqual({ available: true });
     git('rm -q --cached -- .gitignore');
     git('commit -q -m "gone"');
@@ -94,7 +88,8 @@ describe('a data repo without its .gitignore at boot', () => {
     expect(await ensureRepo()).toEqual({ available: true });
     fs.rmSync(path.join(dirs.home, '.gitignore'));
     await quietGitWriters(dirs.home, { budgetMs: 0 });
-    expect(await restoreMissingGitignore()).toEqual({ ok: false, error: expect.stringMatching(/quiet for a leader switch/) });
+    ensureCriticalIgnores();
+    expect(fs.existsSync(path.join(dirs.home, '.gitignore'))).toBe(false);
     expect((await ensureRepo()).available).toBe(false);
     expect(fs.existsSync(path.join(dirs.home, '.gitignore'))).toBe(false);
   });
@@ -102,14 +97,14 @@ describe('a data repo without its .gitignore at boot', () => {
   it('gone while the server runs: the next commit writes it back first, and commits neither its deletion nor what it ignores', async () => {
     expect(await ensureRepo()).toEqual({ available: true });
     const gi = path.join(dirs.home, '.gitignore');
-    const committed = fs.readFileSync(gi);
+    const template = fs.readFileSync(gi);
     fs.rmSync(gi);
     fs.mkdirSync(path.join(dirs.home, 'tmp'), { recursive: true });
     fs.writeFileSync(path.join(dirs.home, 'tmp', 'scratch'), 'x');
     fs.mkdirSync(path.join(dirs.home, 'notes'), { recursive: true });
     fs.writeFileSync(path.join(dirs.home, 'notes', 'a.md'), 'a\n');
     await commitIfDirty();
-    expect(fs.readFileSync(gi).equals(committed)).toBe(true);
+    expect(fs.readFileSync(gi).equals(template)).toBe(true);
     const files = git('ls-files').split('\n');
     expect(files).toContain('.gitignore');
     expect(files).toContain('notes/a.md');

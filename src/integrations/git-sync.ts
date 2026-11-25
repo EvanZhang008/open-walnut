@@ -1252,10 +1252,11 @@ export async function stageAllForCommit(
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   const root = gitOpts?.cwd ?? WALNUT_HOME;
-  // Every `add -A` of the home goes through here: never one with no ignore list (restoreMissingGitignore).
-  if (path.resolve(root) === path.resolve(WALNUT_HOME)) {
-    const ignore = await restoreMissingGitignore();
-    if (!ignore.ok) throw new Error(`git-sync: the data repo has no .gitignore, so nothing is staged: ${ignore.error}`);
+  // Every `add -A` of the home goes through here: never one with no ignore list (a leader
+  // switch's promoted home, or one removed while the server runs: see ensureCriticalIgnores).
+  if (path.resolve(root) === path.resolve(WALNUT_HOME) && !fs.existsSync(path.join(root, '.gitignore'))) {
+    writeOrHealGitignore();
+    if (!fs.existsSync(path.join(root, '.gitignore'))) throw new Error('git-sync: the data repo has no .gitignore and it could not be written, so nothing is staged');
   }
   await releasePrivateDataHolds(gitRunnerAt(root), root);
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
@@ -1630,7 +1631,12 @@ export function ensureCriticalIgnores(): void {
   try {
     content = fs.readFileSync(gitignorePath, 'utf-8');
   } catch {
-    return; // no .gitignore yet — initSync writes the full template
+    // No .gitignore: the template, here too. A repo can have `.git` and no .gitignore (a leader
+    // switch's promoted home before the file was leader data; a file removed by hand), and an
+    // `add -A` with no ignore list takes in tmp/, /voice-archive/ and the machine-local stores.
+    // Not while the home is quiet for a leader switch's stop: the next leader's boot writes it.
+    if (!gitQuietAt(WALNUT_HOME)) fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+    return;
   }
   // Retire only the scanner's blanket filename rules, not machine-local stores or user rules.
   const retired = new Set(SECRET_IGNORE_PATTERNS);
@@ -1711,8 +1717,6 @@ async function ensureMachineLocalUntrackedAsync(atBoot = false): Promise<string[
   // `ls-files -i` only reports paths the CURRENT .gitignore ignores, so the
   // ignore rules must exist before the query — otherwise a repo whose
   // .gitignore predates CRITICAL_IGNORES reports nothing and the guard no-ops.
-  // A .gitignore gone at runtime: written back first (ensureCriticalIgnores needs a file to heal).
-  if (!atBoot) { try { await restoreMissingGitignore(); } catch { /* best-effort */ } }
   try { ensureCriticalIgnores(); } catch { /* best-effort */ }
   await sweepGitTempsAsync();
   const tracked = await gitSafeAsync('ls-files -i -c --exclude-standard');
@@ -1764,40 +1768,6 @@ function writeOrHealGitignore(): void {
   } else {
     ensureCriticalIgnores();
   }
-}
-
-/**
- * An existing data repo with no .gitignore on disk gets one back: the committed one when HEAD
- * holds it (byte for byte, so it is not a change), else the template (also when git cannot
- * answer). Found by a 20 GB leader switch rehearsal (2026-11-24): the standby then left the
- * .gitignore out as rebuildable while it copied `.git` (home-entries.ts data-repo-ignore, leader
- * data since), so the new leader booted an existing repo with no ignore list.
- * ensureCriticalIgnores() returns when the file is missing, so nothing wrote it, and the
- * auto-commit's `git add -A` took in tmp/ (the standby's own spool), /voice-archive/, local/ and
- * every machine-local store, and committed the .gitignore's deletion. Run at boot (ensureRepo),
- * before every `add -A` (stageAllForCommit) and before the sync tick's ignore heal.
- */
-export async function restoreMissingGitignore(): Promise<{ ok: true } | { ok: false; error: string }> {
-  const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
-  if (fs.existsSync(gitignorePath)) return { ok: true };
-  // A leader switch's stop: nothing of this server writes the home now (the next leader's boot writes it).
-  if (gitQuietAt(WALNUT_HOME)) return { ok: false, error: 'the home is quiet for a leader switch' };
-  let committed: Buffer | null = null;
-  let why = '';
-  try {
-    const r = await execGitArgsRaw(['show', 'HEAD:.gitignore'], { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT, holdsNoLock: true });
-    if (r.code === 0) committed = r.stdout;
-    else why = r.stderr.trim().split('\n')[0] ?? '';
-  } catch (err) {
-    why = err instanceof Error ? err.message : String(err);
-  }
-  try {
-    fs.writeFileSync(gitignorePath, committed ?? GITIGNORE_CONTENT);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  log.git.warn('git-sync: the data repo had no .gitignore; written back', { from: committed ? 'HEAD' : 'template', ...(why ? { why } : {}) });
-  return { ok: true };
 }
 
 /**
@@ -4057,16 +4027,14 @@ export async function ensureRepo(): Promise<{ available: boolean; error?: string
         error: `git repo config setup failed: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
-    // A repo whose .gitignore is gone gets it back before anything stages; with none, it is
-    // not available (an auto-commit with no ignore list takes in tmp/ and the machine-local stores).
-    const ignore = await restoreMissingGitignore();
-    if (!ignore.ok) return { available: false, error: `the data repo has no .gitignore and it could not be written: ${ignore.error}` };
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
     // files added after the repo was initialized never enter the sync history
     // (ensureMachineLocalUntrackedAsync heals it first), and drop any that are
     // STILL tracked. Ignoring a tracked path does not
     // protect it: a merge carrying its deletion removes the local file.
     try { await ensureMachineLocalUntrackedAsync(true); } catch { /* best-effort */ }
+    // That heal writes a missing .gitignore (ensureCriticalIgnores): with none, nothing may commit.
+    if (!fs.existsSync(path.join(WALNUT_HOME, '.gitignore'))) return { available: false, error: 'the data repo has no .gitignore and it could not be written' };
   }
   return { available: true };
 }
