@@ -113,3 +113,73 @@ export function stripInternalLines(text: string, streaming = false): string {
   const joined = kept.join('\n');
   return joined === text ? text : joined.replace(/\s+$/, '');
 }
+
+/** A line as two texts are compared: its trailing white space (and a `\r`) does not count. */
+const lineKey = (l: string) => l.replace(/\s+$/, '');
+/** Past this many cells the middle is compared by set, not by the exact walk (a long rewrite). */
+const DIFF_CELLS_MAX = 200_000;
+
+/**
+ * The lines of `raw` that `shown` leaves out, in their order, as one text: what Walnut hid from a
+ * reply (its status lines, a turn-end marker, a tasks line), for a developer who asked to see them
+ * folded under the reply (Settings > Advanced, `ui.show_hidden_lines`). Any hiding works, since it
+ * only compares the two texts: a line is hidden when no line of `shown` stands for it in the
+ * longest run they share. A line whose start alone was cut (a `[Q4]:` tag before the words, an old
+ * version tag) gives only that start, never the words again. Blank lines at either end are dropped;
+ * '' when nothing is hidden.
+ */
+export function hiddenLinesOf(raw: string, shown: string): string {
+  if (raw === shown) return '';
+  const a = raw.split('\n').map(lineKey);
+  const b = shown ? shown.split('\n').map(lineKey) : [];
+  // The common head and tail first: Walnut hides lines at the end, so the walk is usually empty.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const midA = a.slice(head, a.length - tail);
+  const midB = b.slice(head, b.length - tail);
+  let out: string[];
+  if (midB.length === 0) out = midA;
+  else if (midA.length * midB.length > DIFF_CELLS_MAX) {
+    const kept = new Set(midB);
+    out = midA.filter((l) => !kept.has(l));
+  } else {
+    // The longest common run of lines (classic table, from the end), then one walk from the start.
+    // A shown line stands for a raw line that ends with it: the hiding cut only its start.
+    const stands = (r: string, sh: string) => r === sh || (!!sh.trim() && r.endsWith(sh));
+    const n = midA.length, m = midB.length, w = m + 1;
+    const len = new Uint32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        len[i * w + j] = stands(midA[i], midB[j]) ? len[(i + 1) * w + j + 1] + 1 : Math.max(len[(i + 1) * w + j], len[i * w + j + 1]);
+      }
+    }
+    out = [];
+    let i = 0, j = 0;
+    while (i < n) {
+      if (j < m && stands(midA[i], midB[j])) {
+        const cut = midA[i].slice(0, midA[i].length - midB[j].length).trim();
+        if (cut) out.push(cut);
+        i++; j++;
+      } else if (j < m && len[i * w + j + 1] >= len[(i + 1) * w + j]) j++;
+      else out.push(midA[i++]);
+    }
+  }
+  let s = 0, e = out.length;
+  while (s < e && !out[s].trim()) s++;
+  while (e > s && !out[e - 1].trim()) e--;
+  return out.slice(s, e).join('\n');
+}
+
+/**
+ * A stored reply as a person reads it (stripInternalLines), with what was taken out of it beside
+ * the text (`hidden`, absent when nothing was): every parse that hides Walnut's lines from a chat row
+ * calls this, so a developer's chat can show them folded (tests/lib/hidden-lines.test.ts).
+ */
+export function splitInternalLines(text: string): { text: string; hidden?: string } {
+  const shown = stripInternalLines(text);
+  if (shown === text) return { text };
+  const hidden = hiddenLinesOf(text, shown);
+  return hidden ? { text: shown, hidden } : { text: shown };
+}

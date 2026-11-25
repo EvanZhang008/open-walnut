@@ -59,7 +59,8 @@ import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
-import { stripTurnMarker } from '@/utils/turn-end-marker';
+import { hiddenLinesOf, stripTurnMarker } from '@/utils/turn-end-marker';
+import { useShowHiddenLines } from '@/hooks/useShowHiddenLines';
 import { MessageAboutContext, rowAbout } from './message-about';
 import { AboutLine, ReplyThreadContext, ReplyThreadLine, useReplyThreadLineOn } from './reply-thread-line';
 import { answerTasks, type ReplyThread } from '@open-walnut/reply-thread';
@@ -263,6 +264,8 @@ interface SessionMessageProps {
   /** The words alone, as a question's comment card shows its answer: no tools
    *  and no thinking (whose part of the turn it was is not knowable there). */
   answerOnly?: boolean;
+  /** No fold of the lines Walnut hid (a thread card: it already reads those lines as its state). */
+  noHiddenLines?: boolean;
   /** The notes Walnut put in front of the person's words are drawn by the fold
    *  right above this row (SessionChatHistory), so this row draws the words alone. */
   ridersFolded?: boolean;
@@ -306,14 +309,9 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   // like > Thinking ... just liek all other not even icon icon isinside te collpes").
   if (!inStepList) {
     return (
-      <div className="tool-run-row process-fold" data-testid="thought-fold" data-open={open ? 'true' : 'false'} {...(live ? { 'data-running': 'true' } : {})}>
-        <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
-          <DisclosureChevron open={open} className="tool-run-chevron process-fold-chevron" />
-          <span className="tool-run-label">Thinking</span>
-          {live && <span className="tool-run-live-dot" />}
-        </button>
-        {open && <div className="process-fold-body"><InFoldBody.Provider value><InStepList.Provider value><SessionThinking text={text} live={live} /></InStepList.Provider></InFoldBody.Provider></div>}
-      </div>
+      <FoldLine label="Thinking" open={open} onToggle={() => setOpen((p) => !p)} testId="thought-fold" live={live}>
+        <InFoldBody.Provider value><InStepList.Provider value><SessionThinking text={text} live={live} /></InStepList.Provider></InFoldBody.Provider>
+      </FoldLine>
     );
   }
   // Inside a list of steps the reader opened, a step row like every other (step-rows.css):
@@ -335,6 +333,37 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
         </div>
       )}
     </div>
+  );
+}
+
+/** The one fold line of the timeline at rest: the chevron, then the words; its body once opened. */
+function FoldLine({ label, open, onToggle, testId, live, children }: {
+  label: string; open: boolean; onToggle: () => void; testId: string; live?: boolean; children: ReactNode;
+}) {
+  return (
+    <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'} {...(live ? { 'data-running': 'true' } : {})}>
+      <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={onToggle}>
+        <DisclosureChevron open={open} className="tool-run-chevron process-fold-chevron" />
+        <span className="tool-run-label">{label}</span>
+        {live && <span className="tool-run-live-dot" />}
+      </button>
+      {open && <div className="process-fold-body">{children}</div>}
+    </div>
+  );
+}
+
+/**
+ * The lines Walnut hid from a reply (its status lines, a turn-end marker, a tasks line), for a
+ * developer who keeps them on screen (Settings > Advanced, useShowHiddenLines): one fold line
+ * like "Thinking", closed at first, the lines as the session wrote them once opened.
+ */
+export function HiddenLinesFold({ text, disclosureId }: { text: string; disclosureId?: string }) {
+  const [open, setOpen] = useRowDisclosure(disclosureId, false);
+  if (!text.trim()) return null;
+  return (
+    <FoldLine label="Hidden by Walnut" open={open} onToggle={() => setOpen((p) => !p)} testId="hidden-lines-fold">
+      <div className="chat-thinking-content" data-testid="hidden-lines-text" data-find-skip="">{text}</div>
+    </FoldLine>
   );
 }
 
@@ -1337,7 +1366,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, replyThread, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, noHiddenLines, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, replyThread, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
   // A reply still arriving is this same row (SessionChatHistory draws a stream
   // block as the row its persisted twin will be): its words hold while the
@@ -1349,6 +1378,14 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // the turn shows the number, so the line itself never renders. Nor does the
   // "no action needed" marker line (turn-end-marker.ts): it is for the timeline.
   const text = role === 'assistant' ? stripTurnMarker(stripQuestionTag(rawText ?? '')) : rawText;
+  // What Walnut hid from the reply, folded under it for a developer (ui.show_hidden_lines): the
+  // lines the server's parse took out (message.hidden), then those this view takes out of the text.
+  const showHidden = useShowHiddenLines();
+  const hiddenText = useMemo(() => {
+    if (!showHidden || noHiddenLines || role !== 'assistant') return '';
+    const here = hiddenLinesOf(rawText ?? '', text ?? '');
+    return [message.hidden ?? '', here].filter((t) => t.trim()).join('\n');
+  }, [showHidden, noHiddenLines, role, rawText, text, message.hidden]);
   // In Main's or a lead's chat, the tasks a reply is about show under it (message-about.tsx).
   const showAbout = useContext(MessageAboutContext);
   const aboutIds = useMemo(() => (showAbout && role === 'assistant' ? rowAbout(message.about, rawText) : []), [showAbout, role, message.about, rawText]);
@@ -1607,6 +1644,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />
         ))}
+        {hiddenText && <HiddenLinesFold text={hiddenText} disclosureId={disclosureIds.hidden(message.msgId)} />}
         {bodyText && (lineThread && !isUser
           ? <ReplyThreadLine thread={lineThread} side="answer" {...(lineTasks?.length ? { tasks: lineTasks } : {})} />
           : aboutIds.length > 0 && <AboutLine ids={aboutIds} />)}

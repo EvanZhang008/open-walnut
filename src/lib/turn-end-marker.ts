@@ -25,6 +25,8 @@
 
 import { readAboutTag, stripAboutTag } from '../core/org/message-about.js';
 import { FENCE, INDENTED_CODE, stripInternalLines } from './internal-lines.js';
+// The web client reads the hidden lines of a reply through this module (@open-walnut/turn-end-marker).
+export { hiddenLinesOf } from './internal-lines.js';
 
 export const NO_ACTION_TAG = '<walnut-turn status="agent-ack"/>';
 /**

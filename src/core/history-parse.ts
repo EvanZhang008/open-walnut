@@ -32,7 +32,7 @@ import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { IDLE_COMPACT_HISTORY_TEXT, IDLE_COMPACT_UUID_PREFIX } from './sessions/prompt-cache.js';
 import { commandTagLine, isWalnutCommandNotice, settingChangeNotice, walnutCommandNotice } from './sessions/walnut-commands.js';
 import { messageAbout, readAboutTag } from './org/message-about.js';
-import { stripInternalLines } from '../lib/internal-lines.js';
+import { splitInternalLines } from '../lib/internal-lines.js';
 import { CLI_ERROR_PREFIX, isCliErrorReply } from './sessions/cli-error-reply.js';
 import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions/side-thread-digest.js';
 
@@ -211,6 +211,9 @@ export interface SessionHistoryMessage {
   cliError?: true;
   tools?: SessionHistoryTool[];
   thinking?: string;
+  /** For role='assistant': the lines Walnut left out of `text` (its status lines, internal-lines.ts
+   *  splitInternalLines), shown folded under the reply only where `ui.show_hidden_lines` is on. */
+  hidden?: string;
   model?: string;
   /** Reasoning effort recorded by the CLI on this assistant message, not a default. */
   effort?: string;
@@ -1685,10 +1688,13 @@ function messagesFromLines(parsedLines: RawJsonlLine[], opts?: ParseSessionMessa
 
     const opensTurn = hiddenTurnStart && !msg.parentToolUseId;
     if (opensTurn) hiddenTurnStart = false;
+    // A reply as a person reads it: Walnut's own lines (a status report, an old version tag) left
+    // out, and kept beside it for a developer's chat to show folded (ui.show_hidden_lines).
+    const reply = msg.role === 'assistant' ? splitInternalLines(text) : null;
     result.push({
       role: msg.role as 'user' | 'assistant' | 'system',
-      // A reply as a person reads it: Walnut's own lines (a status report, an old version tag) left out.
-      text: msg.role === 'assistant' ? stripInternalLines(text) : text,
+      text: reply ? reply.text : text,
+      ...(reply?.hidden ? { hidden: reply.hidden } : {}),
       timestamp: msg.timestamp,
       msgId: mapMsgId,
       ...(tools.length > 0 ? { tools } : {}),

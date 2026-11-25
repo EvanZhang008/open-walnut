@@ -377,6 +377,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'Developer options, device records, and on a Mac, keeping it awake during sessions.',
     keywords: [
       'keep awake', 'lid', 'battery', 'sdk',
+      { word: 'hidden lines', rowLabel: 'Show lines Walnut hides', anchor: 'show-hidden-lines' },
       { word: 'port', rowLabel: 'Port', anchor: 'sdk-port' }, // the row's real label (N17)
       'raw config', 'json', 'background jobs',
       { word: 'simulator device records', rowLabel: 'Device records', anchor: 'devices-others' },

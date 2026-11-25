@@ -1,7 +1,7 @@
 import { CONTROL_PROMPT_GUARD, isOpRefusalRecord, type JournalRecord } from './acp-worker/protocol.js'
 import { projectUserText } from '../core/sessions/reference-cards.js'
 import { redactAiOnly } from '../lib/ai-only-envelope.js'
-import { stripInternalLines } from '../lib/internal-lines.js'
+import { splitInternalLines } from '../lib/internal-lines.js'
 import type {
   SessionHistoryMessage,
   SessionHistoryTool,
@@ -704,8 +704,8 @@ export function projectAcpJournalHistory(
 export function shownAcpMessages(messages: SessionHistoryMessage[]): SessionHistoryMessage[] {
   return messages.map((m) => {
     if (m.role !== 'assistant' || !m.text) return m
-    const text = stripInternalLines(m.text)
-    return text === m.text ? m : { ...m, text }
+    const reply = splitInternalLines(m.text)
+    return reply.text === m.text ? m : { ...m, text: reply.text, ...(reply.hidden ? { hidden: reply.hidden } : {}) }
   })
 }
 

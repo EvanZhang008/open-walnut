@@ -11,6 +11,7 @@ import { AUTOSAVE_DELAY_MS } from '@/hooks/useAutoSave';
 import { apiGet, apiPost } from '@/api/client';
 import type { OnSave } from './GeneralSection';
 import { DeviceList } from './cloud/DeviceList';
+import { setShowHiddenLines, useShowHiddenLines } from '@/hooks/useShowHiddenLines';
 
 export interface KeepAwakeStatus {
   state: {
@@ -234,6 +235,8 @@ export function AdvancedSection({ config, onSave }: Props) {
     };
   }, []);
 
+  // ui.show_hidden_lines: its own write (no form name), so the form's autosave never sees it.
+  const showHidden = useShowHiddenLines();
   const kaState = kaStatus?.state ?? null;
   const kaSupported = kaState?.supported !== false;
   const needsSetup = kaState?.setupDone === false;
@@ -285,6 +288,11 @@ export function AdvancedSection({ config, onSave }: Props) {
             )}
           </SettingsDisclosure>
         )}
+
+        {/* A developer switch: the lines Walnut hides from a reply, folded under it (useShowHiddenLines). */}
+        <SettingsRow label="Show lines Walnut hides" htmlFor="show-hidden-lines" data-testid="advanced-show-hidden-lines"
+          help="Folded under each reply in a session chat. On by default when Walnut runs from its source code."
+          control={<ToggleSwitch id="show-hidden-lines" checked={showHidden} onChange={(on) => setShowHiddenLines(on)} />} />
 
         {/* SDK Session Server: a developer switch (Agent SDK server instead of CLI sessions). */}
         <SettingsDisclosure id="advanced-sdk" data-testid="advanced-disclosure-sdk" label="SDK session server" help="For developers: run sessions through the Agent SDK instead of the CLI." summary={sdkEnabled ? 'On' : 'Off'}>

@@ -103,6 +103,8 @@ export const disclosureIds = {
   run: (first: { toolUseId?: string; msgId?: string } | undefined): string | undefined =>
     first?.toolUseId ? `run-${first.toolUseId}` : first?.msgId ? `run-${first.msgId}` : undefined,
   thinking: (msgId: string | undefined): string | undefined => (msgId ? `think-${msgId}` : undefined),
+  /** A reply: the lines Walnut hid from it (HiddenLinesFold). */
+  hidden: (msgId: string | undefined): string | undefined => (msgId ? `hidden-${msgId}` : undefined),
   tool: (toolUseId: string | undefined): string | undefined => (toolUseId ? `tool-${toolUseId}` : undefined),
   diff: (toolUseId: string | undefined): string | undefined => (toolUseId ? `diff-${toolUseId}` : undefined),
   diffFull: (toolUseId: string | undefined): string | undefined => (toolUseId ? `difffull-${toolUseId}` : undefined),

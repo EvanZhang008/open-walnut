@@ -139,7 +139,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
   const reply = (r: SessionHistoryMessage) => (
     <SessionMessage
       key={r.msgId ?? r.walnutMessageId} message={r} sessionId={h.sessionId} sessionCwd={h.sessionCwd}
-      sessionHost={h.sessionHost} answerOnly onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
+      sessionHost={h.sessionHost} answerOnly noHiddenLines onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
     />
   );
   return (

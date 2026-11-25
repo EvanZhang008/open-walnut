@@ -2250,6 +2250,10 @@ export interface Config {
      *  Walnut adds should be visible); false hides them behind each message's footer
      *  "Walnut added" control, which shows them for that message. */
     show_walnut_additions?: boolean;
+    /** The session chat shows, folded under each reply, the lines Walnut hid from it (its status
+     *  lines: src/lib/internal-lines.ts). Settings > Advanced. Unset: on where Walnut runs from its
+     *  own source checkout (a developer), off for everyone else. */
+    show_hidden_lines?: boolean;
     /** Completing a task from its session column (or with the keyboard) goes on to the next
      *  task that needs the person: its column opens and takes the caret. Default: true. */
     next_after_complete?: boolean;

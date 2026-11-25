@@ -324,6 +324,9 @@ export interface SessionHistoryMessage {
   cliError?: true;
   tools?: SessionHistoryTool[];
   thinking?: string;
+  /** For role='assistant': the lines Walnut left out of `text` (its status lines), shown folded
+   *  under the reply only where `ui.show_hidden_lines` is on (useShowHiddenLines). */
+  hidden?: string;
   model?: string;
   /** Reasoning effort recorded by the CLI on this assistant message. */
   effort?: string;
