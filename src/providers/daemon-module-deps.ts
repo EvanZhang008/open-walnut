@@ -15,6 +15,36 @@
  * gets it from the call itself, with no frame between (DaemonClient.call).
  */
 
+import type * as TriggerCheck from './trigger-check-core.js'
+import type * as TriggerEnvelope from './trigger-envelope-core.js'
+import type * as TriggerClock from './trigger-clock-core.js'
+import type * as ClockSchedule from './clock-schedule-core.js'
+import type * as TriggerStateSnapshot from './trigger-state-snapshot-core.js'
+import type * as TriggerStateSeed from './trigger-state-seed-core.js'
+
+/**
+ * The trigger logic the runtime's trigger area (daemon-trigger-store/runs/set/commands.ts) runs on:
+ * a check's input, run and verdict, a trigger's state, the claim, ack and host delivery of fires,
+ * their envelope, a clock's schedule, a pushed set's validation, a trigger's memory moved between
+ * daemons. Task logic (tests/providers/daemon-task-logic-ratchet.test.ts), so an area module
+ * never loads it: it takes it as its `judge` dep, which the runtime fills from the trigger code
+ * (trigger-check-core.ts and friends).
+ */
+export type HostTriggerJudge =
+  Pick<typeof TriggerCheck,
+    | 'buildCheckStdin' | 'runCheckProcess' | 'parseCheckStdout' | 'checkErrorOf' | 'decideCheck' | 'applyCheckOutcome'
+    | 'applyCheckError' | 'applyMachineFault' | 'checkIdleOf' | 'newItemsOf' | 'checkCallerEnv' | 'testCheckCaller'
+    | 'clampTimeoutSeconds' | 'CHECK_ERROR_BACKOFF_MS' | 'MAX_CONSECUTIVE_CHECK_ERRORS' | 'MIN_EVERY_MS'
+    | 'emptyHostState' | 'coerceHostState' | 'triggerStateFileName' | 'TRIGGER_STATE_TTL_MS'
+    | 'claimFires' | 'ackFire' | 'fireDueOnHost' | 'hostBatch' | 'markHostBatch' | 'markHostDelivered'
+    | 'HOST_DELIVERY_GRACE_MS' | 'HOST_DELIVERY_RETRY_MS' | 'PENDING_FIRE_REPLAY_MS' | 'applyClockFire'
+    | 'validateTriggerDef' | 'validateTriggerSet' | 'applyTriggersDelta' | 'triggersSetHash'>
+  & Pick<typeof TriggerEnvelope, 'buildTriggerMessage' | 'buildScheduledMessage'>
+  & Pick<typeof TriggerClock, 'clockStateOnArm' | 'clockDueMs' | 'clockFireOwed' | 'dropStaleClockFires'>
+  & Pick<typeof ClockSchedule, 'createClockSchedule'>
+  & Pick<typeof TriggerStateSnapshot, 'takeTriggerStateSnapshot'>
+  & Pick<typeof TriggerStateSeed, 'seedTriggerState'>
+
 /** The runtime's answer to one command: `sendOk` / `sendError` (daemon-standalone.ts, "Protocol helpers"). */
 export interface DaemonReplies<W> {
   sendOk: (ws: W, id: number | null, data: Record<string, unknown>) => void

@@ -11,16 +11,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { ackFire, buildCheckStdin, checkErrorOf, claimFires, clampTimeoutSeconds, decideCheck, emptyHostState, markHostDelivered, newItemsOf, parseCheckStdout, runCheckProcess, triggerStateFileName, MIN_EVERY_MS, checkCallerEnv, testCheckCaller, type CheckCaller, type CheckCallers, type TriggerCheckSpec, type TriggerDef, type TriggersTestResult } from './trigger-check-core.js'
-import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
-import { seedTriggerState } from './trigger-state-seed-core.js'
+import type { CheckCaller, CheckCallers, TriggerCheckSpec, TriggerDef, TriggersTestResult } from './trigger-check-core.js'
 import type { ClockHostStart } from './clock-host-start-core.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { ArmedTrigger, TriggerSocket, createDaemonTriggerStore } from './daemon-trigger-store.js'
 import type { createDaemonTriggerRuns } from './daemon-trigger-runs.js'
-import { ok, fail, type Answer, type Answers, type DaemonLog } from './daemon-module-deps.js'
+import { ok, fail, type Answer, type Answers, type DaemonLog, type HostTriggerJudge } from './daemon-module-deps.js'
 
 export interface DaemonTriggerCommandsDeps<W extends TriggerSocket> {
+  /** The trigger logic this area runs on (daemon-module-deps.ts HostTriggerJudge), passed in by the runtime. */
+  judge: HostTriggerJudge
   triggerStore: ReturnType<typeof createDaemonTriggerStore<W>>
   triggerRuns: ReturnType<typeof createDaemonTriggerRuns>
   /** A stopping Demo starts no test. */
@@ -42,6 +42,7 @@ export interface DaemonTriggerCommandsDeps<W extends TriggerSocket> {
 
 export function createDaemonTriggerCommands<W extends TriggerSocket>(deps: DaemonTriggerCommandsDeps<W>) {
   const { triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, foreignHomeRefusal, logMsg } = deps
+  const { ackFire, buildCheckStdin, checkErrorOf, claimFires, clampTimeoutSeconds, decideCheck, emptyHostState, markHostDelivered, newItemsOf, parseCheckStdout, runCheckProcess, triggerStateFileName, MIN_EVERY_MS, checkCallerEnv, testCheckCaller, takeTriggerStateSnapshot, seedTriggerState } = deps.judge
   const { TRIGGER_STATE_DIR, armedTriggers, drainingTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerScopes, triggersConfigureGate, triggerKey, heldTrigger, triggerFor, triggerStateDirOf, triggerStatePath, persistTriggerState, persistTriggersFile, triggerOwnerOf } = triggerStore
   const { checkRunFence, runClock, runTrigger } = triggerRuns
 

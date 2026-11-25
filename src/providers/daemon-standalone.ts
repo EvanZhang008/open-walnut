@@ -128,8 +128,13 @@ import { createDaemonProcessGroups } from './daemon-process-groups.js'
 import { settleAnswer, fail, type Answer, type AnswerFn, type Answers } from './daemon-module-deps.js'
 import { Worker as ThreadWorker } from 'node:worker_threads'
 import { createHistoryReady, createReadyWorkerExecutor, readyWorkerEntries, type ReadyWorkerLike } from './history-ready-core.js'
-import { validateTriggerDef, checkGatewayCall, createCheckCallers, withoutTriggerCaller } from './trigger-check-core.js'
-import { START_TASK_TOKEN } from './trigger-clock-core.js'
+import * as triggerCheck from './trigger-check-core.js'
+import * as triggerClock from './trigger-clock-core.js'
+import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
+import { createClockSchedule } from './clock-schedule-core.js'
+import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
+import { seedTriggerState } from './trigger-state-seed-core.js'
+import type { HostTriggerJudge } from './daemon-module-deps.js'
 import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, gitRunnerWith, liveTranscriptIdsFromPs, listTaskDirs, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreSessionAnywhere, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreloadAsync, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createLogAppender, type LogAppender } from './log-appender-core.js'
@@ -195,6 +200,13 @@ const DAEMON_VERSION = process.env.DAEMON_VERSION || 'dev'
 
 // The runtime's options and its surface: daemon-runtime-types.ts (a server that creates one reads them there).
 export type { DaemonRuntimeOptions, DaemonFrame, DaemonClient, DaemonRuntime } from './daemon-runtime-types.js'
+
+const { validateTriggerDef, checkGatewayCall, createCheckCallers, withoutTriggerCaller } = triggerCheck
+const { START_TASK_TOKEN } = triggerClock
+/** The trigger logic the trigger area runs on (task logic): the area modules take it as their `judge` dep. */
+const hostTriggerJudge: HostTriggerJudge = {
+  ...triggerCheck, ...triggerClock, buildScheduledMessage, buildTriggerMessage, createClockSchedule, takeTriggerStateSnapshot, seedTriggerState,
+}
 
 export async function createDaemonRuntime(options: DaemonRuntimeOptions): Promise<DaemonRuntime> {
 // The daemon's body, as it was when it was the whole program: not indented, so its lines and
@@ -5445,13 +5457,13 @@ const { hookActions, HOOKS_DIR, daemonHooksByHome, loadDaemonHooksAtBoot, persis
 // ── walnut-trigger: the daemon owns the clock and runs the check; clock routines (clock-routine-v1) ──
 // The store (daemon-trigger-store.ts), the runs and the clock (daemon-trigger-runs.ts), the set
 // (daemon-trigger-set.ts) and the other commands (daemon-trigger-commands.ts).
-const triggerStore = createDaemonTriggerStore({ daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, walnutScope, gatewayClientHomes, wsClients, isServerClient, sendEvent, logMsg })
+const triggerStore = createDaemonTriggerStore({ judge: hostTriggerJudge, daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, walnutScope, gatewayClientHomes, wsClients, isServerClient, sendEvent, logMsg })
 const { TRIGGERS_BASE_DIR, TRIGGER_STATE_DIR, armedTriggers, drainingTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerScopes, triggerScopeOf, persistTriggersFile } = triggerStore
-const triggerRuns = createDaemonTriggerRuns({ daemonEnv, triggerStore, demoQuiesce, childUse, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, followerTriggers, clockHostStart, setInterval, clearInterval, logMsg })
+const triggerRuns = createDaemonTriggerRuns({ judge: hostTriggerJudge, daemonEnv, triggerStore, demoQuiesce, childUse, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, followerTriggers, clockHostStart, setInterval, clearInterval, logMsg })
 const { demoTriggerChecks, demoTriggerCheckPids } = triggerRuns
-const triggerSet = createDaemonTriggerSet({ triggerStore, triggerRuns, offlineHost, walnutScope, gatewayClientHomes, sendEvent, logMsg, sendOk, sendError })
+const triggerSet = createDaemonTriggerSet({ judge: hostTriggerJudge, triggerStore, triggerRuns, offlineHost, walnutScope, gatewayClientHomes, sendEvent, logMsg, sendOk, sendError })
 const { loadTriggersAtBoot, effectiveTriggerDefs, armTriggerSet, triggerHoldsChanged } = triggerSet
-const triggerCommands = createDaemonTriggerCommands({ triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, foreignHomeRefusal, logMsg })
+const triggerCommands = createDaemonTriggerCommands({ judge: hostTriggerJudge, triggerStore, triggerRuns, demoQuiesce, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, clockHostStart, walnutScope, gatewayClientHomes, foreignHomeRefusal, logMsg })
 const { runTriggerTest } = triggerCommands
 // keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
 let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null

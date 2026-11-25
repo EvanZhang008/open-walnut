@@ -11,14 +11,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { TriggerHold, createOfflineHostCore } from './offline-host-core.js'
-import { triggersSetHash, validateTriggerDef, validateTriggerSet, applyTriggersDelta, type TriggerDef, type TriggerHostState } from './trigger-check-core.js'
+import type { TriggerDef, TriggerHostState } from './trigger-check-core.js'
 import type { ClockReport } from './trigger-clock-core.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { ArmedTrigger, TriggerSocket, createDaemonTriggerStore } from './daemon-trigger-store.js'
 import type { createDaemonTriggerRuns } from './daemon-trigger-runs.js'
-import type { DaemonLog, DaemonReplies, DaemonSendEvent } from './daemon-module-deps.js'
+import type { DaemonLog, DaemonReplies, DaemonSendEvent, HostTriggerJudge } from './daemon-module-deps.js'
 
 export interface DaemonTriggerSetDeps<W extends TriggerSocket> extends DaemonReplies<W> {
+  /** The trigger logic this area runs on (daemon-module-deps.ts HostTriggerJudge), passed in by the runtime. */
+  judge: HostTriggerJudge
   triggerStore: ReturnType<typeof createDaemonTriggerStore<W>>
   triggerRuns: ReturnType<typeof createDaemonTriggerRuns>
   /** The pauses, resumes and deletes a session made here while its Walnut was away. */
@@ -33,6 +35,7 @@ export interface DaemonTriggerSetDeps<W extends TriggerSocket> extends DaemonRep
 
 export function createDaemonTriggerSet<W extends TriggerSocket>(deps: DaemonTriggerSetDeps<W>) {
   const { triggerStore, triggerRuns, offlineHost, walnutScope, gatewayClientHomes, sendEvent, logMsg, sendOk, sendError } = deps
+  const { triggersSetHash, validateTriggerDef, validateTriggerSet, applyTriggersDelta } = deps.judge
   const { TRIGGERS_BASE_DIR, TRIGGERS_FILE, TRIGGER_STATE_DIR, TRIGGER_TICK_MS, armedTriggers, drainingTriggers, triggerScopes, triggersConfigureGate, triggerKey, heldTrigger, fireHolders, triggerScopeOf, triggerStatePath, mtimeOf, readTriggerState, persistTriggerState, pruneTriggerStateFiles, persistTriggersFile, sendTriggerFire, canonicalTriggerDef, triggerOwnerOf } = triggerStore
   const { newArmedTrigger, armClock } = triggerRuns
 

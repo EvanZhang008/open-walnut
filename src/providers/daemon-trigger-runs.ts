@@ -8,18 +8,17 @@
  * (daemon-trigger-store.ts). Checks start with the runtime's childUse. The code is the runtime's
  * as it was; deps carry the runtime's own names.
  */
-import { hostBatch, markHostBatch, applyCheckError, applyCheckOutcome, applyClockFire, buildCheckStdin, checkErrorOf, decideCheck, checkIdleOf, fireDueOnHost, markHostDelivered, parseCheckStdout, runCheckProcess, CHECK_ERROR_BACKOFF_MS, HOST_DELIVERY_GRACE_MS, HOST_DELIVERY_RETRY_MS, MAX_CONSECUTIVE_CHECK_ERRORS, PENDING_FIRE_REPLAY_MS, applyMachineFault, checkCallerEnv, type CheckCallers, type PendingFire, type TriggerDef, type TriggerHostState } from './trigger-check-core.js'
-import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
-import { clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires } from './trigger-clock-core.js'
-import { createClockSchedule } from './clock-schedule-core.js'
+import type { CheckCallers, PendingFire, TriggerDef, TriggerHostState } from './trigger-check-core.js'
 import type { ClockHostStart } from './clock-host-start-core.js'
 import type { createFollowerTriggerDelivery } from './follower-trigger-delivery-core.js'
 import type { ChildProcessUse } from './daemon-child-spawn.js'
 import type { RuntimeTimers } from './daemon-runtime-timers.js'
 import type { ArmedTrigger, createDaemonTriggerStore } from './daemon-trigger-store.js'
-import type { DaemonEnv, DaemonLog } from './daemon-module-deps.js'
+import type { DaemonEnv, DaemonLog, HostTriggerJudge } from './daemon-module-deps.js'
 
 export interface DaemonTriggerRunsDeps {
+  /** The trigger logic this area runs on (daemon-module-deps.ts HostTriggerJudge), passed in by the runtime. */
+  judge: HostTriggerJudge
   daemonEnv: DaemonEnv
   /** The trigger store (daemon-trigger-store.ts). */
   triggerStore: ReturnType<typeof createDaemonTriggerStore>
@@ -43,6 +42,7 @@ export interface DaemonTriggerRunsDeps {
 
 export function createDaemonTriggerRuns(deps: DaemonTriggerRunsDeps) {
   const { daemonEnv, triggerStore, demoQuiesce, childUse, checkCallers, GATEWAY_SOCK_PATH, GATEWAY_SHIM_DIR, followerTriggers, clockHostStart, setInterval, clearInterval, logMsg } = deps
+  const { hostBatch, markHostBatch, applyCheckError, applyCheckOutcome, applyClockFire, buildCheckStdin, checkErrorOf, decideCheck, checkIdleOf, fireDueOnHost, markHostDelivered, parseCheckStdout, runCheckProcess, CHECK_ERROR_BACKOFF_MS, HOST_DELIVERY_GRACE_MS, HOST_DELIVERY_RETRY_MS, MAX_CONSECUTIVE_CHECK_ERRORS, PENDING_FIRE_REPLAY_MS, applyMachineFault, checkCallerEnv, buildScheduledMessage, buildTriggerMessage, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, createClockSchedule } = deps.judge
   const { TRIGGER_TICK_MS, armedTriggers, hostDeliveriesInFlight, triggerChecksRunning, triggerKey, heldTrigger, fireHolders, readTriggerState, persistTriggerState, sendTriggerEvent, sendTriggerFire } = triggerStore
 
   // The clock: startTriggers (Main) sets it, stopTriggers (cleanup) clears it.

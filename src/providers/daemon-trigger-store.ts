@@ -10,10 +10,10 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { coerceHostState, emptyHostState, triggerStateFileName, TRIGGER_STATE_TTL_MS, type PendingFire, type TriggerDef, type TriggerHostState } from './trigger-check-core.js'
+import type { PendingFire, TriggerDef, TriggerHostState } from './trigger-check-core.js'
 import { DaemonSessionGate } from './daemon-cron-runtime.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
-import type { DaemonEnv, DaemonLog, DaemonSendEvent } from './daemon-module-deps.js'
+import type { DaemonEnv, DaemonLog, DaemonSendEvent, HostTriggerJudge } from './daemon-module-deps.js'
 
 /** The runtime's socket as the triggers see it: the Walnut it configured triggers for. */
 export interface TriggerSocket { data?: { triggerScope?: string } }
@@ -44,6 +44,8 @@ export interface ArmedTrigger {
 export interface TriggerScope { configured: TriggerDef[]; hash: string | null; inherited?: boolean; push?: { hash: string; raw: unknown[] } }
 
 export interface DaemonTriggerStoreDeps<W extends TriggerSocket> {
+  /** The trigger logic this area runs on (daemon-module-deps.ts HostTriggerJudge), passed in by the runtime. */
+  judge: HostTriggerJudge
   daemonEnv: DaemonEnv
   DAEMON_DIR: string
   HOME_DIR: string
@@ -65,6 +67,7 @@ export interface DaemonTriggerStoreDeps<W extends TriggerSocket> {
 
 export function createDaemonTriggerStore<W extends TriggerSocket>(deps: DaemonTriggerStoreDeps<W>) {
   const { daemonEnv, DAEMON_DIR, HOME_DIR, SERVICE_MODE, DAEMON_STATE_DIR, IS_PROD_DAEMON_DIR, walnutScope, gatewayClientHomes, wsClients, isServerClient, sendEvent, logMsg } = deps
+  const { coerceHostState, emptyHostState, triggerStateFileName, TRIGGER_STATE_TTL_MS } = deps.judge
 
   // ── walnut-trigger: the daemon owns the clock and runs the check ──
   // A trigger is a routine whose `check` is a shell command this host runs on a
