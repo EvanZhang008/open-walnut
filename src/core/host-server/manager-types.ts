@@ -225,6 +225,8 @@ export interface ManagerDeps {
   floors?: FollowerFloors
   /** The experiment `service_without_copy` is on (copyless.ts copylessWanted; tests set it). */
   copylessWanted?(): Promise<boolean>
+  /** The one service is not for this host (service-launcher-flag.ts oneServiceRefused; tests set it). */
+  oneServiceRefused?(hostKey: string): Promise<boolean>
   /**
    * Walnut Health (health-item.ts): a start that failed (it tries again by itself), and one that
    * settled (it runs, or none is meant to run). Never awaited.

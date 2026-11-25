@@ -24,6 +24,9 @@ const DISK_SHORT = 'mem_total_kb=16777216\nmem_avail_kb=12582912\ndisk_free_kb=1
 
 afterEach(() => { noteCopyless('devbox', false) })
 
+/** The bench's deps, the one service offered to the host unless a test says otherwise. */
+const deps = (over: Parameters<typeof b.deps>[0]) => b.deps({ oneServiceRefused: async () => false, ...over })
+
 function copylessHost(room = FREE_SHORT) {
   const h = b.host()
   h.room = room
@@ -44,7 +47,7 @@ function withTarget() {
 describe('a host short of memory or disk', () => {
   it.each([['memory', FREE_SHORT], ['disk', DISK_SHORT]] as const)('runs the service without a copy (%s), with the experiment on', async (_why, room) => {
     const t = withTarget()
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true, registerTarget: t.registerTarget as never }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true, registerTarget: t.registerTarget as never }))
     const h = copylessHost(room)
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ phase: 'running', copyless: true })
@@ -60,7 +63,7 @@ describe('a host short of memory or disk', () => {
   })
 
   it('shows its gate as today with the experiment off', async () => {
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => false }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => false }))
     const h = copylessHost()
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
@@ -71,13 +74,13 @@ describe('a host short of memory or disk', () => {
   })
 
   it('keeps the gate on a host whose Walnut is too old or not under the service launcher', async () => {
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true }))
     const old = b.host()
     old.room = FREE_SHORT
     await m.connected(old)
     expect(m.view('devbox')).toMatchObject({ phase: 'not-eligible', gate: { reason: 'memory' } })
     m.stop()
-    const m2 = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m2 = createHostServerManager(deps({ copylessWanted: async () => true }))
     const bare = copylessHost()
     bare.underLauncher = () => false
     await m2.connected(bare)
@@ -86,7 +89,7 @@ describe('a host short of memory or disk', () => {
   })
 
   it('no build for its system is not answered without a copy', async () => {
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true }))
     const h = copylessHost()
     h.system = 'os=Linux\narch=armv7l\n'
     await m.connected(h)
@@ -98,7 +101,7 @@ describe('a host short of memory or disk', () => {
   it('goes back to a full follower once the host has room, and to its gate once the experiment is off', async () => {
     let on = true
     const t = withTarget()
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => on, registerTarget: t.registerTarget as never }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => on, registerTarget: t.registerTarget as never }))
     const h = copylessHost()
     await m.connected(h)
     expect(m.view('devbox').copyless).toBe(true)
@@ -112,7 +115,7 @@ describe('a host short of memory or disk', () => {
     m.stop()
     // Another host's first start (a follower that ran is never judged by its own memory again).
     const fresh = b.deps()
-    const m2 = createHostServerManager(b.deps({ copylessWanted: async () => on, stateFile: fresh.stateFile + '.2' }))
+    const m2 = createHostServerManager(deps({ copylessWanted: async () => on, stateFile: fresh.stateFile + '.2' }))
     const small = copylessHost()
     await m2.connected(small)
     expect(m2.view('devbox').copyless).toBe(true)
@@ -129,7 +132,7 @@ describe('a host the person turned off', () => {
   it('runs the service without a copy, its switch still off, with the experiment on', async () => {
     b.settings = TURNED_OFF
     const t = withTarget()
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true, registerTarget: t.registerTarget as never }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true, registerTarget: t.registerTarget as never }))
     const h = copylessHost(ROOMY)
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'running', copyless: true })
@@ -140,13 +143,13 @@ describe('a host the person turned off', () => {
 
   it('stays off as today with the experiment off, or when it cannot run without a copy', async () => {
     b.settings = TURNED_OFF
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => false }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => false }))
     const h = copylessHost(ROOMY)
     await m.connected(h)
     expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
     expect(h.calls).not.toContain('room')
     m.stop()
-    const m2 = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m2 = createHostServerManager(deps({ copylessWanted: async () => true }))
     const old = b.host()
     await m2.connected(old)
     expect(m2.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
@@ -156,7 +159,7 @@ describe('a host the person turned off', () => {
 
   it('a host that runs as this Walnut\'s one service already counts as under a launcher, whatever its hello says of one', async () => {
     b.settings = TURNED_OFF
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true }))
     const served = copylessHost(ROOMY)
     served.underLauncher = () => false
     served.servesAs = () => ({ serves: 'walnut-serve', serviceHome: '/Users/me/.open-walnut' })
@@ -166,9 +169,33 @@ describe('a host the person turned off', () => {
     m.stop()
   })
 
+  it('stays off when the one service is not for this host (the launcher off, or its own service_offer: false)', async () => {
+    b.settings = TURNED_OFF
+    const asked: string[] = []
+    const m = createHostServerManager(deps({ copylessWanted: async () => true, oneServiceRefused: async (k) => { asked.push(k); return true } }))
+    const h = copylessHost(ROOMY)
+    await m.connected(h)
+    expect(asked).toEqual(['devbox'])
+    expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
+    expect(h.specs.filter(Boolean)).toEqual([])
+    expect(runsCopyless('devbox')).toBe(false)
+    m.stop()
+  })
+
+  it('stays off while the host\'s system is not known (the probe named none)', async () => {
+    b.settings = TURNED_OFF
+    const m = createHostServerManager(deps({ copylessWanted: async () => true }))
+    const h = copylessHost(ROOMY)
+    h.system = ''
+    await m.connected(h)
+    expect(m.view('devbox')).toMatchObject({ enabled: false, phase: 'off' })
+    expect(h.specs.filter(Boolean)).toEqual([])
+    m.stop()
+  })
+
   it('stays off on this computer', async () => {
     b.settings = TURNED_OFF
-    const m = createHostServerManager(b.deps({ copylessWanted: async () => true }))
+    const m = createHostServerManager(deps({ copylessWanted: async () => true }))
     const h = copylessHost(ROOMY)
     h.reachesThisComputer = async () => true
     await m.connected(h)

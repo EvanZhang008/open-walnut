@@ -44,11 +44,15 @@ export async function copylessWanted(): Promise<boolean> {
 /**
  * Why this host cannot run without a copy now (null: it can): its runtime, its launcher, its system.
  * `service`: the host runs as this Walnut's one service already (one-service-mode.ts), so a launcher keeps it.
+ * `refused`: the one service is not for this host (service-launcher-flag.ts oneServiceRefused: the
+ * launcher off, or its own `service_offer: false`): it would run the follower beside the daemon.
  */
-export function copylessUnfit(host: HostServerHost, target: HostTarget | null, service = false): string | null {
+export function copylessUnfit(host: HostServerHost, target: HostTarget | null, service = false, refused = false): string | null {
   if (!host.hasCapability(COPYLESS_CAPABILITY)) return 'its Walnut is older than the service without a copy'
+  if (refused) return 'the one service is turned off for this host'
   if (!service && host.underLauncher && !host.underLauncher()) return 'its session helper does not run under the service launcher yet'
-  if (target && !target.target.startsWith('linux-')) return 'only Linux hosts run without a copy for now'
+  // Not known yet (the probe's answer did not parse) counts as not Linux: the next look decides.
+  if (!target?.target.startsWith('linux-')) return 'only Linux hosts run without a copy for now'
   return null
 }
 

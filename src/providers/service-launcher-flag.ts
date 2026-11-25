@@ -46,14 +46,45 @@ export async function hostServiceOfferWanted(hostKey: string, machineIdOf?: (hos
   const forced = process.env.WALNUT_HOST_SERVICE_OFFER
   if (forced === '1' || forced === '0') return forced === '1'
   if (hostKey === '__local__') return false
-  // A host the leader runs without a copy (experiment service_without_copy) runs only as the one service.
-  try { if ((await import('../core/host-server/copyless.js')).runsCopyless(hostKey)) return true } catch { /* the offer below decides */ }
   try {
     const [{ getConfig }, { isFollower }] = await Promise.all([import('../core/config-manager.js'), import('../core/server-role.js')])
     if (isFollower()) return false
-    return serviceOfferFor(await getConfig(), hostKey, machineIdOf)
+    const config = await getConfig()
+    const offer = serviceOfferFor(config, hostKey, machineIdOf)
+    if (offer === true) return true
+    // A host the leader runs without a copy (experiment service_without_copy) runs only as the one
+    // service, whatever the list kept from before says; a host's own service_offer: false still wins.
+    if (!serviceRefusedBy(config, hostKey, machineIdOf)) {
+      try { if ((await import('../core/host-server/copyless.js')).runsCopyless(hostKey)) return true } catch { /* the offer decides */ }
+    }
+    return offer
   } catch {
     return false
+  }
+}
+
+/**
+ * The config takes the one service from this host by its own word: `hosts.<name>.service_offer: false`
+ * (or a name proven to be the same machine says so). A list kept from before that leaves the host
+ * out is no such word (serviceOfferFor without the list).
+ */
+export function serviceRefusedBy(config: OfferConfig, hostKey: string, machineIdOf?: (hostKey: string) => string | null): boolean {
+  return serviceOfferFor({ hosts: config.hosts }, hostKey, machineIdOf) === false
+}
+
+/**
+ * Whether a host may not run as the one service whatever its size (copyless.ts copylessUnfit asks it):
+ * the service launcher is off, or the config takes the service from this host (serviceRefusedBy).
+ */
+export async function oneServiceRefused(hostKey: string): Promise<boolean> {
+  if (!(await serviceLauncherWanted())) return true
+  const forced = process.env.WALNUT_HOST_SERVICE_OFFER
+  if (forced === '1' || forced === '0') return forced === '0'
+  try {
+    const { getConfig } = await import('../core/config-manager.js')
+    return serviceRefusedBy(await getConfig(), hostKey)
+  } catch {
+    return true
   }
 }
 

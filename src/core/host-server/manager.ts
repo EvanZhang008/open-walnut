@@ -136,6 +136,8 @@ export function createHostServerManager(deps: ManagerDeps) {
     run: (hostKey, kind) => { if (hosts.get(hostKey)?.connected) void reconcile(hostKey, kind === 'proof' ? { retry: true } : {}) },
   })
   const wantsCopyless = deps.copylessWanted ?? copylessWanted
+  const serviceRefused = deps.oneServiceRefused
+    ?? (async (hostKey: string) => (await import('../../providers/service-launcher-flag.js')).oneServiceRefused(hostKey).catch(() => true))
   /** The view's sentence for a setup that runs again later, and when (none past the end of a ladder that stops). */
   function retryingLater(hostKey: string, kind: TryLaterKind, message: string, o: { stopAtEnd?: boolean } = {}): { message: string; at: number | undefined } {
     const next = tryLater.later(hostKey, kind, o)
@@ -666,7 +668,7 @@ export function createHostServerManager(deps: ManagerDeps) {
         try { target = parseHostTarget(out) } catch { target = null }
         if (offCopyless || ('gate' in judged && copylessGate(judged.gate.reason))) {
           const unfit = !(offCopyless || await wantsCopyless()) ? 'off'
-            : !replica ? 'it runs the plain host server, which has no service' : copylessUnfit(host, target, oneServiceHere(host))
+            : !replica ? 'it runs the plain host server, which has no service' : copylessUnfit(host, target, oneServiceHere(host), await serviceRefused(hostKey))
           if (unfit === null) { copyless = true; known = target ?? undefined }
           else if (offCopyless) {
             log.session.info('host server: a turned-off host stays off, it cannot run without a copy', { host: hostKey, why: unfit })

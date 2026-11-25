@@ -284,6 +284,26 @@ describe('hostServiceOfferWanted', () => {
     await expect((await import('../../src/providers/service-launcher-flag.js')).serviceLauncherWanted()).resolves.toBe(false)
   })
 
+  // Review of the copyless service (M3): a host run without a copy is offered the one service past a
+  // list kept from before, but its own service_offer: false still wins, as it does for every host.
+  it('a host run without a copy is offered past a kept list; its own service_offer: false still wins', async () => {
+    for (const k of KEYS) delete process.env[k]
+    const listed = await withConfig({ host_service_offer: [] })
+    const copyless = await import('../../src/core/host-server/copyless.js')
+    await expect(listed('devbox')).resolves.toBe(false)
+    copyless.noteCopyless('devbox', true)
+    await expect(listed('devbox')).resolves.toBe(true)
+    const optedOut = await withConfig({ hosts: { devbox: { service_offer: false } } })
+    ;(await import('../../src/core/host-server/copyless.js')).noteCopyless('devbox', true)
+    await expect(optedOut('devbox')).resolves.toBe(false)
+    const { oneServiceRefused } = await import('../../src/providers/service-launcher-flag.js')
+    await expect(oneServiceRefused('devbox')).resolves.toBe(true)
+    await expect(oneServiceRefused('gpu-box')).resolves.toBe(false)
+    // The launcher off refuses every host.
+    await withConfig({ experimental: { service_launcher: false } })
+    await expect((await import('../../src/providers/service-launcher-flag.js')).oneServiceRefused('gpu-box')).resolves.toBe(true)
+  })
+
   it('hosts.<name>.service_offer keeps one host on two programs, or offers it past a list', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     const offer = await withConfig({ hosts: { devbox: { service_offer: false }, 'gpu-box': {}, lab: { service_offer: 'no' } } })
