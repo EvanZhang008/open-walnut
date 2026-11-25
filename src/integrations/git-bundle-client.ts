@@ -211,7 +211,8 @@ function runGit(repoDir: string, args: string[], timeoutMs: number, stdin?: stri
       child.stdin?.on('error', () => { /* git exited early: its exit code tells */ })
       child.stdin?.end(stdin)
     }
-    trackOwnGit(repoDir, child)
+    // Bundle create and rev-parse take no lock of the repo: never a lock holder for clearStaleLock (git-children.ts).
+    trackOwnGit(repoDir, child, false)
     let out = ''
     let err = ''
     const timer = setTimeout(() => {
