@@ -166,7 +166,7 @@ describe('serviceModeWantNow', () => {
 // not; neither in_process_daemon nor the per-process switch of this computer's own runtime
 // (WALNUT_IN_PROCESS_DAEMON) changes it.
 describe('hostServiceOfferWanted', () => {
-  const KEYS = ['WALNUT_HOST_SERVICE_OFFER', 'WALNUT_IN_PROCESS_DAEMON'] as const
+  const KEYS = ['WALNUT_HOST_SERVICE_OFFER', 'WALNUT_IN_PROCESS_DAEMON', 'WALNUT_SERVICE_LAUNCHER'] as const
   let saved: Record<string, string | undefined> = {}
   beforeEach(() => { saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]])) })
   afterEach(() => {
@@ -220,6 +220,26 @@ describe('hostServiceOfferWanted', () => {
       }
     }
     await expect((await withConfig({ host_service_offer: [] }))('devbox')).resolves.toBe(false)
+  })
+
+  // What a public install reads with nothing stored (no experiment, no list, no env): both inputs of the
+  // offer the host-server manager's one-service gate reads (daemon-connection.ts oneServiceWanted) are on,
+  // so its "never demote a host meant to be the one service" guards cover every host under the launcher.
+  it('with nothing stored, a host under the launcher is offered its one service, and the mode decision wants it', async () => {
+    for (const k of KEYS) delete process.env[k]
+    const offer = await withConfig({})
+    const { serviceLauncherWanted } = await import('../../src/providers/service-launcher-flag.js')
+    await expect(offer('devbox')).resolves.toBe(true)
+    await expect(serviceLauncherWanted()).resolves.toBe(true)
+    await expect(serviceModeWantNow({
+      serves: 'daemon', serviceHome: null, home: HOME, launcher: true, expected: 'walnut-daemon-new', serveUnfit: null,
+      modeAsked: async () => null, offerWanted: () => offer('devbox'), launcherWanted: serviceLauncherWanted,
+      follower: async () => ({ kind: 'replica' as const }),
+    })).resolves.toEqual({ want: 'walnut-serve' })
+    // A stored false of the experiment still turns the whole offer off.
+    const off = await withConfig({ experimental: { service_launcher: false } })
+    await expect(off('devbox')).resolves.toBe(true)
+    await expect((await import('../../src/providers/service-launcher-flag.js')).serviceLauncherWanted()).resolves.toBe(false)
   })
 
   it('hosts.<name>.service_offer keeps one host on two programs, or offers it past a list', async () => {

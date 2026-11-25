@@ -1142,12 +1142,13 @@ describe('the host\'s mode rides the managed update', () => {
     expect(managedUpdate).toHaveBeenCalledTimes(1)
   })
 
-  // The leader's list (config host_service_offer): with the experiment off, the hosts it names get
-  // the whole offer (the walnut file staged, --serve), the others nothing; out of the list, --no-serve.
-  describe('host_service_offer names the hosts offered while the experiment is off', () => {
-    const configWith = (list: string[] | undefined) => vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
+  // The leader's config decides the offer per host: with no list every host gets the whole offer (the
+  // walnut file staged, --serve); a list names the only hosts offered, the others nothing; a host the
+  // config takes the offer from (out of the list, hosts.<name>.service_offer: false) gets --no-serve.
+  describe('the config\'s offer per host, with in_process_daemon off', () => {
+    const configWith = (list: string[] | undefined, hosts?: Record<string, unknown>) => vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
       ...(await importOriginal<Record<string, unknown>>()),
-      getConfig: async () => ({ experimental: { in_process_daemon: false, service_launcher: true }, ...(list ? { host_service_offer: list } : {}) }),
+      getConfig: async () => ({ experimental: { in_process_daemon: false, service_launcher: true }, ...(list ? { host_service_offer: list } : {}), ...(hosts ? { hosts } : {}) }),
     }))
     beforeEach(() => {
       delete process.env.WALNUT_HOST_SERVICE_OFFER
@@ -1198,13 +1199,34 @@ describe('the host\'s mode rides the managed update', () => {
       expect(optsOf(0).serve).toEqual({ home, on: false })
     })
 
-    it('no list: a host that runs as the daemon is left as it is, and the follower is never asked', async () => {
+    // The default flip (2026-11-24): before it, no list offered no host.
+    it('no list: every host is offered, --serve with the walnut file staged', async () => {
+      const { WALNUT_HOME: home } = await import('../../src/constants.js')
       configWith(undefined)
+      const { c, source } = readyHost('devbox')
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(source).toHaveBeenCalledWith(true)
+      expect(optsOf(0).serve).toEqual({ home, on: true })
+    })
+
+    it('hosts.<name>.service_offer false: a host that runs as the daemon is left as it is, and the follower is never asked', async () => {
+      configWith(undefined, { devbox: { service_offer: false } })
       followerFact.mockClear()
       const { c } = readyHost('devbox')
       await priv(c).recheckPostponedUpgrade()
       expect(managedUpdate).not.toHaveBeenCalled()
       expect(followerFact).not.toHaveBeenCalled()
+    })
+
+    it('hosts.<name>.service_offer false: the host it serves as this Walnut\'s service gets --no-serve at its next update', async () => {
+      const { WALNUT_HOME: home } = await import('../../src/constants.js')
+      configWith(undefined, { devbox: { service_offer: false } })
+      const { c, source } = readyHost('devbox', { serves: 'walnut-serve', serviceHome: home })
+      await priv(c).recheckPostponedUpgrade()
+      expect(managedUpdate).toHaveBeenCalledTimes(1)
+      expect(source).toHaveBeenCalledWith(false)
+      expect(optsOf(0).serve).toEqual({ home, on: false })
     })
   })
 

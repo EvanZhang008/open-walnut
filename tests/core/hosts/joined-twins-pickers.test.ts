@@ -92,6 +92,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/core/hosts/found-host-offer.ts': 'which found hosts may be asked about at all; the twin match needs the network, and Home reads it live (GET /api/hosts/net twins)',
     'src/core/artifacts/unify/refs.ts': "re-points every row's notes_exclude when the notes move: the rows themselves",
     'src/core/replication/config-allowlist.ts': 'each row\'s own engine settings (hosts.<name>.engines) into the copy\'s host_engines row, by key: the rows themselves, not a list to pick from',
+    'src/providers/service-launcher-flag.ts': 'the rows with a one-service offer choice of their own (hosts.<name>.service_offer), by key, matched by machine id: the rows themselves, not a list to pick from',
     'src/core/session-channel/switch.ts': 'the rows the leader turned on to run their own sessions (hosts.<name>.runs_sessions), by key: the rows themselves, not a list to pick from',
     'src/core/session-channel/leader-issue.ts': 'the configured rows a door credential may be issued to or revoked from: every enabled row, a joined twin included, not a list to pick from',
     'src/commands/demo-ssh-masters.ts': "the Demo's stop ends the SSH masters of every SSH row its data dir holds: a teardown, not a choice",

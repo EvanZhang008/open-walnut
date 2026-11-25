@@ -25,8 +25,9 @@ function facts(tasks: Task[], enabled: boolean): StatusFacts {
 describe('experimental choices', () => {
   it('every registered experiment starts as its registry default and only a boolean overrides it', () => {
     // An experiment that graduated by its default keeps its switch: a stored false still turns it off
-    // (follower_on_every_host ended on, into GRADUATED_EXPERIMENTS).
-    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id)).toEqual(['host_runs_sessions']);
+    // (follower_on_every_host ended on, into GRADUATED_EXPERIMENTS). The one-service experiments went on
+    // by default on 2026-11-24 (docs/plan/one-service-every-host.md).
+    expect(EXPERIMENTAL_FEATURES.filter((f) => f.default).map((f) => f.id).sort()).toEqual(['host_call_entry', 'host_runs_sessions', 'in_process_daemon', 'service_launcher', 'work_survives_restart']);
     for (const feature of EXPERIMENTAL_FEATURES) {
       expect(experimentalEnabled(undefined, feature.id)).toBe(feature.default);
       expect(experimentalEnabled({}, feature.id)).toBe(feature.default);

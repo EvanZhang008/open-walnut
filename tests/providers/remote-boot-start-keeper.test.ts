@@ -152,7 +152,8 @@ describe('boot start keeper', () => {
   it('sets up a compiled Mac\'s host from the walnut file in its daemon slot', async () => {
     const l = start({ compiled: true, after: CRON_BOOT })
     await l.keeper.check()
-    expect(l.installCalls()).toEqual([`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN} 2>/dev/null || true`])
+    // Under the launcher: the experiment service_launcher is on by default since 2026-11-24.
+    expect(l.installCalls()).toEqual([`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN} --launcher 2>/dev/null || true`])
     expect(l.chunk).not.toHaveBeenCalled()
     expect(l.keeper.state).toMatchObject({ mode: 'boot', backend: 'cron', setup: { running: false, error: null } })
   })
@@ -184,7 +185,7 @@ describe('boot start keeper', () => {
     const l = start({ after: CRON_BOOT })
     await l.keeper.check()
 
-    expect(l.installCalls()).toEqual([`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN} 2>/dev/null || true`])
+    expect(l.installCalls()).toEqual([`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN} --launcher 2>/dev/null || true`])
     expect(l.markers).toHaveLength(1)
     expect(l.markers[0]).toContain(`v=${VERSION} at=${NOW} result=ok`)
     expect(l.reconnect).toHaveBeenCalledTimes(1)

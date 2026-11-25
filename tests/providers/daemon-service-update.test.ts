@@ -18,12 +18,21 @@ const staged = `${remote}/daemon`
 const existing = '/home/walnut/.local/share/open-walnut/daemon/versions/walnut-daemon-1234abcd/open-walnut-daemon'
 const RM = `rm -rf ${remote}`
 
+// The upload, tail and install cases pin the plain service's lines: the chunks, the tail and the
+// detached runner are the same under the launcher, whose words (on by default since 2026-11-24, the
+// experiment service_launcher) have their own cases in "the host's mode on the update line".
+let launcherEnv: string | undefined
 beforeEach(async () => {
+  launcherEnv = process.env.WALNUT_SERVICE_LAUNCHER
+  process.env.WALNUT_SERVICE_LAUNCHER = '0'
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-update-test-'))
   binary = path.join(root, 'daemon')
   await fs.writeFile(binary, randomBytes(800_000))
 })
-afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  if (launcherEnv === undefined) delete process.env.WALNUT_SERVICE_LAUNCHER; else process.env.WALNUT_SERVICE_LAUNCHER = launcherEnv
+  await fs.rm(root, { recursive: true, force: true })
+})
 
 type UploadFault = 'chunk' | 'version' | 'checksum' | 'path' | 'checkLost'
 
@@ -629,6 +638,13 @@ describe('the host\'s mode on the update line', () => {
     const l = lab(undefined, 'user', 'serving', ` --launcher --serve ${quoted}`)
     await updateRemoteDaemonService({ binary }, version, l, 'user', { serve: { home, on: true } })
     expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged} --launcher --serve ${quoted}`])
+  })
+
+  it('with nothing stored the launcher is on (its default since 2026-11-24): the line says --launcher', async () => {
+    delete process.env.WALNUT_SERVICE_LAUNCHER
+    const l = lab(undefined, 'user', 'serving', ' --launcher')
+    await updateRemoteDaemonService({ binary }, version, l, 'user', {})
+    expect(l.host.updates).toEqual([`${staged} walnut daemon update --yes --scope user --executable ${staged} --launcher`])
   })
 
   it('without the launcher there is no service to run: no --serve', async () => {
