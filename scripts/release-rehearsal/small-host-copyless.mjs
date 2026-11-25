@@ -170,9 +170,9 @@ async function leaderDown() {
 
 /** The host's Walnut processes (pid, rss in KB, args), as ps sees them there. */
 function hostProcs() {
-  return inHost('ps -eo pid=,ppid=,rss=,args=').split('\n').map((l) => l.trim()).filter(Boolean)
+  return inHost('ps -e -o pid= -o ppid= -o rss= -o args=').split('\n').map((l) => l.trim()).filter(Boolean)
     .map((l) => { const [pid, ppid, rss, ...a] = l.split(/\s+/); return { pid: Number(pid), ppid: Number(ppid), rss: Number(rss), args: a.join(' ') } })
-    .filter((p) => /daemon|walnut|claude-real/.test(p.args) && !/sshd|ps -eo/.test(p.args))
+    .filter((p) => /daemon|walnut|claude-real/.test(p.args) && !/sshd|ps -e -o/.test(p.args))
 }
 const view = () => api('GET', '/api/host-servers')?.hosts?.find((h) => h.hostKey === 'small')?.view ?? null
 const working = (work) => { try { return JSON.parse(fs.readFileSync(path.join(work, 'data', 'host-servers.json'), 'utf8')).small?.working ?? null } catch { return null } }
