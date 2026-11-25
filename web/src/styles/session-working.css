@@ -74,3 +74,6 @@
   text-align: center;
   white-space: nowrap;
 }
+
+/* The workers line under the live turn's working line takes its own line (SessionWorkingIndicator). */
+.session-working-row > .session-working-row { flex-basis: 100%; }

@@ -7,9 +7,10 @@ import { backgroundAgentsOnly, backgroundRunningLabel } from './background-ledge
 import { useMemo } from 'react';
 import { useTaskListSelect } from '@/contexts/TasksContext';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { Chip } from '@/components/controls';
+import { Chip, DisclosureButton } from '@/components/controls';
+import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
-import { workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
+import { workersStartFolded, workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
 import '@/styles/session-working.css';
 
 /**
@@ -24,8 +25,9 @@ import '@/styles/session-working.css';
  *    working… ›";
  *  - the turn over, background work still going: one quiet "1 command still running
  *    in the background ›" line in the working line's place;
- *  - the turn over, its task's workers (subtasks) at work: "3 workers are working…" with
- *    each worker, which opens it (workers-working.ts).
+ *  - its task's workers (subtasks) at work: "3 workers are working…" with each worker, which
+ *    opens it, under whichever line shows, its own turn's included, so it never blinks out when
+ *    the lead's turn starts; past three it is one folded line (workers-working.ts).
  *
  * Every one opens the Background tasks panel; the session's ⋮ menu opens it too, also
  * after everything finished.
@@ -39,12 +41,13 @@ export function SessionWorkingIndicator({ sessionId, working }: {
   const foregroundActive = useForegroundActive(sessionId);
   const { tasks, running } = useBackgroundRunning(sessionId);
   const agents = backgroundAgentsOnly(tasks);
-  const workers = useWorkersWorking(sessionId, !working && status?.process_status !== 'running');
+  const workers = useWorkersWorking(sessionId);
+  const workersRow = workers.length ? <WorkersWorkingRow sessionId={sessionId} workers={workers} /> : null;
   const backgroundOnly = status?.process_status === 'running' && !status.archived
     && !status.pendingPermissionTool && foregroundActive === false && agents.length > 0;
 
   if (backgroundOnly) {
-    return (
+    const agentsLine = (
       <button
         type="button"
         className="session-working-indicator session-background-working"
@@ -57,6 +60,7 @@ export function SessionWorkingIndicator({ sessionId, working }: {
         <span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
       </button>
     );
+    return workersRow ? <>{agentsLine}{workersRow}</> : agentsLine;
   }
 
   const label = backgroundRunningLabel(running);
@@ -75,10 +79,10 @@ export function SessionWorkingIndicator({ sessionId, working }: {
           <span className="session-background-note-sep" aria-hidden="true">·</span>
           {label} running<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
         </button> : undefined} />
+        {workersRow}
       </div>
     );
   }
-  const workersRow = workers.length ? <WorkersWorkingRow workers={workers} /> : null;
   if (!label) return workersRow;
   const backgroundRow = (
     <button
@@ -96,18 +100,27 @@ export function SessionWorkingIndicator({ sessionId, working }: {
 }
 
 /** The task's workers at work, kept as one string in the list's select so it re-renders only on a change. */
-function useWorkersWorking(sessionId: string, active: boolean): WorkingWorker[] {
-  const key = useTaskListSelect(({ tasks }) => (active ? JSON.stringify(workersWorkingOf(tasks, sessionId)) : '[]')) ?? '[]';
+function useWorkersWorking(sessionId: string): WorkingWorker[] {
+  const key = useTaskListSelect(({ tasks }) => JSON.stringify(workersWorkingOf(tasks, sessionId))) ?? '[]';
   return useMemo(() => JSON.parse(key) as WorkingWorker[], [key]);
 }
 
-function WorkersWorkingRow({ workers }: { workers: WorkingWorker[] }) {
+function WorkersWorkingRow({ sessionId, workers }: { sessionId: string; workers: WorkingWorker[] }) {
   const openTask = useOpenTask();
+  // A long list starts folded; his open or close of it is kept for this session (usePageViewOf).
+  const [picked, setPicked] = usePageViewOf<boolean | null>('session', 'workers-open', sessionId, null, (v): v is boolean | null => v === null || isBoolean(v));
+  const folds = workersStartFolded(workers.length);
+  const open = !folds || (picked ?? false);
+  const label = workersWorkingLabel(workers.length);
   // The working line's own row and label; each worker is a one-shot chip (pressed undefined) that opens it.
   return (
-    <div className="session-working-row" data-testid="session-workers-working">
-      <span className="session-working-label">{workersWorkingLabel(workers.length)}</span>
-      {workers.map((w) => (
+    <div className="session-working-row" data-testid="session-workers-working" data-open={open ? 'true' : 'false'}>
+      {folds
+        ? <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the workers' : 'Show each worker'} onClick={() => setPicked(!open)}>
+            <span className="session-working-label">{label}</span>
+          </DisclosureButton>
+        : <span className="session-working-label">{label}</span>}
+      {open && workers.map((w) => (
         <Chip key={w.id} pressed={undefined} title={`Open ${w.title}`} trailing={<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>} onClick={() => openTask(w.id)}>
           {w.title}
         </Chip>
