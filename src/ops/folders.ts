@@ -153,6 +153,8 @@ defineOp({
       : 'Nothing else is required.';
     return withOutcome({ ...(moved ?? {}) }, outcome, next);
   },
+  // Tasks that did not move are Walnut's own fault: the caller named the move, it did not happen.
+  resultErrorKind: { code: 'not_moved', fault: true },
   resultError: (result) => {
     const failed = (result as FolderMoveBody | undefined)?.failed ?? [];
     return failed.length

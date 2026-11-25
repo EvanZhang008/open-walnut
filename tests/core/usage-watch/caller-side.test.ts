@@ -12,13 +12,19 @@
  *   - the replay of that watch's task_report_set (23 uses, 5 bad arguments, refusals) passes, and two
  *     server errors still fail it;
  *   - the report's rows and its list name the caller's side apart from `failed`;
- *   - nothing in the real-use code adds the caller's side to Walnut's faults (a source ratchet).
+ *   - nothing in the real-use code adds the caller's side to Walnut's faults (a source ratchet);
+ *   - an op that answers a failure inside its result (resultError) says whose it is (resultErrorKind):
+ *     task_create's session that did not start was counted "refused by design" (2026-11-25 review);
+ *   - an hour row written before the codes were kept by side still finds a new code of Walnut's own,
+ *     and never reads a caller's code as one (agg.ts backfillSides).
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { OUTCOME_SIDE, type OutcomeClass } from '../../../src/core/usage-watch/agg.js'
+import { OUTCOME_SIDE, backfillSides, emptyAgg, type Agg, type OutcomeClass } from '../../../src/core/usage-watch/agg.js'
+import { failureClass } from '../../../src/core/usage-watch/normalize.js'
+import { listOps } from '../../../src/ops/index.js'
 import { _resetUsageRecorderForTesting, flushUsage, recordOpCall } from '../../../src/core/usage-watch/record.js'
 import { closeUsageWatchStore, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
 import { judgeWatch, newWatch } from '../../../src/core/usage-watch/watches.js'
@@ -130,5 +136,33 @@ describe('Walnut\'s own faults, apart from the caller\'s side', () => {
       }
     }
     expect(hits).toEqual([])
+  })
+
+  it('every op that answers a failure inside its result says whose it is', () => {
+    const missing = listOps({ includeDeprecated: true }).filter((op) => op.resultError && !op.resultErrorKind).map((op) => op.name)
+    expect(missing).toEqual([])
+    const kinds = Object.fromEntries(listOps().filter((op) => op.resultErrorKind).map((op) => [op.name, op.resultErrorKind]))
+    // A session that did not start is Walnut's own fault, never a refusal by design.
+    expect(kinds.task_create).toEqual({ code: 'start_failed', fault: true })
+    expect(failureClass({ fault: true, code: 'start_failed', result: {} })).toEqual({ cls: 'error', code: 'start_failed' })
+    expect(failureClass({ code: 'settings_refused', result: {} })).toEqual({ cls: 'refused', code: 'settings_refused' })
+    // A full disk is neither side's: the disk alarms watch it.
+    expect(OUTCOME_SIDE[failureClass({ status: 507, code: 'disk_full' }).cls as Exclude<OutcomeClass, 'ok'>]).toBe('neither')
+  })
+
+  it('an hour row from before the sides were kept finds a new code of Walnut\'s own, never a caller\'s', () => {
+    const old = (over: Partial<Agg>): Agg => { const a = { ...emptyAgg(), ...over } as Agg; delete (a as Partial<Agg>).ownCodes; delete (a as Partial<Agg>).callerCodes; return a }
+    const own = old({ calls: 5, errors: 2, codes: { http_500: 2 } })
+    backfillSides(own)
+    expect(own.ownCodes).toEqual({ http_500: 2 })
+    const caller = old({ calls: 5, badArgs: 2, refused: 1, codes: { invalid_args: 2, same_ask: 1 } })
+    backfillSides(caller)
+    expect(caller.callerCodes).toEqual({ invalid_args: 2, same_ask: 1 })
+    expect(caller.ownCodes).toBeUndefined()
+    // Both sides in one row: whose each code was is not known, so none is called Walnut's.
+    const mixed = old({ calls: 5, errors: 1, badArgs: 1, codes: { http_500: 1, invalid_args: 1 } })
+    backfillSides(mixed)
+    expect(mixed.ownCodes).toBeUndefined()
+    expect(mixed.callerCodes).toBeUndefined()
   })
 })

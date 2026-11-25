@@ -70,13 +70,15 @@ describe('the order of the rows', () => {
     row({ name: 'a_calls', calls: 900 }),
     row({ name: 'over', calls: 10, overLimit: 3 }),
     row({ name: 'bad', calls: 10, badArgs: 2, overLimit: 50 }),
+    // Bad arguments are the caller's: many of them rank a tool no higher than its calls do.
+    row({ name: 'only_bad', calls: 10, badArgs: 9 }),
     row({ name: 'err', calls: 10, errors: 1, timeouts: 1, badArgs: 0 }),
     row({ name: 'cut', calls: 5, cut: 1 }),
     row({ name: 'alarm', calls: 1, alarm: { id: 'usage.errors{op=alarm}', state: 'ALARM', since: NOW } }),
   ]
 
-  it('puts problems first: alarm, then cut, errors, bad args, over budget, then calls, then the name', () => {
-    expect(sortRows(rows, 'problems').map((r) => r.name)).toEqual(['alarm', 'cut', 'err', 'bad', 'over', 'a_calls', 'b_calls'])
+  it('puts problems first: alarm, then cut, errors, over budget, then calls, then the name; bad arguments rank nothing', () => {
+    expect(sortRows(rows, 'problems').map((r) => r.name)).toEqual(['alarm', 'cut', 'err', 'bad', 'over', 'a_calls', 'b_calls', 'only_bad'])
   })
 
   it('sorts by calls and by name', () => {

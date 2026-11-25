@@ -131,6 +131,13 @@ export interface WalnutOp {
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
   resultError?: (result: unknown) => string | undefined
   /**
+   * Whose a resultError is, for real use (core/usage-watch/normalize.ts failureClass): its code, and
+   * whether it is Walnut's own fault (a session that did not start, tasks that did not move) or a
+   * refusal by design (settings a rule refused). Every op with a resultError names it
+   * (tests/core/usage-watch/caller-side.test.ts).
+   */
+  resultErrorKind?: { code: string; fault: boolean }
+  /**
    * Per-op HTTP timeout override (ms). Search ops need more than the 10s
    * default: a cold embedding model + semantic legs measured 10s+, and a
    * timeout there reads as "search is broken" when the answer was coming.

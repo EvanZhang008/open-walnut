@@ -75,14 +75,17 @@ export function matchesFind(name: string, query: string): boolean {
   return !q || norm(name).includes(q);
 }
 
-/** What puts a row higher in "Problems first", most important first. */
+/**
+ * What puts a row higher in "Problems first", most important first. A tool's bad arguments are the
+ * caller's, not a problem of the tool's (core/usage-watch/agg.ts OUTCOME_SIDE): they never rank it.
+ */
 function problemKeys(r: UsageRow): number[] {
-  if (r.kind === 'op') return [inAlarm(r), r.cut, realErrors(r), r.badArgs, r.overLimit, r.calls];
+  if (r.kind === 'op') return [inAlarm(r), r.cut, realErrors(r), r.overLimit, r.calls];
   if (r.kind === 'http') return [inAlarm(r), r.serverErrors, r.slow, r.calls];
   return [inAlarm(r), r.calls];
 }
 
-/** The rows in the asked order; ties by name. Problems first: alarm, then cut, errors, bad args, over budget, then calls (for a tool). */
+/** The rows in the asked order; ties by name. Problems first: alarm, then cut, errors, over budget, then calls (for a tool). */
 export function sortRows(rows: readonly UsageRow[], sort: ToolSort): UsageRow[] {
   const byName = (a: UsageRow, b: UsageRow) => a.name.localeCompare(b.name);
   const out = [...rows];

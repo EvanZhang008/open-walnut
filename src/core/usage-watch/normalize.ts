@@ -304,19 +304,24 @@ function printsOnItsOwn(c: ShellCommand): boolean {
 export const ASLEEP_CODE = 'asleep'
 
 /** How a failed op call ended, from what the op answered (executor.ts OpOutcome). */
-export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string; result?: unknown }): { cls: 'refused' | 'bad_args' | 'error' | 'timeout' | 'unreachable'; code: string } {
+export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; fault?: boolean; status?: number; code?: string; result?: unknown }): { cls: 'refused' | 'bad_args' | 'error' | 'timeout' | 'unreachable'; code: string } {
   const code = safeCode(r.code)
   // Words the reply-language send gate held back (ops/reply-language-gate.ts): a refusal of its own, counted apart from bad arguments.
   if (code === 'reply_language') return { cls: 'refused', code }
   if (r.invalidArgs) return { cls: 'bad_args', code: code ?? 'invalid_args' }
   if (r.unreachable) return { cls: 'unreachable', code: code ?? 'unreachable' }
   if (r.lost) return { cls: 'timeout', code: code ?? 'lost' }
+  // The op answered and what failed in it is Walnut's own (WalnutOp.resultErrorKind: a session that did not start).
+  if (r.fault) return { cls: 'error', code: code ?? 'fault' }
   const s = r.status
   if (typeof s === 'number') {
     const c = code ?? `http_${s}`
     if (s === 408 || s === 504) return { cls: 'timeout', code: c }
     if (s === 502 || s === 503) return { cls: 'unreachable', code: c }
-    if (s >= 500) return { cls: s === 501 || s === 507 ? 'refused' : 'error', code: c }
+    // 501: the box does not do this by design (a refusal). 507: the machine's disk is full, neither
+    // the tool's fault nor the caller's (the disk alarms watch it), so neither side counts it.
+    if (s === 507) return { cls: 'unreachable', code: c }
+    if (s >= 500) return { cls: s === 501 ? 'refused' : 'error', code: c }
     if (s === 400 || s === 422) return { cls: 'bad_args', code: c }
     return { cls: 'refused', code: c }
   }

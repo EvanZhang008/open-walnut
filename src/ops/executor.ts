@@ -85,8 +85,16 @@ export type OpOutcome =
       status?: number
       /** The error code it answered with beside the status (`disk_full`, `host_reconnecting`), when it named one. */
       code?: string
+      /** The op answered, and what failed in it is Walnut's own fault (WalnutOp.resultErrorKind). */
+      fault?: true
       /** How long it said to wait before trying again (its `retryAfter`, seconds), in ms. */
       retryAfterMs?: number }
+
+/** A resultError's code and whose it is (WalnutOp.resultErrorKind), for real use. */
+function resultErrorFields(op: WalnutOp): { code?: string; fault?: true } {
+  const k = op.resultErrorKind
+  return k ? { code: k.code, ...(k.fault ? { fault: true as const } : {}) } : {}
+}
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -751,6 +759,7 @@ async function withEarlierWrites(outcome: Extract<OpOutcome, { ok: false }>, bas
     result: { ...(isPlainObject(outcome.result) ? outcome.result : {}), call_id: prov.callId, earlier_writes: earlier },
     ...(outcome.status !== undefined ? { status: outcome.status } : {}),
     ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+    ...(outcome.fault ? { fault: true as const } : {}),
     ...(outcome.retryAfterMs !== undefined ? { retryAfterMs: outcome.retryAfterMs } : {}),
   }
 }
@@ -786,7 +795,7 @@ async function runOp(
       // acts for the same caller: the nested call cannot climb above this origin.
       const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind, ...(fit ? { answer: fit } : {}) }))
       const message = op.resultError?.(result)
-      return message ? { ok: false, message, result, ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
+      return message ? { ok: false, message, result, ...resultErrorFields(op), ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
       // The handler's own refusal under a code (an `api` write of a shortened read): nothing ran.
       if (err instanceof OwnRefusalError) return { ok: false, message: err.message, code: err.code, ...err.extra }
@@ -817,7 +826,7 @@ async function runOp(
   try {
     const result = op.mapResult ? op.mapResult({ body: r.result, args, ...(fit ? { answer: fit } : {}) }) : r.result
     const message = op.resultError?.(result)
-    return message ? { ok: false, message, result } : { ok: true, result }
+    return message ? { ok: false, message, result, ...resultErrorFields(op) } : { ok: true, result }
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }

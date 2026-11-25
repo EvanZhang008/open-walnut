@@ -14,7 +14,7 @@ import Database, { type Database as DB } from '../../lib/sqlite.js'
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { emptyAgg, mergeAgg, type Agg, type UsageKind } from './agg.js'
+import { backfillSides, emptyAgg, mergeAgg, type Agg, type UsageKind } from './agg.js'
 
 export const RETAIN_HOURS = 30 * 24
 export const RETAIN_EVENT_DAYS = 14
@@ -108,7 +108,13 @@ export function addHours(rows: ReadonlyArray<{ hour: number; kind: UsageKind; na
 }
 
 function parseAgg(text: string): Agg {
-  try { return { ...emptyAgg(), ...(JSON.parse(text) as Partial<Agg>) } } catch { return emptyAgg() }
+  try {
+    const raw = JSON.parse(text) as Partial<Agg>
+    const a = { ...emptyAgg(), ...raw }
+    // A row from before the codes were kept by side: give them the side they can only be (agg.ts).
+    if (raw.ownCodes === undefined && raw.callerCodes === undefined) backfillSides(a)
+    return a
+  } catch { return emptyAgg() }
 }
 
 /**

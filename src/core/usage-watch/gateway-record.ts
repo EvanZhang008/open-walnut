@@ -10,7 +10,7 @@ import { PROGRAM_CLIENT, answerSize, isToolClient } from '../../lib/tool-answer-
 import { failureClass } from './normalize.js'
 import { recordOpCall, recordToolError } from './record.js'
 
-export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean; result?: unknown; message?: string; invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string }, ms: number, whole = false): void {
+export function recordGatewayCall(op: string, client: unknown, r: { ok: boolean; result?: unknown; message?: string; invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; fault?: boolean; status?: number; code?: string }, ms: number, whole = false): void {
   try {
     const c = isToolClient(client) ? client : 'unknown'
     if (r.ok) {

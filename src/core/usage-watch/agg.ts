@@ -20,6 +20,19 @@ export const OUTCOME_SIDE: Record<Exclude<OutcomeClass, 'ok'>, 'own' | 'caller' 
   error: 'own', timeout: 'own', bad_args: 'caller', refused: 'caller', unreachable: 'neither',
 }
 
+/**
+ * Codes by side for a row written before they were kept apart (or merged by an older version,
+ * which keeps `codes` only): given only where the row's failures are all of one side, so a code
+ * of the caller's is never read as a new fault of Walnut's.
+ */
+export function backfillSides(a: Agg): void {
+  const own = ownFaults(a)
+  const caller = callerSide(a)
+  if (a.unreachable) return
+  if (own > 0 && caller === 0) a.ownCodes = { ...(a.codes ?? {}) }
+  else if (caller > 0 && own === 0) a.callerCodes = { ...(a.codes ?? {}) }
+}
+
 /** Walnut's own faults among the calls: server errors and timeouts. */
 export function ownFaults(a: Pick<Agg, 'errors' | 'timeouts'>): number {
   return (a.errors ?? 0) + (a.timeouts ?? 0)

@@ -805,6 +805,8 @@ defineOp({
     }
   },
   resultError: (result) => (result as { start_error?: string } | undefined)?.start_error,
+  // The task was made and its session did not start: Walnut's own fault, never the caller's.
+  resultErrorKind: { code: 'start_failed', fault: true },
   answer: TASK_CREATE_ANSWER,
   // Its start answers once the session is up or failed (up to 110 s: src/web/routes/task-v1.ts).
   timeoutMs: 130_000,

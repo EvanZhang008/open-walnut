@@ -151,6 +151,8 @@ defineOp({
     return withOutcome({ ...rec(body) }, `${b.name ?? b.plugin} settings changed. ${what.join('; ')}.`,
       'Tell the person each setting that changed, in their words.')
   },
+  // A setting the plugin's rules refuse, or one only a person may change: a refusal by design.
+  resultErrorKind: { code: 'settings_refused', fault: false },
   resultError: (result) => {
     const b = rec(result) as SetBody
     const n = (b.refused?.length ?? 0) + (b.needsPerson?.length ?? 0)
