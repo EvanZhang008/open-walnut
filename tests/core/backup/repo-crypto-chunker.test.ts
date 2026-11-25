@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import {
@@ -78,6 +78,37 @@ describe('content-defined chunking', () => {
     const streamed: Buffer[] = [];
     for await (const c of chunkStream(Readable.from(pieces))) streamed.push(c);
     expect(streamed.map((c) => c.length)).toEqual(chunkBuffer(big).map((c) => c.length));
+  });
+
+  it('cuts the same bytes whatever the reads look like: tiny, empty, larger than a chunk', async () => {
+    const sizes = [1, 0, 7, 65_536, 3 * 1024 * 1024, 0, 12_345, MAX_CHUNK, 1];
+    const pieces: Buffer[] = [];
+    let off = 0;
+    for (let i = 0; off < big.length; i++) {
+      const n = sizes[i % sizes.length]!;
+      pieces.push(big.subarray(off, off + n));
+      off += n;
+    }
+    const streamed: Buffer[] = [];
+    for await (const c of chunkStream(Readable.from(pieces))) streamed.push(c);
+    const whole = chunkBuffer(big);
+    expect(streamed.length).toBe(whole.length);
+    streamed.forEach((c, i) => expect(c.equals(whole[i]!)).toBe(true));
+  });
+
+  // 2026-11-25: every 64 KiB read was joined onto what was pending, copying up to 2 MiB a read
+  // (about 16 times the file in buffers); a backup run's ~300 MB of changed files took the Mac's
+  // server from 2 to 5.6 GB. The reads are joined about once per chunk now.
+  it('joins the reads about once per chunk, never once per read', async () => {
+    const pieces: Buffer[] = [];
+    for (let off = 0; off < big.length; off += 65_536) pieces.push(big.subarray(off, off + 65_536));
+    const concat = vi.spyOn(Buffer, 'concat');
+    let joined = 0;
+    try {
+      for await (const _ of chunkStream(Readable.from(pieces))) { /* drain */ }
+      for (const [list, total] of concat.mock.calls) joined += total ?? (list as Buffer[]).reduce((n, b) => n + b.length, 0);
+    } finally { concat.mockRestore(); }
+    expect(joined).toBeLessThan(2 * big.length);
   });
 
   it('moves only the chunks near an insertion', () => {

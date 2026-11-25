@@ -66,20 +66,36 @@ export function chunkBuffer(buf: Buffer): Buffer[] {
 }
 
 /**
- * Chunk a stream. Keeps at most MAX_CHUNK plus one read of bytes in memory,
+ * Chunk a stream. Keeps at most 2 * MAX_CHUNK plus one read of bytes in memory,
  * and cuts only once MAX_CHUNK bytes are pending (or the stream ended), so the
  * cuts are exactly those chunkBuffer would make over the whole file.
  */
 export async function* chunkStream(stream: Readable): AsyncGenerator<Buffer> {
-  let pending: Buffer = Buffer.alloc(0);
-  for await (const piece of stream) {
-    pending = pending.length === 0 ? (piece as Buffer) : Buffer.concat([pending, piece as Buffer]);
+  // The reads wait in a list and are joined once 2 * MAX_CHUNK bytes are in: joining every read onto
+  // what was pending copied up to 2 MiB per 64 KiB read, about 32 MiB of buffers per chunk
+  // (2026-11-25 on the Mac: a run's ~300 MB of changed files took the server from 2 to 5.6 GB).
+  let parts: Buffer[] = [];
+  let size = 0;
+  const cutFull = function* (): Generator<Buffer> {
+    let pending = parts.length === 1 ? parts[0]! : Buffer.concat(parts, size);
     while (pending.length >= MAX_CHUNK) {
       const len = findCut(pending);
       yield Buffer.from(pending.subarray(0, len));
       pending = pending.subarray(len);
     }
+    // The rest is under MAX_CHUNK: its own copy, so the joined buffer is not kept for it.
+    parts = pending.length ? [Buffer.from(pending)] : [];
+    size = pending.length;
+  };
+  for await (const piece of stream) {
+    const b = piece as Buffer;
+    if (!b.length) continue;
+    parts.push(b);
+    size += b.length;
+    // Twice MAX_CHUNK: the rest a cut leaves is under MAX_CHUNK, so each byte is joined about twice.
+    if (size >= 2 * MAX_CHUNK) yield* cutFull();
   }
+  let pending = parts.length === 1 ? parts[0]! : Buffer.concat(parts, size);
   while (pending.length > 0) {
     const len = findCut(pending);
     yield Buffer.from(pending.subarray(0, len));
