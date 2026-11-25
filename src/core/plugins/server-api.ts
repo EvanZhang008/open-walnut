@@ -89,6 +89,7 @@ import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../types.js'
 import { EXTERNAL_IMPORT_EVENT_SOURCE, claimSessionImports, extendImportLifecycle, externalImportProject, importAutoCompleteAfterDays, releaseSessionImportClaims } from '../sessions/external-session-import.js'
 import { listTagDisplayRules, listTagLinkRules, setPluginTagDisplay, setPluginTagLink } from '../tag-display.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 import type {
   AdapterCallOptions,
   ModelResult,
@@ -570,6 +571,12 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     context.signal.throwIfAborted()
   }
 
+  /** A plugin's write of leader data, from its own timer too (a native setTimeout outlives its dispose): none once a
+   *  leader switch's stop began (lib/leader-clocks.ts); the next leader runs the plugin again. */
+  const assertMayWrite = (call: string): void => {
+    if (homeWritesStopped()) throw new Error(`${call}: this server is stopping for a leader switch; the next leader takes this write`)
+  }
+
   /** Folder writes are primary-only: a replica's own store is replaced by the next projection
    *  import, and its outbox forwards single-task updates, not these batches. */
   const assertPrimaryWrite = (call: string): void => {
@@ -661,6 +668,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         title: string; description?: string; priority?: TaskPriority; phase?: TaskPhase; project?: string;
         parentTaskId?: string; dependsOn?: string[]; tags?: string[]; dueDate?: string; startDate?: string; endDate?: string; idempotency_key?: string;
       }) {
+        assertMayWrite('tasks.create')
         const { updateTask } = await import('../task-manager.js')
         const { addTaskIdempotently } = await import('../task-create-idempotency.js')
         const { task, reused } = await addTaskIdempotently({
@@ -714,7 +722,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return publicTask(task)
       },
       async keepInPlugin(ids: string[], keep = true) {
+        assertMayWrite('tasks.update')
         if (keep && !keepsTasks) {
+        assertMayWrite('tasks.keepInPlugin')
           throw new Error(`Plugin "${pluginId}" keeps no tasks of its own: declare "taskVisibility": "plugin" in its manifest first`)
         }
         assertPrimaryWrite('tasks.keepInPlugin')
@@ -734,21 +744,25 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         await addNote(id, markdown)
       },
       async appendLog(id: string, entry: string) {
+        assertMayWrite('tasks.appendNote')
         await assertProviderMayWrite(id, 'tasks.appendLog')
         const { appendConversationLog } = await import('../task-manager.js')
         await appendConversationLog(id, entry)
       },
       async complete(id: string) {
+        assertMayWrite('tasks.appendLog')
         await assertProviderMayWrite(id, 'tasks.complete')
         const { completeTask } = await import('../task-manager.js')
         return publicTask((await completeTask(id, { source: 'plugin' })).task)
       },
       async delete(id: string) {
+        assertMayWrite('tasks.complete')
         await assertProviderMayWrite(id, 'tasks.delete')
         const { deleteTask } = await import('../task-manager.js')
         await deleteTask(id)
       },
       async folders() {
+        assertMayWrite('tasks.delete')
         const { listGroups } = await import('../task-manager.js')
         return (await listGroups()).map(publicFolder)
       },
@@ -768,6 +782,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return publicFolder({ ...created, member_ids: [] })
       },
       async fileIntoFolder(folderId: string, items: FilingItemInput[]) {
+        assertMayWrite('tasks.createFolder')
         assertPrimaryWrite('tasks.fileIntoFolder')
         const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
         if (!Array.isArray(items) || items.length === 0) return result
@@ -781,6 +796,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           // One transaction per chunk, yielding in between, so a plugin handing over thousands
           // of tasks never holds the event loop for the whole batch.
           for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
+        assertMayWrite('tasks.fileIntoFolder')
             if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve))
             const done = await fileTasksIntoFolder(folderId, items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map(filingItem))
             result.skipped.push(...done.skipped)
@@ -808,6 +824,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const { fileTasksIntoProject } = await import('../task-manager.js')
         // Same chunking and event shape as fileIntoFolder.
         for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
+        assertMayWrite('tasks.fileIntoProject')
           if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve))
           const done = await fileTasksIntoProject(project, items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map(filingItem))
           result.skipped.push(...done.skipped)
@@ -824,6 +841,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const folder = groups.find((one) => one.group_id === folderId)
         if (!folder) throw new Error(`Folder "${folderId}" not found.`)
         if (folder.member_ids.length > 0 || groups.some((one) => one.parent_id === folderId)) {
+        assertMayWrite('tasks.deleteFolder')
           throw new Error(`Folder "${folder.label}" is not empty; a plugin only deletes an empty folder.`)
         }
         await deleteFolder(folderId)
@@ -834,6 +852,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return (await getCustomTiers()).map(publicPinGroup)
       },
       async ensurePinGroup(label: string) {
+        assertMayWrite('tasks.ensurePinGroup')
         assertPrimaryWrite('tasks.ensurePinGroup')
         if (typeof label !== 'string' || !label.trim()) throw new Error('Pin group name cannot be empty.')
         const { ensureCustomTier } = await import('../task-manager.js')
@@ -968,6 +987,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return structuredClone((config.plugins?.[pluginId] ?? {}) as T)
       },
       async patch(partial: Record<string, unknown>) {
+        assertMayWrite('config.patch')
         const { config: next, changed } = await patchPluginConfig(pluginId, partial)
         // A reload re-applying the same settings tells no client (and no onChange handler).
         if (changed) emitConfigChanged({ plugins: { [pluginId]: next } }, ['web-ui'], { source: `plugin/${pluginId}` })
@@ -1045,6 +1065,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     router: {
       async intake(kind: RouterSourceKind, account: string, arrivals: Array<{ message: string; version?: string; labels?: string[] }>) {
         assertLive('router.intake')
+        assertMayWrite('router.intake')
         // Only the plugin that serves this kind's items may enter them: another plugin could
         // otherwise bind made-up accounts into the person's router.
         if (routerSourceOwners.get(kind) !== pluginId) {
@@ -1177,6 +1198,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       timeout(handler: () => void | Promise<void>, delayMs: number) {
         assertLive('timers.timeout')
         const timer = setTimeout(() => {
+          if (homeWritesStopped()) return
           void Promise.resolve(handler()).catch((error) => notifyError('Timer callback failed', error))
         }, Math.max(0, delayMs))
         timer.unref?.()
@@ -1187,6 +1209,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         let stopped = false
         let timer: ReturnType<typeof setTimeout> | null = null
         const tick = async () => {
+          // A leader switch's stop: the plugin's clock writes nothing more (lib/leader-clocks.ts).
+          if (homeWritesStopped()) return
           try { await handler() }
           catch (error) { await notifyError('Interval callback failed', error) }
           if (!stopped) {

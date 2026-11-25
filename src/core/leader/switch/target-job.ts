@@ -122,7 +122,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     // The copy: complete and recent (its batches still come). The old leader's server verified it just before.
     const status = await standbyStatus(o.standbyDir)
     if (status.batch === null) problems.push(`the standby copy ${o.standbyDir} holds no complete batch yet`)
-    else if (sinceLanded(status) > RECENT_BATCH_S) problems.push(`the standby copy's last batch landed ${sinceLanded(status)} s ago (more than ${RECENT_BATCH_S} s): is the standby running?`)
+    else if (sinceLanded(status) > RECENT_BATCH_S) problems.push(`the standby copy's last batch landed ${sinceLanded(status)} s ago (more than ${RECENT_BATCH_S} s): is the standby running? (Right after a batch of the whole home its runner can still be finishing it for minutes: wait for its next batch, then try again.)`)
     const free = freeBytes(self.home)
     const need = Math.max(1024 ** 3, status.bytes * 0.2)
     if (free !== null && free < need) problems.push(`only ${(free / 1024 ** 3).toFixed(1)} GB free where the new home goes; ${(need / 1024 ** 3).toFixed(1)} GB needed`)

@@ -9098,6 +9098,9 @@ export class DaemonConnection {
       let msg: Record<string, unknown>
       try { msg = JSON.parse(typeof data === 'string' ? data : data.toString()) } catch { return }
       if (this.resolveCommandFrame(msg)) return
+      // A leader switch's stop: none of the events below writes leader data here any more, as in handleFrame
+      // (lib/leader-clocks.ts). The daemon keeps what it sent unacked for the next leader.
+      if (homeWritesStopped()) return
       if ('ev' in msg && (msg as { ev?: string }).ev === 'stt-request') {
         void this.handleSttRequest(msg as unknown as DaemonEvent)
       }

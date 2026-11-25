@@ -309,7 +309,7 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   log.web[look.ok ? 'info' : 'warn'](`leader switch: the last look before the stop ${look.ok ? 'found the standby caught up' : 'found the standby behind; the stop is refused'}`, { switchId, ms: look.ms, budgetMs: look.budgetMs, batches: look.batches, ...(look.ok ? {} : { why: look.why }) })
   if (!look.ok) {
     abandonSwitchStop(begun.sw)
-    res.status(409).json({ ok: false, why: `the standby fell behind after its catch-up, so the final batch would not fit in the commit window (nothing stopped; the handover is taken back): ${look.why}` })
+    res.status(409).json({ ok: false, why: `the standby fell behind after its catch-up, so the final batch would not fit in the commit window (nothing stopped; the handover is being taken back): ${look.why}` })
     return
   }
   const knobs = testKnobs(req.body?.test)

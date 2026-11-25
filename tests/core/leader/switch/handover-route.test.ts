@@ -149,7 +149,7 @@ describe('the switch stop\'s last look', () => {
     looks = [slow(480_000), slow(540_000)]
     const r = await fetch(`${base}/api/leader/switch/final-stop`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ switchId: '20261124T000000-ffffff' }) })
     expect(r.status).toBe(409)
-    expect(((await r.json()) as { why: string }).why).toMatch(/^the standby fell behind after its catch-up, so the final batch would not fit in the commit window \(nothing stopped; the handover is taken back\): .*falls further behind/)
+    expect(((await r.json()) as { why: string }).why).toMatch(/^the standby fell behind after its catch-up, so the final batch would not fit in the commit window \(nothing stopped; the handover is being taken back\): .*falls further behind/)
     expect(calls).toEqual(['look', 'look'])
     expect(calls).not.toContain('switch stop requested')
     // Not in a stop: the cancel the source job sends next takes the handover back.

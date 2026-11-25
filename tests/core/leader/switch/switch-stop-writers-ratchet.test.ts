@@ -25,8 +25,8 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { clockFiles, clocksIn, codeOf, sourcesUnder } from './clock-scan.js'
-import { CLOCKS, STARTERS, type Clock } from './clock-table.js'
+import { clockFiles, clocksIn, codeOf, rearmingFiles, rearmingIn, sourcesUnder } from './clock-scan.js'
+import { CLOCKS, REARMING, STARTERS, type Clock } from './clock-table.js'
 
 const ROOT = path.resolve(__dirname, '../../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -352,13 +352,19 @@ function serverStarters(): string[] {
   }).sort()
 }
 
-/** Files that ask the gate on an event or a one-shot timer that arms itself again, not on a clock CLOCKS lists. */
+/**
+ * Files that ask the gate where no scan of the source finds the writer: an event handler, or a timer armed again
+ * through another function (a schedule() that a write calls, a retry a failure arms). A timer that names its own
+ * function is found (clock-scan.ts rearmingIn, REARMING in clock-table.ts); these cannot be told from a one-shot by
+ * their text. Plugins' own timers are not under src/ at all: their writes go through the plugin API and storage.
+ */
 const EVENT_GATES: Record<string, string> = {
+  'src/core/plugins/server-api.ts': 'a plugin\'s writes of tasks, config and router items, and its API timers (its own native timers outlive its dispose)',
+  'src/core/plugins/plugin-storage.ts': 'a plugin\'s data files (plugin-data/), from any timer of the plugin',
   'src/providers/daemon-connection.ts': 'a host\'s unsolicited events (session records, the queue, relayed sends, the offline journal): handleFrame',
   'src/core/offline-handover.ts': 'the offline journal\'s drain into session-requests.json and tasks (a link event): runOfflineHandover',
   'src/core/deferred-door-work.ts': 'the retry of deferred outward work (a re-arming timer)',
   'src/core/private-tasks/kept-digest.ts': 'the kept digest\'s two timers (re-arming)',
-  'src/core/session-queue-transit.ts': 'the transit retry of queued rows (re-arming)',
   'src/core/sessions/session-stop.ts': 'a session stop\'s retry and its fail deadline (each re-arms)',
   'src/core/sessions/subtask-notices.ts': 'the 3 s coalesce timers that flush edge notices into a session\'s queue',
   'src/core/sessions/turn-end-wait.ts': 'the turn-end wait\'s timer',
@@ -410,17 +416,50 @@ describe('the leader\'s clocks, from the source', () => {
     }
   })
 
+  it('every timer that arms its own function again is classified, one entry a timer; each gated one asks first', () => {
+    const found = rearmingFiles(ROOT)
+    expect(Object.keys(found).length).toBeGreaterThan(50)
+    const want = Object.fromEntries(Object.entries(REARMING).map(([f, list]) => [f, list.length]))
+    const unknown = Object.keys(found).filter((f) => !(f in want))
+    expect(unknown, `classify these in clock-table.ts REARMING: ${unknown.join(', ')}`).toEqual([])
+    expect(found).toEqual(want)
+    const before = stoppedBeforeFinalBatch()
+    for (const [file, list] of Object.entries(REARMING)) {
+      const code = codeOf(read(file))
+      const at = rearmingIn(code)
+      resolved(list).forEach(([kind, why, stop], i) => {
+        if (kind === 'gated') expect(gatedAt(code, at[i]!), `${file} re-arming timer ${i + 1} (${why})`).toBe(true)
+        if (kind === 'stopped') expect(before, `${file} re-arming timer ${i + 1}: its stop ${stop}`).toContain(stop!.replace(/\?\./g, '.'))
+      })
+    }
+  })
+
   it('a link\'s events and the re-arming timers ask the gate; every file that asks it is in a table', () => {
     for (const [file, why] of Object.entries(EVENT_GATES)) expect(codeOf(read(file)), `${file}: ${why}`).toContain(GATE)
     const frame = functionBody(read('src/providers/daemon-connection.ts'), '  private handleFrame(')
     const event = frame.indexOf('const event = msg as unknown as DaemonEvent')
     expect(event).toBeGreaterThan(frame.indexOf('this.resolveCommandFrame(msg)'))
     expect(frame.slice(event, event + 400)).toContain(`if (${GATE}) return`)
+    // The bulk socket: after a main link's reconnect the daemon's first trusted client may be it (message, launch and
+    // trigger events): asked right after the command replies, as handleFrame does.
+    const conn = codeOf(read('src/providers/daemon-connection.ts'))
+    // The bulk socket's handler: the one that parses its own frames and resolves command replies (the main one hands
+    // its data to handleMessage).
+    const bulks = [...conn.matchAll(/ws\.on\('message', \(data\) => \{\s*let msg: Record<string, unknown>/g)]
+    expect(bulks.length, 'one bulk socket handler').toBe(1)
+    const handler = spanAt(conn, bulks[0]!.index!)
+    expect(handler.indexOf('this.resolveCommandFrame(msg)')).toBeGreaterThan(0)
+    expect(handler.indexOf(`if (${GATE}) return`)).toBeGreaterThan(handler.indexOf('this.resolveCommandFrame(msg)'))
+    expect(handler.indexOf(`if (${GATE}) return`)).toBeLessThan(handler.indexOf("'stt-request'"))
+    const api = codeOf(read('src/core/plugins/server-api.ts'))
+    for (const w of ['create', 'update', 'keepInPlugin', 'appendNote', 'appendLog', 'complete', 'delete', 'createFolder', 'fileIntoFolder', 'fileIntoProject', 'deleteFolder', 'ensurePinGroup']) {
+      expect(api, `the plugin API's tasks.${w}`).toContain(`assertMayWrite('tasks.${w}')`)
+    }
     const handover = functionBody(read('src/core/offline-handover.ts'), 'export function runOfflineHandover(')
     expect(handover.slice(handover.indexOf('{'))).toMatch(/^\{\s*if \(homeWritesStopped\(\)\) return Promise\.reject/)
     const asking = sourcesUnder(path.join(ROOT, 'src')).map((f) => path.relative(ROOT, f))
       .filter((f) => f !== path.join('src', 'lib', 'leader-clocks.ts') && codeOf(read(f)).includes(GATE))
-    const listed = (f: string) => f in EVENT_GATES || STARTERS[f]?.[0] === 'gated' || (CLOCKS[f] && resolved(CLOCKS[f]!).some(([k]) => k === 'gated'))
+    const listed = (f: string) => f in EVENT_GATES || STARTERS[f]?.[0] === 'gated' || (CLOCKS[f] && resolved(CLOCKS[f]!).some(([k]) => k === 'gated')) || (REARMING[f] && resolved(REARMING[f]!).some(([k]) => k === 'gated'))
     expect(asking.filter((f) => !listed(f))).toEqual([])
   })
 

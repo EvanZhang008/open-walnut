@@ -26,7 +26,7 @@ import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './r
 import { machineById, type LeaderSwitchSettings } from './settings.js'
 import { killPoint, type StartedBy } from './flow.js'
 import { hostLeadRefusal, type HostServiceFacts } from './service-role.js'
-import { standbyBusy } from './catch-up.js'
+import { PROMOTE_TRIAL_MS, standbyBusy } from './catch-up.js'
 
 export interface HandedOverSwitch {
   switchId: string
@@ -214,15 +214,18 @@ function lateWhy(o: { writer: boolean; last: string; batches: number; writers?: 
  */
 export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; stoppedAt: string; signal: AbortSignal; test?: FinalBatchTest; writers?: WritersSettled; log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void }): Promise<FinalStopResult> {
   const write = (r: FinalStopResult) => { try { writeDurableJson(finalStopResultFile(o.home), r) } catch (err) { o.log('warn', 'leader switch: the switch stop\'s result could not be written', { error: String(err) }) } return r }
+  // The final batch ends in time for the new leader's promote, trial and commit before the commit deadline
+  // (catch-up.ts timeline): a mark later than that only makes the target roll back at the deadline.
+  const markBy = o.sw.commitDeadline - PROMOTE_TRIAL_MS
   try {
-    const b = await runFinalBatch({ home: o.home, peer: o.sw.peer, deadlineAt: o.sw.commitDeadline, signal: o.signal, ...(o.test ? { test: o.test } : {}), ...(o.writers ? { writers: o.writers } : {}) })
+    const b = await runFinalBatch({ home: o.home, peer: o.sw.peer, deadlineAt: markBy, signal: o.signal, ...(o.test ? { test: o.test } : {}), ...(o.writers ? { writers: o.writers } : {}) })
     if (!b.ok) {
       o.log('warn', 'leader switch: no final mark (the switch rolls back)', { switchId: o.sw.switchId, why: b.why, batches: b.batches })
       return write({ switchId: o.sw.switchId, ok: false, why: b.why, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     }
     if (o.signal.aborted) return write({ switchId: o.sw.switchId, ok: false, why: 'the switch stop was stopped by a signal before its mark', stoppedAt: o.stoppedAt, at: new Date().toISOString() })
-    // The new leader starts no commit after the deadline: a mark after it would only say so later.
-    if (Date.now() > o.sw.commitDeadline) return write({ switchId: o.sw.switchId, ok: false, why: 'the final batch ended after the commit window: no final mark', stoppedAt: o.stoppedAt, at: new Date().toISOString() })
+    // The new leader could not promote, try and commit before the deadline: a mark now would only say so later.
+    if (Date.now() > markBy) return write({ switchId: o.sw.switchId, ok: false, why: `the final batch ended later than ${PROMOTE_TRIAL_MS / 1000} s before the commit deadline (the new leader's promote, trial and commit): no final mark`, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     const mark: FinalMark = { v: 1, switchId: o.sw.switchId, batch: b.batch, unchanged: true, released: true, stoppedAt: o.stoppedAt, at: new Date().toISOString() }
     await o.sw.peer.writeFile(finalMarkName(o.sw.switchId), mark)
     o.log('info', 'leader switch: final batch sent and marked; this server exits', { switchId: o.sw.switchId, batch: b.batch, batches: b.batches })

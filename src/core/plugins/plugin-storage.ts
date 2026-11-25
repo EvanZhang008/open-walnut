@@ -8,6 +8,7 @@ import { readJsonFile, updateJsonFile, writeJsonFile } from '../../utils/fs.js'
 import type { Disposable } from './disposable.js'
 import { validatePluginId } from './ids.js'
 import { sortedByName } from '../../lib/dir-order.js'
+import { homeWritesStopped } from '../../lib/leader-clocks.js'
 
 const DB_WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
@@ -322,6 +323,7 @@ export class PluginStorage implements Disposable {
 
   async writeJson(name: string, value: unknown): Promise<void> {
     this.assertActive()
+    refuseInSwitchStop()
     const file = this.resolve(name)
     await ensurePrivateParent(this.dataDir, file)
     return writeJsonFile(file, value, { mode: 0o600 })
@@ -329,6 +331,7 @@ export class PluginStorage implements Disposable {
 
   async updateJson<T>(name: string, fallback: T, update: (current: T) => T | Promise<T>): Promise<T> {
     this.assertActive()
+    refuseInSwitchStop()
     const file = this.resolve(name)
     await ensurePrivateParent(this.dataDir, file)
     return updateJsonFile(file, fallback, update, { mode: 0o600 })
@@ -345,6 +348,7 @@ export class PluginStorage implements Disposable {
 
   async writeText(name: string, value: string): Promise<void> {
     this.assertActive()
+    refuseInSwitchStop()
     const file = this.resolve(name)
     await ensurePrivateParent(this.dataDir, file)
     return writeTextAtomic(file, value, 0o600)
@@ -352,6 +356,7 @@ export class PluginStorage implements Disposable {
 
   async delete(name: string): Promise<void> {
     this.assertActive()
+    refuseInSwitchStop()
     await fs.rm(this.resolve(name), { force: true })
   }
 
@@ -447,4 +452,9 @@ export class PluginSecretStore {
   private validateKey(name: string): void {
     if (!/^[a-zA-Z0-9._-]{1,128}$/.test(name)) throw new Error(`Invalid Plugin secret key: ${JSON.stringify(name)}`)
   }
+}
+
+/** Plugin data is leader data: none is written once a leader switch's stop began (lib/leader-clocks.ts). */
+function refuseInSwitchStop(): void {
+  if (homeWritesStopped()) throw new Error('plugin storage: this server is stopping for a leader switch; the next leader takes this write')
 }

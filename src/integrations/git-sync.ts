@@ -1765,7 +1765,11 @@ async function sweepGitTempsAsync(): Promise<void> {
  * would still exist, so nothing would write it again, and the rules past the tear would be gone.
  */
 function writeGitignore(gitignorePath: string, content: string): void {
-  const tmp = `${gitignorePath}.${process.pid}.tmp`;
+  // Not while the home is quiet for a leader switch's stop (every writer of it comes here): the next leader's boot
+  // writes it, and a stage in a quiet home is refused anyway.
+  if (path.resolve(path.dirname(gitignorePath)) === path.resolve(WALNUT_HOME) && gitQuietAt(WALNUT_HOME)) return;
+  // The template's own temp-file rule ignores it (`.open-walnut-*.tmp`): one left by a crash is never committed or copied.
+  const tmp = path.join(path.dirname(gitignorePath), `.open-walnut-gitignore-${process.pid}.tmp`);
   try {
     fs.writeFileSync(tmp, content, 'utf-8');
     fs.renameSync(tmp, gitignorePath);

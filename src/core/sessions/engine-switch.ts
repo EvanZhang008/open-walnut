@@ -60,6 +60,7 @@ import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import { settingPreflight, settingRefusal } from './engine-switch-setting.js';
 import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import { errClause, clause } from '../../utils/format.js';
+import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
   owedLine, unansweredPersonWords,
@@ -544,7 +545,7 @@ async function carryLateRows(taskId: string, from: string, to: string, attempt =
     // The take failed: the rows are still on the old session, and the carry is tried again.
     log.session.warn('task move: carrying late messages failed; trying again', { taskId, from, to, attempt, error: err instanceof Error ? err.message : String(err) });
     // No limit: a row on the archived session is delivered by nobody else.
-    setTimeout(() => { void carryLateRows(taskId, from, to, attempt + 1); }, Math.min(LATE_CARRY_RETRY_MS * 2 ** attempt, LATE_CARRY_MAX_MS)).unref?.();
+    setTimeout(() => { if (homeWritesStopped()) return; void carryLateRows(taskId, from, to, attempt + 1); }, Math.min(LATE_CARRY_RETRY_MS * 2 ** attempt, LATE_CARRY_MAX_MS)).unref?.();
   }
 }
 const LATE_CARRY_RETRY_MS = 30_000;

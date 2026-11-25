@@ -32,6 +32,7 @@ import { bootPolicy } from './boot-policy.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { engineCaps } from './agents/engine-registry.js';
 import { ownWordsOf } from './sessions/own-words.js';
+import { homeWritesStopped } from '../lib/leader-clocks.js';
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 /** First sweep waits for boot to settle (session reconnects, daemon dials). */
@@ -322,6 +323,8 @@ export function startSessionTitleReconciler(): void {
   const tick = () => {
     timer = setTimeout(tick, SWEEP_INTERVAL_MS);
     timer.unref?.();
+    // A pass retitles tasks (leader data): none in a leader switch's stop (lib/leader-clocks.ts).
+    if (homeWritesStopped()) return;
     void sweepPlaceholderTitles();
   };
   timer = setTimeout(tick, FIRST_SWEEP_DELAY_MS);
