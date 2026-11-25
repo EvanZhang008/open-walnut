@@ -31,6 +31,15 @@ const SHAPES: Record<string, string> = {
   </td></tr></table>`,
   // A block box with a pixel width, inside a full-width shell table's cell.
   'fixed-width block in a cell': `<table width="100%"><tr><td align="center"><div style="width: 520px; border-bottom: 1px solid #ddd">${'There was a recent sign-in to your account from a new device. '.repeat(3)}</div></td></tr></table>`,
+  // The sign-in notice's button: a 280px inline-block with 60px side padding, in a padded column's cell.
+  'fixed-width button in a padded cell': `<div style="max-width: 600px; padding: 32px 64px 0"><div style="width: 400px; max-width: 400px">
+    <table style="width: 100%; border-collapse: collapse"><tr><td style="text-align: center">
+      <a href="https://example.invalid/review" style="padding: 12px 60px; border: 1px solid #308bbf; display: inline-block; width: 280px">Review the sign-in</a>
+    </td></tr></table></div></div>`,
+  // A calendar notice: a sender reset clears the body's padding, and a full-width collapsing table
+  // inside inline spans takes 16px side padding from a class rule; WebKit scrolled 32px past it.
+  'padded collapsing table': `<style>body { margin: 0; padding: 0; } .body-container { padding-left: 16px; padding-right: 16px; }</style>
+    <span><span><table class="body-container" style="width: 100%"><tr><td>${'Your event starts tomorrow at nine at the north pier. '.repeat(4)}</td></tr></table></span></span>`,
   // The `nowrap` attribute rather than a style.
   'nowrap attribute': `<table><tr><td nowrap>${'Ferry departures from the north pier every hour '.repeat(4)}</td></tr></table>`,
 }

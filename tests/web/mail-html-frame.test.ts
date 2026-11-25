@@ -300,7 +300,12 @@ describe('a fixed-width table fits the paper without losing its width', () => {
  * Other declarations that hold the paper open the same way (2026-11-24: a pricing notice's 600px
  * wrapper also said `min-width:600px`, so its fitted width yielded and the minimum did not).
  */
-describe('a pixel minimum or a block box width fits the paper too', () => {
+describe('a pixel minimum or a box width fits the paper too', () => {
+  it('drops a collapsing table\'s side padding in the frame, which WebKit adds to the scroll width', () => {
+    const document = buildMailSrcdoc('<table class="body-container"><tr><td>x</td></tr></table>', { allowRemoteImages: false });
+    expect(document).toContain('table:not([style*="separate" i]) { padding-left: 0 !important; padding-right: 0 !important; }');
+  });
+
   it('fits a pixel min-width on a table, after its fitted width', () => {
     const kept = hardenMailHtml('<table width="600" style="margin:0 auto; max-width:600px; min-width:600px; width:600px"><tr><td>x</td></tr></table>');
     expect(kept).toContain('min-width:min(600px,100%) !important');
@@ -315,14 +320,18 @@ describe('a pixel minimum or a block box width fits the paper too', () => {
     expect(hardenMailHtml(percent)).toBe(percent);
   });
 
-  it('gives a block box auto width capped at its pixel width, and a floated or inline-block one min()', () => {
-    expect(hardenMailHtml('<div style="width: 400px; color: #333">x</div>')).toContain('width:auto !important;max-width:400px !important; color: #333');
-    expect(hardenMailHtml('<div style="display: inline-block; width: 280px">x</div>')).toContain('width:min(280px,100%) !important');
-    expect(hardenMailHtml('<div style="float: left; width: 280px">x</div>')).toContain('width:min(280px,100%) !important');
+  it('gives a box auto width, capped at its pixel width and held at it while the paper allows', () => {
+    expect(hardenMailHtml('<div style="width: 400px; color: #333">x</div>'))
+      .toContain('<div style="color: #333;width:auto !important;max-width:400px !important;min-width:min(400px,100%) !important">');
+    // The sign-in notice's button: 280px of content plus 60px of padding and 1px of border each side.
+    expect(hardenMailHtml('<a href="https://example.invalid/r" style="padding: 12px 60px; border: 1px solid #308bbf; display: inline-block; width: 280px">Review</a>'))
+      .toContain('max-width:280px !important;min-width:min(280px,100% - 122px) !important');
+    // The sender's own smaller cap stays the cap.
+    expect(hardenMailHtml('<div style="width: 600px; max-width: 480px">x</div>')).toContain('max-width:480px !important;min-width:min(480px,100%) !important');
   });
 
   it('leaves a cell, an image and a max-width alone', () => {
-    for (const html of ['<table><tr><td style="width: 518px">x</td></tr></table>', '<img src="https://cdn.example.invalid/a.png" style="width: 600px">', '<div style="max-width: 600px">x</div>']) {
+    for (const html of ['<table><tr><td style="width: 518px">x</td></tr></table>', '<img src="https://cdn.example.invalid/a.png" style="width: 600px">', '<div style="max-width: 600px">x</div>', '<div style="width: 50%">x</div>']) {
       expect(hardenMailHtml(html)).toBe(html);
     }
   });

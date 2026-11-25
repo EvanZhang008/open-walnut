@@ -15,7 +15,7 @@
  *   3. DOMPurify, applied LAST by `mail-sanitize.ts`, which is the primary sanitizer in a real
  *      browser: it parses, so it sees what a regex cannot.
  *
- * No imports, no DOM, no framework: `tests/web/mail-html-frame.test.ts` runs this under the
+ * No DOM and no framework (only its pure sibling `mail-width-fit.ts`): `tests/web/mail-html-frame.test.ts` runs this under the
  * node environment, where DOMPurify would be a silent passthrough.
  *
  * The sibling precedent is `src/core/human-inbox/letter-frame.ts`, which does the same job for
@@ -23,6 +23,8 @@
  * letter allows no network subresource ever, while mail has to be able to load remote images
  * once the human asks for this one message.
  */
+
+import { fitInlineWidths, PX_WIDTH } from './mail-width-fit';
 
 /** Popups only: no scripts, no same-origin, no top-level navigation. */
 export const MAIL_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
@@ -65,6 +67,12 @@ export function mailFrameCsp(allowRemoteImages: boolean): string {
  * repo bans. `walnut-cid-image` is the chip an attachment-referencing image becomes, because this
  * console has no route that serves attachment bytes, so the picture can never arrive.
  *
+ * A collapsing-border table has no padding (CSS 2.1, 17.6.2): both engines lay its cells out
+ * edge to edge, but WebKit still adds the sender's side padding to the scrollable width, so a
+ * `width: 100%` table with 16px side padding from a class rule scrolled 32px past a 520px paper in
+ * the Mac app only (2026-11-25, a calendar notice). The padding goes, which changes nothing drawn;
+ * a table the sender made `separate` keeps it.
+ *
  * Tables get no margin of their own. HTML mail is LAID OUT in tables: a card is a stack of
  * one-row tables whose cells carry the card's side borders, and a bottom margin on `table` opened a
  * gap between every two rows, so the borders read as a column of separate boxes (a real account
@@ -86,6 +94,7 @@ const FRAME_RESET = `<style>
   img { height: auto; }
   pre { overflow-x: auto; white-space: pre-wrap; }
   table { border-collapse: collapse; }
+  table:not([style*="separate" i]) { padding-left: 0 !important; padding-right: 0 !important; }
   h1, h2, h3, h4 { line-height: 1.25; margin: 1.2em 0 0.5em; }
   p, ul, ol { margin: 0 0 1em; }
   blockquote { margin: 0 0 1em 12px; padding-left: 12px; border-left: 2px solid rgba(60,60,67,0.22); color: #4b4b50; }
@@ -177,8 +186,6 @@ function attrValue(assignment: string | undefined): string {
   return raw;
 }
 
-/** A pixel width as an attribute (`600`, `600px`) or as a CSS declaration value. */
-const PX_WIDTH = /^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/i;
 /** Every `width` declaration in an inline style, so it can be read and then replaced. */
 const CSS_WIDTH_DECL = /(^|;)\s*width\s*:\s*([^;!]*?)\s*(?:!important)?\s*(?=;|$)/gi;
 
@@ -235,47 +242,8 @@ function fitFixedTable(attrs: string, kept: string): string | null {
   if (!fixed) return null;
   const withoutStyle = kept.replace(ATTR, (attr, key: string) => (key.toLowerCase() === 'style' ? '' : attr)).trim();
   const width = `width:min(${fixed.px}px,100%) !important`;
-  const style = fixed.style ? `${fitBoxWidths(stripRemoteCssUrls(fixed.style), false)};${width}` : width;
+  const style = fixed.style ? `${fitInlineWidths('table', stripRemoteCssUrls(fixed.style))};${width}` : width;
   return `${withoutStyle}${withoutStyle ? ' ' : ''}style="${style.replace(/"/g, '&quot;')}"`;
-}
-
-/** Every `width` or `min-width` declaration in an inline style (never `max-width`). */
-const CSS_BOX_WIDTH_DECL = /(^|;)(\s*)(min-width|width)\s*:\s*([^;!]*?)\s*(?:!important)?\s*(?=;|$)/gi;
-
-/**
- * Block boxes whose own pixel `width` is fitted too. Not a table (`fitFixedTable` reads its
- * attribute as well), not its cells, rows or columns (a percentage inside `min()` makes a cell's
- * width auto, which re-spread every column of a card), and not an image (`max-width: 100%` in the
- * frame reset already holds it).
- */
-const FITS_OWN_WIDTH = new Set(['div', 'section', 'article', 'header', 'footer', 'main', 'aside', 'nav', 'p', 'center', 'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
-
-/**
- * A pixel `min-width` in an inline style, and a block box's pixel `width`, become
- * `min(<width>, 100%)`.
- *
- * The same paper-edge cut as a fixed table width, by other declarations. A newsletter's 600px
- * wrapper said `width:600px; min-width:600px` (2026-11-24, a cloud provider's pricing notice), so
- * the fitted width yielded and the minimum did not, and at a 520px paper both engines laid the
- * text out at 624px and cut every line; a sign-in notice holds a 400px div. On fifteen real bodies
- * at a 520px paper, WebKit's overflowing layouts went from 5 to 2. Where the paper is wider,
- * nothing changes.
- */
-function fitBoxWidths(style: string, ownWidth: boolean): string {
-  // A block box in normal flow fills its container, so `auto` capped at the declared width is the
-  // same box wherever the paper is wider, and it also yields inside a table cell, where `min()`
-  // with a percentage still counts its pixels toward the cell's width (a sign-in notice's 400px
-  // div kept its cell 34px past a 520px paper). A floated or inline-block box would shrink to its
-  // content under `auto`, so it keeps `min()`.
-  const shrinks = /(^|;)\s*(float\s*:\s*(left|right)|display\s*:\s*inline)/i.test(style);
-  return style.replace(CSS_BOX_WIDTH_DECL, (whole, lead: string, space: string, prop: string, value: string) => {
-    const name = prop.toLowerCase();
-    if (name === 'width' && !ownWidth) return whole;
-    const found = PX_WIDTH.exec(value);
-    if (!found) return whole;
-    if (name === 'width' && !shrinks) return `${lead}${space}width:auto !important;max-width:${found[1]}px !important`;
-    return `${lead}${space}${name}:min(${found[1]}px,100%) !important`;
-  });
 }
 
 /**
@@ -320,7 +288,7 @@ export function hardenMailHtml(raw: string): string {
         }
         if (lower === 'style') {
           const value = attrValue(assignment);
-          const clean = fitBoxWidths(stripRemoteCssUrls(value), FITS_OWN_WIDTH.has(tag));
+          const clean = fitInlineWidths(tag, stripRemoteCssUrls(value));
           if (clean === value) return attr;
           changed = true;
           return `${key}="${clean.replace(/"/g, '&quot;')}"`;
