@@ -41,7 +41,7 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  * view, a daemon's ready view) written under another number is dropped, never served. The bump
  * log lives beside HISTORY_CACHE_SCHEMA's re-export in history-disk-cache.ts.
  */
-export const HISTORY_CACHE_SCHEMA = 16;
+export const HISTORY_CACHE_SCHEMA = 17;
 
 /** One block of a transcript line's content array. */
 type ContentBlock = Extract<NonNullable<NonNullable<RawJsonlLine['message']>['content']>, unknown[]>[number];

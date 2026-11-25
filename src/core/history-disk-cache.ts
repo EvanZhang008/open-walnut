@@ -80,6 +80,10 @@ import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
  * person's words drained with a peer's reply had read as the reply's card), the earlier ones under
  * their own send's uuid with the line's as `lineUuid`.
  *
+ * 17 (2026-11-25): `hidden` on an assistant row, the lines Walnut left out of its text (the
+ * developer's fold, ui.show_hidden_lines). A version-16 parse lacks it, so the fold never showed on
+ * a reply parsed before the deploy (tests/core/history-cache-schema-fields.test.ts).
+ *
  * The number itself lives in history-parse.ts, beside the parser it versions: the session
  * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */
