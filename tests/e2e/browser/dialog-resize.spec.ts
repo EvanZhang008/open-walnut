@@ -55,8 +55,9 @@ test('a dialog grows by its edges, keeps the size it was left at, and forgets it
   await expect.poll(async () => Math.round((await dialog.boundingBox())!.width)).toBe(Math.round(before.width + 120))
   const wide = (await dialog.boundingBox())!
   expect(Math.abs(wide.x + wide.width / 2 - centre), 'still centred').toBeLessThan(2)
-  // The press on the edge never closed it.
+  // The press on the edge never closed it, and the strip moved with the edge it dragged.
   await expect(dialog).toBeVisible()
+  await expect.poll(async () => Math.round((await page.getByTestId('dialog-resize-e').boundingBox())!.x - (wide.x + wide.width))).toBe(-3)
 
   // The corner sets both sizes.
   await dragEdge(page, 'se', -40, -30)

@@ -52,7 +52,34 @@ function inlineSize(el: HTMLElement): DialogSize {
   return { w: px(el.style.width), h: px(el.style.height) };
 }
 
-function Edge({ side, dialog, box }: { side: Side; dialog: HTMLElement; box: Box }) {
+const T = 9; // a strip: 6 px outside the panel's edge, 3 px over it
+const C = 16; // a corner's square
+
+/** Where a side's strip sits, fixed to the window, for the panel's box. */
+function stripStyle(side: Side, box: Box): { left: number; top: number; width: number; height: number } {
+  if (side.length === 2) {
+    return {
+      width: C, height: C,
+      top: side[0] === 'n' ? box.top - 6 : box.top + box.height - C + 6,
+      left: side[1] === 'w' ? box.left - 6 : box.left + box.width - C + 6,
+    };
+  }
+  if (side === 'n' || side === 's') {
+    return { left: box.left + C / 2, width: Math.max(0, box.width - C), height: T, top: side === 'n' ? box.top - 6 : box.top + box.height - 3 };
+  }
+  return { top: box.top + C / 2, height: Math.max(0, box.height - C), width: T, left: side === 'w' ? box.left - 6 : box.left + box.width - 3 };
+}
+
+/** Moves the strips at once, without waiting for a render (WebKit may hold one back during a drag). */
+function placeStrips(box: Box) {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('.dialog-resize-layer [data-dialog-resize-edge]'))) {
+    const st = stripStyle(el.dataset.dialogResizeEdge as Side, box);
+    el.style.left = `${st.left}px`; el.style.top = `${st.top}px`;
+    el.style.width = `${st.width}px`; el.style.height = `${st.height}px`;
+  }
+}
+
+function Edge({ side, dialog, box, follow }: { side: Side; dialog: HTMLElement; box: Box; follow: () => void }) {
   const start = useRef<{ w: number; h: number; kx: number; ky: number; room: { width: number; height: number }; inline: DialogSize; kind: string | null } | null>(null);
   const now = useRef<DialogSize>({});
   const horiz = side.includes('e') || side.includes('w');
@@ -68,6 +95,9 @@ function Edge({ side, dialog, box }: { side: Side; dialog: HTMLElement; box: Box
         width: b.cx ? window.innerWidth : window.innerWidth - r.left + DIALOG_WINDOW_GAP,
         height: b.cy ? window.innerHeight : window.innerHeight - r.top + DIALOG_WINDOW_GAP,
       };
+      // The panel itself shows the drag (an accent outline): it moves with its edge in every engine,
+      // where the strips are placed by a render WebKit may hold back until the drag ends.
+      dialog.setAttribute('data-dialog-resizing', side);
       start.current = { w: r.width, h: r.height, kx: b.cx ? 2 : 1, ky: b.cy ? 2 : 1, room, inline: inlineSize(dialog), kind: dialogKind(dialog) };
       now.current = {};
     },
@@ -81,14 +111,18 @@ function Edge({ side, dialog, box }: { side: Side; dialog: HTMLElement; box: Box
       now.current = fit;
       // The other dimension keeps what the panel has now (its own CSS, or a size set before).
       applyDialogSize(dialog, { w: fit.w ?? s.inline.w, h: fit.h ?? s.inline.h });
+      // The strips follow the edge they drag (WebKit sends no ResizeObserver note during a drag).
+      follow();
     },
     onEnd: ({ canceled }) => {
       const s = start.current;
       start.current = null;
+      dialog.removeAttribute('data-dialog-resizing');
       if (!s) return;
       const moved = (now.current.w !== undefined && Math.abs(now.current.w - s.w) >= 1)
         || (now.current.h !== undefined && Math.abs(now.current.h - s.h) >= 1);
       // A click, or Escape: exactly what the panel had before the press.
+      follow();
       if (canceled || !moved) { applyDialogSize(dialog, s.inline); return; }
       if (s.kind) keepDialogSize(s.kind, now.current);
     },
@@ -97,21 +131,9 @@ function Edge({ side, dialog, box }: { side: Side; dialog: HTMLElement; box: Box
     const kind = dialogKind(dialog);
     if (kind) keepDialogSize(kind, null);
     applyDialogSize(dialog, null);
+    follow();
   };
-  const T = 9; // the strip: 6 px outside the panel's edge, 3 px over it
-  const C = 16; // a corner's square
-  const style: React.CSSProperties = {};
-  if (side === 'n' || side === 's') Object.assign(style, { left: box.left + C / 2, width: Math.max(0, box.width - C), height: T });
-  if (side === 'e' || side === 'w') Object.assign(style, { top: box.top + C / 2, height: Math.max(0, box.height - C), width: T });
-  if (side === 'n') style.top = box.top - 6;
-  if (side === 's') style.top = box.top + box.height - 3;
-  if (side === 'w') style.left = box.left - 6;
-  if (side === 'e') style.left = box.left + box.width - 3;
-  if (side.length === 2) {
-    Object.assign(style, { width: C, height: C });
-    style.top = side[0] === 'n' ? box.top - 6 : box.top + box.height - C + 6;
-    style.left = side[1] === 'w' ? box.left - 6 : box.left + box.width - C + 6;
-  }
+  const style = stripStyle(side, box);
   return (
     <div
       className={`dialog-resize-edge dialog-resize-edge--${side}${drag.isDragging ? ' is-dragging' : ''}`}
@@ -141,58 +163,58 @@ export function DialogResizeEdges() {
   // later into <body>, and the same layer token would leave the old strips under its scrim.
   const ids = useRef(new WeakMap<HTMLElement, number>());
   const nextId = useRef(0);
+  const wakeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (phone) { setDialog(null); return; }
     let frame = 0;
-    let still = 0;
-    let watched: HTMLElement | null = null;
+    // Which dialog is on top is asked again only when the page changed; while one is open its box
+    // is measured every frame (it animates in, its content grows, a drag moves its edge), which is
+    // one element's rect, not a query of the page.
+    let dirty = true;
+    let top: HTMLElement | null = null;
     let last: Box | null = null;
-    const ro = new ResizeObserver(() => wake());
     const look = () => {
       frame = 0;
-      const top = topDialog();
-      // A dialog that just opened takes the size kept for its kind, fitted to this window.
-      if (top && !sized.current.has(top)) {
-        sized.current.add(top);
-        const kind = dialogKind(top);
-        const kept = kind ? storedDialogSize(kind) : null;
-        if (kept) applyDialogSize(top, clampDialogSize(kept, { width: window.innerWidth, height: window.innerHeight }));
+      if (dirty || (top && !top.isConnected)) {
+        dirty = false;
+        top = topDialog();
+        // A dialog that just opened takes the size kept for its kind, fitted to this window.
+        if (top && !sized.current.has(top)) {
+          sized.current.add(top);
+          const kind = dialogKind(top);
+          const kept = kind ? storedDialogSize(kind) : null;
+          if (kept) applyDialogSize(top, clampDialogSize(kept, { width: window.innerWidth, height: window.innerHeight }));
+        }
+        const now = top;
+        setDialog((d) => (d === now ? d : now));
       }
-      if (top !== watched) {
-        if (watched) ro.unobserve(watched);
-        if (top) ro.observe(top);
-        watched = top;
-      }
-      setDialog((d) => (d === top ? d : top));
       const next = top ? boxOf(top) : null;
-      const changed = !sameBox(last, next);
-      if (changed) { last = next; setBox(next); }
-      // While it moves (it animates in, its content grows) its box is followed every frame, then
-      // the observers wake it again.
-      still = changed ? 0 : still + 1;
-      if (top && still < 20) frame = requestAnimationFrame(look);
+      if (!sameBox(last, next)) { last = next; setBox(next); if (next) placeStrips(next); }
+      if (top) frame = requestAnimationFrame(look);
     };
-    const wake = () => { still = 0; if (!frame) frame = requestAnimationFrame(look); };
+    const wake = () => { dirty = true; if (!frame) frame = requestAnimationFrame(look); };
+    wakeRef.current = wake;
     const mo = new MutationObserver(wake);
     mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden'] });
     window.addEventListener('resize', wake);
     wake();
     return () => {
-      mo.disconnect(); ro.disconnect();
+      mo.disconnect();
       window.removeEventListener('resize', wake);
       if (frame) cancelAnimationFrame(frame);
     };
   }, [phone]);
 
   if (phone || !dialog || !box) return null;
+  const follow = () => wakeRef.current();
   let id = ids.current.get(dialog);
   if (id === undefined) { id = nextId.current += 1; ids.current.set(dialog, id); }
   // An anchored axis (a panel pinned at its top, say) moves only by its far edge.
   const sides = SIDES.filter((s) => (box.cx || !s.includes('w')) && (box.cy || !s.includes('n')));
   return createPortal(
     <div className="dialog-resize-layer" key={id}>
-      {sides.map((side) => <Edge key={side} side={side} dialog={dialog} box={box} />)}
+      {sides.map((side) => <Edge key={side} side={side} dialog={dialog} box={box} follow={follow} />)}
     </div>,
     document.body,
     String(id),

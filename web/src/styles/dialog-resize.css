@@ -32,5 +32,9 @@
 .dialog-resize-edge--w::after { right: 2px; top: 12px; bottom: 12px; width: 2px; }
 .dialog-resize-edge--s::after { top: 2px; left: 12px; right: 12px; height: 2px; }
 .dialog-resize-edge--n::after { bottom: 2px; left: 12px; right: 12px; height: 2px; }
-.dialog-resize-edge:hover::after,
-.dialog-resize-edge.is-dragging::after { opacity: 0.6; }
+.dialog-resize-edge:hover:not(.is-dragging)::after { opacity: 0.6; }
+/* While dragged, the panel's own outline shows it (it moves with the edge). */
+html .wn-dialog[data-dialog-resizing] {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+}
