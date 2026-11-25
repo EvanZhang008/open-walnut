@@ -24,6 +24,7 @@ import { BLOCK_SOURCE_READ } from '../../../src/core/sessions/block-sources.js';
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js';
 import { buildSessionContext } from '../../../src/core/sessions/session-context.js';
 import { _resetUserProfileForTesting, refreshUserProfile } from '../../../src/core/sessions/user-profile-context.js';
+import { _resetReplyLanguageForTesting, refreshReplyLanguage } from '../../../src/core/sessions/reply-language-context.js';
 import { _resetThreadsForEveryTaskForTesting, setThreadsForEveryTask } from '../../../src/core/org/keeps-threads.js';
 import { FACT_INLINE_CAP } from '../../../src/core/session-channel/fact-log.js';
 import { updateConfig } from '../../../src/core/config-manager.js';
@@ -96,6 +97,17 @@ describe('USER.md unchanged: no session is told its profile or Threads rules are
     await fs.rm(USER_FILE, { force: true });
     await refreshUserProfile();
     _resetThreadsForEveryTaskForTesting();
+    expect(instructionNoticeFor(record, task) ?? '').not.toMatch(GONE);
+    expect(instructionNoticeFor(record, task, { ignoreTold: true }) ?? '').not.toMatch(GONE);
+  });
+
+  it('on a host replica, words for other people (2026-11-25, v9c7fc7a0) and every other part the setting writes', async () => {
+    await updateConfig({ session: { outward_language: { language: 'English' } } } as Partial<Config>);
+    await refreshReplyLanguage();
+    const { task, record } = await spawned();
+    expect(parseInstructions(record.appliedAppendSystemPrompt!).blocks.has('outward-language')).toBe(true);
+    process.env.WALNUT_HOST_SERVER = '1';
+    _resetReplyLanguageForTesting(null);
     expect(instructionNoticeFor(record, task) ?? '').not.toMatch(GONE);
     expect(instructionNoticeFor(record, task, { ignoreTold: true }) ?? '').not.toMatch(GONE);
   });

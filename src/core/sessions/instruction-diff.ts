@@ -99,6 +99,8 @@ const BLOCK_KINDS: Array<[string, RegExp]> = [
   // "<who> cleared the instructions for your role at <time>": who may be an agent's name.
   ['core-instructions', /^(Your core instructions[,:] |.+ cleared the instructions for your role at \d{4}-)/],
   ['reply-language', /^Reply language, the user's setting \(v[0-9a-f]{8}\): /],
+  // Words other people read (reply-language-context.ts outwardLanguageLine).
+  ['outward-language', /^Language for other people, the user's setting \(v[0-9a-f]{8}\): /],
   // A task's Threads, turned on by the user (session-context.ts TASK_THREADS_LINE).
   ['task-threads', /^Threads, the user's setting for your task \(v[0-9a-f]{8}\): /],
 ];
@@ -256,13 +258,15 @@ export function dueChanges(
     // were never told it still applied, since its version had not changed).
     // Only a told record says so (a prompt's block with no lines is a block, not a gone one); one
     // from before `gone` was kept says so when the version is the one it was told is gone.
-    const told = views[block.id];
+    // Told under another id, the same version: a block of a kind not named yet was named by where
+    // it sat ("#0"), and is named by its kind now (2026-11-25: "Language for other people").
+    const told = views[block.id] ?? goneByVersion(views, block.version);
     const toldGone = !!told && !told.words.length && block.words.length > 0 && (!!told.gone || told.version === block.version);
     if (view?.version === block.version && !toldGone) continue;
     // Whole: never had it, was told it is gone, or it changed form (Walnut's default
     // became the user's own words): a list of changes would read against the wrong head.
-    if (!view || !view.words.length || (view.form && view.form !== block.form)) {
-      blocks.push({ block, whole: true, added: block.words.map((word) => ({ word })), removed: [], ...(toldGone ? { restored: { same: view!.version === block.version } } : {}) });
+    if (!view || toldGone || !view.words.length || (view.form && view.form !== block.form)) {
+      blocks.push({ block, whole: true, added: block.words.map((word) => ({ word })), removed: [], ...(toldGone ? { restored: { same: told!.version === block.version } } : {}) });
       continue;
     }
     const changes = wordChanges(view.words, block.words);
@@ -540,10 +544,19 @@ export function rewordedLines(had: string[], now: string[]): string[] {
   return wordChanges(had, now).added.filter((l) => l.reworded && !opensSection(l.word)).map((l) => l.word);
 }
 
+/** A view told gone at `version` under any id. */
+function goneByVersion(views: Record<string, BlockView>, version: string): BlockView | undefined {
+  return Object.values(views).find((v) => !v.words.length && v.gone && v.version === version);
+}
+
 /** The block versions a session holds once `due` reached it. */
 export function viewsAfter(views: Record<string, BlockView>, due: Due): Record<string, BlockView> {
   const out = { ...views };
-  for (const c of due.blocks) out[c.block.id] = { version: c.block.version, words: c.block.words, form: c.block.form };
+  for (const c of due.blocks) {
+    out[c.block.id] = { version: c.block.version, words: c.block.words, form: c.block.form };
+    // A told-gone mark of the same version under another id is answered by this one too.
+    if (c.restored) for (const [id, v] of Object.entries(out)) if (id !== c.block.id && !v.words.length && v.version === c.block.version) delete out[id];
+  }
   for (const g of due.gone) out[g.id] = { version: g.from, words: [], gone: true };
   return out;
 }

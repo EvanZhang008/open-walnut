@@ -25,6 +25,7 @@ import { _resetReplyLanguageForTesting } from '../../../src/core/sessions/reply-
 import { BLOCK_KIND_IDS, dueChanges, parseInstructions, renderDue } from '../../../src/core/sessions/instruction-diff.js'
 import { splitAtLines } from '../../../src/core/sessions/instruction-hook-parts.js'
 import { legacyForm } from '../../helpers/versioned-block.js'
+import { outwardSettingOf } from '../../../src/lib/outward-language.js'
 
 const USER = (rules: string[]) => `---\nname: User Profile\n---\n\n# USER.md\n\n## Identity\nA builder of small tools.\n## Standing rules\n\n${rules.map((r) => `- ${r}`).join('\n')}\n`
 const RULES = Array.from({ length: 12 }, (_, i) => `Rule ${i + 1}: keep this standing preference in every task.`)
@@ -65,7 +66,8 @@ beforeEach(async () => {
   await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
   await fs.writeFile(USER_FILE, USER(RULES))
   await refreshUserProfile()
-  _resetReplyLanguageForTesting('Talk to the user in Chinese.\nKeep code and commits in English.')
+  // With words for other people set too, so its block (outward-language) is checked.
+  _resetReplyLanguageForTesting('Talk to the user in Chinese.\nKeep code and commits in English.', outwardSettingOf({ language: 'English' }))
 })
 
 describe('the prompt names a block version once, never on each line', () => {

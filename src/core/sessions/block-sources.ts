@@ -24,14 +24,21 @@ export const BLOCK_SOURCE_READ: Record<string, () => boolean> = {
   'user-profile': () => !isFollower() && userProfileRead(),
   // A replica's config has no Reply language (config-allowlist.ts).
   'reply-language': () => !isFollower() && replyLanguageRead(),
+  // The language of words for other people, read with the Reply language from the leader's config
+  // (2026-11-25: the dev box's host replica told two sessions it was gone).
+  'outward-language': () => !isFollower() && replyLanguageRead(),
   // The task_threads switch is read by the leader's status sync; a follower's copy of it may lag.
   'task-threads': () => !isFollower() && threadsForEveryTaskRead(),
   // A role's own instructions ride the task itself (Task.org_instructions), which every server holds.
   'core-instructions': () => true,
 }
 
-/** Whether a block missing from this server's default instructions is gone (a kind not named here: yes). */
+/**
+ * Whether a block missing from this server's default instructions is gone. A kind not named here
+ * is never: its source is unknown, so its absence says nothing (2026-11-25: a new block, "Language
+ * for other people", had no kind yet and was told gone from a replica that holds no copy of it).
+ */
 export function goneKnownHere(id: string): boolean {
   const read = BLOCK_SOURCE_READ[id]
-  return read ? read() : true
+  return read ? read() : false
 }

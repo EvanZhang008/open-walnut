@@ -107,7 +107,8 @@ function heldBeyondPrompt(record: NoticeRecord, current: Parsed, prompt: Parsed,
     // A restatement still says a part it was told is gone is there after all (instruction-diff.ts
     // dueChanges `restored`): the summary may carry "gone" on, and the prompt's copy reads as held.
     const toldGone = ignoreTold && noted?.blocks
-      ? Object.fromEntries(Object.entries(noted.blocks).filter(([id, v]) => !v.words.length && current.blocks.has(id))) : {};
+      ? Object.fromEntries(Object.entries(noted.blocks).filter(([id, v]) => !v.words.length
+        && (current.blocks.has(id) || [...current.blocks.values()].some((b) => b.version === v.version)))) : {};
     return { told: new Set<string>(), views: toldGone as Record<string, BlockView>, texts: [] as string[] };
   }
   const told = new Set(noted.lines ?? []);
