@@ -43,6 +43,15 @@ function listing(dir: string): string[] {
   return out.sort()
 }
 
+/** A port free on loopback now. */
+async function freePort(): Promise<number> {
+  const probe = http.createServer()
+  await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done))
+  const port = (probe.address() as { port: number }).port
+  await new Promise<void>((done) => probe.close(() => done()))
+  return port
+}
+
 const url = (l: StandbyListener, p: string) => {
   const a = l.server.address()
   return `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}${p}`
@@ -173,6 +182,77 @@ describe('the standby of a handed-over home', () => {
       await wait.close()
     } finally {
       await new Promise<void>((done) => other.close(() => done()))
+    }
+  })
+
+  it('a waiting start whose standby\'s pid file outlived it (a pid used again, its port no standby) ends at the port check', async () => {
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', commit: 5, at: new Date().toISOString() })
+    const file = standbyServerFile(home, env)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ pid: process.ppid, port: 1, home }))
+    const s = handedOverAtBoot({ home, env })!
+    const asked: number[] = []
+    const wait = waitForOtherStandby(s, { pid: process.ppid, port: 1 }, { env, lookMs: 10, confirm: async (sb) => { asked.push(sb.port); return false } })
+    try {
+      const line = await Promise.race([wait.ended, new Promise<null>((r) => setTimeout(() => r(null), 2_000))])
+      expect(line).toMatch(/is gone; this waiting process ends/)
+      expect(asked).toEqual([1])
+      expect(fs.existsSync(file)).toBe(true)
+    } finally { await wait.close() }
+  })
+
+  it('a job dead after the commit (marker still switching), the new leader\'s console replica up on the port: the standby keeps the port and its runtime, and does not end', async () => {
+    const { setMachineIdHomeForTest } = await import('../../../../src/core/machine-id.js')
+    const { writeConsoleFile, writeHolder } = await import('../../../../src/core/handed-over-console.js')
+    // The console files live under the account's state dir: this test's own.
+    setMachineIdHomeForTest(root)
+    try {
+      writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'switching', handover: 4, at: new Date().toISOString() })
+      // The standby looks for the console on its own port: a fixed one, as a machine's is.
+      const port = await freePort()
+      open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port, host: '127.0.0.1', env, lookMs: 20, answerWaitMs: 50, say: () => {} })
+      // B committed and its replica on this machine waits for the console's port (as after-commit-seen leaves it).
+      const walnutId = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
+      writeConsoleFile({ v: 1, walnutId, home, port, host: '127.0.0.1', switchId: 's1', to: 'machine-b', device: 'console-machine-a', token: 'f'.repeat(32), at: new Date().toISOString() })
+      writeHolder(walnutId, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: new Date().toISOString() })
+      let ended: string | null = null
+      void open.ended.then((l) => { ended = l })
+      await new Promise((r) => setTimeout(r, 400))
+      // Twenty looks later: still serving its port (a console stands only on 'handed-over'), still running.
+      expect(ended).toBeNull()
+      expect(open.server.listening).toBe(true)
+      expect((await (await fetch(url(open, '/api/leader/status'))).json()).standby).toBe(true)
+    } finally {
+      setMachineIdHomeForTest(null)
+    }
+  })
+
+  it('yielded to the console, it reads its own switch at `switching` as still standing: it does not end (and so keeps its runtime)', async () => {
+    const { setMachineIdHomeForTest } = await import('../../../../src/core/machine-id.js')
+    const { writeConsoleFile, writeHolder } = await import('../../../../src/core/handed-over-console.js')
+    setMachineIdHomeForTest(root)
+    const replica = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ instance: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' })) })
+    try {
+      writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', handover: 4, commit: 5, at: new Date().toISOString() })
+      const port = await freePort()
+      open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port, host: '127.0.0.1', env, lookMs: 20, answerWaitMs: 60_000, say: () => {} })
+      const walnutId = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
+      writeConsoleFile({ v: 1, walnutId, home, port, host: '127.0.0.1', switchId: 's1', to: 'machine-b', device: 'console-machine-a', token: 'f'.repeat(32), at: new Date().toISOString() })
+      writeHolder(walnutId, { pid: process.pid, state: 'serving', port, host: '127.0.0.1', since: new Date().toISOString() })
+      const deadline = Date.now() + 3_000
+      while (open.server.listening && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+      expect(open.server.listening).toBe(false)
+      // The replica takes the port (it answers as this Walnut there).
+      await new Promise<void>((done) => replica.listen(port, '127.0.0.1', done))
+      let ended: string | null = null
+      void open.ended.then((l) => { ended = l })
+      // The same switch's marker at `switching` (not a transition a switch makes; the rule the resume needs).
+      writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'switching', handover: 4, at: new Date().toISOString() })
+      await new Promise((r) => setTimeout(r, 300))
+      expect(ended).toBeNull()
+    } finally {
+      await new Promise<void>((done) => replica.close(() => done()))
+      setMachineIdHomeForTest(null)
     }
   })
 

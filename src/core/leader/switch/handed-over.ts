@@ -393,9 +393,12 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
       say(`${servedLine(found)}: this standby gave the port up and takes it back if the console ends`)
       return
     }
-    // A switch back moved this home aside (or another switch took it): nothing to stand by for.
+    // A switch back moved this home aside (or another switch took it): nothing to stand by for. The same
+    // switch still at `switching` (its job died after the commit, before the hand-off wrote `handed-over`) is
+    // still this standby's: it keeps its runtime for the resume. (A console stands only once the marker says
+    // `handed-over`, so a standby yields after that only; the rule holds either way.)
     const m = readMarker(s.home)
-    if (!m || m.state !== 'handed-over' || m.switchId !== s.switchId) {
+    if (!m || (m.state !== 'handed-over' && m.state !== 'switching') || m.switchId !== s.switchId) {
       closed = true
       clearInterval(look)
       endWith(`Walnut standby: ${s.home} no longer stands handed over by switch ${s.switchId}; this standby ends`)
@@ -455,18 +458,27 @@ export async function otherStandbyOf(home: string, env: NodeJS.ProcessEnv = proc
  * standby is gone, so its launcher starts it again by the usual rules. Ending at once instead had a launcher
  * that restarts what it sees stop start it again every few seconds for as long as the other one ran.
  */
-export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer, o: { env?: NodeJS.ProcessEnv; lookMs?: number } = {}): StandbyListener {
+export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer, o: { env?: NodeJS.ProcessEnv; lookMs?: number; confirm?: (sb: StandbyServer) => Promise<boolean> } = {}): StandbyListener {
   const env = o.env ?? process.env
   let endWith: (line: string) => void = () => {}
   const ended = new Promise<string>((resolve) => { endWith = resolve })
   let closed = false
-  const look = setInterval(() => {
-    if (closed) return
-    const now = readStandbyServer(s.home, env)
-    if (now && now.pid === running.pid) return
+  let looks = 0
+  let asking = false
+  const end = () => {
     closed = true
     clearInterval(look)
     endWith(`Walnut: the standby of ${s.home} (pid ${running.pid}) is gone; this waiting process ends, so the next start boots by the usual rules`)
+  }
+  const look = setInterval(() => {
+    if (closed || asking) return
+    const now = readStandbyServer(s.home, env)
+    if (!now || now.pid !== running.pid) { end(); return }
+    // Every tenth look its port is asked too: a standby killed by SIGKILL leaves its pid file, and a pid used
+    // again by another long-lived process would keep this one waiting for good.
+    if (++looks % 10) return
+    asking = true
+    void (o.confirm ?? confirmStandby)(now).then((yes) => { asking = false; if (!yes && !closed) end() }, () => { asking = false })
   }, o.lookMs ?? 1_000)
   return {
     server: http.createServer(),
