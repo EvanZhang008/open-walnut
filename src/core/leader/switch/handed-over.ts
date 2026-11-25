@@ -363,8 +363,20 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
     const claim = readSwitchClaim(s.home, env)
     return claim ? `switch ${claim.switchId} is making ${s.home} the new leader's home` : null
   }
+  /**
+   * The same switch's marker, moved on since the boot (a standby the switch starts at the stop reads
+   * `switching`; the commit then writes `handed-over` with the new leader's doors): every answer says it
+   * from here on, as a standby booted now would.
+   */
+  const followMarker = () => {
+    if (!s.marker || s.marker.torn) return
+    const m = readMarker(s.home)
+    if (!m || m.torn || m.switchId !== s.switchId || JSON.stringify(m) === JSON.stringify(s.marker)) return
+    Object.assign(s, standbyOf({ home: s.home, env, marker: m, record: s.record, leader: m.to, why: markerRefusal(m) }))
+  }
   async function step(): Promise<void> {
     const over = await superseded()
+    followMarker()
     if (over) {
       closed = true
       clearInterval(look)
@@ -428,6 +440,40 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
     if (state === 'serving') { state = 'yielded'; await release() }
   }
   return { server, close, line, ended }
+}
+
+/** Another process's standby of `home` that runs now (its pid file names it and its port confirms it), or null. */
+export async function otherStandbyOf(home: string, env: NodeJS.ProcessEnv = process.env): Promise<StandbyServer | null> {
+  const running = readStandbyServer(home, env)
+  return running && running.pid !== process.pid && await confirmStandby(running) ? running : null
+}
+
+/**
+ * A start of a home whose standby already runs in another process: a launcher's start beside the standby
+ * the switch started at the stop (source-job.ts, so the machine's session runtime comes back at once), or the
+ * other way round. It waits as a promotion wait does (no port, no file, nothing opened) and ends once that
+ * standby is gone, so its launcher starts it again by the usual rules. Ending at once instead had a launcher
+ * that restarts what it sees stop start it again every few seconds for as long as the other one ran.
+ */
+export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer, o: { env?: NodeJS.ProcessEnv; lookMs?: number } = {}): StandbyListener {
+  const env = o.env ?? process.env
+  let endWith: (line: string) => void = () => {}
+  const ended = new Promise<string>((resolve) => { endWith = resolve })
+  let closed = false
+  const look = setInterval(() => {
+    if (closed) return
+    const now = readStandbyServer(s.home, env)
+    if (now && now.pid === running.pid) return
+    closed = true
+    clearInterval(look)
+    endWith(`Walnut: the standby of ${s.home} (pid ${running.pid}) is gone; this waiting process ends, so the next start boots by the usual rules`)
+  }, o.lookMs ?? 1_000)
+  return {
+    server: http.createServer(),
+    line: `Walnut waits: a standby of this home already runs (pid ${running.pid}, port ${running.port}): ${s.message}. It takes no port and opens nothing until that standby ends`,
+    ended,
+    close: async () => { closed = true; clearInterval(look) },
+  }
 }
 
 /** A standby's pid file: its process, its port and the address it listens on. */

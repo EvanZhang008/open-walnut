@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { confirmStandby, handedOverAtBoot, readStandbyServer, serveHandedOver, standbyForRecord, type StandbyListener } from '../../../../src/core/leader/switch/handed-over.js'
+import { confirmStandby, handedOverAtBoot, otherStandbyOf, readStandbyServer, serveHandedOver, standbyForRecord, waitForOtherStandby, type StandbyListener } from '../../../../src/core/leader/switch/handed-over.js'
 import { standbyServerFile } from '../../../../src/core/leader/switch/machine-id.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
 import { setUpMachineWitness } from '../../../../src/core/leader/switch/witness-route.js'
@@ -124,6 +124,56 @@ describe('the standby of a handed-over home', () => {
     expect((await (await fetch(url(open, '/api/leader/status'))).json()).sessionRuntime).toEqual({ held: 'in-process', dir: '/tmp/d' })
     runtime = { held: false, why: 'declined' }
     expect((await (await fetch(url(open, '/api/leader/status'))).json()).sessionRuntime).toEqual({ held: false, why: 'declined' })
+  })
+
+  it('started at the stop (marker switching), it says the commit once the marker says it: the message, its 409 and the new leader\'s doors', async () => {
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'switching', handover: 4, at: new Date().toISOString() })
+    open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port: 0, host: '127.0.0.1', env })
+    expect((await (await fetch(url(open, '/api/leader/status'))).json()).message).toMatch(/is handing the leader to machine-b/)
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', handover: 4, commit: 5, leaderDoors: ['wss://b.example/host-door'], at: new Date().toISOString() })
+    const deadline = Date.now() + 5_000
+    let st: Record<string, unknown> = {}
+    while (Date.now() < deadline) {
+      st = await (await fetch(url(open, '/api/leader/status'))).json()
+      if (st.message === 'this machine handed the leader to machine-b (switch s1)') break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    expect(st).toMatchObject({ message: 'this machine handed the leader to machine-b (switch s1)', leaderDoors: ['wss://b.example/host-door'], handedOver: { state: 'handed-over', commit: 5 } })
+    const w = await fetch(url(open, '/api/tasks'), { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
+    expect(await w.json()).toEqual({ error: 'this machine handed the leader to machine-b (switch s1)', code: 'handed_over', leader: 'machine-b', leaderDoors: ['wss://b.example/host-door'], switchId: 's1' })
+  })
+
+  it('a start beside a running standby waits, holding nothing, and ends once that standby is gone (a launcher does not loop)', async () => {
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', commit: 5, at: new Date().toISOString() })
+    const other = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ standby: true, pid: process.ppid })) })
+    await new Promise<void>((done) => other.listen(0, '127.0.0.1', done))
+    try {
+      const port = (other.address() as { port: number }).port
+      const file = standbyServerFile(home, env)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, JSON.stringify({ pid: process.ppid, port, home }))
+      const s = handedOverAtBoot({ home, env })!
+      const running = await otherStandbyOf(home, env)
+      expect(running).toMatchObject({ pid: process.ppid, port })
+      const before = listing(home)
+      const wait = waitForOtherStandby(s, running!, { env, lookMs: 20 })
+      expect(wait.line).toMatch(/a standby of this home already runs \(pid \d+, port \d+\).*It takes no port/)
+      expect(wait.server.listening).toBe(false)
+      let ended: string | null = null
+      void wait.ended.then((l) => { ended = l })
+      await new Promise((r) => setTimeout(r, 120))
+      expect(ended).toBeNull()
+      // The other standby stops (its pid file goes with it): this one ends, for its launcher's next start.
+      fs.rmSync(file)
+      await new Promise((r) => setTimeout(r, 120))
+      expect(ended).toMatch(/is gone; this waiting process ends/)
+      // It wrote nothing anywhere: no pid file of its own, nothing in the home.
+      expect(fs.existsSync(file)).toBe(false)
+      expect(listing(home)).toEqual(before)
+      await wait.close()
+    } finally {
+      await new Promise<void>((done) => other.close(() => done()))
+    }
   })
 
   it('a switch still under way says so', () => {

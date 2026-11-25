@@ -716,9 +716,12 @@ databases and the first log line, and starts `src/core/leader/switch/handed-over
 
 It listens on loopback (127.0.0.1) unless the server's own bind setting names an address
 (`bind-address.ts`: `--bind`, `WALNUT_BIND_ADDRESS`). Status requests at the same moment share
-one read of the witnesses. A second standby of the same home, while one runs (its pid file names
-it and its port confirms), starts nothing and exits with the error "a standby of this home
-already runs".
+one read of the witnesses. A second start of the same home while its standby runs (its pid file
+names it and its port confirms), a launcher's beside the one the switch started, takes no port and
+opens nothing: it waits, saying "a standby of this home already runs", and ends once that standby
+is gone, so its launcher starts it again by the usual rules (`waitForOtherStandby`). Ending at once
+had a launcher that restarts what it sees stop start it again every few seconds. `serveHandedOver`
+itself still refuses a second standby with that error.
 
 It writes one file, outside the home: its pid and port beside the instance lock
 (`leader-instance/standby-<hash of the home>.json`, `machine-id.ts standbyServerFile`), removed
@@ -749,7 +752,7 @@ the leader's own status says `daemonInProcess`.
 Since the runtime comes back only with the standby, the source job starts the old home as the
 standby after the stop whenever the old leader's server ran the daemon in its own process (its
 preflight read `daemonInProcess`), not only when the old machine keeps a witness; a launcher that
-restarts the home does the same, and the second standby starts nothing. A target job that rolls back on
+restarts the home does the same, and the second start waits for the first standby to end. A target job that rolls back on
 a machine whose home handed the leader over before (a switch back that did not complete) stopped that
 home's standby for its trial; once the handed-over home is back in place it starts it again, so the
 witness door and the session runtime it held come back. Between the stop and the

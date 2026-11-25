@@ -1362,7 +1362,18 @@ function assertNotTestHomeOnProductionPort(port: number, dev: boolean): void {
  */
 async function serveHandedOverHome(standby: import('../core/leader/switch/handed-over.js').HandedOverStandby, port: number, options: ServerOptions): Promise<HttpServer> {
   assertNotTestHomeOnProductionPort(port, options.dev ?? false)
-  const { serveHandedOver } = await import('../core/leader/switch/handed-over.js')
+  const { serveHandedOver, otherStandbyOf, waitForOtherStandby } = await import('../core/leader/switch/handed-over.js')
+  // Another process runs this home's standby already (the switch started it at the stop, or a launcher did):
+  // this one waits, holding nothing (that standby holds the port and this machine's session runtime), and
+  // ends once it is gone, so a launcher that restarts what it sees stop does not start it again and again.
+  const other = await otherStandbyOf(standby.home)
+  if (other) {
+    log.web.warn('leader switch: a standby of this home already runs; this process waits and holds nothing', { pid: other.pid, port: other.port, switchId: standby.switchId })
+    handedOverServer = waitForOtherStandby(standby, other)
+    console.log(handedOverServer.line)
+    bootCompleted = true
+    return handedOverServer.server
+  }
   log.web.warn('leader switch: this home handed the leader over; running as a standby that leads nothing', { leader: standby.leader, switchId: standby.switchId, why: standby.why })
   // Also on stdout: the one line a person who started it by hand reads.
   console.log(`Walnut runs as a standby: ${standby.message}`)
