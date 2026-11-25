@@ -1,5 +1,5 @@
 /**
- * A thing the phone app takes off the screen by itself on a timer (a notice, an Undo offer, a run's
+ * A thing the phone app takes off the screen by itself on a clock (a notice, an Undo offer, a run's
  * outcome, a tap-again window) waits through `NoticeTiming` (ios-native/Walnut/Core/NoticeTiming.swift),
  * which holds it at least 8 s in a UI-test launch of a debug build.
  *
@@ -8,157 +8,160 @@
  * 5 s (2026-11-16 SessionChanges "Copy said nothing"; 2026-11-24 Routines "Ran just now", gone 4 s
  * after it showed, and the review's Undo, gone 5 s after a swipe, red in 8 of 8 main runs).
  *
- * The members are read from the source: under ios-native/Walnut, every wait (`Task.sleep`,
- * `asyncAfter`, a `DispatchWorkItem` it runs) of a second or more (a named length is read where the
- * file declares it; one declared elsewhere counts), whose
- * closure then takes something away (`x = nil`, `x = false`, `f(false)`). Each one either names
- * `NoticeTiming` in its wait or is in KNOWN with why it is not a passing thing a test must catch.
+ * The members are read from the source (tests/web/ios-timed-hide-scan.ts): under ios-native/Walnut,
+ * every wait (`Task.sleep`, `asyncAfter`, a `DispatchWorkItem` it runs, a `Timer`) of a second or
+ * more whose work then takes something away (`x = nil`, `x = false`, `f(false)`, `dismiss()`,
+ * `clear...()`, `hide...()`, `remove...()`), every take-away in that work, and every date window (a
+ * stored "until" deadline, or a check of how long ago something was stamped). Each one either names
+ * `NoticeTiming` or is in KNOWN with why it is not a passing thing a test must catch; each KNOWN entry
+ * covers one member (or `count`), so a new one with the same text in the same file is judged again.
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { code, swiftFiles, timedHides, throughNoticeTiming, uncovered, type KnownHide } from './ios-timed-hide-scan'
 
 const APP = path.resolve(import.meta.dirname, '../../ios-native/Walnut')
 
-const code = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/"(?:\\.|[^"\\\n])*"/g, '""')
+// Reasons shared by many date windows and waits.
+const FRESH = 'how fresh a read or a cache is: decides whether to ask again; nothing shown goes'
+const AGAIN = 'a debounce or a repeat guard: decides whether to act again; nothing shown goes'
+const BUDGET = 'a background wait, retry or work budget; nothing shown goes'
+const QUIET = 'how long an ask stays quiet after an answer: keeps a prompt from showing, takes nothing shown away'
+const TYPING = 'a settle window after typing, a scroll or a layout change, not shown'
+const LONG = 'a span of minutes or more, far past any UI test'
 
-function swiftFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...swiftFiles(full))
-    else if (entry.name.endsWith('.swift')) out.push(full)
-  }
-  return out
-}
-
-/** The index just past the `)` that closes the `(` at `open`. */
-function pastParen(src: string, open: number): number {
-  let depth = 0
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === '(') depth++
-    else if (src[i] === ')' && --depth === 0) return i + 1
-  }
-  return src.length
-}
-
-/** The rest of the closure that holds `from`, up to its closing brace. */
-function restOfClosure(src: string, from: number): string {
-  let depth = 0
-  for (let i = from; i < src.length; i++) {
-    if (src[i] === '{') depth++
-    else if (src[i] === '}' && --depth < 0) return src.slice(from, i)
-  }
-  return src.slice(from)
-}
-
-function closureAt(src: string, open: number): string {
-  return restOfClosure(src, open + 1)
-}
-
-/** Seconds a wait's argument asks for, or null when it is a named value. */
-export function literalSeconds(arg: string): number | null {
-  const num = (s: string) => Number(s.replace(/_/g, ''))
-  let m = /\.milliseconds\(\s*([\d_.]+)\s*\)/.exec(arg)
-  if (m) return num(m[1]) / 1000
-  m = /nanoseconds:\s*([\d_]+)\s*\)?\s*$/.exec(arg.trim().replace(/\)$/, ''))
-  if (m) return num(m[1]) / 1e9
-  m = /\.seconds\(\s*([\d_.]+)\s*\)/.exec(arg)
-  if (m) return num(m[1])
-  m = /\.now\(\)\s*\+\s*([\d_.]+)\s*(?:[,)]|$)/.exec(arg)
-  if (m) return num(m[1])
-  return null
-}
-
-const WAIT = /Task\.sleep\s*\(|asyncAfter\s*\(/g
-const TAKE_AWAY = /(?<![=!<>])\b[A-Za-z_][\w.?]*(?:\[[^\]\n]*\])?\s*=\s*(?:nil|false)\b|\b\w+\(\s*false\s*\)/
-
-export interface TimedHide { file: string; line: number; wait: string; takes: string }
-
-/** Every timed take-away in one Swift source (comments and strings already blanked). */
-/** Seconds a wait asks for, a named length declared in the same file (`static let tick: Duration =
- *  .milliseconds(100)`) read through; null when the length is not known from the source. */
-export function waitSeconds(wait: string, src: string): number | null {
-  const literal = literalSeconds(wait)
-  if (literal !== null) return literal
-  const name = /(?:for:|deadline:\s*\.now\(\)\s*\+|\.seconds\()\s*(?:Self\.|self\.)?(\w+)\s*\)*\s*$/.exec(wait.replace(/\)$/, ''))?.[1]
-  if (!name) return null
-  const decl = new RegExp(`\\b(?:let|var)\\s+${name}\\s*(?::\\s*[\\w.]+)?\\s*=\\s*([^\\n;]+)`).exec(src)?.[1]
-  if (!decl) return null
-  const named = literalSeconds(decl)
-  if (named !== null) return named
-  return /^\s*[\d_.]+\s*$/.test(decl) ? Number(decl.replace(/_/g, '')) : null
-}
-
-export function timedHides(file: string, src: string): TimedHide[] {
-  const found: TimedHide[] = []
-  for (const m of src.matchAll(WAIT)) {
-    const argEnd = pastParen(src, m.index + m[0].length - 1)
-    const wait = src.slice(m.index, argEnd)
-    const seconds = waitSeconds(wait, src)
-    if (seconds !== null && seconds < 1) continue
-    let after = restOfClosure(src, argEnd)
-    // `asyncAfter(deadline: ..., execute: reset)`: the work item named there is what runs.
-    const item = /execute:\s*(\w+)\s*\)$/.exec(wait)?.[1]
-    if (item) {
-      const def = new RegExp(`\\b${item}\\s*=\\s*DispatchWorkItem\\s*(?:\\([^)]*\\))?\\s*\\{`).exec(src)
-      if (def) after = closureAt(src, def.index + def[0].length - 1)
-    } else if (/^asyncAfter/.test(wait)) {
-      const open = src.indexOf('{', argEnd)
-      if (open >= 0 && /^\s*$/.test(src.slice(argEnd, open))) after = closureAt(src, open)
-    }
-    const takes = TAKE_AWAY.exec(after)?.[0]
-    if (!takes) continue
-    found.push({ file, line: src.slice(0, m.index).split('\n').length, wait: wait.replace(/\s+/g, ' '), takes: takes.replace(/\s+/g, ' ') })
-  }
-  return found
-}
+const k = (file: string, takes: string, why: string, count?: number): KnownHide => ({ file, takes, why, count })
 
 /** Timed take-aways that are not a passing thing a UI test must catch, by file and what they clear. */
-const KNOWN: { file: string; takes: string; why: string }[] = [
-  { file: 'Stores/ChatStore.swift', takes: 'self.fileRetryTasks[bubbleID] = nil', why: 'a retry backoff forgets its own task' },
-  { file: 'Stores/SessionConversationStore.swift', takes: 'self.retryTasks[bubbleID] = nil', why: 'a retry backoff forgets its own task' },
-  { file: 'Stores/SessionConversationStore.swift', takes: 'self?.stopRequestedAt = nil', why: 'the Stop request times out; nothing on screen goes' },
-  { file: 'Stores/FocusMusicPlayer.swift', takes: 'self.focusWatch = nil', why: 'the Focus watch ends with the block; nothing is shown' },
-  { file: 'Views/Tasks/GlobalSearchModel.swift', takes: 'self.searching = false', why: 'a search debounce' },
-  { file: 'Stores/SessionQueueModel.swift', takes: 'self.fadeTask = nil', why: 'wakes the badge to read its state again; the Delivered span is judged in updateSendStates and no UI test reads it' },
-  { file: 'Views/Chat/ChatView.swift', takes: 'restoreWaitsForOpen = false', why: 'a launch restore stops waiting for a deep link; nothing on screen goes' },
-  { file: 'Views/Chat/ComposerView.swift', takes: 'seatSettling = false', why: 'a stray-tap guard after the seat moves, not shown' },
-  { file: 'Views/Chat/ComposerView.swift', takes: 'self.pending = nil', why: 'a settle wait, not shown' },
-  { file: 'Views/Inbox/LetterThreadView.swift', takes: 'movingId = nil', why: 'ends a move animation' },
-  { file: 'Views/Sessions/SessionConversationView.swift', takes: 'coveredUntilPage = false', why: 'the longest a cover hides an unpainted page; ending sooner is the point' },
-  { file: 'Views/Org/OrgThreadsView.swift', takes: 'testMark = nil', why: 'the UI tests\' own reveal mark, already 8 s (testMarkSeconds)' },
-  { file: 'Views/Org/OrgThreadsView.swift', takes: 'highlight = nil', why: 'a tint UI tests read through testMark; holding it longer would show under the next push\'s held sheet (expectHeld)' },
-  { file: 'Views/Tasks/TasksView.swift', takes: 'highlightedTaskId = nil', why: 'a row tint, nothing to read or tap, no UI test reads it' },
-  { file: 'Views/Sessions/FileSourceLinesView.swift', takes: 'flash = false', why: 'a line tint after a jump, nothing to read or tap' },
-  { file: 'Timeline/TimelineTextCells.swift', takes: 'showCopied(false)', why: 'its Copied label is read by polling with no tap between, and CodeBlockUITests checks it comes back within 5 s' },
-  { file: 'Timeline/TimelineHarnessView.swift', takes: 'self?.streaming = false', why: 'the debug timeline harness\'s scripted stream' },
-  { file: 'Timeline/TimelineHarnessView.swift', takes: 'self.activity = nil', why: 'the debug timeline harness\'s scripted stream' },
+const KNOWN: KnownHide[] = [
+  // Waits whose work takes something away.
+  k('Stores/ChatStore.swift', 'self.fileRetryTasks[bubbleID] = nil', 'a retry backoff forgets its own task'),
+  k('Stores/ChatStore.swift', 'failed = false', 'a retry backoff sends the failed file again: the failed mark goes because the send starts'),
+  k('Stores/ChatStore.swift', 'retryNotice = nil', 'a retry backoff sends the failed file again: its waiting notice goes because the send starts'),
+  k('Stores/ChatStore.swift', 'uploadFailedID = nil', 'a retry backoff sends the failed file again'),
+  k('Stores/SessionConversationStore.swift', 'self.retryTasks[bubbleID] = nil', 'a retry backoff forgets its own task', 2),
+  k('Stores/SessionConversationStore.swift', 'self?.stopRequestedAt = nil', 'the Stop request times out; nothing on screen goes'),
+  k('Stores/FocusMusicPlayer.swift', 'self.focusWatch = nil', 'the Focus watch ends with the block; nothing is shown', 2),
+  k('Stores/FocusSpacesStore.swift', 'self.expireIfDue', 'a Focus block ends at its own clock time, which the person set'),
+  k('Stores/TasksStoreStatusPrediction.swift', 'self?.expirePrediction', 'a predicted status gives way to the server\'s; nothing to read or tap', 2),
+  k('Views/Tasks/GlobalSearchModel.swift', 'self.searching = false', 'a search debounce'),
+  k('Views/Tasks/GlobalSearchModel.swift', 'self.response = nil', 'a search debounce: a new query replaces the answer'),
+  k('Views/Tasks/GlobalSearchModel.swift', 'self.unavailableNotice = nil', 'a search debounce: an answer replaces the notice'),
+  k('Stores/SessionQueueModel.swift', 'self.fadeTask = nil', 'wakes the badge to read its state again; the Delivered span is judged in updateSendStates and no UI test reads it'),
+  k('Views/Chat/ChatView.swift', 'restoreWaitsForOpen = false', 'a launch restore stops waiting for a deep link; nothing on screen goes'),
+  k('Views/Chat/ComposerView.swift', 'seatSettling = false', 'a stray-tap guard after the seat moves, not shown'),
+  k('Views/Inbox/LetterThreadView.swift', 'movingId = nil', 'ends a move animation'),
+  k('Views/Sessions/SessionConversationView.swift', 'coveredUntilPage = false', 'the longest a cover hides an unpainted page; ending sooner is the point'),
+  k('Views/Sessions/SessionQueueViews.swift', 'dismiss', 'the edit sheet closes itself after its row went out; held longer it would sit over the page the test goes on to'),
+  k('Talk/TalkSetupView.swift', 'dismiss', 'the Action Button sheet closes after a Resend; held longer it would sit over the page the test goes on to'),
+  k('Talk/TalkPanel.swift', 'self.close', 'the Talk panel closes once a take is idle (callers pass 0.5 s); nothing to read'),
+  k('Views/Org/OrgThreadsView.swift', 'testMark = nil', 'the UI tests\' own reveal mark, already 8 s (testMarkSeconds)'),
+  k('Views/Org/OrgThreadsView.swift', 'highlight = nil', 'a tint UI tests read through testMark; holding it longer would show under the next push\'s held sheet (expectHeld)'),
+  k('Views/Tasks/TasksView.swift', 'highlightedTaskId = nil', 'a row tint, nothing to read or tap, no UI test reads it'),
+  k('Views/Sessions/FileSourceLinesView.swift', 'flash = false', 'a line tint after a jump, nothing to read or tap'),
+  k('Timeline/TimelineTextCells.swift', 'showCopied(false)', 'its Copied label is read by polling with no tap between, and CodeBlockUITests checks it comes back within 5 s'),
+  k('Timeline/TimelineHarnessView.swift', 'self?.streaming = false', 'the debug timeline harness\'s scripted stream'),
+  k('Timeline/TimelineHarnessView.swift', 'self.streaming = false', 'the debug timeline harness\'s scripted stream'),
+  k('Timeline/TimelineHarnessView.swift', 'self.activity = nil', 'the debug timeline harness\'s scripted stream'),
+
+  // Stored "until" deadlines.
+  k('Stores/SessionQueueModel.swift', 'hiddenUntil', 'keeps a row that is going out hidden so it does not flash back; it hides, never takes a shown thing away'),
+  k('Stores/SessionStreamGate.swift', 'holdDeadline', 'how long a stream restart is held back; nothing shown goes'),
+  k('Views/Chat/ChatDrawer.swift', 'orgSettleUntil', 'the drawer\'s rows keep their order while it opens, not shown'),
+  k('Views/Inbox/LetterReplyField.swift', 'echoGuardUntil', 'ignores the text view\'s own echo after a send, not shown'),
+  k('Views/Inbox/LetterFollowsNewestStatus.swift', 'sendScrollEnds', TYPING),
+  k('Views/ScrollBottomTracking.swift', 'armHoldCeiling', TYPING),
+  k('Health/HealthAccessPrompt.swift', 'quietUntil', QUIET, 3),
+  k('Places/PlacesAccessPrompt.swift', 'quietUntil', QUIET, 3),
+  k('Health/HealthBackground.swift', 'earliestBeginDate', 'the earliest a background refresh may run; nothing shown'),
+
+  // How long ago something was stamped.
+  k('Stores/SessionQueueModel.swift', 'since at', 'the Delivered badge span; no UI test reads it (see fadeTask)'),
+  k('Stores/SessionQueueModel.swift', 'since $0.since', 'how long a queue row is watched fast; nothing shown goes'),
+  k('Views/Org/OrgThreadsView.swift', 'since sent', 'the "Follow up sent" line shows for 10 minutes, far past any UI test'),
+  k('Views/Org/OrgThreadModel.swift', 'since at', 'a closed thread is Archived a day after it closed'),
+  k('Views/Org/OrgThreadsStore.swift', 'since settledAt', 'the store keeps writing out a moment after it settled, not shown'),
+  k('Views/Org/OrgAvatar.swift', 'since at', FRESH),
+  k('Stores/ServerClientSettings.swift', 'since lastRead', FRESH),
+  k('Stores/TagDisplayStore.swift', 'since lastRead', FRESH),
+  k('Stores/TasksStoreRefresh.swift', 'since last', FRESH, 2),
+  k('Stores/ComposerSuggestController.swift', 'since cached.at', FRESH),
+  k('Stores/InboxStore.swift', 'since lastRefreshAt', FRESH),
+  k('Stores/RouteCoordinator.swift', 'since $0.value', 'a rejected route is skipped for a while; nothing shown'),
+  k('Stores/RouteCoordinator.swift', 'since last.at', AGAIN),
+  k('Stores/LetterReplyStore.swift', 'since $0.value', 'drafts older than their keep time are forgotten; ' + LONG),
+  k('Stores/PendingFileSends.swift', 'since $0.savedAt', 'kept file sends older than their keep time are forgotten; ' + LONG),
+  k('Stores/SessionConversationStore.swift', 'since $0.value.stashedAt', 'a stashed message older than its keep time is forgotten; nothing shown'),
+  k('Stores/SessionConversationStore.swift', 'since entry.stashedAt', 'a stashed message older than its keep time is forgotten; nothing shown'),
+  k('Stores/SessionConversationStore.swift', 'since heldSavedAt[bubbleID]??.distantPast', 'how often an upload\'s progress is saved; nothing shown goes'),
+  k('Stores/ChatStore.swift', 'since created', 'a local echo the server never confirmed gives way to the server\'s list'),
+  k('Stores/ChatStore.swift', 'since self.lastSSEEventAt', 'a silent event stream is reconnected; nothing shown goes'),
+  k('Stores/TasksStore.swift', 'since $0.createdAt', 'a just-created task the server never listed gives way to the server\'s list'),
+  k('Stores/TasksStoreStatusPrediction.swift', 'since p.madeAt', 'a predicted status gives way to the server\'s'),
+  k('Stores/VoiceModeController.swift', 'since since.at', 'how long voice mode waits for the final words before it speaks; nothing shown goes'),
+  k('Stores/PasswordsStore.swift', 'since at', 'Passwords lock after the app sat in the background; a lock, not a passing thing'),
+  k('Core/OrgNodeLink.swift', 'since since', BUDGET),
+  k('Core/RouteSelector.swift', 'since last', AGAIN),
+  k('Core/VoiceLiveWords.swift', 'since since', 'how often live words are sent; nothing shown goes'),
+  k('Core/VoiceRecordingStore.swift', 'since last', AGAIN),
+  k('Core/WorkCardController.swift', 'since startedAt', 'the system\'s own Live Activity time limit'),
+  k('App/DebugThreadPushLink.swift', 'since last.at', AGAIN),
+  k('Views/Tasks/WorkCardSheet.swift', 'since last.at', AGAIN),
+  k('Views/Tasks/TeamStatusModel.swift', 'since $0', 'how long a teammate has been quiet, read from the server\'s times'),
+  k('Views/Chat/ComposerPrimaryAction.swift', 'since lastTap', AGAIN),
+  k('Views/Chat/PillMenuButton.swift', 'since at', 'where focus returns after a menu, not shown'),
+  k('Views/Chat/ComposerModelRefreshPolicy.swift', 'since started', AGAIN),
+  k('Views/Chat/ComposerModelRefreshPolicy.swift', 'since ended', AGAIN, 2),
+  k('Views/Chat/ComposerModelRefreshPolicy.swift', 'since last', FRESH),
+  k('Views/Inbox/LetterReaderView.swift', 'since noteChangedAt', TYPING),
+  k('Views/Sessions/PermissionRequestCard.swift', 'since $0', TYPING),
+  k('Views/Sessions/PermissionRequestCard.swift', 'since picturesAddedAt', TYPING),
+  k('Views/Sessions/PermissionRequestCard.swift', 'since typedAt', TYPING),
+  k('Views/Sessions/PermissionRequestCard.swift', 'since grewAt', TYPING),
+  k('Health/HealthAccessPrompt.swift', 'since last', QUIET),
+  k('Health/HealthSyncEngine.swift', 'since $0', FRESH),
+  k('Health/HealthSyncEngine.swift', 'since env.now()', BUDGET, 2),
+  k('Health/HealthSyncState.swift', 'since lastWrite', 'how often the sync state is saved; nothing shown goes'),
+  k('Places/PlacesAccessPrompt.swift', 'since last', QUIET),
+  k('Places/PlacesAlwaysTiming.swift', 'since started', BUDGET),
+  k('Places/PlacesAlwaysTiming.swift', 'since since', BUDGET),
+  k('Places/PlacesQueue.swift', 'since $0.lastMoment', 'sent visits older than their keep time are forgotten; ' + LONG),
+  k('Places/PlacesRecorder.swift', 'since started', BUDGET, 2),
+  k('Places/PlacesSyncEngine.swift', 'since $0', FRESH),
+  k('Places/PlacesSyncEngine.swift', 'since started', BUDGET),
+  k('Demo/DemoServerWorkCard.swift', 'since idle', 'the demo server\'s scripted work card'),
 ]
 
-const isKnown = (h: TimedHide) => KNOWN.some((k) => k.file === h.file && k.takes === h.takes)
-
-describe('iOS: a thing taken off the screen on a timer waits through NoticeTiming', () => {
+describe('iOS: a thing taken off the screen on a clock waits through NoticeTiming', () => {
   const hides = swiftFiles(APP).flatMap((f) => timedHides(path.relative(APP, f), code(fs.readFileSync(f, 'utf8'))))
+  const notThrough = hides.filter((h) => !throughNoticeTiming(h))
 
   it('finds the members it guards', () => {
     const where = hides.map((h) => `${h.file} ${h.takes}`)
     expect(where).toContain('Views/Settings/RoutinesView.swift runNotes[id] = nil')
     expect(where).toContain('Timeline/TimelineTextCells.swift showCopied(false)')
+    expect(where).toContain('Views/Sessions/PermissionRequestCard.swift since armedAt')
+    expect(where).toContain('Stores/SessionQueueModel.swift hiddenUntil')
+    expect(where).toContain('Views/Chat/ComposerView.swift onDismiss')
   })
 
   it('every timed take-away names NoticeTiming or says why it is not a passing thing', () => {
-    const offenders = hides
-      .filter((h) => !/NoticeTiming/.test(h.wait) && !isKnown(h))
-      .map((h) => `${h.file}:${h.line} ${h.wait} -> ${h.takes}`)
-    expect(offenders, 'wait with `NoticeTiming.after(seconds) { ... }` (or `NoticeTiming.seconds` in the sleep)').toEqual([])
+    const offenders = uncovered(notThrough, KNOWN).map((h) => `${h.file}:${h.line} ${h.wait} -> ${h.takes}`)
+    expect(
+      offenders,
+      'wait with `NoticeTiming.after(normal) { ... }`, or `NoticeTiming.seconds(normal)` in the sleep or the window',
+    ).toEqual([])
   })
 
-  it('KNOWN lists only take-aways that are still there', () => {
-    const stale = KNOWN.filter((k) => !hides.some((h) => h.file === k.file && h.takes === k.takes))
-    expect(stale.map((k) => `${k.file} ${k.takes}`)).toEqual([])
+  it('KNOWN lists only take-aways that are still there, as many as it says', () => {
+    const stale = KNOWN.filter((entry) => {
+      const n = notThrough.filter((h) => h.file === entry.file && h.takes === entry.takes).length
+      return n < (entry.count ?? 1)
+    })
+    expect(stale.map((entry) => `${entry.file} ${entry.takes} x${entry.count ?? 1}`)).toEqual([])
+    const keys = KNOWN.map((entry) => `${entry.file} ${entry.takes}`)
+    expect(keys.filter((key, i) => keys.indexOf(key) !== i), 'one entry per take-away, with count').toEqual([])
   })
 
   it('the members a UI test catches wait through NoticeTiming', () => {
@@ -174,7 +177,8 @@ describe('iOS: a thing taken off the screen on a timer waits through NoticeTimin
   })
 
   it('catches each kind of wait and take-away, and leaves short and unrelated waits', () => {
-    const one = (s: string) => timedHides('x', code(s)).length
+    const all = (s: string) => timedHides('x', code(s))
+    const one = (s: string) => all(s).length
     expect(one('Task { try? await Task.sleep(for: .seconds(5)); if a == b { removed = nil } }')).toBe(1)
     expect(one('Task { try? await Task.sleep(nanoseconds: 2_500_000_000)\n withAnimation { id = nil } }')).toBe(1)
     expect(one('DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }')).toBe(1)
@@ -185,7 +189,36 @@ describe('iOS: a thing taken off the screen on a timer waits through NoticeTimin
     expect(one('static let tick: Duration = .milliseconds(100)\nTask { try? await Task.sleep(for: Self.tick); listening = false }')).toBe(0)
     expect(one('static let window: Duration = .seconds(5)\nTask { try? await Task.sleep(for: Self.window); offer = nil }')).toBe(1)
     expect(one('static let hold: TimeInterval = 0.2\nDispatchQueue.main.asyncAfter(deadline: .now() + Self.hold) { shown = false }')).toBe(0)
+    // Two types in one file each read their own length: the first never masks the second.
+    expect(one('struct A { static let hold = 0.2 }\nstruct B { static let hold = 4\n func f() { DispatchQueue.main.asyncAfter(deadline: .now() + Self.hold) { shown = false } } }')).toBe(1)
     expect(one('Task { try? await Task.sleep(for: .seconds(5)); await refresh() }')).toBe(0)
     expect(one('if a == nil { Task { try? await Task.sleep(for: .seconds(3)) } }\nx = nil')).toBe(0)
+    // A call that takes something away after the wait (2026-11-25 review: dismiss() and clear() were missed).
+    expect(one('Task { try? await Task.sleep(for: .seconds(1.2)); dismiss() }')).toBe(1)
+    expect(one('.task { try? await Task.sleep(for: .seconds(6)); talk.clearResentNotice() }')).toBe(1)
+    expect(one('Task { try? await Task.sleep(for: .seconds(3)); self?.hideBanner() }')).toBe(1)
+    expect(one('Task { try? await Task.sleep(for: .seconds(3)); rows.removeAll { $0.gone } }')).toBe(1)
+    // Every take-away in the work, not only the first: a known first one never hides the next.
+    expect(all('Task { try? await Task.sleep(for: .seconds(4)); task = nil; notice = nil }').map((h) => h.takes)).toEqual(['task = nil', 'notice = nil'])
+    // A Timer, scheduled or added to a run loop, and its block.
+    expect(one('Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { _ in self.toast = nil }')).toBe(1)
+    expect(one('let t = Timer(timeInterval: 2.5, repeats: false) { [weak self] _ in self?.dismiss() }')).toBe(1)
+    expect(one('Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in self.toast = nil }')).toBe(0)
+    // Date windows: a stored deadline and an age check, a local budget and a short window left out.
+    expect(all('func f() { hiddenUntil[id] = Date().addingTimeInterval(Self.span) }').map((h) => h.takes)).toEqual(['hiddenUntil'])
+    expect(all('if isOpen { quietUntil = .now + 30 }').map((h) => h.takes)).toEqual(['quietUntil'])
+    expect(all('if Date().timeIntervalSince(armedAt) < 5 { confirm() }').map((h) => h.takes)).toEqual(['since armedAt'])
+    expect(one('let deadline = Date().addingTimeInterval(30)')).toBe(0)
+    expect(one('let cutoff = now.addingTimeInterval(-86_400)')).toBe(0)
+    expect(one('if now.timeIntervalSince(typedAt) < 0.5 { return true }')).toBe(0)
+    expect(all('if Date().timeIntervalSince(armedAt) < NoticeTiming.seconds(5) { confirm() }').every(throughNoticeTiming)).toBe(true)
+  })
+
+  it('a KNOWN entry covers as many take-aways as it says, so a second of the same text is judged again', () => {
+    const h = (line: number) => ({ file: 'f.swift', line, kind: 'wait' as const, wait: 'w', takes: 'x = nil' })
+    expect(uncovered([h(1)], [k('f.swift', 'x = nil', 'why')])).toEqual([])
+    expect(uncovered([h(1), h(9)], [k('f.swift', 'x = nil', 'why')]).map((x) => x.line)).toEqual([9])
+    expect(uncovered([h(1), h(9)], [k('f.swift', 'x = nil', 'why', 2)])).toEqual([])
+    expect(uncovered([h(1)], [k('g.swift', 'x = nil', 'why')]).map((x) => x.line)).toEqual([1])
   })
 })

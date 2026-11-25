@@ -2841,8 +2841,8 @@ struct ConfirmationBanner: View {
         .foregroundStyle(.primary)
         .modifier(BannerTypeCap(text: text))
         .task {
-            // Self-dismiss: success lines are transient by nature.
-            try? await Task.sleep(for: .seconds(5))
+            // Self-dismiss: success lines are transient by nature (held longer for a UI test's slow find).
+            try? await Task.sleep(for: .seconds(NoticeTiming.seconds(5)))
             onDismiss()
         }
     }

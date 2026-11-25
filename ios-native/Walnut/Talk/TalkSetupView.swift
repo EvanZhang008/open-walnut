@@ -550,7 +550,7 @@ struct TalkUnsentList: View {
                     .padding(.bottom, 12)
                     .accessibilityIdentifier("talk.unsent.sent")
                     .task(id: words) {
-                        try? await Task.sleep(for: .seconds(6))
+                        try? await Task.sleep(for: .seconds(NoticeTiming.seconds(6)))
                         if talk.lastResent == words { talk.clearResentNotice() }
                     }
                 }
