@@ -143,7 +143,11 @@ An isolated run on a dev box, no companion and no production data:
    `{key, peer: {id, relays}, relayMode, port}` from the QR), then
    `curl 127.0.0.1:<port>/api/v1/status` answers 401, and 200 with the token.
 4. The app: `WalnutConnectLiveUITests` pairs through the setup form with the link in
-   `/tmp/walnut-connect-live.json` on the Mac (`{link, port, task}`) and loads the board.
+   `/tmp/walnut-connect-live.json` on the Mac (`{link, port, task}`) and loads the board
+   (`scripts/ios-fleet-test.sh --host __local__ --video ui -- -only-testing:WalnutUITests/WalnutConnectLiveUITests`,
+   on a Mac with Rust's iOS targets). The run pins the server address to the Walnut Connect
+   port, so Settings names it as the Custom route, and a pinned launch stores no routes: a
+   relaunch over Walnut Connect is not part of this run.
 
 ## Where the code lives
 

@@ -112,19 +112,6 @@ final class SavedLoginsUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 30), "pairing through the form failed")
     }
 
-    private func disconnect(_ app: XCUIApplication, keepLogin: Bool) {
-        app.tab(.settings).tap()
-        let button = app.buttons["settings.disconnect"].firstMatch
-        _ = button.waitForExistence(timeout: 10)
-        revealInList(app, button)
-        XCTAssertTrue(button.isHittable, "no Disconnect in Settings")
-        button.tap()
-        let choice = app.buttons[keepLogin ? "settings.disconnect.keepLogin" : "settings.disconnect.forgetLogin"].firstMatch
-        XCTAssertTrue(choice.waitForExistence(timeout: 5), "the Disconnect dialog has no such choice")
-        choice.tap()
-        XCTAssertTrue(app.buttons["setup.scan"].waitForExistence(timeout: 20), "Disconnect did not return to pairing")
-    }
-
     private func waitGone(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element)
         return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed

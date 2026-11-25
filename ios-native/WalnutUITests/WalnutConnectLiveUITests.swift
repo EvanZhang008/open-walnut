@@ -37,6 +37,11 @@ final class WalnutConnectLiveUITests: XCTestCase {
         // The app's Walnut Connect port is the one the run names, so the pinned address is it.
         let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, origin, "-walnut.connect.port", String(live.port)])
         let paste = app.buttons["Paste pairing link"]
+        // Another UI test (or an earlier run of this one) may have left a token in the test
+        // Keychain namespace: start unpaired.
+        if !paste.waitForExistence(timeout: 10), app.tabBars.firstMatch.exists {
+            disconnect(app, keepLogin: false)
+        }
         XCTAssertTrue(paste.waitForExistence(timeout: 20), "no pairing screen")
         shot(app, "1-pairing-screen")
 
@@ -56,17 +61,34 @@ final class WalnutConnectLiveUITests: XCTestCase {
         }
         shot(app, "3-board-over-walnut-connect")
 
+        // The Tasks drawer hides the tab bar while it is open: close it first.
+        let scrim = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "tasks.drawer.scrim")).firstMatch
+        if scrim.exists {
+            scrim.tap()
+            _ = scrim.waitForNonExistence(timeout: 5)
+        }
+        XCTAssertTrue(app.tab(.settings).waitForExistence(timeout: 10), "no Settings tab")
         app.tab(.settings).tap()
-        let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Walnut Connect")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "Settings does not say Walnut Connect")
+        // The run pins the server address to the Walnut Connect port, and a pinned address is
+        // the Custom route, so Settings names that port: only the library listens there.
+        let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "127.0.0.1:\(live.port)")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "Settings does not name the Walnut Connect port")
         shot(app, "4-settings-walnut-connect")
     }
 
     /// iOS asks before an app reads what another app (the test runner) put on the pasteboard.
+    /// The question is SpringBoard's, and the app is never asked about it: its main thread
+    /// waits inside the pasteboard read until the answer, so any query of the app meanwhile
+    /// times out its snapshot and fails the test (2026-11-25, the first live run on iOS 26.0).
     private func allowPaste(_ app: XCUIApplication) {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        for button in [app.alerts.buttons["Allow Paste"], springboard.alerts.buttons["Allow Paste"], springboard.buttons["Allow Paste"]] {
-            if button.waitForExistence(timeout: 3) { button.tap(); return }
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            for button in [springboard.alerts.buttons["Allow Paste"], springboard.buttons["Allow Paste"]] where button.exists {
+                button.tap()
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.5)
         }
     }
 
