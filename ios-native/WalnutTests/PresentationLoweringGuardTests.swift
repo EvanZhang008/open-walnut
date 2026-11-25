@@ -115,7 +115,6 @@ final class PresentationLoweringGuardTests: XCTestCase {
         "Walnut/Views/Sessions/SessionExtrasSheets.swift": (.holds, "a side question being written"),
         "Walnut/Views/Sessions/SessionPathPicker.swift": (.holds, "a path typed and not picked"),
         "Walnut/Views/Sessions/SessionQueueViews.swift": (.holds, "a queued message changed from what is queued"),
-        "Walnut/Views/Settings/AdvancedSettingsSection.swift": (.savedOnChange, "Settings > Advanced: the hidden-lines switch is written to the server as it changes"),
         "Walnut/Views/Settings/AppleHealthView.swift": (.notPresented, "a Settings page; each switch is saved as it changes"),
         "Walnut/Views/Settings/DirectorsSettingsSection.swift": (.savedOnChange, "Settings > Org: a layout tap and the project-names switch are written to the org settings as they change"),
         "Walnut/Views/Settings/FocusMusicView.swift": (.notPresented, "a Settings page; each change is saved as it is made"),

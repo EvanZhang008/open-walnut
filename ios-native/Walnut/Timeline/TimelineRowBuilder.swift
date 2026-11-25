@@ -210,8 +210,7 @@ final class TimelineRowBuilder {
               expandedRowIDs: Set<String>,
               scope: String = TimelineScope.unscoped,
               queued: QueuedSend.Status? = nil,
-              showAbout: Bool = false,
-              showHiddenLines: Bool = false) -> [TimelineRow] {
+              showAbout: Bool = false) -> [TimelineRow] {
         let namespace = TimelineScope.namespace(scope, message.id)
         switch message.kind {
         case .tool:
@@ -231,12 +230,6 @@ final class TimelineRowBuilder {
             let shown = TimelineTurnMarker.strip(message.text)
             var rows = assistantRows(shown == message.text ? message : message.replacingText(shown),
                                      width: width, idPrefix: namespace)
-            // What Walnut hid from the reply, for a developer (the server's ui.show_hidden_lines):
-            // one closed row under the words, opening to the lines as the session wrote them.
-            if showHiddenLines, !rows.isEmpty {
-                rows += hiddenLinesRows(Self.hiddenLines(of: message), namespace: namespace,
-                                        expandedRowIDs: expandedRowIDs, width: width)
-            }
             // The thread the reply answers (experiment reply_thread_line), in place of
             // the About pills; else, in Main's or a lead's chat, the tasks a reply is about,
             // under it (MessageAboutTag): the server's, else the row's own line while fresh.
@@ -866,12 +859,10 @@ final class TimelineRowBuilder {
         liveThinking: String = "",
         liveTools: [LiveToolCall] = [],
         expandedRowIDs: Set<String> = [],
-        runFoldedElsewhere: Bool = false,
-        showHiddenLines: Bool = false
+        runFoldedElsewhere: Bool = false
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
-        let rawLive = liveText
         // The acknowledgement line never prints, not even half-written.
         let liveText = TimelineTurnMarker.stripLive(liveText)
         // Once the turn has called a tool, its reasoning rides that call's run
@@ -963,12 +954,6 @@ final class TimelineRowBuilder {
             }
         } else {
             headCache = nil
-        }
-        // What Walnut hides from the reply so far, under it as the saved reply will have it.
-        if showHiddenLines, !liveText.isEmpty {
-            rows += hiddenLinesRows(Self.hiddenLines(server: nil, raw: rawLive, shown: liveText),
-                                    namespace: TimelineScope.namespace(scope, "live"),
-                                    expandedRowIDs: expandedRowIDs, width: width)
         }
         // This turn's tool calls under the reply, all of them folded into one run
         // row with the turn's reasoning (see `liveToolRows`).
@@ -1343,43 +1328,6 @@ final class TimelineRowBuilder {
         let label = Self.injectedLabel(message)
         return labelledFoldRows(id: id, phrase: label, items: [(label, message.text)],
                                 expanded: expandedRowIDs.contains(id), width: width)
-    }
-
-    /// The phrase of the row that holds what Walnut hid from a reply (the web's HiddenLinesFold).
-    static let hiddenLinesPhrase = "Hidden by Walnut"
-
-    /// The lines Walnut hid from a reply (`ChatMessage.hidden`: its status lines, and the
-    /// turn-end marker this view strips), as the turn fold's closed capsule; open, one row of
-    /// the lines as written. None when nothing was hidden.
-    private func hiddenLinesRows(_ text: String, namespace: String,
-                                 expandedRowIDs: Set<String>, width: CGFloat) -> [TimelineRow] {
-        guard !text.isEmpty else { return [] }
-        let id = "\(namespace)#hidden"
-        var rows = [foldRow(id: id, phrase: Self.hiddenLinesPhrase, failures: .none,
-                            expanded: expandedRowIDs.contains(id), width: width)]
-        guard expandedRowIDs.contains(id) else { return rows }
-        let attributed = NSAttributedString(string: text, attributes: [
-            .font: TimelineTextStyler.footnoteFont,
-            .foregroundColor: UIColor.secondaryLabel,
-        ])
-        var hasher = Hasher()
-        hasher.combine(text)
-        rows.append(textRow(id: "\(id)#0", revision: hasher.finalize(), attributed: attributed, width: width))
-        return rows
-    }
-
-    /// Every line Walnut hid from a reply: the server's (`hidden`), then every line this view
-    /// takes out of the text as it shows it (`TimelineTurnMarker.strip`: a status report a parse
-    /// that keeps no `hidden` left in, an Org chat's tasks line, the turn-end marker), as the web's
-    /// fold reads them (`hiddenLinesOf`, ported in HiddenLines).
-    static func hiddenLines(of message: ChatMessage) -> String {
-        hiddenLines(server: message.hidden, raw: message.text, shown: TimelineTurnMarker.strip(message.text))
-    }
-
-    static func hiddenLines(server: String?, raw: String, shown: String) -> String {
-        [server?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "", HiddenLines.of(raw: raw, shown: shown)]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
     }
 
     /// What an injected row reads; the server always names it, its own "Injected context" if not.

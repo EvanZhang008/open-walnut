@@ -143,8 +143,6 @@ struct SessionTimelineBody: View {
                 // long-press item shows it for that message (TimelineTurnFold).
                 showWalnutAdditions: ServerClientSettings.shared.showAll,
                 showMessageAbout: showMessageAbout,
-                // The developer switch (Settings > Advanced): what Walnut hid, folded under a reply.
-                showHiddenLines: ServerClientSettings.shared.showHiddenLines,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },

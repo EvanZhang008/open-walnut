@@ -261,7 +261,6 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // methods: a routine's `:id` would also take /draft, /check-test and /trigger,
   // which change no routine and keep the plain away answer.
   { method: 'PUT', pattern: '/api/config', away: 'needs-leader', why: 'config_writes_need_mac' },
-  { method: 'PUT', pattern: '/api/v1/config/ui', away: 'needs-leader', why: 'config_writes_need_mac' },
   // A trigger's pause, resume and delete by this host's own calls (away-triggers.ts): the phone's
   // routes, which the ops call.
   ...['/api/routines', '/api/cron', '/api/v1/routines'].flatMap((base): RouteRow[] => [

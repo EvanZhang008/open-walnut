@@ -19,7 +19,7 @@ import request from 'supertest'
 import { consoleV1Router } from '../../../src/web/routes/console-v1.js'
 import { EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, keepsOwnSwitch } from '../../../src/core/experimental.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
-import { WALNUT_HOME, CONFIG_FILE, GLOBAL_SKILLS_DIR, WALNUT_INSTALL_DIR } from '../../../src/constants.js'
+import { WALNUT_HOME, CONFIG_FILE, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 
 function createApp() {
   const app = express()
@@ -120,55 +120,6 @@ describe('GET /api/v1/config — allowlist projection', () => {
     expect(res.body.cloud).toBe(false)
     expect(typeof res.body.processNice).toBe('number')
     expect(typeof res.body.memory.rssMb).toBe('number')
-  })
-
-  it('resolves the developer switch ui.show_hidden_lines for the phone (2026-11-25)', async () => {
-    await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET)
-    const unset = await request(createApp()).get('/api/v1/config')
-    // Unset: on where this Walnut runs from its own source checkout (a developer), off elsewhere.
-    expect(unset.body.config.ui.show_hidden_lines).toBe(WALNUT_INSTALL_DIR !== null)
-    for (const v of [true, false]) {
-      await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + `ui:\n  show_hidden_lines: ${v}\n`)
-      const res = await request(createApp()).get('/api/v1/config')
-      expect(res.body.config.ui.show_hidden_lines).toBe(v)
-      expect(typeof res.body.config.ui.show_walnut_additions).toBe('boolean')
-    }
-  })
-
-  it('PUT /config/ui merges the phone\'s switch into config.yaml and keeps every other ui key', async () => {
-    await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET + 'ui:\n  show_walnut_additions: false\n  shortcuts:\n    send: cmd-enter\n')
-    const put = await request(createApp()).put('/api/v1/config/ui').send({ show_hidden_lines: false })
-    expect(put.status).toBe(200)
-    expect(put.body).toEqual({ ok: true, ui: { show_hidden_lines: false } })
-    const yaml = await fs.readFile(CONFIG_FILE, 'utf8')
-    expect(yaml).toMatch(/show_hidden_lines: false/)
-    expect(yaml).toMatch(/show_walnut_additions: false/)
-    expect(yaml).toMatch(/send: cmd-enter/)
-    const read = await request(createApp()).get('/api/v1/config')
-    expect(read.body.config.ui.show_hidden_lines).toBe(false)
-    for (const bad of [{}, { show_hidden_lines: 'yes' }, { show_walnut_additions: true }, { show_hidden_lines: true, shortcuts: {} }, [true]]) {
-      const res = await request(createApp()).put('/api/v1/config/ui').send(bad)
-      expect(res.status, JSON.stringify(bad)).toBe(400)
-    }
-  })
-
-  it('a replica refuses the switch\'s write (needs_leader) and leaves the unset switch out', async () => {
-    const { _resetServerRoleForTesting } = await import('../../../src/core/server-role.js')
-    const saved = { WALNUT_ROLE: process.env.WALNUT_ROLE, WALNUT_PLACEMENT: process.env.WALNUT_PLACEMENT, WALNUT_HOST_SERVER: process.env.WALNUT_HOST_SERVER }
-    Object.assign(process.env, { WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_HOST_SERVER: '1' })
-    _resetServerRoleForTesting()
-    try {
-      await fs.writeFile(CONFIG_FILE, CONFIG_WITH_EVERY_SECRET)
-      const put = await request(createApp()).put('/api/v1/config/ui').send({ show_hidden_lines: true })
-      expect(put.status).toBe(503)
-      expect(await fs.readFile(CONFIG_FILE, 'utf8')).not.toMatch(/show_hidden_lines/)
-      const read = await request(createApp()).get('/api/v1/config')
-      expect(read.status).toBe(200)
-      expect('show_hidden_lines' in read.body.config.ui).toBe(false)
-    } finally {
-      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
-      _resetServerRoleForTesting()
-    }
   })
 
   it('projects the experiment switches as booleans only (the phone reads project_first_start)', async () => {

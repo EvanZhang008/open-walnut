@@ -607,7 +607,6 @@ extension ChatMessage {
         copy.opensTurn = opensTurn
         copy.walnutAddedToggle = walnutAddedToggle
         copy.thread = thread
-        copy.hidden = hidden
         return copy
     }
 }

@@ -1126,7 +1126,6 @@ final class SessionConversationStore {
             row.aboutTagged = m.aboutTagged
             row.thread = m.thread
             row.opensTurn = m.opensTurn
-            row.hidden = m.hidden
             return row
         }
     }
@@ -1149,25 +1148,7 @@ final class SessionConversationStore {
     /// several of the server's rows.
     static func keepingWholeText(_ messages: [SessionTranscript.Message],
                                  held: [ChatMessage]) -> [ChatMessage] {
-        keepingHidden(keepingWholeInjected(keepingWholeRowText(messages, held: held), held: held), held: held)
-    }
-
-    /// The lines Walnut hid from a reply ride only a rich read (`hidden`): a slim poll's copy of
-    /// the same reply (same role, time and text) keeps the ones a rich read delivered, so the
-    /// developer's "Hidden by Walnut" row never blinks out between rich reads.
-    static func keepingHidden(_ rows: [ChatMessage], held: [ChatMessage]) -> [ChatMessage] {
-        guard rows.contains(where: { $0.kind == nil && $0.hidden == nil }) else { return rows }
-        var known: [String: String] = [:]
-        for m in held where m.kind == nil && !isProvisional(m) {
-            if let hidden = m.hidden { known["\(m.role)|\(m.createdAt)|\(m.text)"] = hidden }
-        }
-        guard !known.isEmpty else { return rows }
-        return rows.map { m in
-            guard m.kind == nil, m.hidden == nil, let hidden = known["\(m.role)|\(m.createdAt)|\(m.text)"] else { return m }
-            var kept = m
-            kept.hidden = hidden
-            return kept
-        }
+        keepingWholeInjected(keepingWholeRowText(messages, held: held), held: held)
     }
 
     private static func keepingWholeRowText(_ messages: [SessionTranscript.Message],
@@ -1285,7 +1266,6 @@ final class SessionConversationStore {
         row.aboutTagged = m.aboutTagged
         row.thread = m.thread
         row.opensTurn = m.opensTurn
-        row.hidden = m.hidden
         return row
     }
 

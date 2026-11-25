@@ -38,7 +38,6 @@ struct TimelineHarnessView: View {
                 activity: store.activity,
                 scope: "harness",
                 showWalnutAdditions: store.showWalnutAdditions,
-                showHiddenLines: store.showHiddenLines,
                 scrollToBottomSignal: store.scrollToBottomSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
@@ -182,10 +181,6 @@ final class TimelineHarnessStore {
     /// `--timeline-harness-additions-shown` sets it (off: each bubble's long press).
     var showWalnutAdditions = ProcessInfo.processInfo.arguments
         .contains { $0.contains("timeline-harness-additions-shown") }
-    /// The developer switch `ui.show_hidden_lines`, as `--timeline-harness-hidden-lines` sets it
-    /// (with its fixture: replies whose status lines Walnut hid).
-    var showHiddenLines = ProcessInfo.processInfo.arguments
-        .contains { $0.contains("timeline-harness-hidden-lines") }
     @ObservationIgnored var bottomPinned = true
     @ObservationIgnored var streamOn = false
     /// The island stream waits while this is true (see `startIslandStream`).
@@ -238,8 +233,6 @@ final class TimelineHarnessStore {
                 self?.liveTools = ended.tools
                 self?.messages = ended.messages
             }
-        } else if arguments.contains(where: { $0.contains("timeline-harness-hidden-lines") }) {
-            messages = TimelineHiddenLinesFixtures.messages()
         } else if arguments.contains(where: { $0.contains("timeline-harness-turns") }) {
             messages = TimelineTurnFixtures.messages()
         } else if arguments.contains(where: { $0.contains("timeline-harness-code") }) {

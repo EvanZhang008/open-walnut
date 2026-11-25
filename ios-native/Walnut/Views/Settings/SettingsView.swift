@@ -66,11 +66,6 @@ struct SettingsView: View {
                 PlacesSettingsSection()
                 voiceSection
                 if !inDemo {
-                    // The demo has no server to keep the switch, and only a server that names it
-                    // (ui.show_hidden_lines) can keep its write: an older one never sees it.
-                    if ServerClientSettings.shared.offersHiddenLines {
-                        AdvancedSettingsSection()
-                    }
                     diagnosticsSection
                     actionsSection
                 }

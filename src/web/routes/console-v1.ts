@@ -23,7 +23,7 @@
 
 import { logRouteError } from './route-error-log.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE, WALNUT_INSTALL_DIR } from '../../constants.js'
+import { CLOUD_MODE } from '../../constants.js'
 import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
@@ -49,8 +49,7 @@ const SERVER_RELAY_SID = '__server__'
  * ALLOWLIST projection — the inverse of the internal route's redactConfig
  * (which deep-masks a denylist of secret field names). Only fields named here
  * ever leave the box, so a future config key holding a credential can never
- * leak by default. Config write is Class D; the one write twin is the phone's ui switches
- * (PUT /config/ui, PHONE_UI_SWITCHES).
+ * leak by default. No write twin exists by design (config write is Class D).
  */
 async function buildConfigProjection(res?: Response): Promise<Record<string, unknown>> {
   const { getConfig } = await import('../../core/config-manager.js')
@@ -100,16 +99,7 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
     },
     // Whether the chat always shows what Walnut added to a message (additive, 2026-10-29).
     // On unless the person turned it off (2026-10-31, the user: they should be visible).
-    // Whether the chat shows, folded under a reply, the lines Walnut hid from it (additive,
-    // 2026-11-25), resolved: unset, on where this Walnut runs from its own source checkout (a
-    // developer; GET /api/config's `installDir`, which the web reads the same way), off elsewhere.
-    ui: {
-      show_walnut_additions: config.ui?.show_walnut_additions !== false,
-      // A follower cannot tell whether the Mac runs from its source, so it leaves the key out
-      // while unset: the phone keeps what it last read rather than flipping to off while the Mac is away.
-      ...(config.ui?.show_hidden_lines !== undefined ? { show_hidden_lines: config.ui.show_hidden_lines }
-        : isFollower() ? {} : { show_hidden_lines: WALNUT_INSTALL_DIR !== null }),
-    },
+    ui: { show_walnut_additions: config.ui?.show_walnut_additions !== false },
     // The experiments that are on or off by choice (additive, 2026-11-20): the phone shows what
     // an experiment changes only when it is on, as the web does. Booleans only.
     experimental: experimentalFlagsOf(config),
@@ -158,39 +148,6 @@ consoleV1Router.get('/config', async (_req: Request, res: Response, next: NextFu
         uptimeSec: Math.round(process.uptime()),
       },
     })
-  } catch (err) {
-    next(err)
-  }
-})
-
-/** The ui switches a phone may set (PUT /api/v1/config/ui): booleans the app shows in its Settings. */
-export const PHONE_UI_SWITCHES = ['show_hidden_lines'] as const
-
-// PUT /api/v1/config/ui — the phone's write of its ui switches (PHONE_UI_SWITCHES), merged
-// into the leader's config.yaml. A follower answers 503 needs_leader: through the companion
-// the call reaches the Mac while it answers (v1-forward), and nothing else may keep it.
-consoleV1Router.put('/config/ui', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const body = req.body
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      sendError(res, 400, 'invalid_body', 'Send an object of ui switches')
-      return
-    }
-    const keys = Object.keys(body)
-    const unknown = keys.filter((k) => !(PHONE_UI_SWITCHES as readonly string[]).includes(k))
-    if (keys.length === 0 || unknown.length > 0 || keys.some((k) => typeof body[k] !== 'boolean')) {
-      sendError(res, 400, 'invalid_body', `Send booleans for: ${PHONE_UI_SWITCHES.join(', ')}`)
-      return
-    }
-    if (isFollower()) {
-      const { NeedsLeaderError } = await import('../../core/replication/needs-leader.js')
-      throw new NeedsLeaderError('config_writes_need_mac')
-    }
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const { emitSettingsConfigChanged } = await import('../../core/config-broadcast.js')
-    await updateConfig({ ui: body })
-    emitSettingsConfigChanged(await getConfig())
-    res.json({ ok: true, ui: Object.fromEntries(keys.map((k) => [k, body[k]])) })
   } catch (err) {
     next(err)
   }
