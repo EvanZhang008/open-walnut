@@ -81,8 +81,10 @@ import {
   type LinkStatus,
 } from '../../core/notes-index.js'
 import { nameAnswersHere } from '../middleware/answer-name.js'
-import { LockedNoteError, assertNotLocked, isLockedNoteText, readableNoteText } from '../../core/notes/locked-note.js'
-import { isPersonCaller } from './person-caller.js'
+import { LockedNoteError, assertNotLocked, hasHiddenMark, looksProtectedNoteText, noteForReader, noteProtection } from '../../core/notes/locked-note.js'
+import { isPersonCaller, isPersonInOwnWindow } from './person-caller.js'
+import { assertLockedNoteDelete, assertLockedNoteMove } from '../../core/notes/locked-note-moves.js'
+import { walnutWritesNote } from '../../core/notes/vault-files.js'
 
 export const MAX_NOTE_SIZE = 2_000_000 // 2 MB
 
@@ -107,10 +109,6 @@ export class NotesOpError extends Error {
   }
 }
 
-/** Whether the note file at `absFile` is locked now (a missing or unreadable file is not). */
-export async function lockedOnDisk(absFile: string): Promise<boolean> {
-  try { return isLockedNoteText(await fsp.readFile(absFile, 'utf-8')) } catch { return false }
-}
 
 // ── One-time structural index bootstrap + in-process reconcile subscription ──
 // Honors the DO-NOT-TOUCH on server.ts: we don't wire boot there. The index
@@ -617,9 +615,11 @@ notesV2Router.get('/content/*path', async (req: Request, res: Response, next: Ne
     const relPath = noteRelOf(filePath)
     const id = readId(data) ?? getNoteIdByPath(relPath)
     // A locked note answers its stub, never the ciphertext: its text is read only through
-    // /api/v1/vault/notes/read (docs/reference/locked-notes.md). The hash is the file's.
-    const locked = isLockedNoteText(content)
-    res.json({ content: locked ? readableNoteText(content) : content, updatedAt, contentHash, ...(id ? { id } : {}), ...(locked ? { locked: true } : {}) })
+    // /api/v1/vault/notes/read (docs/reference/locked-notes.md). A hidden note answers its text to
+    // the person in their own window only, its frontmatter and stub to anyone else. The hash is the file's.
+    const kind = noteProtection(content)
+    const shown = kind === 'hidden' && isPersonInOwnWindow(req) ? content : noteForReader(content).content
+    res.json({ content: shown, updatedAt, contentHash, ...(id ? { id } : {}), ...(kind ? { [kind]: true } : {}) })
   } catch (err) {
     next(err)
   }
@@ -636,8 +636,11 @@ export async function writeNoteContent(
   notePath: string,
   content: unknown,
   expectedHash?: unknown,
-  /** Only make a new note: a note already at the path is left as it is (`exists`). */
-  options: { createOnly?: boolean } = {},
+  /**
+   * `createOnly`: only make a new note, a note already at the path is left as it is (`exists`).
+   * `person`: the person writes (isPersonInOwnWindow): only they write a hidden note.
+   */
+  options: { createOnly?: boolean; person?: boolean } = {},
 ): Promise<
   | { ok: true; path: string; updatedAt: string; contentHash: string; id: string; created: boolean }
   | { ok: false; conflict: string; exists?: true; deleted?: true }
@@ -666,6 +669,7 @@ export async function writeNoteContent(
   let created = false
   let exists = false
   let deleted = false
+  let hidNow = false
   const conflict = await withUserFileLock(filePath, async () => {
     if (options.createOnly) {
       try {
@@ -684,10 +688,16 @@ export async function writeNoteContent(
     } catch (err: any) {
       if (err.code !== 'ENOENT') throw err
     }
-    // A locked note is written only through its own route (core/notes/locked-note-store.ts).
-    try { assertNotLocked(currentContent, 'be changed here', content) } catch (err) {
+    // A locked note is written only through its own route (core/notes/locked-note-store.ts), and a
+    // hidden one only by the person, its new text keeping the mark (core/notes/locked-note.ts).
+    try { assertNotLocked(currentContent, 'be changed here', content, { person: options.person === true }) } catch (err) {
       if (err instanceof LockedNoteError) throw new NotesOpError(err.message, err.status, err.code)
       throw err
+    }
+    if (hasHiddenMark(content)) {
+      // Walnut's own writers replace such a note as theirs (vault-files.ts walnutWritesNote), as Hide refuses it.
+      if (walnutWritesNote(noteRelOf(filePath))) throw new NotesOpError('Walnut writes this note itself, so it cannot be hidden', 400, 'not_lockable')
+      hidNow = !hasHiddenMark(currentContent)
     }
     if (currentContent === null) {
       // A save that names the bytes it replaces (`expectedHash`) is an edit of a note that was
@@ -721,6 +731,8 @@ export async function writeNoteContent(
   log.memory.info('Note updated', { path: notePath, size: finalContent.length })
   // source format `notes/{path}` is a shared contract with files-tools.ts and useNoteContent.ts
   bus.emit(EventNames.NOTES_UPDATED, { source: `notes/${normalizedPath}`, contentHash }, ['web-ui'])
+  // The person hid it with this save: the indexes' freed copies of its text are wiped, as Hide does.
+  if (hidNow) void import('../../core/notes/locked-note-residue.js').then((m) => m.wipeLockedNoteResidue(noteRelOf(filePath), filePath))
   return { ok: true, path: noteRelOf(filePath), updatedAt: stat.mtime.toISOString(), contentHash, id: id as string, created }
 }
 
@@ -730,7 +742,7 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     const notePath = getWildcardPath(req)
     if (!notePath) { res.status(400).json({ error: 'path required' }); return }
     const { content, expectedHash } = req.body
-    const result = await writeNoteContent(notePath, content, expectedHash)
+    const result = await writeNoteContent(notePath, content, expectedHash, { person: isPersonInOwnWindow(req) })
     if (!result.ok && result.deleted) {
       res.status(410).json({ error: 'The note was deleted', deleted: true })
       return
@@ -760,9 +772,10 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
     if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
 
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
-    // A locked note is the person's to delete: an agent's delete is refused (deleting data).
-    if (!isPersonCaller(req) && await lockedOnDisk(filePath)) {
-      res.status(423).json({ error: 'This note is locked: only its owner deletes it, in Walnut.', code: 'note_locked' })
+    // A locked or hidden note is the person's to delete: an agent's delete is refused (deleting data).
+    try { await assertLockedNoteDelete(filePath, { person: isPersonCaller(req) }) } catch (err) {
+      if (!(err instanceof LockedNoteError)) throw err
+      res.status(err.status).json({ error: err.message, code: err.code })
       return
     }
     if (!(await deleteNoteFile(filePath))) {
@@ -889,26 +902,18 @@ export async function deleteNotesFolder(folderPath: unknown, opts: { person?: bo
   // (the post-delete reconcile hits the ENOENT branch per note).
   const relPrefix = noteRelOf(fullPath).replace(/\/+$/, '') + '/'
   const containedNotes: string[] = []
-  const containedFiles: string[] = []
   const collect = async (dir: string): Promise<void> => {
     let entries
     try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const e of entries) {
       const full = path.join(dir, e.name)
       if (e.isDirectory()) await collect(full)
-      else if (e.name.endsWith('.md')) { containedNotes.push(noteRelOf(full)); containedFiles.push(full) }
+      else if (e.name.endsWith('.md')) containedNotes.push(noteRelOf(full))
     }
   }
   await collect(fullPath)
-  // A locked note is the person's to delete: an agent's delete of a folder holding one is refused.
-  if (opts.person === false) {
-    for (const [i, file] of containedFiles.entries()) {
-      const rel = containedNotes[i]
-      if (await lockedOnDisk(file)) {
-        throw new NotesOpError(`This folder holds a locked note (${rel}): only its owner deletes it, in Walnut.`, 423, 'note_locked')
-      }
-    }
-  }
+  // A locked or hidden note is the person's to delete: anyone else's delete of a folder holding one is refused.
+  await asNotesOp(() => assertLockedNoteDelete(fullPath, { person: opts.person === true }))
 
   await fsp.rm(fullPath, { recursive: true })
   invalidateNotesTree()
@@ -945,6 +950,14 @@ notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: 
 
 // ─── Move / Rename ───────────────────────────────────────────────────────
 
+/** Run a locked-note rule (core/notes/locked-note-moves.ts), its refusal as a NotesOpError. */
+async function asNotesOp(check: () => Promise<void>): Promise<void> {
+  try { await check() } catch (err) {
+    if (err instanceof LockedNoteError) throw new NotesOpError(err.message, err.status, err.code)
+    throw err
+  }
+}
+
 // POST /api/notes-v2/move — rename/move only. updateWikiLinksInAll REMOVED:
 // id-keyed links survive a rename because the edge keys on the target's
 // frontmatter id, not the basename. Move = file rename + one-row path update
@@ -952,8 +965,11 @@ notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: 
 /**
  * Move/rename a note or attachment. Shared by this router's POST /move and
  * POST /api/v1/notes/move — throws NotesOpError so each edge maps its shape.
+ * A locked note moves only for the person (`person: true`, the caller's
+ * isPersonCaller; left out, the caller is not the person), and never onto a note
+ * Walnut writes itself (core/notes/locked-note-moves.ts).
  */
-export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }> {
+export async function moveNote(from: unknown, to: unknown, opts: { person?: boolean } = {}): Promise<{ ok: true }> {
   ensureIndexBootstrap()
   if (typeof from !== 'string' || typeof to !== 'string') {
     throw new NotesOpError('from and to (strings) are required', 400)
@@ -987,12 +1003,13 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
     if (err.code !== 'ENOENT') throw err
     // ENOENT is expected — destination is free, proceed
   }
-
-  // Move file. A drawing moves under its note lock, so a save in flight cannot recreate it at
-  // the old path; its companion note follows below.
-  await fsp.mkdir(path.dirname(toFile), { recursive: true })
-  if (isDrawingScene(fromFile)) await withUserFileLock(fromFile, () => fsp.rename(fromFile, toFile))
-  else await fsp.rename(fromFile, toFile)
+  // Move file, under its lock: a save, a drawing save or a Lock in flight cannot write the old path
+  // again, and the locked-note rule reads the bytes that move. A drawing's companion note follows below.
+  await withUserFileLock(fromFile, async () => {
+    await asNotesOp(() => assertLockedNoteMove(fromFile, toFile, { person: opts.person === true }))
+    await fsp.mkdir(path.dirname(toFile), { recursive: true })
+    await fsp.rename(fromFile, toFile)
+  })
   invalidateNotesTree()
 
   const fromRel = noteRelOf(fromFile)
@@ -1009,10 +1026,10 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
 notesV2Router.post('/move', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { from, to } = req.body ?? {}
-    res.json(await moveNote(from, to))
+    res.json(await moveNote(from, to, { person: isPersonCaller(req) }))
   } catch (err) {
     if (err instanceof NotesOpError) {
-      res.status(err.statusCode).json({ error: err.message })
+      res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) })
       return
     }
     next(err)
@@ -1767,7 +1784,7 @@ notesV2Router.post('/folder', async (req: Request, res: Response, next: NextFunc
  * Flat note list with ids (feeds [[ authoring / autocomplete). Shared by
  * GET /api/notes-v2/list and GET /api/v1/notes/list.
  */
-export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; title: string; path: string; name: string; locked?: true }>; moves: MoveMap | null }> {
+export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; title: string; path: string; name: string; locked?: true; hidden?: true }>; moves: MoveMap | null }> {
   ensureIndexBootstrap()
   await ensureNotesDir()
   const rows = listNotes()
@@ -1781,8 +1798,9 @@ export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; titl
         title: r.title,
         path: r.path,
         name: path.basename(r.path, '.md'),
-        // A locked note (core/notes/locked-note.ts): the tree marks it.
+        // A locked or hidden note (core/notes/locked-note.ts): the tree marks it.
         ...(r.locked ? { locked: true as const } : {}),
+        ...(r.hidden ? { hidden: true as const } : {}),
       })),
     }
   }
@@ -1917,8 +1935,8 @@ export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{
       try {
         content = await fsp.readFile(filePath, 'utf-8')
       } catch { return false }
-      // A locked note's tags are inside its ciphertext: it is never rewritten here.
-      if (isLockedNoteText(content)) return false
+      // A locked note's tags are inside its ciphertext, and a hidden note is written only by the person: never rewritten here.
+      if (looksProtectedNoteText(content)) return false
       const next = renameTagInContent(content, from, to, normalizeTag)
       if (next === null) return false
       await fsp.writeFile(filePath, next, 'utf-8')

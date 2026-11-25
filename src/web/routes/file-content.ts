@@ -18,7 +18,8 @@
  * `expectedHash` for optimistic locking (mirrors the notes save contract).
  */
 
-import { isLockedNoteText } from '../../core/notes/locked-note.js'
+import { noteProtection, readableNoteText } from '../../core/notes/locked-note.js'
+import { fileProtection } from '../../core/notes/locked-note-moves.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import os from 'node:os'
@@ -413,6 +414,8 @@ export interface FileContentPayload {
    * back over the whole thing. No hash → the editor stays read-only.
    */
   contentHash?: string
+  /** A hidden note (docs/reference/locked-notes.md): `content` is its frontmatter and stub. */
+  hidden?: true
 }
 
 /**
@@ -624,6 +627,12 @@ export async function readFileContentPayload(
     ? await readPartial(filePath, MAX_FILE_SIZE)
     : await fsp.readFile(filePath)
   const content = buffer.toString('utf-8')
+  // A hidden note's text is shown only on the Notes page (docs/reference/locked-notes.md): every
+  // edge of this read (the Files panel, the phone, a session's `api` call) gets its frontmatter and
+  // stub, and no hash, so the editor stays read-only.
+  if (noteProtection(content) === 'hidden') {
+    return { content: readableNoteText(content), size: stat.size, truncated: false, binary: false, extension: ext, hidden: true }
+  }
   return {
     content,
     size: stat.size,
@@ -885,9 +894,14 @@ export async function writeFileContentPayload(
   // a TAB STILL RUNNING AN OLD BUNDLE is fenced out here, with no reload needed.
   const unverifiedBase = machineWrite && baseFrom !== 'content'
   // Only Walnut's Lock writes a locked note's file (docs/reference/locked-notes.md): a copy written
-  // here would read as locked and could never be edited again.
-  if (isLockedNoteText(content)) {
+  // here would read as locked and could never be edited again. A hidden note is written only on
+  // the Notes page, so this editor never hides one either.
+  const nextKind = noteProtection(content)
+  if (nextKind === 'locked') {
     throw new FileContentError('This text is a locked note\'s file (its mark and envelope): only Walnut\'s Lock writes one.', 400, 'locked_note_text')
+  }
+  if (nextKind === 'hidden') {
+    throw new FileContentError('This text hides a note (its frontmatter carries walnut_hidden: 1): a note is hidden only on the Notes page.', 400, 'hidden_note_text')
   }
   if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
     throw new FileContentError(
@@ -1062,9 +1076,10 @@ function assertOverwritable(current: string, filePath: string): void {
   if (isBinaryContent(Buffer.from(current.slice(0, 8192), 'utf-8'))) {
     throw new FileContentError(`Refusing to overwrite a binary file: ${path.basename(filePath)}`, 415)
   }
-  // A locked note (wherever its file is) is written only through its own route (docs/reference/locked-notes.md).
-  if (isLockedNoteText(current)) {
-    throw new FileContentError(`${path.basename(filePath)} is a locked note: open it in Notes and press Show to change it.`, 423, 'note_locked')
+  // A locked or hidden note (wherever its file is) is written only on the Notes page (docs/reference/locked-notes.md).
+  const kind = noteProtection(current)
+  if (kind) {
+    throw new FileContentError(`${path.basename(filePath)} is a ${kind} note: open it in Notes and press Show to change it.`, 423, `note_${kind}`)
   }
 }
 
@@ -1089,6 +1104,14 @@ export async function serveRawFileContent(
 ): Promise<void> {
   const { filePath, isRemote } = assertPathAllowed(rawPath, rawHost, 'read')
   const ext = path.extname(filePath).slice(1).toLowerCase()
+
+  // A hidden note's bytes never leave here, as a download either: its frontmatter and stub, as the JSON read gives.
+  if (!isRemote && ext === 'md' && (await fileProtection(filePath)) === 'hidden') {
+    let text: string
+    try { text = await fsp.readFile(filePath, 'utf-8') } catch { res.status(404).type('text/plain').send('File not found'); return }
+    await sendRawText(res, ext, readableNoteText(text), req)
+    return
+  }
 
   // Media/PDF/image playback + universal download: byte-exact streaming with
   // Range support. Text decoding would corrupt these, so they take their own path.

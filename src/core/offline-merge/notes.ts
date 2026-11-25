@@ -42,7 +42,7 @@
  * a copy or a letter entry.
  */
 
-import { isLockedNoteText } from '../notes/locked-note.js';
+import { noteProtection } from '../notes/locked-note.js';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { noteKey, notesRoot } from '../notes/note-paths.js';
@@ -257,19 +257,39 @@ async function applyNote(deps: NoteDrainDeps, hooks: NoteApplyHooks, record: Not
   }
   const abs = path.join(deps.root, rel);
   if (!abs.startsWith(deps.root + path.sep)) throw new Error(`note record names a path outside the vault: ${rel}`);
+  // Only Walnut's Lock on the Mac writes a locked note's file, and only the person on the Mac hides
+  // a note (docs/reference/locked-notes.md): a text saved away that is either never lands, as the
+  // note or as a conflict copy. It stays in the entry.
+  const oursKind = record.mode !== 'delete' && ours !== null ? noteProtection(ours) : null;
+  if (oursKind) {
+    const entries = [entryOf(record, {
+      notePath: rel, why: `${oursKind}-text`, kept: 'mac', replica: ours, replicaAt: at,
+      reason: oursKind === 'locked'
+        ? 'the text saved while away is a locked note\'s file, which only Walnut\'s Lock writes, so it was not applied'
+        : 'the text saved while away hides the note, and a note is hidden only on the Mac, so it was not applied',
+    })];
+    hooks.conflicts(entries);
+    return { action: 'kept', path: rel, copies: [], entries };
+  }
   return deps.lock(abs, async () => {
     const mac = await readText(abs);
     const ctxKey = record.noteId ? `id:${record.noteId}` : `path:${rel}`;
     const out: NoteOutcome = { action: 'noop', path: rel, copies: [], entries: [] };
     const vkey = `${deps.hostKey}/${record.opId ?? `seq-${record.seq}`}`;
     const note = (e: Partial<ConflictEntry>): void => { out.entries.push(entryOf(record, { notePath: rel, ...e })); };
-    // A locked note on the Mac is changed only there, by its owner (docs/reference/locked-notes.md):
-    // a save or delete made away never lands over its ciphertext. The user hears of it, and the
-    // words written away stay in the entry (they were typed in a plain copy, before the lock got there).
-    if (isLockedNoteText(mac)) {
+    // A locked or hidden note on the Mac is changed only there, by its owner (docs/reference/locked-notes.md):
+    // a save or delete made away never lands over it. The user hears of it, and the words written
+    // away stay in the entry (they were typed in a plain copy, before the lock or the hide got there).
+    // A hidden one's letter line is its reason (offline-conflict.ts words name only the lock).
+    const macKind = noteProtection(mac);
+    if (macKind) {
       note({
-        why: 'locked', kept: 'mac', replicaAt: at, ...(ours !== null ? { replica: ours } : {}), ...(base !== null ? { base } : {}),
-        reason: 'the note is locked on the Mac, so a change made away was not applied; its text is in this entry: Show the note on the Mac and add it there',
+        why: macKind, kept: 'mac', replicaAt: at, ...(ours !== null ? { replica: ours } : {}), ...(base !== null ? { base } : {}),
+        reason: ours === null
+          ? `the note is ${macKind} on the Mac, so a delete made while away was not applied: only its owner deletes it, on the Mac`
+          : macKind === 'locked'
+            ? 'the note is locked on the Mac, so a change made while away was not applied. The text typed on the other device is kept as plain text in this entry (its "replica" field), in the conflict log file on the Mac the letter names: press Show on the note and add what you want of it there'
+            : 'the note is hidden on the Mac, so a change made while away was not applied; the text typed on the other device is kept in the conflict log on the Mac',
       });
       hooks.conflicts(out.entries);
       out.action = 'kept';

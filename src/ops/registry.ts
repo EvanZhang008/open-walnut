@@ -128,12 +128,6 @@ export interface WalnutOp {
    * `kind: 'content'`; an op with a known large object gives its compact `shape`.
    */
   answer?: OpAnswer
-  /**
-   * Why this op's answer is never kept for a resend (op-calls.ts runOnce): it carries text the person
-   * released once, for a window the route checks on every call (a locked note's text). A copy of the
-   * call then runs again and meets those checks. Guard: tests/core/notes/locked-note-writers-guard.test.ts.
-   */
-  answerNeverKept?: string
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
   resultError?: (result: unknown) => string | undefined
   /**

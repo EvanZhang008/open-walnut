@@ -10,9 +10,10 @@
  * instead of applying it twice. `op_result` reads a call here
  * (src/web/routes/op-calls-v1.ts), then in that ledger.
  *
- * An answer holding a secret (a vault item's fields, a token) is never kept, and a copy from
- * another session under the same id is refused: a replay must never hand a secret past the
- * checks its route makes on every call.
+ * An answer holding a secret (a vault item's fields, a token) is never kept, nor one whose route
+ * said so (`notKept`, lib/answer-not-kept.ts: a locked note's text, whichever op reached it), and a
+ * copy from another session under the same id is refused: a replay must never hand a secret past
+ * the checks its route makes on every call.
  *
  * In memory: a restart forgets the calls, never their writes, which the ledger keeps.
  */
@@ -116,7 +117,6 @@ export async function runOnce(
   callerSid: string | undefined,
   run: () => Promise<OpOutcome>,
   now: () => number = Date.now,
-  neverKeep?: string,
 ): Promise<OpOutcome> {
   const at = now()
   prune(at)
@@ -153,9 +153,9 @@ export async function runOnce(
   try { text = JSON.stringify(outcome) ?? '' } catch { text = '' }
   const bytes = Buffer.byteLength(text)
   // Lost on the way, or refused for now: the next copy runs again, and the ledger answers any
-  // write that applied. Too big or a secret: not held, so a copy runs again too, and meets the
-  // route's own checks.
-  const notKept = neverKeep ? neverKeep
+  // write that applied. Too big, a secret, or a route that said so: not held, so a copy runs again
+  // too, and meets the route's own checks.
+  const notKept = outcome.notKept ? outcome.notKept
     : !text || bytes > MAX_ANSWER_BYTES ? `the answer (${bytes} bytes) was too large to keep`
     : ANSWER_SECRET_KEYS.test(text) ? 'the answer holds a secret, which is never kept' : ''
   if (notKept) record.notKept = notKept

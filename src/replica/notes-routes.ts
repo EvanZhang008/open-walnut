@@ -21,7 +21,7 @@
  * those goes to the Mac first while it answers (the source's `forward`). A copy that
  * keeps every note answers exactly as before: no `partial`, no forward.
  */
-import { isLockedNoteText, readableNoteText } from '../core/notes/locked-note.js'
+import { noteForReader } from '../core/notes/locked-note.js'
 import type { NextFunction, Request, Response } from 'express'
 import { replicaNotesForward, replicaNotesSource, replicaNotesSourceSearches, type NotesSource } from './notes-source.js'
 import { log } from '../logging/index.js'
@@ -103,11 +103,11 @@ async function answer(src: NotesSource, flavor: Flavor, req: Request, res: Respo
     const found = await src.content(raw)
     if (!found) { notFound(res, flavor, 'Note not found'); return true }
     asOf()
-    // A locked note answers its stub, as the Mac's own route does (docs/reference/locked-notes.md).
-    const locked = isLockedNoteText(found.content)
-    const note = locked ? { ...found, content: readableNoteText(found.content), locked: true as const } : found
-    if (flavor === 'v1') res.json({ content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt, ...(locked ? { locked: true } : {}) })
-    else res.json(note)
+    // A locked note answers its stub, and a hidden one its frontmatter and stub, on both flavors:
+    // a replica never answers a hidden note's text, not even to the person (docs/reference/locked-notes.md).
+    const { content, ...kind } = noteForReader(found.content)
+    if (flavor === 'v1') res.json({ content, contentHash: found.contentHash, updatedAt: found.updatedAt, ...kind })
+    else res.json({ ...found, content, ...kind })
     return true
   }
   if (p.startsWith('/backlinks/')) return listing(async () => { const r = await src.backlinks(wildcard(p, '/backlinks/')); asOf(); res.json(withPartial(r)) })

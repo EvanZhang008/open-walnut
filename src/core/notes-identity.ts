@@ -24,7 +24,7 @@
  * and picked up on the next reconcile.
  */
 import fsp from 'node:fs/promises'
-import { isLockedNoteText } from './notes/locked-note.js'
+import { looksProtectedNoteText } from './notes/locked-note.js'
 import path from 'node:path'
 import { noteAbs } from './notes/note-paths.js'
 import { withFileLock } from '../utils/file-lock.js'
@@ -85,7 +85,10 @@ export async function stampAllIds(): Promise<StampAllResult> {
       continue // gone since the walk — deletion reconcile handles it
     }
     const { data } = parseFrontmatter(bytes)
-    if (readId(data) || walnutOwnedNote(relPath)) {
+    // A locked note's file is written only by its lock (docs/reference/locked-notes.md): an id
+    // stamped here would differ from the one inside its ciphertext. A hidden note only by the
+    // person. The indexer ids either by its path.
+    if (readId(data) || walnutOwnedNote(relPath) || looksProtectedNoteText(bytes)) {
       // Already identified (or Walnut's own file, identified by its path) — ensure it is in the index, then move on.
       await reconcileNote(relPath).catch(() => {})
       continue
@@ -224,8 +227,8 @@ export async function mergeNoteIds(opts: {
   // stays on disk verbatim — a redundant duplicate carrying the winner id.
   try {
     const bytes = await withUserFileLock(abs, () => fsp.readFile(abs, 'utf-8'))
-    // A locked note keeps its file as its lock wrote it (docs/reference/locked-notes.md).
-    if (isLockedNoteText(bytes)) throw new Error('a locked note is left as it is')
+    // A locked note keeps its file as its lock wrote it, a hidden note as the person wrote it (docs/reference/locked-notes.md).
+    if (looksProtectedNoteText(bytes)) throw new Error('a locked or hidden note is left as it is')
     const baseHash = computeContentHash(bytes)
     const rewritten = stampId(stripId(bytes), winnerId)
     await withUserFileLock(abs, async () => {

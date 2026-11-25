@@ -20,6 +20,7 @@ import { ApiError } from '@/api/client';
 import { fetchNoteContent } from '@/api/notes-v2';
 import { useEvent } from '@/hooks/useWebSocket';
 import { splitFrontmatter } from '@/components/notes/frontmatter';
+import { HIDDEN_NOTE_LINE, isHiddenNote } from '@/components/notes/locked-note';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { ProjectTrackingView, hasTrackingNote, type TrackingNoteState } from './ProjectTrackingView';
 
@@ -44,8 +45,9 @@ export function ProjectTrackingBlock({ notePath }: ProjectTrackingBlockProps) {
       // setext underline, so `project: … kind: project-tracking updated: …` came
       // out as an <h2> at the top of the section. Same split the notes editor uses
       // (its own comment records the same lesson).
-      const body = splitFrontmatter(content).body;
-      setState({ status: 'present', sanitizedHtml: renderNoteMarkdown(body) });
+      const { frontmatter, body } = splitFrontmatter(content);
+      // A hidden note shows its text only on the Notes page after Show (docs/reference/locked-notes.md).
+      setState({ status: 'present', sanitizedHtml: renderNoteMarkdown(isHiddenNote(frontmatter) ? HIDDEN_NOTE_LINE : body) });
     } catch (err) {
       if (generation.current !== mine) return;
       // 404 is the only answer that means "the note is gone". Everything else is

@@ -14,7 +14,8 @@
  */
 
 import { readRecents } from './CommandPalette';
-import { LockedMark } from './LockedMark';
+import { markOf } from './LockedMark';
+import type { NoteProtection } from './locked-note';
 import { DisclosureChevron } from '@/components/controls';
 
 /** Sentinel "path" used in the expanded-folders set to track this group's collapse state. */
@@ -29,8 +30,8 @@ function basenameNoExt(p: string): string {
 }
 
 interface NotesRecentGroupProps {
-  /** Paths of locked notes: their rows carry the lock (LockedMark). */
-  lockedPaths?: Set<string>;
+  /** Locked and hidden notes by path: their rows carry the mark (LockedMark). */
+  marks?: Map<string, NoteProtection>;
   /** Set of note paths that exist in the current tree (used to skip stale recents). */
   existingPaths: Set<string>;
   /** Active path (highlights the matching row). */
@@ -48,7 +49,7 @@ interface NotesRecentGroupProps {
   onContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
-export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expanded, onToggle, onContextMenu, lockedPaths }: NotesRecentGroupProps) {
+export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expanded, onToggle, onContextMenu, marks }: NotesRecentGroupProps) {
   // Only render recents that still resolve to a file in the current tree.
   const recents = readRecents().filter((p) => existingPaths.has(p)).slice(0, MAX_SHOWN);
   if (recents.length === 0) return null;
@@ -75,7 +76,7 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
             >
               <ClockGlyph />
               <span className="notes-tree-name wn-title">{basenameNoExt(path)}</span>
-              {lockedPaths?.has(path) && <LockedMark />}
+              {markOf(marks, path)}
             </div>
           ))}
         </div>

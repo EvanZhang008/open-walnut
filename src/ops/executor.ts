@@ -22,8 +22,16 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
 import { answerByHeader } from '../lib/answer-by.js'
 import { CALLER_UNPROVEN_HEADER } from '../lib/caller-unproven.js'
+import { answerNotKeptOf } from '../lib/answer-not-kept.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person' | 'agent'; pluginId?: string; unproven?: true }>()
+/**
+ * The op calls a self-call runs inside, innermost first (an op run inside another op's handler
+ * has its caller's as `parent`): a route that says its answer is never kept marks every one of
+ * them, so no call on the way keeps that answer, or one built from it (lib/answer-not-kept.ts).
+ */
+interface KeepMark { notKept?: string; parent?: KeepMark }
+const keepScope = new AsyncLocalStorage<KeepMark>()
 import { getOp, getOpOwner, type HttpBinding, type WalnutOp } from './registry.js'
 import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
@@ -57,16 +65,20 @@ export function resolveApiBase(override?: string): string {
   return `${walnutApiTarget({ given: override }).root}/api/v1`
 }
 
+/**
+ * `notKept` (either outcome): a route this call reached said its answer is never kept, and why
+ * (lib/answer-not-kept.ts): op-calls.ts holds nothing of it for a copy or an op_result read.
+ */
 export type OpOutcome =
   /** `retry`: a self-call on the way got no answer or one a retry may change, though the op answered ok. */
-  | { ok: true; result: unknown; retry?: true }
+  | { ok: true; result: unknown; retry?: true; notKept?: string }
   /**
    * `unreachable`: nothing answered at all (a session's CLI may ask its host daemon instead).
    * `lost`: the request went but its answer did not come back (a timeout, a dropped
    * connection), so a write may have applied. `retry`: a self-call was answered with a status a
    * retry may change (5xx, 408, 429): a copy of the same call runs again (op-calls.ts).
    */
-  | { ok: false; message: string; result?: unknown; unreachable?: true; lost?: true; retry?: true
+  | { ok: false; message: string; result?: unknown; unreachable?: true; lost?: true; retry?: true; notKept?: string
       /** The call named no op, or arguments the op does not take: the caller's to fix, nothing ran. */
       invalidArgs?: true
       /** The HTTP status Walnut's API answered this failure with, when it answered one. */
@@ -259,6 +271,9 @@ async function rawRequest(
   }
 
   prov.answeredAny = true
+  // The route said its answer is never kept: every op call this one runs inside keeps nothing.
+  const notKept = answerNotKeptOf(res.headers)
+  if (notKept) for (let m = keepScope.getStore(); m; m = m.parent) m.notKept ??= notKept
   // The headers came, the body did not (a reset, a timeout mid-answer): the answer was lost.
   let text = ''
   try {
@@ -654,7 +669,13 @@ export async function executeOp(
     // made, say an edit already applied) is told what that first try already applied.
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
-  const outcome = once ? await runOnce(once, op.name, args, explicitSid, run, Date.now, op.answerNeverKept) : await run()
+  // Inside its own keep mark, under its caller's: a route it reaches that says "never kept" marks both.
+  const keep: KeepMark = { parent: keepScope.getStore() }
+  const runMarked = async (): Promise<OpOutcome> => {
+    const o = await keepScope.run(keep, run)
+    return keep.notKept ? { ...o, notKept: keep.notKept } : o
+  }
+  const outcome = once ? await runOnce(once, op.name, args, explicitSid, runMarked) : await runMarked()
   // A key read under its right name, or a read-size count read as its most, says so (parseOpArgs), to every caller.
   const moved = parsed.renamed ? renameNote(op.name, parsed.renamed) : undefined
   // A refusal after a key was read under its right name says so too, or the caller cannot tell what it was told about.

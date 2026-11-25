@@ -98,14 +98,13 @@ export function createPluginNotes() {
       return out
     },
 
-    async read(notePath: string): Promise<{ path: string; content: string; hash: string; locked?: true } | null> {
+    async read(notePath: string): Promise<{ path: string; content: string; hash: string; locked?: true; hidden?: true } | null> {
       const full = notePathOf(inside(notePath))
       try {
         const content = await fsp.readFile(full, 'utf8')
-        // A locked note reads as its stub: its text is the person's alone (docs/reference/locked-notes.md).
-        const { isLockedNoteText, readableNoteText } = await import('../notes/locked-note.js')
-        const locked = isLockedNoteText(content)
-        return { path: noteRelOf(full), content: locked ? readableNoteText(content) : content, hash: computeContentHash(content), ...(locked ? { locked: true } : {}) }
+        // A locked or hidden note reads as its stub: its text is the person's alone (docs/reference/locked-notes.md).
+        const { noteForReader } = await import('../notes/locked-note.js')
+        return { path: noteRelOf(full), hash: computeContentHash(content), ...noteForReader(content) }
       } catch (error: any) {
         if (error?.code === 'ENOENT' || error?.code === 'EISDIR') return null
         throw error

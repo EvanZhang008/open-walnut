@@ -7,7 +7,8 @@
  * The body is capped at LETTER_BODY_MAX bytes in every language (a Han character is 3 bytes):
  * items that do not fit are counted in a "more" line linking the full list.
  */
-import type { ConflictEntry, ConflictLogFile } from '../../offline-merge/conflict-log.js';
+import path from 'node:path';
+import { conflictDir, type ConflictEntry, type ConflictLogFile } from '../../offline-merge/conflict-log.js';
 import {
   LETTER_BODY_MAX, conflictEntryLink, conflictNeedsUser, memoryDocName, noteLink, refusedBySession, taskLink,
 } from '../../offline-merge/letter-rules.js';
@@ -79,6 +80,8 @@ interface Words {
     restored: string;
     moveNotMade: (reason?: string) => string;
     attachmentKept: (copy?: { path: string; link: string }) => string;
+    /** A change to a note locked on the Mac (offline-merge/notes.ts): the file its away text is in, null for a delete. */
+    locked: (logFile: string | null) => string;
   };
 }
 
@@ -132,6 +135,9 @@ const WORDS: ByLang<Words> = {
       restored: 'the note was deleted while away and also edited; the edit won and the note is back.',
       moveNotMade: (reason) => `a move or rename made while away was not made: ${reason ?? 'the note stays where it is'}.`,
       attachmentKept: (c) => `a different picture or file is at this path on the Mac, so it stays; the one saved while away is${c ? ` [${c.path}](${c.link})` : ' beside it'}.`,
+      locked: (f) => (f
+        ? `the note is locked on the Mac, so the change made while away was not applied. The text typed on the other device is kept as plain text in this Mac's conflict log, \`${f}\` (the "replica" field of this item's entry). Press Show on the note and add what you want of it there.`
+        : 'the note is locked on the Mac, so the delete made while away was not applied: only its owner deletes it, on the Mac.'),
     },
   },
   zh: {
@@ -180,6 +186,9 @@ const WORDS: ByLang<Words> = {
       restored: '这条笔记在离线期间被删除，同时又被编辑过；编辑优先，笔记已恢复。',
       moveNotMade: (reason) => `离线期间的一次移动或改名没有执行：${reason ?? '笔记留在原处'}。`,
       attachmentKept: (c) => `Mac 上这个路径已有另一张图片或另一个文件，所以保留它；离线期间保存的那份${c ? `是 [${c.path}](${c.link})` : '在它旁边'}。`,
+      locked: (f) => (f
+        ? `这条笔记在 Mac 上已上锁，所以离线期间的改动没有应用。在另一台设备上输入的文字以明文保存在这台 Mac 的冲突日志里：\`${f}\`（这一项完整记录中的 "replica" 字段）。请在这条笔记上按 Show，把需要的内容加进去。`
+        : '这条笔记在 Mac 上已上锁，所以离线期间的删除没有执行：只有它的主人能在 Mac 上删除它。'),
     },
   },
 };
@@ -195,7 +204,7 @@ function fieldName(w: Words, f: string | undefined): string {
   return f === 'project+group_id' ? w.fields['project+group_id'] : f ?? w.fields.change;
 }
 
-function itemLine(w: Words, e: ConflictEntry): string {
+function itemLine(w: Words, e: ConflictEntry, drainId: string): string {
   const p = (v: unknown): string => preview(w, v);
   const i = w.item;
   switch (e.kind) {
@@ -207,13 +216,18 @@ function itemLine(w: Words, e: ConflictEntry): string {
     case 'parent-refused': return i.parentRefused(p(e.reason));
     case 'create-collision': return i.createCollision(p(e.reason));
     case 'board': return i.board(p(e.reason));
-    case 'note': return noteLine(w, e);
+    case 'note': return noteLine(w, e, drainId);
     case 'memory': return i.memory(e.why === 'conflict');
     case 'conversation': return i.conversation(e.kept === 'replica', p(e.mac), p(e.replica));
   }
 }
 
-function noteLine(w: Words, e: ConflictEntry): string {
+/** The file a drain's entries are kept in on this Mac (conflict-log.ts writes `<drain>.ndjson` there). */
+function logFileOf(drainId: string): string {
+  return path.join(conflictDir(), `${drainId}.ndjson`);
+}
+
+function noteLine(w: Words, e: ConflictEntry, drainId: string): string {
   const n = w.note;
   const copy = e.copyPath ? n.copy(e.copyPath, noteLink(e.copyPath)) : '';
   switch (e.why) {
@@ -226,6 +240,7 @@ function noteLine(w: Words, e: ConflictEntry): string {
     case 'restored': return n.restored;
     case 'move-kept': case 'move-taken': return n.moveNotMade(e.reason);
     case 'attachment-kept': return n.attachmentKept(e.copyPath ? { path: e.copyPath, link: noteLink(e.copyPath) } : undefined);
+    case 'locked': return n.locked(typeof e.replica === 'string' ? logFileOf(drainId) : null);
     default: return `${preview(w, e.reason)}${w.stop}${copy}`;
   }
 }
@@ -266,7 +281,7 @@ export function conflictLetterIn(lang: LetterLang, file: ConflictLogFile): Confl
   for (const i of needed) {
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
-    const line = w.line(targetOf(w, e), `${itemLine(w, e)}${byLine(w, e)}`, entryLink);
+    const line = w.line(targetOf(w, e), `${itemLine(w, e, file.drainId)}${byLine(w, e)}`, entryLink);
     if (Buffer.byteLength(body) + Buffer.byteLength(line) > budget) break;
     body += line;
     links.push(entryLink);
@@ -307,6 +322,7 @@ export const OFFLINE_CONFLICT = letterKind<ConflictLogFile>({
         { kind: 'given-up', seq: 1, recordKind: 'op', taskId: 't-2', reason: 'write timed out' },
         { kind: 'board', seq: 2, recordKind: 'board', boardTaskId: 't-3', reason: 'edit did not match' },
         { kind: 'conversation', seq: 3, recordKind: 'conversation-edit', kept: 'replica', mac: 'Old name', replica: 'New name' },
+        { kind: 'note', seq: 4, recordKind: 'note', notePath: 'Private/journal.md', why: 'locked', kept: 'mac', replica: 'A line typed away.' },
       ],
     },
   ],

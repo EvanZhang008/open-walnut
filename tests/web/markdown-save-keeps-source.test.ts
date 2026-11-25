@@ -34,7 +34,7 @@ const RAW_READS: Record<string, { count: number; why: string }> = {
     count: 3,
     why: 'the raw (source) view mirrors and compares the doc; its edits reach disk through the hook that saves',
   },
-  'hooks/useNoteContent.ts': { count: 1, why: 'after a merge, compares the merged body with the doc before reloading it' },
+  'components/notes/editor-merge.ts': { count: 1, why: 'after a merge, compares the merged body with the doc before reloading it' },
   'components/notes/extensions/markdown-copy.ts': { count: 2, why: 'Markdown for the clipboard, not for disk' },
 }
 
@@ -44,6 +44,7 @@ const SAVERS = [
   'hooks/useNoteContent.ts',
   'hooks/useGlobalNotes.ts',
   'hooks/useFieldContent.ts',
+  'components/notes/useLockedNoteEditor.ts',
 ]
 
 function walk(dir: string): string[] {

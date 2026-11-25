@@ -168,6 +168,9 @@ export function openSearchDb(options: OpenOptions): OpenResult {
   // server on the same home) makes writes fail INSTANTLY with SQLITE_BUSY —
   // observed as vector-backfill writes dying with "database is locked".
   db.pragma('busy_timeout = 5000');
+  // What a delete frees inside a page is zeroed at no extra I/O: a removed doc's text does not
+  // linger in the file (a caller that must also clear free pages does that itself).
+  db.pragma('secure_delete = FAST');
   db.exec(DDL);
 
   let needsRebuild = false;

@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { useSearchParamsNow } from '@/hooks/useSearchParamsNow';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { LockedNotePanel } from '@/components/notes/LockedNotePanel';
+import { CoverButton, HiddenNoteCover, useHiddenNoteShown } from '@/components/notes/HiddenNoteCover';
 import { VAULT_RAW_IO } from '@/components/notes/vault-raw-io';
 import { useNoteContent } from '@/hooks/useNoteContent';
 import { NoteMissingState } from '@/components/notes/NoteMissingState';
@@ -37,7 +38,8 @@ export function PopoutNote() {
     missing,
     createMissing,
     updatedAt,
-    locked,
+    protection,
+    remountKey,
   } = useNoteContent(notePath || null, {
     mayCreate: (p) => following && p === notePath,
     onSavedAs: (_from, to) => setParams({ path: to }, { replace: true }),
@@ -55,13 +57,15 @@ export function PopoutNote() {
   const handleWikiLinkClick = useCallback((target: string) => {
     openPopout('note', { path: target, create: 1 });
   }, []);
+  const cover = useHiddenNoteShown(remountKey);
 
   if (!notePath) {
     return <EmptyState size="pane" icon={ICON_NOTE} title="No note to show" hint="This window was opened without a note path." />;
   }
   if (missing) return <NoteMissingState path={notePath} onCreate={createMissing} onClose={() => window.close()} closeLabel="Close window" />;
-  // A locked note opens hidden here too (docs/reference/locked-notes.md).
-  if (locked && !loading) {
+  // A locked or hidden note opens covered here too (docs/reference/locked-notes.md).
+  if (protection === 'hidden' && !loading && !cover.shown) return <HiddenNoteCover notePath={notePath} onShow={cover.show} />;
+  if (protection === 'locked' && !loading) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         <LockedNotePanel key={notePath} notePath={notePath} onNavigate={(p) => openPopout('note', { path: p, create: 1 })} />
@@ -92,6 +96,8 @@ export function PopoutNote() {
         onApplyExternal={applyExternalChange}
         onDismissExternal={dismissExternalChange}
         rawFlushIO={VAULT_RAW_IO}
+        dictation={protection !== 'hidden'}
+        headerActions={protection === 'hidden' ? <CoverButton onClick={cover.cover} testId="hidden-note-hide" /> : undefined}
         loadingFallback={<LoadingState size="pane" title="Loading note…" />}
       />
     </div>

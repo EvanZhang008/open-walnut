@@ -2,8 +2,11 @@ import type { Editor } from '@tiptap/core';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import { VAULT_RAW_IO } from './vault-raw-io';
 import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
-import { ICON_LOCK, ICON_NOTE } from '@/components/common/Icons';
+import { ICON_NOTE } from '@/components/common/Icons';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
+import { useExperimental } from '@/hooks/useExperimental';
+import { CoverButton, HiddenNoteCover, useHiddenNoteShown } from './HiddenNoteCover';
+import { NoteProtectMenu, type NoteProtectAction } from './NoteProtectMenu';
 
 /**
  * NotesEditorPanel — the /notes-page binding of the shared MarkdownEditorPanel
@@ -14,6 +17,9 @@ import type { PendingExternalChange } from '@/hooks/useNoteContent';
  * The shell (MarkdownEditorPanel) is reused by every other surface — pop-outs,
  * the global-notes widget/popup, task/memory panels — so the editor + toolbar
  * stay identical everywhere.
+ *
+ * A hidden note (docs/reference/locked-notes.md) opens covered (HiddenNoteCover.tsx) until Show,
+ * for this open only; shown, it is the same editor with dictation off and a Hide in its header.
  */
 
 interface NotesEditorPanelProps {
@@ -40,8 +46,13 @@ interface NotesEditorPanelProps {
   onToggleFavorite?: () => void;
   /** Read only (the phone's default for a note, until Edit). */
   readOnly?: boolean;
-  /** Lock the note with the master password (LockedNotePanel shows it then); absent where a note cannot be locked. */
-  onLock?: () => void;
+  /** The note is hidden from AI: it opens covered until Show, whatever the experiment says. */
+  hidden?: boolean;
+  /**
+   * Hide, encrypt or unhide the note (NoteProtectMenu); absent where a note cannot be locked or
+   * hidden. The Lock control shows only with the `locked_notes` experiment on.
+   */
+  onProtect?: (action: NoteProtectAction) => void;
 }
 
 export function NotesEditorPanel({
@@ -60,8 +71,11 @@ export function NotesEditorPanel({
   isFavorite,
   onToggleFavorite,
   readOnly = false,
-  onLock,
+  hidden = false,
+  onProtect,
 }: NotesEditorPanelProps) {
+  const lockOn = useExperimental('locked_notes');
+  const cover = useHiddenNoteShown(remountKey ?? notePath);
   if (!notePath) {
     return (
       <EmptyState
@@ -72,6 +86,7 @@ export function NotesEditorPanel({
       />
     );
   }
+  if (hidden && !cover.shown) return <HiddenNoteCover notePath={notePath} onShow={cover.show} />;
 
   return (
     <MarkdownEditorPanel
@@ -105,10 +120,12 @@ export function NotesEditorPanel({
       onApplyExternal={onApplyExternal}
       onDismissExternal={onDismissExternal}
       rawFlushIO={VAULT_RAW_IO}
-      headerActions={onLock && !readOnly ? (
-        <button type="button" className="btn btn-icon notes-lock-btn" onClick={onLock} aria-label="Lock this note" title="Lock note" data-testid="note-lock">
-          {ICON_LOCK}
-        </button>
+      dictation={!hidden}
+      headerActions={hidden || (onProtect && lockOn && !readOnly) ? (
+        <>
+          {hidden && <CoverButton onClick={cover.cover} testId="hidden-note-hide" />}
+          {onProtect && lockOn && !readOnly && <NoteProtectMenu hidden={hidden} onAction={onProtect} />}
+        </>
       ) : undefined}
       findPrimary
       loadingFallback={

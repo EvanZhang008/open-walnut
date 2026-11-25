@@ -854,5 +854,6 @@ mark.notes-search-mark {
 
 /* A locked note's notice (LockedNotePanel): layout only, the card is the shared NoticeCard. */
 .notes-locked-notice {
-  margin: 8px 16px 0;
+  /* Clear of the floating "Open in new window" button at the right. */
+  margin: 8px 56px 0 16px;
 }

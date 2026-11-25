@@ -44,7 +44,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
-import { withFileLock } from '../../utils/file-lock.js';
+import { withUserFileLock } from '../../utils/user-file-lock.js';
 import { generateNoteId, parseFrontmatter, readId, stampId } from '../parse-frontmatter.js';
 import type { Task } from '../types.js';
 import { TRIAGE_RUNS_NOTE_DIR, TRIAGE_STATE_NOTE } from './batch.js';
@@ -55,7 +55,7 @@ import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { addContextRecoveryFailListener } from '../sessions/context-full-recovery.js';
 import { loadTurnRetriers, turnEndAnsweredNothing, turnMidWorkNow } from '../sessions/turn-run.js';
 import { noteAbsIn } from '../notes/note-paths.js';
-import { isLockedNoteText } from '../notes/locked-note.js';
+import { looksProtectedNoteText } from '../notes/locked-note.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it. */
 export const TRIAGE_RUNS_SUBSCRIBER = 'triage-runs';
@@ -181,7 +181,9 @@ export function triageJournalLine(outcome: JournalOutcome): string {
  * Append one line to this month's journal note, creating it with its skeleton.
  *
  * Writes the file directly (under the same cross-process lock the notes routes
- * take) and then emits the vault's own NOTES_UPDATED contract, which is what the
+ * and Lock take, withUserFileLock: with another lock, Lock could seal the note
+ * between this read and this write, and the plain text would land over the
+ * ciphertext) and then emits the vault's own NOTES_UPDATED contract, which is what the
  * index reconciler and every open window listen to. Not the HTTP note ops: this
  * runs INSIDE the server, on a bus handler, and an HTTP round trip to itself would
  * queue behind the very request pool the note write is supposed to stay out of.
@@ -190,15 +192,15 @@ async function appendToRunsNote(line: string, nowMs: number, home: string): Prom
   const notePath = triageRunsNotePath(nowMs);
   const file = noteAbsIn(home, notePath);
   await mkdir(path.dirname(file), { recursive: true });
-  const wrote = await withFileLock(file, async () => {
+  const wrote = await withUserFileLock(file, async () => {
     let current = '';
     try {
       current = await readFile(file, 'utf-8');
     } catch {
       current = '';
     }
-    // A note the person locked (docs/reference/locked-notes.md) takes no line in the clear.
-    if (isLockedNoteText(current)) return false;
+    // A note the person locked or hid (docs/reference/locked-notes.md) takes no line from triage.
+    if (looksProtectedNoteText(current)) return false;
     if (!current.trim()) current = runsNoteSkeleton(nowMs);
     // A note a human created at this path keeps its own frontmatter; only the id
     // is added, exactly as every other note write in the vault does.

@@ -312,9 +312,10 @@ describe('reading a stored document never loses text silently, on every surface'
               args = { ...read.args, ...JSON.parse(call[2]) as Record<string, unknown> }
             }
             expect(joined).toBe(text)
-            // A 9 KB memory is one MCP answer; on the CLI (8,000 bytes) it pages.
-            if (kind.startsWith('9,012') && surface === 'mcp') expect(pages).toBe(0)
-            if (surface === 'cli') expect(pages).toBeGreaterThan(0)
+            // A 9 KB memory is one MCP answer; under a smaller cap (the CLI's 8,000 bytes, a released
+            // locked note's 8,000 characters on every surface) it pages.
+            if (kind.startsWith('9,012') && surface === 'mcp' && cap > 9_012) expect(pages).toBe(0)
+            if (surface === 'cli' || cap < 9_012) expect(pages).toBeGreaterThan(0)
           } finally { fetcher.mockRestore() }
         })
       }

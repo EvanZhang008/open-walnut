@@ -10,13 +10,11 @@ import {
 import type { Editor } from '@tiptap/core';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
-import { isLockedNote } from '@/components/notes/locked-note';
+import { noteProtectionOf, type NoteProtection } from '@/components/notes/locked-note';
 import { keepUnsavedEdit } from '@/components/notes/locked-note-saves';
-import { threeWayMerge } from '@open-walnut/three-way-merge';
 import { leaderErrorMessage } from '@/api/leader-presence';
-import { entityRefsToMarkdownLinks } from '@/utils/markdown';
-import { normalizeForEditor } from '@/components/notes/notes-content-preprocess';
-import { markdownKeepingSource, loadsAs } from '@/components/notes/editor-keep-source';
+import { markdownKeepingSource } from '@/components/notes/editor-keep-source';
+import { mergeIntoEditor } from '@/components/notes/editor-merge';
 import {
   dropCachedNote, getCachedNote, loadNoteIntoCache, peekCachedNote, putCachedNote, wireNoteContentCacheEvents, type CachedNote,
 } from '@/stores/note-content-cache';
@@ -90,7 +88,7 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
    * later). Now that render shows the new note from the cache when it has it,
    * and the spinner otherwise, never the wrong note.
    */
-  const [doc, setDoc] = useState<{ path: string | null; body: string | null; locked?: boolean }>({ path: null, body: null });
+  const [doc, setDoc] = useState<{ path: string | null; body: string | null; protection?: NoteProtection }>({ path: null, body: null });
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('idle');
   /**
@@ -117,10 +115,10 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   const propPathRef = useRef<string | null>(notePath);
   propPathRef.current = notePath;
   /** Body for the note the load effect is currently serving (always currentPathRef). */
-  // Every caller sets frontmatterRef first, so the mark of a locked note (its outer frontmatter,
-  // docs/reference/locked-notes.md) is read with the body it belongs to.
+  // Every caller sets frontmatterRef first, so the mark of a locked or hidden note (its first
+  // frontmatter block, docs/reference/locked-notes.md) is read with the body it belongs to.
   const setContent = useCallback((body: string | null) => {
-    setDoc({ path: currentPathRef.current, body, ...(isLockedNote(frontmatterRef.current, body) ? { locked: true } : {}) });
+    setDoc({ path: currentPathRef.current, body, protection: noteProtectionOf(frontmatterRef.current) ?? undefined });
   }, []);
   const editorRef = useRef<Editor | null>(null);
   const contentHashRef = useRef<string | null>(null);
@@ -290,25 +288,16 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
     }
     if (currentPathRef.current !== pathToSave || editorRef.current !== editor || editor.isDestroyed) return false;
     const ours = joinFrontmatter(frontmatterRef.current, savedBody(editor));
-    const merge = threeWayMerge(base, ours, theirs.content, { idFrom: 'theirs' });
+    const merge = mergeIntoEditor(editor, base, ours, theirs.content);
     if (!merge.ok) {
       log.warn('notes', 'note save conflict did not merge cleanly', { path: pathToSave, conflicts: merge.conflicts, overBudget: merge.overBudget });
       return false;
     }
     contentHashRef.current = theirs.contentHash;
     lastWrittenRef.current = theirs.content;
-    const { frontmatter, body } = splitFrontmatter(merge.merged);
-    frontmatterRef.current = frontmatter;
-    const shown = editor.storage.markdown.getMarkdown();
-    // The merge keeps the note's own bytes, so compare documents, not spellings.
-    if (body !== shown && !loadsAs(editor, body, shown)) {
-      const { from, to } = editor.state.selection;
-      editor.commands.setContent(normalizeForEditor(entityRefsToMarkdownLinks(body)), { emitUpdate: false });
-      const max = editor.state.doc.content.size;
-      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
-    }
+    frontmatterRef.current = merge.frontmatter;
     dirtyRef.current = merge.merged !== theirs.content;
-    setContent(body);
+    setContent(merge.body);
     log.info('notes', 'note save conflict merged three ways', { path: pathToSave, attempt: mergeTriesRef.current, resave: dirtyRef.current });
     return true;
   }, [setContent]);
@@ -993,7 +982,7 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
         propPathRef.current = to;
         followedPathRef.current = to;
         keptRemountKeyRef.current = { to, key: remountKeyRef.current.key };
-        setDoc((d) => (d.path === from ? { path: to, body: d.body } : d));
+        setDoc((d) => (d.path === from ? { ...d, path: to } : d));
         // A change from elsewhere that came in during the move belongs to the note, now at `to`.
         // (Read afresh: the busy check above saw none, but the move awaited since.)
         const pend = pendingExternalRef.current as PendingExternalChange | null;
@@ -1062,17 +1051,17 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   // `body: null` under the path, which reads as "not loading, no content".
   let content: string | null = null;
   let loading = false;
-  let locked = false;
+  let protection: NoteProtection | null = null;
   if (notePath) {
     if (doc.path === notePath) {
       content = doc.body;
-      locked = !!doc.locked;
+      protection = doc.protection ?? null;
     } else {
       const hit = peekCachedNote(notePath);
       if (hit) {
         const split = splitFrontmatter(hit.content);
         content = split.body;
-        locked = isLockedNote(split.frontmatter, split.body);
+        protection = noteProtectionOf(split.frontmatter);
       } else loading = true;
     }
   }
@@ -1080,8 +1069,8 @@ export function useNoteContent(notePath: string | null, options: NoteContentOpti
   return {
     content,
     loading,
-    /** A locked note: `content` is its stub, its text opens only with the master password (LockedNotePanel). */
-    locked,
+    /** 'locked': `content` is its stub (LockedNotePanel); 'hidden': its text, covered until Show (HiddenNoteCover). */
+    protection,
     updatedAt,
     saveStatus,
     onEditorUpdate,

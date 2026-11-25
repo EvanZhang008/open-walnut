@@ -70,7 +70,6 @@ const STORE_LOCKS = new Set<string>([
   "src/core/stt/voice-archive.ts: join(this.dir(id), 'metadata.json')", // WALNUT_HOME/voice-archive/<id>/metadata.json
   'src/core/suggest-accuracy.ts: file',                         // suggestion accuracy stats
   'src/core/task-manager.ts: TASKS_FILE',                       // the task store
-  'src/core/triage/runs.ts: file',                              // triage run log
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/core/triage/state.ts: file',                             // triage state
   'src/providers/daemon-service-files.ts: ownershipPath',       // daemon dir ownership record
@@ -91,6 +90,7 @@ const USER_CONTENT_WRITERS: Record<string, number> = {
   'src/core/notes-identity.ts': 4,      // initial reads and guarded id writes
   'src/core/notes-indexer.ts': 2,       // initial snapshot and id back-write
   'src/utils/file-ops.ts': 2,           // agent edit + checked write
+  'src/core/triage/runs.ts': 1,         // the triage Runs note, a vault note the person may lock
 };
 
 const LOCK_NAMES = new Set(['withFileLock', 'withFileLockSync']);

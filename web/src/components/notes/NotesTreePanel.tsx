@@ -5,7 +5,7 @@ import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
-import { LockedMark } from './LockedMark';
+import { markOf, protectedNotes } from './LockedMark';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
 import { jumpNeedles, findQueries } from './jump-target';
@@ -209,9 +209,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   const bodyRef = useRef<HTMLDivElement>(null);
   const confirm = useConfirm();
   const alert = useAlert();
-  // Locked notes (docs/reference/locked-notes.md) carry a lock in their row; the list says which.
+  // Locked and hidden notes (docs/reference/locked-notes.md) carry a mark in their row; the list says which.
   const notesList = useNotesListCorpus(true);
-  const lockedPaths = useMemo(() => new Set(notesList.filter((n) => n.locked).map((n) => n.path)), [notesList]);
+  const marks = useMemo(() => protectedNotes(notesList), [notesList]);
 
   // Reveal-in-tree: expand every ancestor folder of revealPath, then scroll the
   // node into view. Re-fires whenever revealNonce changes (so the locate button
@@ -938,7 +938,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         ) : (
           <span className="notes-tree-name wn-title">{node.name.replace(/\.md$/, '')}</span>
         )}
-        {!isRenaming && lockedPaths.has(node.path) && <LockedMark />}
+        {!isRenaming && markOf(marks, node.path)}
       </div>
     );
   };
@@ -1012,7 +1012,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           onSelect={onSelect}
           onToggleFavorite={onToggleFavorite}
           onContextMenu={handlePathContextMenu}
-          lockedPaths={lockedPaths}
+          marks={marks}
         />
       )}
 
@@ -1026,7 +1026,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           expanded={recentExpanded}
           onToggle={toggleRecent}
           onContextMenu={handlePathContextMenu}
-          lockedPaths={lockedPaths}
+          marks={marks}
         />
       )}
 
@@ -1096,7 +1096,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                         <span className="notes-tree-name notes-search-file-name wn-title" title={r.path}>
                           <HighlightedTitle text={label.name} query={searchQuery} tokens={searchTokens} />
                         </span>
-                        {lockedPaths.has(r.path) && <LockedMark />}
+                        {markOf(marks, r.path)}
                         {label.title && (
                           <span className="notes-search-note-title wn-title">
                             <HighlightedTitle text={label.title} query={searchQuery} tokens={searchTokens} />
@@ -1181,15 +1181,15 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           {contextMenu.node.kind === 'attachment' && (
             <button onClick={() => handleReveal(contextMenu.node.path, 'app')}>Open in default app</button>
           )}
-          {/* Chat-column launchers — a fresh Walnut Agent conversation, or a
-              real Claude Code session (full MCP/skills config), opened on this
-              note/folder. Both land as named entries in the pane's switcher. */}
-          {onStartAgentChat && contextMenu.node.kind !== 'attachment' && (
+          {/* Chat-column launchers (a fresh Walnut Agent conversation, or a real Claude Code session),
+              opened on this note/folder as named entries in the pane's switcher. Never on a locked
+              or hidden note: no agent is opened on one (docs/reference/locked-notes.md). */}
+          {onStartAgentChat && contextMenu.node.kind !== 'attachment' && !marks.has(contextMenu.node.path) && (
             <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onStartAgentChat(p); }}>
               New Note Agent chat
             </button>
           )}
-          {onStartSession && contextMenu.node.kind !== 'attachment' && (
+          {onStartSession && contextMenu.node.kind !== 'attachment' && !marks.has(contextMenu.node.path) && (
             <button onClick={() => { const p = contextMenu.node.path; setContextMenu(null); onStartSession(p); }}>
               Start Claude Code session
             </button>

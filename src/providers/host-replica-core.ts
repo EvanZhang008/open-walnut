@@ -19,7 +19,7 @@
  * Imported by daemon-standalone.ts (createHostReplica). The factory body references NOTHING at module scope; every side effect arrives through deps.
  * (locked-note.ts is pure text parsing: a locked note reads as its stub here as on the Mac.)
  */
-import { isLockedNoteText, readableNoteText } from '../core/notes/locked-note.js'
+import { noteForReader, readableNoteText } from '../core/notes/locked-note.js'
 
 export type ReplicaKind = 'notes' | 'memory' | 'skills'
 
@@ -631,14 +631,14 @@ export function createHostReplica(deps: HostReplicaDeps) {
     const row = rowIn(v, k)
     const raw = row ? readBody(home, 'notes', k, v) : null
     if (!row || raw === null) return fail('not_found', `Note not found in this host's copy: ${k}`)
-    // A locked note reads as its stub, never its ciphertext (docs/reference/locked-notes.md).
-    const locked = isLockedNoteText(raw)
-    const content = locked ? readableNoteText(raw) : raw
+    // A locked note reads as its stub, never its ciphertext, and a hidden one as its frontmatter
+    // and stub (docs/reference/locked-notes.md): a replica never answers the person's text.
+    const { content, ...kind } = noteForReader(raw)
     const updatedAt = row.m && typeof row.m.updatedAt === 'string' ? row.m.updatedAt : undefined
     const noteId = row.m && typeof row.m.id === 'string' ? row.m.id : undefined
     return ok({
       path: k.replace(/\.md$/i, ''), content, contentHash: row.h,
-      ...(updatedAt ? { updatedAt } : {}), ...(noteId ? { id: noteId } : {}), ...(locked ? { locked: true } : {}),
+      ...(updatedAt ? { updatedAt } : {}), ...(noteId ? { id: noteId } : {}), ...kind,
       offline: true, as_of: ageOf(home, 'notes'),
       outcome: `Read from this host's copy of the notes (as of ${ageOf(home, 'notes')}). ${why}`,
       next: 'A note_write or note_edit needs the Walnut server; keep contentHash for it.',

@@ -22,6 +22,8 @@ import {
   VAULT_FORMAT, VAULT_VERSION, VaultError, aadWrap, commitSides, isOpen, loadFile, loadMachine, openGen, prepareSides, requireOpen,
   mutate, rewrapItems, saveFile, serial, setAsideMachine, setOpen, tryOpenWithMachine, writeMachine, decryptAll, type MachineFile, type VaultFile,
 } from './state.js'
+// The locked-notes key's backup in the data folder follows every vault write (a new master password too).
+import './locked-notes-key-backup.js'
 
 export { VAULT_FORMAT, VAULT_VERSION, VaultError, closeVault, isOpen, openKey, resetVaultForTest } from './state.js'
 export type { VaultFile } from './state.js'

@@ -17,6 +17,7 @@ import { WALNUT_HOME } from '../constants.js'
 import { noteAbs, notesRoot } from './notes/note-paths.js'
 import { globalNotesFile } from './notes/vault-files.js'
 import { log } from '../logging/index.js'
+import { looksProtectedNoteText } from './notes/locked-note.js'
 
 /** Hard-coded legacy paths (no longer referenced by constants) */
 const OLD_ROOT_FILE = path.join(WALNUT_HOME, 'global-notes.md')
@@ -46,6 +47,8 @@ export async function migrateGlobalNotes(): Promise<void> {
 
   try {
     const content = await fsp.readFile(source, 'utf-8')
+    // A locked or hidden file is never copied as a note Walnut writes (docs/reference/locked-notes.md).
+    if (looksProtectedNoteText(content)) { log.memory.warn('global notes migration skipped: the old file is a locked or hidden note'); return }
     await fsp.writeFile(target, content, 'utf-8')
     log.memory.info(`Migrated ${path.basename(source)} → notes/global-notes.md`)
   } catch (err) {

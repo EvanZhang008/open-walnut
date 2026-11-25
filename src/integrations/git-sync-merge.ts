@@ -21,9 +21,8 @@
  *     committed with both parents, so the losing version stays in history.
  */
 
-import { isLockedNoteText } from '../core/notes/locked-note.js';
 import {
-  contentClock, must, removalLine, replayCommits, writeTreeEntries, type GitStatusRunner,
+  contentDecision, must, removalLine, replayCommits, writeTreeEntries, type GitStatusRunner,
 } from './git-sync-rewrite-carry.js';
 import { mergeRecords } from './git-sync-records.js';
 
@@ -72,41 +71,27 @@ export type LwwSide = 'local' | 'remote';
 export type LwwClock = 'content' | 'commit' | 'records' | 'locked';
 
 /**
- * Which side of a conflicted path is the newer write. The store's own
- * `lastUpdated` (JSON only) decides first: commit time is the phase of each
- * box's 30 s auto-save tick, not data freshness (2026-08-23: a replica's empty
- * store committed 14 s after the primary's copy holding the user's message won
- * on commit time). Then the newest commit touching the path on each side; a tie
- * goes to the remote (deterministic; the companion-box-pulls-the-Mac case).
+ * Which side of a conflicted path is the newer write. What the content says
+ * decides first (contentDecision, shared with the rewrite replay): a store's own
+ * `lastUpdated` (JSON only), since commit time is the phase of each box's 30 s
+ * auto-save tick, not data freshness (2026-08-23: a replica's empty store
+ * committed 14 s after the primary's copy holding the user's message won on
+ * commit time); and a note locked (or hidden) on one side only keeps that side,
+ * so a plain copy never goes over the ciphertext or shows a hidden note again
+ * (the plain one is the other parent's). Then the newest commit touching the path on each side; a tie goes
+ * to the remote (deterministic; the companion-box-pulls-the-Mac case).
  * `mine` and `theirs` are `"<mode> <oid>"`, absent for a side that deleted it.
  */
 export async function chooseLww(
   run: GitStatusRunner, file: string, mine: string | undefined, theirs: string | undefined,
   localHead: string, remoteHead: string,
 ): Promise<{ side: LwwSide; clock: LwwClock }> {
-  if (file.endsWith('.json')) {
-    const [a, b] = await Promise.all([contentClock(run, mine), contentClock(run, theirs)]);
-    if (a !== null && b !== null && a !== b) return { side: a > b ? 'local' : 'remote', clock: 'content' };
-  }
-  // A note locked on one side only (docs/reference/locked-notes.md): the locked side stays, so an
-  // older plain copy never goes over the ciphertext; the plain one is the other parent's.
-  if (file.endsWith('.md')) {
-    const [a, b] = await Promise.all([lockedBlob(run, mine), lockedBlob(run, theirs)]);
-    if (a !== b) return { side: a ? 'local' : 'remote', clock: 'locked' };
-  }
+  const decided = await contentDecision(run, file, mine, theirs);
+  if (decided) return decided;
   const touched = async (ref: string): Promise<number> =>
     Number((await run(['--literal-pathspecs', 'log', '-1', '--format=%ct', ref, '--', file])).stdout.trim() || '0');
   const [localAt, remoteAt] = await Promise.all([touched(localHead), touched(remoteHead)]);
   return { side: localAt > remoteAt ? 'local' : 'remote', clock: 'commit' };
-}
-
-/** Whether a blob (`"<mode> <oid>"`) is a locked note's file. */
-async function lockedBlob(run: GitStatusRunner, entry: string | undefined): Promise<boolean> {
-  const oid = entry?.split(' ')[1];
-  if (!oid) return false;
-  const size = Number((await run(['cat-file', '-s', oid])).stdout.trim());
-  if (!Number.isFinite(size) || size > 8 * 1024 * 1024) return false;
-  return isLockedNoteText((await run(['cat-file', 'blob', oid])).stdout);
 }
 
 /**

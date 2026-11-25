@@ -197,6 +197,14 @@ async function backupDaily(d: string): Promise<void> {
   } catch { /* a backup is a convenience: the write itself goes on */ }
 }
 
+const savedListeners = new Set<() => void>()
+
+/** Told after every write of vault.json (locked-notes-key-backup.ts keeps its copy current). */
+export function onVaultSaved(listener: () => void): () => void {
+  savedListeners.add(listener)
+  return () => { savedListeners.delete(listener) }
+}
+
 /** Write `f` (a copy: the cache takes it only after the write succeeded). */
 export async function saveFile(f: VaultFile): Promise<void> {
   const d = await dir()
@@ -206,6 +214,7 @@ export async function saveFile(f: VaultFile): Promise<void> {
   await writeAtomic(file, next)
   const st = await fsp.stat(file)
   fileCache = { f: next, mtimeMs: st.mtimeMs, size: st.size }
+  for (const listener of savedListeners) { try { listener() } catch { /* a listener never fails the write */ } }
 }
 
 export async function decryptAll(f: VaultFile, key: Uint8Array): Promise<Map<string, VaultItem>> {

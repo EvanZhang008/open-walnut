@@ -32,6 +32,7 @@ import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalRequester }
 import { ambientTestRun } from '../../core/test-run.js'
 import type { SessionProc } from '../../core/approvals/caller-proof.js'
 import { clause } from '../../utils/format.js'
+import { notSeenInsideWhy } from '../../core/approvals/seen-inside.js'
 
 export const approvalsV1Router = Router()
 
@@ -198,12 +199,8 @@ async function proveIdentity(req: Request, body: Record<string, unknown>, out: A
 
 /** A single-use step needs its asking process seen inside the session it names (403 otherwise). */
 function assertSeenInside(requester: ApprovalRequester, E: new (status: number, code: string, message: string) => Error): void {
-  if (requester.identity === 'verified' && requester.sessionId) return
-  const why = !requester.sessionId
-    ? 'the request names no session Walnut can check'
-    : requester.check === 'outside'
-      ? 'the asking process is not inside the session it names'
-      : 'Walnut could not check that the asking process is inside the session it names (a call through a host daemon\'s socket, a remote host, or a check that timed out)'
+  const why = notSeenInsideWhy(requester)
+  if (!why) return
   throw new E(403, 'unverified_session', `A single-use approval needs the asking process seen inside its session, and ${clause(why)}. Run walnut approve from that session's own shell on this machine, with the walnut CLI reaching Walnut over HTTP.`)
 }
 

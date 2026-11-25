@@ -1,14 +1,23 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
-import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, pagedResult } from './doc-page.js';
+import { DOC_PART_INPUT, pagedResult } from './doc-page.js';
 
 /**
  * Locked notes for agents (core/notes/locked-note-ask.ts, docs/reference/locked-notes.md). A note
  * the user locked is private and hand-written: an agent reads only its stub (note_read says
  * `locked: true`). These ops are the one way past it, and each needs the user's own yes, given
  * with their Passwords master password; there is no op that locks, unlocks or reads one unasked.
+ * No answer of theirs is kept for a resend: their routes say so (lib/answer-not-kept.ts).
  */
+
+/**
+ * A released note's whole answer, at most, on every surface. Claude Code writes a large tool answer
+ * to a file on the session's host (tool-results/*.txt), which would leave the user's private text
+ * there in the clear; the 23,000-character pages a document gets did (2026-11-25 review). So this op
+ * answers in pages no larger than a shell's `walnut tools call` gets, and reads on by `next`.
+ */
+export const LOCKED_NOTE_ANSWER_MAX = 8_000;
 
 const USE_RULE = 'The text is the user\'s private writing: use it only for the purpose you gave, quote no more than the step needs, '
   + 'and never put it in a file, a commit, a log, a search, a memory or another message.';
@@ -44,7 +53,8 @@ defineOp({
     + 'on without that note, and say why in `purpose`, in words the user reads before deciding. The user approves on a card, typing '
     + 'their Passwords master password; Approvals being off does not answer it. Answers `status: "pending"` with requestId and '
     + 'waitToken: then locked_note_wait. A yes lets this task read the note for 10 minutes; "edit" lets it read and save it '
-    + '(locked_note_save) for 30 minutes. Refusals: not_locked (read it with note_read), denied (do not ask again unless the user says so), '
+    + '(locked_note_save) for 30 minutes. Refusals: not_locked (read it with note_read), note_hidden (the user hid it: no tool reads it), '
+    + 'denied (do not ask again unless the user says so), '
     + 'agent_paused (three denials: stop asking), too_many_asks. ' + USE_RULE,
   input: {
     path: z.string().min(1).max(1000).describe('Vault-relative path of the locked note (from note_read or note_search)'),
@@ -70,12 +80,11 @@ defineOp({
     ...DOC_PART_INPUT,
   },
   bind: { method: 'POST', path: '/vault/notes/agent/ask/:id/wait' },
-  answerNeverKept: 'the answer is a locked note\'s text, released for a window the route checks on every call',
   timeoutMs: 20_000,
   mapResult: ({ body }) => askOutcome(body),
   // Its answer is the note's text the user released: a document, paged like note_read (doc-page.ts), never cut.
   answer: {
-    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    kind: 'content', max: LOCKED_NOTE_ANSWER_MAX,
     shape: ({ result, args, max, surface }) => pagedResult(result, 'content', args, waitAgain(args), { fit: { max, surface } }),
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
@@ -96,7 +105,6 @@ defineOp({
     expectedHash: z.string().min(1).describe('contentHash of the text you edited'),
   },
   bind: { method: 'POST', path: '/vault/notes/agent/ask/:id/save' },
-  answerNeverKept: 'a save under a locked-note ask runs only inside its window, checked on every call',
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'Saved; the note stays locked.', 'Keep contentHash for another save in the same window.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

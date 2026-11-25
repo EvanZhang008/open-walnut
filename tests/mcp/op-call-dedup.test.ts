@@ -21,7 +21,8 @@ import { executeOp } from '../../src/ops/index.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { opIdMiddleware } from '../../src/web/middleware/op-id.js'
 import { _setLedgerFileForTesting } from '../../src/core/offline-merge/ledger.js'
-import { _heldBytesForTesting, _resetOpCallsForTesting, runOnce } from '../../src/ops/op-calls.js'
+import { _heldBytesForTesting, _resetOpCallsForTesting, opCallOf, runOnce } from '../../src/ops/op-calls.js'
+import { markAnswerNotKept } from '../../src/lib/answer-not-kept.js'
 import { defineOp } from '../../src/ops/registry.js'
 import { handleGatewayCapability } from '../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../src/core/peers/peer-throttle.js'
@@ -48,6 +49,8 @@ let notePuts = 0
 let rowAnswers: Record<string, number[]> = {}
 let rowPatches: string[] = []
 let secretUses = 0
+/** How often the route that says its answer is never kept answered (a locked note's, stood in for). */
+let releasedUses = 0
 /** When set, the next request to this path drops its answer after it applied. */
 let dropPath = ''
 /** When set, the next POST /messages sends its headers and then breaks its body. */
@@ -74,6 +77,24 @@ defineOp({
   bind: { method: 'POST', path: '/probe-secret' },
   tags: { readonly: false, remote: 'allow' },
 })
+// Bound to a route that says its answer is never kept, and one that runs that op inside its handler.
+defineOp({
+  name: 'test_probe_released',
+  title: 'probe', description: 'probe',
+  input: { id: z.string() },
+  bind: { method: 'POST', path: '/vault/probe-released' },
+  tags: { readonly: false, remote: 'allow' },
+})
+defineOp({
+  name: 'test_probe_nested',
+  title: 'probe', description: 'probe',
+  input: { id: z.string() },
+  handler: async (args) => {
+    const inner = await executeOp('test_probe_released', { id: args.id }, { apiBase, origin: LOCAL_ORIGIN })
+    return { echoed: inner.ok ? inner.result : null }
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -90,6 +111,7 @@ beforeEach(async () => {
   rowAnswers = {}
   rowPatches = []
   secretUses = 0
+  releasedUses = 0
   dropPath = ''
   cutBody = false
   const app = express()
@@ -149,6 +171,13 @@ beforeEach(async () => {
     res.status(status).json(status < 400 ? { id: req.params.id } : { error: { code: 'busy', message: 'try again' } })
   })
   app.post('/api/v1/probe-secret', (_req, res) => { secretUses += 1; res.json({ item: 'x', password: `p-${secretUses}` }) })
+  // No secret key name in it: only the route's word keeps it out of the op-call registry. Under
+  // /vault, as the locked-note routes are, so the applied-ops ledger keeps none of it either.
+  app.post('/api/v1/vault/probe-released', (_req, res) => {
+    releasedUses += 1
+    markAnswerNotKept(res, 'a released note')
+    res.json({ status: 'released', content: `private text ${releasedUses}` })
+  })
   app.use('/api/v1', opCallsV1Router)
   server = http.createServer(app)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -345,6 +374,19 @@ describe('runOnce (src/ops/op-calls.ts)', () => {
     expect(runs).toBe(1)
   })
 
+  it('an outcome a route said is never kept is held nowhere: not the record, not the bytes, and a copy runs again', async () => {
+    let runs = 0
+    const released = () => { runs += 1; return Promise.resolve({ ok: true as const, result: { content: `private ${runs}` }, notKept: 'its route never lets its answer be kept' }) }
+    expect(await runOnce('oc-aaaaaaaa3', 'x', {}, 'sid-a', released)).toMatchObject({ ok: true, result: { content: 'private 1' } })
+    const record = opCallOf('oc-aaaaaaaa3')
+    expect(record).toMatchObject({ notKept: 'its route never lets its answer be kept', rerun: true })
+    expect(record?.outcome).toBeUndefined()
+    expect(JSON.stringify(record)).not.toContain('private')
+    expect(_heldBytesForTesting()).toBe(0)
+    expect(await runOnce('oc-aaaaaaaa3', 'x', {}, 'sid-a', released)).toMatchObject({ result: { content: 'private 2' } })
+    expect(runs).toBe(2)
+  })
+
   it('a lost outcome is not replayed: the next copy runs again', async () => {
     let runs = 0
     const lost = () => { runs += 1; return Promise.resolve({ ok: false as const, message: 'timed out', lost: true as const }) }
@@ -369,6 +411,27 @@ describe('what the review of the first version found', () => {
     // which keeps no secret either, answers its status; a vault route the ledger skips runs again).
     const again = await runAs('sid-a', 'test_probe_secret', { item: 'x' }, callId)
     expect(JSON.stringify(again)).not.toContain('p-1')
+  })
+
+  it('an answer whose route says it is never kept is held by no op that reached it: `api`, a bound op, an op run inside another', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['api', { method: 'POST', path: '/api/v1/vault/probe-released', body: { id: 'a' } }],
+      ['test_probe_released', { id: 'a' }],
+      ['test_probe_nested', { id: 'a' }],
+    ]
+    for (const [name, args] of calls) {
+      const callId = newCallId()
+      const before = releasedUses
+      const first = await runAs('sid-a', name, args, callId)
+      expect(JSON.stringify(first.ok && first.result), name).toContain(`private text ${before + 1}`)
+      const read = await executeOp('op_result', { call_id: callId }, { apiBase, origin: LOCAL_ORIGIN, callerSid: 'sid-a' })
+      expect(read.ok && read.result, name).toMatchObject({ state: 'done', not_kept: expect.stringMatching(/never lets its answer be kept \(a released note\)/) })
+      expect(JSON.stringify(read), name).not.toContain('private text')
+      // A copy is never handed the first answer: it goes to the route again, which checks it again.
+      const again = await runAs('sid-a', name, args, callId)
+      expect(JSON.stringify(again.ok && again.result), name).toContain(`private text ${before + 2}`)
+      expect(releasedUses, name).toBe(before + 2)
+    }
   })
 
   it('a copy from another session under the same id is refused, and its op_result withholds the answer', async () => {

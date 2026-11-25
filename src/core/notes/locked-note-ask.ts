@@ -9,13 +9,19 @@
  *   read: the same ask may read the text for READ_MS after the yes (a long note comes in pages);
  *   edit: the same, for EDIT_MS, and the same task may save the note in that time.
  *
+ * The window starts at the yes, not at the first read: an ask read days later gives nothing. An ask
+ * that names a task's session must come from inside it (approvals/seen-inside.ts), every call: a
+ * session id is only a name, which another process can copy with the wait token. One that names
+ * none asks as its host.
+ *
  * Asks are kept across a restart (kept-asks.ts: the token only as its hash, never the text), so a
  * deploy during a wait asks the person nothing twice; Lock all ends them (endAllLockedNoteAsks).
  * Brakes per asker: at most 2 waiting, and 3 denials in 30 minutes pause its asks for 30 minutes.
  */
 import crypto from 'node:crypto'
-import { LockedNoteError } from './locked-note.js'
+import { HIDDEN_NOTE_AGENT_TEXT, LockedNoteError } from './locked-note.js'
 import { keptMap } from '../kept-asks.js'
+import { notSeenInsideWhy } from '../approvals/seen-inside.js'
 import type { ApprovalRequester } from '../approvals/types.js'
 
 export const EDIT_MS = 30 * 60_000
@@ -43,15 +49,16 @@ interface Ask {
   noteId: string
   /** Set once the person said yes and the text was first released. */
   releasedAt?: number
-  /** Until when the same ask may read the text again (pages of a long note), from the release. */
+  /** Until when the same ask may read the text again (pages of a long note), from the yes. */
   readUntil?: number
-  /** Until when a save is allowed (edit only), from the release. */
+  /** Until when a save is allowed (edit only), from the yes. */
   editUntil?: number
 }
 
 export interface AskDeps {
   askPerson(input: { what: string; detail: string; timeoutMs: number; requester: LockedNoteRequester; testRun?: string }): Promise<{ id: string; waitToken: string; expiresAt: string }>
-  waitApproval(id: string, waitToken: string, waitMs: number): Promise<{ status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled'; answeredBy?: string }>
+  /** `answeredAt`: when the person answered (the approval's answer.at), where the window starts. */
+  waitApproval(id: string, waitToken: string, waitMs: number): Promise<{ status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled'; answeredBy?: string; answeredAt?: string }>
   cancelApproval(id: string): Promise<void>
   /** The note's text, as the person reads it (locked-note-store.ts readLockedNote). */
   read(path: string): Promise<{ content: string; contentHash: string; updatedAt: string; path: string }>
@@ -59,6 +66,8 @@ export interface AskDeps {
   save(path: string, content: unknown, expectedHash: unknown): Promise<{ contentHash: string; updatedAt: string; path: string }>
   /** The id of the locked note at `path` now ('' when it has none), or null when no locked note is there. */
   lockedNoteId(path: string): Promise<string | null>
+  /** Whether a hidden note is at `path` (docs/reference/locked-notes.md, "Hidden notes"): no ask opens one. */
+  hiddenNote?(path: string): Promise<boolean>
   now?: () => number
 }
 
@@ -72,6 +81,20 @@ const refuse = (status: number, code: string, message: string): never => { throw
 
 function askerOf(r: LockedNoteRequester): string {
   return r.taskId ? `task:${r.taskId}` : `host:${r.host}`
+}
+
+/** A call that names a task's session comes from inside it, as Walnut saw (403 unverified_session). */
+function seenInside(r: LockedNoteRequester): void {
+  if (!r.taskId && !r.sessionId) return
+  if (r.identity === 'verified') return
+  refuse(403, 'unverified_session', `Only the session that asked opens a locked note, and Walnut must see the call come from inside it: ${notSeenInsideWhy(r) ?? 'it was not seen there'}. `
+    + 'Call it from that session through its own Walnut tools (its MCP tools, or the walnut CLI in its shell). Nothing was given.')
+}
+
+/** The ask's own task, seen from inside its session. */
+function sameAsker(a: Ask, requester: LockedNoteRequester): void {
+  seenInside(requester)
+  if (askerOf(requester) !== a.asker) refuse(403, 'not_your_ask', 'Only the task that asked may use this ask.')
 }
 
 function cleanPurpose(raw: unknown): string {
@@ -91,7 +114,12 @@ export async function askLockedNote(input: { path: unknown; purpose: unknown; ac
   const notePath = path.endsWith('.md') ? path : `${path}.md`
   const access: LockedNoteAccess = input.access === 'edit' ? 'edit' : 'read'
   const purpose = cleanPurpose(input.purpose)
+  // A card naming a task the call is not seen inside would be a yes nobody can use, or the wrong one.
+  seenInside(input.requester)
   const noteId = await deps.lockedNoteId(notePath)
+  if (noteId === null && await deps.hiddenNote?.(notePath)) {
+    refuse(409, 'note_hidden', `This note is hidden, not locked, and no ask opens it: no tool reads a hidden note. ${HIDDEN_NOTE_AGENT_TEXT}`)
+  }
   if (noteId === null) refuse(409, 'not_locked', 'This note is not locked: read it with note_read.')
   const now = (deps.now ?? Date.now)()
   for (const [id, a] of asks) if (a.readUntil ? now > a.readUntil : now - a.at > ASK_TIMEOUT_MS + 60_000) asks.delete(id)
@@ -111,7 +139,7 @@ export async function askLockedNote(input: { path: unknown; purpose: unknown; ac
       ? `If you approve, it may read this note and save changes to it for the next ${EDIT_MS / 60_000} minutes. Nothing else.`
       : `If you approve, it may read this note for the next ${READ_MS / 60_000} minutes. It cannot change it.`,
     'Approving asks for your Passwords master password.',
-    `The text then goes into that agent's conversation on ${input.requester.host}, and what it writes about the note can be searched like any of its words.`,
+    `The text then goes into that agent's conversation on ${input.requester.host} (a long answer may also be written to a file there), and what it writes about the note can be searched like any of its words.`,
   ].join('\n')
   const made = await deps.askPerson({ what, detail, timeoutMs: ASK_TIMEOUT_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}) })
   asks.set(made.id, { approvalId: made.id, at: now, tokenHash: sha(made.waitToken), path: notePath, access, asker, requester: input.requester, noteId: noteId! })
@@ -133,9 +161,8 @@ function released(a: Ask, note: { path: string; content: string; contentHash: st
   }
 }
 
-/** The ask's own task only, and only while the same note is at its path. */
-async function sameAskerAndNote(id: string, a: Ask, requester: LockedNoteRequester, deps: AskDeps): Promise<void> {
-  if (askerOf(requester) !== a.asker) refuse(403, 'not_your_ask', 'Only the task that asked may use this ask.')
+/** Only while the same note (by its id) is at the ask's path. */
+async function sameNote(id: string, a: Ask, deps: AskDeps): Promise<void> {
   if ((await deps.lockedNoteId(a.path)) !== a.noteId) {
     asks.delete(id)
     refuse(409, 'note_changed', 'The note at this path is no longer the one the user approved (moved, replaced or unlocked): nothing was given. Ask again if it is still needed.')
@@ -145,10 +172,10 @@ async function sameAskerAndNote(id: string, a: Ask, requester: LockedNoteRequest
 /** Wait for the person's answer; on a yes, the text, again (by pages) until the ask's window ends. */
 export async function waitLockedNote(id: string, token: unknown, waitMs: number, requester: LockedNoteRequester, deps: AskDeps) {
   const a = own(id, token)
-  if (askerOf(requester) !== a.asker) refuse(403, 'not_your_ask', 'Only the task that asked may use this ask.')
+  sameAsker(a, requester)
   if (a.releasedAt) {
     if ((deps.now ?? Date.now)() > a.readUntil!) { asks.delete(id); refuse(403, 'read_ended', 'The time to read this note ended: ask again if it is still needed.') }
-    await sameAskerAndNote(id, a, requester, deps)
+    await sameNote(id, a, deps)
     return released(a, await deps.read(a.path))
   }
   const since = epoch
@@ -162,12 +189,17 @@ export async function waitLockedNote(id: string, token: unknown, waitMs: number,
     refuse(403, 'denied', 'The user said no. Do not ask again unless they say so.')
   }
   if (r.status !== 'approved') { asks.delete(id); return { status: r.status } }
-  await sameAskerAndNote(id, a, requester, deps)
-  const note = await deps.read(a.path)
+  // The window runs from the yes (the card said "for the next 10 minutes"), never from a first read
+  // days later. No answer time (an older record) counts from the ask, which came before it.
   const now = (deps.now ?? Date.now)()
+  const answered = r.answeredAt ? Date.parse(r.answeredAt) : NaN
+  const until = Math.min(now, Number.isFinite(answered) ? answered : a.at) + (a.access === 'edit' ? EDIT_MS : READ_MS)
+  if (now > until) { asks.delete(id); refuse(403, 'read_ended', 'The time to read this note ended before it was read: ask again if it is still needed. Nothing was given.') }
+  await sameNote(id, a, deps)
+  const note = await deps.read(a.path)
   a.releasedAt = now
-  a.readUntil = now + (a.access === 'edit' ? EDIT_MS : READ_MS)
-  if (a.access === 'edit') a.editUntil = a.readUntil
+  a.readUntil = until
+  if (a.access === 'edit') a.editUntil = until
   asks.changed()
   return released(a, note, r.answeredBy)
 }
@@ -175,10 +207,15 @@ export async function waitLockedNote(id: string, token: unknown, waitMs: number,
 /** Save a locked note under an approved edit ask (same task, same note, inside its window). */
 export async function saveLockedNoteForAgent(id: string, token: unknown, content: unknown, expectedHash: unknown, requester: LockedNoteRequester, deps: AskDeps) {
   const a = own(id, token)
+  sameAsker(a, requester)
+  // A save on no hash would overwrite whatever the person saved meanwhile, with no conflict shown.
+  if (typeof expectedHash !== 'string' || !expectedHash.trim()) {
+    refuse(400, 'expected_hash_required', 'Pass expectedHash: the contentHash locked_note_wait gave, or the one your last save answered. Nothing was saved.')
+  }
   const now = (deps.now ?? Date.now)()
   if (a.access !== 'edit' || !a.editUntil) refuse(403, 'not_approved', 'This ask was not approved for changes: ask with access "edit".')
   if (now > a.editUntil!) { asks.delete(id); refuse(403, 'edit_ended', 'The time to change this note ended: ask again if it is still needed.') }
-  await sameAskerAndNote(id, a, requester, deps)
+  await sameNote(id, a, deps)
   return deps.save(a.path, content, expectedHash)
 }
 

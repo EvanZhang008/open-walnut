@@ -26,7 +26,7 @@
  * Cloud companion only.
  */
 
-import { isLockedNoteText } from './notes/locked-note.js'
+import { noteProtection } from './notes/locked-note.js'
 import { log } from '../logging/index.js'
 import { noteKey } from './notes/note-paths.js'
 import { GLOBAL_NOTES_KEY } from './notes/vault-files.js'
@@ -412,12 +412,18 @@ export function companionNoteSave(req: { path: unknown; content?: unknown; expec
   const shown = view && view.has(key) ? view.get(key) : undefined
   const current = shown === undefined ? replica.copyBody(home, key) : shown === null ? null : shown.body
   const currentHash = current === null ? null : replica.hashOf(current)
-  // A locked note is changed only on the Mac, by its owner (docs/reference/locked-notes.md).
-  if (isLockedNoteText(current)) {
-    return { ok: false, code: 'needs_leader', message: 'This note is locked, so it is changed only in Walnut on your Mac.', detail: { why: 'note_locked' } }
+  // A locked or hidden note is changed only on the Mac, by its owner (docs/reference/locked-notes.md).
+  const kind = noteProtection(current)
+  if (kind) {
+    return { ok: false, code: 'needs_leader', message: `This note is ${kind}, so it is changed only in Walnut on your Mac.`, detail: { why: `note_${kind}` } }
   }
-  if (req.mode !== 'delete' && typeof req.content === 'string' && isLockedNoteText(req.content)) {
-    return { ok: false, code: 'bad_request', message: 'This text is a locked note\'s file: only Walnut\'s Lock on your Mac writes one.', detail: { why: 'locked_note_text' } }
+  const nextKind = req.mode !== 'delete' && typeof req.content === 'string' ? noteProtection(req.content) : null
+  if (nextKind) {
+    return {
+      ok: false, code: 'bad_request',
+      message: nextKind === 'locked' ? 'This text is a locked note\'s file: only Walnut\'s Lock on your Mac writes one.' : 'This text hides the note: a note is hidden only in Walnut on your Mac.',
+      detail: { why: `${nextKind}_note_text` },
+    }
   }
   const expected = typeof req.expectedHash === 'string' && req.expectedHash ? req.expectedHash : null
   const content = req.mode === 'delete' ? null : req.content

@@ -48,6 +48,7 @@ const WHOLE_REPLACE_KNOWN: Record<string, string> = {
   task_note_write: 'replace or append; no line edit yet',
   agent_memory_write: 'replace or append; no line edit yet',
   org_node_edit: 'instructions replace whole, at most 4000 characters',
+  locked_note_save: 'a locked note is sealed whole each save, under an edit ask the person approved',
 }
 /** Creates, or short fields set whole: nothing a script would edit one line of. */
 const CREATE_OR_SHORT = new Set([

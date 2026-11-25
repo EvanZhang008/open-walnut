@@ -3,9 +3,12 @@
  * master password; the file then holds only its id, the mark, the stub and ciphertext; every
  * ordinary read answers the stub and every ordinary write refuses it; only the person, with a vault
  * session, reads and saves its text; the key survives a lock, a restart and a new master password;
- * removing the lock gives the text back. Fake data only; the vault and notes are the test's own.
+ * removing the lock gives the text back. An agent reads it only from inside the session that asked,
+ * after the person's yes, and no answer is kept for a resend whichever op reached it. Fake data only;
+ * the vault and notes are the test's own.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -20,6 +23,8 @@ import { resetVaultForTest } from '../../src/core/vault/store.js'
 import { resetSessionsForTest } from '../../src/core/vault/sessions.js'
 import { notesRoot } from '../../src/core/notes/note-paths.js'
 import { LOCKED_NOTES_KEY_FIELD } from '../../src/core/vault/locked-notes-key.js'
+import { ANSWER_NOT_KEPT_HEADER } from '../../src/lib/answer-not-kept.js'
+import { vaultNotesV1Router } from '../../src/web/routes/vault-notes-v1.js'
 
 let base = ''
 let session = ''
@@ -47,7 +52,7 @@ async function http(method: string, p: string, body?: unknown, headers: Record<s
   const text = await res.text()
   let parsed: Record<string, any> = {}
   try { parsed = text ? JSON.parse(text) : {} } catch { parsed = { raw: text } }
-  return { status: res.status, body: parsed }
+  return { status: res.status, body: parsed, headers: res.headers }
 }
 const v1 = (method: string, p: string, body?: unknown, headers?: Record<string, string>) => http(method, `/api/v1${p}`, body, headers)
 const file = () => fsp.readFile(path.join(notesRoot(), NOTE), 'utf8')
@@ -75,6 +80,16 @@ afterAll(async () => {
 
 describe('locked notes', () => {
   let hash = ''
+
+  it('every locked-note route answers marked never kept and not to be cached, whatever it answers', async () => {
+    const routes = (vaultNotesV1Router as unknown as { stack: Array<{ route?: { path: string } }> }).stack.flatMap((l) => l.route ? [l.route.path] : [])
+    expect(routes.length).toBeGreaterThanOrEqual(8)
+    for (const route of routes) {
+      const r = await http('POST', `/api/v1${route.replace(/:[A-Za-z_]+/g, 'x')}`, {}, AGENT)
+      expect(r.headers.get(ANSWER_NOT_KEPT_HEADER), route).toBeTruthy()
+      expect(r.headers.get('cache-control'), route).toBe('no-store')
+    }
+  })
 
   it('needs a person with Passwords unlocked to lock a note', async () => {
     const put = await http('PUT', `/api/notes-v2/content/${NOTE}`, { content: TEXT })
@@ -211,6 +226,18 @@ describe('locked notes', () => {
     const noSession = await answer('approve')
     expect(noSession.status).toBe(401)
     expect(noSession.body.code).toBe('master_password_needed')
+    // Passwords unlocked three minutes ago is not the master password typed for this yes.
+    const realNow = Date.now
+    const earlier = vi.spyOn(Date, 'now').mockImplementation(() => realNow() - 3 * 60_000)
+    try {
+      session = (await v1('POST', '/vault/unlock', { password: MASTER })).body.session.token
+    } finally {
+      earlier.mockRestore()
+    }
+    expect((await v1('POST', '/vault/notes/read', { path: NOTE })).status).toBe(200)
+    const stale = await answer('approve')
+    expect(stale.status).toBe(401)
+    expect(stale.body.code).toBe('master_password_needed')
     expect((await wait()).body.status).toBe('pending')
     session = keep
     // The master password typed for this yes: a fresh unlock right before it.
@@ -244,6 +271,7 @@ describe('locked notes', () => {
     const later = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 3 * 60_000)
     try {
       const stale = await v1('POST', `/approvals/${ask.requestId}/answer`, { decision: 'approve', digest: card.digest, device: { name: 'Web console', kind: 'web' } })
+      expect(stale.status).toBe(401)
       expect(stale.body.code).toBe('master_password_needed')
     } finally {
       later.mockRestore()
@@ -265,6 +293,55 @@ describe('locked notes', () => {
     expect(after.status).toBe(404)
     session = (await v1('POST', '/vault/unlock', { password: MASTER })).body.session.token
     expect((await v1('POST', '/vault/notes/read', { path: NOTE })).body.content).toBe(next)
+  })
+
+  it('through a session\'s own Walnut tools: only from inside it, and no answer kept for a resend, `api` included', async () => {
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { addTask } = await import('../../src/core/task-manager.js')
+    const { handleGatewayCapability } = await import('../../src/core/peers/capability-router.js')
+    const { newCallId } = await import('../../src/lib/op-call-id.js')
+    const { task } = await addTask({ title: 'Plan the week', project: 'Locked note tests' })
+    const sid = crypto.randomUUID()
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { host: 'devbox', initialProcessStatus: 'idle' })
+    // The real relay: a host's daemon passes the call on with its word on the process on its socket
+    // (caller-proof-v1), and the server runs the op itself (capability-router.ts).
+    const tool = (name: string, args: Record<string, unknown>, opts: { callId?: string; inside?: boolean } = {}) =>
+      handleGatewayCapability('tools.call', sid, {
+        name, args, client: 'mcp', callerProof: { v: 1, verified: opts.inside !== false, pid: 4242 }, ...(opts.callId ? { callId: opts.callId } : {}),
+      }, 'devbox')
+    const refusal = (r: Awaited<ReturnType<typeof tool>>) => (r.ok ? 'ok' : (r.error as { api?: { code?: string } }).api?.code)
+    // Another process naming this session (a lead that read its history) is refused before the person is asked.
+    expect(refusal(await tool('locked_note_ask', { path: NOTE, purpose: 'plan the week' }, { inside: false }))).toBe('unverified_session')
+    const asked = await tool('locked_note_ask', { path: NOTE, purpose: 'plan the week' })
+    expect(asked.ok, JSON.stringify(asked)).toBe(true)
+    const { requestId, waitToken } = (asked.ok ? asked.result : {}) as { requestId: string; waitToken: string }
+    const card = (await http('GET', '/api/v1/approvals')).body.approvals.find((a: { id: string }) => a.id === requestId)
+    expect(card.what).toBe('Let the task "Plan the week" read your locked note "Diary"')
+    session = (await v1('POST', '/vault/unlock', { password: MASTER })).body.session.token
+    expect((await v1('POST', `/approvals/${requestId}/answer`, { decision: 'approve', digest: card.digest, device: { name: 'Web console', kind: 'web' } })).status).toBe(200)
+    expect(refusal(await tool('locked_note_wait', { id: requestId, token: waitToken, wait_ms: 0 }, { inside: false }))).toBe('unverified_session')
+    // The text, through `api` and through the named op, each under a call id: op_result holds neither.
+    const viaApi = { method: 'POST', path: `/api/v1/vault/notes/agent/ask/${requestId}/wait`, body: { token: waitToken, wait_ms: 0 } }
+    const calls: Array<[string, Record<string, unknown>, string]> = [
+      ['api', viaApi, newCallId()],
+      ['locked_note_wait', { id: requestId, token: waitToken, wait_ms: 0 }, newCallId()],
+    ]
+    for (const [name, args, callId] of calls) {
+      const r = await tool(name, args, { callId })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      expect(JSON.stringify(r), name).toContain(SECRET_WORD)
+      const read = await v1('GET', `/op-calls/${callId}`, undefined, { 'x-walnut-caller-sid': sid })
+      expect(read.body, name).toMatchObject({ state: 'done', not_kept: expect.stringContaining('never lets its answer be kept') })
+      expect(JSON.stringify(read.body), name).not.toContain(SECRET_WORD)
+    }
+    // After Lock all a resend under the same id runs again, and its route gives nothing.
+    await v1('POST', '/vault/lock', { all: true })
+    for (const [name, args, callId] of calls) {
+      const again = await tool(name, args, { callId })
+      expect(again.ok, name).toBe(false)
+      expect(JSON.stringify(again), name).not.toContain(SECRET_WORD)
+    }
+    session = (await v1('POST', '/vault/unlock', { password: MASTER })).body.session.token
   })
 
   it('opens again after Lock all, a restart and a new master password', async () => {

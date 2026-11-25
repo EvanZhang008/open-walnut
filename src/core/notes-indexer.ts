@@ -17,7 +17,7 @@
  *
  * Files stay the source of truth; the index is rebuildable (rebuildIndex()).
  */
-import { isLockedNoteText, readableNoteText } from './notes/locked-note.js'
+import { looksProtectedNoteText, readableNoteText } from './notes/locked-note.js'
 import fsp from 'node:fs/promises'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -260,9 +260,10 @@ async function reconcileNoteInternal(
     return null
   }
 
-  let { data, body, raw } = parseFrontmatter(bytes)
   // A locked note is indexed as its stub: its ciphertext is no text (docs/reference/locked-notes.md).
-  if (isLockedNoteText(bytes)) body = parseFrontmatter(readableNoteText(bytes)).body
+  // A hidden note as its frontmatter and stub: its text is the person's alone. Its outer block is
+  // the frontmatter column too (a BOM aside), so the list marks the lock or the hidden mark.
+  let { data, body, raw } = parseFrontmatter(readableNoteText(bytes))
   let id = readId(data)
 
   // FALLBACK id assignment for id-less files (git pull / external/AI write).
@@ -270,8 +271,9 @@ async function reconcileNoteInternal(
   // read under lock — never clobber an in-flight edit (§8.3).
   // A file Walnut writes itself (a memory folder, a skill): an id from its path, nothing written.
   if (!id && walnutOwnedNote(relPath)) id = pathNoteId(relPath)
-  // A locked note's file is written only by its lock (docs/reference/locked-notes.md): an id from its path.
-  if (!id && isLockedNoteText(bytes)) id = pathNoteId(relPath)
+  // A locked note's file is written only by its lock, a hidden note's only by the person
+  // (docs/reference/locked-notes.md): an id from its path.
+  if (!id && looksProtectedNoteText(bytes)) id = pathNoteId(relPath)
   if (!id) {
     const assignedId = generateNoteId()
     const stamped = stampId(bytes, assignedId)

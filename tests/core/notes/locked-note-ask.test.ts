@@ -17,12 +17,15 @@ import {
 import { flushKept, forgetKeptForRestart } from '../../../src/core/kept-asks.js'
 
 const TEXT = '# Private\nOnly mine.\n'
-const TASK = { host: 'local', taskId: 't-1', taskTitle: 'Plan the week', sessionId: 's-1' }
-const OTHER = { host: 'local', taskId: 't-2', sessionId: 's-2' }
+// Seen inside their sessions (approvals-v1.ts proveIdentity), as a session's own Walnut tools are.
+const TASK = { host: 'local', taskId: 't-1', taskTitle: 'Plan the week', sessionId: 's-1', identity: 'verified' as const }
+const OTHER = { host: 'local', taskId: 't-2', sessionId: 's-2', identity: 'verified' as const }
 
 function fake() {
   let clock = 1_000_000
   const status = new Map<string, 'pending' | 'approved' | 'denied' | 'expired' | 'canceled'>()
+  /** When the person answered, on this clock (set by `approve`; a bare status has none). */
+  const answeredAt = new Map<string, string>()
   const made: Array<{ what: string; detail: string }> = []
   const saves: string[] = []
   /** The id of the locked note at a path (a test swaps one in). */
@@ -35,14 +38,18 @@ function fake() {
       made.push({ what: input.what, detail: input.detail })
       return { id, waitToken: `tok-${id}`, expiresAt: new Date(clock + 600_000).toISOString() }
     },
-    async waitApproval(id) { return { status: status.get(id) ?? 'expired', answeredBy: 'Web console' } },
+    async waitApproval(id) {
+      const at = answeredAt.get(id)
+      return { status: status.get(id) ?? 'expired', answeredBy: 'Web console', ...(at ? { answeredAt: at } : {}) }
+    },
     async cancelApproval(id) { status.set(id, 'canceled') },
     async read(path) { return { path, content: TEXT, contentHash: 'h1', updatedAt: 'now' } },
     async save(path, content) { saves.push(String(content)); return { path, contentHash: 'h2', updatedAt: 'now' } },
     async lockedNoteId(path) { return path === 'plain.md' ? null : (ids.get(path) ?? `n_${path}`) },
     now: () => clock,
   }
-  return { deps, status, made, saves, ids, tick: (ms: number) => { clock += ms } }
+  const approve = (id: string) => { status.set(id, 'approved'); answeredAt.set(id, new Date(clock).toISOString()) }
+  return { deps, status, made, saves, ids, approve, now: () => clock, tick: (ms: number) => { clock += ms } }
 }
 
 beforeEach(() => resetLockedNoteAsksForTest())
@@ -163,6 +170,73 @@ describe('an agent asking for a locked note', () => {
     f.status.set(r2.requestId, 'approved')
     f.ids.set('b.md', 'n_swapped')
     await expect(waitLockedNote(r2.requestId, r2.waitToken, 0, TASK, f.deps)).rejects.toMatchObject({ code: 'note_changed' })
+  })
+
+  it('the window runs from the yes, not from the first read', async () => {
+    const f = fake()
+    const r = await askLockedNote({ path: 'a.md', purpose: 'read it please', requester: TASK }, f.deps)
+    f.tick(60_000)
+    f.approve(r.requestId)
+    const yes = f.now()
+    f.tick(7 * 60_000)
+    const w = await waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)
+    expect(w).toMatchObject({ status: 'released', readUntil: new Date(yes + READ_MS).toISOString() })
+    f.tick(READ_MS - 7 * 60_000 + 1)
+    await expect(waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)).rejects.toMatchObject({ code: 'read_ended' })
+  })
+
+  it('an approved ask never read gives nothing after its window, days later', async () => {
+    const f = fake()
+    for (const access of ['read', 'edit'] as const) {
+      const r = await askLockedNote({ path: `${access}.md`, purpose: 'read it please', access, requester: TASK }, f.deps)
+      f.approve(r.requestId)
+      // The session died; the resumed one has the id and the token in its transcript.
+      f.tick(3 * 24 * 60 * 60_000)
+      await expect(waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)).rejects.toMatchObject({ status: 403, code: 'read_ended' })
+      await expect(waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)).rejects.toMatchObject({ code: 'not_found' })
+      await expect(saveLockedNoteForAgent(r.requestId, r.waitToken, 'x', 'h1', TASK, f.deps)).rejects.toMatchObject({ code: 'not_found' })
+    }
+    expect(f.saves).toEqual([])
+  })
+
+  it('a save names the hash it edited: none is a 400, and nothing is saved', async () => {
+    const f = fake()
+    const r = await askLockedNote({ path: 'a.md', purpose: 'fix a typo', access: 'edit', requester: TASK }, f.deps)
+    f.approve(r.requestId)
+    await waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)
+    for (const missing of [undefined, '', '  ', 42]) {
+      await expect(saveLockedNoteForAgent(r.requestId, r.waitToken, 'new text', missing, TASK, f.deps)).rejects.toMatchObject({ status: 400, code: 'expected_hash_required' })
+    }
+    expect(f.saves).toEqual([])
+  })
+
+  it('a session id only named, never seen inside its session, is refused at every step', async () => {
+    const f = fake()
+    // A lead that read its child's history names the child's session, with its wait token.
+    const claimed = { ...TASK, identity: 'unverified' as const, check: 'outside' as const }
+    await expect(askLockedNote({ path: 'a.md', purpose: 'read it please', requester: claimed }, f.deps)).rejects.toMatchObject({ status: 403, code: 'unverified_session' })
+    expect(f.made).toEqual([])
+    const r = await askLockedNote({ path: 'a.md', purpose: 'fix a typo', access: 'edit', requester: TASK }, f.deps)
+    f.approve(r.requestId)
+    for (const who of [claimed, { ...TASK, identity: 'unverified' as const, check: 'unchecked' as const }, { ...TASK, identity: undefined }]) {
+      await expect(waitLockedNote(r.requestId, r.waitToken, 0, who, f.deps)).rejects.toMatchObject({ status: 403, code: 'unverified_session' })
+    }
+    expect(await waitLockedNote(r.requestId, r.waitToken, 0, TASK, f.deps)).toMatchObject({ status: 'released' })
+    await expect(saveLockedNoteForAgent(r.requestId, r.waitToken, 'x', 'h1', claimed, f.deps)).rejects.toMatchObject({ status: 403, code: 'unverified_session' })
+    expect(f.saves).toEqual([])
+    // A caller that names no session asks as its host, and only it reads its yes.
+    const host = { host: 'devbox', identity: 'none' as const }
+    const h = await askLockedNote({ path: 'b.md', purpose: 'read it please', requester: host }, f.deps)
+    expect(f.made.at(-1)?.what).toContain('an agent on devbox')
+    f.approve(h.requestId)
+    await expect(waitLockedNote(h.requestId, h.waitToken, 0, TASK, f.deps)).rejects.toMatchObject({ code: 'not_your_ask' })
+    expect(await waitLockedNote(h.requestId, h.waitToken, 0, host, f.deps)).toMatchObject({ status: 'released' })
+  })
+
+  it('the card says where the text goes, a file there included', async () => {
+    const f = fake()
+    await askLockedNote({ path: 'a.md', purpose: 'read it please', requester: { ...TASK, host: 'devbox' } }, f.deps)
+    expect(f.made[0].detail).toContain('conversation on devbox (a long answer may also be written to a file there)')
   })
 
   it('cancel withdraws the approval', async () => {

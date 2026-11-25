@@ -74,6 +74,8 @@ export interface NoteListItem {
   title?: string;
   /** A locked note (docs/reference/locked-notes.md): its text opens only with the master password. */
   locked?: true;
+  /** A hidden note: plain text no agent tool reads, covered on the Notes page until Show. */
+  hidden?: true;
 }
 
 /** ● exact / ○ semantic / ◐ both / ▣ attachment — the hybrid-search match label (§1.2). */

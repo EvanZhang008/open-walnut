@@ -14,7 +14,7 @@
  * drive reads.
  */
 import Database, { type Database as DatabaseType } from '../lib/sqlite.js'
-import { LOCKED_STUB_LEAD } from './notes/locked-note.js'
+import { noteProtection } from './notes/locked-note-format.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
@@ -187,6 +187,8 @@ function openNotesIndexDb(): DatabaseType {
     handle.pragma('journal_mode = WAL')
     handle.pragma('busy_timeout = 5000')
     handle.pragma('synchronous = NORMAL')
+    // What a delete frees inside a page is zeroed (a locked note's old text, locked-note-residue.ts).
+    handle.pragma('secure_delete = FAST')
     handle.exec(SCHEMA_SQL)
     // v1→v2: section-heading search leg needs a headings column on pre-existing
     // DBs (CREATE TABLE IF NOT EXISTS won't add it). Content is backfilled by the
@@ -1814,20 +1816,25 @@ export interface ListRow {
   id: string
   title: string
   path: string
-  /** A locked note (core/notes/locked-note.ts): its outer frontmatter carries the mark, its body is the stub. */
+  /** A locked note: the mark in its first frontmatter block (core/notes/locked-note-format.ts noteProtection). */
   locked?: true
+  /** A hidden note (the hidden mark there, and no lock mark: the lock wins). */
+  hidden?: true
 }
 
 export function listNotes(): ListRow[] {
   const d = getNotesIndexDb()
   if (!d) return []
   const rows = d
-    // The mark in its outer frontmatter and the stub as its body (the indexer keeps only the stub
-    // of a locked note): a plain note that merely names the mark is not marked.
-    .prepare(`SELECT id, title, path, (instr(COALESCE(frontmatter, ''), 'walnut_locked: 1') > 0
-        AND substr(ltrim(body, char(10, 13, 32, 9)), 1, length(?)) = ?) AS locked FROM notes ORDER BY title COLLATE NOCASE`)
-    .all(LOCKED_STUB_LEAD, LOCKED_STUB_LEAD) as Array<ListRow & { locked: number | true | undefined }>
-  return rows.map(({ locked, ...r }) => (locked ? { ...r, locked: true as const } : r))
+    // The frontmatter of the few rows that name a key at all, read by the one rule every
+    // writer and the web use (a plain note that only names a mark in its body is not marked).
+    .prepare(`SELECT id, title, path, CASE WHEN instr(COALESCE(frontmatter, ''), 'walnut_locked') > 0
+        OR instr(COALESCE(frontmatter, ''), 'walnut_hidden') > 0 THEN frontmatter END AS fm FROM notes ORDER BY title COLLATE NOCASE`)
+    .all() as Array<ListRow & { fm: string | null }>
+  return rows.map(({ fm, ...r }) => {
+    const kind = fm ? noteProtection(fm) : null
+    return kind === 'locked' ? { ...r, locked: true as const } : kind === 'hidden' ? { ...r, hidden: true as const } : r
+  })
 }
 
 export function tagCounts(): Array<{ tag: string; count: number }> {

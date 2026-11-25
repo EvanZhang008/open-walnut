@@ -35,6 +35,24 @@ export function walnutOwnedNote(rel: string): boolean {
   return /^(projects\/[^/]+\/)?(memory|skills)\//.test(rel)
 }
 
+/**
+ * Inbox Triage's own notes (core/triage/batch.ts TRIAGE_STATE_NOTE and TRIAGE_RUNS_NOTE_DIR, pinned
+ * equal by tests/core/notes/locked-note-paths.test.ts): kept here so this module stays a leaf.
+ */
+const TRIAGE_NOTE_RE = /^walnut\/triage\/(state\.md|runs\/[^/]+\.md)$/
+
+/**
+ * A note Walnut writes itself, so a person never locks it and a locked note never moves there
+ * (docs/reference/locked-notes.md): the global notes file, a memory folder or the skills
+ * (walnutOwnedNote), and Inbox Triage's State.md and monthly Runs notes. Their writers replace or
+ * delete the file as theirs, and triage would fail on a locked State.md forever. In any letter
+ * case: on a Mac's disk `Walnut/triage/state.md` is the same file.
+ */
+export function walnutWritesNote(rel: string): boolean {
+  const lower = rel.replace(/\\/g, '/').toLowerCase()
+  return path.posix.basename(lower) === GLOBAL_NOTES_KEY || walnutOwnedNote(lower) || TRIAGE_NOTE_RE.test(lower)
+}
+
 /** The id of a Walnut-owned note: its path's, never written into the file. */
 export function pathNoteId(rel: string): string {
   return `n_w${crypto.createHash('sha1').update(rel).digest('hex').slice(0, 14)}`

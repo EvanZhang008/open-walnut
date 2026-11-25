@@ -58,9 +58,9 @@ import {
   ensureNotesDir,
   getWildcardPath,
   MAX_NOTE_SIZE,
-  lockedOnDisk,
 } from './notes-v2.js'
-import { LockedNoteError, assertFileNotLocked, assertNotLockedText, isLockedNoteText, readableNoteText } from '../../core/notes/locked-note.js'
+import { assertLockedNoteDelete } from '../../core/notes/locked-note-moves.js'
+import { LockedNoteError, assertFileNotLocked, assertNotLockedText, noteForReader } from '../../core/notes/locked-note.js'
 import { isPersonCaller } from './person-caller.js'
 import { isNotesExtrasPath, noteRelOf, resolveNotePath } from '../../core/notes/note-paths.js'
 import { getNotesTree, invalidateNotesTree } from '../../core/notes-tree.js'
@@ -4608,13 +4608,21 @@ apiV1Router.get('/notes/content/*path', async (req: Request, res: Response, next
       }
       throw err
     }
-    // A locked note answers its stub, never the ciphertext (docs/reference/locked-notes.md).
-    const locked = isLockedNoteText(content)
-    res.json({ content: locked ? readableNoteText(content) : content, contentHash: computeContentHash(content), updatedAt, ...(locked ? { locked: true } : {}) })
+    // A locked note answers its stub, never the ciphertext, and a hidden note its frontmatter and
+    // stub, to every caller (docs/reference/locked-notes.md): its text is the Notes page's alone.
+    const { content: shown, ...kind } = noteForReader(content)
+    res.json({ content: shown, contentHash: computeContentHash(content), updatedAt, ...kind })
   } catch (err) {
     next(err)
   }
 })
+
+/** A LockedNoteError as the note routes' answer; false for any other error. */
+function sentLockedNoteError(res: Response, err: unknown): boolean {
+  if (!(err instanceof LockedNoteError)) return false
+  sendError(res, err.status, err.code, err.message)
+  return true
+}
 
 /**
  * Shared write path for PUT (update) and POST (create). Stamps a frontmatter
@@ -4628,6 +4636,9 @@ async function writeNote(filePath: string, notePath: string, content: string): P
     try { current = await fsp.readFile(filePath, 'utf-8') } catch { /* a create */ }
   }
   const { content: finalContent } = withNoteId(content, current)
+  // Only Walnut's Lock writes a locked note's file (docs/reference/locked-notes.md): checked on
+  // the bytes that land too, after the id went in (400 locked_note_text).
+  assertNotLockedText(finalContent)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   await fsp.writeFile(filePath, finalContent, 'utf-8')
   const stat = await fsp.stat(filePath)
@@ -4668,18 +4679,15 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
     // hash, each passed the check, and each wrote, so two edits answered 200 and
     // then vanished (found by tests/integration/tracking-note-ops.test.ts).
     // Only Walnut's Lock writes a locked note's file (docs/reference/locked-notes.md).
-    try { assertNotLockedText(content) } catch (err) {
-      if (err instanceof LockedNoteError) { sendError(res, err.status, err.code, err.message); return }
-      throw err
-    }
+    assertNotLockedText(content)
     const outcome = await withUserFileLock(filePath, async (): Promise<
       | { kind: 'conflict'; serverHash: string; serverContent: string }
-      | { kind: 'locked'; message: string }
+      | { kind: 'locked'; code: string; message: string }
       | { kind: 'written'; contentHash: string; updatedAt: string }
     > => {
-      // A locked note is written only through its own route (core/notes/locked-note-store.ts).
+      // A locked note is written only through its own route (core/notes/locked-note-store.ts), a hidden one only on the Notes page.
       try { await assertFileNotLocked(filePath, 'be changed here') } catch (err) {
-        if (err instanceof LockedNoteError) return { kind: 'locked', message: err.message }
+        if (err instanceof LockedNoteError) return { kind: 'locked', code: err.code, message: err.message }
         throw err
       }
       if (typeof expectedHash === 'string' && expectedHash) {
@@ -4695,7 +4703,7 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
       return { kind: 'written', ...(await writeNote(filePath, notePath, content)) }
     })
     if (outcome.kind === 'locked') {
-      sendError(res, 423, 'note_locked', outcome.message)
+      sendError(res, 423, outcome.code, outcome.message)
       return
     }
     if (outcome.kind === 'conflict') {
@@ -4709,6 +4717,7 @@ apiV1Router.put('/notes/content/*path', async (req: Request, res: Response, next
     log.memory.info('Note updated via api-v1', { path: notePath, size: content.length })
     res.json({ contentHash, updatedAt })
   } catch (err) {
+    if (sentLockedNoteError(res, err)) return
     next(err)
   }
 })
@@ -4734,6 +4743,8 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
     const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
+    // A new note is never a locked note's file, made up or copied (docs/reference/locked-notes.md).
+    assertNotLockedText(body)
 
     // Create-only: never silently overwrite (use PUT for updates). Under the same
     // lock as the PUT, so "does it exist" and "write it" cannot straddle another
@@ -4758,6 +4769,7 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
     log.memory.info('Note created via api-v1', { path: notePath })
     res.status(201).json({ path: noteRelOf(filePath), contentHash, updatedAt })
   } catch (err) {
+    if (sentLockedNoteError(res, err)) return
     next(err)
   }
 })
@@ -4775,10 +4787,10 @@ apiV1Router.delete('/notes/*path', async (req: Request, res: Response, next: Nex
     const fullPath = resolveNotePath(notePath)
     if (!fullPath) { sendError(res, 400, 'bad_request', 'invalid path'); return }
     const filePath = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
-    // A locked note is the person's to delete: an agent's delete is refused (deleting data).
-    if (!isPersonCaller(req) && await lockedOnDisk(filePath)) {
-      sendError(res, 423, 'note_locked', 'This note is locked: only its owner deletes it, in Walnut.')
-      return
+    // A locked or hidden note is the person's to delete: an agent's delete is refused (deleting data).
+    try { await assertLockedNoteDelete(filePath, { person: isPersonCaller(req) }) } catch (err) {
+      if (sentLockedNoteError(res, err)) return
+      throw err
     }
 
     try {

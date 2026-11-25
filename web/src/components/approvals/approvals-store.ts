@@ -15,6 +15,7 @@ import { useSyncExternalStore } from 'react';
 import { answerApproval, listApprovals, setApprovalsAskMe, type Approval } from '@/api/approvals';
 import { vaultCall } from '@/api/vault';
 import { withMasterPassword } from '@/components/passwords/with-passwords-unlock';
+import { SHEET_BUSY_WORDS, unlockSheetBusy } from '@/components/passwords/unlock-sheet-busy';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
 import { inMacApp } from '@/utils/mac-app';
@@ -146,7 +147,15 @@ export function applyApprovalEvent(a: Approval): void {
   }
 }
 
-const PASSWORDS_SUB = 'Approving lets an agent read your locked note. Type your master password to approve.';
+/**
+ * The unlock sheet's line for an agent's ask for a locked note: what a yes lets it do, in the
+ * words of the card (src/core/notes/locked-note-ask.ts: "read and change your locked note" for an
+ * edit ask, "read your locked note" for a read ask).
+ */
+export function passwordsSubFor(a: Pick<Approval, 'what'>): string {
+  const what = /\bread and change your locked note\b/.test(a.what) ? 'read and change' : 'read';
+  return `Approving lets an agent ${what} your locked note. Type your master password to approve.`;
+}
 
 /** Which device this window is, for the record of who answered. */
 function thisDevice(): { name: string; kind: 'mac-app' | 'web' } {
@@ -166,9 +175,11 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny'):
     // An agent's ask for a locked note: the yes goes with the master password typed for it, here and
     // now (docs/reference/locked-notes.md); a cancelled sheet answers nothing.
     const r = a.needsPasswords && decision === 'approve'
-      ? await withMasterPassword(PASSWORDS_SUB, () => vaultCall<{ approval: Approval }>('POST', `/approvals/${encodeURIComponent(a.id)}/answer`, body))
+      ? await withMasterPassword(passwordsSubFor(a), () => vaultCall<{ approval: Approval }>('POST', `/approvals/${encodeURIComponent(a.id)}/answer`, body))
       : await answerApproval(a.id, body);
     if (r) settle(r.approval);
+    // No sheet came up: another step's sheet is open. Said on the card, never a silent no.
+    else if (unlockSheetBusy()) set({ errors: { ...state.errors, [a.id]: SHEET_BUSY_WORDS } });
   } catch (err) {
     set({ errors: { ...state.errors, [a.id]: err instanceof Error ? err.message : String(err) } });
     // Changed, answered elsewhere or gone meanwhile: read the list so the card shows what is true now.

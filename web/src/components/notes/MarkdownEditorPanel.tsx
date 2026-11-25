@@ -100,6 +100,8 @@ export interface MarkdownEditorPanelProps {
   attachmentNotePath?: string | null;
   /** No image goes in (a locked note: an image would be stored unencrypted, docs/reference/locked-notes.md). */
   noImages?: boolean;
+  /** The mic in the editor (off in a locked note: speech would go to the voice provider). */
+  dictation?: boolean;
   tasks?: React.ComponentProps<typeof NotesEditor>['tasks'];
   focusedTaskId?: string | null;
   placeholder?: string;
@@ -172,6 +174,7 @@ export function MarkdownEditorPanel({
   onWikiLinkClick,
   attachmentNotePath,
   noImages = false,
+  dictation = true,
   tasks,
   focusedTaskId,
   placeholder,
@@ -604,6 +607,7 @@ export function MarkdownEditorPanel({
             onWikiLinkClick={onWikiLinkClick}
             attachmentNotePath={attachmentNotePath ?? undefined}
             noImages={noImages}
+            dictation={dictation}
             tasks={tasks}
             focusedTaskId={focusedTaskId ?? undefined}
             onEditorReady={showFormatToolbar ? handleEditorReady : undefined}

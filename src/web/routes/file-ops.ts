@@ -58,7 +58,11 @@ import { createFileReader } from '../../core/session-file-reader.js'
 import { hostDisplayNameFor } from '../../core/hosts/host-display-name.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import { confinesLocalFiles } from '../../core/server-role.js'
+import { LOCAL_HOST } from '../../core/sessions/host-admission.js'
+import { LockedNoteError } from '../../core/notes/locked-note.js'
+import { assertLockedNoteDelete, assertLockedNoteMove, assertNoLockedNoteCopy } from '../../core/notes/locked-note-moves.js'
 import { log } from '../../logging/index.js'
+import { isPersonCaller } from './person-caller.js'
 
 export type FileOpName = 'mkdir' | 'create' | 'rename' | 'duplicate' | 'delete'
 
@@ -109,12 +113,14 @@ export interface FileOpInput {
   newPath?: unknown
   host?: unknown
   recursive?: unknown
+  /** The caller is the person (person-caller.ts isPersonCaller); left out, it is not. */
+  person?: boolean
 }
 
 export type FileOpResult =
   | { status: 200; body: { ok: true; path?: string } }
   | { status: 202; body: { pending: true; message: string } }
-  | { status: number; body: { error: string; code: FileOpErrorCode } }
+  | { status: number; body: { error: string; code: FileOpErrorCode | 'note_locked' | 'note_hidden' | 'not_lockable' } }
 
 /** Race `work` against a clock WITHOUT cancelling it. `{ done: false }` means
  *  "still running", never "failed" (header rule 3). Exported so the race is unit
@@ -455,6 +461,19 @@ async function assertAbsent(target: string): Promise<void> {
 }
 
 /**
+ * The notes routes' rules for a locked or hidden note in the vault (core/notes/locked-note-moves.ts):
+ * only the person renames, moves or deletes one, never onto a note Walnut writes itself; nobody
+ * copies a locked one, and only the person a hidden one. The vault is on this machine, so only an
+ * operation here (or through this machine's own daemon) can reach it.
+ */
+async function guardLockedNotes(p: PreparedOp, person: boolean): Promise<void> {
+  if (p.host && p.host !== LOCAL_HOST) return
+  if (p.op === 'rename') await assertLockedNoteMove(p.filePath, p.newPath!, { person })
+  else if (p.op === 'duplicate') await assertNoLockedNoteCopy(p.filePath, { person })
+  else if (p.op === 'delete') await assertLockedNoteDelete(p.filePath, { person })
+}
+
+/**
  * Remote execution: ONE daemon RPC per operation, all checks host-side.
  *
  * `slowTimeoutMs` is threaded into the two unbounded ops so the RPC outlives the
@@ -508,6 +527,7 @@ export async function performFileOp(input: FileOpInput, deps?: FileOpDeps): Prom
     // the kernel will actually reach. Local only — the remote half of this runs in
     // the daemon, which is the only side that can resolve that host's symlinks.
     if (!prepared.host) await enforceFloorOnRealPaths(prepared)
+    await guardLockedNotes(prepared, input.person === true)
     const context = {
       op: prepared.op,
       path: prepared.filePath,
@@ -550,6 +570,9 @@ export async function performFileOp(input: FileOpInput, deps?: FileOpDeps): Prom
     if (err instanceof FileOpError) {
       return { status: STATUS_BY_CODE[err.code], body: { error: err.message, code: err.code } }
     }
+    if (err instanceof LockedNoteError && (err.code === 'note_locked' || err.code === 'note_hidden' || err.code === 'not_lockable')) {
+      return { status: err.status, body: { error: err.message, code: err.code } }
+    }
     throw err
   }
 }
@@ -568,6 +591,7 @@ for (const op of FILE_OP_NAMES) {
         newPath: body.newPath,
         host: body.host,
         recursive: body.recursive,
+        person: isPersonCaller(req),
       })
       res.status(result.status).json(result.body)
     } catch (err) {

@@ -32,6 +32,7 @@ import { hasHeldText } from '@/hooks/useNoteGone';
 import { primaryDoc, requestPageFind } from '@/utils/find-doc';
 import { useAlert } from '@/hooks/useConfirm';
 import { LockedNotePanel } from '@/components/notes/LockedNotePanel';
+import { dropUnsavedEdits, moveUnsavedEdits } from '@/components/notes/locked-note-saves';
 import { isLockablePath, useLockNote } from '@/components/notes/useLockNote';
 import { useNoteAutoName } from '@/hooks/useNoteAutoName';
 import { fileBaseFromTitle, followAutoName, forgetAutoName, markAutoNamed, pickUntitledPath } from '@/components/notes/note-auto-name';
@@ -451,7 +452,7 @@ export function NotesPage() {
   const {
     content,
     loading: contentLoading,
-    locked: noteLocked,
+    protection,
     updatedAt,
     saveStatus,
     onEditorUpdate,
@@ -918,12 +919,12 @@ export function NotesPage() {
   const filePaths = useMemo(() => treeFilePaths(tree), [tree]);
   const alert = useAlert();
 
-  // Lock the open note (components/notes/useLockNote.ts).
-  const { lock: lockOpenNote, locking } = useLockNote({ unsaved: hasUnsavedEdits, status: saveStatus });
+  const { run: protectNote, locking } = useLockNote({ unsaved: hasUnsavedEdits, status: saveStatus });
 
-  // A note renamed or moved: its open tab follows in place (position and active
-  // state kept), so flush-on-switch is not triggered spuriously (§1.6).
+  // A note renamed or moved: its open tab follows in place (position and active state kept), so
+  // flush-on-switch is not triggered spuriously (§1.6); a locked note's unsaved edit follows too.
   const retargetTab = useLeanCallback((from: string, to: string) => {
+    moveUnsavedEdits(from, to);
     choseTabs();
     setTabs((prev) => prev.map((t) => (t.path === from ? { ...t, path: to } : t)));
     setActivePath((cur) => (cur === from ? to : cur));
@@ -1019,13 +1020,11 @@ export function NotesPage() {
   const handleDeleteNote = useCallback(
     async (notePath: string) => {
       forgetAutoName(notePath);
-      // Cancel any pending debounced save targeting the doomed note — an
-      // in-flight PUT after the rm would re-create it (same resurrection bug
-      // markMovedAway kills for the move path).
-      if (notePath === activeNotePath) {
-        await markMovedAway(notePath);
-      }
+      // Cancel any pending debounced save targeting the doomed note: an in-flight PUT after
+      // the rm would re-create it (the resurrection bug markMovedAway kills for the move path).
+      if (notePath === activeNotePath) await markMovedAway(notePath);
       await removeNote(notePath);
+      dropUnsavedEdits((p) => p === notePath);
       choseTabs();
       dropTabs((t) => t.path === notePath);
     },
@@ -1046,12 +1045,11 @@ export function NotesPage() {
   const handleDeleteFolder = useCallback(
     async (folderPath: string) => {
       const prefix = folderPath.replace(/\/+$/, '') + '/';
-      // Kill any pending save for an active note inside the doomed folder —
-      // an in-flight PUT after the rm would re-create the note AND its parents.
-      if (activeNotePath && activeNotePath.startsWith(prefix)) {
-        await markMovedAway(activeNotePath);
-      }
+      // Kill any pending save for an active note inside the doomed folder: an in-flight PUT
+      // after the rm would re-create the note AND its parents.
+      if (activeNotePath && activeNotePath.startsWith(prefix)) await markMovedAway(activeNotePath);
       await removeFolder(folderPath);
+      dropUnsavedEdits((p) => p.startsWith(prefix));
       choseTabs();
       dropTabs((t) => t.path.startsWith(prefix));
     },
@@ -1182,9 +1180,7 @@ export function NotesPage() {
           ) : contentLoading ? (
             <LoadingState size="pane" title="Loading note…" />
           ) : (
-            // position:relative so the floating pop-out button anchors to the
-            // editor pane's top-right (NotesEditorPanel owns its own header, so we
-            // overlay rather than editing that cross-owned component).
+            // position:relative: the pop-out button floats at the pane's top-right, over the panel's header.
             <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
               <button
                 className="btn btn-icon global-notes-expand-btn"
@@ -1195,7 +1191,7 @@ export function NotesPage() {
               >
                 {ICON_EXPAND}
               </button>
-              {noteLocked ? (
+              {protection === 'locked' ? (
                 <LockedNotePanel
                   key={activeNotePath}
                   notePath={activeNotePath}
@@ -1223,7 +1219,8 @@ export function NotesPage() {
                 isFavorite={isNoteFavorite(activeNotePath)}
                 onToggleFavorite={() => toggleFavoriteNote(activeNotePath)}
                 readOnly={noteLayer.readOnly || locking === activeNotePath}
-                onLock={isLockablePath(activeNotePath) ? () => void lockOpenNote(activeNotePath) : undefined}
+                hidden={protection === 'hidden'}
+                onProtect={isLockablePath(activeNotePath) ? (action) => void protectNote(action, activeNotePath) : undefined}
               />
               )}
             </div>
@@ -1304,7 +1301,8 @@ export function NotesPage() {
               // side chat (chatMode = its conversation id). key remounts the
               // pane on switch so useChat reloads the right history.
               const agentConvId = chatMode.startsWith('conv-') ? chatMode : mainConvId;
-              return <NotesChat key={agentConvId ?? 'main'} activeNotePath={activeNotePath} headerLeft={tabs} conversationId={agentConvId} />;
+              // A hidden or locked note is never named to the agent (docs/reference/locked-notes.md).
+              return <NotesChat key={agentConvId ?? 'main'} activeNotePath={protection ? null : activeNotePath} headerLeft={tabs} conversationId={agentConvId} />;
             })()}
           </div>
         </>

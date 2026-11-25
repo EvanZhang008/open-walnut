@@ -25,13 +25,15 @@
  * after it is replayed onto the matching new-chain commit with a three-way
  * `merge-tree` (base = the commit's own parent, so exactly its change is
  * applied), keeping its message, author and dates. A conflict is a file both
- * sides changed: the newer write wins (the store's own `lastUpdated`, else
- * commit time, as chooseLww decides), except a file the rewrite removed, whose
+ * sides changed: the newer write wins (contentDecision: the store's own
+ * `lastUpdated`, or a note's locked side; else commit time, as chooseLww
+ * decides), except a file the rewrite removed, whose
  * removal stands: a replay never brings back a path the hub had before the
  * rewrite and the new chain lacks (a scrub must not be undone).
  * The old head stays on `pre-rewrite-backup` whatever happens here.
  */
 
+import { noteProtection } from '../core/notes/locked-note.js';
 import { mergeRecords } from './git-sync-records.js';
 
 export interface GitStatusResult { code: number; stdout: string; stderr: string }
@@ -166,15 +168,57 @@ export async function contentClock(run: GitStatusRunner, entry: string | undefin
   }
 }
 
+/** How protected a blob (`"<mode> <oid>"`) is: 2 a locked note's file, 1 a hidden note's, 0 neither. */
+async function protectionOfBlob(run: GitStatusRunner, entry: string | undefined): Promise<number> {
+  const oid = entry?.split(' ')[1];
+  if (!oid) return 0;
+  const size = Number((await run(['cat-file', '-s', oid])).stdout.trim());
+  if (!Number.isFinite(size) || size > 8 * 1024 * 1024) return 0;
+  const kind = noteProtection((await run(['cat-file', 'blob', oid])).stdout);
+  return kind === 'locked' ? 2 : kind === 'hidden' ? 1 : 0;
+}
+
 /**
- * Whether the local version of a conflicted file is the newer write: the store's
- * own `lastUpdated` when both sides carry one, else the replayed commit's time
- * against the newest commit that touched the file on the new chain. A tie goes
- * to the local side, the write being carried.
+ * The side of a note more protected on one side than the other (docs/reference/locked-notes.md),
+ * or null when both are alike. A locked side stays over a hidden or plain one, and a hidden side
+ * over a plain one, whatever the clocks say: a plain copy (older, or edited later on a box that
+ * had not seen the lock or the hide yet, or a delete) never goes over the ciphertext, and never
+ * shows a hidden note to agents again. The other version stays in history.
+ */
+export async function lockedSide(
+  run: GitStatusRunner, file: string, mine: string | undefined, theirs: string | undefined,
+): Promise<'local' | 'remote' | null> {
+  if (!file.endsWith('.md')) return null;
+  const [a, b] = await Promise.all([protectionOfBlob(run, mine), protectionOfBlob(run, theirs)]);
+  return a === b ? null : a > b ? 'local' : 'remote';
+}
+
+/**
+ * What the content of a conflicted file decides before any commit time, for both
+ * conflict deciders (chooseLww on a pull, and the rewrite replay here): a JSON store's
+ * own `lastUpdated` when both sides carry one, and the locked side of a note locked on
+ * one side only. Null: the commit times decide.
+ */
+export async function contentDecision(
+  run: GitStatusRunner, file: string, mine: string | undefined, theirs: string | undefined,
+): Promise<{ side: 'local' | 'remote'; clock: 'content' | 'locked' } | null> {
+  if (file.endsWith('.json')) {
+    const [a, b] = await Promise.all([contentClock(run, mine), contentClock(run, theirs)]);
+    if (a !== null && b !== null && a !== b) return { side: a > b ? 'local' : 'remote', clock: 'content' };
+  }
+  const locked = await lockedSide(run, file, mine, theirs);
+  return locked ? { side: locked, clock: 'locked' } : null;
+}
+
+/**
+ * Whether the local version of a conflicted file is the newer write: what its
+ * content decides (contentDecision), else the replayed commit's time against the
+ * newest commit that touched the file on the new chain. A tie goes to the local
+ * side, the write being carried.
  */
 async function localIsNewer(run: GitStatusRunner, file: string, mine: string, theirs: string, step: { onto: string; commit: string }): Promise<boolean> {
-  const [a, b] = await Promise.all([contentClock(run, mine), contentClock(run, theirs)]);
-  if (a !== null && b !== null && a !== b) return a > b;
+  const decided = await contentDecision(run, file, mine, theirs);
+  if (decided) return decided.side === 'local';
   const localAt = Number((await run(['log', '-1', '--format=%ct', step.commit])).stdout.trim() || '0');
   const remoteAt = Number((await run(['--literal-pathspecs', 'log', '-1', '--format=%ct', step.onto, '--', file])).stdout.trim() || '0');
   return localAt >= remoteAt;
@@ -216,6 +260,10 @@ async function resolveConflicts(
     } else if (records) {
       lines.push(`${records}\t${file}`);
       out.keptMerged.push(file);
+    } else if (!mine && theirs && (await lockedSide(run, file, mine, theirs)) === 'remote') {
+      // A local delete never removes a note the new chain holds locked (chooseLww keeps it too).
+      lines.push(`${theirs}\t${file}`);
+      out.keptRemote.push(file);
     } else if (mine && theirs && !(await localIsNewer(run, file, mine, theirs, step))) {
       lines.push(`${theirs}\t${file}`);
       out.keptRemote.push(file);

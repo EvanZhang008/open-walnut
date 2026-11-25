@@ -356,6 +356,13 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Voice mode reads Chinese answers with Qwen3-TTS on this Mac, a male standard Mandarin voice by default (tts.qwen_voice in the config names another speaker). Needs a Mac with Apple Silicon: the first time it is on, Walnut sets up the voice model in the background (about 2.5 GB to download), and until it is ready Chinese is read the way it is today. English keeps its voice. Off: every answer is read as before.',
     default: false,
   },
+  {
+    id: 'locked_notes',
+    name: 'Locked notes',
+    summary: 'A Lock button in a note\'s header hides the note from AI, or encrypts it with your Passwords master password.',
+    description: 'A Lock button in a note\'s header offers Hide from AI and Encrypt. Hide from AI keeps the text plain on disk, but no agent tool reads or changes it, and the Notes page shows it after Show, with no password. Encrypt locks it with your Passwords master password: agents, search and sync see only that it is locked, and its text shows after Show and the master password. A note already hidden or locked always opens covered with Show, and stays protected, with this switch on or off. Off: no Lock button.',
+    default: false,
+  },
 ] as const;
 
 /**

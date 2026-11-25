@@ -50,6 +50,7 @@ import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { companionMemoryRoutes } from '../../replica/companion-copy-routes.js'
 import { nameAnswersHere } from '../middleware/answer-name.js'
+import { isPersonCaller } from './person-caller.js'
 
 export const searchMemoryV1Router = Router()
 // A middleware below may answer before the route: real use names it as that route (answer-name.ts).
@@ -505,10 +506,11 @@ searchMemoryV1Router.post('/notes/move', async (req: Request, res: Response, nex
     const { moveNote, NotesOpError } = await import('./notes-v2.js')
     const { from, to } = (req.body ?? {}) as Record<string, unknown>
     try {
-      res.json(await moveNote(from, to))
+      // Only the person moves a locked note (core/notes/locked-note-moves.ts).
+      res.json(await moveNote(from, to, { person: isPersonCaller(req) }))
     } catch (err) {
       if (err instanceof NotesOpError) {
-        const code = err.statusCode === 404 ? 'not_found' : err.statusCode === 409 ? 'conflict' : 'bad_request'
+        const code = err.code ?? (err.statusCode === 404 ? 'not_found' : err.statusCode === 409 ? 'conflict' : 'bad_request')
         sendError(res, err.statusCode, code, err.message)
         return
       }
