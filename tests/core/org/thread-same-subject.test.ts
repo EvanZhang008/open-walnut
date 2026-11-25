@@ -5,7 +5,7 @@
  * Chinese test data is written with \u escapes.
  */
 import { describe, expect, it } from 'vitest'
-import { copyRefusal, reasonCoversTask, sameSubjectCandidates, sameSubjectRefusal, strongMatch, subjectWords, type TreeThreads } from '../../../src/core/org/thread-same-subject.js'
+import { copyRefusal, headWords, reasonCoversTask, sameSubjectCandidates, sameSubjectRefusal, strongMatch, subjectWords, type TreeThreads } from '../../../src/core/org/thread-same-subject.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
 
 const NOW = Date.parse('2026-11-23T08:00:00Z')
@@ -105,5 +105,31 @@ describe('one subject is one thread', () => {
     expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 1002345', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 1002399'), NOW))).toBeUndefined()
     expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 v1.35', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 v1.36'), NOW))?.id).toBe('th-a')
     expect(strongMatch(sameSubjectCandidates('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 20261124', tree('Orchard \u65b0\u5e73\u53f0 dashboard \u7b49\u4f60\u5ba1 20261125'), NOW))?.id).toBe('th-a')
+  })
+
+  it('a subject named before a colon that the other title does not hold is another matter, whatever state they share (the thread monitor, 2026-11-25)', () => {
+    const tree = (title: string): TreeThreads[] => [{ task: { id: 'n', title: 'Node' }, threads: [thread('th-a', title)] }]
+    const match = (fresh: string, open: string) => strongMatch(sameSubjectCandidates(fresh, tree(open), NOW))?.id
+    // Two reports whose comments went to two design docs of one person.
+    const report = 'Seed storage report: comments posted to Marta\'s design doc'
+    const design = 'Marta\'s irrigation design: your two comments are posted to the doc'
+    expect(match(report, design)).toBeUndefined()
+    expect(match(design, report)).toBeUndefined()
+    // The same shape in Chinese: "<report>: comments posted to Marta's design doc", "Marta's Irrigation design: your two comments are posted to the doc".
+    expect(match('\u79cd\u5b50\u4ed3\u50a8\u62a5\u544a\uff1a\u8bc4\u8bba\u5df2\u53d1\u5230 Marta \u7684\u8bbe\u8ba1\u6587\u6863', 'Marta \u7684 Irrigation \u8bbe\u8ba1\uff1a\u4f60\u7684\u4e24\u6761\u8bc4\u8bba\u5df2\u53d1\u5230\u6587\u6863')).toBeUndefined()
+    // One finding in two places, each named first; one state on two fixes, one title with no colon.
+    expect(match('Northgate (plot-7): soil probe read rate fell to 98.5%', 'Southmoor (plot-9): soil probe read rate fell to 98.1%')).toBeUndefined()
+    expect(match('Sidebar crash on a side question: fixed and live now', 'Third comment in the file preview cannot be added (fixed and live now)')).toBeUndefined()
+    // Control: without the rule each pair above is a strong match (the words after the colon alone).
+    expect(match(report.replace(':', ''), design.replace(':', ''))).toBe('th-a')
+    // A head the other title holds is still a repeat, in either order and with one colon or two.
+    expect(match('North field gamma: failover switch stays off, open it?', 'North field gamma failover switch stays off')).toBe('th-a')
+    expect(match('North field gamma failover switch stays off', 'North field gamma: failover switch stays off, open it?')).toBe('th-a')
+    expect(match('Soil probe review: read rate chart does not line up', 'Soil probe review: four charts do not line up (health, read rate)')).toBe('th-a')
+    // A time or a link is no head.
+    expect(headWords('Deploy at 14:05 failed')).toEqual([])
+    expect(headWords('See https://example.test/x')).toEqual([])
+    expect(headWords('Seed storage report: sent')).toEqual(['seed', 'storage', 'report'])
+    expect(headWords('Trailing colon:')).toEqual([])
   })
 })

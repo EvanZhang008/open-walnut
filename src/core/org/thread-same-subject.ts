@@ -85,7 +85,7 @@ export function sameSubjectCandidates(title: string, tree: readonly TreeThreads[
 
 /** The open threads of a tree with their telling words, read once for many titles (candidatesIn). */
 export interface SubjectIndex {
-  rows: ReadonlyArray<{ t: OrgThread; task: TreeThreads['task']; words: Set<string>; theirs: number }>;
+  rows: ReadonlyArray<{ t: OrgThread; task: TreeThreads['task']; words: Set<string>; theirs: number; head: string[] }>;
   seenIn: ReadonlyMap<string, number>;
   everywhere: number;
 }
@@ -101,7 +101,8 @@ export function subjectIndex(tree: readonly TreeThreads[], now: number): Subject
   const seenIn = new Map<string, number>();
   for (const r of rows) for (const w of r.words) seenIn.set(w, (seenIn.get(w) ?? 0) + 1);
   const everywhere = Math.max(EVERYWHERE_MIN, Math.ceil(rows.length / 6));
-  return { rows: rows.map((r) => ({ ...r, theirs: [...r.words].filter((w) => (seenIn.get(w) ?? 0) < everywhere).length })), seenIn, everywhere };
+  const telling = (w: string) => (seenIn.get(w) ?? 0) < everywhere;
+  return { rows: rows.map((r) => ({ ...r, theirs: [...r.words].filter(telling).length, head: headWords(r.t.title).filter(telling) })), seenIn, everywhere };
 }
 
 /** A word that names one item: a ticket or review id ("pr-4821", "tkt-100234"), a long number. */
@@ -121,14 +122,36 @@ function otherItems(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return mine.length > 0 && theirs.length > 0 && !mine.some((w) => b.has(w));
 }
 
+/**
+ * The subject a title names before its colon ("<subject>: <where it stands>"), as telling words;
+ * none when it has no such head. A colon inside a time ("11:30") or a link ("https://") is no head. Pure.
+ */
+export function headWords(title: string): string[] {
+  const at = title.search(/\uff1a|:(?!\/\/|\d)/);
+  return at > 0 && title.slice(at + 1).trim() ? [...subjectWords(title.slice(0, at))] : [];
+}
+
+/**
+ * One title names its subject before a colon and none of those words stand in the other title: two
+ * matters, however much of where they stand they share (2026-11-25, the thread monitor's [dup]: two
+ * reports whose comments went to two design docs of one person, "<report>: comments posted to <name>'s
+ * design doc" and "<name>'s <design>: your two comments are posted to the doc", read as one repeat;
+ * his data held four more such pairs, each sharing a state such as "fixed and live" or one finding
+ * in two regions). Pure.
+ */
+function otherHead(head: readonly string[], theirs: ReadonlySet<string>): boolean {
+  return head.length > 0 && !head.some((w) => theirs.has(w));
+}
+
 /** sameSubjectCandidates over an index. Pure. */
 export function candidatesIn(index: SubjectIndex, title: string): SubjectCandidate[] {
   const { rows, seenIn, everywhere } = index;
   const all = subjectWords(title);
   const mine = new Set([...all].filter((w) => (seenIn.get(w) ?? 0) < everywhere));
+  const head = headWords(title).filter((w) => mine.has(w));
   const out: SubjectCandidate[] = [];
   for (const r of rows) {
-    if (otherItems(all, r.words)) continue;
+    if (otherItems(all, r.words) || otherHead(head, r.words) || otherHead(r.head, all)) continue;
     const shared = sharedCount(mine, r.words);
     if (shared) out.push({ id: r.t.id, title: r.t.title, taskId: r.task.id, taskTitle: r.task.title, shared, of: mine.size, theirs: r.theirs, updatedAt: r.t.updatedAt });
   }
