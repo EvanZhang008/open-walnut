@@ -30,7 +30,7 @@ export const FACT_KEYS: Readonly<Record<string, readonly [FactKeyClass, string]>
   host: ['rewritten', 'the link\'s host'],
   messageIds: ['scoped', 'queue rows: none of another session (linesNotOthers); a row the leader never made stands'],
   messageId: ['scoped', 'a queue row: removed when it is another session\'s'],
-  exits: own('session:queue-left\'s step per row, by row id: the ledger reads it only for the ids its scoped messageIds keeps (delivery-ledger.ts)'),
+  exits: ['scoped', 'session:queue-left\'s step per row, keyed by queue row id: a key of another session\'s row is removed, as from messageIds'],
   dictationIds: own('the recordings dictated into a person\'s send (stt/dictation-ids.ts): Voice Accuracy pairs only a recording kept on this machine, never another session\'s object'),
   dictationText: TEXT,
   attemptId: ['scoped', 'a transfer attempt: only one the leader started on this host; else the fork-init is not said'],
@@ -94,6 +94,13 @@ export function factAsLeaderSays(name: string, data: unknown, o: { sid: string; 
     for (const k of SCOPED_KEYS) {
       if (!(k in out)) continue
       const v = out[k]
+      // An object keyed by queue row ids (session:queue-left's exits): keys are scoped as messageIds are.
+      if (k === 'exits') {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) { delete out[k]; continue }
+        const keep = new Set(o.scope('messageIds', Object.keys(v)))
+        out[k] = Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([id]) => keep.has(id)))
+        continue
+      }
       const ids = Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : typeof v === 'string' ? [v] : []
       const kept = new Set(o.scope(k, ids))
       if (k === 'attemptId') { if (!kept.has(String(v))) return null; continue }

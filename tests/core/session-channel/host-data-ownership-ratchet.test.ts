@@ -420,6 +420,8 @@ it('a fact names no queue row of another session, and only a transfer attempt st
   log!.append('mine', 'session:messages-delivered', { sessionId: 'mine', count: 2, messageIds: ['qm-other-1', 'qm-mine-2'] })
   log!.append('mine', 'session:message-queued', { sessionId: 'mine', messageId: 'qm-other-1', message: 'x' })
   log!.append('mine', 'session:message-queued', { sessionId: 'mine', messageId: 'qm-mine-2', message: 'y' })
+  // A row that left the host's queue (session-queue-exits.ts): said only for its own session's rows.
+  log!.append('mine', 'session:queue-left', { sessionId: 'mine', messageIds: ['qm-mine-1', 'qm-other-1'], exits: { 'qm-mine-1': { step: 'removed', why: 'left the queue unsent (it was parked)' }, 'qm-other-1': { step: 'read' } } })
   // A fork-init of another transfer's attempt is not said; of the one started here it is.
   log!.append('mine', 'transfer:fork-init', { attemptId: 'att-other', preassignedId: null, actualId: 'mine', renamed: false })
   log!.append('mine', 'transfer:fork-init', { attemptId: 'att-mine', preassignedId: null, actualId: 'mine', renamed: false })
@@ -431,6 +433,7 @@ it('a fact names no queue row of another session, and only a transfer attempt st
   expect(said('session:queued-cancelled').map((d) => d.messageIds)).toEqual([['qm-mine-1', 'qm-nobody']])
   expect(said('session:messages-delivered').map((d) => d.messageIds)).toEqual([['qm-mine-2']])
   expect(said('session:message-queued').map((d) => d.messageId)).toEqual([undefined, 'qm-mine-2'])
+  expect(said('session:queue-left').map((d) => d.messageIds)).toEqual([['qm-mine-1']])
   expect(said('transfer:fork-init').map((d) => d.attemptId)).toEqual(['att-mine'])
   expect(JSON.stringify(r.applied)).not.toContain('qm-other-1')
 })
