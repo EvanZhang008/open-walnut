@@ -235,8 +235,47 @@ function fitFixedTable(attrs: string, kept: string): string | null {
   if (!fixed) return null;
   const withoutStyle = kept.replace(ATTR, (attr, key: string) => (key.toLowerCase() === 'style' ? '' : attr)).trim();
   const width = `width:min(${fixed.px}px,100%) !important`;
-  const style = fixed.style ? `${stripRemoteCssUrls(fixed.style)};${width}` : width;
+  const style = fixed.style ? `${fitBoxWidths(stripRemoteCssUrls(fixed.style), false)};${width}` : width;
   return `${withoutStyle}${withoutStyle ? ' ' : ''}style="${style.replace(/"/g, '&quot;')}"`;
+}
+
+/** Every `width` or `min-width` declaration in an inline style (never `max-width`). */
+const CSS_BOX_WIDTH_DECL = /(^|;)(\s*)(min-width|width)\s*:\s*([^;!]*?)\s*(?:!important)?\s*(?=;|$)/gi;
+
+/**
+ * Block boxes whose own pixel `width` is fitted too. Not a table (`fitFixedTable` reads its
+ * attribute as well), not its cells, rows or columns (a percentage inside `min()` makes a cell's
+ * width auto, which re-spread every column of a card), and not an image (`max-width: 100%` in the
+ * frame reset already holds it).
+ */
+const FITS_OWN_WIDTH = new Set(['div', 'section', 'article', 'header', 'footer', 'main', 'aside', 'nav', 'p', 'center', 'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
+/**
+ * A pixel `min-width` in an inline style, and a block box's pixel `width`, become
+ * `min(<width>, 100%)`.
+ *
+ * The same paper-edge cut as a fixed table width, by other declarations. A newsletter's 600px
+ * wrapper said `width:600px; min-width:600px` (2026-11-24, a cloud provider's pricing notice), so
+ * the fitted width yielded and the minimum did not, and at a 520px paper both engines laid the
+ * text out at 624px and cut every line; a sign-in notice holds a 400px div. On fifteen real bodies
+ * at a 520px paper, WebKit's overflowing layouts went from 5 to 2. Where the paper is wider,
+ * nothing changes.
+ */
+function fitBoxWidths(style: string, ownWidth: boolean): string {
+  // A block box in normal flow fills its container, so `auto` capped at the declared width is the
+  // same box wherever the paper is wider, and it also yields inside a table cell, where `min()`
+  // with a percentage still counts its pixels toward the cell's width (a sign-in notice's 400px
+  // div kept its cell 34px past a 520px paper). A floated or inline-block box would shrink to its
+  // content under `auto`, so it keeps `min()`.
+  const shrinks = /(^|;)\s*(float\s*:\s*(left|right)|display\s*:\s*inline)/i.test(style);
+  return style.replace(CSS_BOX_WIDTH_DECL, (whole, lead: string, space: string, prop: string, value: string) => {
+    const name = prop.toLowerCase();
+    if (name === 'width' && !ownWidth) return whole;
+    const found = PX_WIDTH.exec(value);
+    if (!found) return whole;
+    if (name === 'width' && !shrinks) return `${lead}${space}width:auto !important;max-width:${found[1]}px !important`;
+    return `${lead}${space}${name}:min(${found[1]}px,100%) !important`;
+  });
 }
 
 /**
@@ -281,7 +320,7 @@ export function hardenMailHtml(raw: string): string {
         }
         if (lower === 'style') {
           const value = attrValue(assignment);
-          const clean = stripRemoteCssUrls(value);
+          const clean = fitBoxWidths(stripRemoteCssUrls(value), FITS_OWN_WIDTH.has(tag));
           if (clean === value) return attr;
           changed = true;
           return `${key}="${clean.replace(/"/g, '&quot;')}"`;

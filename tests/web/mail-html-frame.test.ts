@@ -297,6 +297,38 @@ describe('a fixed-width table fits the paper without losing its width', () => {
 });
 
 /**
+ * Other declarations that hold the paper open the same way (2026-11-24: a pricing notice's 600px
+ * wrapper also said `min-width:600px`, so its fitted width yielded and the minimum did not).
+ */
+describe('a pixel minimum or a block box width fits the paper too', () => {
+  it('fits a pixel min-width on a table, after its fitted width', () => {
+    const kept = hardenMailHtml('<table width="600" style="margin:0 auto; max-width:600px; min-width:600px; width:600px"><tr><td>x</td></tr></table>');
+    expect(kept).toContain('min-width:min(600px,100%) !important');
+    expect(kept).toContain('width:min(600px,100%) !important');
+    expect(kept).not.toMatch(/min-width:\s*600px/);
+    expect(kept).toContain('max-width:600px');
+  });
+
+  it('fits a pixel min-width on any element, and leaves a percentage one alone', () => {
+    expect(hardenMailHtml('<div style="min-width: 640px; color: #333">x</div>')).toContain('<div style="min-width:min(640px,100%) !important; color: #333">');
+    const percent = '<div style="min-width: 100%">x</div>';
+    expect(hardenMailHtml(percent)).toBe(percent);
+  });
+
+  it('gives a block box auto width capped at its pixel width, and a floated or inline-block one min()', () => {
+    expect(hardenMailHtml('<div style="width: 400px; color: #333">x</div>')).toContain('width:auto !important;max-width:400px !important; color: #333');
+    expect(hardenMailHtml('<div style="display: inline-block; width: 280px">x</div>')).toContain('width:min(280px,100%) !important');
+    expect(hardenMailHtml('<div style="float: left; width: 280px">x</div>')).toContain('width:min(280px,100%) !important');
+  });
+
+  it('leaves a cell, an image and a max-width alone', () => {
+    for (const html of ['<table><tr><td style="width: 518px">x</td></tr></table>', '<img src="https://cdn.example.invalid/a.png" style="width: 600px">', '<div style="max-width: 600px">x</div>']) {
+      expect(hardenMailHtml(html)).toBe(html);
+    }
+  });
+});
+
+/**
  * An image that points INTO the message (a `cid:` part) can never arrive: this console serves no
  * attachment bytes, and the frame's policy could not fetch them if it did. So the browser painted
  * its broken-image glyph in the middle of the prose, which reads as a broken reader rather than as

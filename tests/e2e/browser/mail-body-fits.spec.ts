@@ -25,6 +25,12 @@ const SHAPES: Record<string, string> = {
   'long link in a cell': `<table><tr><td>Open https://tracking.example.invalid/c/eJyNkMFuwyAQRL_GdzBgEsXHqrfeKvXSa4XNGqMaEwFp1L8vjtM2laqqnFaa2Z3dNz3RMG2ECWi5ZrUSWsNqS6oN6qjZZCEjTbaYnThHK3Q2jZYL6t9X91 to read it</td></tr></table>`,
   // The newsletter shape: a table with a fixed pixel width (fitFixedTable).
   'fixed-width table': `<table width="720" border="1"><tr><td>Timetable</td><td>Departs</td><td>Arrives</td></tr></table>`,
+  // The pricing-notice shape: a centred wrapper whose pixel width is also its minimum (fitBoxWidths).
+  'min-width wrapper': `<table width="600" style="margin: 0 auto; max-width: 600px; min-width: 600px; width: 600px"><tr><td>
+    <table style="width: 598px"><tr><td style="padding: 30px 40px 0 40px">${'You are receiving this communication because you have active projects using these tools. '.repeat(3)}</td></tr></table>
+  </td></tr></table>`,
+  // A block box with a pixel width, inside a full-width shell table's cell.
+  'fixed-width block in a cell': `<table width="100%"><tr><td align="center"><div style="width: 520px; border-bottom: 1px solid #ddd">${'There was a recent sign-in to your account from a new device. '.repeat(3)}</div></td></tr></table>`,
   // The `nowrap` attribute rather than a style.
   'nowrap attribute': `<table><tr><td nowrap>${'Ferry departures from the north pier every hour '.repeat(4)}</td></tr></table>`,
 }
@@ -32,7 +38,7 @@ const SHAPES: Record<string, string> = {
 for (const [name, html] of Object.entries(SHAPES)) {
   test(`a mail body with ${name} fits the paper`, async ({ page }) => {
     const doc = buildMailSrcdoc(hardenMailHtml(html), { allowRemoteImages: false })
-    for (const width of [360, 560]) {
+    for (const width of [360, 520, 560]) {
       await page.setViewportSize({ width, height: 700 })
       await page.setContent(doc)
       const box = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
