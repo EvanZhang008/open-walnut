@@ -13,6 +13,7 @@ import { callerSide, emptyAgg, mergeAgg, msPercentile, ownFaults, type Agg, type
 import { readAlive, readHours, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 import { RECORDED_NON_OPS } from './counters.js'
+import { sleptBetween } from '../../lib/sleep-ledger.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -232,15 +233,39 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   return out
 }
 
-/** The share of minutes in [since, until) this server recorded (1 = all). */
-export function recordedShare(since: number, until: number): number {
+/** How far back a watch that ended Unknown is judged again (rejudgeUnknown): the sleep ledger keeps a week. */
+export const REJUDGE_UNKNOWN_MS = 7 * 86_400_000
+
+/**
+ * A watch that ended Unknown, judged again at its own check time with what is known now, or null when it
+ * still reads Unknown (or never did). Its time is over, so too little use is final, never extended. For
+ * the watches judged before the machine's sleep was left out of the recorded share (2026-11-25).
+ */
+export function rejudgeUnknown(w: Watch): (WatchVerdict & { state: Exclude<WatchState, 'watching' | 'dropped'> }) | null {
+  if (w.state !== 'unknown' || !w.checkedAt) return null
+  const v = judgeWatch({ ...w, state: 'watching', extended: true }, w.checkAt)
+  return v.state === 'unknown' || v.state === 'extended' ? null : { ...v, state: v.state }
+}
+
+/**
+ * The share of the minutes in [since, until) this machine was awake that this server recorded (1 = all).
+ *
+ * A machine asleep runs no server and no one uses it: those minutes are left out, never "not recording"
+ * (2026-11-25: 15 watches in three days ended Unknown, every one on the Mac's sleep: 205 minutes one night
+ * and 47 in the day, while its 117 restarts cost 13 minutes; a restart's own minute is recorded twice, so
+ * hours read 61 to 64). Sleep comes from the sleep ledger (lib/sleep-ledger.ts, a week of it).
+ */
+export function recordedShare(since: number, until: number, slept: (from: number, to: number) => number = sleptBetween): number {
   const alive = readAlive(Math.floor(since / HOUR_MS) * HOUR_MS)
   let want = 0
   let got = 0
   for (let h = Math.floor(since / HOUR_MS) * HOUR_MS; h < until; h += HOUR_MS) {
-    const span = Math.max(0, Math.min(until, h + HOUR_MS) - Math.max(since, h)) / 60_000
-    want += span
-    got += Math.min(span, alive.get(h) ?? 0)
+    const from = Math.max(since, h)
+    const to = Math.min(until, h + HOUR_MS)
+    if (!(to > from)) continue
+    const awake = Math.max(0, to - from - slept(from, to)) / 60_000
+    want += awake
+    got += Math.min(awake, alive.get(h) ?? 0)
   }
   return want ? got / want : 1
 }

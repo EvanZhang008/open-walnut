@@ -8,7 +8,7 @@ import { flushUsage, setWatchedOps, startUsageRecorder, stopUsageRecorder } from
 import { lastEventLine, routeUsageAlarm, sendDueNotes, type RouteDeps } from './route.js'
 import { usageTargetOf } from '../health-monitor/usage-alarms.js'
 import type { RouteAlarmInput, RouteAlarmResult } from '../health-monitor/types.js'
-import { judgeWatch, listWatches, putWatch, type Watch } from './watches.js'
+import { REJUDGE_UNKNOWN_MS, judgeWatch, listWatches, putWatch, rejudgeUnknown, type Watch } from './watches.js'
 import { clause } from '../../utils/format.js'
 
 export const NOTE_FROM = 'Walnut: real use'
@@ -96,6 +96,29 @@ async function checkDueWatches(now = Date.now()): Promise<void> {
   }
 }
 
+let rejudged = false
+
+/**
+ * Once a server start: watches that ended Unknown in the last week, judged again (watches.ts
+ * rejudgeUnknown). Each new verdict is kept and told as a fresh one is; one still Unknown is left.
+ */
+async function rejudgeUnknownWatches(now = Date.now()): Promise<void> {
+  if (rejudged) return
+  rejudged = true
+  const recent = listWatches({ states: ['unknown'], limit: 1_000 }).filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS)
+  for (const w of recent) {
+    const v = rejudgeUnknown(w)
+    if (!v) continue
+    const done: Watch = { ...w, state: v.state, result: v.results }
+    putWatch(done)
+    log.obs.info('usage watch: judged again', { watch: w.id, taskId: w.taskId, state: v.state })
+    if (!(await realUseOn())) continue
+    const summary = `Judged again (it had read Unknown, the machine's sleep counted as time not recorded): ${v.summary}`
+    const told = await tellVerdict(done, summary).catch((err) => `not told: ${err instanceof Error ? err.message : String(err)}`)
+    putWatch({ ...done, told })
+  }
+}
+
 /** The verdict to its task while open, else (unless it passed) to its project's lead. */
 async function tellVerdict(w: Watch, summary: string): Promise<string> {
   const task = await routeDeps.taskInfo(w.taskId)
@@ -142,6 +165,7 @@ export function startRealUse(): void {
     void (async () => {
       try {
         setWatchedOps(listWatches({ states: ['watching'] }).flatMap((w) => w.targets.filter((t) => t.startsWith('op:')).map((t) => t.slice(3))))
+        await rejudgeUnknownWatches()
         await checkDueWatches()
         await sendDueNotes(routeDeps)
       } catch (err) {
@@ -155,6 +179,7 @@ export function startRealUse(): void {
 export function stopRealUse(): void {
   if (timer) clearInterval(timer)
   timer = null
+  rejudged = false
   void import('../event-bus.js').then(({ bus }) => bus.unsubscribe(CLOSE_SUBSCRIBER)).catch(() => { /* never subscribed */ })
   stopUsageRecorder()
 }
