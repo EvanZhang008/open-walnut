@@ -20,7 +20,10 @@ import XCTest
 /// whose session serves the full ten-row catalog.
 ///
 /// RUN IT WITH `ios-native/tests/ui/run-ui-tests.sh` and the stub running (see
-/// `MidTurnQueueUITests` for why a bare `xcodebuild` skips every case here).
+/// `MidTurnQueueUITests` for why a bare `xcodebuild` skips every case here):
+/// `ios-native/tests/ui/with-ui-stub.sh <log> bash ios-native/tests/ui/run-ui-tests.sh …` on a
+/// Mac, or `scripts/ios-fleet-test.sh --stub ui -- -only-testing:WalnutUITests/ModelPillHealUITests`
+/// from any host.
 ///
 /// The sheet's Cost, Speed and Details rows are tested in ModelSheetFoldsUITests.swift,
 /// an extension of this class that shares its helpers (the ones without `private`).
@@ -1097,19 +1100,20 @@ final class ModelPillHealUITests: XCTestCase {
     /// Tasks tab stays mounted while the user is on Inbox; its composer must not
     /// ask while hidden (not on a stream reconnect, not on the 60s TTL), must ask
     /// once when the user comes back to it, and must go quiet for good once the
-    /// page is popped.
+    /// page goes away. A session page on the Tasks tab sits beside the board drawer
+    /// and is never popped (4d941ed0e5, 2026-11-09): it goes away when another
+    /// session takes the page, so the test opens the stub's second session.
     @MainActor
     func testASessionPagesComposerOffScreenNeverAsks() async throws {
         let stub = try await stubUnderTest()
         try await stub.reset()
         try await stub.setEngine("lane")
-        try await stub.call("POST", "__stub/work-session?on=1")
+        try await stub.call("POST", "__stub/work-session?on=1&second=1")
         let app = try launchPaired()
         let tasksTab = app.tab(.tasks)
         XCTAssertTrue(tasksTab.waitForExistence(timeout: 60), "the tab bar never appeared")
         tasksTab.tap()
-        let row = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'board.row.'")).firstMatch
+        let row = element(app, "board.row.task-stub-work")
         XCTAssertTrue(row.waitForExistence(timeout: 45), "the board never showed the work task")
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
         let pill = app.buttons["composer.modelPill"]
@@ -1158,13 +1162,27 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertEqual(sessionAsks(records, backAt).count, 1, "coming back to the session page asked more than once")
         XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 10))
 
-        // Popped: the composer is gone, and nothing it armed may fire.
-        let back = app.navigationBars.buttons.element(boundBy: 0)
-        XCTAssertTrue(back.waitForExistence(timeout: 5), "no back button on the session page")
-        back.tap()
-        XCTAssertTrue(waitUntil(timeout: 10) { !app.buttons["composer.modelPill"].exists || !self.element(app, "chat.composer").exists },
-                      "the session page did not pop")
-        let poppedAt = Date()
+        // Gone: another session takes the page (the board drawer, then its row). The
+        // work session's composer is gone with its page, and nothing it armed may fire.
+        let title = element(app, "session.title")
+        XCTAssertTrue(title.label.hasPrefix("Stub work task"), "the page shows \(title.label), not the work session")
+        app.buttons["tasks.menu"].tap()
+        let next = element(app, "board.row.task-stub-next")
+        XCTAssertTrue(next.waitForExistence(timeout: 10), "the board drawer did not show the second task")
+        // The drawer slides in: a tap on a row still moving is lost.
+        XCTAssertTrue(waitToMatch(next, "isHittable == true"), "the second task's row never became tappable")
+        waitStill(next)
+        let leftForGoodAt = Date()
+        next.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
+        XCTAssertTrue(waitUntil(timeout: 15) { title.exists && title.label.hasPrefix("Stub review task") },
+                      "the second session did not take the page (it shows \(title.exists ? title.label : "nothing"))")
+        // A live control: the page that took over asks for its own catalog, so a silent
+        // record below is the work session's composer being gone, not asks going unseen.
+        XCTAssertTrue(waitUntil(timeout: 15) {
+            ((try? self.syncRequests(stub)) ?? []).contains { $0.at > leftForGoodAt && $0.path.hasSuffix("/sessions/sess-stub-next/model-options") }
+        }, "the second session's composer never asked for its catalog")
+        XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 10), "the second session's pill reads \(pill.label)")
+        try await stub.screenshot(app, "model-pill-14-second-session-took-the-page")
         try await Task.sleep(for: .seconds(8))
         try await stub.dropStreams()
         try await Task.sleep(for: .seconds(48))
@@ -1173,10 +1191,10 @@ final class ModelPillHealUITests: XCTestCase {
         app.activate()
         try await Task.sleep(for: .seconds(8))
         records = try await stub.requests()
-        let afterPop = sessionAsks(records, poppedAt)
-        print("[evidence] session page popped \(Int(Date().timeIntervalSince(poppedAt)))s, home and back: "
-              + "\(afterPop.count) model asks for the session")
-        XCTAssertTrue(afterPop.isEmpty, "the popped session page's composer asked \(afterPop.count) time(s)")
+        let afterGone = sessionAsks(records, leftForGoodAt)
+        print("[evidence] work session page gone \(Int(Date().timeIntervalSince(leftForGoodAt)))s, home and back: "
+              + "\(afterGone.count) model asks for the session")
+        XCTAssertTrue(afterGone.isEmpty, "the gone session page's composer asked \(afterGone.count) time(s)")
     }
 
     // MARK: - Scenario 9: the Mac goes away after a good answer (gate r2 D3)

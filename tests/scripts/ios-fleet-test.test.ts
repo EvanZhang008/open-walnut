@@ -670,6 +670,19 @@ describe('ios-fleet-test.sh', () => {
     expect(r.calls.find((c) => c.op === 'host_exec')!.args.host).toBe('mac-two')
   })
 
+  it('--stub pairs a ui run to the stub on the Mac, and is refused for any other run', () => {
+    const bin = fakeWalnut([{ host: 'mac-two', loadPerCpu: 0.2 }], outTgz())
+    const r = run(['--host', 'mac-two', '--stub', 'ui', '--', '-only-testing:WalnutUITests/ModelPillHealUITests'], bin)
+    expect(r.status, r.stderr).toBe(0)
+    const line = (r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]
+    expect(line).toMatch(/remote-run\.sh" "\$D" ui --stub --min-idle 25 --max-load 2 -- -only-testing:WalnutUITests\/ModelPillHealUITests/)
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    const unit = run(['--host', 'mac-two', '--stub', 'unit'], bin)
+    expect(unit.status).toBe(64)
+    expect(unit.stderr).toContain('--stub pairs a ui run to the stub')
+    expect(fs.existsSync(path.join(dir, 'calls.jsonl'))).toBe(false)
+  })
+
   it('on the real checkout, the repo files the iOS tests read are all in what is sent', () => {
     // The iOS tests of this repo: every repo-root file they name exists, so the scan finds it.
     const root = path.resolve(__dirname, '../..')

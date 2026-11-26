@@ -126,6 +126,11 @@
 //                               surface): GET /tasks, /focus/tasks, /tasks/:id,
 //                               /sessions, /sessions/:id, its transcript and its
 //                               SSE stream. Off (the default) they answer as before.
+//                               `&second=1`: a second pinned task with its own
+//                               session (task-stub-next / sess-stub-next, the same
+//                               catalog and controls), so a test can switch the Tasks
+//                               tab's page to another session: the only way a session
+//                               page there goes away for good.
 //                               `&taskMode=asking`: the task asks the user one thing
 //                               (an `ask` Action needed item from the lane session),
 //                               and POST /sessions/:id/messages answers 202.
@@ -405,6 +410,32 @@ let workSession = false
 let workProcessStatus = 'idle'
 let workTaskMode = 'live'
 let workTaskEdits = {}
+/** `/__stub/work-session?second=1`: a second pinned task with its own session. */
+let workSecond = false
+const NEXT_TASK_ID = 'task-stub-next'
+const NEXT_SESSION_ID = 'sess-stub-next'
+
+/** The sessions whose model catalog, controls and model writes this stub answers. */
+function servesSession(id) {
+  return id === LANE_SESSION_ID || (workSession && workSecond && id === NEXT_SESSION_ID)
+}
+
+function nextTask() {
+  return {
+    id: NEXT_TASK_ID, title: 'Stub review task', status: 'in_progress', phase: 'IN_PROGRESS',
+    priority: 'none', project: 'Stub', pinned: true,
+    created_at: '2026-09-24T00:00:00Z', updated_at: '2026-09-24T00:00:00Z',
+  }
+}
+
+function nextSessionRow() {
+  const now = new Date().toISOString()
+  return {
+    id: NEXT_SESSION_ID, title: 'Stub review session', task_id: NEXT_TASK_ID, task_title: 'Stub review task',
+    project: 'Stub', host: '', process_status: 'idle', model: FULL_CATALOG.current,
+    mode: null, started_at: now, last_active_at: now, message_count: 0, cwd: '/tmp', pinned: false,
+  }
+}
 
 function workTask() {
   return {
@@ -459,11 +490,36 @@ function answerWorkSession(p, req, res, raw) {
       id: 'task-stub-other', title: 'Stub release notes', status: 'todo', phase: 'TODO', priority: 'none',
       project: 'Stub', created_at: '2026-09-25T00:00:00Z', updated_at: '2026-09-25T00:00:00Z',
     }
-    const tasks = ['live', 'long-title', 'asking'].includes(workTaskMode) ? [workTask()] : []
+    const tasks = ['live', 'long-title', 'asking'].includes(workTaskMode)
+      ? [workTask(), ...(workSecond ? [nextTask()] : [])] : []
     return json(res, 200, { tasks: workTaskMode === 'asking' ? [...tasks, other] : tasks, syncedAt: now }), true
   }
   if (p === '/api/v1/focus/tasks') {
-    return json(res, 200, { pinned_tasks: [WORK_TASK_ID], focus_tasks: [WORK_TASK_ID] }), true
+    const ids = [WORK_TASK_ID, ...(workSecond ? [NEXT_TASK_ID] : [])]
+    return json(res, 200, { pinned_tasks: ids, focus_tasks: ids }), true
+  }
+  if (workSecond) {
+    if (p === `/api/v1/tasks/${NEXT_TASK_ID}`) {
+      return json(res, 200, { task: { ...nextTask(), session_ids: [NEXT_SESSION_ID] } }), true
+    }
+    if (p === `/api/v1/sessions/${NEXT_SESSION_ID}`) {
+      const row = nextSessionRow()
+      return json(res, 200, {
+        session: {
+          claudeSessionId: NEXT_SESSION_ID, process_status: 'idle', title: row.title, taskId: NEXT_TASK_ID,
+          project: 'Stub', host: '', cwd: '/tmp', startedAt: now, lastActiveAt: now, messageCount: 0,
+          model: row.model,
+        },
+        pendingPermissions: [],
+      }), true
+    }
+    if (p === `/api/v1/sessions/${NEXT_SESSION_ID}/transcript`) {
+      return json(res, 200, { sessionId: NEXT_SESSION_ID, exportedAt: now, truncated: false, messages: [] }), true
+    }
+    if (p === `/api/v1/sessions/${NEXT_SESSION_ID}/stream`) {
+      attachStream(`session:${NEXT_SESSION_ID}`, res)
+      return true
+    }
   }
   if (p === `/api/v1/tasks/${WORK_TASK_ID}`) {
     if (workTaskMode === 'missing') return notFound(res, 'This task no longer exists on the server.'), true
@@ -472,7 +528,10 @@ function answerWorkSession(p, req, res, raw) {
     }
     return json(res, 200, { task: { ...workTask(), session_ids: [LANE_SESSION_ID] } }), true
   }
-  if (p === '/api/v1/sessions') return json(res, 200, { sessions: workTaskMode === 'completed' ? [] : [workSessionRow()], syncedAt: now }), true
+  if (p === '/api/v1/sessions') {
+    const rows = workTaskMode === 'completed' ? [] : [workSessionRow(), ...(workSecond ? [nextSessionRow()] : [])]
+    return json(res, 200, { sessions: rows, syncedAt: now }), true
+  }
   if (p === `/api/v1/sessions/${LANE_SESSION_ID}`) {
     const row = workSessionRow()
     return json(res, 200, {
@@ -598,6 +657,7 @@ function resetAll() {
   workProcessStatus = 'idle'
   workTaskMode = 'live'
   workTaskEdits = {}
+  workSecond = false
   statusMode = 'live'
   statusCloudChat = null
   answeredByMode = 'mac'
@@ -2031,6 +2091,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/__stub/work-session' && req.method === 'POST') {
       workSession = url.searchParams.get('on') === '1'
       workTaskMode = url.searchParams.get('taskMode') || 'live'
+      workSecond = url.searchParams.get('second') === '1'
       for (const letter of inboxLetters.filter((l) => l.id === 'lt-stub-reply-a')) {
         letter.taskRefs = [WORK_TASK_ID]
         if (workTaskMode === 'long-title') letter.sender.taskTitle = workTask().title
@@ -2235,7 +2296,7 @@ const server = http.createServer(async (req, res) => {
   if (answerModelSheetFacts(p, req, res)) return
   const modelOptionsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/model-options$/)
   if (modelOptionsMatch && req.method === 'GET') {
-    if (decodeURIComponent(modelOptionsMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')
+    if (!servesSession(decodeURIComponent(modelOptionsMatch[1]))) return notFound(res, 'no such session')
     return json(res, 200, {
       ...FULL_CATALOG,
       current: laneModel ?? FULL_CATALOG.current,
@@ -2262,7 +2323,7 @@ const server = http.createServer(async (req, res) => {
   // the mode registry's labels.
   const controlsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/controls$/)
   if (controlsMatch && (req.method === 'GET' || req.method === 'POST')) {
-    if (decodeURIComponent(controlsMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')
+    if (!servesSession(decodeURIComponent(controlsMatch[1]))) return notFound(res, 'no such session')
     if (req.method === 'POST') {
       let payload = {}
       try { payload = JSON.parse(raw || '{}') } catch { /* answered as an empty body */ }

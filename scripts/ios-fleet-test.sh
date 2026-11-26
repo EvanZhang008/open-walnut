@@ -30,6 +30,8 @@
 #   --video          record the simulator's screen while the tests run (run.mp4); for ui:
 #                    unit tests do not drive the screen, so a unit video shows the app idle
 #   --keep-xcresult  bring the whole result bundle back too (it can be large)
+#   --stub           for ui: pair the app to ios-native/tests/ui/mid-turn-stub-server.mjs, started
+#                    on that Mac for the run (the tests that call `stubUnderTest()` skip without it)
 #   --min-idle P     refuse a Mac with under P percent of its CPU idle (default 25)
 #   --max-load N     refuse a Mac whose load per CPU is over N (default 2, 28 on 14 cores, the load
 #                    watchdog's line). The old 0.75 kept a run waiting 110 minutes on a Mac with room
@@ -74,7 +76,7 @@ KEY_LINES='^(remote-run:|FLEET_RESULT|\*\* (BUILD|TEST)|Test Case .* failed|.*: 
 while [ $# -gt 0 ]; do
   case $1 in
     --host) HOST=$2; shift ;;
-    --video|--keep-xcresult) FLAGS+=("$1") ;;
+    --video|--keep-xcresult|--stub) FLAGS+=("$1") ;;
     --udid) FLAGS+=(--udid "$2"); shift ;;
     --max-load) MAX_LOAD=$2; shift ;;
     --min-idle) MIN_IDLE=$2; shift ;;
@@ -107,6 +109,7 @@ shift
 [ "${1:-}" = "--" ] && shift
 ARGS=("$@")
 [ "$MODE" != run ] || [ ${#ARGS[@]} -gt 0 ] || die "run needs a command after --" 64
+case " ${FLAGS[*]-} " in *" --stub "*) [ "$MODE" = ui ] || die "--stub pairs a ui run to the stub: use it with ui" 64 ;; esac
 case " ${FLAGS[*]-} " in *" --video "*) [ "$MODE" != unit ] || say "--video with unit records the app idle (unit tests do not drive the screen); use it with ui to see a run" ;; esac
 
 command -v walnut >/dev/null || die "the walnut command is not on PATH (this runs from a Walnut task session)"

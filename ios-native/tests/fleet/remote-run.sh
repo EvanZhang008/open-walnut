@@ -3,10 +3,11 @@
 # task that runs on another host. The caller sends the sources (src.tgz, unpacked into
 # <run-dir>/src), runs this through host_exec, and fetches <run-dir>/out.tgz back.
 #
-#   remote-run.sh <run-dir> <unit|ui|build|run> [--video] [--keep-xcresult] [--min-idle P] [--max-load N] [--udid U] [-- ARGS...]
+#   remote-run.sh <run-dir> <unit|ui|build|run> [--video] [--keep-xcresult] [--stub] [--min-idle P] [--max-load N] [--udid U] [-- ARGS...]
 #
 #   unit   xcodebuild test -only-testing:WalnutTests ARGS
-#   ui     tests/ui/run-ui-tests.sh ARGS (the pairing-aware XCUITest runner)
+#   ui     tests/ui/run-ui-tests.sh ARGS (the pairing-aware XCUITest runner); with --stub, paired
+#          to tests/ui/mid-turn-stub-server.mjs (tests/ui/with-ui-stub.sh, its log out/stub.log)
 #   build  xcodebuild build-for-testing ARGS
 #   run    ARGS is a command, run in ios-native with WALNUT_SIM_UDID set
 #
@@ -32,12 +33,13 @@
 set -uo pipefail
 
 RUN_DIR=${1:?run dir}; MODE=${2:?mode}; shift 2
-VIDEO=0; KEEP_XCRESULT=0; MIN_IDLE=25; MAX_LOAD=2; ASKED_UDID=""; AUDIO_WHY=""
+VIDEO=0; KEEP_XCRESULT=0; STUB=0; MIN_IDLE=25; MAX_LOAD=2; ASKED_UDID=""; AUDIO_WHY=""
 while [ $# -gt 0 ]; do
   case $1 in
     --video) VIDEO=1 ;;
     --udid) ASKED_UDID=$2; shift ;;
     --keep-xcresult) KEEP_XCRESULT=1 ;;
+    --stub) STUB=1 ;;
     --max-load) MAX_LOAD=$2; shift ;;
     --min-idle) MIN_IDLE=$2; shift ;;
     --audio) AUDIO_WHY=$2; shift ;;
@@ -251,12 +253,15 @@ XCB=(-project Walnut.xcodeproj -scheme Walnut -destination "platform=iOS Simulat
 # In the background with a wait, so a stop's SIGTERM runs the trap at once (bash defers it
 # until a foreground child exits).
 [ "$MODE" != run ] || [ $# -gt 0 ] || refuse 64 "run needs a command after --" failed
+# ui: the pairing-aware runner, paired to the mid-turn stub with --stub.
+UI_RUN=(bash tests/ui/run-ui-tests.sh "$@")
+[ "$STUB" = 0 ] || UI_RUN=(bash tests/ui/with-ui-stub.sh "$OUT/stub.log" "${UI_RUN[@]}")
 case $MODE in
   unit) "${POLITE[@]}" xcodebuild test "${XCB[@]}" -resultBundlePath "$OUT/Test.xcresult" -only-testing:WalnutTests "$@" & ;;
   build) "${POLITE[@]}" xcodebuild build-for-testing "${XCB[@]}" "$@" & ;;
   # This run holds its simulator alone (its own lock, or the queue's lease): the UI runner takes
   # no lane lock of the machine's on top (one would be the owner's own lane a).
-  ui) WALNUT_UITEST_LEASE_HELD=1 WALNUT_UITEST_DD="$DERIVED" WALNUT_UITEST_RESULT_BUNDLE="$OUT/Test.xcresult" "${POLITE[@]}" bash tests/ui/run-ui-tests.sh "$@" & ;;
+  ui) WALNUT_UITEST_LEASE_HELD=1 WALNUT_UITEST_DD="$DERIVED" WALNUT_UITEST_RESULT_BUNDLE="$OUT/Test.xcresult" "${POLITE[@]}" "${UI_RUN[@]}" & ;;
   run) "${POLITE[@]}" "$@" & ;;
   *) refuse 64 "unknown mode $MODE (unit, ui, build, run)" failed ;;
 esac
