@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { PHONE, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
+import { PHONE, expectPageNameForReaders, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
 import { cssColorToRgba } from './css-color'
 
 const SHOTS = '/tmp/mobile-web/phone-pages-r3'
@@ -190,10 +190,7 @@ test('N2-19: a routine row with an error keeps every line at 12 px and every con
   const smallComposer = await findSmallTargets(page, '.routines-view')
   expect(smallComposer, JSON.stringify(smallComposer)).toEqual([])
   // One title (the bar's) and a description without a dash.
-  // The page's own title stays for screen readers only (page-head.css, .page-name): a 1 px box.
-  const title = page.locator('.page-header .page-title', { hasText: 'Routines' })
-  await expect(title).toBeAttached()
-  expect(await title.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(1)
+  await expectPageNameForReaders(page, page.locator('.page-header .page-title', { hasText: 'Routines' }), 'Routines')
   expect(await page.locator('.page-header').innerText()).not.toMatch(/[\u2013\u2014]/)
   expect(await view.locator('textarea').first().evaluate((el) => getComputedStyle(el).resize)).toBe('none')
   await shot(page, 'n2-19-routine-error')

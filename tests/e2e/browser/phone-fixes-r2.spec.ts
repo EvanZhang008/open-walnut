@@ -6,7 +6,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs, seedRecentOpened } from './todo-panel-helpers'
-import { PHONE, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
+import { PHONE, expectPageNameForReaders, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
 void findSmallTargets; void findSmallText; void openDrawer
 
 /** The bar's Back (exact: a session titled "Background ..." also matches /Back/). */
@@ -359,8 +359,7 @@ test('N2-19: Routines on a phone: one title (the bar\'s), finger-sized controls,
   const view = page.locator('.routines-view').first()
   await expect(view).toBeVisible({ timeout: 15_000 })
   await page.waitForTimeout(800)
-  await expect(page.locator('.page-header .page-title', { hasText: 'Routines' })).toBeHidden()
-  await expect(page.locator('.phone-topbar .phone-topbar-title-text')).toHaveText('Routines')
+  await expectPageNameForReaders(page, page.locator('.page-header .page-title', { hasText: 'Routines' }), 'Routines')
   const small = await findSmallTargets(page, '.routines-view')
   expect(small, JSON.stringify(small)).toEqual([])
   const tiny = await findSmallText(page, 12, '.routines-view')

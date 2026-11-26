@@ -341,7 +341,7 @@ test('fresh remote host: a bare word lists the matching home folders, picking on
   const home = list(page).locator('[data-section-id="home:devbox"]')
   const label = home.locator('.sps-section-label')
   await expect(label).toBeVisible()
-  expect(await label.innerText()).toContain('HOME FOLDERS')
+  expect(await label.innerText()).toContain('home folders')
   const rows = home.locator('.sps-path-item')
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText('~/workplace')

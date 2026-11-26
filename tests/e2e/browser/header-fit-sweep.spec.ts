@@ -84,6 +84,25 @@ test('every page in the sidebar: its headers fit at 1512, 1280, 1024 and phone w
   expect(found).toEqual({})
 })
 
+// The check itself (2026-11-26: a phone's `.page-name` title, kept for screen readers as a 1 px
+// clipped box, read as "h1.page-title is 1px, needs 48px" on Apps): a title kept for screen readers
+// is not drawn, so not squeezed, while a title its row squeezes is still found.
+test('the check skips a title kept for screen readers and still finds a squeezed one', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      header { display: flex; align-items: center; gap: 8px; width: 160px; }
+      header button { flex: none; width: 60px; }
+      header.reader-head { width: 240px; }
+      .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      .squeezed { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
+    <header class="reader-head"><div><h1 class="page-title sr">Apps</h1><p>Apps</p></div><button>New</button><button>More</button></header>
+    <header class="squeezed-head"><h1 class="page-title squeezed">A long page title</h1><button>New</button><button>More</button></header>`)
+  const found = await page.evaluate(findHeaderProblems, HEADER_TITLE_MIN_PX)
+  expect(found.filter((p) => p.header === 'header.reader-head')).toEqual([])
+  expect(found.filter((p) => p.header === 'header.squeezed-head').map((p) => p.kind)).toContain('title')
+})
+
 // The whole page narrowed, not only one divider (2026-11-22, the text-fit audit): the Scratchpad takes
 // its own column at every width, so at 1024 the Org page is about 568 px beside it; and Home holds
 // three columns (Scratchpad, Quick question, a session).

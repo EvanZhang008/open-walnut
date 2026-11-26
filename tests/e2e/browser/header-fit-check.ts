@@ -6,7 +6,9 @@
  * - `spill`: a part runs past the header's own box (cut off by the column, or under the next pane);
  * - `title`: the title is narrower than it needs to stay readable (its own text, or
  *   HEADER_TITLE_MIN_PX, whichever is less), so it reads as one clipped letter; or it cuts its
- *   text while a subtitle beside it (`[data-fit-sub]`) still shows, which must give way first;
+ *   text while a subtitle beside it (`[data-fit-sub]`) still shows, which must give way first.
+ *   A title kept for screen readers only (out of the flow, clipped to 1 px) is not drawn, so not
+ *   checked;
  * - `more`: the More button shows while nothing is put away into it (`data-fit-overflow`), or
  *   while the row has no button that could go into it (an empty menu).
  *
@@ -59,6 +61,13 @@ export function findHeaderProblems(minTitlePx: number): HeaderProblem[] {
     for (const c of el.children) if (isTitle(c) && c.getClientRects().length > 0) return c;
     return null;
   };
+  // The screen-reader-only pattern: taken out of the flow and clipped to a box of at most 1 px. A
+  // title squeezed by its row stays in the flow, so the squeeze this finds is never mistaken for it.
+  const forReadersOnly = (el: Element): boolean => {
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return (cs.position === 'absolute' || cs.position === 'fixed') && cs.overflow === 'hidden' && r.width <= 1 && r.height <= 1;
+  };
   // Parts inside a clipped, scrolled or hidden region are not on screen as laid out.
   const inViewport = (r: DOMRect) => r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight;
   const candidates = document.querySelectorAll('header, [data-fit-header], [class*="-head"], [class*="-bar"], [class*="toolbar"], [class*="title-row"], [class*="meta-row"], [class*="tool-row"]');
@@ -80,8 +89,9 @@ export function findHeaderProblems(minTitlePx: number): HeaderProblem[] {
     // A row of buttons with no title (a session's tool row) is checked for covering, spilling and
     // cut buttons; a row with a title also for the title's width.
     if (controls === 0 || (!title && controls < 2)) continue;
-    // A title faded out on purpose (a collapsed sidebar's label) is not shown, so not squeezed.
-    if (title && Number(getComputedStyle(title).opacity) < 0.05) title = null;
+    // A title faded out on purpose (a collapsed sidebar's label) is not shown, so not squeezed; nor
+    // is one kept for screen readers only (a phone's `.page-name`, page-head.css: the bar shows it).
+    if (title && (Number(getComputedStyle(title).opacity) < 0.05 || forReadersOnly(title))) title = null;
     const name = nameOf(head);
     // A group of buttons that clips its own buttons (a chip cut under the next group). A subtitle
     // or any part that ends in an ellipsis gives way by design.

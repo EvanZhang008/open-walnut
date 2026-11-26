@@ -14,6 +14,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { dropFakes } from './route-teardown'
+import { expectPageNameForReaders } from './phone-helpers'
 
 test.setTimeout(120_000)
 // A settings read still in flight when a test ends is dropped, never an error.
@@ -113,7 +114,9 @@ test('on a phone the gear and its panel fit the screen', async ({ page }) => {
   await expect(page).toHaveURL(/\/org/)
   const gear = page.getByTestId('org-settings')
   await expect(gear).toBeVisible()
-  const title = (await page.getByTestId('org-name').boundingBox())!
+  // The bar names the org (page-name.ts); the list's own title is for screen readers only there.
+  await expectPageNameForReaders(page, page.locator('.org-list-title'), 'Org')
+  const title = (await page.locator('.phone-topbar .phone-topbar-title-text').boundingBox())!
   expect(title.width).toBeGreaterThan(30)
   await gear.click()
   const box = (await page.getByTestId('org-settings-menu').boundingBox())!

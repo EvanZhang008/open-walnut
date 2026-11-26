@@ -52,6 +52,31 @@ const NOT_A_MENU_HEADING: Record<string, string> = {
   'ext-relay-label': "a label in the extension relay panel, not a menu",
 };
 
+/** Every class and test id a menu's heading wears: the words written beside `.wn-menu-heading`,
+ *  and a `<MenuHeading>`'s className and testId. */
+function headingHooks(): { classes: Set<string>; testIds: Set<string> } {
+  const classes = new Set(['wn-menu-heading']);
+  const testIds = new Set<string>();
+  for (const f of walk(WEB_SRC, ['.tsx'])) {
+    const src = fs.readFileSync(f, 'utf8');
+    for (const m of src.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\}|\{'([^']*)'\})/g)) {
+      const words = (m[1] ?? m[2] ?? m[3]).split(/[\s$]+/).filter((w) => /^[a-z][\w-]*$/.test(w));
+      if (words.includes('wn-menu-heading')) for (const w of words) classes.add(w);
+    }
+    for (const m of src.matchAll(/<MenuHeading\b([^>]*)>/g)) {
+      const cls = /className="([^"]+)"/.exec(m[1])?.[1];
+      if (cls) for (const w of cls.split(/\s+/)) classes.add(w);
+      const id = /testId="([^"]+)"/.exec(m[1])?.[1];
+      if (id) testIds.add(id);
+    }
+  }
+  return { classes, testIds };
+}
+
+/** A literal in capitals only ('HOME FOLDERS', /MODEL/): the words a heading drew before it was
+ *  sentence case. */
+const CAPS_LITERAL = /(['"`/])([A-Z][A-Z0-9 ]*[A-Z])\1/;
+
 const DRAWS_MENU = /\bwn-menu(?![\w-])|useMenuPlacement|role="(?:menu|listbox)"|<MenuHeading\b/;
 
 describe('menus: one heading look', () => {
@@ -76,6 +101,28 @@ describe('menus: one heading look', () => {
       }
     }
     expect(off, "a menu's section name is <MenuHeading> / .wn-menu-heading in sentence case; else name it in NOT_A_MENU_HEADING with why").toEqual([]);
+  });
+
+  // 2026-11-26: the path selector's "home folders" heading went sentence case and a browser spec
+  // still read "HOME FOLDERS" from it (session-path-selector-hosts.spec.ts, red on main CI).
+  it('no browser spec expects a menu heading in capitals', () => {
+    const { classes, testIds } = headingHooks();
+    const SPECS = path.join(__dirname, '../e2e/browser');
+    const hook = (line: string) => [...classes].some((c) => new RegExp(`\\.${c}(?![\\w-])`).test(line))
+      || [...testIds].some((id) => line.includes(`'${id}'`) || line.includes(`"${id}"`));
+    const off: string[] = [];
+    for (const f of walk(SPECS, ['.ts'])) {
+      const lines = fs.readFileSync(f, 'utf8').split('\n');
+      // A locator of a heading kept in a name (`const label = home.locator('.sps-section-label')`).
+      const names = lines.flatMap((l) => (hook(l) ? [.../\b(?:const|let)\s+(\w+)\s*=/.exec(l)?.slice(1) ?? []] : []));
+      const named = (l: string) => names.some((n) => new RegExp(`\\b${n}\\b`).test(l));
+      lines.forEach((l, i) => {
+        if ((hook(l) || named(l)) && /\bexpect\b|\.toHaveText\(|\.toContainText\(/.test(l) && CAPS_LITERAL.test(l)) {
+          off.push(`${path.relative(SPECS, f)}:${i + 1} ${l.trim()}`);
+        }
+      });
+    }
+    expect(off, "a menu's heading reads in sentence case: expect its words as written").toEqual([]);
   });
 
   it('the exceptions are still drawn in capitals', () => {

@@ -242,6 +242,33 @@ describe('page heads: one title look and one New key look', () => {
     expect(off, 'Give the title className "page-name" (page-head.css hides it on a phone, for screen readers kept) instead of a rule of the view\'s own').toEqual([]);
   });
 
+  // 2026-11-26: on a phone a title that is the page's name became a 1 px box for screen readers, and
+  // the Org list's title plain text (its rename moved to Org settings). Two browser specs still
+  // waited for the Routines title to hide (Playwright calls that box visible) and for the phone's
+  // org-name rename key (never drawn there): both red on main CI.
+  it('no browser spec waits for a page\'s name to hide, or for the Org rename key on a phone', () => {
+    const owned = new Set(['page-title', 'pane-title', 'page-name', ...titleCompanions().keys()]);
+    const SPECS = path.join(ROOT, 'tests/e2e/browser');
+    const titleRef = (l: string) => [...l.matchAll(/\.([a-z][\w-]*)/g)].some((m) => owned.has(m[1]));
+    const off: string[] = [];
+    for (const f of walk(SPECS, ['.ts'])) {
+      const src = fs.readFileSync(f, 'utf8');
+      const filePhone = /test\.use\(\s*\{[^}]*(PHONE|iPhone|isMobile:\s*true)/.test(src);
+      const names = src.split('\n').flatMap((l) => (titleRef(l) ? [.../\b(?:const|let)\s+(\w+)\s*=/.exec(l)?.slice(1) ?? []] : []));
+      src.split('\n').forEach((l, i) => {
+        const ref = titleRef(l) || names.some((n) => new RegExp(`\\b${n}\\b`).test(l));
+        if (ref && /\.toBeHidden\(|\.not\.toBeVisible\(/.test(l)) off.push(`${rel(f)}:${i + 1} ${l.trim()}`);
+      });
+      // Each test on its own: a phone one (its file's device, or a viewport a phone is) has no rename key.
+      for (const block of src.split(/\n(?=test(?:\.\w+)?\()/)) {
+        const width = Number(/setViewportSize\(\s*\{\s*width:\s*(\d+)/.exec(block)?.[1] ?? NaN);
+        if (!(filePhone || width <= 768)) continue;
+        if (/getByTestId\(\s*['"`]org-name['"`]\s*\)/.test(block)) off.push(`${rel(f)}: ${block.slice(0, 80).split('\n')[0]} reads org-name on a phone`);
+      }
+    }
+    expect(off, 'On a phone the bar names the page: expectPageNameForReaders (phone-helpers.ts) checks its title, and the org is renamed in Org settings (org-name-input)').toEqual([]);
+  });
+
   it('finds each shape it guards', () => {
     expect(/\b(page|pane)-title\b/.test('<h1 className="pane-title org-list-title">')).toBe(true);
     expect(/(^|[\s>+~])h1(?![\w-])[^\s>+~]*$/.test('.apps-hero h1')).toBe(true);

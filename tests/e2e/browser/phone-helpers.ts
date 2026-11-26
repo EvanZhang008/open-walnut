@@ -9,8 +9,11 @@
  * - findSmallText: every visible text node renders at 12 px or more.
  * - injectSafeArea / setKeyboardInset: Playwright draws no notch and no
  *   keyboard, so the specs write the CSS variables the phone rules read.
+ * - expectPageNameForReaders: on a phone a title that is the page's name
+ *   (`.page-name`, page-head.css) is kept for screen readers only. Playwright
+ *   calls that 1 px box visible, so `toBeHidden()` can never pass on it.
  */
-import { devices, expect, type Page } from '@playwright/test'
+import { devices, expect, type Locator, type Page } from '@playwright/test'
 
 export const PHONE = devices['iPhone 15']
 export const PHONE_LANDSCAPE = devices['iPhone 15 landscape']
@@ -126,6 +129,18 @@ export async function setKeyboardInset(page: Page, px: number): Promise<void> {
     document.documentElement.style.setProperty('--wn-keyboard-inset', `${v}px`)
     document.documentElement.dataset.wnKeyboard = v > 0 ? 'open' : 'closed'
   }, px)
+}
+
+/**
+ * The page's own title on a phone: still in the page for a screen reader, drawn as a clipped
+ * 1 px box, while the top bar shows the name (page-head.css `.page-name`, PhoneTopBar).
+ */
+export async function expectPageNameForReaders(page: Page, title: Locator, name: string): Promise<void> {
+  await expect(title).toBeAttached()
+  const box = await title.evaluate((el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height, overflow: getComputedStyle(el).overflow } })
+  expect(box.overflow, `the ${name} title is drawn under the bar`).toBe('hidden')
+  expect(Math.max(box.w, box.h), `the ${name} title is drawn under the bar`).toBeLessThanOrEqual(1)
+  await expect(page.locator('.phone-topbar .phone-topbar-title-text')).toHaveText(name)
 }
 
 export const menuButton = (page: Page) => page.locator('.phone-topbar').getByRole('button', { name: 'Menu' })
