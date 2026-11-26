@@ -38,17 +38,28 @@ describe('listHostDiagnostics', () => {
   })
 
   it('carries the runtime, daemon dir and warnings the connection reports', async () => {
+    // The daemon's files belong in the home dir (remote-daemon-dir.ts): a host there has nothing to warn about.
     state.connect = {
       runtime: 'node',
-      daemonDir: { path: '/home/alice/.cache/open-walnut', home: '/home/alice', fallback: true, reason: '/tmp is read-only', freeMb: 900 },
+      daemonDir: { path: '/home/alice/.cache/open-walnut', home: '/home/alice', fallback: true, freeMb: 900 },
     }
     const [h] = await listHostDiagnostics()
     expect(h.runtime).toBe('node')
     // The home rides along for redaction: its last segment is the remote user name.
     expect(h.daemonDir).toEqual({ display: '~/.cache/open-walnut', fallback: true, freeMb: 900, home: '/home/alice' })
+    expect(h.warnings).toEqual([])
+  })
+
+  it('a daemon left in /tmp because the home dir cannot hold it carries the connect side\'s warning', async () => {
+    state.connect = {
+      runtime: 'node',
+      daemonDir: { path: '/tmp/open-walnut', home: '/home/alice', fallback: false, reason: '~/.cache/open-walnut is read-only', freeMb: 900 },
+    }
+    const [h] = await listHostDiagnostics()
+    expect(h.daemonDir).toEqual({ display: '/tmp/open-walnut', fallback: false, freeMb: 900, home: '/home/alice' })
     // The wording belongs to the connect side (remote-daemon-dir.ts); the doctor carries it as-is.
     expect(h.warnings).toHaveLength(1)
-    expect(h.warnings?.[0]).toMatch(/~\/\.cache\/open-walnut.*read-only/)
+    expect(h.warnings?.[0]).toMatch(/\/tmp\/open-walnut.*~\/\.cache\/open-walnut.*read-only.*temp cleanup/)
   })
 
   it('treats an unknown runtime as not known', async () => {
