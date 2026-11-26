@@ -71,19 +71,45 @@ export type CaughtUp =
   | { ok: true; batch: number; batchMs: number; waitedMs: number }
   | { ok: false; why: string; waitedMs: number }
 
-/** The batches the leader's standby runner made current ("standby: batch committed" in its server's log): start, end, time. */
-function committedBatches(m: Machine): Array<{ start: number; end: number; batch: number; ms: number; sentBytes: number }> {
-  const out: Array<{ start: number; end: number; batch: number; ms: number; sentBytes: number }> = []
+type CommittedBatch = { start: number; end: number; batch: number; ms: number; sentBytes: number }
+/** What has been read of each log file: its bytes so far (a whole line each) and the batches in them. */
+const batchLogRead = new Map<string, { bytes: number; batches: CommittedBatch[] }>()
+
+/**
+ * The batches the leader's standby runner made current ("standby: batch committed" in its server's log): start,
+ * end, time. Each file is read on from where the last read ended (a wait polls this for up to an hour on a large home).
+ */
+function committedBatches(m: Machine): CommittedBatch[] {
+  const out: CommittedBatch[] = []
   for (const f of serverLogFiles(m)) {
-    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
-      if (!line.includes('"standby: batch committed"')) continue
+    const seen = batchLogRead.get(f) ?? { bytes: 0, batches: [] }
+    let size = 0
+    try { size = fs.statSync(f).size } catch { continue }
+    if (size < seen.bytes) { seen.bytes = 0; seen.batches = [] }
+    if (size > seen.bytes) {
+      const fd = fs.openSync(f, 'r')
       try {
-        const l = JSON.parse(line) as { time: string; batch?: number; totalMs?: number; sentBytes?: number }
-        const end = Date.parse(l.time)
-        const ms = Number(l.totalMs)
-        if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') out.push({ start: end - ms, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
-      } catch { /* a torn last line */ }
+        const buf = Buffer.alloc(size - seen.bytes)
+        fs.readSync(fd, buf, 0, buf.length, seen.bytes)
+        const text = buf.toString('utf8')
+        // Up to the last whole line: a line still being written is read next time.
+        const whole = text.lastIndexOf('\n') + 1
+        seen.bytes += Buffer.byteLength(text.slice(0, whole))
+        for (const line of text.slice(0, whole).split('\n')) {
+          if (!line.includes('"standby: batch committed"')) continue
+          try {
+            const l = JSON.parse(line) as { time: string; batch?: number; totalMs?: number; sentBytes?: number }
+            const end = Date.parse(l.time)
+            const ms = Number(l.totalMs)
+            if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') seen.batches.push({ start: end - ms, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
+          } catch { /* not a log line */ }
+        }
+      } finally {
+        fs.closeSync(fd)
+      }
+      batchLogRead.set(f, seen)
     }
+    out.push(...seen.batches)
   }
   return out
 }
