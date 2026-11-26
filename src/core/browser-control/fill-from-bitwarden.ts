@@ -21,11 +21,12 @@
  * actions and under Approvals only.
  */
 import { BrowserError } from './hub.js'
+import { clause, errClause } from '../../utils/format.js'
 import type { FillDeps, FillInput, FillOutcome } from './fill-login.js'
 
 export async function fillFromBitwarden(input: FillInput & { what: 'login' | 'code' }, deps: FillDeps, url: string, locked: Error): Promise<{ outcome: FillOutcome; username?: string }> {
   const here = (() => { try { return new URL(url).host } catch { return url } })()
-  const lockedBecause = (why: string) => new BrowserError(`${locked.message}. Bitwarden could not fill it either: ${why}.`, 423, 'vault_locked')
+  const lockedBecause = (why: string) => new BrowserError(`${errClause(locked)}. Bitwarden could not fill it either: ${clause(why)}.`, 423, 'vault_locked')
   const { readAgentHolds } = await import('../vault/sources/bitwarden/agent-holds.js')
   const holds = await readAgentHolds()
   if (!holds.ok) throw lockedBecause(holds.why)
