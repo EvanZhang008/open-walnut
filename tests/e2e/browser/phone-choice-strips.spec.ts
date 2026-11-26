@@ -99,13 +99,22 @@ test('Bell: the panel sections say they scroll and keep the picked one whole', a
   await expect(rail).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => stripProblems(page)).toEqual([])
   // Each section, picked by a script click while it is out of view (so neither Playwright nor the
-  // focus scrolls the rail): the first, the last (All, where the first entry was cut to "u"), then
-  // one in the middle. Each is a new pick.
-  for (const at of [0, -1, 2]) {
+  // focus scrolls the rail): one in the middle, the first, then the last (All, where the first entry
+  // was cut to "u"). Each must be a new pick: a click on the section already picked changes nothing,
+  // so nothing brings it back. The panel lands on Needs you (the first) when something needs him and
+  // on All (the last) otherwise, so the middle goes first (CI 45816478315: six open permission asks
+  // left on the shared fixture landed it on Needs you, and a first pick of Needs you stayed
+  // scrolled away).
+  const sections = rail.locator('.nfc-rail-btn')
+  expect(await sections.count(), 'a middle section that is neither end').toBeGreaterThanOrEqual(4)
+  for (const at of [2, 0, -1]) {
+    const target = at < 0 ? sections.last() : sections.nth(at)
+    await expect(target, 'each pick is a new one').not.toHaveAttribute('aria-current', 'page')
     await rail.evaluate((el, i) => {
       el.scrollLeft = i === -1 ? 0 : el.scrollWidth
       Array.from(el.querySelectorAll<HTMLElement>('.nfc-rail-btn')).at(i)!.click()
     }, at)
+    await expect(target).toHaveAttribute('aria-current', 'page')
     await expect.poll(() => stripProblems(page)).toEqual([])
   }
   // The rail scrolls on a phone: its edge says so.
@@ -130,12 +139,17 @@ test('Usage: Started by and Break down by say they scroll and keep the pick in v
   // Picked while out of view, the strip itself brings it in (a script click, so neither
   // Playwright nor the focus scrolls it): the last choice, then one in the middle.
   const group = page.getByRole('radiogroup', { name: /break down by/i })
+  // Each a new pick, as the bell's: a click on the choice already picked brings nothing back.
+  const radios = group.getByRole('radio')
   for (const at of [-1, 2]) {
+    const target = at < 0 ? radios.last() : radios.nth(at)
+    await expect(target, 'each pick is a new one').not.toHaveAttribute('aria-checked', 'true')
     await group.evaluate((el, i) => {
       el.scrollLeft = i < 0 ? 0 : el.scrollWidth
       const radios = Array.from(el.querySelectorAll<HTMLElement>('[role="radio"]'))
       radios.at(i)!.click()
     }, at)
+    await expect(target).toHaveAttribute('aria-checked', 'true')
     await expect.poll(() => stripProblems(page)).toEqual([])
   }
 })
