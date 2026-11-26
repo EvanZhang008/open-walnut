@@ -385,6 +385,41 @@ describe.skipIf(!BUN)('a session\'s call stays with its own Walnut, standalone d
     expect([...mainB.requests, ...bulkB.requests, ...bulkA.requests]).toEqual([])
   }, 60_000)
 
+  // GitHub issue #23 (0.6.37): an OpenCode (ACP) session's plugin ops answered hub_unreachable
+  // after the whole wait. Its `walnut` calls carry the worker's runtime id (acp-...), which no copy
+  // or spawn record named, so the call had no Walnut and the one server, which names its own, was
+  // never asked. The worker's start now names its Walnut (ownerHome), and the gateway reads it.
+  it("an ACP session's calls (its runtime id) reach its own Walnut's server, plugin ops included", async () => {
+    const port = await boot()
+    const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
+    await open(port, 'bulkA', 'A', 'run-a')
+    // A stand-in agent worker: answers initialize and newSession, and stays.
+    const worker = path.join(root, 'acp-worker.cjs')
+    fs.writeFileSync(worker, [
+      "require('readline').createInterface({ input: process.stdin }).on('line', (line) => {",
+      '  const m = JSON.parse(line)',
+      "  const result = m.op === 'newSession' ? { sessionId: 'fake-acp' } : { ok: true }",
+      "  process.stdout.write(JSON.stringify({ id: m.id, ok: true, result }) + '\\n')",
+      '})',
+    ].join('\n'))
+    const runtimeId = `acp-${crypto.randomUUID()}`
+    const started = await rpc(mainA.ws, { cmd: 'acpStart', sid: runtimeId, cwd: root, workerCmd: [process.execPath, worker], adapterCmd: ['/bin/true'], env: {}, ownerHome: HOME_A })
+    expect(started.ok, JSON.stringify(started)).toBe(true)
+    try {
+      for (const op of ['mail_list', 'task_list']) {
+        const before = mainA.requests.length
+        const answer = call(runtimeId, op, 4_000)
+        expect(await waitFor(() => mainA.requests.length > before, 4_000), `${op} reached A's server`).toBe(true)
+        const relay = mainA.requests[before]!
+        expect(relay.callerSid).toBe(runtimeId)
+        expect((await rpc(mainA.ws, { cmd: 'gateway-result', relayId: relay.relayId, result: { from: 'A', op } })).ok).toBe(true)
+        expect(await answer).toMatchObject({ ok: true, result: { from: 'A', op } })
+      }
+    } finally {
+      await rpc(mainA.ws, { cmd: 'acpStop', sid: runtimeId }, 10_000).catch(() => undefined)
+    }
+  }, 60_000)
+
   it('with no server of its Walnut connected, the call fails at once, retryable, naming why', async () => {
     const port = await boot()
     const mainA = await open(port, 'mainA', 'A', 'run-a', HOME_A)
