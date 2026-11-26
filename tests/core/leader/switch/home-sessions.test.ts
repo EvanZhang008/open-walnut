@@ -105,6 +105,12 @@ describe('the old leader\'s stop', () => {
     expect(s.byId.get(sid(2))!.leaderSwitch).toMatchObject({ stopped: 'idle', supervised: true })
   })
 
+  it('names an ACP session to the runtime by its worker\'s runtime id', async () => {
+    const { stopTargetOf } = await import('../../../../src/core/leader/switch/home-session-runtime.js')
+    expect(stopTargetOf({ claudeSessionId: sid(1), acpRuntimeId: 'acp-rt-1' })).toBe('acp-rt-1')
+    expect(stopTargetOf({ claudeSessionId: sid(1) })).toBe(sid(1))
+  })
+
   it('fails (and names the session) when a CLI did not end, or its process still runs in the home', async () => {
     const home = path.join(root, 'home')
     const s = fakeStore([rec(1, home, { process_status: 'running', pid: 101, title: 'Main' }), rec(2, home, { process_status: 'idle', pid: 102 })])

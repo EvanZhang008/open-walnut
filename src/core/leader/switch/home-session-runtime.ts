@@ -52,7 +52,8 @@ export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) return { ok: false, why: 'this machine\'s session runtime is not connected' }
       if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return { ok: false, why: `this machine's session runtime lacks ${HOME_STOP_CAPABILITY}` }
-      const reply = await conn.send('stop', { sid: rec.claudeSessionId, reason: 'leader_switch', stopRequestId, home, initiator: 'automatic' }, STOP_ANSWER_MS)
+      // An ACP session's worker is named by its runtime id (the daemon routes it to the worker's strict stop).
+      const reply = await conn.send('stop', { sid: stopTargetOf(rec), reason: 'leader_switch', stopRequestId, home, initiator: 'automatic' }, STOP_ANSWER_MS)
       if (reply.ok === true && (reply.stopped === true || reply.noop === true)) return { ok: true }
       // The runtime holds no start of it by this Walnut (a start still on its way here, the record ahead of its
       // spawn): nothing of it runs to stop, and its spawn now meets the marker. The scan after the stops still fails
@@ -63,6 +64,11 @@ export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
     processesInHome: (spellings) => processesInFolders(spellings),
     now: Date.now,
   }
+}
+
+/** The id the runtime knows a session by: an ACP worker's runtime id, else the session's own id. */
+export function stopTargetOf(rec: Pick<SessionRecord, 'claudeSessionId' | 'acpRuntimeId'>): string {
+  return rec.acpRuntimeId || rec.claudeSessionId
 }
 
 export async function rollbackDeps(): Promise<RollbackDeps> {
