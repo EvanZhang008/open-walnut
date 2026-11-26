@@ -608,62 +608,6 @@ export function pruneDaemonScratch(io: {
 }
 
 /**
- * A release from before the session daemon's files left the temp dir (lib/daemon-dir.ts, 2026-11-26)
- * starts its daemon in /tmp/open-walnut whenever none runs, and reads `sessions.json` there. After a
- * downgrade it found none: it removed the stdin FIFOs of the sessions this daemon had started, then
- * adopted their CLIs by pid, and those sessions never took a line again. So a daemon whose dir is
- * the home one leaves that name in the shared dir as a symlink to its own registry: the older
- * daemon reads through it, adopts the sessions as any restarted daemon does, and writes its own
- * file over the link at its first change. The dir rule never counts a link as a daemon's file.
- *
- * Only inside a shared dir that is a real directory of this user (the server's log dir; never
- * created here). What is at the name decides: nothing, or a link to somewhere else, gets the
- * link; a real file is left alone unless it is from before this machine booted (a registry of
- * sessions that ended with the boot). Returns what it did.
- */
-export function linkRegistryForOlderReleases(io: {
-  fs: {
-    lstatSync(p: string): { uid: number; mtimeMs: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean }
-    readlinkSync(p: string): string
-    symlinkSync(target: string, p: string): void
-    renameSync(from: string, to: string): void
-    unlinkSync(p: string): void
-  }
-  sharedDir: string
-  registryFile: string
-  uid: number
-  pid: number
-  /** When this machine booted (ms), or null when it cannot be read: then a real file is never replaced. */
-  bootMs: number | null
-}): 'linked' | 'kept' | 'skipped' {
-  const gone = (err: unknown): boolean => (err as { code?: string } | null)?.code === 'ENOENT'
-  try {
-    const dir = io.fs.lstatSync(io.sharedDir)
-    if (!dir.isDirectory() || dir.uid !== io.uid) return 'skipped'
-  } catch { return 'skipped' }
-  const link = io.sharedDir + '/sessions.json'
-  try {
-    const st = io.fs.lstatSync(link)
-    if (st.isSymbolicLink()) {
-      if (io.fs.readlinkSync(link) === io.registryFile) return 'kept'
-    } else if (!st.isFile() || io.bootMs === null || st.mtimeMs >= io.bootMs - 5_000) {
-      return 'skipped'
-    }
-  } catch (err) { if (!gone(err)) return 'skipped' }
-  // Made beside it and renamed over: the name is never missing, and never half a link.
-  const next = `${link}.${io.pid}.link`
-  try {
-    try { io.fs.unlinkSync(next) } catch { /* none left from an earlier try */ }
-    io.fs.symlinkSync(io.registryFile, next)
-    io.fs.renameSync(next, link)
-    return 'linked'
-  } catch {
-    try { io.fs.unlinkSync(next) } catch { /* never made */ }
-    return 'skipped'
-  }
-}
-
-/**
  * The Walnut instruction notice (core/sessions/instruction-notice.ts) reaches a session by two
  * paths: the server's queue and this host's own same-host delivery (offline-host-core.ts
  * withTaskRouting). Each learns of the other's delivery only later (the host slice is pushed

@@ -8,8 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DAEMON_LOG_KEEP_MS, DAEMON_PICTURE_KEEP_MS, keepRuntimeFiles, linkRegistryForOlderReleases, pruneDaemonScratch, RUNTIME_KEEP_MS } from '../../src/providers/daemon-core.js'
-import { DAEMON_STATE_MARKERS, chooseLocalDaemonDir, realDaemonDirDeps, SHARED_DAEMON_DIR } from '../../src/lib/daemon-dir.js'
+import { DAEMON_LOG_KEEP_MS, DAEMON_PICTURE_KEEP_MS, keepRuntimeFiles, pruneDaemonScratch, RUNTIME_KEEP_MS } from '../../src/providers/daemon-core.js'
 
 let dir = ''
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-keep-')) })
@@ -167,87 +166,5 @@ describe('pruneDaemonScratch', () => {
   it('a dir with no images, or no dir at all, removes nothing and does not throw', () => {
     expect(prune()).toEqual([])
     expect(pruneDaemonScratch({ fs, dir: path.join(dir, 'missing'), ownLogs: [], now })).toEqual([])
-  })
-})
-
-/**
- * A release from before the daemon's files left /tmp/open-walnut reads `sessions.json` there
- * (2026-11-26: after a downgrade it found none, and the sessions that still ran never took a line
- * again). A daemon in the home dir leaves the name there as a link to its registry.
- */
-describe('linkRegistryForOlderReleases', () => {
-  const uid = process.getuid?.() ?? 0
-  const BOOT = Date.now() - 3600_000
-  let shared = ''
-  let registry = ''
-  beforeEach(() => {
-    shared = path.join(dir, 'shared')
-    registry = path.join(dir, 'home', 'sessions.json')
-    fs.mkdirSync(shared)
-    fs.mkdirSync(path.dirname(registry))
-    fs.writeFileSync(registry, '{"version":1,"sessions":{"s1":{"pid":4242}}}')
-  })
-  const link = (over: Partial<Parameters<typeof linkRegistryForOlderReleases>[0]> = {}) =>
-    linkRegistryForOlderReleases({ fs, sharedDir: shared, registryFile: registry, uid, pid: 4242, bootMs: BOOT, ...over })
-  const at = () => path.join(shared, 'sessions.json')
-
-  it('leaves a link an older daemon reads the registry through, and keeps it', () => {
-    expect(link()).toBe('linked')
-    expect(fs.lstatSync(at()).isSymbolicLink()).toBe(true)
-    expect(JSON.parse(fs.readFileSync(at(), 'utf8')).sessions.s1.pid).toBe(4242)
-    expect(link()).toBe('kept')
-    expect(fs.readdirSync(shared)).toEqual(['sessions.json'])
-  })
-
-  it('an older daemon writes its own registry over the link (a rename), and that file is then left alone', () => {
-    link()
-    fs.writeFileSync(at() + '.tmp', '{"version":1,"sessions":{}}')
-    fs.renameSync(at() + '.tmp', at())
-    expect(fs.lstatSync(at()).isFile()).toBe(true)
-    expect(link()).toBe('skipped')
-    expect(fs.readFileSync(at(), 'utf8')).toBe('{"version":1,"sessions":{}}')
-    // The home registry was never written through.
-    expect(JSON.parse(fs.readFileSync(registry, 'utf8')).sessions.s1.pid).toBe(4242)
-  })
-
-  it('a link to somewhere else is pointed at this registry', () => {
-    fs.symlinkSync(path.join(dir, 'elsewhere.json'), at())
-    expect(link()).toBe('linked')
-    expect(fs.readlinkSync(at())).toBe(registry)
-  })
-
-  it('a registry from before this machine booted is replaced; without a boot time it is not', () => {
-    fs.writeFileSync(at(), 'old')
-    fs.utimesSync(at(), new Date(BOOT - 3600_000), new Date(BOOT - 3600_000))
-    expect(link({ bootMs: null })).toBe('skipped')
-    expect(link()).toBe('linked')
-    expect(fs.readlinkSync(at())).toBe(registry)
-  })
-
-  it('never makes the shared dir, and never writes into one that is not this user\'s real dir', () => {
-    fs.rmSync(shared, { recursive: true })
-    expect(link()).toBe('skipped')
-    expect(fs.existsSync(shared)).toBe(false)
-    fs.mkdirSync(shared)
-    expect(link({ uid: uid + 1 })).toBe('skipped')
-    fs.rmSync(shared, { recursive: true })
-    fs.mkdirSync(path.join(dir, 'real'))
-    fs.symlinkSync(path.join(dir, 'real'), shared)
-    expect(link()).toBe('skipped')
-    expect(fs.readdirSync(path.join(dir, 'real'))).toEqual([])
-    fs.rmSync(shared)
-    fs.mkdirSync(shared)
-    fs.mkdirSync(at())
-    expect(link()).toBe('skipped')
-  })
-
-  // The link must never read as "a daemon ran in the shared dir": that would move the daemon back there at the next start.
-  it('the dir rule does not count the link, whichever marker name it has', () => {
-    const map = (p: string) => (p === SHARED_DAEMON_DIR || p.startsWith(SHARED_DAEMON_DIR + '/') ? shared + p.slice(SHARED_DAEMON_DIR.length) : p)
-    const deps = { ...realDaemonDirDeps, lstat: (p: string) => realDaemonDirDeps.lstat(map(p)), readFile: (p: string) => realDaemonDirDeps.readFile(map(p)), bootTimeMs: () => BOOT, dirProblem: () => null }
-    const home = path.join(dir, 'h')
-    link()
-    for (const name of DAEMON_STATE_MARKERS.filter((n) => n !== 'sessions.json')) fs.symlinkSync(registry, path.join(shared, name))
-    expect(chooseLocalDaemonDir({ HOME: home }, deps).dir).toBe(path.join(home, '.cache', 'open-walnut'))
   })
 })

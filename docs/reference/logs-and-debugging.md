@@ -38,10 +38,12 @@ the same cases):
   cannot hold it (its socket paths would be too long, or it cannot be written). The daemon ages
   its own scratch there (old daemons' logs after 14 days, pictures nobody read for 10 days:
   `pruneDaemonScratch` in `src/providers/daemon-core.ts`). A release from before the move starts
-  its daemon in `/tmp/open-walnut` whenever none runs (after a downgrade), so the home daemon
-  leaves `/tmp/open-walnut/sessions.json` there as a link to its registry
-  (`linkRegistryForOlderReleases`): the older daemon adopts the sessions that still run instead of
-  cutting them off. The dir rule never counts a link as a daemon's file.
+  its daemon in `/tmp/open-walnut` whenever it sees none running (after a downgrade, or beside a
+  newer server), so the home daemon also holds that dir's instance lock and leaves
+  `/tmp/open-walnut/sessions.json` there as a link to its registry
+  (`src/providers/daemon-older-release-door.ts`): the older daemon gives way while the home one
+  runs, and adopts the sessions that still run once it stopped, instead of cutting them off. The
+  dir rule never counts a link as a daemon's file.
 
 The server always names the daemon's dir to its daemon
 (`WALNUT_DAEMON_DIR`); both daemon builds treat either dir as production. A second user's remote terminal

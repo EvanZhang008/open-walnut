@@ -41,7 +41,6 @@ import {
   LIVE_FIFO_MODE,
   keepRuntimeFiles,
   pruneDaemonScratch,
-  linkRegistryForOlderReleases,
   RUNTIME_KEEP_MS,
 } from './daemon-core.js'
 import { Subscribers, type SessionData as SessionDataOf, type AgentSub as AgentSubOf, type WsData } from './daemon-session-types.js'
@@ -194,6 +193,8 @@ import { readCronBootId } from './daemon-cron-host.js'
 import { askOwnPort, daemonServesCheck, startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
 import { createServiceRolesReader, programServiceRoles, SERVICE_ROLES_FLAG, withGoodRoles } from './service-roles.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
+import { linkRegistryForOlderReleases, ownSharedDir, servesOlderReleases } from './daemon-older-release-door.js'
+import { DAEMON_SERVICE_UNIT_NAME, readDaemonServiceDir, serviceConfigRunsAs } from './daemon-service-config.js'
 import { writeBackDoorFiles } from './daemon-lost-files.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { busyOpenWords } from './daemon-busy-words.js'
@@ -403,7 +404,12 @@ const checkCallers = createCheckCallers()
 const PICTURE_ROOTS: string[] = (() => {
   const both = (d: string): string[] => { try { const real = fs.realpathSync(d); return real !== d ? [d, real] : [d] } catch { return [d] /* not made yet */ } }
   const named = serverImagesDirOf(daemonEnv)
-  return [...new Set([...both(DAEMON_DIR).flatMap((d) => [`${d}/images/`, `${d}-images/`]), ...(named ? both(named).map((d) => `${d}/`) : [])])]
+  // A daemon in the home dir that no server started (a login service's) is named none: the server's
+  // pictures are then in the shared temp dir (daemon-fs-write.ts serverImagesDir). By /tmp's two
+  // spellings, since that dir may not be made yet.
+  const shared = !named && path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
+    ? both(path.dirname(PROD_DAEMON_DIR)).map((d) => `${d}/${path.basename(PROD_DAEMON_DIR)}/images/`) : []
+  return [...new Set([...both(DAEMON_DIR).flatMap((d) => [`${d}/images/`, `${d}-images/`]), ...(named ? both(named).map((d) => `${d}/`) : []), ...shared])]
 })()
 
 // Which Walnut a pushed setting belongs to, and where its copy is kept
@@ -1332,21 +1338,52 @@ function updateCronMetadata(sid: string, session: SessionData, line?: string) {
 // only provides Bun-specific I/O bindings.
 const REGISTRY_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'sessions.json')
 type RegistryEntry = CoreRegistryEntry
-// A release from before the daemon's files left /tmp/open-walnut looks for this registry there
-// (linkRegistryForOlderReleases, daemon-core.ts). Only the account's own production daemon in its
-// home dir leaves the link: by the passwd home, so a daemon under a faked HOME (a test, a demo)
-// never writes into the real shared dir. A login service's daemon is found by its unit instead.
-const LINKS_REGISTRY_FOR_OLDER_RELEASES = ((): boolean => {
-  if (SERVICE_MODE || process.platform === 'win32') return false
-  try { return path.resolve(DAEMON_DIR) === path.join(os.userInfo().homedir, '.cache', 'open-walnut') } catch { return false }
-})()
+// What this daemon leaves in /tmp/open-walnut for a release from before its files moved to the
+// home dir (daemon-older-release-door.ts): that dir's instance lock, and a link to this registry.
+const SERVES_OLDER_RELEASES = servesOlderReleases({
+  daemonDir: DAEMON_DIR, serviceMode: SERVICE_MODE, platform: process.platform, resolve: path.resolve,
+  accountHome: ((): string | null => { try { return os.userInfo().homedir || null } catch { return null } })(),
+})
+/** The shared dir is this user's own real dir (made when it is free and no other account's system unit runs its daemon there). */
+function ownsSharedDir(): boolean {
+  if (!SERVES_OLDER_RELEASES) return false
+  let otherAccountPins = false
+  if (process.platform === 'linux') {
+    try {
+      const unit = fs.readFileSync(path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME), 'utf8')
+      const me = os.userInfo()
+      otherAccountPins = !serviceConfigRunsAs('linux', unit, { name: me.username, uid: me.uid })
+        && path.resolve(readDaemonServiceDir('linux', unit) ?? '') === PROD_DAEMON_DIR
+    } catch { /* no system unit */ }
+  }
+  return ownSharedDir({ fs, sharedDir: PROD_DAEMON_DIR, uid: os.userInfo().uid, mayCreate: !otherAccountPins })
+}
+/** This daemon's lock, and with it the shared dir's: an older daemon started there gives way to this one. */
+async function withSharedDirLock(own: DaemonInstanceLockOwner): Promise<DaemonInstanceLockOwner> {
+  if (!ownsSharedDir()) return own
+  try {
+    const shared = await acquireDaemonInstanceLock({
+      runtimeDir: PROD_DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID, inProcess: !LISTEN,
+      ...(!LISTEN && options.serverHome ? { home: options.serverHome } : {}),
+    })
+    if (shared.kind !== 'owner') {
+      logMsg('warn', 'a daemon holds the instance lock of the shared dir; older releases are not kept out of it', { dir: PROD_DAEMON_DIR, pid: shared.owner.pid })
+      return own
+    }
+    return {
+      ...own,
+      publish: (port) => { own.publish(port); shared.publish(port) },
+      release: () => Promise.all([own.release(), shared.release()]).then(() => undefined),
+    }
+  } catch (err) {
+    logMsg('warn', 'the instance lock of the shared dir could not be taken; older releases are not kept out of it', { dir: PROD_DAEMON_DIR, error: (err as Error).message })
+    return own
+  }
+}
 function keepOlderReleaseLink(): void {
-  if (!LINKS_REGISTRY_FOR_OLDER_RELEASES) return
+  if (!ownsSharedDir()) return
   const up = os.uptime()
-  const did = linkRegistryForOlderReleases({
-    fs, sharedDir: PROD_DAEMON_DIR, registryFile: REGISTRY_FILE, uid: os.userInfo().uid, pid: process.pid,
-    bootMs: up > 0 ? Date.now() - up * 1000 : null,
-  })
+  const did = linkRegistryForOlderReleases({ fs, sharedDir: PROD_DAEMON_DIR, registryFile: REGISTRY_FILE, pid: process.pid, bootMs: up > 0 ? Date.now() - up * 1000 : null })
   if (did === 'linked') logMsg('info', 'registry linked for older releases', { link: path.join(PROD_DAEMON_DIR, 'sessions.json'), registryFile: REGISTRY_FILE })
 }
 
@@ -5669,7 +5706,7 @@ const { cmdSubscribeAgent, cmdUnsubscribeAgent, cmdWriteInbox } = agentSubComman
 
 // ── File system operations (daemon-fs-read.ts, daemon-fs-write.ts) ──
 const fsRead = createDaemonFsRead<ServerWebSocket<WsData>>({ HOME_DIR, CLAUDE_CONFIG_HOME, CLAUDE_PROJECTS_DIRS, childUse })
-const fsWrite = createDaemonFsWrite<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage: fsRead.looksLikeImage, logMsg })
+const fsWrite = createDaemonFsWrite<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, PROD_DAEMON_DIR, codeServer, looksLikeImage: fsRead.looksLikeImage, logMsg })
 
 // ── Git read commands (daemon-git.ts): diff, status, refs, one file's history, exclude ──
 const git = createDaemonGit<ServerWebSocket<WsData>>({ daemonEnv, HOME_DIR, execFileCb })
@@ -6408,7 +6445,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     if (restored) logMsg('warn', 'the daemon holding this dir had lost its door files; written back from its instance lock', { pid: restored.pid, port: restored.port })
     return { kind: 'existing', port: String(lock.owner.wsPort) }
   }
-  daemonInstanceLock = lock
+  daemonInstanceLock = await withSharedDirLock(lock)
   if (SERVICE_MODE) {
     fs.mkdirSync(DAEMON_STATE_DIR!, { recursive: true, mode: 0o700 })
     daemonBootId = await readCronBootId(process.platform, AbortSignal.timeout(5000), childUse)

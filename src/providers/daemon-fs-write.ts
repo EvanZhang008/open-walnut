@@ -8,6 +8,7 @@
  * sweepStaleWriteTemps. The code is the runtime's as it was; deps carry the runtime's own names.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import type { createCodeServer } from './vscode-server-core.js'
@@ -18,8 +19,10 @@ export interface DaemonFsWriteDeps {
   HOME_DIR: string
   /** The runtime's dir: pictures a session was sent are saved under it. */
   DAEMON_DIR: string
-  /** The daemon dir when /tmp/open-walnut is unusable ($HOME/.cache/open-walnut). */
+  /** The home daemon dir ($HOME/.cache/open-walnut). */
   FALLBACK_DAEMON_DIR: string
+  /** The shared temp dir (/tmp/open-walnut): the server's scratch dir when it is this user's own. */
+  PROD_DAEMON_DIR: string
   /** The runtime's embedded editor. */
   codeServer: ReturnType<typeof createCodeServer>
   /** The image sniff fs.readImage uses (daemon-fs-read.ts). */
@@ -37,8 +40,29 @@ export function serverImagesDirOf(env: Record<string, string | undefined>): stri
   return dir && path.isAbsolute(dir) ? dir.replace(/\/+$/, '') : null
 }
 
+/**
+ * Where the server of this machine keeps its pictures, as this daemon must name it: the dir the
+ * server named; else, for a daemon in the home dir that no server started (a login service's: its
+ * unit carries no images dir), the shared temp dir's when that dir is this user's own real dir,
+ * which is the server's own rule for its scratch (lib/daemon-dir.ts chooseLocalLogDir); else
+ * `<daemon dir>/images`, where both were before the daemon's files left the temp dir.
+ */
+export function serverImagesDir(io: {
+  env: Record<string, string | undefined>
+  daemonDir: string
+  homeDaemonDir: string
+  sharedDir: string
+  /** The shared dir is a real directory of this user (looked at when asked: the server may make it after this daemon started). */
+  ownsShared: () => boolean
+}): string {
+  const named = serverImagesDirOf(io.env)
+  if (named) return named
+  if (path.resolve(io.daemonDir) === path.resolve(io.homeDaemonDir) && io.ownsShared()) return path.join(io.sharedDir, 'images')
+  return path.join(io.daemonDir, 'images')
+}
+
 export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
-  const { daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage, logMsg } = deps
+  const { daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, PROD_DAEMON_DIR, codeServer, looksLikeImage, logMsg } = deps
 
   // Bridge-safe image save: mediaType allowlist + decoded-size cap + magic-byte
   // check, writing ONLY into a fixed daemon-owned directory with a generated
@@ -58,9 +82,15 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
   const IMAGE_SAVE_MAX_BYTES = 10 * 1024 * 1024
   // ~4/3 base64 overhead + slack — refuse before decoding an oversized string.
   const IMAGE_SAVE_MAX_BASE64_LENGTH = 14_000_000
-  // Beside the server's own pictures when it named its images dir (the server reads the staged
-  // file back from there: constants.ts MOBILE_STAGED_IMAGES_DIR), else in this daemon's dir.
-  const IMAGE_SAVE_DIR = path.join(serverImagesDirOf(daemonEnv) ?? path.join(DAEMON_DIR, 'images'), 'mobile')
+  // Beside the server's own pictures (the server reads the staged file back from there:
+  // constants.ts MOBILE_STAGED_IMAGES_DIR). Asked at each save: see serverImagesDir.
+  const ownsShared = (): boolean => {
+    try {
+      const st = fs.lstatSync(PROD_DAEMON_DIR)
+      return st.isDirectory() && st.uid === os.userInfo().uid
+    } catch { return false }
+  }
+  const imageSaveDir = (): string => path.join(serverImagesDir({ env: daemonEnv, daemonDir: DAEMON_DIR, homeDaemonDir: FALLBACK_DAEMON_DIR, sharedDir: PROD_DAEMON_DIR, ownsShared }), 'mobile')
 
   // HEIC rides ISO-BMFF: a 'ftyp' box at byte 4. looksLikeImage covers the rest.
   function looksLikeHeic(data: Buffer): boolean {
@@ -82,9 +112,10 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
     // Generated filename — timestamp + random; extension from the mediaType
     // allowlist. NEVER from caller input: no path component crosses the bridge.
     const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext
-    const filePath = path.join(IMAGE_SAVE_DIR, filename)
+    const saveDir = imageSaveDir()
+    const filePath = path.join(saveDir, filename)
     try {
-      await fs.promises.mkdir(IMAGE_SAVE_DIR, { recursive: true })
+      await fs.promises.mkdir(saveDir, { recursive: true })
       await fs.promises.writeFile(filePath, buf)
       logMsg('info', 'image.save: saved', { path: filePath, size: buf.length })
       return ok({ path: filePath, size: buf.length })

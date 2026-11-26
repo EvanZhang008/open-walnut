@@ -48,11 +48,15 @@ _wd_other_account_pins() {
     && ! grep -qsx "User=\($(id -un 2>/dev/null)\|$(id -u 2>/dev/null)\)" "$_wd_unit"
 }
 
-# A login service of ours pins $1.
+# A login service of ours pins $1: the LaunchAgent (its WALNUT_DAEMON_DIR key, never another
+# key's value), the user unit, a system unit that runs this account, or the cron boot script.
 _wd_service_pins() {
   _wd_unit="${_WD_ETC:-/etc/systemd/system}/open-walnut-daemon.service"
-  grep -qsF "<string>$1</string>" "$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist" \
+  _wd_plist="$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist"
+  { [ -r "$_wd_plist" ] && sed -e ':a' -e 'N' -e '$!ba' -e 's/>[[:space:]]*</></g' "$_wd_plist" 2>/dev/null \
+      | grep -qF "<key>WALNUT_DAEMON_DIR</key><string>$1</string>"; } \
     || grep -qsxF "Environment=\"WALNUT_DAEMON_DIR=$1\"" "$HOME/.config/systemd/user/open-walnut-daemon.service" \
+    || grep -qsxF "export WALNUT_DAEMON_DIR='$1'" "$HOME/.local/share/open-walnut/daemon/daemon-boot.sh" \
     || { grep -qsxF "Environment=\"WALNUT_DAEMON_DIR=$1\"" "$_wd_unit" \
       && { ! grep -qs '^User=' "$_wd_unit" || grep -qsx "User=\($(id -un 2>/dev/null)\|$(id -u 2>/dev/null)\)" "$_wd_unit"; }; }
 }

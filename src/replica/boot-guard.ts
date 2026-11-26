@@ -128,7 +128,7 @@ export function replicaBootRefusal(input: ReplicaBootInput): string | null {
       if (holdsOrIs(dir, home)) return `${label} ${dir} is or holds the account's home ${home}`
     }
   }
-  // This account's own Walnut (and its host daemon) runs from here when another user owns /tmp/open-walnut.
+  // This account's own Walnut keeps its session daemon's files here (lib/daemon-dir.ts), and everything when another user owns /tmp/open-walnut.
   for (const home of input.accountHomes ?? accountHomes(input.env)) {
     const own = path.join(home, '.cache', 'open-walnut')
     if (overlaps(runDir, own)) return `WALNUT_DAEMON_DIR ${runDir} is inside or holds ${own}, the run dir of this account's own Walnut`

@@ -23,8 +23,9 @@
  * dir (it has been the place for a second user of one machine since 2026-10-30, and for a host
  * whose /tmp cannot hold the daemon: providers/remote-daemon-dir.ts, the same rule for a host).
  * An older release that finds no daemon running starts its own in /tmp/open-walnut (after a
- * downgrade): the home daemon leaves its registry linked there (daemon-core.ts
- * linkRegistryForOlderReleases), so that daemon adopts the sessions that still run. A link is never
+ * downgrade, or beside a newer server): the home daemon holds that dir's instance lock too and
+ * leaves its registry linked there (providers/daemon-older-release-door.ts), so that daemon gives
+ * way while this one runs and adopts the sessions that still run once it stopped. A link is never
  * one of the markers of rule 4.
  *
  * The DAEMON dir, in order:
@@ -219,7 +220,10 @@ function daemonStateSinceBoot(dir: string, deps: DaemonDirDeps): number {
   for (const name of DAEMON_STATE_MARKERS) {
     const st = deps.lstat(path.join(dir, name))
     if (!st || st.isDirectory() || st.isSymbolicLink() || (uid !== null && st.uid !== uid)) continue
-    if (st.mtimeMs >= boot && st.mtimeMs > newest) newest = st.mtimeMs
+    // Whole seconds, as the shell copies of this rule read a file's time: two dirs written in the
+    // same second are a tie in all of them (the home dir then).
+    const at = Math.floor(st.mtimeMs / 1000) * 1000
+    if (st.mtimeMs >= boot && at > newest) newest = at
   }
   return newest
 }

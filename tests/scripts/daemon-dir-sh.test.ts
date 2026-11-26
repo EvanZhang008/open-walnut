@@ -58,7 +58,7 @@ function shell(env: Record<string, string> = {}): { daemon: Where; log: Where } 
 }
 
 /** The server's answer on the same dirs. */
-function server(env: Record<string, string> = {}): { daemon: Where; log: Where } {
+function server(env: Record<string, string> = {}, platform = 'linux'): { daemon: Where; log: Where } {
   const map = (p: string): string => {
     if (p === SHARED_DAEMON_DIR || p.startsWith(SHARED_DAEMON_DIR + '/')) return shared + p.slice(SHARED_DAEMON_DIR.length)
     if (p.startsWith('/etc/systemd/system/')) return path.join(etc, p.slice('/etc/systemd/system/'.length))
@@ -69,7 +69,7 @@ function server(env: Record<string, string> = {}): { daemon: Where; log: Where }
     lstat: (p) => realDaemonDirDeps.lstat(map(p)),
     readFile: (p) => realDaemonDirDeps.readFile(map(p)),
     bootTimeMs: () => BOOT_S * 1000,
-    platform: 'linux',
+    platform,
   }
   const e = { HOME: home, ...env }
   const name = (dir: string): Where => (dir === SHARED_DAEMON_DIR ? 'shared' : dir === cache ? 'home' : dir)
@@ -165,6 +165,35 @@ describe.skipIf(process.platform === 'win32' || asRoot)('scripts/lib/daemon-dir.
     expect(server().daemon).toBe('shared')
     fs.writeFileSync(path.join(home, '.config', 'systemd', 'user', 'open-walnut-daemon.service'), unit(cache))
     write(shared, 'sessions.json')
+    both({ daemon: 'home', log: 'shared' })
+  })
+
+  // The three places review found the two rules apart (2026-11-26).
+  it('the cron boot script pins a dir as a unit does', () => {
+    write(shared, 'sessions.json')
+    write(path.join(home, '.local', 'share', 'open-walnut', 'daemon'), 'daemon-boot.sh', `#!/bin/sh\nexport WALNUT_DAEMON_DIR='${cache}'\nexec daemon\n`)
+    both({ daemon: 'home', log: 'shared' })
+  })
+
+  it('a LaunchAgent pins only by its WALNUT_DAEMON_DIR key, on one line or two', () => {
+    write(shared, 'sessions.json')
+    const agents = path.join(home, 'Library', 'LaunchAgents')
+    const plist = (body: string) => write(agents, 'dev.openwalnut.session-daemon.plist', `<plist><dict>${body}</dict></plist>`)
+    // The home dir only as another key's value: no pin.
+    plist(`<key>WorkingDirectory</key><string>${cache}</string>`)
+    expect(shell().daemon).toBe('shared')
+    expect(server({}, 'darwin').daemon).toBe('shared')
+    plist(`<key>EnvironmentVariables</key>\n<dict>\n\t<key>WALNUT_DAEMON_DIR</key>\n\t<string>${cache}</string>\n</dict>`)
+    expect(shell().daemon).toBe('home')
+    expect(server({}, 'darwin').daemon).toBe('home')
+  })
+
+  it('two dirs written in the same second are a tie: the home dir', () => {
+    const second = (NOW_S - 600) * 1000
+    write(cache, 'sessions.json')
+    write(shared, 'sessions.json')
+    fs.utimesSync(path.join(cache, 'sessions.json'), new Date(second + 100), new Date(second + 100))
+    fs.utimesSync(path.join(shared, 'sessions.json'), new Date(second + 600), new Date(second + 600))
     both({ daemon: 'home', log: 'shared' })
   })
 
