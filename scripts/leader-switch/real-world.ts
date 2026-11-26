@@ -146,7 +146,7 @@ async function must(r: Promise<ShResult>, what: string): Promise<ShResult> {
 }
 
 /** A local producer's stdout as a stream, and its end: a failure (exit code, stderr read as it goes) is an error. */
-function produce(cmd: string, args: string[], cwd = REPO): { out: Readable; done: Promise<void> } {
+function produce(cmd: string, args: string[], cwd = REPO): { out: Readable; done: Promise<void>; kill: () => void } {
   const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   let err = ''
   p.stderr.setEncoding('utf8').on('data', (d: string) => { err = (err + d).slice(-4000) })
@@ -154,12 +154,13 @@ function produce(cmd: string, args: string[], cwd = REPO): { out: Readable; done
     p.on('error', reject)
     p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.slice(0, 3).join(' ')} exited ${code}: ${err.trim()}`))))
   })
-  return { out: p.stdout, done }
+  return { out: p.stdout, done, kill: () => { try { p.kill('SIGTERM') } catch { /* gone */ } } }
 }
 /** One stream staged there: the unpacking there and the producing here both must end well. */
-async function stage(t: Transport, dest: string, src: { out: Readable; done: Promise<void> }, timeoutMs: number, what: string): Promise<void> {
-  const [r] = await Promise.all([must(t.sh(`tar -x -C ${shq(dest)}`, { input: src.out, timeoutMs }), what), src.done.catch((e: Error) => { throw new Error(`${what}: ${e.message}`) })])
-  void r
+async function stage(t: Transport, dest: string, src: { out: Readable; done: Promise<void>; kill: () => void }, timeoutMs: number, what: string): Promise<void> {
+  // A failed unpacking there ends the producer here too (it would wait on its pipe forever).
+  const there = must(t.sh(`tar -x -C ${shq(dest)}`, { input: src.out, timeoutMs }), what).catch((e: Error) => { src.kill(); throw e })
+  await Promise.all([there, src.done.catch((e: Error) => { throw new Error(`${what}: ${e.message}`) })])
 }
 
 export async function makeRealWorld(root: string, opts: RealOptions): Promise<RealWorld> {
@@ -211,8 +212,11 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
       if (!/^(127\.\d+\.\d+\.\d+|\[::1\]|\[::ffff:127\.\d+\.\d+\.\d+\]):\d+$/.test(l.addr)) listen.open.add(`${l.addr} (pid ${l.pid}: ${l.cmd})`)
     }
   }
-  const stopThere = async (): Promise<void> => {
-    if (stopped) return
+  // One stop, whoever asks (an abort, the world's own stop, a failed start): every caller waits for that same one,
+  // so nothing exits while its cleanup there still runs.
+  let stopping: Promise<void> | null = null
+  const stopThere = (): Promise<void> => (stopping ??= stopOnce())
+  const stopOnce = async (): Promise<void> => {
     stopped = true
     if (watcher) clearInterval(watcher)
     if (follower) clearInterval(follower)
@@ -226,11 +230,13 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
     evidence('cleanup.txt', cleanupOut)
     log(`cleanup on ${t.label}: exit ${c.code}`)
     const after = await t.sh(script('snapshot.sh'), { args: [R, ...(opts.notProduction ?? [])], timeoutMs: 60_000 }).catch(() => null)
+    // Every tunnel closed before the slow listing below (the master stays for it).
+    await t.close().catch(() => {})
     // What this account wrote there since the preflight, outside the machine's own Walnut dirs (read only; the fake's
-    // run lists this computer's files itself: --real-confined).
+    // run lists this computer's files itself: --real-confined). Evidence for a person, not a check.
     const since = Math.floor(Number(facts.now_ms) / 1000) - 1
     if (!t.sharedLoopback && Number.isFinite(since)) {
-      const w = await t.sh(script('written-since.sh'), { args: [String(since)], timeoutMs: 400_000 }).catch(() => null)
+      const w = await t.sh(script('written-since.sh'), { args: [String(since)], timeoutMs: 240_000 }).catch(() => null)
       evidence('written-since.txt', w ? `${w.out}${w.err ? `\n[stderr] ${w.err}` : ''}\n[exit ${w.code}]\n` : 'did not run\n')
     }
     if (after) {
@@ -317,6 +323,7 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
     // The copy link follows B's daemon port as it moves (a server taking the daemon in process): read there every second.
     const followed = new Map<string, number>()
     const tunnelFailures: string[] = []
+    const failedPorts = new Set<number>()
     const forwarded = new Set<number>()
     // Each tunnel, as it is opened (the evidence names every port the run opened there).
     const tunnel = (line: string) => fs.appendFileSync(path.join(opts.evidence, 'tunnels.txt'), `${new Date().toISOString()} ${line}\n`)
@@ -329,8 +336,8 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
         // Not open: asked again next time, and named (real: every tunnel the run asked for opened).
         forwarded.delete(port)
         const why = `forward ${port}: ${err instanceof Error ? err.message : String(err)}`
-        tunnelFailures.push(why)
-        tunnel(`FAILED ${why}`)
+        // Named once per port (the follower asks again every second).
+        if (!failedPorts.has(port)) { failedPorts.add(port); tunnelFailures.push(why); tunnel(`FAILED ${why}`) }
         throw err
       }
       tunnel(`forward ${port}: this computer's 127.0.0.1:${port} to ${t.label}'s 127.0.0.1:${port} (nothing listens there for it)`)

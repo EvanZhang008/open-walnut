@@ -122,8 +122,9 @@ export async function startHostReplicaDoor(o: { base: string; machineDir: string
   const stop = async () => {
     if (!proc.pid || proc.exitCode !== null) return
     try { signal('SIGTERM') } catch { return }
-    for (let i = 0; i < 100 && proc.exitCode === null; i++) await new Promise((r) => setTimeout(r, 100))
-    if (proc.exitCode === null) try { signal('SIGKILL') } catch { /* gone */ }
+    for (let i = 0; i < 100 && proc.exitCode === null && proc.signalCode === null; i++) await new Promise((r) => setTimeout(r, 100))
+    // The group always (what is left of it once the replica went), the replica alone only while it still runs.
+    if (!o.pidOnly || (proc.exitCode === null && proc.signalCode === null)) try { signal('SIGKILL') } catch { /* gone */ }
   }
   return { port: at, proc, log: () => out, stop }
 }

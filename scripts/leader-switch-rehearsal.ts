@@ -167,7 +167,7 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
     failed++
     // The other machine first (its agent, its cleanup, its snapshot, the ssh master), then A's side here.
     const capped = (p: Promise<unknown> | undefined, ms: number) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]).catch(() => {})
-    await capped(stopThere?.(), 300_000)
+    await capped(stopThere?.(), 600_000)
     if (world) await capped(world.stop(), 120_000)
     const out = (() => { try { return fs.readFileSync(path.join(evidence, 'cleanup.txt'), 'utf8') } catch { return 'none ran (nothing was made there)' } })()
     console.log(`REAL  cleanup there:\n${out.trim()}`)
@@ -204,6 +204,7 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
       const l = world.listeners()
       // At least B's daemon and its host replica (w-b's door) were seen listening: a sampler that saw nothing proves nothing.
       print({ name: `real: every port the run's processes on ${transport.label} listened on was on its loopback (at least B's daemon and w-b's door seen)`, ok: l.samples > 0 && l.seen >= 2 && l.open.length === 0, detail: `${l.samples} sample(s), ${l.seen} port(s)${l.open.length ? `; not on loopback: ${l.open.slice(0, 4).join('; ')}` : ''}` })
+      if (host) console.log(`REAL  what this account wrote on ${transport.label} since the preflight, outside its Walnut dirs (evidence for a person to judge): ${path.join(evidence, 'written-since.txt')}`)
       const tf = world.tunnelFailures()
       print({ name: `real: every tunnel the run asked for opened`, ok: tf.length === 0, detail: tf.length ? tf.slice(0, 4).join(' | ') : 'all (tunnels.txt)' })
       const diff = (() => { try { return fs.readFileSync(path.join(evidence, 'procs-diff.txt'), 'utf8').trim() } catch { return 'no snapshot after' } })()

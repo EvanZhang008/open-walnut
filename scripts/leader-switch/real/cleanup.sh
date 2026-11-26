@@ -161,6 +161,9 @@ if [ -n "$left_over" ]; then
   echo "cleanup: a process of the rehearsal is still there; $ROOT kept"
   exit 3
 fi
+n_rec=0
+[ -f "$ROOT/run/pids.jsonl" ] && n_rec=$(grep -c '"pid":' "$ROOT/run/pids.jsonl")
+echo "cleanup: $n_rec recorded start(s), none still running as recorded; $(echo $killed | wc -w) signalled"
 echo "cleanup: no process of the rehearsal left"
 if [ "$KEEP" = "--keep-root" ]; then
   echo "cleanup: $ROOT kept (--keep-root)"

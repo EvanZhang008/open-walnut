@@ -25,7 +25,8 @@ if (!path.isAbsolute(root) || path.resolve(root).split(path.sep).filter(Boolean)
   console.error(`machine-agent: refusing to run: WALNUT_REHEARSAL_ROOT ${JSON.stringify(root)} must be an absolute folder at least two levels deep, ${outside.join(', ') || 'every place'} inside it, OPEN_WALNUT_HOME unset`)
   process.exit(2)
 }
-fs.appendFileSync(process.env.WALNUT_REHEARSAL_PIDS!, `${JSON.stringify({ pid: process.pid, what: 'agent', argv: process.argv, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+const tick = (() => { try { const s = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8'); return Number(s.slice(s.lastIndexOf(')') + 2).split(' ')[19]) } catch { return null } })()
+fs.appendFileSync(process.env.WALNUT_REHEARSAL_PIDS!, `${JSON.stringify({ pid: process.pid, tick, what: 'agent', argv: process.argv, at: new Date().toISOString() })}\n`, { mode: 0o600 })
 
 const { runOp, OPS } = await import('./machine-ops.js')
 
