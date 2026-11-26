@@ -8,7 +8,7 @@
  */
 
 import { log } from '../../logging/index.js'
-import type { NewNotification } from './store.js'
+import type { NewNotification, UpsertOutcome } from './store.js'
 
 /** A host's name without its Settings label: "this machine" for the local one, else its key. */
 export function plainHostLabel(hostKey: string | undefined): string {
@@ -25,13 +25,21 @@ export async function hostLabel(hostKey: string): Promise<string> {
   }
 }
 
-/** Raise (or count again) one item. False when it could not be written. */
-export async function raiseHealthItem(item: NewNotification, source: string): Promise<boolean> {
+/**
+ * Raise (or count again) one item: what the store did with it, false when it could not be written.
+ *
+ * Every item is one of two shapes (tests/core/notifications/health-item-shape-ratchet.test.ts):
+ * a CONDITION that stands and recovers (it carries a recoveryKey; raising it again while it stands
+ * is the same cause seen again), or an EVENT that happened once (`{ once: true }`; its dedupKey
+ * names the event, and raising it again, after a restart say, is the same event told again and
+ * counts nothing).
+ */
+export async function raiseHealthItem(item: NewNotification, source: string, opts: { once?: boolean } = {}): Promise<false | UpsertOutcome> {
   try {
     const [{ upsertNotification }, { bus }] = await Promise.all([import('./store.js'), import('../event-bus.js')])
-    const { record, outcome } = await upsertNotification(item)
+    const { record, outcome } = await upsertNotification(item, opts)
     if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], { source })
-    return true
+    return outcome
   } catch (err) {
     log.session.warn(`${source}: the Walnut Health item could not be written`, { host: item.host, error: err instanceof Error ? err.message : String(err) })
     return false
@@ -69,7 +77,11 @@ export function healthConditions(source: string) {
   return {
     /** Raise (or count again) the condition's item. */
     raise(key: string, item: () => Promise<NewNotification>): Promise<void> {
-      return inTurn(key, async () => { if (await raiseHealthItem(await item(), source)) told.set(key, 'raised') })
+      return inTurn(key, async () => {
+        // A condition is recovered by its key (recover below), so its item carries it.
+        const it = await item()
+        if (await raiseHealthItem({ ...it, recoveryKey: it.recoveryKey ?? key }, source)) told.set(key, 'raised')
+      })
     },
     /** The condition is over: its item, if any, recovers. */
     recover(key: string): Promise<void> {

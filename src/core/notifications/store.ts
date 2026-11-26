@@ -525,6 +525,15 @@ export const REFRESHABLE_DETAIL_KEYS = [
  */
 export async function upsertNotification(
   input: NewNotification,
+  /**
+   * `once`: the item is one event that happened at one time (its dedupKey names that time or
+   * that run), never a cause that can stand or come back. A record of it already in the store,
+   * resolved or not, is that same event told again (a server restart replaying a host's hello),
+   * so nothing moves: no occurrence, no lastTimestamp, no reopen (`suppressed`). 2026-11-26: a
+   * host's one launcher put-back was counted again at every deploy of the Mac's server and kept
+   * Walnut Health's "Background errors keep happening" alarm open for hours after the host was fine.
+   */
+  opts: { once?: boolean } = {},
 ): Promise<{ record: NotificationRecord; outcome: UpsertOutcome }> {
   if (input.kind === 'permission') {
     throw new Error(
@@ -558,6 +567,7 @@ export async function upsertNotification(
     }
 
     const existing = store.notifications[idx];
+    if (opts.once) return { record: { ...existing }, outcome: 'suppressed' as const };
     // A standing warning that turns into an error is news, though not a new occurrence.
     const escalated = isError && !existing.resolved && existing.severity !== 'error' && input.severity === 'error';
     existing.title = input.title;
@@ -620,7 +630,8 @@ export async function upsertNotification(
 
 /**
  * What an upsert did. `suppressed`: an error card the user dismissed while its
- * cause still stood; nothing was written, and callers broadcast nothing.
+ * cause still stood, or a `once` event the store already holds; nothing was
+ * written, and callers broadcast nothing.
  */
 export type UpsertOutcome = 'inserted' | 'refreshed' | 'reopened' | 'suppressed';
 

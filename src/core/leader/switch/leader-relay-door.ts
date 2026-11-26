@@ -222,7 +222,7 @@ export async function recordBegin(o: { switchId: string; from: string; to: strin
   const [{ beganLine }, { log }, { raiseHealthItem }] = await Promise.all([import('./final-stop.js'), import('../../../logging/index.js'), import('../../notifications/health-items.js')])
   const line = beganLine(o)
   log.web.info(`leader switch: ${line.title}`, { switchId: o.switchId, from: o.from, to: o.to, startedBy: o.by })
-  void raiseHealthItem({ kind: 'operation-error', severity: 'info', title: line.title, body: line.body, dedupKey: `leader-switch-began:${o.switchId}`, category: 'Leader switch' }, 'leader-switch')
+  void raiseHealthItem({ kind: 'operation-error', severity: 'info', title: line.title, body: line.body, dedupKey: `leader-switch-began:${o.switchId}`, category: 'Leader switch' }, 'leader-switch', { once: true })
 }
 
 let server: http.Server | null = null

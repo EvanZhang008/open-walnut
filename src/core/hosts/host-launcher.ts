@@ -6,7 +6,9 @@
  * Walnut Health item per put-back (`host-launcher-rollback:<host>:<at>`), never a toast or a bell row
  * (no needsYou: the launcher already brought the host back, and the server holds that build a day).
  * Read from the daemon's hello (`launcher.rollback`); only a put-back of the last day is raised, and
- * each one once per server process. Nothing here throws, and nothing waits for it.
+ * each one once: per server process here, and across restarts by the store (`once`: the hello of every
+ * restart replays the same put-back, which is no new occurrence). Nothing here throws, and nothing
+ * waits for it.
  */
 import { log } from '../../logging/index.js'
 import type { LauncherFacts } from '../../providers/service-launcher-beat.js'
@@ -65,7 +67,9 @@ export async function noteLauncherRollback(hostKey: string, facts: LauncherFacts
   const { hostLabel, raiseHealthItem } = await import('../notifications/health-items.js')
   const item = launcherRollbackItem(hostKey, await hostLabel(hostKey), facts!)
   if (!item) return
-  if (!(await raiseHealthItem(item, 'host-launcher'))) { told.delete(key); return }
+  const outcome = await raiseHealthItem(item, 'host-launcher', { once: true })
+  if (!outcome) { told.delete(key); return }
+  if (outcome === 'suppressed') return // told before this restart
   log.session.warn('host launcher: the daemon was put back to its previous version', { host: hostKey, from: r.from, to: r.to, reason: r.reason })
 }
 
