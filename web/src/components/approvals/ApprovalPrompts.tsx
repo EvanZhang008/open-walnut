@@ -17,7 +17,7 @@
  * device approves). Approve is never greyed out for want of a device.
  * Live through the `approval:changed` event; a reconnect re-reads the list.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
@@ -25,6 +25,7 @@ import { NoticeCard, NoticeStatus } from '@/components/common/NoticeCard';
 import { useEvent } from '@/hooks/useWebSocket';
 import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
+import { inputPressedAt } from '@/utils/input-time';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { APPROVALS_SWITCH_LABEL, type Approval } from '@/api/approvals';
@@ -421,13 +422,24 @@ export function ApprovalPrompts() {
   // card just answered must not land on the next request's Approve.
   // The clock starts once the answer laid over it has gone, when the card is first seen.
   const [armedId, setArmedId] = useState<string | null>(null);
+  // When the shown card's buttons take a click, judged by when the click was made: a busy
+  // page handles a click from the arm window late, after the arming face has gone.
+  const armsAt = useRef(Infinity);
   const covered = !!holding;
   useEffect(() => {
     setArmedId(null);
+    armsAt.current = Infinity;
     if (!card || covered) return;
+    armsAt.current = performance.now() + ARM_MS;
     const t = setTimeout(() => setArmedId(card.id), ARM_MS);
     return () => clearTimeout(t);
   }, [card?.id, covered]);
+  const armGuard = (e: ReactMouseEvent) => {
+    if (inputPressedAt(e.nativeEvent) >= armsAt.current) return;
+    if (!(e.target as Element | null)?.closest?.('.approval-actions')) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   return (
     <>
@@ -455,7 +467,7 @@ export function ApprovalPrompts() {
             </NoticeCard>
           )}
           {card && (!aside || holding) && (
-            <div className="approval-card-place">
+            <div className="approval-card-place" onClickCapture={armGuard}>
               {asLine ? (
                 // Two short lines: what waits, then how many, the time and the buttons (a phone opens
                 // the request instead, whose buttons take a finger).

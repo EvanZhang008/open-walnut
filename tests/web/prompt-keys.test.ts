@@ -5,7 +5,8 @@
  * (tests/e2e/browser/permission-prompt-keys.spec.ts); this tier has no DOM.
  */
 import { describe, expect, it } from 'vitest';
-import { denyNoteMessage, isTextEntry, noteOfDenyMessage, pickPromptCard, promptKeyOf, promptKeyRange, promptKeyList, choiceKeys } from '@/components/sessions/prompt-keys';
+import { denyNoteMessage, isTextEntry, noteOfDenyMessage, pickPromptCard, promptCardArmed, promptKeyOf, promptKeyRange, promptKeyList, choiceKeys, PROMPT_KEY_ARM_MS } from '@/components/sessions/prompt-keys';
+import { inputPressedAt } from '@/utils/input-time';
 
 const key = (k: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey', boolean>> = {}) =>
   ({ key: k, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
@@ -117,3 +118,25 @@ describe('choiceKeys', () => {
     expect(choiceKeys(['allow_once', 'proceed_always', 'reject_once'])).toEqual([1, 2, 3])
   })
 })
+
+describe('the arm reads when the key was pressed', () => {
+  it('a card never shown takes no key', () => {
+    expect(promptCardArmed(null, 10_000)).toBe(false);
+  });
+  it('a key pressed inside the arm window is not taken, one pressed after it is', () => {
+    expect(promptCardArmed(1_000, 1_000 + PROMPT_KEY_ARM_MS - 1)).toBe(false);
+    expect(promptCardArmed(1_000, 1_000 + PROMPT_KEY_ARM_MS)).toBe(true);
+  });
+  it('a key pressed before the card was shown is not taken, however late it is handled', () => {
+    // Pressed at 900 (before the card, shown at 1000), handled at 5000: the event's time counts.
+    const at = inputPressedAt({ timeStamp: 900 }, 5_000);
+    expect(at).toBe(900);
+    expect(promptCardArmed(1_000, at)).toBe(false);
+  });
+  it('a stamp missing or on another clock reads as now, never earlier', () => {
+    expect(inputPressedAt({ timeStamp: 0 }, 5_000)).toBe(5_000);
+    expect(inputPressedAt({ timeStamp: Number.NaN }, 5_000)).toBe(5_000);
+    // An epoch stamp (an old engine) is after the page clock's now.
+    expect(inputPressedAt({ timeStamp: 1_795_000_000_000 }, 5_000)).toBe(5_000);
+  });
+});

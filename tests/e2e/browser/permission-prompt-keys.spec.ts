@@ -70,6 +70,12 @@ async function setup(page: Page): Promise<Answers> {
     { role: 'user', text: 'Run the test suite for the inventory module.', timestamp: iso(60_000), msgId: 'u-1' },
     { role: 'assistant', text: 'I will run the tests now.', timestamp: iso(59_000), msgId: 'a-1' },
   ]
+  // Its recovery state, as a session at rest has it: the fixture server knows no such session, so
+  // unstubbed it answers "Session not found" and the panel draws a recovery strip no real session shows.
+  await page.route(`**/api/sessions/${SID}/supervision`, (route: Route) => route.fulfill({ json: {
+    available: true, startup: 'on-demand', stopRequest: null,
+    supervision: { enabled: false, state: 'inactive', reason: null, generation: 1, retryAt: null, updatedAt: Date.now() },
+  } }))
   await page.route(`**/api/sessions/${SID}/history**`, (route: Route) =>
     route.fulfill({ json: { messages, cursor: messages.length, delta: false } }))
   await page.route(`**/api/sessions/${SID}/permission`, async (route: Route) => {
@@ -99,6 +105,12 @@ const bashAsk = (requestId: string, acpOptions?: unknown[]) => ({
   ...(acpOptions ? { acpOptions } : {}),
 })
 
+/**
+ * A card takes keys PROMPT_KEY_ARM_MS after it is first shown (prompt-keys.ts) and says so:
+ * every test that presses a prompt key waits for this first, never for a guessed delay.
+ */
+const armed = (card: Locator) => expect(card).toHaveAttribute('data-prompt-keys', 'armed')
+
 /** Focus off every field (the transcript is clicked: focus goes to <body>). */
 async function clickTranscript(page: Page): Promise<void> {
   await panel(page).locator('[data-message-id="a-1"]').click()
@@ -123,6 +135,7 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await expect(card.locator('.permission-request-keyhint')).toContainText('1–4 to choose, Enter to send')
     await shot(page, 'rule-pending', 'req-rule-1')
 
+    await armed(card)
     await clickTranscript(page)
     // Enter before any pick sends nothing, and the hint says to pick first.
     await page.keyboard.press('Enter')
@@ -186,6 +199,7 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await expect(card.locator('.prompt-key')).toHaveText(['1', '2'])
     await expect(card.getByTestId('permission-note-input')).toBeVisible()
     await shot(page, 'plain-pending', 'req-plain-1')
+    await armed(card)
     await clickTranscript(page)
     await page.keyboard.press('2')
     await page.keyboard.press('Enter')
@@ -200,6 +214,8 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await inject(page, bashAsk('req-comp-1', RULE_OPTIONS))
     const card = cardOf(page, 'req-comp-1')
     await expect(card).toBeVisible()
+    // Armed: a digit that does not pick is the composer's, not the arm's.
+    await armed(card)
     const composer = panel(page).locator('textarea').first()
     await composer.click()
     await page.keyboard.type('2')
@@ -222,6 +238,7 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await expect(card).toBeVisible()
     await expect(card.locator('.ask-user-question').nth(0)).toHaveClass(/is-key-active/)
     await expect(card.locator('.permission-request-keyhint')).toContainText('1–2 to choose (question 1 of 2)')
+    await armed(card)
     await clickTranscript(page)
     await page.keyboard.press('1')
     await expect(card.locator('.ask-user-question').nth(0).locator('.qp-option-selected')).toHaveText(/SQLite/)
@@ -245,8 +262,7 @@ test.describe('Claude prompt choices on the desktop card', () => {
       input: { questions: [{ question: 'Which fruit?', header: 'Fruit', multiSelect: false, options: [{ label: 'Apple' }, { label: 'Banana' }, { label: 'Cherry' }] }] },
     })
     const card = panel(page).locator('.ask-user-question-card')
-    await expect(card).toBeVisible()
-    await page.waitForTimeout(500)
+    await armed(card)
     // A control outside the card holds focus (a message's own button): Enter there would be its click.
     const outside = panel(page).locator('[data-message-id="a-1"] button').first()
     await outside.focus()
@@ -288,11 +304,34 @@ test.describe('Claude prompt choices on the desktop card', () => {
     const answers = await setup(page)
     await clickTranscript(page)
     await inject(page, bashAsk('req-arm-1', RULE_OPTIONS))
-    // Same moment: the card is not yet armed for keys.
+    // Same moment: the card is not yet armed for keys (prompt-keys: before arm).
     await page.keyboard.press('1')
     await page.keyboard.press('Enter')
     await page.waitForTimeout(150)
     expect(answers.bodies).toEqual([])
     await expect(cardOf(page, 'req-arm-1').locator('.is-picked')).toHaveCount(0)
+  })
+
+  test('a key pressed before the card was armed does not land on it when the page handles it late', async ({ page, browserName }) => {
+    // A busy page handles a key late: the arm reads when the key was pressed (the event's
+    // own time), not when the page got to it. Chromium's input protocol sets that time.
+    test.skip(browserName !== 'chromium', 'sets the key event time through the Chromium input protocol')
+    const answers = await setup(page)
+    await clickTranscript(page)
+    // Pressed just before the prompt arrived (CDP takes seconds since the epoch), handled once it is armed.
+    const pressedAt = Date.now() / 1000 - 0.05
+    await inject(page, bashAsk('req-late-1', RULE_OPTIONS))
+    const card = cardOf(page, 'req-late-1')
+    await armed(card)
+    const cdp = await page.context().newCDPSession(page)
+    for (const type of ['keyDown', 'keyUp'] as const) {
+      await cdp.send('Input.dispatchKeyEvent', { type, key: '1', code: 'Digit1', text: type === 'keyDown' ? '1' : undefined, windowsVirtualKeyCode: 49, timestamp: pressedAt })
+    }
+    await page.waitForTimeout(150)
+    await expect(card.locator('.is-picked')).toHaveCount(0)
+    // The control: the same key pressed now picks.
+    await page.keyboard.press('1')
+    await expect(card.locator('.is-picked')).toHaveCount(1)
+    expect(answers.bodies).toEqual([])
   })
 })

@@ -69,6 +69,8 @@ test('a click on a toast over a pane does not hand that pane the number keys', a
   }
   const cards = page.locator('.permission-request-card[data-prompt-pending="true"]')
   await expect(cards).toHaveCount(2)
+  // Both armed: a key neither takes below is the toast click's doing, not the arm's.
+  for (const i of [0, 1]) await expect(cards.nth(i)).toHaveAttribute('data-prompt-keys', 'armed')
 
   // A third session's ask toasts (its pane is not open) in the notice stack at the bottom left.
   const elsewhere = { sessionId: OFF_SCREEN, requestId: `req-${OFF_SCREEN}`, toolName: 'Bash', input: { command: `echo ${OFF_SCREEN}` } }

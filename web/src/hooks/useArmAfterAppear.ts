@@ -11,6 +11,7 @@
  * before React has drawn the disabled state.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
+import { inputPressedAt } from '@/utils/input-time';
 
 export const ARM_AFTER_APPEAR_MS = 500;
 
@@ -71,7 +72,8 @@ export function useArmAfterAppear<T extends HTMLElement = HTMLElement>(ms = ARM_
   }, [el, ms, enabled]);
 
   const guard = useCallback((e: MouseEvent) => {
-    if (performance.now() >= until.current) return;
+    // By when the tap was made: a busy page handles a tap from the arm window late.
+    if (inputPressedAt(e.nativeEvent) >= until.current) return;
     const target = e.target as HTMLElement | null;
     if (!target?.closest('button, [role="button"], input[type="checkbox"], input[type="radio"]')) return;
     // Reading controls (Show all) answer nothing, so they work at once.

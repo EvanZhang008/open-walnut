@@ -33,7 +33,7 @@ import {
   type PermissionRequestStatus,
 } from '@/stores/permission-request-store';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
-import { denyNoteMessage, noteOfDenyMessage, promptKeyHint, splitPromptHint, promptKeyRange, choiceKeys, promptKeyList, usePromptKeyFocus, usePromptKeys, usePromptKeyTarget } from './prompt-keys';
+import { denyNoteMessage, noteOfDenyMessage, promptKeyHint, splitPromptHint, promptKeyRange, choiceKeys, promptKeyList, usePromptKeyFocus, usePromptKeys, usePromptKeysState, usePromptKeyTarget } from './prompt-keys';
 import { AnswerText, RuleDetail } from './RuleDetail';
 import { callAnswerText, useToolDecisions } from './waiting-tools';
 import { OptionLabel } from '@/components/common/OptionLabel';
@@ -148,6 +148,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
   }, !isSettledPermission(status) && !phone);
   const keyFocus = usePromptKeyFocus(cardRef, keysOn);
   const keyTarget = usePromptKeyTarget(cardRef, keysOn);
+  const keysState = usePromptKeysState(cardRef);
   const keysElsewhere = keysOn && keyTarget.several && !keyTarget.target;
 
   if (isSettledPermission(status)) {
@@ -196,6 +197,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
       className={`permission-request-card ask-user-question-card is-pending${arm.armed ? '' : ' is-arming'}${keysOn && keyTarget.several && keyTarget.target ? ' is-key-target' : ''}`}
       data-prompt-pending={busy ? undefined : 'true'}
       data-prompt-tool="AskUserQuestion"
+      data-prompt-keys={keysState}
     >
       <div className="permission-request-header">
         <span className="permission-request-icon" aria-hidden="true"><QuestionCircleIcon size={14} /></span>
@@ -472,6 +474,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
   }, pending && !askQuestions && !phone);
   const keyFocus = usePromptKeyFocus(cardRef, keysOn);
   const keyTarget = usePromptKeyTarget(cardRef, keysOn);
+  const keysState = usePromptKeysState(cardRef);
 
   if (askQuestions) {
     return (
@@ -509,6 +512,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
       data-prompt-pending={pending && !holding ? 'true' : undefined}
       data-prompt-tool={toolName}
       data-request-id={requestId}
+      data-prompt-keys={keysState}
     >
       <div className="permission-request-header">
         {/* The toast's and the panel's warning sign while it waits, so all three read as one ask. */}

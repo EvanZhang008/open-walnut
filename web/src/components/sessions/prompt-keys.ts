@@ -10,11 +10,16 @@
  * Enter on a focused button stays that button's own click.
  *
  * A card takes keys only PROMPT_KEY_ARM_MS after it appears, so a key already on
- * its way when the prompt arrives does not land on it.
+ * its way when the prompt arrives does not land on it. The arm is read at the time
+ * the key was pressed (the event's own time), not when the page got to it: a page
+ * busy drawing the new card handles a key late, and that key is exactly the one
+ * the arm is for. A card says it is armed (`data-prompt-keys="armed"`), so anything
+ * that presses keys at it waits for that, not for a guessed delay.
  */
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { isImeKey, keyTargetPanel } from '@/hooks/usePanelKeyRouter';
+import { inputPressedAt } from '@/utils/input-time';
 
 export const PROMPT_KEY_ARM_MS = 400;
 
@@ -28,8 +33,13 @@ export interface PromptKeyHandler {
 interface Registration {
   ref: RefObject<HTMLElement | null>;
   handler: { current: PromptKeyHandler };
-  /** When the card was first seen shown (shownNow), or null while it has not been. */
+  /** When the card was first seen shown (shownNow, on performance.now()), or null while it has not been. */
   since: number | null;
+}
+
+/** Whether a card first shown at `since` takes a key pressed at `at` (exported for tests). */
+export function promptCardArmed(since: number | null, at: number): boolean {
+  return since !== null && at - since >= PROMPT_KEY_ARM_MS;
 }
 
 /**
@@ -56,13 +66,25 @@ function watchShown(): void {
     for (const reg of registrations) {
       if (reg.since !== null) continue;
       const el = reg.ref.current;
-      if (el && shownNow(el)) reg.since = Date.now();
+      if (el && shownNow(el)) { reg.since = performance.now(); announceArmed(reg); }
       else waiting = true;
     }
     if (!waiting && shownPoll) { clearInterval(shownPoll); shownPoll = null; }
   };
   shownPoll = setInterval(tick, 50);
   tick();
+}
+
+/** Re-render the cards once this one is armed, so it can say so (data-prompt-keys). */
+function announceArmed(reg: Registration): void {
+  const check = () => {
+    if (!registrations.has(reg) || reg.since === null) return;
+    const left = reg.since + PROMPT_KEY_ARM_MS - performance.now();
+    if (left > 0) { setTimeout(check, left + 1); return; }
+    changed();
+  };
+  // `check` waits on by itself when the clock reads the arm as not over yet.
+  setTimeout(check, PROMPT_KEY_ARM_MS);
 }
 
 const registrations = new Set<Registration>();
@@ -131,11 +153,11 @@ function onKeyDown(e: KeyboardEvent): void {
   const active = document.activeElement;
   if (isTextEntry(e.target) || isTextEntry(active)) return;
   if (key === 'enter' && active && active !== document.body && isActivatable(active)) return;
-  const now = Date.now();
+  const at = inputPressedAt(e);
   const live: Candidate<Registration>[] = [];
   for (const reg of registrations) {
     const el = reg.ref.current;
-    if (el && el.isConnected && reg.since !== null && now - reg.since >= PROMPT_KEY_ARM_MS) live.push({ el, item: reg });
+    if (el && el.isConnected && promptCardArmed(reg.since, at)) live.push({ el, item: reg });
   }
   if (live.length === 0) return;
   // The card the page marks as taking keys (its ring and hint) takes them when the
@@ -222,13 +244,14 @@ export function usePromptKeyTarget(ref: RefObject<HTMLElement | null>, enabled: 
 
 /**
  * Register a pending card (test seam; the hook's body). Returns the unregister function.
- * `since` (tests) says when it was shown; otherwise it is stamped once it is (watchShown).
+ * `since` (tests, on performance.now()) says when it was shown; otherwise it is stamped once it is (watchShown).
  */
 export function registerPromptCard(ref: RefObject<HTMLElement | null>, handler: { current: PromptKeyHandler }, since?: number): () => void {
   const reg: Registration = { ref, handler, since: since ?? null };
   registrations.add(reg);
   install();
   if (reg.since === null) watchShown();
+  else announceArmed(reg);
   changed();
   scheduleTargetRefresh();
   return () => {
@@ -271,6 +294,18 @@ export function usePromptKeys(ref: RefObject<HTMLElement | null>, handler: Promp
   }, [enabled, ref]);
   useSyncExternalStore(subscribe, () => version, () => 0);
   return enabled && isNewestInPanel(ref.current);
+}
+
+/**
+ * The card's key state for its `data-prompt-keys` attribute: "arming" until a key pressed
+ * now would be taken, then "armed"; undefined while it takes no keys (not registered).
+ */
+export function usePromptKeysState(ref: RefObject<HTMLElement | null>): 'arming' | 'armed' | undefined {
+  useSyncExternalStore(subscribe, () => version, () => 0);
+  for (const reg of registrations) {
+    if (reg.ref === ref) return promptCardArmed(reg.since, performance.now()) ? 'armed' : 'arming';
+  }
+  return undefined;
 }
 
 /** Where focus is, for a card's key hint: free (keys reach it), in a text box elsewhere, or in its own box. */
