@@ -252,6 +252,11 @@ describe('the engine split', () => {
 
   it('counts a reopen of a completed task and compares the work on GET /api/usage/engines', async () => {
     const done = await op('task_create', { title: 'Finish and reopen', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
+    // A finish is a close after the work began: a close before the session's first turn is the close
+    // of a start that never ran and no reopen (engine-compare.ts unrunCloses, since ff81a2529a). So the
+    // first turn lands before the close, as it does for work someone finished; closed at once, the
+    // mock CLI's first turn raced the close and the reopen read 0 in about one run of six.
+    await expect.poll(async () => (await getSessionsForTask(done.id)).some((s) => !!s.firstTurnAt), { timeout: 30_000 }).toBe(true)
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'COMPLETE' })).status).toBe(200)
     expect((await api('PATCH', `/api/tasks/${done.id}`, { phase: 'IN_PROGRESS' })).status).toBe(200)
     expect((await task(done.id)).reopens).toBe(1)
