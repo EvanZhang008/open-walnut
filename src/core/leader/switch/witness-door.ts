@@ -109,6 +109,25 @@ export function callerKey(address: string): string {
   return `${groups.slice(0, 4).map((g) => (g || '0').replace(/^0+(?=.)/, '')).join(':')}::/64`
 }
 
+/**
+ * A per-caller brake: false when `from` asked for more than `perCaller` in its window of `windowMs`. Each caller's
+ * window starts at its first ask and a caller is put last when its window starts again, so the map is in window order
+ * and its sweep stops at the first live one. The door's challenges and requests each have one, and so has the relay
+ * (witness-relay.ts).
+ */
+export function callerBrake(perCaller: number, windowMs: number): (from: string, t: number) => boolean {
+  const counted = new Map<string, { n: number; until: number }>()
+  return (from, t) => {
+    const k = callerKey(from)
+    const c = counted.get(k)
+    if (c && c.until > t) { c.n++; return c.n <= perCaller }
+    if (c) counted.delete(k)
+    if (counted.size >= MAX_COUNTED_CALLERS) for (const [key, x] of counted) { if (x.until > t) break; counted.delete(key) }
+    if (counted.size < MAX_COUNTED_CALLERS) counted.set(k, { n: 1, until: t + windowMs })
+    return true
+  }
+}
+
 /** A nonce is its expiry on the door's clock (12 hex) and this, the door's HMAC over the call it is for (64 hex). */
 const nonceMac = (secret: string, f: { walnutId: string; witness: string; digest: string; cnonce: string }, exp: string): string =>
   hmacProof(secret, proofText(['walnut-witness-door-nonce-v1', f.walnutId, f.witness, f.digest, f.cnonce, exp]))
@@ -127,25 +146,8 @@ export function createWitnessDoor(deps: WitnessDoorDeps): WitnessDoor {
   const refuse = (status: number, code: string): DoorResponse => { deps.onRefuse?.(code); return refusal(status, code) }
 
   const sweepUsed = (t: number): void => { for (const [n, until] of used) if (until <= t) used.delete(n) }
-  /**
-   * A per-caller brake: false when `from` asked for more than its share this window. Each caller's window
-   * starts at its first ask and a caller is put last when its window starts again, so the map is in window
-   * order and its sweep stops at the first live one.
-   */
-  const brakeOf = () => {
-    const counted = new Map<string, { n: number; until: number }>()
-    return (from: string, t: number): boolean => {
-      const k = callerKey(from)
-      const c = counted.get(k)
-      if (c && c.until > t) { c.n++; return c.n <= perCaller }
-      if (c) counted.delete(k)
-      if (counted.size >= MAX_COUNTED_CALLERS) for (const [key, x] of counted) { if (x.until > t) break; counted.delete(key) }
-      if (counted.size < MAX_COUNTED_CALLERS) counted.set(k, { n: 1, until: t + ttl })
-      return true
-    }
-  }
-  const challengeBrake = brakeOf()
-  const requestBrake = brakeOf()
+  const challengeBrake = callerBrake(perCaller, ttl)
+  const requestBrake = callerBrake(perCaller, ttl)
 
   return {
     challenge(body, from = 'unknown') {
@@ -260,6 +262,18 @@ export const DOOR_BODY_LIMIT: Readonly<Record<string, number>> = { [WITNESS_DOOR
  * (web/routes/witness-door.ts, the handed-over standby in handed-over.ts).
  */
 export function serveDoorHttp(door: WitnessDoor, sub: string, req: IncomingMessage, res: ServerResponse, from: string): boolean {
+  return readDoorBody(sub, req, res, (body, send) => {
+    if (sub === WITNESS_DOOR_CHALLENGE) send(door.challenge(body, from))
+    else door.request(body, send, from)
+  })
+}
+
+/**
+ * The body of one POST to a door path (`sub`, '/challenge' or '/request'), capped by DOOR_BODY_LIMIT and parsed as
+ * JSON, handed to `answer` with the one way to send the answer. False (nothing written) for any other method or path.
+ * The door (serveDoorHttp) and the relay (witness-relay.ts) read bodies only through this.
+ */
+export function readDoorBody(sub: string, req: IncomingMessage, res: ServerResponse, answer: (body: unknown, send: (r: DoorResponse) => void) => void): boolean {
   const limit = DOOR_BODY_LIMIT[sub]
   if (req.method !== 'POST' || limit === undefined) return false
   const send = (r: DoorResponse) => {
@@ -267,13 +281,9 @@ export function serveDoorHttp(door: WitnessDoor, sub: string, req: IncomingMessa
     res.writeHead(r.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     res.end(JSON.stringify(r.body))
   }
-  const answer = (body: unknown) => {
-    if (sub === WITNESS_DOOR_CHALLENGE) send(door.challenge(body, from))
-    else door.request(body, send, from)
-  }
   // A body an earlier parser already read (a server that parses every body first).
   const parsed = (req as IncomingMessage & { body?: unknown }).body
-  if (req.readableEnded && parsed !== undefined) { answer(parsed); return true }
+  if (req.readableEnded && parsed !== undefined) { answer(parsed, send); return true }
   const tooLarge: DoorResponse = { status: 413, body: { ok: false, error: 'too_large' } }
   // A body its length says is too long is refused before a byte of it is read.
   if (Number(req.headers['content-length'] ?? 0) > limit) { send(tooLarge); req.resume(); return true }
@@ -290,7 +300,7 @@ export function serveDoorHttp(door: WitnessDoor, sub: string, req: IncomingMessa
     if (over) return
     let body: unknown
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { send({ status: 400, body: { ok: false, error: 'bad_request' } }); return }
-    answer(body)
+    answer(body, send)
   })
   req.on('error', () => { if (!res.headersSent) res.destroy() })
   return true

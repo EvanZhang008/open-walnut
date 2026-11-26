@@ -224,7 +224,10 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   // (a switch begun here, the leader machine's witness door for a candidate). Behind the experiment `switchable_leader`:
   // read from this server's config copy, or told by the leader in this server's settings (`leaderRelay`, set by a
   // switch's handover for the old machine's host service, which gets no config copy). Off, its socket is closed and removed.
-  let relay: { on: boolean; listener: import('./leader-relay-entry.js').LeaderRelayListener | null; busy: Promise<void> | null } = { on: false, listener: null, busy: null }
+  // The same switch also parks witness relay streams at the companion over this machine's bridge (witness-relay.ts), when
+  // this server opens the witness door (capability witness-door) and this machine keeps a witness of this Walnut: a
+  // candidate that can dial only the companion reaches this machine's witness through it, whatever any leader's server does.
+  let relay: { on: boolean; listener: import('./leader-relay-entry.js').LeaderRelayListener | null; parker: import('../core/leader/switch/witness-relay.js').RelayParker | null; busy: Promise<void> | null } = { on: false, listener: null, parker: null, busy: null }
   const refreshLeaderRelay = (): void => {
     if (!env.daemonDir || !env.walnutId || relay.busy) return
     relay.busy = (async () => {
@@ -244,6 +247,21 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
         const l = relay.listener
         relay.listener = null
         await l.close()
+      }
+      const park = on && (await import('../core/capabilities.js')).hasCapability('witness-door')
+      if (park && !relay.parker) {
+        const { startHostWitnessRelay, WITNESS_RELAY_PURPOSE } = await import('../core/leader/switch/witness-relay.js')
+        const walnutId = env.walnutId!
+        const p = startHostWitnessRelay({
+          walnutId,
+          open: () => link.openStream('companion', WITNESS_RELAY_PURPOSE),
+          log: (level, msg, data) => log.web[level](msg, { host: env.label, ...data }),
+        })
+        if (stopped) p.stop()
+        else relay.parker = p
+      } else if (!park && relay.parker) {
+        relay.parker.stop()
+        relay.parker = null
       }
       relay.on = on
     })().catch(() => { /* the next report reads it again */ }).finally(() => { relay.busy = null })
@@ -516,6 +534,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       await relay.busy?.catch(() => {})
       await relay.listener?.close()
       relay.listener = null
+      relay.parker?.stop()
+      relay.parker = null
       link.stop()
       clearSelfHost()
       await expose.stop()

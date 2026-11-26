@@ -12,6 +12,9 @@
  *       host: dev-box            #   c: the leader's link to that machine's service (a `hosts` alias, or a machine id)
  *       url: https://box/leader-witness  # b: a direct door (witness-door.ts), no leader link needed
  *       key: <64 hex>            # the witness's own key, minted at setup (sensitive: config-redact.ts)
+ *       relay: w-k               #   relay: also through the door of that witness (the companion), which passes the
+ *                                #   call to this witness's machine over a stream it parked there (witness-relay.ts)
+ *   relay_commit: true         # a switch whose commit majority needs a relay may go (default: refused, this phase)
  *   machines:
  *     - id: <machine id>       # this machine's stable id (src/core/machine-id.ts)
  *       home: /path/to/home    # its data home when it leads
@@ -37,6 +40,7 @@ import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { checkTiming } from '../permit/rules.js'
 import { experimentalEnabled, type ExperimentalFlags } from '../../experimental.js'
 import { log } from '../../../logging/index.js'
+import { WITNESS_RELAY_SUB } from './witness-wire.js'
 
 /** A witness whose record is a directory on this computer (one-computer rehearsals and tests). */
 export interface LocalWitnessPlace { id: string; dir: string }
@@ -50,7 +54,11 @@ export interface LocalWitnessPlace { id: string; dir: string }
  * At least one of the three. `key` is the witness's own (minted at setup, `walnut leader witnesses init`),
  * never a host credential.
  */
-export interface RemoteWitnessPlace { id: string; machine?: string; host?: string; url?: string; key?: string }
+export interface RemoteWitnessPlace {
+  id: string; machine?: string; host?: string; url?: string; key?: string
+  /** `relay`: the id of the witness whose door relays to this one (its door has a url); `relayUrl` is that door's relay, `<url>/relay`. */
+  relay?: string; relayUrl?: string
+}
 export type WitnessPlace = LocalWitnessPlace | RemoteWitnessPlace
 
 export function isRemoteWitness(w: WitnessPlace): w is RemoteWitnessPlace {
@@ -96,6 +104,11 @@ export interface LeaderSwitchSettings {
   commitWindowMs: number
   /** How long the old leader waits for its switch stop after its handover before it cancels the handover itself (stop_wait_s, default 120 s). */
   stopWaitMs: number
+  /**
+   * `relay_commit: true`: a switch whose commit majority needs a witness reached only through a relay may go. Off by default:
+   * this phase such a switch (a Mac with no witness of its own as the new leader) is refused by the preflight, which names it.
+   */
+  relayCommit: boolean
 }
 
 export const DEFAULT_COMMIT_WINDOW_S = 300
@@ -159,7 +172,21 @@ function parseWitness(x: Record<string, unknown> | undefined): WitnessPlace | st
     ...(str(x.host) ? { host: x.host.trim() } : {}),
     ...(str(x.url) ? { url: normalWitnessUrl(x.url) } : {}),
     ...(typeof x.key === 'string' ? { key: x.key } : {}),
+    ...(str(x.relay) ? { relay: x.relay.trim() } : {}),
   }
+}
+
+/** Each `relay` names another witness of the list that has a door url (never itself, never one that is relayed in turn): its relay door is set. */
+function resolveRelays(witnesses: WitnessPlace[]): string | null {
+  for (const w of witnesses) {
+    if (!isRemoteWitness(w) || !w.relay) continue
+    const via = witnesses.find((v) => v.id === w.relay)
+    if (!via || via === w) return `leader_switch.witnesses: ${w.id}'s relay names no other witness of the list (${w.relay})`
+    if (!isRemoteWitness(via) || !via.url) return `leader_switch.witnesses: ${w.id}'s relay ${via.id} has no door url to relay through`
+    if (via.relay) return `leader_switch.witnesses: ${w.id}'s relay ${via.id} is itself relayed (one hop only)`
+    w.relayUrl = `${via.url}${WITNESS_RELAY_SUB}`
+  }
+  return null
 }
 
 /** Every place a witness names: two witnesses that share one count one machine twice. */
@@ -196,6 +223,8 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
   // Two witness ids that reach one machine would be one witness counted twice: a majority that is not one.
   const where = witnesses.flatMap(placesNamed)
   if (new Set(where).size !== where.length) return { settings: null, problem: 'leader_switch.witnesses: each witness needs its own dir, machine, host and url (two ids on one place count one machine twice)' }
+  const relayProblem = resolveRelays(witnesses)
+  if (relayProblem) return { settings: null, problem: relayProblem }
   const machines: MachinePlace[] = []
   for (const m of Array.isArray(o.machines) ? o.machines : []) {
     const x = m as Record<string, unknown>
@@ -233,6 +262,7 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
       params: permitParamsFor(process.env, witnesses),
       commitWindowMs: seconds(o.commit_window_s, DEFAULT_COMMIT_WINDOW_S, 30),
       stopWaitMs: seconds(o.stop_wait_s, DEFAULT_STOP_WAIT_S, 10),
+      relayCommit: o.relay_commit === true,
     },
   }
 }

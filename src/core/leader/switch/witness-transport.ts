@@ -14,6 +14,11 @@
  *      it (leader-relay.ts): a candidate that is a host of the leader (the Mac switching back) reaches
  *      the witness the leader's machine keeps this way, proven with that witness's own key as on way b.
  *      Only while that leader's server runs: it ends at its switch stop, before the commit.
+ *   `relay`: its door through ANOTHER witness's door (`relay`: that witness's id, the companion), which passes the call
+ *      to this witness's machine over a stream that machine parked there (witness-relay.ts). Way b's call and proofs with
+ *      this witness's own key, end to end: the relay holds no key, so nothing it does makes a reply count. It stands
+ *      whatever any leader's server does (the witness machine's service and bridge, and the companion), so a candidate
+ *      that can dial only the companion counts it at its commit. Tried last.
  * A witness that does not answer on its way is asked on the next one next time (the client resends
  * a proposal every 300 ms and reads with every look); the way that answered is kept.
  *
@@ -65,8 +70,8 @@ export interface RemoteCallResult { status: number; body: unknown }
 export type RemoteCall = (place: RemoteWitnessPlace, path: string, body: WitnessCall | WitnessSetup | NoteCall, done: (r: RemoteCallResult | null) => void) => void | (() => void)
 
 /** The ways to a witness kept by a machine (see the top of this file). */
-export type WitnessWay = 'here' | 'host-link' | 'direct' | 'link'
-export const WITNESS_WAYS: readonly WitnessWay[] = ['here', 'host-link', 'direct', 'link']
+export type WitnessWay = 'here' | 'host-link' | 'direct' | 'link' | 'relay'
+export const WITNESS_WAYS: readonly WitnessWay[] = ['here', 'host-link', 'direct', 'link', 'relay']
 
 /** This process's own machine, for way a. */
 export interface HereMachine {
@@ -113,17 +118,17 @@ export interface WitnessTransportOptions {
 export type WitnessDrop = 'invalid-reply' | 'late-reply' | 'too-many-open' | 'no-way' | 'no-answer' | 'bad-status'
 
 /**
- * The ways to `place` this transport has, in the order tried: here (no network at all), then the leader's machine
- * over this machine's host link (a candidate's probe only), then the direct door, then a link. A `dir` witness has
- * none of them (it is always opened here).
- */
-/**
  * The `host-link` way's call and the machine at its other end (the leader's, as its relay door says: GET
  * /leader-switch/whoami). Only the witness that machine keeps is asked there: a witness another machine keeps
  * is never answered for by the leader's door, even from a record left in its witness root.
  */
 export interface HostLink { call: RemoteCall; machine: string }
 
+/**
+ * The ways to `place` this transport has, in the order tried: here (no network at all), then the leader's machine
+ * over this machine's host link (a candidate's probe only), then the direct door, then a link, then the relay. A `dir`
+ * witness has none of them (it is always opened here).
+ */
 export function waysOf(place: RemoteWitnessPlace, o: Pick<WitnessTransportOptions, 'here' | 'direct' | 'remote' | 'ways'> & { hostLink?: { machine: string } }): WitnessWay[] {
   const allowed = o.ways ?? WITNESS_WAYS
   const out: WitnessWay[] = []
@@ -135,6 +140,8 @@ export function waysOf(place: RemoteWitnessPlace, o: Pick<WitnessTransportOption
   if (o.hostLink && place.machine === o.hostLink.machine && place.key && !mine) out.push('host-link')
   if (o.direct && place.url && place.key) out.push('direct')
   if (o.remote && place.host) out.push('link')
+  // Way b's call to the relay's door: last, it is the longest way round.
+  if (o.direct && place.relayUrl && place.key) out.push('relay')
   return out.filter((w) => allowed.includes(w))
 }
 
@@ -204,6 +211,7 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
     const at = (turn.get(place.id) ?? 0) % ways.length
     turn.set(place.id, at)
     const way = ways[at]!
+    if (way === 'relay') { sendCall(opts.direct!, way, { ...place, url: place.relayUrl! }, req, at); return }
     sendCall(way === 'here' ? hereCall(opts.here!, opts.params) : way === 'direct' ? opts.direct! : way === 'host-link' ? opts.hostLink!.call : opts.remote!, way, place, req, at)
   }
 

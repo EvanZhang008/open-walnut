@@ -1,5 +1,5 @@
 /**
- * The names both ends of the leader relay share (src/core/leader/switch/leader-relay.ts): the stream
+ * The names both ends of the leader relay and the witness relay share (src/core/leader/switch/leader-relay.ts): the stream
  * purpose the leader's DaemonConnection routes to its relay door, and where a host's service listens
  * for this machine's processes. No imports beyond node: the daemon connection and the host replica
  * load it with the experiment off, and it carries no switch code.
@@ -12,6 +12,12 @@ export const RELAY_SOCKET_MAX_BYTES = 103
 
 /** The purpose of a relay stream: the leader takes only these into its relay door (never its tunnel port). */
 export const LEADER_RELAY_PURPOSE = 'leader-relay'
+/**
+ * The purpose of a witness relay stream (src/core/leader/switch/witness-relay.ts): a host's service parks it at the
+ * companion over its bridge, and the companion takes it into its relay hub, never into its own port.
+ */
+export const WITNESS_RELAY_PURPOSE = 'witness-relay'
+
 /** Under the host daemon's dir, beside `host-call/`. */
 export const LEADER_RELAY_SOCKET_DIR = 'leader-relay'
 

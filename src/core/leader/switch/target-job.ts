@@ -21,7 +21,7 @@ import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
 import { machineById, readCopySwitchConfig, readHomeSwitchConfig, type LeaderSwitchSettings } from './settings.js'
 import { makeWitnessReader, type WitnessReading } from './witness-reader.js'
-import { commitReach, reachedHolding, reachSentence } from './witness-reach.js'
+import { commitReach, reachedHolding, reachSentence, relayNeed } from './witness-reach.js'
 import { permitHolderId } from './machine-id.js'
 import {
   checkReportName, finalMarkName, readSwitchFile, removeSwitchClaim, switchFolder, ticketName, targetStateName, validFinalMark, validTicket, writeSwitchClaim, writeSwitchFile,
@@ -188,8 +188,20 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     else if (commitReach(reach) < need2) {
       const via = reach.witnesses.filter((w) => w.answered && w.way === 'host-link').map((w) => w.id)
       problems.push(`the new leader reaches a majority of the witnesses only through its host link to the leader (${via.join(', ')}), which closes at the old leader's stop, before the commit: without it ${commitReach(reach)} of ${cfg.settings.witnesses.length} answer (${need2} needed). This machine needs a witness of its own, or direct doors to a majority: ${reachSentence(reach, cfg.settings.witnesses.length)}`)
+    } else {
+      // A relay (witness-relay.ts) stands after the old leader's stop, so the commit can count it. This phase a switch
+      // whose commit needs one (a machine with no witness of its own, the Mac) stays refused unless relay_commit lifts it.
+      const rn = relayNeed(reach, need2)
+      const relayed = reach.witnesses.filter((w) => w.answered && w.way === 'relay').map((w) => `${w.id} through ${w.via}`)
+      if (rn.needsRelay && !cfg.settings.relayCommit) {
+        problems.push(`the new leader's commit majority needs a relay (${relayed.join(', ')}): without it ${rn.without} of ${cfg.settings.witnesses.length} answer (${need2} needed). A switch to a machine that reaches a majority only through a relay is refused in this phase (leader_switch.relay_commit is off): ${reachSentence(reach, cfg.settings.witnesses.length)}`)
+      }
+      if (rn.onePath) {
+        const v = rn.onePath.via
+        report.notes = [`the commit majority goes through ${v}'s door alone (${v} itself, and ${relayed.join(', ')}): with ${v} down this machine reaches only the witnesses it dials itself, ${rn.onePath.left} of ${cfg.settings.witnesses.length} (${need2} needed)`]
+      }
     }
-    report.reach = reach.witnesses.map((w) => ({ id: w.id, answered: w.answered, way: w.way, held: summarize(w.held ?? null), why: w.why }))
+    report.reach = reach.witnesses.map((w) => ({ id: w.id, answered: w.answered, way: w.way, ...(w.via ? { via: w.via } : {}), held: summarize(w.held ?? null), why: w.why }))
   } catch (err) {
     problems.push((err as Error).message)
   }
@@ -197,6 +209,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
   report.at = new Date().toISOString()
   writeSwitchFile(o.standbyDir, checkReportName(o.switchId), report)
   out(`check: ${report.ok ? 'ok' : problems.join('; ')}`)
+  for (const n of report.notes ?? []) out(`check note: ${n}`)
   return report
 }
 

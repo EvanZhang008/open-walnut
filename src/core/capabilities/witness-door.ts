@@ -27,6 +27,12 @@ export const witnessDoor = defineCapability({
       check: 'if (!proofsEqual(hmacProof(key, doorCallerProofText(fields)), r.proof))',
     },
     {
+      path: '/leader-witness/relay',
+      opensWith: "nothing on this box: it passes a door call to ANOTHER witness's own door, over a stream that witness's machine parked here over its authenticated bridge (the host's machine token), one call per stream; the caller proves that witness's key to that witness and counts only a reply that witness proved with the same key, so the relay holds no key and can make no vote count; with nothing parked every call is 503 no_relay; the body capped as the door's, posts braked per caller",
+      verifiedIn: 'src/core/leader/switch/witness-relay.ts',
+      check: 'const call = sub === WITNESS_DOOR_CHALLENGE ? parseDoorChallenge(body) : parseDoorRequest(body)',
+    },
+    {
       path: '/bridge/witness-setup',
       opensWith: "only where the Mac's bridge lane is (capability bridge-door: the companion; a host's service, a leader or a standby does not mount it): only the paired Mac's own machine token (bridge-local), checked before the body is read, as every write the Mac makes to this box; it sets a witness up once (its record, its first list, its key) and never replaces a key; a device token or another machine's token gets 403, failures are rate limited per address",
       verifiedIn: 'src/web/routes/bridge-ingest.ts',
@@ -35,6 +41,7 @@ export const witnessDoor = defineCapability({
   ],
   reads: [
     'src/core/leader/switch/leader-relay-door.ts',
+    'src/web/ws/bridge-registry.ts',
     'src/web/server.ts',
   ],
 })

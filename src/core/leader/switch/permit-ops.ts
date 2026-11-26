@@ -87,6 +87,10 @@ export const PROPOSE_WAIT_MS = 3_000
 /**
  * Read every witness. `standing` is the record a majority holds (null: none ever), or
  * undefined when no record has a majority among the answers (the outcome is unknown).
+ * A read that waits longer than READ_WAIT_MS (init's setup read, a candidate's probe) asks the witnesses that have
+ * neither answered nor been found absent again every READ_WAIT_MS: each ask takes a witness's next way, so one
+ * whose current way does not answer (a link that opens only once this server leads, a relay with nothing parked)
+ * is still heard on another within the same wait.
  */
 export async function readStanding(h: PermitHandle, waitMs = READ_WAIT_MS, expected = h.places.length): Promise<{ standing: PermitRecord | null | undefined; answered: number; replies: PermitReply[]; absent: string[] }> {
   const t0 = Date.now()
@@ -94,9 +98,11 @@ export async function readStanding(h: PermitHandle, waitMs = READ_WAIT_MS, expec
   // `absent`: reached, and no witness there (it never answers this read); every other one that did not answer was not reached.
   const absent = (): string[] => { const got = new Set(h.client.readBack().map((r) => r.witness)); return h.absentSince(t0).filter((w) => !got.has(w)) }
   const deadline = Date.now() + waitMs
+  let askAt = waitMs > READ_WAIT_MS ? t0 + READ_WAIT_MS : Infinity
   while (Date.now() < deadline) {
     await tick(20)
     if (h.client.readBack().length + absent().length >= expected) break
+    if (Date.now() >= askAt && deadline - Date.now() > 200) { h.client.readAgain(absent()); askAt = Date.now() + READ_WAIT_MS }
   }
   const replies = h.client.readBack()
   return { standing: h.client.standing(), answered: replies.length, replies, absent: absent() }

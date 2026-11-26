@@ -223,7 +223,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
       if (cancelAsked() && PRE_COMMIT.has(s.step) && s.step !== 'preflight') { s.rollbackWhy ??= 'cancelled by hand'; save('cancel', 'cancelled by hand'); continue }
       switch (s.step) {
         case 'preflight': {
-          await preflight(s, settings, side, read)
+          await preflight(s, settings, side, read, out)
           save('handover', `checks passed; handing over to ${s.to}`)
           break
         }
@@ -433,7 +433,7 @@ export function promptSplitProblem(home: string, report: Pick<CheckReport, 'stor
   return "the new leader's build cannot read the session prompts kept outside their rows (sessions.sqlite): update it, or run `walnut sessions-prompts unsplit` here first"
 }
 
-async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: SwitchSide, read: () => Promise<WitnessReading>): Promise<void> {
+async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: SwitchSide, read: () => Promise<WitnessReading>, out: (line: string) => void = () => {}): Promise<void> {
   const problems: string[] = []
   const running = src.runningServer()
   st.sourceWasRunning = !!running
@@ -475,6 +475,7 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
       if (r?.verify?.error) problems.push(`the standby copy on ${st.to} did not verify: ${r.verify.error}`)
       else if (r?.verify?.drift) problems.push(`the standby copy on ${st.to} had ${r.verify.drift} path(s) changed in it directly (repaired, saved under drift/): check them first`)
       problems.push(...report.problems)
+      for (const n of report.notes ?? []) out(`the new leader's check: ${n}`)
       const holding = (report.reach ?? []).filter((w) => w.answered && w.held && w.held.holder === st.from && w.held.kind !== 'handover' && w.held.kind !== 'release').length
       if (report.ok && holding < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`the witnesses the new leader reaches do not name ${st.from} as the holder (${JSON.stringify(report.reach)})`)
       if (olderVersion(report.version, st.sourceVersion)) problems.push(`the new leader runs ${report.version}, older than ${st.sourceVersion} that wrote the data`)

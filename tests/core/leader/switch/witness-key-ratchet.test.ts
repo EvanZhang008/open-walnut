@@ -149,6 +149,7 @@ describe('a witness key goes nowhere but where it belongs', () => {
       'src/core/leader/switch/witness-transport.ts': 'waysOf (a door needs a key) and the setup body over a link',
       'src/core/leader/switch/witness-reach.ts': 'names a door that has no key yet',
       'src/core/leader/switch/witness-wire.ts': 'the setup body carries it',
+      'src/core/leader/switch/witness-relay.ts': 'the host\'s parker parks only for a witness whose key file is there (keyedWitnesses); the door it serves holds the key, the relay none',
       'src/core/leader/switch/witness-setup.ts': 'sets a witness of this machine up with its key',
       'src/core/leader/switch/local-witnesses.ts': 'names the key file, to tell a directory that holds nothing',
       'src/core/leader/switch/switch-notes.ts': 'a note goes only to a witness whose key this machine holds (way b proves with it)',

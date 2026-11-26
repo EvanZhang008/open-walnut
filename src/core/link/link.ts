@@ -20,8 +20,10 @@ export type LinkPeerRole = 'primary' | 'companion' | 'follower'
 /**
  * Which door of the other server a stream is for. `leader-relay`: the leader's relay door
  * (src/core/leader/switch/leader-relay.ts), opened only by a host replica's relay socket.
+ * `witness-relay`: a stream a host replica parks at the companion for its witness door
+ * (src/core/leader/switch/witness-relay.ts).
  */
-export type LinkDoor = 'web' | 'replica' | 'leader-relay'
+export type LinkDoor = 'web' | 'replica' | 'leader-relay' | 'witness-relay'
 
 export interface Link {
   readonly peer: { host: string; walnutId: string }

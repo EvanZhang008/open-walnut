@@ -436,6 +436,17 @@ export class PermitClient {
     for (const w of to) this.opts.transport.send(w, { type: 'read' })
   }
 
+  /**
+   * Ask again, within the same read, the witnesses of the fixed list (and of a change in flight) that have not
+   * answered it, except `skip`; the answers so far stay. A transport with several ways to a witness tries its next
+   * one (witness-transport.ts), so a long read reaches a witness whose first way did not answer.
+   */
+  readAgain(skip: readonly string[] = []): void {
+    const p = this.pending?.record
+    const to = new Set([...this.list, ...(this.joint ?? []), ...(p?.kind === 'members' ? p.newList! : [])])
+    for (const w of to) if (!this.reads.has(w) && !skip.includes(w)) this.opts.transport.send(w, { type: 'read' })
+  }
+
   readBack(): PermitReply[] {
     return [...this.reads.values()]
   }

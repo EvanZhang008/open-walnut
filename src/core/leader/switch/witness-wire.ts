@@ -273,6 +273,10 @@ export function acceptReply(body: unknown, asked: string, req: PermitRequest, ro
 export const WITNESS_DOOR_PATH = '/leader-witness'
 export const WITNESS_DOOR_CHALLENGE = '/challenge'
 export const WITNESS_DOOR_REQUEST = '/request'
+/** Under a door's mount: the relay to ANOTHER witness's door (witness-relay.ts), `<door>/relay/challenge|request`. */
+export const WITNESS_RELAY_SUB = '/relay'
+/** A relay with nothing parked for that witness: not reached (never NO_WITNESS_HERE_CODE, never evidence `absent`). */
+export const NO_RELAY_CODE = 'no_relay'
 /**
  * The largest call text the door takes. The largest real call is a list change carrying the full ledger
  * (MAX_LEDGER_ENTRIES entries of a real op id such as mail:<key>, the holder's id and its nonce: about 160

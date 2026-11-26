@@ -241,6 +241,18 @@ describe('a permit client over real witness machines', () => {
     }
   }, 30_000)
 
+  it('a long read asks again on the next way a witness whose first way did not answer; a short read does not', async () => {
+    // Two ways to each witness: the door first (it never answers here: a relay with nothing parked, a door out of
+    // reach), then the link. init's setup read (10 s) must hear them all; a renew's short read stays one ask.
+    const twoWays = PLACES.map((p) => ({ ...p, url: 'https://door.invalid/leader-witness', key: 'k'.repeat(43) }))
+    const silentDoor: RemoteCall = (_p, _path, _body, done) => { done(null) }
+    const client = (id: string) => openPermitClient(id, twoWays, DEFAULT_PERMIT_PARAMS, undefined, { remote: loopbackCall(hosts()), direct: silentDoor, walnutId: WALNUT })
+    expect((await readStanding(client('short'), 600)).answered).toBe(0)
+    const long = await readStanding(client('long'), 5_000)
+    expect(long.answered).toBe(3)
+    expect(long.standing).toBeNull()
+  }, 30_000)
+
   it('a standby or a reader command (no daemon link allowed, no reach registered) describes this Walnut to no host and reaches no remote witness', async () => {
     const h = openPermitClient('S', PLACES, DEFAULT_PERMIT_PARAMS, undefined, { walnutId: WALNUT })
     const read = await readStanding(h, 600)

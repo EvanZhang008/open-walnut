@@ -97,7 +97,9 @@ export interface CheckReport {
   /** The data store shapes the candidate's build reads (session-prompts.ts SESSION_STORE_FORMATS); absent: a build before the probe. */
   storeFormats?: Record<string, number>
   /** Each witness as the candidate reached it (witness-reach.ts): by which way, and what it holds (a summary). */
-  reach?: Array<{ id: string; answered: boolean; way?: string; held: { holder?: string; kind?: string; number?: number } | null; why?: string }>
+  reach?: Array<{ id: string; answered: boolean; way?: string; via?: string; held: { holder?: string; kind?: string; number?: number } | null; why?: string }>
+  /** What the check found worth saying that refuses nothing (a commit majority that rests on one relay's door); printed by the source job. */
+  notes?: string[]
 }
 
 export function readSwitchFile<T>(standbyDir: string, name: string): T | null {

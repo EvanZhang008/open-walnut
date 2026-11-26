@@ -40,6 +40,8 @@ import {
 import { eventLoopP99Ms } from '../../core/event-loop-monitor.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { assertFrameFits } from '../../providers/daemon-frame-cap.js'
+import { hasCapability } from '../../core/capabilities.js'
+import { WITNESS_RELAY_PURPOSE } from '../../lib/leader-relay-names.js'
 import { DRAIN_SWAP_WINDOW_MS, resendThroughSwap, waitHostLink, wakeHostLink } from '../../providers/daemon-drain-resend.js'
 import {
   sessionChannelKey, scheduleOfflineAnnouncement, cancelOfflineAnnouncement, offlineAnnouncementPending,
@@ -85,11 +87,19 @@ interface BridgeConn {
  * (docs/plan/walnut-servers-everywhere.md, "One kind of link"): into this
  * server's own port, which trusts no loopback caller here (cloud mode), and the
  * request carries X-Forwarded-For besides.
+ *
+ * One purpose goes elsewhere: a witness relay stream ('witness-relay', core/leader/switch/witness-relay.ts), a stream
+ * the host's service parks here so a caller of this box's witness door reaches that host's witness door. Only while
+ * this box opens the witness door (capability witness-door); never into this server's port.
  */
 function bridgeStreams(ws: WebSocket, hostAlias: string): StreamEndpoint {
   return createStreamEndpoint({
     send: (frame) => { ws.send(JSON.stringify(frame)) },
     accept: (info) => {
+      if (info.from === 'follower' && info.purpose === WITNESS_RELAY_PURPOSE) {
+        if (!hasCapability('witness-door')) return null
+        return (stream) => { void import('../../core/leader/switch/witness-relay.js').then((m) => m.relayHub().park(hostAlias, stream), () => stream.destroy()) }
+      }
       const root = getSelfApiRoot()
       if (info.from !== 'follower' || !root) return null
       const port = Number(new URL(root).port)
