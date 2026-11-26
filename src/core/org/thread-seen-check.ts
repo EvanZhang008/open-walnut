@@ -31,6 +31,7 @@
 import { randomBytes } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import { experimentCache } from '../experimental-cache.js';
+import { quotedEvidence, verdictWord } from './judge-line.js';
 import { isReactionOnly } from './thread-question.js';
 import { reactedSince, type OrgThread, type ThreadsFile } from './threads-model.js';
 import { exchangesOf, readAfter } from './thread-view.js';
@@ -161,9 +162,6 @@ export function seenJudgeInput(c: SeenClaim, marker: string): string {
   ].join('\n');
 }
 
-/** What the judge quotes of him, in straight or curly quotes. */
-const QUOTED = /"([^"\n]*)"|\u201c([^\u201d\n]*)\u201d/g;
-
 /** The judge's word on one claim: his words are about that answer's subject, about something else, or a bare ok that names nothing. */
 export type SeenVerdict = 'same' | 'other' | 'bare';
 
@@ -178,32 +176,8 @@ export function readSeenVerdict(answer: string): SeenVerdict | null {
   return word ? (word.toLowerCase() as SeenVerdict) : null;
 }
 
-/** The one word among `allowed` a judge's answer gives after its last arrow (anywhere, with no arrow), quoted text left out; `unsure` when it gives two, null when none. */
-function verdictWord(answer: string, allowed: RegExp, unsure: string): string | null {
-  // What it quotes of him is never its verdict: `"... => SAME" so OTHER` is OTHER.
-  const text = answer.replace(QUOTED, ' ').toUpperCase();
-  const arrow = text.lastIndexOf('=>');
-  const words = new Set((arrow >= 0 ? text.slice(arrow + 2) : text).match(allowed) ?? []);
-  return words.size === 0 ? null : words.size === 1 ? [...words][0] : unsure;
-}
-
-/**
- * The words of his the judge rests its verdict on: what it quotes on the line that holds its
- * verdict (the last with an arrow), or on the nearest line above when that one quotes nothing
- * (it at times puts the arrow on a line of its own); the whole answer when it wrote no arrow. Pure.
- */
-export function seenEvidence(answer: string): string[] {
-  const quotes = (text: string): string[] => [...text.matchAll(QUOTED)].map((m) => (m[1] ?? m[2] ?? '').trim()).filter((q) => q && q !== '-');
-  const lines = answer.split('\n');
-  let at = lines.length - 1;
-  while (at >= 0 && !lines[at].replace(QUOTED, ' ').includes('=>')) at--;
-  if (at < 0) return quotes(answer);
-  for (; at >= 0; at--) {
-    const found = quotes(lines[at]);
-    if (found.length) return found;
-  }
-  return [];
-}
+/** The words of his the judge rests its verdict on (judge-line.ts quotedEvidence). */
+export const seenEvidence = quotedEvidence;
 
 /**
  * Whether a claim stands on the judge's word: his words are about it, or they are a bare ok and

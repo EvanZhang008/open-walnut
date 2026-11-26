@@ -34,6 +34,12 @@ export const STALE_NEEDS_MS = 72 * HOUR;
 export const THIN_MIN = 30;
 /** Pairs judged in one call, findings in one note, and how long one finding is not told again. */
 export const MAX_PAIRS = 10;
+/**
+ * Lists of MAX_PAIRS one pass reads for a node with more fresh pairs than one holds, best first
+ * (2026-11-26, the first day: a lead with 125 candidate pairs had 10 read in each of four passes six
+ * hours apart, and each pass still found new repeats among them).
+ */
+export const PASS_CALLS = 3;
 export const MAX_FINDINGS = 8;
 export const TELL_AGAIN_MS = 14 * 24 * HOUR;
 /** What the model reads of one card. */

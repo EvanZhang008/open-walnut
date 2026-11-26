@@ -34,10 +34,15 @@ const NOTICE = '<walnut-message kind="notification" from="Walnut: subtask" outco
 const INTERIM = 'I am looking into it: a subagent is reading the Saturday timetable now, and I will come back with the answer.'
 const REAL = 'The 7:10 from the central station reaches the coast at 8:42: it is the only train before nine on Saturday.'
 
-/** The replies that answer a question, by a few words of each: the model's stand-in names that question's number. */
+/** The replies that answer a question, by a few words of each: the model's stand-in names that question's number, and its second read agrees. */
 const ANSWERS: Array<[reply: string, question: string]> = [
   ['reaches the coast at 8:42', 'Which train reaches the coast'],
   ['closes at five on Sunday', 'When does the hardware shop'],
+]
+/** Replies about another matter that the list call's stand-in still names a question for; `second` is what its second read then says. */
+const MISNAMED: Array<[reply: string, question: string, second: string]> = [
+  ['two sign-in letters went out', 'When does the garden gate', '"-" => NO'],
+  ['arrives within a week by post', 'When does the garden gate', '"The gate gets its new lock on Friday." => YES'],
 ]
 
 /** The number of the listed question whose words hold `q` (the list is "<n>. ..." entries); 1 when the input lists one question unnumbered. */
@@ -51,14 +56,22 @@ function numberOf(input: string, q: string): number {
 const judged: Array<{ input: string; said: string }> = []
 /** The judgements of the one reply holding these words (its own call, whenever it ran). */
 const judgedOn = (words: string) => judged.filter((j) => j.input.includes(words))
+/** The second reads: one question alone beside the reply. */
+const confirmed: Array<{ input: string; said: string }> = []
+const confirmedOn = (words: string) => confirmed.filter((j) => j.input.includes(words))
 
 beforeAll(async () => {
   await startFlow({ sid: SID, title: 'Weekend trip helper', project: 'Trips' })
   setAnsweredJudgeOverride(async (input) => {
-    const hit = ANSWERS.find(([reply]) => input.includes(reply))
+    const hit = [...ANSWERS, ...MISNAMED].find(([reply]) => input.includes(reply))
     const n = hit ? numberOf(input, hit[1]) : 0
     const said = n ? `ANSWERED: ${n}` : 'NONE'
     judged.push({ input, said })
+    return said
+  }, async (input) => {
+    const hit = ANSWERS.find(([reply, question]) => input.includes(reply) && input.includes(question))
+    const said = hit ? `"${hit[0]}" => YES` : MISNAMED.find(([reply]) => input.includes(reply))?.[2] ?? '"-" => NO'
+    confirmed.push({ input, said })
     return said
   })
 }, 40_000)
@@ -110,6 +123,10 @@ describe('a reply that answers his question marks its thread answered', () => {
     await vi.waitFor(async () => { expect((await thread(id)).state).toBe('answered') }, { timeout: 10_000 })
     expect(judged).toHaveLength(2)
     expect(judged[1].said).toBe('ANSWERED: 1')
+    // The question the list call named was read once more, alone beside the reply, and confirmed.
+    expect(confirmedOn(REAL).map((j) => j.said)).toEqual(['"reaches the coast at 8:42" => YES'])
+    expect(confirmedOn(REAL)[0].input).toContain('Which train reaches the coast before nine on Saturday?')
+    expect(confirmed.filter((j) => j.input.includes(INTERIM))).toHaveLength(0)
     t = await thread(id)
     expect(t.messages[0].answer).toMatchObject({ text: REAL, sid: SID })
     // The working summary is gone: his card's line is the answer's own.
@@ -147,6 +164,30 @@ describe('a reply that answers his question marks its thread answered', () => {
     expect((await thread(id)).messages[0].answer?.text).toBe(real)
   }, 240_000)
 
+  it('a reply about another matter that the list call names a question for: the second read refuses it and the thread stays as it was (2026-11-26)', async () => {
+    const id = await askAndPromise('When does the garden gate get its new lock?')
+    flow.statusAnswer = WORKING
+    const asIs = async () => {
+      const t = await thread(id)
+      expect(t).toMatchObject({ state: 'working', reply: 'Checking the Saturday timetable for him.' })
+      expect(t.messages[0].answer?.text).toBe(INTERIM)
+    }
+    // The second read says NO.
+    const other = 'The sign-in for the seed catalogue ran out this morning, so two sign-in letters went out where one was meant to go.'
+    await questionAfter(await noticeTurnEnds(NOTICE, other))
+    await vi.waitFor(() => { expect(confirmedOn(other).map((j) => j.said)).toEqual(['"-" => NO']) }, { timeout: 10_000 })
+    expect(judgedOn(other).map((j) => j.said)).toEqual(['ANSWERED: 1'])
+    expect(confirmedOn(other)[0].input).toContain('When does the garden gate get its new lock?')
+    await new Promise((r) => setTimeout(r, 1000))
+    await asIs()
+    // The second read says YES on words the reply does not hold: no better.
+    const loose = 'The catalogue order for the spring seeds went out on Tuesday and arrives within a week by post.'
+    await questionAfter(await noticeTurnEnds(NOTICE, loose))
+    await vi.waitFor(() => { expect(confirmedOn(loose).map((j) => j.said)).toEqual(['"The gate gets its new lock on Friday." => YES']) }, { timeout: 10_000 })
+    await new Promise((r) => setTimeout(r, 1000))
+    await asIs()
+  }, 120_000)
+
   it('flag off: the same flow changes nothing and asks no model', async () => {
     await switches(false)
     const before = judged.length
@@ -155,6 +196,7 @@ describe('a reply that answers his question marks its thread answered', () => {
     await questionAfter(await noticeTurnEnds(NOTICE, 'The shop by the north fence opens at ten on Sunday and closes at four, the only one open that day.'))
     await new Promise((r) => setTimeout(r, 2000))
     expect(judged).toHaveLength(before)
+    expect(confirmed.filter((j) => j.input.includes('north fence'))).toHaveLength(0)
     const t = await thread(id)
     expect(t).toMatchObject({ state: 'working', reply: 'Checking the Saturday timetable for him.' })
     expect(t.messages[0].answer?.text).toBe(INTERIM)

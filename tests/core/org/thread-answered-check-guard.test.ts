@@ -66,4 +66,43 @@ describe('every stored turn-end status answer reaches the answered check', () =>
     expect(body.slice(0, body.indexOf('await judge('))).not.toMatch(/\bfor \(/)
     expect(src).not.toMatch(/PER_THREAD_MAX|PER_TURN_MAX/)
   })
+
+  it('what the list call names is written only after the second read confirmed it', () => {
+    const src = read('src/core/org/thread-answered-check.ts')
+    const body = src.slice(src.indexOf('async function checkOnce('), src.indexOf('export function checkTurnAnswers('))
+    expect(body).toMatch(/await judge\(listed, prose, taskId\)[\s\S]*await confirmNamed\(asked, prose, taskId\)[\s\S]*const ids = sure\.yes\.map\(\(c\) => c\.thread\.id\)[\s\S]*markAnsweredGroup\(cur, ids,/)
+    expect(body.match(/\bconst ids\b/g)).toHaveLength(1)
+    const confirm = src.slice(src.indexOf('async function confirmNamed('), src.indexOf('function within<T>('))
+    expect(confirm).toMatch(/readConfirm\(text, prose\) === true/)
+  })
+})
+
+/**
+ * The class of the 2026-11-26 wrong mark: a small model's word alone changing what a card of his
+ * shows. Every Threads module that calls the fast model is listed with what its word can do. One
+ * whose YES writes a card's state reads the model's quote against the text it judged (judge-line.ts
+ * quotedEvidence); the others only refuse a node's own claim, tell the node, or file his own words.
+ * Enumerated from the source: a new judge fails here until it is listed with its bound.
+ */
+const JUDGES: Record<string, { does: 'writes a card' | 'refuses a claim' | 'tells the node' | 'files his words'; why: string }> = {
+  'src/core/org/thread-answered-check.ts': { does: 'writes a card', why: 'marks his question answered with the reply: two reads, the second quoting the reply' },
+  'src/core/org/thread-seen-check.ts': { does: 'refuses a claim', why: 'a node says he saw an answer; the judge can only refuse it, on the words of his it quotes' },
+  'src/core/org/thread-audit.ts': { does: 'tells the node', why: 'two cards on one subject: the node is told and decides, the check changes nothing' },
+  'src/core/org/thread-join-check.ts': { does: 'files his words', why: 'which thread his own new message goes under; no answer and no state is written on its word' },
+}
+
+describe('a small model\'s word alone never changes what his card shows', () => {
+  it('every Threads module that calls the fast model is listed with its bound', () => {
+    const found = srcFiles('src/core/org').filter((f) => /\bcallFastModel\(/.test(read(f))).sort()
+    expect(found, 'a new Threads judge: list it here with what its word can do; one that writes a card must check the model\'s quote').toEqual(Object.keys(JUDGES).sort())
+  })
+
+  it('a judge whose word writes a card reads the model\'s quote against the text', () => {
+    for (const [f, j] of Object.entries(JUDGES)) {
+      if (j.does !== 'writes a card') continue
+      const src = read(f)
+      expect(src, f).toMatch(/import \{[^}]*\bquotedEvidence\b[^}]*\} from '\.\/judge-line\.js'/)
+      expect(src, f).toMatch(/quotedEvidence\(answer\)\.some\(/)
+    }
+  })
 })

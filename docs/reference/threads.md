@@ -450,8 +450,12 @@ decide, `asksHimNow`, on a card not in needs), `stale` (new or working with noth
 hours, needs for 3 days) and `thin` (no summary on an answered or needs card, one that only points
 elsewhere, `summaryPointsElsewhere`, or under 30 characters). The rules pick repeat candidates
 (a card naming the other's id, two or more shared telling words of the same-subject index, the same
-linked task); ONE fast-model call per node judges at most 10 pairs SAME, DIFFERENT or UNSURE with a
-reason, from each card's title, ask and first summary sentence (never his messages). A verdict is
+linked task); one fast-model call judges at most 10 pairs SAME, DIFFERENT or UNSURE with a
+reason, from each card's title, ask and first summary sentence (never his messages). A node with
+more fresh pairs than one list holds reads up to 3 lists in a pass, best first, and the rest in the
+next pass (`PASS_CALLS`; 2026-11-26, the first day: a lead with 125 candidate pairs had 10 read in
+each of four passes six hours apart, and each pass still found new repeats); a list the model does
+not answer ends the pass. A verdict is
 kept while both cards read the same (at most 14 days), so an unchanged pair costs no second call.
 Only SAME is reported. Without a model (none set up, a timeout, a test run) the rule findings still go.
 
@@ -622,15 +626,37 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   newer ones are answered or closed), each title cut to 200 characters, his question to 300, his last later word there to 200,
   the reply to 3,000; none for an agent acknowledgement or a reply under 40 characters. A call reads
   about 1.8 KB typically (two questions, a 600-character reply) and at most about 13,100 characters
-  (12 questions at their cuts, a full reply). One log line per reply (`org threads:
-  answered check`: the candidates, the threads named, marked, merged and left, the call's ms). The model can be
-  wrong both ways: a real answer it leaves out stays out of his sight until the node's line or the
-  30-minute overdue reminder moves it (as before); an interim reply it names shows in his Done with
-  that reply as the answer until a later reply it names replaces it or the node's thread_update moves
-  it (a line keeps an answer he has not read in his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
+  (12 questions at their cuts, a full reply). **A question the list call names is read a second
+  time, alone beside the reply, and only a YES that quotes the reply marks it** (`confirmNamed`;
+  2026-11-26, the first day in real use: 61 replies judged on three nodes, one thread marked, and
+  that one got a reply about another matter). The second call has one question to hold the reply
+  against: it says in two lines what the question asks and what the reply is about, then ends with
+  the sentence of the reply that answers it in quotes and `=> YES`, or `"-" => NO`
+  (`CONFIRM_JUDGE_PROMPT`; the thread's title names the matter for a question that names nothing
+  itself). `readConfirm` takes a YES only when what it quotes is in the reply (letters and digits
+  compared, 4 or more; `judge-line.ts`, shared with the seen check); a NO, two verdicts, no verdict,
+  a quote of his question or a paraphrase leave the thread as it was. At most 4 named questions are
+  read again per reply, side by side. Measured on copies of his real threads (private, never
+  committed; 22 cases: 9 real answers, their replies against a list without the question, 3 replies
+  that only hand the work on, and the day's wrong one), each 8 times. Through the Claude Code CLI,
+  as a `claude_cli` provider calls the fast model (it thinks first): of 80 replies about another
+  matter the list call named a question once and the second read refused it, 0 marked; of 72 real
+  answers 64 were named and 63 marked; the 24 hand-ons were never named. Called directly (a Bedrock
+  or API provider, no thinking): the list call named a question in 17 of 80 such replies (and in 9
+  of 20 runs of the day's wrong reply), the second read refused 31 of the 32 questions named, 1
+  marked; of 72 real answers all were named and 61 marked. One log line per reply (`org threads:
+  answered check`: the candidates, the threads the list call `named`, the ones of them the second
+  read `refused`, marked, merged and left, the list call's `ms` and the second read's `confirmMs`).
+  The model can still be wrong both ways: a real answer it leaves out or does not confirm stays out
+  of his sight until the node's line or the 30-minute overdue reminder moves it (as before); an
+  interim reply both reads take for the answer shows in his Done with that reply as the answer until
+  a later reply replaces it or the node's thread_update moves it (a line keeps an answer he has not
+  read in his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
   `tests/core/org/thread-answered-check-guard.test.ts` (every caller of `applyStatusAnswer(`, the save
-  reaching the check, one call per reply), `tests/e2e/thread-answered-check.test.ts` (a busy node
-  among them).
+  reaching the check, one list call per reply, nothing written before the second read, and every
+  Threads module that calls the fast model listed with what its word can do: one whose word writes
+  a card must check the model's quote), `tests/e2e/thread-answered-check.test.ts` (a busy node, and
+  a reply about another matter that the list call names a question for, among them).
 - Off: everything as before. Guards: `tests/core/org/thread-each-question.test.ts`,
   `tests/core/org/thread-each-question-guard.test.ts` (every call of `mergeThreads(` and
   `splitMessageInto(`, and every join kind of `fileMessage`, listed with its test),
@@ -714,6 +740,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-26 | Not seen by him yet (the first day of the thread check and the answered check in real use, read from the log): the answered check marked one thread in a day, a three-day-old question, with a reply about another matter; and a lead with 125 candidate pairs had only 10 read per pass of the thread check | one fast-model call read up to 12 waiting questions beside a reply and its word alone wrote the card; the thread check read one list of 10 pairs per node and pass | fixed: a question the list call names is read a second time alone beside the reply, and only a YES that quotes the reply marks it (`thread-answered-check.ts` `confirmNamed`, `readConfirm`; measured above); the thread check reads up to 3 lists a pass (`PASS_CALLS`). Guards: `tests/core/org/thread-answered-check-guard.test.ts` (the write only after the second read; every Threads judge listed with what its word can do), `tests/e2e/thread-audit.test.ts` |
 | 11-26 | Not seen by him (a usage watch on `thread_update` ended Failed on a new error code, a thrown error): four calls in a day, from two sessions, passed `merge_into` together with another field (`user_words` three times, `reply` once) and read `internal`, the server's own fault, with the two calls that go through in its words | the op's own check refused them with a bare `Error`, which no client can tell from a crash; 47 more refusals in the op handlers were written the same way | fixed: a handler refuses under a code (`badInput`, `OwnRefusalError` in `src/ops/own-refusal.ts`), counted as a bad argument or a refusal, never as an error; `user_words` already ride a merge; ratchet in `tests/unit/ops/own-refusal-codes.test.ts` lists the few bare errors left (answers of Walnut's own that came back broken) and fails on a new one. The route's own check of the same merge answers the same code (`bad_input`), and a refusal thrown through any route with its own status and code is answered by them, never as a 500 (`src/lib/coded-refusal.ts`; 11-26, a task update a sync plugin's content rule refused read `internal`) |
 | 11-26 | Not seen by him (the first two hours of `threads_reply_tag` in real use): 6 of 17 replies with a card line named no thread (`thread="none"`, a placeholder, a made-up id), from three sessions; no card was wrong, the status question kept them | those turns were started by a notice, a trigger or another task, where no note gives the session a thread id, and the rule did not say a line needs one; each such line was sent back as unreadable, which the session had no id to fix | fixed: a state line with no thread id is read as naming no thread (`unnamed`), holds no turn (`CARD_STOP_NO_HOLD`) and is logged apart; the rule says no id means no line; a decision line with no id is still sent back. Guards: `tests/lib/card-tag.test.ts`, `tests/e2e/reply-card-stop.test.ts`, `tests/core/org/stop-checks-guard.test.ts` |
 | 11-26 | Not seen by him (a trial with a real session, 7 runs of 7): he said "that first one is done, close it"; the thread closed, and his message stayed as a Done card of its own waiting for his Acknowledge | the message was filed right after another one, then taken out as a subject of its own; the close moved nothing | fixed: the message that holds the words a close or a merge quotes moves under that thread (`carryHisWords`); guard in `tests/core/org/thread-close-words.test.ts` |

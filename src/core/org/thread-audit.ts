@@ -23,7 +23,7 @@ import { experimentalEnabled } from '../experimental.js';
 import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import {
-  AUDIT_JUDGE_SYSTEM, MAX_PAIRS, auditNote, judgeInput, pairSig, pickToTell, readJudgement, repeatCandidates, repeatFinding,
+  AUDIT_JUDGE_SYSTEM, MAX_PAIRS, PASS_CALLS, auditNote, judgeInput, pairSig, pickToTell, readJudgement, repeatCandidates, repeatFinding,
   ruleFindings, wakesNode, type AuditFinding, type PairVerdict, type RepeatCandidate,
 } from './thread-audit-rules.js';
 import { emptyNode, readAudit, recordPass, settleTold, updateAudit, zeroKinds, type KindCounts, type NodeAudit } from './thread-audit-store.js';
@@ -196,10 +196,20 @@ export async function auditNode(taskId: string, opts: { now?: number; tasks?: re
     const judged = { ...state.judged };
     // A pair whose cards read as when it was judged keeps its verdict: no second call.
     const fresh = candidates.filter((c) => judged[c.key]?.sig !== sigOf(c));
-    const ask = fresh.slice(0, MAX_PAIRS);
-    const answer = ask.length ? await judgePairs(ask, taskId) : { verdicts: null, called: false, ms: 0 };
     const at = new Date(now).toISOString();
-    ask.forEach((c, i) => { const v = answer.verdicts?.[i]; if (v) judged[c.key] = { verdict: v.verdict, sig: sigOf(c), at, ...(v.reason ? { reason: v.reason } : {}) }; });
+    // One list of MAX_PAIRS at a time, at most PASS_CALLS of them; a list with no answer ends it, and what is left waits for the next pass.
+    let calls = 0;
+    let callMs = 0;
+    let asked = 0;
+    while (calls < PASS_CALLS && asked < fresh.length) {
+      const ask = fresh.slice(asked, asked + MAX_PAIRS);
+      const answer = await judgePairs(ask, taskId);
+      asked += ask.length;
+      callMs += answer.ms;
+      if (answer.called) calls++;
+      if (!answer.verdicts) break;
+      ask.forEach((c, i) => { const v = answer.verdicts?.[i]; if (v) judged[c.key] = { verdict: v.verdict, sig: sigOf(c), at, ...(v.reason ? { reason: v.reason } : {}) }; });
+    }
     const repeats: AuditFinding[] = [];
     const unjudged = new Set<string>();
     for (const c of candidates) {
@@ -227,11 +237,9 @@ export async function auditNode(taskId: string, opts: { now?: number; tasks?: re
     else if (state.ride && !(await unreadRide(state)).size) delete settled.node.ride;
     // Told again only because its note was unread: one finding, counted told once.
     const reported = told.filter((f) => !unread.has(f.key));
-    const calls = answer.called ? 1 : 0;
-    const callMs = answer.ms;
     await updateAudit((cur) => recordPass(cur, taskId, settled.node, { found, reported, fixed: settled.fixed, calls, callMs }, now));
     const result: AuditResult = { taskId, ran: true, found: countKinds(found), told, fixed: settled.fixed, delivery, pairs: candidates.length, calls, callMs };
-    log.task.info('thread audit: pass', { taskId, found: result.found, told: told.length, fixed: settled.fixed, pairs: candidates.length, judged: ask.length, calls, callMs, delivery });
+    log.task.info('thread audit: pass', { taskId, found: result.found, told: told.length, fixed: settled.fixed, pairs: candidates.length, judged: asked, calls, callMs, delivery });
     return result;
   } catch (err) {
     log.task.warn('thread audit: pass failed for a node', { taskId, error: err instanceof Error ? err.message : String(err) });

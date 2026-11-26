@@ -188,6 +188,53 @@ describe('the thread check', () => {
     expect(third).not.toContain(gate)
   })
 
+  it('a lead with more pairs than one list holds: one pass reads up to three lists, the next pass the rest (2026-11-26)', async () => {
+    // Cards that name each other by id: every two of them are a pair worth asking about, whatever their words.
+    const naming = async (lead: Lead, subjects: string[]): Promise<void> => {
+      const ids: string[] = []
+      for (const [i, subject] of subjects.entries()) {
+        const id = (await fileThreadMessage(lead.id, { text: `please look at the ${subject}`, via: 'chat', at: ago(200 - i) })).thread.id
+        await setThread(lead.id, id, { title: `The ${subject}`, titled: true, state: 'answered', reply: `The ${subject} is looked at and written up.${ids.length ? ` See also ${ids.join(', ')}.` : ''}` })
+        ids.push(id)
+      }
+    }
+    const busy = await newLead()
+    await naming(busy, ['north fence posts', 'pear press belt', 'well pump fuse', 'barn roof gutter', 'seed drill chain', 'cider cellar vent', 'goat shed latch', 'orchard ladder rung', 'herb bed netting'])
+    const lists: number[] = []
+    setAuditJudgeOverride(async (input) => {
+      const n = (input.match(/^\d+\. A: /gm) ?? []).length
+      lists.push(n)
+      return Array.from({ length: n }, (_, i) => `${i + 1} DIFFERENT: another block of the grove`).join('\n')
+    })
+    try {
+      const first = await api('POST', '/api/v1/thread-audit/run', { task: busy.id })
+      expect(first.json).toMatchObject({ ran: true, delivery: 'none', told: [] })
+      const pairs: number = first.json.pairs
+      expect(pairs).toBeGreaterThan(30)
+      // Three lists of ten, best first: no more in one pass.
+      expect(first.json.calls).toBe(3)
+      expect(lists).toEqual([10, 10, 10])
+      // The next pass reads only what is left; the one after has nothing to ask.
+      const second = await api('POST', '/api/v1/thread-audit/run', { task: busy.id })
+      expect(second.json.calls).toBe(Math.min(3, Math.ceil((pairs - 30) / 10)))
+      expect(lists.slice(3).reduce((a, b) => a + b, 0)).toBe(Math.min(30, pairs - 30))
+      if (pairs <= 60) {
+        const third = await api('POST', '/api/v1/thread-audit/run', { task: busy.id })
+        expect(third.json).toMatchObject({ ran: true, calls: 0 })
+      }
+      // A list the judge does not answer ends the pass: the rest waits, nothing is lost.
+      const quietLead = await newLead()
+      await naming(quietLead, ['frost fan bearing', 'plum drier tray', 'bee hive stand', 'tool shed hinge', 'cart wheel spoke', 'rain barrel tap'])
+      let asked = 0
+      setAuditJudgeOverride(async () => { asked++; throw new Error('no answer') })
+      const none = await api('POST', '/api/v1/thread-audit/run', { task: quietLead.id })
+      expect(none.json).toMatchObject({ ran: true, calls: 1, told: [] })
+      expect(asked).toBe(1)
+    } finally {
+      setAuditJudgeOverride(async (input) => { judged.push(input); return '1 SAME: one irrigation timer, told twice' })
+    }
+  })
+
   it('a check run by hand does nothing while the org is off', async () => {
     _resetOrgEnabledForTesting(false)
     try {
