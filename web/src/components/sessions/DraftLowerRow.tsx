@@ -100,10 +100,12 @@ export function DraftLowerRow({
           )}
         </div>
       ) : (
-        <div ref={recentRef} className="draft-v6-chips" role="group" aria-label="Start with" data-testid="draft-v6-recent">
+        // Only someone with no places yet has chips here ("Start with"); the places used before are
+        // DraftRecentList's rows under the row, so an empty row is no labelled group.
+        <div ref={recentRef} className="draft-v6-chips" role={fresh ? 'group' : undefined} aria-label={fresh ? 'Start with' : undefined} data-testid="draft-v6-recent">
           {fresh && <span className="draft-v6-lower-key" data-fit="key">Start with</span>}
           {fresh && starters.map((r) => (
-            <RecentChip key={r.name} kind={r.startSource ? whereKindOf(r.startSource) : 'folder'} label={projectDisplayName(r.name)}
+            <StartChip key={r.name} kind={r.startSource ? whereKindOf(r.startSource) : 'folder'} label={projectDisplayName(r.name)}
               current={where.project.toLowerCase() === r.name.toLowerCase()} onClick={() => where.pickProject(r.name)} />
           ))}
         </div>
@@ -150,10 +152,10 @@ export function DraftLowerRow({
   );
 }
 
-function RecentChip({ kind, label, current, onClick, title }: { kind: WhereKind; label: string; current: boolean; onClick: () => void; title?: string }) {
+function StartChip({ kind, label, current, onClick }: { kind: WhereKind; label: string; current: boolean; onClick: () => void }) {
   return (
-    <button type="button" className="btn btn-sm draft-v6-place" aria-pressed={current} title={current ? `${title ?? label}: in use now` : title ?? label}
-      data-fit="chip" data-testid="draft-v6-recent-chip" onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
+    <button type="button" className="btn btn-sm draft-v6-place" aria-pressed={current} title={current ? `${label}: in use now` : label}
+      data-fit="chip" data-testid="draft-v6-start-chip" onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
       {/* The place in use is the button family's pressed look (aria-pressed); it keeps its own icon, no check. */}
       <span className={`draft-v6-place-ic is-${kind}`} aria-hidden="true">
         <WhereIcon kind={kind} size={13} />

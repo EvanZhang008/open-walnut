@@ -152,11 +152,14 @@ test('every way back gives the draft its place again: the pressed key, the \u00d
     await expect(slot(page), step).toHaveCount(0)
     await expect(fixKey(page), step).toHaveAttribute('aria-pressed', 'false')
   }
-  const chips = panel.getByTestId('draft-v6-recent-chip')
-  expect(await chips.count(), 'the fixture has Recent places').toBeGreaterThan(1)
+  // The places used before are the list under the row (e6b38437d8 turned the Recent chips into
+  // DraftRecentList rows). Folder rows only: a folder row's title ends with the folder it picks.
+  const places = panel.getByTestId('draft-v6-recent-list').locator('[data-testid="draft-v6-recent-row"][data-kind="folder"]')
+  // The list fills in when the page's working-dirs answer lands: wait for it, never read it once.
+  await expect.poll(() => places.count(), { message: 'the fixture has Recent folders' }).toBeGreaterThan(1)
   // Stand on a Recent folder first: that is where each way back must land.
-  await chips.first().click()
-  await expect(chips.first()).toHaveAttribute('aria-pressed', 'true')
+  await places.first().click()
+  await expect(places.first()).toHaveAttribute('aria-selected', 'true')
   const before = await whereText()
   // The key again.
   await fixKey(page).click()
@@ -174,11 +177,13 @@ test('every way back gives the draft its place again: the pressed key, the \u00d
   // Another Recent place: the pick lands on the plain draft, and Start is a plain start there.
   await fixKey(page).click()
   await expect(title).toHaveText('Fix Walnut')
-  const other = chips.nth(1)
-  const otherDir = await other.getAttribute('title')
+  const other = places.nth(1)
+  // "Use: <name> (<machine>: <folder>)": the folder, home folded to ~.
+  const otherDir = /: ([^:()]+)\)$/.exec(String(await other.getAttribute('title')))?.[1]
+  expect(otherDir, 'a folder row names its folder').toBeTruthy()
   await other.click()
   await plain('a Recent place')
-  await expect(other).toHaveAttribute('aria-pressed', 'true')
+  await expect(other).toHaveAttribute('aria-selected', 'true')
   const bodies: Array<Record<string, unknown>> = []
   await page.route((url) => url.pathname === '/api/sessions/quick-start', async (route) => {
     bodies.push(route.request().postDataJSON() as Record<string, unknown>)
@@ -188,7 +193,7 @@ test('every way back gives the draft its place again: the pressed key, the \u00d
   await draftComposer(page).press('Enter')
   await expect.poll(() => bodies.length).toBe(1)
   expect(bodies[0].intent).toBeUndefined()
-  expect(String(bodies[0].cwd)).toContain(String(otherDir).replace(/:.*$/, '').replace(/^~/, ''))
+  expect(String(bodies[0].cwd)).toContain(otherDir!.replace(/^~/, ''))
   expect(errors).toEqual([])
 })
 
