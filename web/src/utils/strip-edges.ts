@@ -1,8 +1,9 @@
 /**
- * A choice strip that scrolls sideways (a TabList, a SegmentedControl) says so: the edge with more
- * past it fades (`data-more="left"`, `"right"` or `"left right"` on the strip, drawn in
- * choice-controls.css), and the picked item is brought into the strip's view when it changes,
- * scrolling the strip only, never the page. On a phone the Usage page's segments stopped at
+ * A choice strip that scrolls sideways (a TabList, a SegmentedControl, the bell panel's sections, a
+ * menu's Pin to row) says so: the edge with more past it fades (`data-strip-more="left"`, `"right"`
+ * or `"left right"` on the strip, drawn in choice-controls.css for any element that carries it),
+ * and the picked item is brought into the strip's view when it changes, scrolling the strip only,
+ * never the page. On a phone the Usage page's segments stopped at
  * "Outside Walnut $0.0(" and "Toke" with nothing saying the row went on (2026-11-26 audit).
  *
  * The attribute is set on the element itself, not through React state, so a scroll never renders.
@@ -39,8 +40,8 @@ export function useStripEdges(stripRef: RefObject<HTMLElement | null>, pickedSel
     let theirs = false;
     const read = () => {
       const more = stripMore(strip);
-      if (more) strip.setAttribute('data-more', more);
-      else strip.removeAttribute('data-more');
+      if (more) strip.setAttribute('data-strip-more', more);
+      else strip.removeAttribute('data-strip-more');
     };
     const showPicked = () => {
       let item = strip.querySelector<HTMLElement>(pickedSelector);
@@ -79,12 +80,12 @@ export function useStripEdges(stripRef: RefObject<HTMLElement | null>, pickedSel
       if (picked || !theirs) showPicked();
       read();
     });
-    mo?.observe(strip, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'aria-checked', 'aria-current'] });
+    mo?.observe(strip, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'aria-checked', 'aria-current', 'aria-pressed'] });
     return () => {
       strip.removeEventListener('scroll', onScroll);
       ro?.disconnect();
       mo?.disconnect();
-      strip.removeAttribute('data-more');
+      strip.removeAttribute('data-strip-more');
     };
   }, [stripRef, pickedSelector, enabled]);
 }

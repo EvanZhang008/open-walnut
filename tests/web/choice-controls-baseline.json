@@ -14,10 +14,8 @@
     "components/passwords/VaultBrowser.tsx": 1,
     "components/sessions/BackgroundTasksPanel.tsx": 2,
     "components/sessions/DraftTaskMenu.tsx": 1,
-    "components/sessions/PhoneSessionHeaderRows.tsx": 1,
     "components/sessions/SessionDiffView.tsx": 1,
     "components/sessions/SessionKebabSection.tsx": 3,
-    "components/sessions/SessionMenuOpen.tsx": 1,
     "components/tasks/PinShortcutChoices.tsx": 2,
     "components/tasks/TaskKebabMenu.tsx": 1,
     "components/tasks/ViewDropdown.tsx": 2

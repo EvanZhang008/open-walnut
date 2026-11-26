@@ -87,17 +87,18 @@
   scrollbar-width: none;
 }
 
-/* A strip that scrolls sideways (a TabList or a SegmentedControl wider than its room) fades the
-   edge with more past it (utils/strip-edges.ts sets data-more), so a phone sees the row goes on. */
-:is(.wn-tabs, .wn-seg)[data-more='right'] {
+/* A strip that scrolls sideways (a TabList or a SegmentedControl wider than its room, the bell
+   panel's sections on a phone, a menu's Pin to row) fades the edge with more past it: every strip
+   that uses utils/strip-edges.ts gets data-strip-more, so a phone sees the row goes on. */
+[data-strip-more='right'] {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
 }
-:is(.wn-tabs, .wn-seg)[data-more='left'] {
+[data-strip-more='left'] {
   -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
 }
-:is(.wn-tabs, .wn-seg)[data-more='left right'] {
+[data-strip-more='left right'] {
   -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }

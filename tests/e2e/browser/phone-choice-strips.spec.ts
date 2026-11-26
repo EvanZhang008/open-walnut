@@ -5,8 +5,9 @@
  * next tab's icon: a desktop give-way rule outranked the phone's whole-name rule), and Usage's
  * "Started by" and "Break down by" stopped at "Outside Walnut $0.0(" and "Toke" with nothing
  * saying the row went on.
- * `stripProblems` checks every `.wn-tabs` and `.wn-seg` on the page, so a new strip, a new page
- * or a narrower rule that brings either back fails here.
+ * `stripProblems` checks every `.wn-tabs` and `.wn-seg` on the page and every other row of choices
+ * that scrolls sideways (the bell panel's sections were one: their first entry was cut to "u" with
+ * no sign of more), so a new strip, a new page or a narrower rule that brings it back fails here.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -28,11 +29,19 @@ test.setTimeout(120_000)
 async function stripProblems(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const out: string[] = []
-    for (const strip of Array.from(document.querySelectorAll<HTMLElement>('.wn-tabs, .wn-seg'))) {
+    const isItem = (c: Element): c is HTMLElement => c instanceof HTMLElement && (/^(tab|radio)$/.test(c.getAttribute('role') ?? '') || c.matches('button, a'))
+    const strips = new Set(Array.from(document.querySelectorAll<HTMLElement>('.wn-tabs, .wn-seg')))
+    // Any other short row of two or more choices that scrolls sideways is a strip too.
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('body *'))) {
+      const ox = getComputedStyle(el).overflowX
+      if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 1 && el.getBoundingClientRect().height <= 80
+        && Array.from(el.children).filter(isItem).length >= 2) strips.add(el)
+    }
+    for (const strip of strips) {
       const box = strip.getBoundingClientRect()
       if (box.width === 0 || box.height === 0 || getComputedStyle(strip).visibility === 'hidden') continue
-      const name = strip.getAttribute('aria-label') || String(strip.className).split(' ').slice(-1)[0]
-      const items = Array.from(strip.children).filter((c): c is HTMLElement => c instanceof HTMLElement && /^(tab|radio)$/.test(c.getAttribute('role') ?? ''))
+      const name = strip.getAttribute('aria-label') || String(strip.className).split(' ')[0]
+      const items = Array.from(strip.children).filter(isItem)
       for (let i = 0; i + 1 < items.length; i++) {
         const a = items[i].getBoundingClientRect(), b = items[i + 1].getBoundingClientRect()
         if (Math.abs(a.top - b.top) < 4 && a.right > b.left + 1) out.push(`${name}: "${items[i].textContent?.trim()}" runs ${Math.round(a.right - b.left)} px over "${items[i + 1].textContent?.trim()}"`)
@@ -41,12 +50,13 @@ async function stripProblems(page: Page): Promise<string[]> {
         if (it.scrollWidth > it.clientWidth + 1) out.push(`${name}: "${it.textContent?.trim()}" is cut (${it.scrollWidth} in ${it.clientWidth})`)
       }
       const scrolls = strip.scrollWidth > strip.clientWidth + 1
-      const more = strip.getAttribute('data-more') ?? ''
+      const more = strip.getAttribute('data-strip-more') ?? ''
       if (scrolls && !more) out.push(`${name}: scrolls (${strip.scrollWidth} in ${strip.clientWidth}) with no edge mark`)
       if (!scrolls && more) out.push(`${name}: marks "${more}" but fits`)
       const cs = getComputedStyle(strip) as CSSStyleDeclaration & { webkitMaskImage?: string }
       if (more && (cs.maskImage || cs.webkitMaskImage || 'none') === 'none') out.push(`${name}: marks "${more}" but draws no fade`)
-      const picked = items.find((it) => it.getAttribute('aria-selected') === 'true' || it.getAttribute('aria-checked') === 'true')
+      const picked = items.find((it) => it.getAttribute('aria-selected') === 'true' || it.getAttribute('aria-checked') === 'true'
+        || it.getAttribute('aria-current') === 'page' || it.getAttribute('aria-pressed') === 'true')
       if (scrolls && picked) {
         const p = picked.getBoundingClientRect()
         if (p.left < box.left - 1 || p.right > box.right + 1) out.push(`${name}: the pick "${picked.textContent?.trim()}" is outside the strip's view`)
@@ -76,8 +86,29 @@ test('Home: the tab bar keeps every name whole, side by side, and says it scroll
   // Scrolled to the end, the left edge says there is more before it.
   await bar.evaluate((el) => { el.scrollLeft = el.scrollWidth })
   if (await bar.evaluate((el) => el.scrollWidth > el.clientWidth + 1)) {
-    await expect(bar).toHaveAttribute('data-more', /left/)
+    await expect(bar).toHaveAttribute('data-strip-more', /left/)
   }
+})
+
+test('Bell: the panel sections say they scroll and keep the picked one whole', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.goto('/')
+  await page.locator('[aria-label^="Notifications"]:visible').first().click({ timeout: 60_000 })
+  const rail = page.locator('.nfc-rail')
+  await expect(rail).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => stripProblems(page)).toEqual([])
+  // Each section, picked by a script click while it is out of view (so neither Playwright nor the
+  // focus scrolls the rail): the first, the last (All, where the first entry was cut to "u"), then
+  // one in the middle. Each is a new pick.
+  for (const at of [0, -1, 2]) {
+    await rail.evaluate((el, i) => {
+      el.scrollLeft = i === -1 ? 0 : el.scrollWidth
+      Array.from(el.querySelectorAll<HTMLElement>('.nfc-rail-btn')).at(i)!.click()
+    }, at)
+    await expect.poll(() => stripProblems(page)).toEqual([])
+  }
+  // The rail scrolls on a phone: its edge says so.
+  if (await rail.evaluate((el) => el.scrollWidth > el.clientWidth + 1)) await expect(rail).toHaveAttribute('data-strip-more', /./)
 })
 
 test('Usage: Started by and Break down by say they scroll and keep the pick in view', async ({ page }) => {

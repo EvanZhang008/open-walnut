@@ -22,6 +22,7 @@
  * expandable group, and a collapsed group never hides a pending ask.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useStripEdges } from '@/utils/strip-edges';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
@@ -218,26 +219,11 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // The dialog contract (focus in, Tab kept inside, back to the bell on close).
   const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
   useDialogFocus(open ? panelEl : null, 'Notifications');
-  // A phone's rail is one sideways strip: the selected section is scrolled into
-  // view, or a center opening on All (the strip's last entry) showed no
-  // selected tab at all (N9).
-  // Measured from the two boxes (offsets were read against the panel, not the
-  // strip, and missed), and again while the opening panel settles: the strip
-  // is not scrollable yet while it slides in and its counts load.
-  useEffect(() => {
-    if (!phone || !open || !panelEl) return undefined;
-    const reveal = () => {
-      const active = panelEl.querySelector<HTMLElement>('.nfc-rail-btn[aria-current="page"]');
-      const rail = active?.closest<HTMLElement>('.nfc-rail');
-      if (!active || !rail) return;
-      const a = active.getBoundingClientRect();
-      const r = rail.getBoundingClientRect();
-      if (a.left < r.left || a.right > r.right) rail.scrollLeft += a.left - r.left - (r.width - a.width) / 2;
-    };
-    const raf = requestAnimationFrame(reveal);
-    const timers = [120, 360, 900].map((ms) => setTimeout(reveal, ms));
-    return () => { cancelAnimationFrame(raf); timers.forEach(clearTimeout); };
-  }, [phone, open, panelEl, section, feed.length]);
+  // A phone's rail is one sideways strip: the selected section is kept in view and the edges with
+  // more sections past them fade (utils/strip-edges.ts), or a center opening on All (the strip's
+  // last entry) showed no selected tab at all (N9) and a cut first one with no sign of more.
+  const railRef = useRef<HTMLDivElement>(null);
+  useStripEdges(railRef, '.nfc-rail-btn[aria-current="page"]', phone && open);
 
   // The scrim starts at the panel's right edge (its width depends on the sidebar and on Split),
   // so the page beside it reads as behind the panel and the sidebar stays as it is.
@@ -363,7 +349,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               tabpanel, arrow-key navigation and a roving tabIndex, and a
               half-implemented contract misleads a screen reader worse than an
               honest list of buttons does. */}
-          <div className="nfc-rail" aria-label="Notification sections">
+          <div className="nfc-rail" ref={railRef} aria-label="Notification sections">
             <RailButton
               label="Needs you" count={counts.action + approvals.length} tone="alert"
               active={section === 'action'} onClick={() => pickSection('action')}

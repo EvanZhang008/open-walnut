@@ -272,10 +272,11 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-26: the center's tab strip rests on whole tabs, never a cut one. */
+  /* N2-26: the center's tab strip rests on whole tabs, never a cut one. It rests them clear of
+     the edge fade too (36 px, utils/strip-edges.ts keeps a pick 40 px in). */
   html body .notification-panel.nfc-panel-wide .nfc-rail {
     scroll-snap-type: x mandatory;
-    scroll-padding-inline: 12px;
+    scroll-padding-inline: 40px;
   }
   html body .notification-panel.nfc-panel-wide .nfc-rail .nfc-rail-btn {
     scroll-snap-align: start;

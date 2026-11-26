@@ -10,21 +10,40 @@ import { PICK_MARGIN, scrollToShow, stripMore } from '../../web/src/utils/strip-
 
 const WEB_SRC = join(__dirname, '..', '..', 'web', 'src')
 
-function tsxFiles(dir: string): string[] {
+function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const name of readdirSync(dir)) {
     const p = join(dir, name)
-    if (statSync(p).isDirectory()) out.push(...tsxFiles(p))
-    else if (name.endsWith('.tsx')) out.push(p)
+    if (statSync(p).isDirectory()) out.push(...sourceFiles(p))
+    else if (/\.tsx?$/.test(name) && !name.endsWith('.d.ts')) out.push(p)
   }
   return out
 }
 
-/** Files that render a strip but scroll sideways for another element (not one of the strip's items). */
+/** Code that scrolls something sideways but is no strip of choices, each with why. A strip of
+ *  choices (tabs, segments, a menu's row of picks, a panel's sections) uses utils/strip-edges.ts. */
 const OWN_SIDEWAYS_SCROLL: Record<string, string> = {
-  'components/sessions/SessionChatHistory.tsx': 'brings a thread card into view, not a strip item',
-  'components/chat/MentionPalette.tsx': "its data-more marks the mention list's own bottom, which scrolls down",
+  'utils/strip-edges.ts': 'the shared strip hook itself',
+  'utils/page-find-geometry.ts': 'brings a find match into view in any scroller',
+  'utils/overlay-exit.ts': 'puts back the scroll an overlay saved',
+  'utils/code-block-actions.ts': 'keeps a code block and its line rail scrolled together',
+  'pages/hold-strip-animation.ts': 'puts back scroll positions after an animation',
+  'pages/useHomeKeyboard.ts': 'brings a board column into view',
+  'components/sessions/SessionChatHistory.tsx': 'brings a thread card into view',
+  'components/sessions/ThreadCommentCard.tsx': 'brings a comment card into view',
+  'components/sessions/DraftWhereColumns.tsx': 'a column browser that shows its newest column',
+  'components/sessions/path-selector/GhostTextInput.tsx': 'keeps a text overlay under its input',
+  'components/dock/FocusDock.tsx': 'brings a task card of the dock into view',
+  'components/common/PdfFind.tsx': 'brings a PDF page into view',
+  'components/common/PdfPreview.tsx': 'zooms a PDF around a point',
+  'components/board/kanban/BoardKanban.tsx': 'brings a board column or card into view',
+  'components/board/kanban/KanbanAddTask.tsx': 'brings the add-task form into view',
+  'components/tasks/HomeBoardSheet.tsx': 'brings a board card into view',
+  'components/tasks/useInlineTitleEdit.ts': 'shows the start of a title being edited',
 }
+
+/** A line that scrolls an element sideways. */
+const SIDEWAYS = /\.scrollLeft\s*[-+]?=(?!=)|scrollIntoView\([^)]*inline|scroll(To|By)\(\{[^}]*left/
 
 describe('strip edges', () => {
   it('names the sides with more past them', () => {
@@ -51,26 +70,32 @@ describe('strip edges', () => {
 
   it('both shared strips use it, and no screen keeps its own copy', () => {
     const root = join(__dirname, '..', '..', 'web', 'src')
-    for (const f of ['components/controls/Tabs.tsx', 'components/settings/inputs/SegmentedControl.tsx']) {
+    for (const f of ['components/controls/Tabs.tsx', 'components/settings/inputs/SegmentedControl.tsx', 'components/common/NotificationPanel.tsx', 'components/tasks/PinShortcutChoices.tsx']) {
       expect(readFileSync(join(root, f), 'utf8'), f).toMatch(/useStripEdges\(/)
     }
     const pc = readFileSync(join(root, 'components/settings/sections/cloud/PhonesCloudTabs.tsx'), 'utf8')
     expect(pc).not.toMatch(/data-more=/)
   })
 
-  // 2026-11-26 review: the terminal tabs, the Home bar and the notes tabs each kept their own
-  // scroll-into-view (and the terminal its own fade) beside the shared one, two writers on one strip.
-  it('no screen that renders a strip scrolls it sideways or fades it itself', () => {
+  // 2026-11-26: the terminal tabs, the Home bar and the notes tabs each kept their own
+  // scroll-into-view (and the terminal its own fade) beside the shared one, and the bell panel's
+  // sections and a menu's Pin to row, built by hand, scrolled without saying so.
+  it('nothing else scrolls a strip sideways or marks its edges itself', () => {
     const hits: string[] = []
-    for (const f of tsxFiles(WEB_SRC)) {
-      const src = readFileSync(f, 'utf8')
-      if (!/<(TabList|SegmentedControl)\b/.test(src)) continue
+    for (const f of sourceFiles(WEB_SRC)) {
       const rel = relative(WEB_SRC, f)
-      if (OWN_SIDEWAYS_SCROLL[rel]) continue
+      const src = readFileSync(f, 'utf8')
       for (const [i, line] of src.split('\n').entries()) {
-        if (/scrollIntoView\([^)]*inline|\.scrollLeft\s*=[^=]|fade-(left|right)|data-more/.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim()}`)
+        if (!OWN_SIDEWAYS_SCROLL[rel] && SIDEWAYS.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim()}`)
+        if (rel !== 'utils/strip-edges.ts' && /data-strip-more|fade-(left|right)\b/.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim()}`)
       }
     }
     expect(hits).toEqual([])
+  })
+
+  it('every exempt file still scrolls sideways (a stale exemption is removed)', () => {
+    for (const rel of Object.keys(OWN_SIDEWAYS_SCROLL)) {
+      expect(readFileSync(join(WEB_SRC, rel), 'utf8'), rel).toMatch(SIDEWAYS)
+    }
   })
 })

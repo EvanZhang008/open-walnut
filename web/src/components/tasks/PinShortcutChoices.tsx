@@ -24,11 +24,12 @@
  */
 import { EmptyState } from '@/components/common/EmptyState';
 import { ICON_CHECK, ICON_SLIDERS } from '@/components/common/Icons';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePageView } from '@/utils/view-memory';
+import { useStripEdges } from '@/utils/strip-edges';
 import { DisclosureChevron } from '@/components/controls';
 import { Chip } from '@/components/controls';
 import {
@@ -88,17 +89,9 @@ export function PinShortcutChoices({ choices, current, onChoose }: {
   const more = pinMoreEntries(stored, all);
   const hiddenCurrent = current !== null ? more.find((c) => c.value === current) ?? null : null;
   // The row scrolls sideways, so a lit tier past its edge (a long plugin tier name, the third
-  // shortcut on a phone) would show cut off: bring it fully into the row, without moving the menu.
+  // shortcut on a phone) is brought fully into the row, and the edges with more fade.
   const stripRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const row = stripRef.current;
-    const lit = row?.querySelector<HTMLElement>('.task-kebab-tier-btn[aria-pressed="true"]');
-    if (!row || !lit) return;
-    const left = lit.getBoundingClientRect().left - row.getBoundingClientRect().left + row.scrollLeft;
-    const right = left + lit.getBoundingClientRect().width;
-    if (right > row.scrollLeft + row.clientWidth) row.scrollLeft = right - row.clientWidth;
-    else if (left < row.scrollLeft) row.scrollLeft = left;
-  }, [current, strip.length]);
+  useStripEdges(stripRef, '.task-kebab-tier-btn[aria-pressed="true"]');
 
   return (
     <div className="task-pin-shortcuts" data-testid="kebab-group-pin">
