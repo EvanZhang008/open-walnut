@@ -10,7 +10,7 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { Chip, ChipGroup, DisclosureButton } from '@/components/controls';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
-import { workersStartFolded, workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
+import { WORKERS_VIEW_ID, workersWorkingLabel, workersWorkingOf, type WorkingWorker } from './workers-working';
 import '@/styles/session-working.css';
 
 /**
@@ -107,21 +107,18 @@ function useWorkersWorking(sessionId: string): WorkingWorker[] {
 
 function WorkersWorkingRow({ sessionId, workers }: { sessionId: string; workers: WorkingWorker[] }) {
   const openTask = useOpenTask();
-  // A long list starts folded; his open or close of it is kept for this session (usePageViewOf).
-  const [picked, setPicked] = usePageViewOf<boolean | null>('session', 'workers-open', sessionId, null, (v): v is boolean | null => v === null || isBoolean(v));
-  const folds = workersStartFolded(workers.length);
-  const open = !folds || (picked ?? false);
+  // Folded until he opens it, at every count; his open or close is kept for this session (usePageViewOf).
+  const [picked, setPicked] = usePageViewOf<boolean | null>('session', WORKERS_VIEW_ID, sessionId, null, (v): v is boolean | null => v === null || isBoolean(v));
+  const open = picked ?? false;
   const label = workersWorkingLabel(workers.length);
   // The working line's own row and label; each worker is a one-shot chip (pressed undefined) that opens it.
   // A ChipGroup, so on a phone its wrapped rows sit apart and no chip's 44 px finger target covers
   // the toggle or the chip above (2026-11-25: at 390px the first chip took the tap meant to fold).
   return (
     <ChipGroup className="session-working-row" data-testid="session-workers-working" data-open={open ? 'true' : 'false'}>
-      {folds
-        ? <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the subtasks' : 'Show each subtask'} onClick={() => setPicked(!open)}>
-            <span className="session-working-label">{label}</span>
-          </DisclosureButton>
-        : <span className="session-working-label">{label}</span>}
+      <DisclosureButton expanded={open} inline data-testid="session-workers-toggle" title={open ? 'Hide the subtasks' : 'Show each subtask'} onClick={() => setPicked(!open)}>
+        <span className="session-working-label">{label}</span>
+      </DisclosureButton>
       {open && workers.map((w) => (
         <Chip key={w.id} pressed={undefined} title={`Open ${w.title}`} trailing={<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>} onClick={() => openTask(w.id)}>
           {w.title}

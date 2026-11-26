@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
 import fs from 'node:fs'
 import path from 'node:path'
-import { WORKERS_INLINE_MAX, workersStartFolded, workersWorkingLabel, workersWorkingOf } from '../../web/src/components/sessions/workers-working'
+import { WORKERS_VIEW_ID, workersWorkingLabel, workersWorkingOf } from '../../web/src/components/sessions/workers-working'
 
 const row = (id: string, extra: Partial<Task>): Task => ({ id, title: `Task ${id}`, phase: 'IN_PROGRESS', status: 'todo', session_ids: [], ...extra }) as Task
 
@@ -49,11 +49,22 @@ describe('workersWorkingOf', () => {
     expect(workersWorkingLabel(1)).toBe('1 subtask is working…')
     expect(workersWorkingLabel(3)).toBe('3 subtasks are working…')
   })
+})
 
-  it('a long list starts folded, a short one shows its chips', () => {
-    expect(workersStartFolded(WORKERS_INLINE_MAX)).toBe(false)
-    expect(workersStartFolded(WORKERS_INLINE_MAX + 1)).toBe(true)
-    expect(workersStartFolded(13)).toBe(true)
+describe('the workers line starts folded at every count', () => {
+  // 2026-11-25, the user: "defualt collapes bro." One to three workers were drawn as chips with no
+  // toggle, and a list he once opened stayed open under the old view id.
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/components/sessions/SessionWorkingIndicator.tsx'), 'utf-8')
+  const row = src.slice(src.indexOf('function WorkersWorkingRow'))
+  it('open only once he opened it, and the toggle is always drawn', () => {
+    expect(row).toMatch(/const open = picked \?\? false;/)
+    expect(row).toMatch(/^\s+<DisclosureButton expanded=\{open\}[^\n]*data-testid="session-workers-toggle"/m)
+    // No count decides whether it folds or whether the toggle shows.
+    expect(row.slice(0, row.indexOf('</ChipGroup>'))).not.toMatch(/workers\.length\s*[<>]=?|\?\s*<DisclosureButton/)
+  })
+  it('his choice is kept per session under the id that started with this change', () => {
+    expect(WORKERS_VIEW_ID).toBe('workers-shown')
+    expect(row).toMatch(/usePageViewOf<boolean \| null>\('session', WORKERS_VIEW_ID, sessionId/)
   })
 })
 

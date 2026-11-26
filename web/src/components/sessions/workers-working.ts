@@ -8,15 +8,12 @@
  * 2026-11-25, the user, on a lead with thirteen workers: "如果要显示这些，是不是自动应该 collapse？
  * 而且它刚才显示了之后又突然消失". So the line is drawn from the workers alone, whatever the lead
  * itself reads or runs (its own turn, a moment Waiting on its report), and a long one is one folded
- * line. Pure, so the list's select can run it each change.
+ * line. Then: "defualt collapes bro.": folded at every count. Pure, so the list's select can run it each change.
  */
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
 
 export interface WorkingWorker { id: string; title: string }
-
-/** At most this many workers show as chips by themselves; more fold into one line. */
-export const WORKERS_INLINE_MAX = 3;
 
 /** The workers at work of the task this session is the current session of. */
 export function workersWorkingOf(tasks: readonly Task[], sessionId: string): WorkingWorker[] {
@@ -35,5 +32,10 @@ export function workersWorkingLabel(count: number): string {
   return count === 1 ? '1 subtask is working…' : `${count} subtasks are working…`;
 }
 
-/** Whether the line starts folded: a long list does, a short one shows its chips. */
-export const workersStartFolded = (count: number): boolean => count > WORKERS_INLINE_MAX;
+/**
+ * The line starts folded at every count, one worker too: his "defualt collapes bro." (2026-11-25,
+ * on the line that drew one to three workers as chips with no toggle). His open or close is kept
+ * per session under this view id; the id is new with that change, so a list he opened before it
+ * starts folded once more.
+ */
+export const WORKERS_VIEW_ID = 'workers-shown';

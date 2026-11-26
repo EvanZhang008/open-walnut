@@ -22,10 +22,13 @@ const litter: string[] = []
 let api: KanbanApi
 let lead = ''
 let leadSid = ''
+let fewLead = ''
+let fewLeadSid = ''
 const PLAN = 'Planned the work in thirteen parts. Each part has its own worker and its own tests, '
   + 'and each reports back here when it is done. The service parts go first, then the hosts, then the phone app and the docs. '
   + 'Nothing ships until its part passes its own checks on the cloud box, and the phone part waits for the hosts.'
 const LEAD_TITLE = `Narrow column lead ${Date.now().toString(36)}`
+const FEW_TITLE = `Two workers lead ${Date.now().toString(36)}`
 
 // Titles as long as the user's own workers' titles.
 const TITLES = Array.from({ length: 13 }, (_, i) => i % 7 === 0
@@ -50,6 +53,15 @@ test.beforeAll(async () => {
     litter.push(id)
     await startSession(api, id, 'slow:900000 snapshot-clean-turn:Worker finished.')
   }
+  // A lead with two workers: a short list folds too (2026-11-25, the user: "defualt collapes bro.").
+  fewLead = (await task({ title: FEW_TITLE })).task.id
+  litter.push(fewLead)
+  fewLeadSid = await startSession(api, fewLead, 'snapshot-clean-turn:Two parts, one worker each.')
+  for (const title of ['Part A: the settings page', 'Part B: the docs']) {
+    const id = (await task({ title, parent_task_id: fewLead })).task.id
+    litter.push(id)
+    await startSession(api, id, 'slow:900000 snapshot-clean-turn:Worker finished.')
+  }
   await pollUntil('13 workers at work', async () => (await call<{ tasks: Array<{ parent_task_id?: string; user_status?: { state?: string } }> }>(api, 'GET', '/api/tasks')).tasks
     .filter((t) => t.parent_task_id === lead && t.user_status?.state === 'working').length, (n) => n === TITLES.length, 120_000)
 })
@@ -58,7 +70,7 @@ test.afterAll(async () => {
   for (const id of [...litter].reverse()) await fetch(`${api.base}/api/tasks/${id}?force=true`, { method: 'DELETE' }).catch(() => undefined)
 })
 
-async function openLead(page: Page, phone = false): Promise<Locator> {
+async function openLead(page: Page, phone = false, title = LEAD_TITLE, sid = leadSid): Promise<Locator> {
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: PROJECT })
   await page.setContent(`<a href="${api.base}/">Open Walnut</a>`)
@@ -67,13 +79,14 @@ async function openLead(page: Page, phone = false): Promise<Locator> {
   // project's tasks on its first screen (its search opens a page of its own).
   if (!phone) {
     await page.locator('.todo-search-input').click()
-    await page.keyboard.type(LEAD_TITLE)
+    await page.keyboard.type(title)
   }
   // A phone draws the list's rows in its own shape: the row is the one carrying the task's id.
-  const row = page.locator(phone ? `.todo-panel [data-task-id="${lead}"]` : `.todo-panel-item[data-task-id="${lead}"]`).first()
+  const id = title === LEAD_TITLE ? lead : fewLead
+  const row = page.locator(phone ? `.todo-panel [data-task-id="${id}"]` : `.todo-panel-item[data-task-id="${id}"]`).first()
   await expect(row).toBeVisible({ timeout: 90_000 })
-  await (phone ? row.getByText(LEAD_TITLE, { exact: true }) : row.locator('.todo-item-title')).click()
-  const panel = page.locator(`${REAL_PANEL}[data-session-id="${leadSid}"]`)
+  await (phone ? row.getByText(title, { exact: true }) : row.locator('.todo-item-title')).click()
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   return panel
 }
@@ -104,6 +117,30 @@ async function expectInside(panel: Locator, shape: string): Promise<void> {
   // The long titles are cut in a 508px column: the test means nothing if none is.
   expect(m.chips.some((c) => c.clipped), `${shape}: a long title is cut`).toBe(true)
 }
+
+// 2026-11-25, the user: "defualt collapes bro." One to three workers were drawn as chips with no toggle.
+test.describe('his window', () => {
+test.use({ viewport: { width: 1280, height: 800 } })
+test('a short list starts folded too: one line, its toggle opens it and the choice is kept across a reload', async ({ page }) => {
+  test.setTimeout(180_000)
+  await pollUntil('2 workers at work', async () => (await call<{ tasks: Array<{ parent_task_id?: string; user_status?: { state?: string } }> }>(api, 'GET', '/api/tasks')).tasks
+    .filter((t) => t.parent_task_id === fewLead && t.user_status?.state === 'working').length, (n) => n === 2, 120_000)
+  const panel = await openLead(page, false, FEW_TITLE, fewLeadSid)
+  const line = panel.getByTestId('session-workers-working')
+  const toggle = panel.getByTestId('session-workers-toggle')
+  await expect(toggle).toHaveText('2 subtasks are working…', { timeout: 60_000 })
+  await expect(line).toHaveAttribute('data-open', 'false')
+  await expect(line.locator('.wn-chip')).toHaveCount(0)
+  await toggle.click()
+  await expect(line).toHaveAttribute('data-open', 'true')
+  await expect(line.locator('.wn-chip')).toHaveCount(2)
+  await page.reload()
+  await expect(line).toHaveAttribute('data-open', 'true', { timeout: 60_000 })
+  await toggle.click()
+  await expect(line).toHaveAttribute('data-open', 'false')
+  await expect(line.locator('.wn-chip')).toHaveCount(0)
+})
+})
 
 test('open, the line keeps inside a narrow column by itself and inside the lead\'s live turn', async ({ page }) => {
   test.setTimeout(180_000)
