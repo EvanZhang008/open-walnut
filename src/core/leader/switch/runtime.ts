@@ -153,9 +153,10 @@ export interface RuntimeOptions {
 
 /**
  * A witness that took none of the leader's renewals for a lease (`behind`); the same one taking them again, or gone from
- * the list (`back`); and, at this process's first lead, every such item it did not raise itself (`stale`: one left by an
- * earlier process of this home, or by the old leader whose home this is a copy of: the items are lead data and travel
- * with the home). A server that stops leading writes nothing for them: a handed-over home stays as it was.
+ * the list (`back`); and, at every lead of this process, every such item still open (`stale`: one left by an earlier
+ * process of this home, by the old leader whose home this is a copy of (the items are lead data and travel with the
+ * home), or by this process before it stopped leading). A server that stops leading writes nothing for them: a
+ * handed-over home stays as it was.
  */
 export interface WitnessHealth {
   behind(witness: string, forMs: number, why: string): void
@@ -478,12 +479,14 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   const lagWindowMs = lagWindowMsOf(settings.params)
   const lagging = new Set<string>()
   const witnessHealth = opts.witnessHealth ?? healthOfWitnesses
-  // The first lead of this process (at boot or from waiting) tells onFirstLead, once.
+  // Every lead (at boot, from waiting, after a handover that did not stand) starts with no witness counted behind and
+  // recovers every open witness-behind item (its own from before included): a witness still behind is said again a lease
+  // later. The first lead of this process also tells onFirstLead, once.
   const ledNow = () => {
+    forgetLag()
+    witnessHealth.stale()
     if (everLed) return
     everLed = true
-    // A witness-behind item no process of this one raised is stale: recovered now, raised again if it still holds.
-    witnessHealth.stale()
     if (opts.onFirstLead) setImmediate(() => { try { opts.onFirstLead!() } catch (err) { log('warn', 'leader permit: the first lead\'s step failed', { error: (err as Error).message }) } })
   }
   const lead = (record: PermitRecord, msg: string) => {
@@ -524,8 +527,8 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   }
   /**
    * This server no longer leads (a handover, another holder, a lease that ran out, its stop): it forgets which
-   * witnesses lagged and writes nothing (its home may be handed over by now). The next process that leads with this
-   * home's data recovers the items (WitnessHealth.stale).
+   * witnesses lagged and writes nothing (its home may be handed over by now). The next lead with this home's data (this
+   * process again, or the next one) recovers the items (WitnessHealth.stale).
    */
   const forgetLag = () => { lagging.clear() }
   const loop = async () => {

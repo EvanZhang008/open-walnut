@@ -25,6 +25,7 @@
 
 import type { NewNotification } from '../notifications/store.js'
 import { healthConditions, hostLabel } from '../notifications/health-items.js'
+import { log } from '../../logging/index.js'
 import { inProcessDaemonWantedNow } from '../../providers/in-process-daemon.js'
 
 const conditions = healthConditions('home-move')
@@ -149,6 +150,7 @@ export function noteSwitchConfirmed(): void {
 export function _resetHomeBusyHealthForTesting(): void {
   conditions.reset()
   permitConditions.reset()
+  staleReadWarned = false
 }
 
 
@@ -183,21 +185,30 @@ export function noteWitnessBack(witness: string): void {
   void permitConditions.recover(witnessBehindKey(witness))
 }
 
+/** The sweep's store read failed: said once per process (a sweep runs at every lead). */
+let staleReadWarned = false
+
 /**
- * At a process's first lead: every open witness-behind item it did not raise itself recovers (one an earlier process of
- * this home raised, or the old leader before a switch: notifications.json is lead data, the copy brings it along). A
- * witness still behind is raised again a lease later. Returns the keys it recovered.
+ * At every lead of a process (its first, and again after a lost lease or a handover that did not stand): every open
+ * witness-behind item recovers, whoever raised it (an earlier process of this home, the old leader before a switch:
+ * notifications.json is lead data, the copy brings it along; or this process before it stopped leading, when it forgot
+ * which witnesses lagged). A witness still behind is raised again a lease later. Returns the keys it recovered.
  */
 export async function recoverStaleWitnessItems(): Promise<string[]> {
+  let keys: string[]
   try {
-    // Read only: a first lead with no such item writes nothing.
+    // Read only: a lead with no such item writes nothing.
     const { listNotifications } = await import('../notifications/store.js')
     const { feed } = await listNotifications()
-    const keys = [...new Set(feed.filter((n) => !n.resolved && typeof n.dedupKey === 'string' && n.dedupKey.startsWith(WITNESS_BEHIND_PREFIX)).map((n) => n.dedupKey as string))]
-    const stale = keys.filter((k) => permitConditions.toldOf(k) !== 'raised')
-    for (const k of stale) await permitConditions.recover(k)
-    return stale
-  } catch {
+    keys = [...new Set(feed.filter((n) => !n.resolved && typeof n.dedupKey === 'string' && n.dedupKey.startsWith(WITNESS_BEHIND_PREFIX)).map((n) => n.dedupKey as string))]
+  } catch (err) {
+    if (!staleReadWarned) {
+      staleReadWarned = true
+      log.session.warn('leader-permit: the open witness-behind items could not be read; none recovered at this lead', { error: err instanceof Error ? err.message : String(err) })
+    }
     return []
   }
+  // The store says open: what this process told before (a recovery of an item raised again elsewhere) is out of date.
+  for (const k of keys) { permitConditions.forget(k); await permitConditions.recover(k) }
+  return keys
 }

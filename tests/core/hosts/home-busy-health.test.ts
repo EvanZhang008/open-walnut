@@ -16,6 +16,7 @@ import path from 'node:path'
 import { createWalnutScope } from '../../../src/providers/walnut-scope-core.js'
 import { homeBusyItem, homeBusyKey, homeMoveItem, homeMoveKey, noteHomeBusy, noteHomeServed, noteMoveNotTaken, noteMoveTaken, noteWitnessBack, noteWitnessBehind, recoverStaleWitnessItems, witnessBehindItem, witnessBehindKey, _resetHomeBusyHealthForTesting } from '../../../src/core/leader/home-busy-health.js'
 import { raiseHealthItem } from '../../../src/core/notifications/health-items.js'
+import { log } from '../../../src/logging/index.js'
 
 afterEach(() => _resetHomeBusyHealthForTesting())
 
@@ -90,17 +91,41 @@ describe('a leader witness that takes none of the renewals (switch/runtime.ts ch
     await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-b')))?.resolved).toBeTruthy(), { timeout: 5_000 })
   })
 
-  it('an item that came with the home (an earlier process, the old leader) is recovered at the first lead; one this process raised is not', async () => {
+  it('at a lead every open witness-behind item recovers: one that came with the home, one this process raised, one it said back before', async () => {
     // As if written by another process: straight into the store, nothing told in this one.
     await raiseHealthItem(witnessBehindItem('w-k', 60_000, 'no answer'), 'leader-permit')
     noteWitnessBehind('w-a', 60_000, 'no answer')
     await vi.waitFor(async () => expect(await findNotification(witnessBehindKey('w-a'))).toBeTruthy(), { timeout: 5_000 })
-    expect(await recoverStaleWitnessItems()).toEqual([witnessBehindKey('w-k')])
-    expect((await findNotification(witnessBehindKey('w-k')))?.resolved).toBeTruthy()
-    expect((await findNotification(witnessBehindKey('w-a')))?.resolved).toBeFalsy()
-    // Nothing open of that kind: the sweep finds nothing and writes nothing.
+    // w-c (a name no earlier case used, so its first recovery is this one's): this process said it back, then another process (the old leader of a copied home) raised it again.
+    noteWitnessBehind('w-c', 60_000, 'no answer')
+    noteWitnessBack('w-c')
+    await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-c')))?.resolved).toBeTruthy(), { timeout: 5_000 })
+    await raiseHealthItem(witnessBehindItem('w-c', 60_000, 'no answer'), 'leader-permit')
+    await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-c')))?.resolved).toBeFalsy(), { timeout: 5_000 })
+    expect((await recoverStaleWitnessItems()).sort()).toEqual([witnessBehindKey('w-a'), witnessBehindKey('w-c'), witnessBehindKey('w-k')])
+    for (const w of ['w-a', 'w-c', 'w-k']) expect((await findNotification(witnessBehindKey(w)))?.resolved).toBeTruthy()
+    // Raised again after the sweep (still behind a lease later): it opens again.
+    noteWitnessBehind('w-a', 60_000, 'no answer')
+    await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-a')))?.resolved).toBeFalsy(), { timeout: 5_000 })
     noteWitnessBack('w-a')
     await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-a')))?.resolved).toBeTruthy(), { timeout: 5_000 })
+    // Nothing open of that kind: the sweep finds nothing and writes nothing.
     expect(await recoverStaleWitnessItems()).toEqual([])
+  })
+
+  it('a store that cannot be read: the sweep recovers nothing and says so once', async () => {
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    const store = await import('../../../src/core/notifications/store.js')
+    const read = vi.spyOn(store, 'listNotifications').mockRejectedValue(new Error('EACCES: notifications.json'))
+    try {
+      expect(await recoverStaleWitnessItems()).toEqual([])
+      expect(await recoverStaleWitnessItems()).toEqual([])
+      const said = warn.mock.calls.filter((c) => /witness-behind items could not be read/.test(String(c[0])))
+      expect(said).toHaveLength(1)
+      expect(JSON.stringify(said[0])).toContain('EACCES')
+    } finally {
+      read.mockRestore()
+      warn.mockRestore()
+    }
   })
 })

@@ -78,6 +78,8 @@ export function healthConditions(source: string) {
         if (await recoverHealthItems([key], source)) told.set(key, 'clear')
       })
     },
+    /** Drop what this process told for the key: the store showed it out of date (the next recover writes). */
+    forget(key: string): void { told.delete(key) },
     /** What this process told for the key (undefined: nothing yet). */
     toldOf: (key: string) => told.get(key),
     /** Tests only. */

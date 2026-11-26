@@ -371,6 +371,27 @@ describe('a witness that takes none of the leader\'s renewals', () => {
     expect(read.replies.find((x) => x.witness === 'w3')?.held?.by).toBe('machine-b')
   }, 40_000)
 
+  it('the same process loses its lease while a witness lags and leads again: that lead sweeps too, its own item included', async () => {
+    // The review's probe (round 2, M1): the sweep ran at the first lead only and skipped the items this process raised,
+    // so after a lost lease and a new lead the alarm stayed open with every witness fine again.
+    const { told, health } = recorder()
+    const r = await start('machine-a', false, { witnessHealth: health })
+    const [, w2, w3] = settings.witnesses
+    fs.renameSync(w3!.dir, `${w3!.dir}.off`)
+    await until('w3 reported behind', () => told.some((t) => t.startsWith('behind w3')), 15_000)
+    // A second witness down: no renew stands, the lease runs out, the runtime waits.
+    fs.renameSync(w2!.dir, `${w2!.dir}.off`)
+    await until('waiting', () => r.status().state === 'waiting', 15_000)
+    fs.renameSync(`${w2!.dir}.off`, w2!.dir)
+    fs.renameSync(`${w3!.dir}.off`, w3!.dir)
+    await until('leading again', () => r.status().state === 'leading', 30_000)
+    await until('the second lead\'s sweep', () => told.filter((t) => t === 'stale').length === 2, 5_000)
+    await new Promise((res) => setTimeout(res, 4_000))
+    expect(told).toEqual(['stale', `behind w3 ${lagWindowMsOf(settings.params)} no answer`, 'stale'])
+    const read = await readStanding(openPermitClient('reader', settings.witnesses, settings.params, () => true))
+    expect(read.replies.find((x) => x.witness === 'w3')?.held?.by).toBe('machine-a')
+  }, 60_000)
+
   it('a restart: the next process sweeps at its first lead, the stopped one writes nothing at its stop', async () => {
     const a = recorder()
     const first = await start('machine-a', false, { witnessHealth: a.health })
