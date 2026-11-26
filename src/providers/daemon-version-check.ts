@@ -576,6 +576,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/replica-sync-gz.ts',
   'src/providers/tool-call-output.ts',
   'src/providers/trigger-unsent-checks.ts',
+  // The places macOS guards (follower reads, host_exec cwds, uploads never touch them on the loop).
+  'src/core/hosts/mac-places.ts',
 ] as const
 
 /**

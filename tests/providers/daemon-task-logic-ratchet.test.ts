@@ -54,6 +54,8 @@ const CORE_HELPERS = new Set([
   'src/core/notes/locked-note.ts',
   'src/core/notes/locked-note-format.ts',
   'src/core/bash-file-ops.ts',
+  // The places macOS guards (a path test, node:path only): the daemon never opens one on its loop.
+  'src/core/hosts/mac-places.ts',
   'src/core/drained-sends.ts',
   'src/core/hints/hint-format.ts',
   'src/core/history-parse.ts',

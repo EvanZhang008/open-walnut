@@ -70,6 +70,7 @@ import { createHostReplica } from './host-replica-core.js'
 import { unpackReplicaSyncLists } from './replica-sync-gz.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
+import { isMacGuarded } from '../core/hosts/mac-places.js'
 import { createFollowerGateway, type FollowerGatewayResponse, type GatewayCaller } from './follower-gateway-core.js'
 import { createHostCallTokens } from './host-call-token-core.js'
 import { createFollowerTriggerDelivery, type TriggerDeliveryResult, type TriggerFire } from './follower-trigger-delivery-core.js'
@@ -3974,6 +3975,7 @@ const followerReads = createFollowerReads({
   claudeProjectsDirs: [path.join(HOME_DIR, '.claude', 'projects'), ...(daemonEnv.CLAUDE_CONFIG_DIR ? [path.join(daemonEnv.CLAUDE_CONFIG_DIR, 'projects')] : [])],
   streamsDir: STREAMS_DIR,
   realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } },
+  guarded: (p) => isMacGuarded(p, HOME_DIR),
   sliceOwner: (sid) => offlineHost.ownerOf(sid),
   // The Mac's copy first (as sliceOwner), else the record of who started the worker here.
   runtimeOwner: (runtimeId) => acpRuntimeHome(runtimeId),

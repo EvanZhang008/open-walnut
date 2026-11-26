@@ -43,3 +43,13 @@ export function macPlace(p: string, mac: MacSide, opts: { foldCase?: boolean } =
   const root = MAC_PROTECTED_IN_HOME.find((r) => inside(rel!, fold(r)))
   return root ? `~/${root}` : null
 }
+
+/**
+ * Whether this process, on a Mac, must not touch `p` on its own: it lies in a place macOS guards, so
+ * an open (a realpath opens too) waits on the consent dialog it puts on the screen, with the caller's
+ * thread stopped until someone answers (2026-11-26: a host's service froze at every start on a
+ * realpath of a session cwd in ~/Desktop). Folded case, as the Mac's disk compares. False elsewhere.
+ */
+export function isMacGuarded(p: string, home: string, platform: string = process.platform): boolean {
+  return platform === 'darwin' && macPlace(p, { home }, { foldCase: true }) !== null
+}

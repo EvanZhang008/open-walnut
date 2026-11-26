@@ -420,6 +420,7 @@ SOURCES=(
   src/providers/replica-sync-gz.ts
   src/providers/tool-call-output.ts
   src/providers/trigger-unsent-checks.ts
+  src/core/hosts/mac-places.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

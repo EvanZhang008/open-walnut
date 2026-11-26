@@ -29,6 +29,7 @@
  * it, so the agent reads why it cannot open it instead of a bare missing path.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { PASTES_DIR } from '../constants.js'
@@ -36,6 +37,7 @@ import { UPLOAD_CHUNK_BYTES, UPLOAD_ID_RE, isUploadName } from '../core/sessions
 import { MAX_UPLOAD_FRAME_BYTES } from './ssh-upload-budget.js'
 import { localTaskDirRoot } from '../core/sessions/task-dir-place.js'
 import { isTaskDirId } from '../lib/task-dir.js'
+import { isMacGuarded } from '../core/hosts/mac-places.js'
 import { readAttachmentBlocks, type HeaderBlockKind } from '../lib/attachment-headers.js'
 
 /** The daemon capability that takes `upload.part` (daemon-capabilities.ts). */
@@ -136,6 +138,8 @@ function partsUnder(root: string, p: string): string[] | null {
 
 function shippable(localPath: string, roots: ShipRoots): ShippableFile | null {
   if (!path.isAbsolute(localPath) || localPath.split('/').includes('..')) return null
+  // No upload lives in a guarded place, and resolving one would wait on its dialog.
+  if (isMacGuarded(localPath, os.homedir())) return null
   let readPath: string
   try {
     readPath = fs.realpathSync(localPath)

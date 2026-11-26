@@ -20,6 +20,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { isMacGuarded } from '../core/hosts/mac-places.js'
 import type { MatchLine } from './host-exec-matcher.js'
 
 const COMMAND_MAX_CHARS = 64 * 1024
@@ -222,6 +223,8 @@ export function resolveCwd(raw: unknown, home: string): string | ExecError {
   if (cwd === '~') cwd = home
   else if (cwd.startsWith('~/')) cwd = path.join(home, cwd.slice(2))
   if (!path.isAbsolute(cwd)) return bad(`cwd must be an absolute path or start with ~/ (got "${cwd}")`)
+  // A guarded place (the user allowed its dialog): never opened on this loop, only by the run's own shell.
+  if (isMacGuarded(cwd, home)) return path.resolve(cwd)
   try {
     const real = fs.realpathSync(cwd)
     if (!fs.statSync(real).isDirectory()) return bad(`${cwd} is not a directory on this host`, 'cwd_missing')

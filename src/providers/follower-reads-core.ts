@@ -54,6 +54,14 @@ export interface FollowerReadsDeps {
   streamsDir?: string
   /** The real path of an existing path, or null when nothing is there. */
   realpath: (p: string) => string | null
+  /**
+   * A path in a place macOS guards (Desktop, Documents, another app's data: mac-places.ts). Such a
+   * path is never touched here: resolving it opens it, and the open waits on the consent dialog it
+   * puts on that Mac's screen, with this daemon's whole loop stopped (2026-11-26: a session once run
+   * in ~/Desktop froze a host's service at every start until its launcher killed it). A session cwd
+   * there is no root, and a read there is not this Walnut's. Absent: nothing is guarded (Linux).
+   */
+  guarded?: (p: string) => boolean
   /** The Walnut whose host slice lists `sid`. */
   sliceOwner: (sid: string) => string | undefined
   /** The Walnut that first asked this host to spawn `sid` (the spawn journal). */
@@ -177,6 +185,8 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     const abs = path.resolve(p)
     const hit = realCache.get(abs)
     if (hit !== undefined) return hit
+    // Never resolved: the open would wait on a dialog (deps.guarded). Its ancestors are no help either.
+    if (isGuarded(abs)) return abs
     let head = abs
     const rest: string[] = []
     let real: string | null = null
@@ -190,6 +200,10 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     }
     const out = real === null ? abs : (rest.length ? path.join(real, ...rest) : real)
     return out
+  }
+
+  function isGuarded(p: string): boolean {
+    try { return !!deps.guarded && deps.guarded(p) } catch { return true }
   }
 
   /** realOf, remembered for session cwds (they rarely move, and the scan runs per read). */
@@ -247,7 +261,11 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
     const add = (sid: string, cwd: string) => {
       const home = ownerOf(sid)
       if (!home || !cwd || !path.isAbsolute(cwd)) return
+      // A session working in a guarded place gives no follower reads there (deps.guarded).
+      if (isGuarded(path.resolve(cwd))) return
       const real = realRoot(cwd)
+      // A link into a guarded place too: its root would no longer decide, and a shallower one would.
+      if (isGuarded(real)) return
       // The filesystem root is no session's own tree, and a deny root stays nobody's.
       if (real === path.parse(real).root || denied.has(real)) return
       let set = out.get(real)
@@ -301,7 +319,10 @@ export function createFollowerReads(deps: FollowerReadsDeps) {
       if (!base) return false
       s = path.join(base, s)
     }
+    if (isGuarded(path.resolve(s))) return false
     const real = realOf(s)
+    // Through a link into a guarded place: refused, as written there (a shallower root must not take it).
+    if (isGuarded(real)) return false
     if (sessionFileOf(home, real)) return true
     let best = ''
     let owners: Set<string> | undefined
