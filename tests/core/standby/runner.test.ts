@@ -111,6 +111,38 @@ describe('standby runner', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('# Memory\n')
   }, 60_000)
 
+  it('a carry rides each complete batch into <dir>/carry, here and on a standby host; its failure only logs', async () => {
+    sb = await sandbox('carry')
+    dbs.push(...seedHome(sb.home).dbs)
+    const eng = path.join(sb.root, 'claude')
+    fs.mkdirSync(path.join(eng, 'projects', '-f'), { recursive: true })
+    fs.writeFileSync(path.join(eng, 'projects', '-f', '00000000-0000-4000-8000-000000000001.jsonl'), '{"t":1}\n')
+    const place = {
+      dirMayHold: (rel: string) => rel === 'projects' || rel === 'projects/-f',
+      fileTest: () => (dir: string) => dir === 'projects/-f',
+      appendOnly: (rel: string) => rel.endsWith('.jsonl'),
+      holdsDir: (rel: string) => rel === 'projects/-f',
+    }
+    let fail = false
+    const carry = async () => { if (fail) throw new Error('no records now'); return { root: eng, place, stagingDir: path.join(sb.root, 'carry-staging') } }
+    runner = startStandbyRunner({ settings: async () => ({ on: true, home: sb.home, dir: sb.target, intervalSeconds: 3600 }), notify: async () => true, carry })
+    await runner.reconcile()
+    expect((await runner.runOnce())?.ok).toBe(true)
+    expect((await standbyStatus(path.join(sb.target, 'carry'))).batch).toBeGreaterThanOrEqual(1)
+    expect(fs.readFileSync(path.join(sb.target, 'carry', 'copy', 'projects', '-f', '00000000-0000-4000-8000-000000000001.jsonl'), 'utf8')).toBe('{"t":1}\n')
+    fail = true
+    expect((await runner.runOnce())?.ok).toBe(true)
+    runner.stop()
+
+    const host = fakeStandbyHost(sb.root)
+    const target = path.join(sb.root, 'remote-target')
+    fail = false
+    runner = startStandbyRunner({ settings: async () => ({ on: true, home: sb.home, dir: target, host: 'standby-box', intervalSeconds: 3600 }), notify: async () => true, connect: async () => host.link, carry })
+    await runner.reconcile()
+    expect((await runner.runOnce())?.ok).toBe(true)
+    expect((await standbyStatus(path.join(target, 'carry'))).batch).toBeGreaterThanOrEqual(1)
+  }, 60_000)
+
   it('stopped with chunks still waiting to go to a standby host, it sends nothing more there', async () => {
     sb = await sandbox('remote-stop')
     dbs.push(...seedHome(sb.home).dbs)

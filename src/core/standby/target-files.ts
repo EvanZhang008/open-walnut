@@ -51,6 +51,14 @@ export function targetPaths(root: string): TargetPaths {
   }
 }
 
+/**
+ * The target of a second place a standby carries beside the copy (scan.ts CarrySource: the sessions' engine records
+ * of a leader switch), inside the standby folder.
+ */
+export function carryTargetDir(dir: string): string {
+  return path.join(dir, 'carry')
+}
+
 export function chunkPath(t: TargetPaths, id: string): string {
   if (!CHUNK_ID.test(id)) throw new Error(`not a chunk id: ${id}`)
   return path.join(t.chunks, id.slice(0, 2), id)

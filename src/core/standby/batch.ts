@@ -23,11 +23,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
-import { isAppendOnlyHomePath } from '../home-manifest/index.js'
 import { RoundFailed, VoidBatch, fsClock, newStats, type BatchOptions, type BatchOutcome, type BatchRun } from './batch-run.js'
 import { hasCopy, recordRead, runRound } from './batch-round.js'
 import { changeRuleOf } from './change-rules.js'
-import { limiter, scanHome, type ScanResult } from './scan.js'
+import { limiter, placeOf, scanHome, type ScanResult } from './scan.js'
 import { STAGING_NAME, removeDeadOwners } from './scratch.js'
 import { stageFile, type StageOutcome } from './stage.js'
 import { STANDBY_FORMAT, STANDBY_VERSION, compareBatchPaths, type BatchManifest } from './types.js'
@@ -41,7 +40,7 @@ export { VoidBatch, RoundFailed, databaseStat, type BatchOptions, type BatchOutc
  */
 async function catchUp(run: BatchRun, s1: ScanResult): Promise<number> {
   const need = [...s1.files.values()].filter((e) => {
-    const rule = changeRuleOf(e.p, { db: e.db, appendOnly: isAppendOnlyHomePath(e.p) })
+    const rule = changeRuleOf(e.p, { db: e.db, appendOnly: placeOf(run.opts).appendOnly(e.p) })
     return (rule === 'quiet-through-moment' || rule === 'content-addressed') && !hasCopy(run, e)
   })
   if (!need.length) return 0
@@ -96,7 +95,7 @@ export async function takeBatch(opts: BatchOptions): Promise<BatchOutcome> {
       // The clock before the walk: a dir whose ctime is at or past this may have gained a name
       // in the same tick the walk listed it (a tick is coarse), so the hold lists it again.
       const scanClock = await fsClock(stagingDir, opts.home)
-      const s1 = await scanHome(opts.home)
+      const s1 = await scanHome(opts.home, placeOf(opts))
       stats.passes++
       stats.scanMs = s1.ms
       if (s1.unreadable.length) throw new VoidBatch(`cannot read ${s1.unreadable.slice(0, 5).join(', ')}`)

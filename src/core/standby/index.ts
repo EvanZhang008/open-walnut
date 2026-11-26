@@ -26,7 +26,8 @@ export async function localTransport(dir: string): Promise<StandbyTarget & Stand
   return target
 }
 
-export { checkTargetPlace } from './target-files.js'
+export { carryTargetDir, checkTargetPlace } from './target-files.js'
+export { HOME_PLACE, type CarrySource, type CopyPlace } from './scan.js'
 
 /** One batch from `home` to the local target `dir`. */
 export async function snapshotTo(home: string, dir: string, opts: Partial<Omit<BatchOptions, 'home' | 'transport'>> = {}): Promise<BatchOutcome> {

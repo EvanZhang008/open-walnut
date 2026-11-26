@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { COPY_SUFFIX, homeEntries, homePathClass, type DataClass } from '../home-manifest/index.js'
+import { COPY_SUFFIX, homeEntries, homePathClass, isAppendOnlyHomePath, type DataClass } from '../home-manifest/index.js'
 import { isNotCopiedDir, isNotCopiedPath } from './change-rules.js'
 import type { SourceStat } from './types.js'
 
@@ -90,6 +90,30 @@ export function makeBatchFileTest(): (dir: string, name: string) => boolean {
   return (dir, name) => fileClass(dir, name) === 'leader-data' && !isNotCopiedPath(dir ? `${dir}/${name}` : name)
 }
 
+/**
+ * What a batch walks and how it reads each file. A batch of the home walks by its manifest (HOME_PLACE, the default
+ * of every batch); a leader switch's carry of the sessions' engine records walks another root by its own place
+ * (core/leader/switch/session-carry.ts). The kinds' rules (change-rules.ts) are the same for every place.
+ */
+export interface CopyPlace {
+  /** A dir the walk enters ('' is the root, always entered). */
+  dirMayHold(rel: string): boolean
+  /** The test of a file in a walked dir: made once per walk (it may cache per dir). */
+  fileTest(): (dir: string, name: string) => boolean
+  /** A file that only grows: taken up to its mark in the round (append-only.ts). */
+  appendOnly(rel: string): boolean
+  /** A dir the batch lists as a dir of the copy when no file of the batch lies under it (batch-dirs.ts). */
+  holdsDir(rel: string): boolean
+}
+
+/** The home, by the data-location manifest: what every batch walked before places existed. */
+export const HOME_PLACE: CopyPlace = {
+  dirMayHold: dirMayHoldLeaderData,
+  fileTest: makeBatchFileTest,
+  appendOnly: isAppendOnlyHomePath,
+  holdsDir: (rel) => homePathClass(rel) === 'leader-data',
+}
+
 export function toSourceStat(st: { size: number; mtimeMs: number; ctimeMs: number; ino: number }): SourceStat {
   return { s: st.size, m: st.mtimeMs, c: st.ctimeMs, i: st.ino }
 }
@@ -130,15 +154,23 @@ export async function isSqliteFile(abs: string): Promise<boolean> {
   }
 }
 
-/** Walk `home` and return every `leader-data` file, and every dir walked. */
-export async function scanHome(home: string): Promise<ScanResult> {
+/** The place a batch walks: its own, else the home's. */
+/** A second place a batch carries beside the home (runner.ts, the leader switch): its root, what it walks, its clock's staging dir. */
+export interface CarrySource { root: string; place: CopyPlace; stagingDir: string }
+
+export function placeOf(o: { place?: CopyPlace }): CopyPlace {
+  return o.place ?? HOME_PLACE
+}
+
+/** Walk `home` and return every file `place` takes (the home's: every `leader-data` file), and every dir walked. */
+export async function scanHome(home: string, place: CopyPlace = HOME_PLACE): Promise<ScanResult> {
   const start = performance.now()
   const files = new Map<string, ScanEntry>()
   const dirs = new Map<string, DirStat>()
   const unreadable: string[] = []
   const dirSlot = limiter(32)
   const statSlot = limiter(256)
-  const isBatchFile = makeBatchFileTest()
+  const isBatchFile = place.fileTest()
   const candidates: Array<{ rel: string; abs: string }> = []
 
   const walk = async (rel: string): Promise<void> => {
@@ -159,7 +191,7 @@ export async function scanHome(home: string): Promise<ScanResult> {
     for (const e of entries) {
       const child = rel ? `${rel}/${e.name}` : e.name
       if (e.isDirectory()) {
-        if (dirMayHoldLeaderData(child)) subdirs.push(walk(child))
+        if (place.dirMayHold(child)) subdirs.push(walk(child))
       } else if (e.isFile()) {
         if (isBatchFile(rel, e.name)) candidates.push({ rel: child, abs: path.join(abs, e.name) })
       }

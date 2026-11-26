@@ -14,7 +14,6 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { isAppendOnlyHomePath } from '../home-manifest/index.js'
 import { holdRound, recordRead, type HoldView, type RoundPlan } from './batch-hold.js'
 import { momentDirs } from './batch-dirs.js'
 import { placePaths } from './batch-place.js'
@@ -22,7 +21,7 @@ import { RoundFailed, VoidBatch, fileEntry, type BatchRun } from './batch-run.js
 import { changeRuleOf, isContentAddressed } from './change-rules.js'
 import type { FileDigest } from './chunks.js'
 import { missingRefTips } from './git-tips.js'
-import { sameStat, scanHome, type ScanEntry, type ScanResult } from './scan.js'
+import { placeOf, sameStat, scanHome, type ScanEntry, type ScanResult } from './scan.js'
 import { openPinWorker, type PinWorker } from './sqlite-pin.js'
 import { stageFile } from './stage.js'
 import type { BatchFile } from './types.js'
@@ -53,7 +52,7 @@ export function hasCopy(run: BatchRun, e: ScanEntry): boolean {
 function planRound(run: BatchRun, s1: ScanResult, round: number): RoundPlan {
   const dbs = [...s1.files.values()].filter((e) => e.db).sort((a, b) => a.p.localeCompare(b.p))
   const plain = [...s1.files.values()].filter((e) => !e.db)
-  const appendOnly = plain.filter((e) => isAppendOnlyHomePath(e.p)).map((e) => e.p)
+  const appendOnly = plain.filter((e) => placeOf(run.opts).appendOnly(e.p)).map((e) => e.p)
   const appendSet = new Set(appendOnly)
   // Hot: changed lately, or a read of it was not taken. Each is likely to change again, so the
   // hold reads its stat, which then proves (or not) the copy the batch holds.
@@ -126,7 +125,7 @@ export async function runRound(run: BatchRun, s1: ScanResult, scanClock: number,
     await worker.close()
     stats.pinMs = performance.now() - view.pinnedFrom
     for (const rel of later) recordRead(run, await stageFile(rel, view.ctx, run.send), round, plan.failed)
-    const s2 = await scanHome(home)
+    const s2 = await scanHome(home, placeOf(run.opts))
     stats.rescanMs = s2.ms
     if (s2.unreadable.length) throw new VoidBatch(`cannot read ${s2.unreadable.slice(0, 5).join(', ')}`)
     await placePaths(run, plan, view, s2, out)
@@ -137,7 +136,7 @@ export async function runRound(run: BatchRun, s1: ScanResult, scanClock: number,
     }
     const missing = await missingRefTips(home, out)
     if (missing.length) throw new RoundFailed(`git's ${missing.slice(0, 3).join(', ')}, which the batch does not hold`)
-    return { files: out, dirs: momentDirs(view.names, s1, s2, out.keys()), pinnedAt: view.pin.pinnedAt }
+    return { files: out, dirs: momentDirs(view.names, s1, s2, out.keys(), placeOf(run.opts)), pinnedAt: view.pin.pinnedAt }
   } finally {
     await (worker as PinWorker | null)?.close().catch(() => {})
   }

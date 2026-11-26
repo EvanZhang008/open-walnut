@@ -19,6 +19,8 @@ import { log } from '../../logging/index.js'
 import { setWriteGateEnabled } from '../../utils/write-gate.js'
 import { snapshotTo, standbyStatus, takeBatch, verifyStandby, type BatchOutcome, type BatchStats, type DriftReport } from './index.js'
 import { RemoteStandbyTarget, type DaemonLink } from './remote-transport.js'
+import type { CarrySource } from './scan.js'
+import { carryTargetDir } from './target-files.js'
 
 const SUBSCRIBER = 'standby-runner'
 const BEHIND_MS = 5 * 60_000
@@ -50,6 +52,12 @@ export interface StandbyRunnerDeps {
   behindMs?: number
   /** After each complete batch (`takenAt`: its moment): the leader switch's cleanup (default: afterSwitchCleanup). */
   afterBatch?(home: string, takenAt: string): Promise<void>
+  /**
+   * A second place whose batches ride each complete batch of the home, into `<dir>/carry` (default: the engine records
+   * of the sessions in the data home, core/leader/switch/session-carry.ts carrySource), or null for none now. Its
+   * failure is only logged: the leader switch's final batch takes it again, and fails the switch stop if it cannot.
+   */
+  carry?(home: string): Promise<CarrySource | null>
 }
 
 /** Where the batches go: a folder here, or one on a standby host. */
@@ -68,6 +76,8 @@ interface StandbySite {
   seen?(): { batch: number; takenAt: string } | null | undefined
   /** How far the batch under way got (its chunks sent, its apply), or null. */
   progress?(): string | null
+  /** One batch of a carry source into the site's carry target. */
+  carry(src: CarrySource): Promise<BatchOutcome>
 }
 
 function localSite(home: string, dir: string): StandbySite {
@@ -79,12 +89,14 @@ function localSite(home: string, dir: string): StandbySite {
       const s = await standbyStatus(dir)
       return s.batch !== null && s.takenAt ? { batch: s.batch, takenAt: s.takenAt } : null
     },
+    carry: (src) => snapshotTo(src.root, carryTargetDir(dir), { place: src.place, stagingDir: src.stagingDir }),
   }
 }
 
 function remoteSite(home: string, host: string, dir: string, walnut: string[] | undefined, connect: (host: string) => Promise<DaemonLink>, linkWaitMs?: number): StandbySite {
   // Chunks wait to go in the home's rebuildable scratch (remote-spool.ts), never in memory.
   const target = new RemoteStandbyTarget({ connect: () => connect(host), dir, walnut, spoolDir: path.join(home, 'tmp', 'standby-spool'), ...(linkWaitMs ? { linkWaitMs } : {}) })
+  let carryTarget: RemoteStandbyTarget | null = null
   return {
     label: `${host}:${dir}`,
     // The home's own scratch (tmp/ is rebuildable): staging never reaches the copy.
@@ -96,7 +108,11 @@ function remoteSite(home: string, host: string, dir: string, walnut: string[] | 
     },
     current: async () => (await target.state()).current,
     unreachable: () => target.unreachable,
-    close: () => target.close(),
+    close: () => { target.close(); carryTarget?.close() },
+    carry: (src) => {
+      carryTarget ??= new RemoteStandbyTarget({ connect: () => connect(host), dir: carryTargetDir(dir), walnut, spoolDir: path.join(home, 'tmp', 'standby-carry-spool'), ...(linkWaitMs ? { linkWaitMs } : {}) })
+      return takeBatch({ home: src.root, place: src.place, transport: carryTarget, stagingDir: src.stagingDir })
+    },
     seen: () => target.seen,
     progress: () => target.progress(),
   }
@@ -125,6 +141,7 @@ export async function defaultStandbyDeps(): Promise<StandbyRunnerDeps> {
     },
     notify: async () => false,
     afterBatch: afterSwitchCleanup(),
+    carry: async (home) => (await import('../leader/switch/session-carry.js')).carrySource(home),
   }
 }
 
@@ -260,6 +277,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         if (now !== undefined) known = now
       }
       if (out?.ok && !ended) await d.afterBatch?.(s.home, out.manifest.takenAt).catch((err) => log.session.warn('standby: after-batch cleanup failed', { error: String(err) }))
+      if (out?.ok && !ended && !away && d.carry) await carryOnce(d.carry)
       const status = known
       const stale = old(status)
       // A batch that just landed is progress, even one that took long to send: never a new "behind".
@@ -279,6 +297,18 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         d.onRecovered?.()
       }
       return out
+    }
+    /** One batch of the carry source, if there is one now; its failure is only logged. */
+    const carryOnce = async (carry: NonNullable<StandbyRunnerDeps['carry']>): Promise<void> => {
+      try {
+        const src = await carry(s.home)
+        if (!src || ended) return
+        const c = await site.carry(src)
+        if (c.ok) log.session.debug('standby: carry batch committed', { batch: c.manifest.batch, files: c.stats.files, unchanged: c.commit.unchanged })
+        else log.session.info('standby: carry batch void', { reason: c.reason })
+      } catch (err) {
+        log.session.warn('standby: carry batch failed', { error: err instanceof Error ? err.message : String(err) })
+      }
     }
     const runOnce = (): Promise<BatchOutcome | null> => {
       running ??= once().finally(() => { running = null })

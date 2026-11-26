@@ -5,10 +5,14 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { BatchFile, BatchManifest, CommitResult, SourceStat, StandbyTransport } from './types.js'
+import type { CopyPlace } from './scan.js'
 
 export interface BatchOptions {
+  /** The root the batch copies: the home, or another place's root (`place`). */
   home: string
   transport: StandbyTransport
+  /** What the batch walks under `home` (default: the home by its manifest, scan.ts HOME_PLACE). */
+  place?: CopyPlace
   /** A dir of this machine on the home's filesystem, for the clock probe (emptied after each batch). */
   stagingDir: string
   /**

@@ -13,7 +13,7 @@ import { markAppendOnly, type AppendMark } from './append-only.js'
 import { RoundFailed, VoidBatch, databaseStat, fsClock, proofEntry, type BatchRun } from './batch-run.js'
 import { changeRuleOf, isObjectStoreDir } from './change-rules.js'
 import type { ChunkSink } from './chunks.js'
-import { limiter, sameStat, toSourceStat, type ScanEntry, type ScanResult } from './scan.js'
+import { limiter, placeOf, sameStat, toSourceStat, type ScanEntry, type ScanResult } from './scan.js'
 import { namesAtMoment, type MomentNames } from './moment-names.js'
 import type { Pin, PinWorker } from './sqlite-pin.js'
 import { stageFile, type StageContext, type StageOutcome } from './stage.js'
@@ -146,7 +146,7 @@ export async function holdRound(run: BatchRun, plan: RoundPlan, pinner: PinWorke
       })))
       stats.heldStatFiles = hot.length
       await readInHold([...held].filter(([rel, st]) => st.c < moment && changedSince(rel, st)).map(([rel, st]) => ({ rel, size: st.s })))
-      const names = await namesAtMoment(home, s1, moment, scanClock)
+      const names = await namesAtMoment(home, s1, moment, scanClock, placeOf(run.opts))
       // A dir that also changed after the moment: a name made and removed around it is in
       // neither listing, so its names then cannot be told. Git's object store is the exception
       // (change-rules.ts isObjectStoreDir): its names are placed one by one (batch-place.ts).

@@ -14,9 +14,8 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { homePathClass } from '../home-manifest/index.js'
 import type { MomentNames } from './moment-names.js'
-import type { ScanResult } from './scan.js'
+import { HOME_PLACE, type CopyPlace, type ScanResult } from './scan.js'
 import { closeDirs, openDirs, pruneEmptyParents, removeEmptyDirs } from './target-files.js'
 
 const parentOf = (rel: string): string => {
@@ -32,13 +31,13 @@ export function dirsAbove(paths: Iterable<string>): Set<string> {
 }
 
 /** The batch's dirs: leader dirs of the moment no file of the batch lies under, the deepest only, sorted. */
-export function momentDirs(names: MomentNames, s1: ScanResult, s2: ScanResult, files: Iterable<string>): string[] {
+export function momentDirs(names: MomentNames, s1: ScanResult, s2: ScanResult, files: Iterable<string>, place: CopyPlace = HOME_PLACE): string[] {
   const covered = dirsAbove(files)
   const dirs: string[] = []
   for (const rel of new Set([...s1.dirs.keys(), ...s2.dirs.keys()])) {
     // The home itself, a dir a file lies under, and a dir the walk entered only because a
     // leader path lies below it (not leader data itself) are not listed.
-    if (!rel || covered.has(rel) || homePathClass(rel) !== 'leader-data') continue
+    if (!rel || covered.has(rel) || !place.holdsDir(rel)) continue
     const existed = names.existed(rel)
     if (existed === false || (existed === null && !s2.dirs.has(rel))) continue
     dirs.push(rel)

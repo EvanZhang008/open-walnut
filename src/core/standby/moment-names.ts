@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isContentAddressed, isObjectStoreDir } from './change-rules.js'
-import { DB_NAME, dirMayHoldLeaderData, limiter, makeBatchFileTest, toSourceStat, type ScanResult } from './scan.js'
+import { DB_NAME, HOME_PLACE, limiter, toSourceStat, type CopyPlace, type ScanResult } from './scan.js'
 import type { SourceStat } from './types.js'
 
 interface DirAtMoment {
@@ -66,10 +66,10 @@ function scanNames(s1: ScanResult): Map<string, Set<string>> {
 }
 
 /** Read inside the hold, after the moment (`momentMs`); `scanClock` was read just before the scan, both on the filesystem's clock. */
-export async function namesAtMoment(home: string, s1: ScanResult, momentMs: number, scanClock: number): Promise<MomentNames> {
+export async function namesAtMoment(home: string, s1: ScanResult, momentMs: number, scanClock: number, place: CopyPlace = HOME_PLACE): Promise<MomentNames> {
   const start = performance.now()
   const slot = limiter(64)
-  const isBatchFile = makeBatchFileTest()
+  const isBatchFile = place.fileTest()
   const fromScan = scanNames(s1)
   const changed = new Map<string, DirAtMoment | 'gone'>()
   const listed: string[] = []
@@ -92,7 +92,7 @@ export async function namesAtMoment(home: string, s1: ScanResult, momentMs: numb
     for (const e of entries) {
       const child = rel ? `${rel}/${e.name}` : e.name
       if (e.isDirectory()) {
-        if (!dirMayHoldLeaderData(child)) continue
+        if (!place.dirMayHold(child)) continue
         names.add(e.name)
         if (!s1.dirs.has(child)) fresh.push(child)
       } else if (e.isFile() && isBatchFile(rel, e.name)) {
