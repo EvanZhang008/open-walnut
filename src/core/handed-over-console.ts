@@ -27,6 +27,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { machineIdFile } from './machine-id.js'
+import { LEADER_SWITCH_MARKER_REL } from '../lib/leader-home-gate.js'
 
 export interface HandedOverConsole {
   v: 1
@@ -137,9 +138,9 @@ export function consolesOfHome(home: string, dir = consoleDir()): HandedOverCons
   return out
 }
 
-/** The leader switch's handed-over marker of a home (leader/switch/records.ts markerFile, the same path). */
+/** The leader switch's handed-over marker of a home (lib/leader-home-gate.ts: the one definition of its place). */
 export function handedOverMarkerFile(home: string): string {
-  return path.join(home, 'local', 'leader-switch', 'handed-over.json')
+  return path.join(home, LEADER_SWITCH_MARKER_REL)
 }
 
 /** A home that handed the leader over, or is handing it over: it carries the switch's marker. */

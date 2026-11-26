@@ -19,14 +19,18 @@
  *  - the server's spawners (integrations/git-children.ts refuseGitInQuiet: git-sync, the bundle client) refuse one
  *    under a 'handed-over' marker (`serverGitWriteRefusal`); during the switch the leader still runs its git sync
  *    until its stop, whose quiet (quietGitWriters) refuses every git from then on.
- * tests/core/leader/switch/switch-stop-writers-ratchet.test.ts pins every git runner of src/ to one of these.
+ *  - the daemon twins' session starts (daemon-session-start.ts startSessionProcess, acp-daemon.ts acpStart) refuse a
+ *    CLI or ACP worker whose working folder is in a marked home of either state (`handedOverHomeAt`, async): Walnut's
+ *    main agent works in the home, and the switch stop ended its sessions there; cron recovery, turn retries and host
+ *    resumes start through the same place.
+ * tests/core/leader/switch/switch-stop-writers-ratchet.test.ts pins every git runner of src/ to one of the git rules.
  *
  * Leaf module: node's fs and path only.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** The marker's place in a data home (records.ts markerFile builds it from this). */
+/** The marker's place in a data home (records.ts markerFile and handed-over-console.ts build it from this). */
 export const LEADER_SWITCH_MARKER_REL = path.join('local', 'leader-switch', 'handed-over.json')
 
 /**
@@ -116,29 +120,76 @@ function gitDirOf(argv: readonly string[], cwd: string): string {
 
 export interface LeaderHomeMark { home: string; state: 'switching' | 'handed-over' }
 
+/** A marked home with the marker's `to` (the machine the lead goes or went to) when the marker reads. */
+export interface HandedOverHome extends LeaderHomeMark { to?: string }
+
+/** A read error that means "no marker here": a missing file, or a missing folder on the way. */
+function noMarker(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/**
+ * The mark of `home` from its marker's text; null text = a marker that exists but cannot be read (EACCES, EIO, a
+ * folder where the file should be). Either that or a torn file marks the home as handed over (records.ts readMarker:
+ * never "not handed over"): a wrong refusal costs one snapshot or one start, a wrong pass the old home.
+ */
+function markOf(home: string, text: string | null): HandedOverHome {
+  const parsed = ((): { state?: unknown; to?: unknown } | null => {
+    try { return text === null ? null : JSON.parse(text) as { state?: unknown; to?: unknown } | null } catch { return null /* torn */ }
+  })()
+  const state: LeaderHomeMark['state'] = parsed?.state === 'switching' ? 'switching' : 'handed-over'
+  const to = typeof parsed?.to === 'string' && parsed.to ? parsed.to : undefined
+  return { home, state, ...(to ? { to } : {}) }
+}
+
 /** The marker of the data home at `dir` or above it (a repo inside a home: plugins/<x>), or null. */
-export function leaderHomeMarkAt(dir: string): LeaderHomeMark | null {
+export function leaderHomeMarkAt(dir: string): HandedOverHome | null {
   let at = path.resolve(dir)
   for (;;) {
-    const file = path.join(at, LEADER_SWITCH_MARKER_REL)
-    let text: string | null = null
     try {
-      text = fs.readFileSync(file, 'utf8')
+      return markOf(at, fs.readFileSync(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      // Only a missing file (or a missing folder on the way) is no marker; a marker that cannot be read (EACCES, EIO,
-      // a folder where the file should be) refuses: a wrong refusal costs one snapshot, a wrong pass the old home.
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') return { home: at, state: 'handed-over' }
-    }
-    if (text !== null) {
-      // A marker that cannot be read marks the home as handed over (records.ts readMarker: never "not handed over").
-      let state: LeaderHomeMark['state'] = 'handed-over'
-      try { if ((JSON.parse(text) as { state?: unknown }).state === 'switching') state = 'switching' } catch { /* torn */ }
-      return { home: at, state }
+      if (!noMarker(err)) return markOf(at, null)
     }
     const up = path.dirname(at)
     if (up === at) return null
     at = up
+  }
+}
+
+/**
+ * The session spawn guard (the daemon twins' session start and acpStart, capability
+ * leader-switch-home-stop-v1): the marked data home at the real path of `cwd` or above it, or null.
+ * By folder only (never by "homes this daemon knows"), async fs only, so the start path does no sync IO;
+ * fail-closed as leaderHomeMarkAt. A cwd that does not resolve (gone) is walked as given.
+ */
+export async function handedOverHomeAt(cwd: string): Promise<HandedOverHome | null> {
+  let at: string
+  try { at = await fs.promises.realpath(cwd) } catch { at = path.resolve(cwd) }
+  for (;;) {
+    try {
+      return markOf(at, await fs.promises.readFile(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
+    } catch (err) {
+      if (!noMarker(err)) return markOf(at, null)
+    }
+    const up = path.dirname(at)
+    if (up === at) return null
+    at = up
+  }
+}
+
+/** The error code a refused session start carries (the reply's `code`; its `errorKind` is the lower-case form). */
+export const HOME_HANDED_OVER_CODE = 'HOME_HANDED_OVER'
+
+/** What a start refused by handedOverHomeAt answers: its words and the fields the server shows. */
+export function homeHandedOverRefusal(what: string, mark: HandedOverHome): { error: string; code: string; errorKind: 'home_handed_over'; reason: 'home_handed_over'; home: string; state: HandedOverHome['state']; to?: string } {
+  const where = mark.to ? ` to machine ${mark.to}` : ''
+  const why = mark.state === 'switching' ? `a leader switch is moving it${where}` : `it was handed over${where}`
+  return {
+    error: `${what}: refused, the working folder is in the Walnut data home ${mark.home} and ${why} (local/leader-switch/handed-over.json); the session runs on the new leader`,
+    code: HOME_HANDED_OVER_CODE, errorKind: 'home_handed_over', reason: 'home_handed_over',
+    home: mark.home, state: mark.state, ...(mark.to ? { to: mark.to } : {}),
   }
 }
 

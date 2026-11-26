@@ -6,9 +6,10 @@ import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { daemonGitWriteRefusal, gitArgvWrites, gitSubcommand, leaderHomeMarkAt, LEADER_SWITCH_MARKER_REL, readOnlyGitEnv, serverGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, gitArgvWrites, gitSubcommand, handedOverHomeAt, homeHandedOverRefusal, leaderHomeMarkAt, LEADER_SWITCH_MARKER_REL, readOnlyGitEnv, serverGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
 import { markerFile } from '../../src/core/leader/switch/records.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
+import { handedOverMarkerFile } from '../../src/core/handed-over-console.js'
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-home-gate-'))
 afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }))
@@ -53,8 +54,9 @@ describe('which git argv writes', () => {
 })
 
 describe('the marker of a data home', () => {
-  it('is the one records.ts writes', () => {
+  it('is the one records.ts writes and the handed-over console reads', () => {
     expect(markerFile('/h')).toBe(path.join('/h', LEADER_SWITCH_MARKER_REL))
+    expect(handedOverMarkerFile('/h')).toBe(markerFile('/h'))
   })
 
   it('found at the dir or above it; a torn one reads as handed over; none elsewhere', () => {
@@ -87,6 +89,58 @@ describe('the marker of a data home', () => {
     expect(daemonGitWriteRefusal(['git', '-C', over, 'add', '-A'], free)).toMatch(/handed over/)
     expect(serverGitWriteRefusal(['commit', '-m', 'x'], switching)).toBeNull()
     expect(serverGitWriteRefusal(['commit', '-m', 'x'], over)).toMatch(/git commit refused/)
+  })
+})
+
+describe('the session spawn guard (handedOverHomeAt)', () => {
+  it('finds the home at the real path of the cwd or above it, with the state and the machine it went to', async () => {
+    const h = fs.realpathSync(home('g-switching', JSON.stringify({ switchId: 's1', state: 'switching', to: 'machine-b', at: 'now' })))
+    expect(await handedOverHomeAt(h)).toEqual({ home: h, state: 'switching', to: 'machine-b' })
+    expect(await handedOverHomeAt(path.join(h, 'plugins', 'p'))).toEqual({ home: h, state: 'switching', to: 'machine-b' })
+    const over = fs.realpathSync(home('g-over', JSON.stringify({ state: 'handed-over', to: 'machine-c' })))
+    expect(await handedOverHomeAt(over)).toEqual({ home: over, state: 'handed-over', to: 'machine-c' })
+    // The sync walk of the git rule reads the same mark.
+    expect(leaderHomeMarkAt(over)).toEqual({ home: over, state: 'handed-over', to: 'machine-c' })
+    // A link into the home is followed: the folder decides, not the path it was named by.
+    const link = path.join(ROOT, 'g-link')
+    fs.symlinkSync(path.join(h, 'plugins'), link)
+    expect(await handedOverHomeAt(path.join(link, 'p'))).toEqual({ home: h, state: 'switching', to: 'machine-b' })
+  })
+
+  it('by folder: a neighbour whose name starts with the home is not in it', async () => {
+    const h = home('g-nb', JSON.stringify({ state: 'handed-over', to: 'm' }))
+    const neighbour = h + '-c'
+    fs.mkdirSync(path.join(neighbour, 'x'), { recursive: true })
+    expect(await handedOverHomeAt(neighbour)).toBeNull()
+    expect(await handedOverHomeAt(path.join(neighbour, 'x'))).toBeNull()
+    expect(await handedOverHomeAt(home('g-none'))).toBeNull()
+  })
+
+  it('fail closed: a torn marker or one that cannot be opened marks the home as handed over, with no machine', async () => {
+    const torn = fs.realpathSync(home('g-torn', '{"state":"swi'))
+    expect(await handedOverHomeAt(torn)).toEqual({ home: torn, state: 'handed-over' })
+    const unreadable = fs.realpathSync(home('g-unreadable'))
+    fs.mkdirSync(path.join(unreadable, LEADER_SWITCH_MARKER_REL), { recursive: true })
+    expect(await handedOverHomeAt(unreadable)).toEqual({ home: unreadable, state: 'handed-over' })
+    // A file where a folder on the way should be (ENOTDIR) is no marker.
+    const f = home('g-notdir')
+    fs.writeFileSync(path.join(f, 'local'), 'a file')
+    expect(await handedOverHomeAt(f)).toBeNull()
+  })
+
+  it('a cwd that does not resolve is walked as given', async () => {
+    const h = fs.realpathSync(home('g-gone', JSON.stringify({ state: 'switching', to: 'm2' })))
+    expect(await handedOverHomeAt(path.join(h, 'no', 'such', 'dir'))).toEqual({ home: h, state: 'switching', to: 'm2' })
+  })
+
+  it('a refusal names the home, the state and the machine, as fields the server shows', () => {
+    expect(homeHandedOverRefusal('start', { home: '/h', state: 'switching', to: 'mb' })).toEqual({
+      error: expect.stringMatching(/^start: refused, .*\/h .*a leader switch is moving it to machine mb/),
+      code: 'HOME_HANDED_OVER', errorKind: 'home_handed_over', reason: 'home_handed_over', home: '/h', state: 'switching', to: 'mb',
+    })
+    const torn = homeHandedOverRefusal('acpStart', { home: '/h', state: 'handed-over' })
+    expect(torn).not.toHaveProperty('to')
+    expect(torn.error).toMatch(/it was handed over \(/)
   })
 })
 
