@@ -15,9 +15,17 @@ test.setTimeout(90_000)
 
 const NAV = (id: string) => `settings-nav-${id}`
 
+/**
+ * Settings, with its nav settled. A pane gate not known yet stays open (settings-pane-gates.ts,
+ * since 5ebe427b21): macOS Access shows until GET /api/config says `macAccess: false`, then goes.
+ * A count read before that answer drew (C23's `before`, in Linux WebKit every time) is one too many.
+ */
 async function openSettings(page: Page, hash = '') {
   await page.goto(`/settings${hash}`)
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
+  // The server's own answer (a hash-only goto loads nothing, so no response of the page's to wait for).
+  const { macAccess } = await page.evaluate(async () => (await (await fetch('/api/config')).json()) as { macAccess?: boolean })
+  await expect(page.getByTestId(NAV('permissions'))).toHaveCount(macAccess === false ? 0 : 1)
 }
 
 async function clickNav(page: Page, id: string) {
