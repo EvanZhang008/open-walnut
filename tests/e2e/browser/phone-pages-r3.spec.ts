@@ -190,7 +190,10 @@ test('N2-19: a routine row with an error keeps every line at 12 px and every con
   const smallComposer = await findSmallTargets(page, '.routines-view')
   expect(smallComposer, JSON.stringify(smallComposer)).toEqual([])
   // One title (the bar's) and a description without a dash.
-  await expect(page.locator('.page-header .page-title', { hasText: 'Routines' })).toBeHidden()
+  // The page's own title stays for screen readers only (page-head.css, .page-name): a 1 px box.
+  const title = page.locator('.page-header .page-title', { hasText: 'Routines' })
+  await expect(title).toBeAttached()
+  expect(await title.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(1)
   expect(await page.locator('.page-header').innerText()).not.toMatch(/[\u2013\u2014]/)
   expect(await view.locator('textarea').first().evaluate((el) => getComputedStyle(el).resize)).toBe('none')
   await shot(page, 'n2-19-routine-error')

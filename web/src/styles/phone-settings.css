@@ -35,16 +35,7 @@
     background: var(--bg);
   }
 
-  /* The top bar already says Settings: the nav's own title is for screen readers. */
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-nav-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
+  /* The top bar already says Settings: the nav's own title is a .page-name (page-head.css). */
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-nav-find-button {
     display: none;

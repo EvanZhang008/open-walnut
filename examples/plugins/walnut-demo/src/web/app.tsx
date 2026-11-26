@@ -58,7 +58,7 @@ export function DemoApp(props: DemoAppProps) {
       <header className="wd-header">
         <div>
           <span className="wd-kicker">Native plugin app</span>
-          <h1 className="page-title">{demo.walnut.pluginName}</h1>
+          <h1 className="page-title page-name">{demo.walnut.pluginName}</h1>
           <p>
             Every public plugin capability, driven from one app. Each trigger reports a receipt, and the
             demo only ever touches what it owns.

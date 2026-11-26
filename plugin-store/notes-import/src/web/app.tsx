@@ -34,7 +34,7 @@ export function ImportApp(props: AppProps & { walnut: WalnutWebApi; store: Impor
   return (
     <div className="ni-root" data-testid="ni-app">
       <header>
-        <h1 className="page-title">Import notes</h1>
+        <h1 className="page-title page-name">Import notes</h1>
         <p className="ni-lede">Bring your pages in from Notion as Walnut notes. Run it again any time to bring in only what changed.</p>
       </header>
       {!state && !loadError && <p className="ni-muted">Loading…</p>}

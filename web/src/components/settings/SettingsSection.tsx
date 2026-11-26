@@ -77,7 +77,7 @@ function PaneHeader({ title, description, actions }: { title: string; descriptio
     <header className="settings-pane-header" ref={setLeadHeader}>
       {meta && <SettingsPaneTile meta={meta} />}
       <div className="settings-pane-heading">
-        <h2 className="page-title settings-pane-title" id={`${paneId}-title`} tabIndex={-1}>
+        <h2 className="page-title page-name settings-pane-title" id={`${paneId}-title`} tabIndex={-1}>
           {meta?.title ?? title}
         </h2>
         {hasContent(desc) && <p className="page-subtitle settings-pane-desc">{desc}</p>}

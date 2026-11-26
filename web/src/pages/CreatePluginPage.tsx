@@ -64,7 +64,7 @@ export function CreatePluginPage() {
     <div className="create-plugin-page" data-testid="create-plugin-page">
       <header className="create-plugin-hero">
         <p className="create-plugin-kicker">Plugins</p>
-        <h1 className="page-title">Build your own Walnut app</h1>
+        <h1 className="page-title page-name">Build your own Walnut app</h1>
         <p className="create-plugin-lede">
           Describe what you want and an AI session builds it as a plugin: a new app in
           your sidebar, new tools for the AI, or both. Or build it yourself with the

@@ -967,7 +967,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   return (
     <div className="notes-tree-panel">
       <div className="notes-tree-header" data-fit-header="">
-        <h3 className="pane-title" data-fit-title="">Notes</h3>
+        <h3 className="pane-title page-name" data-fit-title="">Notes</h3>
         <div className="notes-tree-actions" data-fit-actions="">
           <button
             className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"

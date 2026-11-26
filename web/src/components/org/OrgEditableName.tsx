@@ -14,16 +14,22 @@ interface Props {
   className?: string;
   testId: string;
   maxLength?: number;
+  /** Always the field (a settings row): Enter or leaving it saves, Escape puts the saved name back. */
+  asField?: boolean;
 }
 
-export function OrgEditableName({ value, label, onSave, className = '', testId, maxLength = 60 }: Props) {
-  const [editing, setEditing] = useState(false);
+export function OrgEditableName({ value, label, onSave, className = '', testId, maxLength = 60, asField = false }: Props) {
+  const [editingNow, setEditing] = useState(false);
+  const editing = asField || editingNow;
   const [draft, setDraft] = useState(value);
   const [failed, setFailed] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   // Once per edit: Escape, or an Enter whose field then blurs as it goes away, is not a second save.
   const cancelled = useRef(false);
-  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
+  useEffect(() => { if (editingNow) input.current?.select(); }, [editingNow]);
+  // A field shows the saved name while it is not being changed (a rename elsewhere, a save's answer).
+  const focused = useRef(false);
+  useEffect(() => { if (asField && !focused.current && !failed) setDraft(value); }, [asField, value, failed]);
 
   if (!editing) {
     return (
@@ -37,18 +43,20 @@ export function OrgEditableName({ value, label, onSave, className = '', testId, 
     );
   }
   const commit = () => {
+    focused.current = false;
     setEditing(false);
-    if (cancelled.current) return;
-    cancelled.current = true;
+    if (cancelled.current) { cancelled.current = asField ? false : cancelled.current; return; }
+    cancelled.current = !asField;
     const next = draft.replace(/\s+/g, ' ').trim();
     if (next === value) return;
+    setFailed(false);
     onSave(next).catch(() => setFailed(true));
   };
-  return (
+  const field = (
     <MicInput data-no-draft="rename"
       ref={input}
-      className={`org-name-input ${className}`}
-      fieldClassName="mic-field-compact mic-field-grow"
+      className={`${asField ? 'org-name-field' : 'org-name-input'} ${className}`}
+      fieldClassName={asField ? 'mic-field-grow' : 'mic-field-compact mic-field-grow'}
       data-testid={`${testId}-input`}
       aria-label={`Rename ${label}`}
       value={draft}
@@ -58,9 +66,21 @@ export function OrgEditableName({ value, label, onSave, className = '', testId, 
       // Enter saves once a name still being dictated is in (the box's send gate).
       onEnter={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelled.current = true; setEditing(false); }
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation(); cancelled.current = true; setEditing(false);
+          if (asField) { setDraft(value); setFailed(false); input.current?.blur(); }
+        }
       }}
+      onFocus={() => { focused.current = true; }}
       onBlur={commit}
     />
+  );
+  if (!asField) return field;
+  // A field has no button to wear the failure: it says it under the field, and the words stay to try again.
+  return (
+    <>
+      {field}
+      {failed && <span className="org-thread-error org-name-failed" role="alert" data-testid={`${testId}-failed`}>Not saved. Press Enter to try again.</span>}
+    </>
   );
 }

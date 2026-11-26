@@ -163,8 +163,13 @@ export function appNavigateTarget(appPath: string, target: string): string {
 
 /** Is `pathname` this app's page? Its subtree counts unless the app is exact (or Home). */
 export function appPathMatches(app: Pick<RegisteredApp, 'path' | 'exactPath'>, pathname: string): boolean {
-  if (app.path === '/' || app.exactPath) return pathname === app.path
-  return pathname === app.path || pathname.startsWith(`${app.path}/`)
+  // As the router matches it: any case, and a trailing slash (`/APPS/` is the Apps page).
+  let decoded = pathname
+  try { decoded = decodeURI(pathname) } catch { /* a malformed escape reads as written */ }
+  const at = decoded.toLowerCase().replace(/(.)\/+$/, '$1')
+  const own = app.path.toLowerCase()
+  if (own === '/' || app.exactPath) return at === own
+  return at === own || at.startsWith(`${own}/`)
 }
 
 export class AppRegistry {

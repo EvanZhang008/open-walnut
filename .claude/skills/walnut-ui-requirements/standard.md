@@ -551,8 +551,17 @@ around it.
   ("New agent", "Add host"), on a page, in a menu or in a dialog.
 - A centred card that stands alone on an empty screen (a sign-in, an unlock, a first run) is not a
   page head and keeps its own heading.
+- On a phone the top bar names the page, every page (`pageNameOf`,
+  `web/src/components/layout/page-name.ts`: an app's title, else the routed page's name; never
+  "Walnut" for a page that has a name). A title that is the page's name wears `.page-name`, and
+  `page-head.css` keeps it for screen readers only there: the page never says its name twice. Its
+  sentence and keys stay, the New key at the end of the sentence's first line.
 - Guard: `tests/web/page-head-guard.test.ts` (every `h1` in the console and the shipped plugins is a
-  page or pane title, no other stylesheet sets their type, no typed "+" or Title Case create key).
+  page or pane title, no other stylesheet sets their type, no typed "+" or Title Case create key;
+  every routed page has a bar name, every title that is a page's name is a `.page-name`, and no
+  other stylesheet hides a title). Source for the phone rule: the audit at 390 px on 2026-11-26,
+  when the bar read "Walnut" on Org, Memory, Agents and Commands and five pages wrote their name
+  again under it.
   Source: the UI audit of 2026-11-26 on the user's data, when page titles came in five sizes (28,
   26, 24, 22, 20 px), pane titles in four sizes and two weights, and the New key three ways.
 

@@ -305,9 +305,6 @@
     flex: none;
     overflow: visible;
   }
-  .app-shell-navigation .notes-tree-pane .notes-tree-header > h3 {
-    display: none;
-  }
   .app-shell-navigation .notes-tree-pane .notes-tree-header {
     justify-content: flex-end;
   }
@@ -386,19 +383,10 @@
 }
 
 /* N20: a Settings pane on a phone. The top bar already names the pane, so the
-   pane's own heading stays for screen readers only (and keeps its focus
-   target). Switches take the iOS size, checkboxes a 22 px box whose label row
+   pane's own heading stays for screen readers only (it is a .page-name: page-head.css),
+   and keeps its focus target; its tile goes with it. Switches take the iOS size, checkboxes a 22 px box whose label row
    (the whole row toggles it) is at least 44 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-header .settings-pane-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-header .settings-pane-tile {
     display: none;
   }

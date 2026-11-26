@@ -415,31 +415,10 @@
   .app-shell-navigation .routines-view .routine-fold {
     margin-top: 0;
   }
-  /* The first screen on a phone is the list: the top bar names the page, so the
-     page's title and sentence go, and New routine sits at the end of the count's line,
-     where it was before it moved onto the title's line on a wide screen. */
-  .app-shell-navigation .routines-view:has(> .routines-page-head) {
-    position: relative;
-  }
-  .app-shell-navigation .routines-page-head .page-header-text {
-    display: none;
-  }
-  .app-shell-navigation .routines-page-head {
-    position: absolute;
-    top: 0;
-    right: 0;
-    margin: 0;
-  }
-  /* Level with the count: none of the page head's pull toward a title (page-head.css). */
-  .app-shell-navigation .routines-view > .routines-page-head > .btn.new-key {
-    margin-block: 0;
-  }
-  .app-shell-navigation .routines-view:has(> .routines-page-head > .btn) > .routines-toolbar {
-    min-height: 44px;
-    padding-right: 140px;
-  }
-  .app-shell-navigation .routines-page-head:not(:has(> .btn)) {
-    display: none;
+  /* The top bar names the page, so the page's title goes (page-head.css, .page-name); its
+     sentence stays, with New routine at the end of its first line, as on every page head. */
+  .app-shell-navigation .routines-view > .routines-page-head {
+    margin-bottom: 4px; /* with the view's 12 px gap, a phone page head's 16 (page-head.css) */
   }
 }
 

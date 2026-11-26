@@ -25,6 +25,7 @@
 import { appOnSidebar, type AppPreferences, type SidebarDefault } from '@/apps/preferences'
 import type { RegisteredApp } from '@/apps/registry'
 import { railItemKey, type RailItemId } from '@/apps/rail-items'
+import { SHELL_PAGE_NAMES } from '@/components/layout/page-name'
 
 /**
  * The name of this section and of its filter chip: Walnut's own pages, whose parts go on the
@@ -100,7 +101,7 @@ const CORE_COPY: Readonly<Record<string, Copy>> = {
  * (no owner: Org). A new rail item must say which, or this does not type-check.
  */
 const RAIL_PARTS: Readonly<Record<RailItemId, { title: string; kind: AppPartKind; owner?: string; path: string; line?: string; tint?: string }>> = {
-  org: { title: 'Org', kind: 'page', path: '/org', line: 'The CEO and the VPs', tint: '#30B0C7' },
+  org: { title: SHELL_PAGE_NAMES['/org'], kind: 'page', path: '/org', line: 'The CEO and the VPs', tint: '#30B0C7' },
   'home-todo': { title: 'Task panel', kind: 'home-panel', owner: 'home', path: '/', line: 'The task list on Home' },
   'home-chat': { title: 'Quick question', kind: 'home-panel', owner: 'home', path: '/', line: 'Ask your Personal AI anything' },
   'home-agenda': { title: 'Agenda', kind: 'side-bar', owner: 'calendar', path: '/', line: "Today's calendar, on Home or beside any page" },

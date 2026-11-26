@@ -18,6 +18,9 @@ import { log } from '@/utils/log';
 import { ORG_OFF_LINE, orgSwitchTitle, useOrgSwitch } from './useOrgSwitch';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { DIRECTORS_LAYOUT_LABEL, DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, DIRECTORS_PROJECTS_LABEL, directorsLayoutHelp, useDirectorSettings } from './useDirectorSettings';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { OrgEditableName } from './OrgEditableName';
+import { useOrgSettings } from './useOrgSettings';
 import '@/styles/org-rail.css';
 
 export function OrgSettingsMenu() {
@@ -27,10 +30,16 @@ export function OrgSettingsMenu() {
   const navigate = useNavigate();
   const { on, busy, error, set, clearError } = useOrgSwitch();
   const dir = useDirectorSettings();
+  // On a phone the top bar names the page and the list's title, where the org is renamed on a wider
+  // screen, is for screen readers only (page-head.css, .page-name): the name is renamed here instead.
+  const phone = usePhoneLayout();
+  const org = useOrgSettings();
   const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'right', minHeight: 200, onAnchorLost: () => setOpen(false) });
   useOverlayLayer({
     open,
     refs: [menuRef, btnRef],
+    // The name field takes Escape first (it keeps the old name), then the panel closes on the next.
+    closeOnEscape: () => 'if-unclaimed',
     onClose: (reason) => { setOpen(false); if (reason === 'escape') btnRef.current?.focus({ preventScroll: true }); },
   });
   const flip = (next: boolean) => {
@@ -53,7 +62,7 @@ export function OrgSettingsMenu() {
       {open && createPortal(
         <div
           ref={menuRef}
-          className="org-answer-menu org-settings-menu wn-overlay"
+          className={`org-answer-menu org-settings-menu wn-overlay${phone ? ' is-phone-layer' : ''}`}
           role="dialog"
           aria-label="Org settings"
           data-testid="org-settings-menu"
@@ -71,6 +80,12 @@ export function OrgSettingsMenu() {
             <ToggleSwitch id="org-settings-enabled" data-testid="org-settings-enabled" checked={on} busy={busy} onChange={flip} />
           </div>
           {error && <div className="org-thread-error" role="alert" data-testid="org-settings-error">{error}</div>}
+          {phone && (
+            <div className="org-settings-row" data-testid="org-settings-name">
+              <span className="org-settings-label"><strong>Name</strong></span>
+              <OrgEditableName value={org.settings.name} label="the org" onSave={(v) => org.save({ name: v })} testId="org-name" asField />
+            </div>
+          )}
           {dir.on && (
             <div className="org-settings-directors" data-testid="org-settings-directors">
               <div className="org-settings-row" title={directorsLayoutHelp(dir.layout)}>

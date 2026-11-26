@@ -466,7 +466,7 @@ export function SettingsPaneSkeleton({ meta }: { meta: SettingsPaneMeta }) {
       <header className="settings-pane-header">
         <SettingsPaneTile meta={meta} />
         <div className="settings-pane-heading">
-          <h2 className="page-title settings-pane-title" id={`${meta.id}-title`} tabIndex={-1}>
+          <h2 className="page-title page-name settings-pane-title" id={`${meta.id}-title`} tabIndex={-1}>
             {meta.title}
           </h2>
           {meta.description && <p className="page-subtitle settings-pane-desc">{meta.description}</p>}

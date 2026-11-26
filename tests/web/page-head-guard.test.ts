@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { walk, scanCss } from './css-scan';
 import { pluginCss, lastCompoundClasses } from './ui-standard-scan';
+import { SHELL_PAGE_NAMES, NO_PAGE_NAME } from '../../web/src/components/layout/page-name';
 
 const ROOT = path.join(__dirname, '../..');
 const HOME = 'web/src/styles/page-head.css';
@@ -97,6 +98,33 @@ function sheets(): [string, string][] {
   return [...css, ...plugins];
 }
 
+/**
+ * Routes App.tsx draws that are no page of their own, so the phone bar has no name for them.
+ * Path -> why.
+ */
+const ROUTE_NO_NAME: Record<string, string> = {
+  '/': 'Home: an app (core-app-list.ts), drawn beside the routes, so its name is the app title',
+  '/tasks/:id': 'a redirect component: it lands on Home, whose app title the bar shows',
+  '/sessions': 'a redirect component: it lands on Home, whose app title the bar shows',
+  '/open-ref': 'a hand-off card opened from another app, centred on an empty page (H1_NOT_A_HEAD)',
+  '/connect-extension': 'the extension pairing card centred on an empty page (H1_NOT_A_HEAD)',
+  '/apps/:appId/*': 'a plugin app: every one is in the app catalog, and the bar shows its title',
+};
+
+/** Every name the phone bar can show for a page: the core apps' titles, the routed pages', and each
+ *  shipped plugin's name and app titles (its manifest). */
+function pageNames(): Set<string> {
+  const apps = fs.readFileSync(path.join(ROOT, 'web/src/apps/core-app-list.ts'), 'utf8');
+  const titles = [...apps.matchAll(/\btitle: '([^']+)'/g)].map((m) => m[1]);
+  const plugins = ['plugin-store', 'examples/plugins'].flatMap((r) => fs.readdirSync(path.join(ROOT, r))
+    .map((d) => path.join(ROOT, r, d, 'manifest.json')).filter((f) => fs.existsSync(f)))
+    .flatMap((f) => [...fs.readFileSync(f, 'utf8').matchAll(/"(?:name|title)":\s*"([^"]+)"/g)].map((m) => m[1]));
+  // A plugin's own page (`ui.page({ path, title })`): the bar shows its title.
+  const pluginPages = ['plugin-store', 'examples/plugins'].flatMap((r) => walk(path.join(ROOT, r), ['.ts', '.tsx']))
+    .flatMap((f) => [...fs.readFileSync(f, 'utf8').matchAll(/\bpath:\s*[^,\n]+,\s*(?:[\w]+:[^,\n]+,\s*)*?title:\s*'([^']+)'/g)].map((m) => m[1]));
+  return new Set([...titles, ...Object.values(SHELL_PAGE_NAMES), ...plugins, ...pluginPages]);
+}
+
 describe('page heads: one title look and one New key look', () => {
   it('every <h1> is a page title or a pane title', () => {
     const off = h1Tags().filter((h) => !/\b(page|pane)-title\b/.test(h.tag) && !H1_NOT_A_HEAD[h.file]);
@@ -154,6 +182,64 @@ describe('page heads: one title look and one New key look', () => {
       }
     }
     expect(off, 'A drawn plus (ICON_PLUS, or NewKey) and sentence case: "New agent", not "+ New Agent"').toEqual([]);
+  });
+
+  it('the phone bar has a name for every page the router draws', () => {
+    const app = code(fs.readFileSync(path.join(ROOT, 'web/src/App.tsx'), 'utf8'));
+    const routes = [...app.matchAll(/<Route\s+path="([^"]+)"\s+element=\{\s*(<\s*(\w+)|null)/g)]
+      .filter((m) => m[3] !== 'Navigate')
+      .map((m) => m[1]);
+    expect(routes.length).toBeGreaterThan(5);
+    const off = routes.filter((r) => !SHELL_PAGE_NAMES[r] && !ROUTE_NO_NAME[r]);
+    expect(off, `Name the page in SHELL_PAGE_NAMES (web/src/components/layout/page-name.ts): the phone bar reads "${NO_PAGE_NAME}" there now`).toEqual([]);
+    expect(Object.keys(ROUTE_NO_NAME).filter((r) => !routes.includes(r)), 'Drop these from ROUTE_NO_NAME').toEqual([]);
+    expect(Object.values(ROUTE_NO_NAME).every((why) => why.length >= 40)).toBe(true);
+  });
+
+  it('a title that is its page\'s name is a .page-name (the phone bar says it instead)', () => {
+    const names = pageNames();
+    const off: string[] = [];
+    for (const f of tsxFiles()) {
+      const src = code(fs.readFileSync(f, 'utf8'));
+      for (const m of src.matchAll(/<(h[1-6]|span|div|p)\b[^>]*className="([^"]*)"[^>]*>\s*([^<{]+?)\s*<\/\1>/g)) {
+        const cls = m[2].split(/\s+/);
+        const isHead = cls.some((c) => c === 'page-title' || c === 'pane-title') || /^h[1-3]$/.test(m[1]) || cls.some((c) => /kicker|eyebrow/.test(c));
+        if (isHead && names.has(m[3]) && !cls.includes('page-name')) off.push(`${rel(f)}:${lineAt(src, m.index ?? 0)} ${m[0].replace(/\s+/g, ' ')}`);
+      }
+    }
+    const header = fs.readFileSync(path.join(ROOT, 'web/src/components/common/PageHeader.tsx'), 'utf8');
+    if (!/<h1 className="page-title page-name">/.test(header)) off.push('PageHeader.tsx: its title is the page\'s name');
+    expect(off, 'Add className "page-name": on a phone the top bar names the page, so the page does not say it again').toEqual([]);
+  });
+
+  it('only page-head.css hides a page\'s name or a title', () => {
+    const companions = titleCompanions();
+    const owned = new Set(['page-title', 'pane-title', 'page-name', 'page-header-text', ...companions.keys()]);
+    // A narrow rail that folds every label to its icon, the title among them (not a phone rule).
+    const RAIL = /\.settings-nav:not\(\.is-overlay-open\)/;
+    const off: string[] = [];
+    for (const [file, text] of sheets()) {
+      if (file === HOME) continue;
+      for (const d of scanCss(file, text)) {
+        const hides = (d.prop === 'display' && /none/.test(d.value)) || d.prop === 'clip' || d.prop === 'clip-path' || (d.prop === 'visibility' && /hidden/.test(d.value));
+        if (!hides) continue;
+        for (const sel of d.selectors) {
+          if (RAIL.test(sel)) continue;
+          const inner = sel.match(/:is\(([^)]*)\)\s*$/)?.[1];
+          const classes = inner ? [...inner.matchAll(/\.([\w-]+)/g)].map((x) => x[1]) : lastCompoundClasses(sel);
+          if (classes.some((c) => owned.has(c))) off.push(`${file}:${d.line} ${sel.trim()} { ${d.prop}: ${d.value} }`);
+        }
+      }
+    }
+    // A title hidden by its tag in a view's head (`.notes-tree-header > h3`).
+    for (const [file, text] of sheets()) {
+      if (file === HOME) continue;
+      for (const d of scanCss(file, text)) {
+        if (d.prop !== 'display' || !/none/.test(d.value)) continue;
+        for (const sel of d.selectors) if (/(header|head)\b[^\s]*\s*>\s*h[1-3]\s*$/.test(sel.trim())) off.push(`${file}:${d.line} ${sel.trim()}`);
+      }
+    }
+    expect(off, 'Give the title className "page-name" (page-head.css hides it on a phone, for screen readers kept) instead of a rule of the view\'s own').toEqual([]);
   });
 
   it('finds each shape it guards', () => {

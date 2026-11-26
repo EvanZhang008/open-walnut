@@ -38,6 +38,7 @@ import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { FitButton } from '@/components/common/HeaderFit';
 import { ICON_ORG_CHART } from '@/components/common/Icons';
 import { useOrgSettings } from './useOrgSettings';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { SearchField } from '@/components/common/SearchField';
 import { OrgDirectorSection } from './OrgDirectorSection';
 import { OrgLeaders } from './OrgLeaders';
@@ -134,6 +135,9 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
   countRender('OrgChannelList');
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
+  // On a phone the top bar names the page and this title is for screen readers only (page-head.css,
+  // .page-name): a rename key there could take focus unseen, so the org is renamed in its settings panel.
+  const phone = usePhoneLayout();
   const sections = orgName.settings.directorsLayout === 'sections';
   const showProjects = orgName.settings.directorsShowProjects !== false;
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -185,8 +189,8 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
   return (
     <aside className="org-list" aria-label={orgName.settings.name}>
       <header className="org-list-head" data-fit-header="">
-        <h1 className="pane-title org-list-title" data-fit-title="">
-          <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
+        <h1 className="pane-title page-name org-list-title" data-fit-title="">
+          {phone ? orgName.settings.name : <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />}
         </h1>
         <span className="org-list-actions" data-fit-actions="">
           {/* Org chart is an icon with its name on hover (2026-11-21, the user: "org chart need to

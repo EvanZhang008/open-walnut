@@ -303,3 +303,71 @@ test('a tap on the page name scrolls the page to the top (Settings, a long page)
   await page.locator('.phone-topbar-title').click()
   await expect.poll(() => scroller.evaluate((el) => el.scrollTop), { timeout: 5_000 }).toBe(0)
 })
+
+// Standard "Page heads": on a phone the bar names every page, and the page never says its name a
+// second time (2026-11-26 at 390 px: the bar read "Walnut" on Org, Memory, Agents and Commands, and
+// those pages and Apps wrote their name again under it).
+test('the bar names each page once, and the page does not say it again', async ({ page }) => {
+  await bootHome(page)
+  const bar = page.locator('.phone-topbar-title-text')
+  const repeats = (name: string) => page.evaluate((n) => [...document.querySelectorAll<HTMLElement>(
+    'main h1, main h2, main h3, main .page-title, main .pane-title',
+  )].filter((e) => {
+    const r = e.getBoundingClientRect()
+    return r.width > 2 && r.height > 2 && getComputedStyle(e).visibility !== 'hidden' && (e.textContent || '').trim() === n
+  }).map((e) => e.className), name)
+  const check = async (name: string) => {
+    await expect(bar).toHaveText(name)
+    await expect.poll(() => repeats(name), { message: `${name} says its name under the bar` }).toEqual([])
+    // Still a heading for a screen reader.
+    await expect(page.getByRole('heading', { name, exact: true }).first()).toBeAttached()
+  }
+  await openDrawer(page)
+  await page.locator('[data-testid="sidebar-org"]').click()
+  await expect(page).toHaveURL(/\/org/)
+  await check('Org')
+  for (const [link, name] of [['Apps', 'Apps'], ['Settings', 'Settings']] as const) {
+    await openDrawer(page)
+    await page.locator('#primary-sidebar').getByRole('link', { name: link }).click()
+    await check(name)
+  }
+  for (const [id, name] of [['agents', 'Agents'], ['commands', 'Commands'], ['memory', 'Memory']] as const) {
+    await openDrawer(page)
+    await page.locator('#primary-sidebar').getByRole('link', { name: 'Settings' }).click()
+    await page.locator(`[data-testid="settings-nav-${id}"]`).click()
+    await check(name)
+  }
+})
+
+// On a phone the org is renamed in Org settings (its list title is the bar's): the bar follows the
+// name, Escape puts the saved name back, and a save the server refuses says so and keeps the words.
+test('the org is renamed in Org settings on a phone, and the bar follows its name', async ({ page }) => {
+  await bootHome(page)
+  await openDrawer(page)
+  await page.locator('[data-testid="sidebar-org"]').click()
+  const bar = page.locator('.phone-topbar-title-text')
+  await expect(bar).toHaveText('Org')
+  await page.getByTestId('org-settings').click()
+  const field = page.getByTestId('org-name-input')
+  await expect(field).toBeVisible()
+  expect((await field.boundingBox())!.height).toBeGreaterThanOrEqual(40)
+  // Escape: the saved name comes back, the panel stays.
+  await field.fill('Draft name')
+  await field.press('Escape')
+  await expect(field).toHaveValue('Org')
+  await expect(page.getByTestId('org-settings-menu')).toBeVisible()
+  // A refused save: said under the field, the words kept.
+  await page.route('**/api/v1/org/settings', (r) => (r.request().method() === 'PUT' ? r.fulfill({ status: 500, body: '{"error":"no"}' }) : r.continue()))
+  await field.fill('Garden team')
+  await field.press('Enter')
+  await expect(page.getByTestId('org-name-failed')).toBeVisible()
+  await expect(field).toHaveValue('Garden team')
+  // Saved: the bar names the page as the org is named. Then back to Org.
+  await page.unroute('**/api/v1/org/settings')
+  await field.press('Enter')
+  await expect(bar).toHaveText('Garden team')
+  await expect(page.getByTestId('org-name-failed')).toHaveCount(0)
+  await field.fill('Org')
+  await field.press('Enter')
+  await expect(bar).toHaveText('Org')
+})

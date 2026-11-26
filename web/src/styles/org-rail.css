@@ -139,3 +139,9 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-settings-all { align-self: flex-start; }
 /* With the Directors on: how they are listed (useDirectorSettings), one row each. */
 .org-settings-directors { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* The org's name in Org settings (a phone, where the list's title is the top bar's): a plain field
+   (standard "Field") beside its label. */
+.org-settings-menu .org-settings-row > .mic-field:has(.org-name-field) { flex: 1 1 auto; min-width: 0; max-width: 220px; }
+.org-settings-menu .org-settings-row:has(.org-name-failed) { flex-wrap: wrap; }
+.org-settings-menu .org-name-failed { flex-basis: 100%; }

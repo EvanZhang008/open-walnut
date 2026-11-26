@@ -24,6 +24,7 @@ import { SettingsPaneTile, useFailedPanes, type SettingsPaneMeta } from './setti
 import { WAY_PANES } from './settings-way-panes'
 import { tunnelSubtitle, useTunnelName } from './sections/cloud/tunnel-name'
 import { APPS_PATH } from '@/utils/open-link'
+import { SHELL_PAGE_NAMES } from '@/components/layout/page-name'
 import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
@@ -45,9 +46,9 @@ export const NAV_GROUP_LABELS: Readonly<Record<NavGroup, string>> = {
 }
 
 const MANAGE_PAGES: ReadonlyArray<{ id: string; to: string; label: string; glyph: SettingsGlyphName; tint: string }> = [
-  { id: 'agents', to: '/agents', label: 'Agents', glyph: 'two-person', tint: '#5856D6' },
-  { id: 'commands', to: '/commands', label: 'Commands', glyph: 'slash-in-square', tint: '#636366' },
-  { id: 'memory', to: '/memory', label: 'Memory', glyph: 'bookmark-stack', tint: '#FF2D55' },
+  { id: 'agents', to: '/agents', label: SHELL_PAGE_NAMES['/agents'], glyph: 'two-person', tint: '#5856D6' },
+  { id: 'commands', to: '/commands', label: SHELL_PAGE_NAMES['/commands'], glyph: 'slash-in-square', tint: '#636366' },
+  { id: 'memory', to: '/memory', label: SHELL_PAGE_NAMES['/memory'], glyph: 'bookmark-stack', tint: '#FF2D55' },
 ]
 
 export interface NavRow {
@@ -373,7 +374,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
       className={`settings-nav${overlay ? ' is-overlay-open' : ''}${listScrolled ? ' is-list-scrolled' : ''}`}
       aria-label="Settings sections"
     >
-      <h1 className="pane-title settings-nav-title">Settings</h1>
+      <h1 className="pane-title page-name settings-nav-title">Settings</h1>
       <button
         type="button"
         className="btn btn-icon settings-nav-find-button"

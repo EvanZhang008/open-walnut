@@ -55,6 +55,7 @@ export function findPageScroller(): HTMLElement | null {
 }
 
 export interface PhoneTopBarProps {
+  /** The page's name (usePageName, page-name.ts: PageTopBar reads it for the shell). */
   pageTitle: string;
   menuRef: Ref<HTMLButtonElement>;
   menuExpanded: boolean;

@@ -338,3 +338,13 @@
     color: inherit;
   }
 }
+
+/* The top bar names the page (page-head.css, .page-name): a head whose title was the name keeps
+   only what else it holds. Org's list keeps its two keys at the right; Memory's list head held
+   only its title, so it closes to nothing (the title stays for screen readers) and the filter
+   starts the pane. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .org-list-head { justify-content: flex-end; }
+  .app-shell-navigation .memory-tree-header:has(> .page-name:only-child) { padding: 0; height: 0; border-bottom: 0; }
+  .app-shell-navigation .memory-tree-header:has(> .page-name:only-child) + .memory-tree-filter { padding-top: 0; }
+}

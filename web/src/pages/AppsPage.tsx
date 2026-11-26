@@ -194,7 +194,7 @@ function AppsPageBody() {
         <header className="apps-hero">
           <span className="apps-hero-icon" aria-hidden="true"><AppsIcon size={26} /></span>
           <div className="apps-hero-text">
-            <h1 className="page-title">Apps</h1>
+            <h1 className="page-title page-name">Apps</h1>
             <p className="page-subtitle">Plugins add features to Walnut, and apps are its pages on the sidebar. Open one to set it up.</p>
           </div>
           {/* One indicator, in whichever view is showing (the grid stays mounted, hidden). */}

@@ -184,6 +184,12 @@ describe('exact app paths', () => {
     expect(appPathMatches(apps, '/apps/walnut-time~main')).toBe(false)
     expect(appPathMatches({ path: '/notes' }, '/notes/a/b')).toBe(true)
     expect(appPathMatches({ path: '/' }, '/notes')).toBe(false)
+    // As the router matches: any case, a trailing slash (the phone bar names the page from this).
+    expect(appPathMatches(apps, '/APPS')).toBe(true)
+    expect(appPathMatches(apps, '/apps/')).toBe(true)
+    expect(appPathMatches(apps, '/%61pps')).toBe(true)
+    expect(appPathMatches({ path: '/routines' }, '/Routines')).toBe(true)
+    expect(appPathMatches({ path: '/' }, '/')).toBe(true)
   })
 
   it('finds the plugin App, not Apps, for a plugin App path', () => {

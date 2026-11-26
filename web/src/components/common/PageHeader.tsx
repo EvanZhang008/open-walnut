@@ -24,7 +24,7 @@ export function PageHeader({ title, subtitle, action, className }: PageHeaderPro
     // cutting (standard "Text that does not fit": titles wrap, only metadata cuts).
     <div className={className ? `page-header ${className}` : 'page-header'}>
       <div className="page-header-text">
-        <h1 className="page-title">{title}</h1>
+        <h1 className="page-title page-name">{title}</h1>
         {subtitle && <p className="page-subtitle">{subtitle}</p>}
       </div>
       {action}

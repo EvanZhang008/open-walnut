@@ -25,7 +25,29 @@
    (a page head, Mail's folder head); beside a title it keeps its middle on the title's. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .btn.new-key { min-height: 44px; }
-  .app-shell-navigation .page-header > .btn.new-key { margin-block: -10px; }
+  /* The title is the bar's (below): the key sits level with the first line under it. */
+  .app-shell-navigation .page-header > .btn.new-key { margin-block: 0; }
+  .app-shell-navigation .page-header { justify-content: flex-end; margin-bottom: 16px; }
+}
+
+/* A phone: the top bar names the page (PhoneTopBar, page-name.ts), so a title that is the page's
+   name (`.page-name`: a page head's title, a list pane's title that names its page, a Settings
+   pane's title under its Back) stays for screen readers only, and its sentence and keys stay.
+   2026-11-26, at 390 px: Org, Memory, Agents, Commands and Apps wrote their name a second time
+   under the bar; Notes, Routines and Settings each hid theirs with a rule of their own. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .page-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .app-shell-navigation .page-name + .page-subtitle { margin-top: 0; }
 }
 
 /* The title of a whole page (Routines, Agents, Apps, a Settings pane, a plugin's page). */

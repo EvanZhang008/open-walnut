@@ -28,7 +28,7 @@ import {
 import { useVisualViewportInset } from '@/hooks/useVisualViewportInset';
 import { useConnectionWatch, usePhoneResync } from '@/hooks/usePhoneResync';
 import { installStandaloneLinks } from '@/utils/standalone-links';
-import { PhoneTopBar } from './PhoneTopBar';
+import { PageTopBar } from './PageTopBar';
 import { AwayLine } from './AwayLine';
 import { ConnectionLine } from './ConnectionLine';
 import { PageSideBar } from './PageSideBar';
@@ -369,8 +369,9 @@ function AppShellInner({ children }: AppShellProps) {
           while the open drawer makes <main> inert, and above the drawer so the same
           button closes it. Every page starts below it, the full-bleed ones too. */}
       {isMobileSidebar && (
-        <PhoneTopBar
-          pageTitle={activeApp?.title ?? 'Walnut'}
+        <PageTopBar
+          pathname={location.pathname}
+          app={activeApp}
           menuRef={sidebarToggleRef}
           menuExpanded={sidebarOpen}
           onMenu={toggleSidebar}

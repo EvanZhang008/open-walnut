@@ -115,7 +115,7 @@ export async function activate(walnut: WalnutWebApi) {
     return (
       <div className="wd-root" data-testid="plugin-demo-auxiliary-page">
         <span className="wd-kicker">Native auxiliary page</span>
-        <h1 className="page-title">Plugin Demo auxiliary route</h1>
+        <h1 className="page-title page-name">Plugin Demo auxiliary page</h1>
         <p>This page came from <code>ui.page</code>. It has no separate Sidebar entry.</p>
         <a className="wd-button" href={demo.appPath || '/'}>Back to Plugin Demo</a>
       </div>
