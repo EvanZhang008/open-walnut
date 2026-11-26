@@ -6,6 +6,8 @@
 # when another user on this machine owns /tmp/open-walnut):
 #   open-walnut-<YYYY-MM-DD>.log   structured JSON, one obj per line (PRIMARY — has time/traceId/reqId)
 #   server.log                     human-readable mirror (HH:MM:SS LVL [subsystem] msg {json})
+# The local session daemon's own dir ($DAEMON_LOG_DIR: ~/.cache/open-walnut, or $LOG_DIR on an
+# install whose daemon still runs from there; scripts/lib/daemon-dir.sh):
 #   daemon-d-<pid>-<id>.log        per-daemon-instance JSON logs (remote/local session spawns)
 #   sessions.json                  session registry
 # Streams ($STREAMS_DIR, default ~/.open-walnut/tmp/streams; legacy /tmp fallback):
@@ -41,10 +43,22 @@
 # abort the whole script and print nothing for a valid-but-empty query.
 set -uo pipefail
 
-# The dir the server and its daemon use: /tmp/open-walnut, or ~/.cache/open-walnut
-# when another user on this machine owns that one (scripts/lib/daemon-dir.sh).
+# The server's log dir: /tmp/open-walnut, or ~/.cache/open-walnut when another user on
+# this machine owns that one (scripts/lib/daemon-dir.sh).
 . "$(dirname "${BASH_SOURCE[0]}")/lib/daemon-dir.sh"
-LOG_DIR="${WALNUT_LOG_DIR:-$(walnut_daemon_dir)}"
+LOG_DIR="${WALNUT_LOG_DIR:-$(walnut_log_dir)}"
+# The local session daemon's own dir (its daemon-d-*.log): the same dir on an older install or
+# when WALNUT_DAEMON_DIR names one, else ~/.cache/open-walnut.
+DAEMON_LOG_DIR="$(walnut_daemon_dir)"
+# Every daemon log, the daemon's own dir first, each file once.
+daemon_logs() {
+  local d f seen=""
+  for d in "$DAEMON_LOG_DIR" "$LOG_DIR"; do
+    case ":$seen:" in *":$d:"*) continue ;; esac
+    seen="$seen:$d"
+    for f in "$d"/daemon-d-*.log; do [[ -f "$f" ]] && printf '%s\n' "$f"; done
+  done
+}
 # Prod streams moved to ~/.open-walnut/tmp/streams (2026-08, reboot-surviving);
 # fall back to the legacy /tmp dir for pre-move sessions still writing there.
 if [[ -n "${WALNUT_STREAMS_DIR:-}" ]]; then
@@ -497,14 +511,14 @@ PY
   daemon)
     sid="${1:?usage: daemon <sid>}"
     echo "── daemon logs serving $sid ──"
-    for f in "$LOG_DIR"/daemon-d-*.log; do
+    while IFS= read -r f; do
       [[ -f "$f" ]] || continue
       if grep -aqF "$sid" "$f"; then
         echo; echo "### $f"
         grep -aF "$sid" "$f" | jq -rc '"\(.ts|sub("^.*T";"")|sub("\\..*$";""))  \(.msg)  \( {state:.newState,reason:.reason,pid:.pid}|tostring )"' 2>/dev/null \
           || grep -aF "$sid" "$f"
       fi
-    done
+    done < <(daemon_logs)
     ;;
 
   jsonl)
@@ -572,12 +586,12 @@ PY
 
     # 4. daemon.log.txt — sid lines across every daemon-d-*.log, labelled by file.
     : > "$dir/daemon.log.txt"
-    for f in "$LOG_DIR"/daemon-d-*.log; do
+    while IFS= read -r f; do
       [[ -f "$f" ]] || continue
       if grep -aqF "$sid" "$f"; then
         { echo "### $f"; grep -aF "$sid" "$f"; } >> "$dir/daemon.log.txt"
       fi
-    done
+    done < <(daemon_logs)
     if [[ -s "$dir/daemon.log.txt" ]]; then included+=("daemon.log.txt"); else
       rm -f "$dir/daemon.log.txt"; missing+=("daemon.log.txt: no daemon-d-*.log mentions $sid"); fi
 

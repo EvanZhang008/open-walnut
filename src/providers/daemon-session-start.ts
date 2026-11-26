@@ -511,6 +511,8 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
         // And the service state dir: a daemon a CLI starts (a test, a sandbox) is isolated,
         // and with this var it could reach the service daemon's journals and state.
         WALNUT_DAEMON_STATE_DIR: undefined,
+        // The server's images dir is this daemon's to know, not a daemon's that a CLI starts.
+        WALNUT_DAEMON_IMAGES_DIR: undefined,
         // A test server's isolated daemon (remote-isolation.ts) is this daemon's own identity: a
         // daemon a CLI starts (a nested test server's) must not claim it. Keep in sync with the twin.
         WALNUT_DAEMON_ISOLATED_FOR: undefined,

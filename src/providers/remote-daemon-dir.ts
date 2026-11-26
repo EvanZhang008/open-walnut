@@ -1,17 +1,18 @@
 /**
  * Where the session daemon keeps its runtime files on a remote host.
  *
- * The default is /tmp/open-walnut, and until now everything assumed it works.
- * It does not always: /tmp can be read-only, mounted noexec (the daemon binary
- * and the gateway shims cannot run there), full, or hold an open-walnut dir that
- * another user owns. When it is unusable the daemon moves to
- * $HOME/.cache/open-walnut instead of failing the connect.
+ * $HOME/.cache/open-walnut, which no temp cleanup empties (since 2026-11-26; lib/daemon-dir.ts
+ * tells why, and is the same rule for the machine the server runs on). It was /tmp/open-walnut,
+ * where the system's temp cleanup removed a running daemon's files after days of nobody touching
+ * them. /tmp/open-walnut is still used when the home dir cannot hold the daemon: no $HOME, read-only,
+ * mounted noexec (the daemon binary and the gateway shims cannot run there), full, or not ours.
  *
- * One ssh round trip (buildDaemonDirProbeScript, run through `sh -s`) answers
- * all of it: is a daemon already alive in either dir (that one wins, so a
- * reconnect never strands a running daemon), can /tmp/open-walnut be created,
- * written and executed from, and how much space is left. The cache dir is only
- * created when /tmp failed, so a healthy host never grows a stray ~/.cache dir.
+ * Nothing that runs is moved. One ssh round trip (buildDaemonDirProbeScript, run through `sh -s`)
+ * answers all of it: is a daemon alive in either dir (that one wins, so a reconnect never strands a
+ * running daemon), did a daemon of ours write its files in either since the host booted (sessions
+ * started there may still run: that one is kept, the later one when both, which also covers a
+ * daemon whose files the cleanup took), can the dir be created, written and executed from, and
+ * how much space is left. The dir that is not going to be used is not created.
  *
  * Streams are unaffected: a production daemon keeps them under
  * ~/.open-walnut/tmp/streams whichever dir it runs from, and the start env pins
@@ -22,6 +23,7 @@
 import path from 'node:path'
 import { shq } from './remote-sh.js'
 import { DAEMON_PID_SH } from './daemon-live-sh.js'
+import { DAEMON_STATE_MARKERS } from '../lib/daemon-dir.js'
 import { clause } from '../utils/format.js'
 
 export const PROD_REMOTE_DAEMON_DIR = '/tmp/open-walnut'
@@ -43,6 +45,8 @@ export interface DirProbe {
   freeMb?: number
   /** A daemon answers from this dir right now (pid alive, port file present). */
   live: boolean
+  /** When a daemon of ours last wrote its files there since the host booted (epoch seconds); 0 or absent: not since. */
+  usedAt?: number
 }
 
 export interface DaemonDirProbe {
@@ -57,9 +61,9 @@ export interface DaemonDirProbe {
 
 export interface DaemonDirChoice {
   path: string
-  /** True when the daemon runs from the $HOME fallback, not /tmp. */
+  /** True when the daemon runs from the $HOME dir, not /tmp (its start then names the dir: daemonDirEnv). */
   fallback: boolean
-  /** Why /tmp was not used, as a clause ("/tmp is read-only"). Fallback or unusable only. */
+  /** Why the home dir is not used, as a clause ("`~/.cache/open-walnut` is read-only"). On /tmp for that reason, or unusable, only. */
   reason?: string
   /** Free space where the chosen dir lives. */
   freeMb?: number
@@ -136,23 +140,47 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     'w_live() { if [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -O "$1/daemon.pid" ]; then p=$(cat "$1/daemon.pid" 2>/dev/null); '
       + 'if [ -n "$p" ] && [ -s "$1/daemon.port" ] && kill -0 "$p" 2>/dev/null && w_daemon "$p" "$1"; then echo 1; return; fi; fi; echo 0; }',
     `w_status() { ${check}; }`,
+    // Boot time in seconds (Linux /proc/stat, macOS kern.boottime; empty: not checked), and a file's mtime.
+    "w_boot=$(sed -n 's/^btime //p' /proc/stat 2>/dev/null)",
+    `[ -n "$w_boot" ] || w_boot=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ *sec = \\([0-9]*\\).*/\\1/p')`,
+    'w_mt() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }',
+    // When a daemon of ours last wrote its files in the dir since the boot (lib/daemon-dir.ts DAEMON_STATE_MARKERS), or 0.
+    'w_used() { n=0; if [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; then',
+    `  for f in ${DAEMON_STATE_MARKERS.join(' ')}; do g="$1/$f"`,
+    '    { [ -e "$g" ] && [ ! -d "$g" ] && [ ! -L "$g" ] && [ -O "$g" ]; } || continue',
+    '    m=$(w_mt "$g"); [ -n "$m" ] || continue',
+    '    if [ -n "$w_boot" ] && [ "$m" -lt $((w_boot - 5)) ] 2>/dev/null; then continue; fi',
+    '    [ "$m" -gt "$n" ] 2>/dev/null && n=$m',
+    '  done; fi; echo "$n"; }',
+    // Usable for the daemon: the check passed (or was not asked for) and the space is there.
+    `w_good() { { [ "$1" = ok ] || [ "$1" = unchecked ]; } && [ "\${2:-999999}" -ge ${min} ] 2>/dev/null; }`,
     'tl=$(w_live "$T")',
     'cl=0; [ -n "$C" ] && cl=$(w_live "$C")',
-    'ts=$(w_status "$T")',
-    'tf=$(w_free "$T")',
+    'tu=$(w_used "$T")',
+    'cu=0; [ -n "$C" ] && cu=$(w_used "$C")',
+    // The dir the daemon is going to use is checked first; the other one only when that one cannot hold it.
+    'first=C; [ -n "$C" ] || first=T',
+    'if [ "$tl" = 1 ]; then first=T; elif [ "$cl" = 1 ]; then first=C; elif [ "$tu" -gt "$cu" ] 2>/dev/null; then first=T; fi',
+    'ts=unchecked; tf=; cs=unchecked; cf=',
+    'if [ "$first" = T ]; then',
+    '  ts=$(w_status "$T"); tf=$(w_free "$T")',
+    '  if [ "$tl" != 1 ] && [ -n "$C" ] && ! w_good "$ts" "$tf"; then cs=$(w_status "$C"); cf=$(w_free "$C"); fi',
+    'else',
+    '  cs=$(w_status "$C"); cf=$(w_free "$C")',
+    '  if [ "$cl" != 1 ] && ! w_good "$cs" "$cf"; then ts=$(w_status "$T"); tf=$(w_free "$T"); fi',
+    'fi',
+    '[ -n "$tf" ] || tf=$(w_free "$T")',
     'echo "tmp_path=$T"',
     'echo "tmp_live=$tl"',
+    'echo "tmp_used=$tu"',
     'echo "tmp=$ts"',
     'echo "tmp_free_mb=$tf"',
     'echo "cache_path=$C"',
     'echo "cache_live=$cl"',
-    // The cache dir is only created when /tmp cannot take the daemon.
-    `if [ "$tl" != 1 ] && { [ "$ts" != ok ] && [ "$ts" != unchecked ] || [ "\${tf:-999999}" -lt ${min} ] || [ "$cl" = 1 ]; }; then`,
-    '  echo "cache=$(w_status "$C")"',
-    '  [ -n "$C" ] && echo "cache_free_mb=$(w_free "$C")"',
-    'else',
-    '  echo "cache=unchecked"',
-    'fi',
+    'echo "cache_used=$cu"',
+    '[ -n "$C" ] || cs=no-home',
+    'echo "cache=$cs"',
+    '[ -n "$cf" ] && echo "cache_free_mb=$cf"',
     `echo '${PROBE_DONE}'`,
   ].join('\n')
 }
@@ -184,56 +212,62 @@ export function parseDaemonDirProbe(output: string): DaemonDirProbe | null {
     ...(kv.get('arch') ? { arch: kv.get('arch') } : {}),
     ...(kv.get('os') ? { os: kv.get('os') } : {}),
     ...(kv.get('home') ? { home: kv.get('home') } : {}),
-    tmp: { path: kv.get('tmp_path') || PROD_REMOTE_DAEMON_DIR, status: asStatus(kv.get('tmp')), freeMb: asMb(kv.get('tmp_free_mb')), live: kv.get('tmp_live') === '1' },
-    cache: { path: cachePath, status: asStatus(kv.get('cache')), freeMb: asMb(kv.get('cache_free_mb')), live: kv.get('cache_live') === '1' },
+    tmp: { path: kv.get('tmp_path') || PROD_REMOTE_DAEMON_DIR, status: asStatus(kv.get('tmp')), freeMb: asMb(kv.get('tmp_free_mb')), live: kv.get('tmp_live') === '1', usedAt: asMb(kv.get('tmp_used')) ?? 0 },
+    cache: { path: cachePath, status: asStatus(kv.get('cache')), freeMb: asMb(kv.get('cache_free_mb')), live: kv.get('cache_live') === '1', usedAt: asMb(kv.get('cache_used')) ?? 0 },
   }
 }
 
-/** Why the daemon is not on /tmp, as a clause ("/tmp is read-only"). */
-export function describeTmpProblem(tmp: DirProbe, minFreeMb = MIN_DAEMON_FREE_MB): string {
-  switch (tmp.status) {
-    case 'read-only': return '/tmp is read-only'
-    case 'noexec': return '/tmp is mounted noexec'
-    case 'full': return '/tmp is full'
-    case 'permission-denied': return '/tmp/open-walnut is not writable (permission denied)'
-    case 'not-a-directory': return '/tmp/open-walnut is a file, not a directory'
-    case 'not-owned': return '/tmp/open-walnut belongs to another user (or is a symlink)'
+/** Why the daemon is not in the home dir, as a clause ("`~/.cache/open-walnut` is read-only"). */
+export function describeHomeProblem(cache: DirProbe, minFreeMb = MIN_DAEMON_FREE_MB): string {
+  const dir = `~/${FALLBACK_DAEMON_SUBDIR}`
+  switch (cache.status) {
+    case 'no-home': return 'this account has no home dir'
+    case 'read-only': return `${dir} is read-only`
+    case 'noexec': return 'the home dir is mounted noexec'
+    case 'full': return 'the home dir is full'
+    case 'permission-denied': return `${dir} is not writable (permission denied)`
+    case 'not-a-directory': return `${dir} is a file, not a directory`
+    case 'not-owned': return `${dir} belongs to another user (or is a symlink)`
     case 'ok':
     case 'unchecked':
-      if (typeof tmp.freeMb === 'number' && tmp.freeMb < minFreeMb) return `/tmp is nearly full (${tmp.freeMb} MB free)`
-      return 'a daemon started there earlier is still running'
-    default: return '/tmp is unusable'
+      if (typeof cache.freeMb === 'number' && cache.freeMb < minFreeMb) return `the home dir is nearly full (${cache.freeMb} MB free)`
+      return 'a daemon started in /tmp/open-walnut earlier may still hold sessions'
+    default: return `${dir} is unusable`
   }
 }
 
 /**
- * Pick the dir. A live daemon wins (never strand a running one), then a healthy
- * /tmp, then the $HOME fallback. A low disk alone is a readiness problem, not
- * a reason to move when the fallback is just as full.
+ * Pick the dir. A live daemon wins (never strand a running one), then the dir a daemon of ours
+ * wrote its files in since the host booted (the later one when both: its sessions may still run),
+ * then the home dir, then /tmp when the home dir cannot hold the daemon. A low disk alone is a
+ * readiness problem, not a reason to move when the other dir is just as full.
  */
 export function chooseDaemonDir(probe: DaemonDirProbe, minFreeMb = MIN_DAEMON_FREE_MB): DaemonDirChoice {
   const tmpPath = probe.tmp.path ?? PROD_REMOTE_DAEMON_DIR
   const cachePath = probe.cache.path
-  const tmpUsable = probe.tmp.status === 'ok' || probe.tmp.status === 'unchecked'
+  const usable = (d: DirProbe) => d.status === 'ok' || d.status === 'unchecked'
+  const tmpUsable = usable(probe.tmp)
+  const cacheUsable = !!cachePath && usable(probe.cache)
   const low = (mb?: number) => typeof mb === 'number' && mb < minFreeMb
-  const tmpChoice = (): DaemonDirChoice => ({ path: tmpPath, fallback: false, ...(probe.tmp.freeMb !== undefined ? { freeMb: probe.tmp.freeMb } : {}) })
-  const cacheChoice = (): DaemonDirChoice => ({
-    path: cachePath!, fallback: true, reason: describeTmpProblem(probe.tmp, minFreeMb),
-    ...(probe.cache.freeMb !== undefined ? { freeMb: probe.cache.freeMb } : {}),
-  })
+  const tmpChoice = (reason?: string): DaemonDirChoice => ({ path: tmpPath, fallback: false, ...(reason ? { reason } : {}), ...(probe.tmp.freeMb !== undefined ? { freeMb: probe.tmp.freeMb } : {}) })
+  const cacheChoice = (): DaemonDirChoice => ({ path: cachePath!, fallback: true, ...(probe.cache.freeMb !== undefined ? { freeMb: probe.cache.freeMb } : {}) })
 
   if (probe.tmp.live) return tmpChoice()
   if (probe.cache.live && cachePath) return cacheChoice()
-  if (tmpUsable && !low(probe.tmp.freeMb)) return tmpChoice()
-  if (cachePath && probe.cache.status === 'ok' && (!tmpUsable || !low(probe.cache.freeMb))) return cacheChoice()
-  if (tmpUsable) return tmpChoice()
-  return { ...tmpChoice(), unusable: true, reason: describeTmpProblem(probe.tmp, minFreeMb) }
+  const tmpUsed = probe.tmp.usedAt ?? 0
+  const cacheUsed = probe.cache.usedAt ?? 0
+  if (tmpUsed > cacheUsed && tmpUsable) return tmpChoice()
+  if (cacheUsed > 0 && cacheUsable) return cacheChoice()
+  if (cacheUsable && !low(probe.cache.freeMb)) return cacheChoice()
+  if (tmpUsable && (!cacheUsable || !low(probe.tmp.freeMb))) return tmpChoice(describeHomeProblem(probe.cache, minFreeMb))
+  if (cacheUsable) return cacheChoice()
+  return { ...tmpChoice(), unusable: true, reason: describeHomeProblem(probe.cache, minFreeMb) }
 }
 
 /**
- * Env for the daemon start when it runs from the fallback: the dir itself, and
- * the production streams dir pinned explicitly. Empty for /tmp (a default
- * install keeps the env-free start it always had).
+ * Env for the daemon start when it runs from the home dir: the dir itself, and
+ * the production streams dir pinned explicitly. Empty for /tmp (the env-free
+ * start it always had there).
  */
 export function daemonDirEnv(choice: DaemonDirChoice | null, home?: string): Record<string, string> {
   if (!choice?.fallback) return {}
@@ -248,13 +282,12 @@ export function displayDaemonDir(dir: string, home?: string): string {
   return dir
 }
 
-/** The preflight warning for a relocated daemon, or undefined when it runs from /tmp. */
+/** The preflight warning for a daemon that is not where it should be: on /tmp because the home dir cannot hold it, or nowhere. */
 export function daemonDirWarning(choice: DaemonDirChoice | null | undefined, home?: string): string | undefined {
-  if (!choice) return undefined
-  const reason = (choice.reason ?? '/tmp is unusable').replace(/(\/tmp\/open-walnut|\/tmp)\b/, '`$1`')
-  if (choice.unusable) return `Neither \`/tmp/open-walnut\` nor \`~/${FALLBACK_DAEMON_SUBDIR}\` can hold the session daemon (${reason}, and the home fallback failed too).`
-  if (!choice.fallback) return undefined
-  return `Using \`${displayDaemonDir(choice.path, home)}\` for the session daemon because ${clause(reason)}.`
+  if (!choice?.reason) return undefined
+  const reason = choice.reason.replace(/(~\/\.cache\/open-walnut|\/tmp\/open-walnut)(?![\w`])/g, '`$1`')
+  if (choice.unusable) return `Neither \`~/${FALLBACK_DAEMON_SUBDIR}\` nor \`/tmp/open-walnut\` can hold the session daemon (${reason}, and \`/tmp\` failed too).`
+  return `Using \`${displayDaemonDir(choice.path, home)}\` for the session daemon because ${clause(reason)}. The system's temp cleanup removes files there that nobody touched for days.`
 }
 
 /**

@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { RUNTIME_DIR_PREFIX, isCallerChosenRuntime, workerRuntimeDir } from './runtime-dir-choice.js'
+import { RUNTIME_DIR_PREFIX, isCallerChosenRuntime, pointsAtProductionRuntime, productionRuntimeDirs, workerRuntimeDir } from './runtime-dir-choice.js'
 import { sweepStaleTmpDirs } from './stale-tmp.js'
 
 const TMP = '/var/scratch-tmp'
@@ -39,6 +39,20 @@ describe('the dir a worker runs in', () => {
     for (const inherited of [undefined, '', '/tmp/open-walnut', '/tmp/open-walnut/sub', `${TMP}/${RUNTIME_DIR_PREFIX}1`, `/runner/_temp/x/${RUNTIME_DIR_PREFIX}7`]) {
       expect(workerRuntimeDir(inherited, 101, TMP), String(inherited)).toBe(`${TMP}/${RUNTIME_DIR_PREFIX}101`)
     }
+  })
+
+  // A daemon hands its dir to every session it starts, so a test run inside a Walnut session
+  // inherits the daemon's production dir, which is in the home since 2026-11-26 (src/lib/daemon-dir.ts).
+  it('the daemon\'s production dir in the home is production too: a temp dir of its own, never a dir inside it', () => {
+    const prod = productionRuntimeDirs(['/home/me', undefined, 'relative', '/home/me'])
+    expect(prod).toEqual(['/tmp/open-walnut', '/home/me/.cache/open-walnut'])
+    expect(pointsAtProductionRuntime('/home/me/.cache/open-walnut', prod)).toBe(true)
+    expect(pointsAtProductionRuntime('/home/me/.cache/open-walnut/x', prod)).toBe(true)
+    expect(pointsAtProductionRuntime('/home/me/.cache/open-walnut-test', prod)).toBe(false)
+    const own = path.join(os.userInfo().homedir, '.cache', 'open-walnut')
+    expect(workerRuntimeDir(own, 101, TMP)).toBe(`${TMP}/${RUNTIME_DIR_PREFIX}101`)
+    expect(workerRuntimeDir(`${own}/${RUNTIME_DIR_PREFIX}101`, 101, TMP)).toBe(`${TMP}/${RUNTIME_DIR_PREFIX}101`)
+    expect(isCallerChosenRuntime(own)).toBe(false)
   })
 
   it('a dir already its own is kept, wherever it lives', () => {

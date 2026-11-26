@@ -3,27 +3,30 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  DAEMON_STATE_MARKERS,
   SHARED_DAEMON_DIR,
   chooseLocalDaemonDir,
+  chooseLocalLogDir,
   exitTraceFileFor,
   isProductionDaemonDir,
   realDaemonDirDeps,
   userDaemonDir,
   type DaemonDirDeps,
 } from '../../src/lib/daemon-dir.js'
+import { GATEWAY_SOCKET_FILENAME } from '../../src/providers/gateway-core.js'
 
 const ME = 501
 const OTHER = 502
 const HOME = '/home/me'
 const CACHE = '/home/me/.cache/open-walnut'
 
-type Entry = { kind: 'dir' | 'file' | 'link'; uid: number; text?: string; mtimeMs?: number }
+type Entry = { kind: 'dir' | 'file' | 'link' | 'socket'; uid: number; text?: string; mtimeMs?: number }
 
 /** This machine booted at BOOT; files are written after it unless a test says otherwise. */
 const BOOT = 1_000_000_000_000
 
-/** A fake filesystem and process table: paths to entries, live pids. */
-function deps(files: Record<string, Entry>, live: number[] = [], uid: number | null = ME, platform = 'linux'): DaemonDirDeps {
+/** A fake filesystem and process table: paths to entries, live pids. `homeProblem`: why the home dir cannot hold the daemon. */
+function deps(files: Record<string, Entry>, live: number[] = [], uid: number | null = ME, platform = 'linux', homeProblem: string | null = null): DaemonDirDeps {
   return {
     lstat: (p) => {
       const e = files[p]
@@ -36,6 +39,7 @@ function deps(files: Record<string, Entry>, live: number[] = [], uid: number | n
     userName: () => 'me',
     platform,
     bootTimeMs: () => BOOT,
+    dirProblem: () => homeProblem,
   }
 }
 
@@ -53,34 +57,35 @@ function daemonIn(dir: string, pid: number, uid = ME): Record<string, Entry> {
   }
 }
 
+/** What a daemon that ran in `dir` left there (no pid file: one that runs inside the server, or whose files the cleanup took). */
+function stateIn(dir: string, names: string[] = ['daemon.instance', 'sessions.json'], mtimeMs = BOOT + 60_000, uid = ME): Record<string, Entry> {
+  const out: Record<string, Entry> = { [dir]: { kind: 'dir', uid } }
+  for (const name of names) out[`${dir}/${name}`] = { kind: name.endsWith('.sock') ? 'socket' : 'file', uid, mtimeMs }
+  return out
+}
+
 const env = { HOME }
 
-describe('chooseLocalDaemonDir', () => {
+describe('chooseLocalDaemonDir: the session daemon\'s own dir', () => {
   it('uses WALNUT_DAEMON_DIR as given, whatever /tmp holds', () => {
     const c = chooseLocalDaemonDir({ HOME, WALNUT_DAEMON_DIR: '/tmp/x' }, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } }))
-    expect(c).toEqual({ dir: '/tmp/x', explicit: true, fallback: false })
+    expect(c).toEqual({ dir: '/tmp/x', explicit: true, why: 'WALNUT_DAEMON_DIR names it' })
   })
 
-  it('uses /tmp/open-walnut on a fresh machine and for its owner', () => {
-    expect(chooseLocalDaemonDir(env, deps({})).dir).toBe(SHARED_DAEMON_DIR)
-    const c = chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME } }))
-    expect(c).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, fallback: false })
-  })
-
-  it('moves a second user to $HOME/.cache/open-walnut', () => {
-    const c = chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } }))
-    expect(c).toEqual({ dir: CACHE, explicit: false, fallback: true, reason: '/tmp/open-walnut belongs to another user' })
+  it('a fresh machine, and one whose /tmp/open-walnut holds only logs: the home dir, which no temp cleanup empties', () => {
+    expect(chooseLocalDaemonDir(env, deps({}))).toEqual({ dir: CACHE, explicit: false, why: 'no temp cleanup empties it' })
+    expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME } })).dir).toBe(CACHE)
+    expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } })).dir).toBe(CACHE)
   })
 
   it('never uses a symlink or a file at /tmp/open-walnut', () => {
     expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'link', uid: ME } })).dir).toBe(CACHE)
-    const file = chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'file', uid: ME } }))
-    expect(file).toMatchObject({ dir: CACHE, reason: '/tmp/open-walnut is not a directory' })
+    expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'file', uid: ME } }, [], ME, 'linux', 'it cannot be written')).dir).toBe(CACHE)
   })
 
-  it('keeps a running daemon where it is: the home dir even after /tmp/open-walnut is free again', () => {
-    const c = chooseLocalDaemonDir(env, deps(daemonIn(CACHE, 4242), [4242]))
-    expect(c).toMatchObject({ dir: CACHE, fallback: true, reason: 'the session daemon is running from there' })
+  it('a running daemon keeps its dir: /tmp/open-walnut, or the home dir', () => {
+    expect(chooseLocalDaemonDir(env, deps(daemonIn(SHARED_DAEMON_DIR, 11), [11]))).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, why: 'a session daemon is running there' })
+    expect(chooseLocalDaemonDir(env, deps(daemonIn(CACHE, 4242), [4242]))).toEqual({ dir: CACHE, explicit: false, why: 'a session daemon is running there' })
   })
 
   it('a live daemon in /tmp/open-walnut wins over one in the home dir', () => {
@@ -88,89 +93,185 @@ describe('chooseLocalDaemonDir', () => {
     expect(c.dir).toBe(SHARED_DAEMON_DIR)
   })
 
-  it('a dead pid, a missing port file or a pid file of another user is no live daemon', () => {
-    expect(chooseLocalDaemonDir(env, deps(daemonIn(CACHE, 4242), [])).dir).toBe(SHARED_DAEMON_DIR)
-    const noPort = daemonIn(CACHE, 4242)
-    delete noPort[`${CACHE}/daemon.port`]
-    expect(chooseLocalDaemonDir(env, deps(noPort, [4242])).dir).toBe(SHARED_DAEMON_DIR)
-    const planted = { ...daemonIn(CACHE, 4242), [`${CACHE}/daemon.pid`]: { kind: 'file' as const, uid: OTHER, text: '4242' } }
-    expect(chooseLocalDaemonDir(env, deps(planted, [4242])).dir).toBe(SHARED_DAEMON_DIR)
-    const pidOne = daemonIn(CACHE, 1)
-    expect(chooseLocalDaemonDir(env, deps(pidOne, [1])).dir).toBe(SHARED_DAEMON_DIR)
-  })
-
   it('another user\'s daemon in /tmp/open-walnut does not keep us there', () => {
     const c = chooseLocalDaemonDir(env, deps(daemonIn(SHARED_DAEMON_DIR, 77, OTHER), [77]))
     expect(c.dir).toBe(CACHE)
   })
 
-  it('without a uid (Windows) or a home there is nothing to fall back to', () => {
-    expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } }, [], null)).dir).toBe(SHARED_DAEMON_DIR)
-    expect(chooseLocalDaemonDir({ HOME: 'relative' }, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } })).dir).toBe(SHARED_DAEMON_DIR)
-  })
-})
+  // The class of 2026-11-25: deciding "no daemon here" from files the cleanup took, then starting one elsewhere.
+  describe('sessions started since this machine booted keep their dir', () => {
+    const since = 'a session daemon ran there since this machine started, and its sessions may still run'
 
-describe('chooseLocalDaemonDir on the real filesystem', () => {
-  it('root keeps /tmp/open-walnut, and only $HOME names the home dir', () => {
-    const takenByOther = { [SHARED_DAEMON_DIR]: { kind: 'dir' as const, uid: OTHER } }
-    expect(chooseLocalDaemonDir(env, deps(takenByOther, [], 0)).dir).toBe(SHARED_DAEMON_DIR)
-    expect(chooseLocalDaemonDir({}, deps(takenByOther)).dir).toBe(SHARED_DAEMON_DIR)
+    it('a daemon that runs inside the server (no pid file) keeps /tmp/open-walnut across the server\'s restart', () => {
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR)))).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, why: since })
+    })
+
+    it('a daemon program that stopped (dead pid) keeps it too', () => {
+      expect(chooseLocalDaemonDir(env, deps({ ...daemonIn(SHARED_DAEMON_DIR, 11), ...stateIn(SHARED_DAEMON_DIR) }, [])).dir).toBe(SHARED_DAEMON_DIR)
+    })
+
+    it.each(DAEMON_STATE_MARKERS.map((name) => [name]))('%s alone is enough', (name) => {
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR, [name]))).dir).toBe(SHARED_DAEMON_DIR)
+    })
+
+    it('the temp cleanup took every regular file of a running daemon: the socket it leaves is enough', () => {
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR, [GATEWAY_SOCKET_FILENAME]))).dir).toBe(SHARED_DAEMON_DIR)
+    })
+
+    it('files from before the last boot belong to nothing that runs: the home dir', () => {
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR, undefined, BOOT - 3_600_000))).dir).toBe(CACHE)
+      // Within the uptime clock's slack of the boot: still counts.
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR, undefined, BOOT - 1_000))).dir).toBe(SHARED_DAEMON_DIR)
+    })
+
+    it('files of another user, a marker that is a dir or a link, or a dir that is not ours count for nothing', () => {
+      expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME }, [`${SHARED_DAEMON_DIR}/sessions.json`]: { kind: 'file', uid: OTHER } })).dir).toBe(CACHE)
+      expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME }, [`${SHARED_DAEMON_DIR}/sessions.json`]: { kind: 'dir', uid: ME } })).dir).toBe(CACHE)
+      expect(chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME }, [`${SHARED_DAEMON_DIR}/daemon.instance`]: { kind: 'link', uid: ME } })).dir).toBe(CACHE)
+      expect(chooseLocalDaemonDir(env, deps(stateIn(SHARED_DAEMON_DIR, undefined, undefined, OTHER))).dir).toBe(CACHE)
+    })
+
+    it('the home dir is kept the same way, and when both were used, the one written last', () => {
+      expect(chooseLocalDaemonDir(env, deps(stateIn(CACHE)))).toEqual({ dir: CACHE, explicit: false, why: since })
+      const both = { ...stateIn(SHARED_DAEMON_DIR, undefined, BOOT + 60_000), ...stateIn(CACHE, undefined, BOOT + 120_000) }
+      expect(chooseLocalDaemonDir(env, deps(both)).dir).toBe(CACHE)
+      const sharedLater = { ...stateIn(SHARED_DAEMON_DIR, undefined, BOOT + 180_000), ...stateIn(CACHE, undefined, BOOT + 120_000) }
+      expect(chooseLocalDaemonDir(env, deps(sharedLater)).dir).toBe(SHARED_DAEMON_DIR)
+    })
+
+    it('a running daemon still wins over a dir that was only used', () => {
+      expect(chooseLocalDaemonDir(env, deps({ ...stateIn(SHARED_DAEMON_DIR, undefined, BOOT + 999_000), ...daemonIn(CACHE, 22) }, [22])).dir).toBe(CACHE)
+    })
+  })
+
+  it('a home dir that cannot hold the daemon leaves it in /tmp/open-walnut, and says why', () => {
+    const c = chooseLocalDaemonDir(env, deps({}, [], ME, 'linux', 'its socket paths would be too long'))
+    expect(c).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, why: `${CACHE} cannot hold it (its socket paths would be too long)` })
+    // ... unless /tmp/open-walnut is another user's: the home dir, whose start then says what is wrong.
+    const taken = chooseLocalDaemonDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } }, [], ME, 'linux', 'it cannot be written'))
+    expect(taken).toEqual({ dir: CACHE, explicit: false, why: '/tmp/open-walnut belongs to another user' })
+  })
+
+  it('without a uid (Windows), as root, or without a home there is only /tmp/open-walnut', () => {
+    expect(chooseLocalDaemonDir(env, deps({}, [], null)).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalDaemonDir(env, deps({}, [], 0)).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalDaemonDir({ HOME: 'relative' }, deps({})).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalDaemonDir({}, deps({})).dir).toBe(SHARED_DAEMON_DIR)
     expect(userDaemonDir({})).toBeNull()
     expect(userDaemonDir({ HOME: 'relative' })).toBeNull()
   })
 
-  it('follows this user\'s login service to the home dir, even with /tmp/open-walnut free', () => {
-    const c = chooseLocalDaemonDir(env, deps({ [USER_UNIT]: { kind: 'file', uid: ME, text: unitPinning(CACHE) } }))
-    expect(c).toEqual({ dir: CACHE, explicit: false, fallback: true, reason: 'the login service runs the session daemon from there' })
+  it('a dead pid, a missing port file, a pid file of another user or from before the boot is no running daemon', () => {
+    const noPort = daemonIn(SHARED_DAEMON_DIR, 4242)
+    delete noPort[`${SHARED_DAEMON_DIR}/daemon.port`]
+    // Not running, yet its pid file was written since the boot: its sessions may still run there.
+    expect(chooseLocalDaemonDir(env, deps(noPort, [4242]))).toMatchObject({ dir: SHARED_DAEMON_DIR, why: expect.stringContaining('since this machine started') })
+    const planted = { ...daemonIn(SHARED_DAEMON_DIR, 4242), [`${SHARED_DAEMON_DIR}/daemon.pid`]: { kind: 'file' as const, uid: OTHER, text: '4242' }, [`${SHARED_DAEMON_DIR}/daemon.port`]: { kind: 'file' as const, uid: OTHER, text: '1' } }
+    expect(chooseLocalDaemonDir(env, deps(planted, [4242])).dir).toBe(CACHE)
+    const old = daemonIn(SHARED_DAEMON_DIR, 4242)
+    for (const f of ['daemon.pid', 'daemon.port']) old[`${SHARED_DAEMON_DIR}/${f}`] = { ...old[`${SHARED_DAEMON_DIR}/${f}`], mtimeMs: BOOT - 3_600_000 }
+    expect(chooseLocalDaemonDir(env, deps(old, [4242])).dir).toBe(CACHE)
+  })
+
+  it('follows this user\'s login service to the dir it pins, either one', () => {
+    const pinned = 'the login service runs the session daemon from there'
+    expect(chooseLocalDaemonDir(env, deps({ [USER_UNIT]: { kind: 'file', uid: ME, text: unitPinning(CACHE) } }))).toEqual({ dir: CACHE, explicit: false, why: pinned })
     const mac = chooseLocalDaemonDir(env, deps({ [PLIST]: { kind: 'file', uid: ME, text: `<key>WALNUT_DAEMON_DIR</key>\n\t\t<string>${CACHE}</string>` } }, [], ME, 'darwin'))
     expect(mac.dir).toBe(CACHE)
+    // An install from before the home dir was the default pins /tmp/open-walnut: its service starts there after a reboot.
+    expect(chooseLocalDaemonDir(env, deps({ [USER_UNIT]: { kind: 'file', uid: ME, text: unitPinning(SHARED_DAEMON_DIR) } }))).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, why: pinned })
     // A system unit counts only when it runs this account.
-    expect(chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(CACHE, 'me') } })).dir).toBe(CACHE)
-    expect(chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(CACHE, 'someone') } })).dir).toBe(SHARED_DAEMON_DIR)
-  })
-
-  it('a pid file from before the last boot is no live daemon, whoever holds that pid now', () => {
-    const files = daemonIn(CACHE, 4242)
-    files[`${CACHE}/daemon.pid`] = { ...files[`${CACHE}/daemon.pid`], mtimeMs: BOOT - 3_600_000 }
-    expect(chooseLocalDaemonDir(env, deps(files, [4242])).dir).toBe(SHARED_DAEMON_DIR)
-    files[`${CACHE}/daemon.pid`] = { ...files[`${CACHE}/daemon.pid`], mtimeMs: BOOT + 1_000 }
-    expect(chooseLocalDaemonDir(env, deps(files, [4242])).dir).toBe(CACHE)
-  })
-
-  it('leaves a free /tmp/open-walnut to the account whose system unit runs its daemon there', () => {
-    const c = chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(SHARED_DAEMON_DIR, 'someone') } }))
-    expect(c.dir).toBe(CACHE)
-    expect(c.reason).toMatch(/another user's login service/)
-    // Our own unit there, or another account's unit somewhere else: the shared dir as usual.
     expect(chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(SHARED_DAEMON_DIR, 'me') } })).dir).toBe(SHARED_DAEMON_DIR)
-    expect(chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning('/home/someone/.cache/open-walnut', 'someone') } })).dir).toBe(SHARED_DAEMON_DIR)
-  })
-
-  it('a service pinned to /tmp/open-walnut, or a daemon running there, is not overruled by the pin', () => {
-    expect(chooseLocalDaemonDir(env, deps({ [USER_UNIT]: { kind: 'file', uid: ME, text: unitPinning(SHARED_DAEMON_DIR) } })).dir).toBe(SHARED_DAEMON_DIR)
-    const files = { ...daemonIn(SHARED_DAEMON_DIR, 4242), [USER_UNIT]: { kind: 'file' as const, uid: ME, text: unitPinning(CACHE) } }
-    expect(chooseLocalDaemonDir(env, deps(files, [4242])).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalDaemonDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(SHARED_DAEMON_DIR, 'someone') } })).dir).toBe(CACHE)
     // Pinned to /tmp/open-walnut, which another user now owns: the home dir, as for anyone else.
     const taken = { [SHARED_DAEMON_DIR]: { kind: 'dir' as const, uid: OTHER }, [USER_UNIT]: { kind: 'file' as const, uid: ME, text: unitPinning(SHARED_DAEMON_DIR) } }
     expect(chooseLocalDaemonDir(env, deps(taken)).dir).toBe(CACHE)
+    // A daemon that runs wins over the pin.
+    const files = { ...daemonIn(SHARED_DAEMON_DIR, 4242), [USER_UNIT]: { kind: 'file' as const, uid: ME, text: unitPinning(CACHE) } }
+    expect(chooseLocalDaemonDir(env, deps(files, [4242])).dir).toBe(SHARED_DAEMON_DIR)
   })
 
   // Root always keeps /tmp/open-walnut, so this one needs an ordinary account.
-  it.skipIf(process.getuid?.() === 0)('reads a real pid file and a real live process', () => {
+  it.skipIf(process.getuid?.() === 0)('reads real files, a real live process and a real home dir', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-dir-'))
     try {
       const cache = path.join(home, '.cache', 'open-walnut')
+      // This machine's own /tmp/open-walnut stays out of it.
+      const real = { ...realDaemonDirDeps, lstat: (p: string) => (p.startsWith(SHARED_DAEMON_DIR) ? null : realDaemonDirDeps.lstat(p)) }
+      // Nothing there yet: the home dir can be made, so it is the dir, and choosing made nothing.
+      expect(chooseLocalDaemonDir({ HOME: home }, real)).toEqual({ dir: cache, explicit: false, why: 'no temp cleanup empties it' })
+      expect(fs.existsSync(path.join(home, '.cache'))).toBe(false)
       fs.mkdirSync(cache, { recursive: true })
       fs.writeFileSync(path.join(cache, 'daemon.pid'), String(process.pid))
       fs.writeFileSync(path.join(cache, 'daemon.port'), '1')
-      // This machine's own /tmp/open-walnut stays out of it.
-      const real = { ...realDaemonDirDeps, lstat: (p: string) => (p.startsWith(SHARED_DAEMON_DIR) ? null : realDaemonDirDeps.lstat(p)) }
-      expect(chooseLocalDaemonDir({ HOME: home }, real).dir).toBe(cache)
+      expect(chooseLocalDaemonDir({ HOME: home }, real).why).toBe('a session daemon is running there')
       fs.writeFileSync(path.join(cache, 'daemon.pid'), '999999999')
-      expect(chooseLocalDaemonDir({ HOME: home }, real).dir).toBe(SHARED_DAEMON_DIR)
+      expect(chooseLocalDaemonDir({ HOME: home }, real).why).toMatch(/since this machine started/)
+      // A home dir this user cannot write, or one too deep for a socket path: /tmp/open-walnut.
+      fs.rmSync(path.join(home, '.cache'), { recursive: true })
+      fs.chmodSync(home, 0o500)
+      expect(chooseLocalDaemonDir({ HOME: home }, real)).toMatchObject({ dir: SHARED_DAEMON_DIR, why: expect.stringContaining('cannot be written') })
+      fs.chmodSync(home, 0o700)
+      const deep = path.join(home, 'd'.repeat(90))
+      expect(chooseLocalDaemonDir({ HOME: deep }, real)).toMatchObject({ dir: SHARED_DAEMON_DIR, why: expect.stringContaining('socket paths would be too long') })
     } finally {
+      fs.chmodSync(home, 0o700)
       fs.rmSync(home, { recursive: true, force: true })
     }
+  })
+
+  it('the marker names are the daemon\'s own', () => {
+    expect(DAEMON_STATE_MARKERS).toContain(GATEWAY_SOCKET_FILENAME)
+    const daemon = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    for (const name of DAEMON_STATE_MARKERS.filter((n) => n !== GATEWAY_SOCKET_FILENAME)) expect(daemon).toContain(`'${name}')`)
+  })
+})
+
+describe('chooseLocalLogDir: the server\'s scratch stays in /tmp/open-walnut', () => {
+  it('uses WALNUT_DAEMON_DIR as given: one dir for everything in a test or an isolated server', () => {
+    expect(chooseLocalLogDir({ HOME, WALNUT_DAEMON_DIR: '/tmp/x' }, deps({}))).toEqual({ dir: '/tmp/x', explicit: true, fallback: false })
+  })
+
+  // A daemon hands its own dir to every session it starts: a command run there must still find the server's logs.
+  it('a WALNUT_DAEMON_DIR that names a production daemon dir names no log dir', () => {
+    expect(chooseLocalLogDir({ HOME, WALNUT_DAEMON_DIR: CACHE }, deps({}))).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, fallback: false })
+    expect(chooseLocalLogDir({ HOME, WALNUT_DAEMON_DIR: `${SHARED_DAEMON_DIR}/` }, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } })).dir).toBe(CACHE)
+    // The daemon dir is still the one named.
+    expect(chooseLocalDaemonDir({ HOME, WALNUT_DAEMON_DIR: CACHE }, deps({})).dir).toBe(CACHE)
+  })
+
+  it('/tmp/open-walnut on a fresh machine and for its owner, wherever the daemon is', () => {
+    expect(chooseLocalLogDir(env, deps({})).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: ME } }))).toEqual({ dir: SHARED_DAEMON_DIR, explicit: false, fallback: false })
+    expect(chooseLocalLogDir(env, deps(daemonIn(CACHE, 4242), [4242])).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir(env, deps({ [USER_UNIT]: { kind: 'file', uid: ME, text: unitPinning(CACHE) } })).dir).toBe(SHARED_DAEMON_DIR)
+  })
+
+  it('moves a second user to $HOME/.cache/open-walnut', () => {
+    const c = chooseLocalLogDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'dir', uid: OTHER } }))
+    expect(c).toEqual({ dir: CACHE, explicit: false, fallback: true, reason: '/tmp/open-walnut belongs to another user' })
+  })
+
+  it('never uses a symlink or a file at /tmp/open-walnut', () => {
+    expect(chooseLocalLogDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'link', uid: ME } })).dir).toBe(CACHE)
+    expect(chooseLocalLogDir(env, deps({ [SHARED_DAEMON_DIR]: { kind: 'file', uid: ME } }))).toMatchObject({ dir: CACHE, reason: '/tmp/open-walnut is not a directory' })
+  })
+
+  it('leaves a free /tmp/open-walnut to the account whose system unit runs its daemon there', () => {
+    const c = chooseLocalLogDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(SHARED_DAEMON_DIR, 'someone') } }))
+    expect(c.dir).toBe(CACHE)
+    expect(c.reason).toMatch(/another user's login service/)
+    // Our own unit there, or another account's unit somewhere else: the shared dir as usual.
+    expect(chooseLocalLogDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning(SHARED_DAEMON_DIR, 'me') } })).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir(env, deps({ [SYSTEM_UNIT]: { kind: 'file', uid: 0, text: unitPinning('/home/someone/.cache/open-walnut', 'someone') } })).dir).toBe(SHARED_DAEMON_DIR)
+  })
+
+  it('without a uid (Windows), as root, or without a home there is nothing to fall back to', () => {
+    const takenByOther = { [SHARED_DAEMON_DIR]: { kind: 'dir' as const, uid: OTHER } }
+    expect(chooseLocalLogDir(env, deps(takenByOther, [], null)).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir(env, deps(takenByOther, [], 0)).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir({ HOME: 'relative' }, deps(takenByOther)).dir).toBe(SHARED_DAEMON_DIR)
+    expect(chooseLocalLogDir({}, deps(takenByOther)).dir).toBe(SHARED_DAEMON_DIR)
   })
 })
 

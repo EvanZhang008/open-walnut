@@ -160,8 +160,10 @@ export interface OutsideRootContext {
   env: Record<string, string | undefined>
   /** The account's home dir. */
   userHome: string
-  /** The runtime dir (LOG_DIR). */
+  /** The local session daemon's dir (lib/daemon-dir.ts localDaemonDirChoice). */
   daemonDir: string
+  /** The server's scratch dir (LOG_DIR); the daemon's dir when left out (one dir, as a test server has). */
+  logDir?: string
   /** The engine's home (CLAUDE_HOME). */
   claudeHome: string
 }
@@ -177,19 +179,25 @@ function outsideRootDir(root: OutsideRoot, ctx: OutsideRootContext): string {
     case 'xdg-data': return join(ctx.userHome, '.local', 'share')
     case 'claude-home': return ctx.claudeHome
     case 'daemon-dir': return ctx.daemonDir
+    case 'log-dir': return ctx.logDir ?? ctx.daemonDir
     case 'user-home': return ctx.userHome
   }
 }
 
 /** The outside entry that classifies an absolute path, trying each root (deepest root first). */
 export function classifyOutsideAbsolute(absPath: string, ctx: OutsideRootContext): OutsideEntry | undefined {
-  const roots = (['xdg-state', 'xdg-data', 'claude-home', 'daemon-dir', 'user-home'] as const)
+  const roots = (['xdg-state', 'xdg-data', 'claude-home', 'daemon-dir', 'log-dir', 'user-home'] as const)
     .map((root) => ({ root, dir: outsideRootDir(root, ctx).replace(/\/+$/, '') }))
     .sort((a, b) => b.dir.length - a.dir.length)
+  // The daemon's dir and the log dir are one dir on a test server and an older install: an entry
+  // that names the path wins over either root's own "anything in this dir" entry.
+  let whole: OutsideEntry | undefined
   for (const { root, dir } of roots) {
     if (absPath !== dir && !absPath.startsWith(`${dir}/`)) continue
     const found = classifyOutsidePath(root, absPath.slice(dir.length + 1))
-    if (found) return found
+    if (!found) continue
+    if (found.path !== '' || found.match || absPath === dir) return found
+    whole ??= found
   }
-  return undefined
+  return whole
 }

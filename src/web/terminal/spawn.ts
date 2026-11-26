@@ -54,7 +54,7 @@ import { DEMO_TERMINAL_DIR, DTACH_SOCKET_DIR, IS_EPHEMERAL, IS_DEMO, WALNUT_HOME
 import { testServerRemoteTermRoot, ownRootGuardSh } from '../../providers/remote-isolation.js'
 import { assertDemoAdmission } from '../../core/sessions/demo-admission.js'
 import { ensureDemoTerminalDir } from '../../lib/demo-terminal-dir.js'
-import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
+import { SHARED_DAEMON_DIR, localLogDirChoice } from '../../lib/daemon-dir.js'
 import { setRuntimeTreesDirOf } from '../../providers/service-set.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
@@ -107,7 +107,7 @@ export { DTACH_SOCKET_DIR }
  */
 const TEST_SERVER_TERM = testServerRemoteTermRoot(IS_EPHEMERAL, WALNUT_HOME)
 export const REMOTE_DTACH_SOCKET_DIR = TEST_SERVER_TERM ? TEST_SERVER_TERM.termDir
-  : localDaemonDirChoice().fallback
+  : localLogDirChoice().fallback
     ? `${SHARED_DAEMON_DIR}/term-${typeof process.getuid === 'function' ? process.getuid() : 'user'}`
     : DTACH_SOCKET_DIR
 

@@ -41,16 +41,18 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'claude-home', 'claude.plugins', 'plugins', 'dir', 'The engine\'s plugins and marketplaces'),
   outside('machine', 'claude-home', 'claude.credentials', '.credentials.json', 'file', 'The engine\'s subscription sign-in (Walnut only checks it exists)', { sensitive: true }),
   outside('machine', 'claude-home', 'claude.debug', 'debug', 'dir', 'The engine\'s debug logs'),
-  // The runtime dir (LOG_DIR).
-  outside('machine', 'daemon-dir', 'daemon-dir', '', 'dir', 'Runtime files: the local daemon\'s port, pid and registry'),
+  // The local session daemon's own dir (lib/daemon-dir.ts: ~/.cache/open-walnut, or /tmp/open-walnut on an install whose daemon still runs from there).
+  outside('machine', 'daemon-dir', 'daemon-dir', '', 'dir', 'The local session daemon\'s own files: its port, pid and session registry, its programs, trigger state and logs'),
   outside('machine', 'daemon-dir', 'daemon-dir.stamp', 'daemon.stamp', 'file', 'The pid daemon.pid names and its start time, so a leader tells the daemon from a reused pid'),
-  outside('rebuildable', 'daemon-dir', 'daemon-dir.logs', '', 'file', 'Server and browser logs', { match: /^open-walnut-[^/]+\.log$/ }),
-  outside('machine', 'daemon-dir', 'daemon-dir.streams', 'streams', 'dir', 'Live session output streams'),
-  outside('machine', 'daemon-dir', 'daemon-dir.term', 'term', 'dir', 'Terminal sockets'),
-  outside('machine', 'daemon-dir', 'daemon-dir.images', 'images', 'dir', 'Images pasted or attached in sessions on this machine'),
-  outside('machine', 'daemon-dir', 'daemon-dir.pastes', 'pastes', 'dir', 'Oversized pastes spilled to disk'),
   outside('machine', 'daemon-dir', 'daemon-dir.net', 'net', 'dir', 'Host network identity of a throwaway daemon'),
   outside('rebuildable', 'daemon-dir', 'daemon-dir.external-scan-verdicts', 'external-scan-verdicts.json', 'file', 'What the outside-session scan found in each engine transcript; lost, it reads their heads once'),
+  // The server's scratch dir (LOG_DIR: /tmp/open-walnut), where the system's temp cleanup removing old files is wanted.
+  outside('machine', 'log-dir', 'log-dir', '', 'dir', 'The server\'s scratch: logs, pasted pictures, incident bundles, terminal sockets'),
+  outside('rebuildable', 'log-dir', 'log-dir.logs', '', 'file', 'Server and browser logs', { match: /^open-walnut-[^/]+\.log$/ }),
+  outside('machine', 'log-dir', 'log-dir.streams', 'streams', 'dir', 'Live session output streams'),
+  outside('machine', 'log-dir', 'log-dir.term', 'term', 'dir', 'Terminal sockets'),
+  outside('machine', 'log-dir', 'log-dir.images', 'images', 'dir', 'Images pasted or attached in sessions on this machine'),
+  outside('machine', 'log-dir', 'log-dir.pastes', 'pastes', 'dir', 'Oversized pastes spilled to disk'),
   // The account's home.
   outside('machine', 'user-home', 'home.machine-hold', '.config/walnut', 'dir', 'Machine holds that stop test runs here'),
   outside('machine', 'user-home', 'home.session-host-launch', 'Library/Application Support/Open Walnut', 'dir', 'How the Mac app launches the session host'),

@@ -20,6 +20,7 @@ import readline from 'node:readline';
 import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { sortedNames } from '../../lib/dir-order.js';
+import { localDaemonDirChoice } from '../../lib/daemon-dir.js';
 
 /**
  * Stream a file line-by-line, collecting the lines `keep` accepts.
@@ -331,14 +332,17 @@ async function captureClientEvidence(
 
 /** Concatenate sid-mentioning lines from every daemon-d-*.log, labelled by file. */
 async function captureDaemonLogs(sessionId: string): Promise<string> {
-  let files: string[];
-  try {
-    files = sortedNames(fs.readdirSync(LOG_DIR))
-      .filter(f => f.startsWith('daemon-d-') && f.endsWith('.log'))
-      .map(f => path.join(LOG_DIR, f));
-  } catch {
-    return '';
+  // The local daemon's own dir, then the server's (the same dir on an older install, and where
+  // a daemon from before the daemon's files left /tmp wrote: lib/daemon-dir.ts).
+  const files: string[] = [];
+  for (const dir of new Set([localDaemonDirChoice().dir, LOG_DIR])) {
+    try {
+      files.push(...sortedNames(fs.readdirSync(dir))
+        .filter(f => f.startsWith('daemon-d-') && f.endsWith('.log'))
+        .map(f => path.join(dir, f)));
+    } catch { /* that dir is not there */ }
   }
+  if (files.length === 0) return '';
   const blocks: string[] = [];
   for (const file of files) {
     const hits = await grepFileLines(file, l => l.includes(sessionId));

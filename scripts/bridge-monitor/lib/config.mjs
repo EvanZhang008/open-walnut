@@ -20,7 +20,7 @@ export const DEFAULTS = Object.freeze({
   logDir: path.join(HOME, 'Library', 'Logs', 'Walnut', 'bridge-monitor'),
   stateDir: path.join(SUPPORT_DIR, 'bridge-monitor', 'state'),
   retentionDays: 14,
-  /** Where the local daemon writes daemon-d-*.log and bridge.json. */
+  /** Where the local daemon writes daemon-d-*.log and bridge.json: this dir, and with this default also ~/.cache/open-walnut (daemonLogDirs). */
   daemonLogDir: '/tmp/open-walnut',
   /** Where the local server writes open-walnut-<date>.log. */
   serverLogDir: '/tmp/open-walnut',
@@ -120,16 +120,32 @@ export function loadConfig(file = process.env.BRIDGE_MONITOR_CONFIG || CONFIG_FI
 }
 
 /**
- * The bridge URL the daemon dials, read from the daemon's bridge.json. Only
- * the URL is returned: the token in that file is never read into a record.
+ * The dirs the local daemon may write its files in: the configured one, and with the default
+ * also ~/.cache/open-walnut, where the daemon's files are since they left /tmp (src/lib/daemon-dir.ts;
+ * an install whose daemon still runs from /tmp/open-walnut keeps writing there until its next reboot).
+ */
+export function daemonLogDirs(cfg) {
+  const dirs = [cfg.daemonLogDir]
+  if (cfg.daemonLogDir === DEFAULTS.daemonLogDir) dirs.unshift(path.join(HOME, '.cache', 'open-walnut'))
+  return dirs
+}
+
+/**
+ * The bridge URL the daemon dials, read from the daemon's bridge.json (the newest one when the
+ * daemon's dir moved). Only the URL is returned: the token in that file is never read into a record.
  */
 export function readDaemonBridgeUrl(daemonLogDir) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(daemonLogDir, 'bridge.json'), 'utf-8'))
-    return typeof raw?.url === 'string' && raw.url ? raw.url : null
-  } catch {
-    return null
+  const dirs = Array.isArray(daemonLogDir) ? daemonLogDir : [daemonLogDir]
+  let best = null
+  for (const dir of dirs) {
+    try {
+      const file = path.join(dir, 'bridge.json')
+      const raw = JSON.parse(fs.readFileSync(file, 'utf-8'))
+      const at = fs.statSync(file).mtimeMs
+      if (typeof raw?.url === 'string' && raw.url && (!best || at > best.at)) best = { url: raw.url, at }
+    } catch { /* not in this dir */ }
   }
+  return best ? best.url : null
 }
 
 export function ensureDir(dir) {

@@ -87,7 +87,7 @@ import { createSlashCommandsRouter } from './routes/slash-commands.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
 import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
-import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
+import { exitTraceFileFor, localDaemonDirChoice, localLogDirChoice, localProductionLogDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role, serviceRuntime } from '../core/server-role.js'
 import { capabilityFacts, capabilityList, hasCapability } from '../core/capabilities.js'
 import { bootMode, bootPolicy, setBootMode, trialPurpose } from '../core/boot-policy.js'
@@ -1068,7 +1068,7 @@ function installExitDiagnostics(): void {
 export function exitTraceFile(): string {
   if (IS_EPHEMERAL) return path.join(LOG_DIR, 'exit.log')
   try { if (isHostReplica()) return path.join(LOG_DIR, 'exit.log') } catch { /* undecidable role: the default */ }
-  return exitTraceFileFor(localProductionDaemonDir())
+  return exitTraceFileFor(localProductionLogDir())
 }
 
 // False while startServer() is booting (rejections are fatal), true once the
@@ -1897,11 +1897,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.warn('memory pressure monitor failed to start', { error: err instanceof Error ? err.message : String(err) })
   }
 
-  // Where the logs and the local daemon are, when it is not the usual place.
-  const daemonDirChoice = localDaemonDirChoice()
-  if (daemonDirChoice.fallback) {
-    log.web.info(`runtime files (logs, the local session daemon) are in ${daemonDirChoice.dir} because ${daemonDirChoice.reason}`, { dir: daemonDirChoice.dir })
+  // Where the logs and the local session daemon's files are, and which rule chose the daemon's dir.
+  const logDirChoice = localLogDirChoice()
+  if (logDirChoice.fallback) {
+    log.web.info(`logs and scratch files are in ${logDirChoice.dir} because ${logDirChoice.reason}`, { dir: logDirChoice.dir })
   }
+  const daemonDirChoice = localDaemonDirChoice()
+  log.web.info(`the local session daemon's files are in ${daemonDirChoice.dir}: ${daemonDirChoice.why}`, { dir: daemonDirChoice.dir, logDir: logDirChoice.dir })
 
   // Ops guardrails: a niced server process (inherited from launching dev:prod
   // out of a niced shell, e.g. a background claude session) is starved first

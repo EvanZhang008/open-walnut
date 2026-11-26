@@ -91,9 +91,9 @@ sqlite     ok 3.46.1
 web assets ok
 config     provider bedrock  main model claude-opus-5-5  engine claude  search on  providers bedrock (bedrock)
 hosts      3 configured
-  devbox  alice@devbox.example.com  connected  daemon 0.4.5 binary  dir ~/.cache/open-walnut (fallback)  linux/x64  claude 2.1.280 native signed-in  ok; warning: Using ~/.cache/open-walnut for the session daemon because /tmp is read-only.
-  lab     lab.example.com           failed     -                    -                                    -          -                                error: ssh: connect to host lab.example.com port 22: Connection refused
-  gpu     10.0.0.7                  connected  daemon 0.4.4         -                                    linux/x64  no claude                        problems: claude_missing, dtach_missing
+  devbox  alice@devbox.example.com  connected  daemon 0.4.5 binary  dir ~/.cache/open-walnut  linux/x64  claude 2.1.280 native signed-in  ok; warning: Using ~/.cache/open-walnut for the session daemon because /tmp is read-only.
+  lab     lab.example.com           failed     -                    -                         -          -                                error: ssh: connect to host lab.example.com port 22: Connection refused
+  gpu     10.0.0.7                  connected  daemon 0.4.4         -                         linux/x64  no claude                        problems: claude_missing, dtach_missing
 warnings   1
   - host lab: daemon hello: no answer within 5s`
 
@@ -168,7 +168,7 @@ describe('redactDiagnostics', () => {
     expect(text).not.toContain('10.0.0.7')
     expect(text).toContain('data dir   ~/.open-walnut')
     expect(text).toContain('claude     2.1.280  native  signed-in (a Claude account)  ~/.local/bin/claude')
-    expect(text).toContain('  devbox  [user:1]@[host:1]  connected  daemon 0.4.5 binary  dir ~/.cache/open-walnut (fallback)')
+    expect(text).toContain('  devbox  [user:1]@[host:1]  connected  daemon 0.4.5 binary  dir ~/.cache/open-walnut')
     expect(text).toContain('error: ssh: connect to host [host:2] port 22: Connection refused')
     expect(red.hosts[0].readiness?.claude.path).toBe('/home/\u2026/.local/bin/claude')
     expect(red.hosts.map((h) => h.alias)).toEqual(['devbox', 'lab', 'gpu'])

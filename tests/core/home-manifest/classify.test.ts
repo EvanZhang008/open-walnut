@@ -191,9 +191,15 @@ describe('outside the home', () => {
     expect(classifyOutsideAbsolute('/home/u/.local/state/open-walnut/tasks/t1/x', ctx)?.id).toBe('state.tasks')
     expect(classifyOutsideAbsolute('/xdg/open-walnut/vault/vault.json', { ...ctx, env: { XDG_STATE_HOME: '/xdg' } })?.id).toBe('state.vault')
     expect(classifyOutsideAbsolute('/home/u/.claude/projects/p/s.jsonl', ctx)?.id).toBe('claude.projects')
-    expect(classifyOutsideAbsolute('/tmp/open-walnut/open-walnut-2026-11-21.log', ctx)?.id).toBe('daemon-dir.logs')
+    expect(classifyOutsideAbsolute('/tmp/open-walnut/open-walnut-2026-11-21.log', ctx)?.id).toBe('log-dir.logs')
     expect(classifyOutsideAbsolute('/tmp/open-walnut/daemon.pid', ctx)?.id).toBe('daemon-dir')
-    expect(classifyOutsideAbsolute('/tmp/open-walnut/streams/s.jsonl', ctx)?.id).toBe('daemon-dir.streams')
+    expect(classifyOutsideAbsolute('/tmp/open-walnut/streams/s.jsonl', ctx)?.id).toBe('log-dir.streams')
+    // The two dirs apart, as on a machine started since the daemon's files left /tmp.
+    const apart = { ...ctx, daemonDir: '/home/u/.cache/open-walnut', logDir: '/tmp/open-walnut' }
+    expect(classifyOutsideAbsolute('/home/u/.cache/open-walnut/daemon.pid', apart)?.id).toBe('daemon-dir')
+    expect(classifyOutsideAbsolute('/home/u/.cache/open-walnut/daemon.stamp', apart)?.id).toBe('daemon-dir.stamp')
+    expect(classifyOutsideAbsolute('/tmp/open-walnut/images/a.png', apart)?.id).toBe('log-dir.images')
+    expect(classifyOutsideAbsolute('/tmp/open-walnut/incidents/x', apart)?.id).toBe('log-dir')
     expect(classifyOutsideAbsolute('/home/u/Documents/x', ctx)).toBeUndefined()
   })
 })

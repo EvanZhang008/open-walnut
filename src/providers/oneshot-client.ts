@@ -18,7 +18,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { localProductionDaemonDir } from '../lib/daemon-dir.js'
+import { localProductionLogDir } from '../lib/daemon-dir.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -95,7 +95,7 @@ function local(): ReturnType<typeof createOneShotCore<LocalSink>> {
   // Swept once when the core is built, keeping what a live process names.
   const argvFiles = createCliArgvFiles({
     fs, path, crypto,
-    dir: path.join(process.env.WALNUT_DAEMON_DIR || localProductionDaemonDir(), 'argv'),
+    dir: path.join(process.env.WALNUT_DAEMON_DIR || localProductionLogDir(), 'argv'),
     log: (level, msg, data) => log.agent[level](msg, data),
   })
   execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {

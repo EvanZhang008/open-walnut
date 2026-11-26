@@ -320,6 +320,12 @@ so data an upgrade left there is still copied or skipped right, but they have no
 
 ### Outside the data home
 
+`<daemon dir>` is the local session daemon's own dir: `~/.cache/open-walnut`, or `/tmp/open-walnut`
+on an install whose daemon still runs from there (until its next reboot) and on a machine whose
+home dir cannot hold it. `<log dir>` is the server's scratch dir: `/tmp/open-walnut`, or
+`~/.cache/open-walnut` for a second user of one machine. A test or isolated server names one dir
+for both (`WALNUT_DAEMON_DIR`). The rule is in `src/lib/daemon-dir.ts`.
+
 | Where | Class | Sensitive | What |
 | --- | --- | --- | --- |
 | `$XDG_STATE_HOME/open-walnut/secrets-master/` | leader-data | yes | Fleet secrets: the leader's master copy of every secret it shares with hosts |
@@ -353,15 +359,16 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.claude/plugins/` | machine | no | The engine's plugins and marketplaces |
 | `~/.claude/.credentials.json` | machine | yes | The engine's subscription sign-in (Walnut only checks it exists) |
 | `~/.claude/debug/` | machine | no | The engine's debug logs |
-| `<runtime dir>/` | machine | no | Runtime files: the local daemon's port, pid and registry |
-| `<runtime dir>/daemon.stamp` | machine | no | The pid daemon.pid names and its start time, so a leader tells the daemon from a reused pid |
-| `<runtime dir>/` (and names matching `^open-walnut-[^/]+\.log$`) | rebuildable | no | Server and browser logs |
-| `<runtime dir>/streams/` | machine | no | Live session output streams |
-| `<runtime dir>/term/` | machine | no | Terminal sockets |
-| `<runtime dir>/images/` | machine | no | Images pasted or attached in sessions on this machine |
-| `<runtime dir>/pastes/` | machine | no | Oversized pastes spilled to disk |
-| `<runtime dir>/net/` | machine | no | Host network identity of a throwaway daemon |
-| `<runtime dir>/external-scan-verdicts.json` | rebuildable | no | What the outside-session scan found in each engine transcript; lost, it reads their heads once |
+| `<daemon dir>/` | machine | no | The local session daemon's own files: its port, pid and session registry, its programs, trigger state and logs |
+| `<daemon dir>/daemon.stamp` | machine | no | The pid daemon.pid names and its start time, so a leader tells the daemon from a reused pid |
+| `<daemon dir>/net/` | machine | no | Host network identity of a throwaway daemon |
+| `<daemon dir>/external-scan-verdicts.json` | rebuildable | no | What the outside-session scan found in each engine transcript; lost, it reads their heads once |
+| `<log dir>/` | machine | no | The server's scratch: logs, pasted pictures, incident bundles, terminal sockets |
+| `<log dir>/` (and names matching `^open-walnut-[^/]+\.log$`) | rebuildable | no | Server and browser logs |
+| `<log dir>/streams/` | machine | no | Live session output streams |
+| `<log dir>/term/` | machine | no | Terminal sockets |
+| `<log dir>/images/` | machine | no | Images pasted or attached in sessions on this machine |
+| `<log dir>/pastes/` | machine | no | Oversized pastes spilled to disk |
 | `~/.config/walnut/` | machine | no | Machine holds that stop test runs here |
 | `~/Library/Application Support/Open Walnut/` | machine | no | How the Mac app launches the session host |
 | `~/.config/systemd/user/` | machine | no | The daemon's login service unit on Linux |

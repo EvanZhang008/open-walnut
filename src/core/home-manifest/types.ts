@@ -68,10 +68,11 @@ export interface HomeEntry extends EntryBase {
  * - `xdg-state`: `$XDG_STATE_HOME`, else `~/.local/state`
  * - `xdg-data`: `~/.local/share`
  * - `claude-home`: the engine's own `~/.claude`
- * - `daemon-dir`: the runtime dir (LOG_DIR: `/tmp/open-walnut`, or `~/.cache/open-walnut`)
+ * - `daemon-dir`: the local session daemon's dir (`~/.cache/open-walnut`, or `/tmp/open-walnut` while a daemon from before 2026-11-26 runs there)
+ * - `log-dir`: the server's scratch dir (LOG_DIR: `/tmp/open-walnut`, or `~/.cache/open-walnut` for a second user of one machine)
  * - `user-home`: the account's home dir
  */
-export type OutsideRoot = 'xdg-state' | 'xdg-data' | 'claude-home' | 'daemon-dir' | 'user-home'
+export type OutsideRoot = 'xdg-state' | 'xdg-data' | 'claude-home' | 'daemon-dir' | 'log-dir' | 'user-home'
 
 export interface OutsideEntry extends EntryBase {
   root: OutsideRoot

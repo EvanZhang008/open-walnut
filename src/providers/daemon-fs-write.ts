@@ -27,6 +27,16 @@ export interface DaemonFsWriteDeps {
   logMsg: DaemonLog
 }
 
+/**
+ * The images dir the server of this machine named to its daemon (WALNUT_DAEMON_IMAGES_DIR,
+ * local-daemon.ts): its own scratch dir's, which is not the daemon's dir since the daemon's files
+ * moved out of /tmp (lib/daemon-dir.ts). Null on a host no server named one to: `<daemon dir>/images`.
+ */
+export function serverImagesDirOf(env: Record<string, string | undefined>): string | null {
+  const dir = env.WALNUT_DAEMON_IMAGES_DIR
+  return dir && path.isAbsolute(dir) ? dir.replace(/\/+$/, '') : null
+}
+
 export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
   const { daemonEnv, HOME_DIR, DAEMON_DIR, FALLBACK_DAEMON_DIR, codeServer, looksLikeImage, logMsg } = deps
 
@@ -48,7 +58,9 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
   const IMAGE_SAVE_MAX_BYTES = 10 * 1024 * 1024
   // ~4/3 base64 overhead + slack — refuse before decoding an oversized string.
   const IMAGE_SAVE_MAX_BASE64_LENGTH = 14_000_000
-  const IMAGE_SAVE_DIR = path.join(DAEMON_DIR, 'images', 'mobile')
+  // Beside the server's own pictures when it named its images dir (the server reads the staged
+  // file back from there: constants.ts MOBILE_STAGED_IMAGES_DIR), else in this daemon's dir.
+  const IMAGE_SAVE_DIR = path.join(serverImagesDirOf(daemonEnv) ?? path.join(DAEMON_DIR, 'images'), 'mobile')
 
   // HEIC rides ISO-BMFF: a 'ftyp' box at byte 4. looksLikeImage covers the rest.
   function looksLikeHeic(data: Buffer): boolean {

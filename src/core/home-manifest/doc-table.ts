@@ -13,7 +13,8 @@ const ROOT_LABEL: Record<OutsideRoot, string> = {
   'xdg-state': '$XDG_STATE_HOME',
   'xdg-data': '~/.local/share',
   'claude-home': '~/.claude',
-  'daemon-dir': '<runtime dir>',
+  'daemon-dir': '<daemon dir>',
+  'log-dir': '<log dir>',
   'user-home': '~',
 }
 
@@ -50,6 +51,12 @@ export function renderDataLocationsBlock(): string {
     ...HEADER, ...home,
     '',
     '### Outside the data home',
+    '',
+    '`<daemon dir>` is the local session daemon\'s own dir: `~/.cache/open-walnut`, or `/tmp/open-walnut`',
+    'on an install whose daemon still runs from there (until its next reboot) and on a machine whose',
+    'home dir cannot hold it. `<log dir>` is the server\'s scratch dir: `/tmp/open-walnut`, or',
+    '`~/.cache/open-walnut` for a second user of one machine. A test or isolated server names one dir',
+    'for both (`WALNUT_DAEMON_DIR`). The rule is in `src/lib/daemon-dir.ts`.',
     '',
     ...HEADER, ...outside,
     '',

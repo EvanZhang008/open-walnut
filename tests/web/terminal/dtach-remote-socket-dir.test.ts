@@ -13,7 +13,7 @@ vi.mock('../../../src/lib/daemon-dir.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/lib/daemon-dir.js')>()
   return {
     ...actual,
-    localDaemonDirChoice: () => ({ dir: '/home/second/.cache/open-walnut', explicit: false, fallback: true, reason: 'test' }),
+    localLogDirChoice: () => ({ dir: '/home/second/.cache/open-walnut', explicit: false, fallback: true, reason: 'test' }),
   }
 })
 

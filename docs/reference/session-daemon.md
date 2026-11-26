@@ -202,7 +202,7 @@ tries again by itself, later and later, and goes to Walnut Health.
 
 **Topology:** walnut (Mac) ←ssh tunnel→ daemon (remote bun binary) ←spawn→ `claude -p` CLI. Goal: tunnel/daemon crashes don't lose sessions.
 
-**Remote files:** `/tmp/open-walnut/sessions.json` (registry), `/tmp/open-walnut-streams/<sid>.{pipe,jsonl,pgid}`. JSONL is source of truth.
+**Remote files:** `<daemon dir>/sessions.json` (registry; the daemon dir is `~/.cache/open-walnut`, or `/tmp/open-walnut` where a daemon from before 2026-11-26 still runs or the home dir cannot hold it: `src/providers/remote-daemon-dir.ts`), `/tmp/open-walnut-streams/<sid>.{pipe,jsonl,pgid}`. JSONL is source of truth.
 
 **CLI lifecycle (READ THIS: easy to get wrong):**
 - `claude -p --input-format stream-json` is **LONG-RUNNING**, NOT per-turn. One CLI process stays alive across many messages, reading new input from its FIFO stdin between turns. (Evidence: a session with 39 messages had only 4 spawns.)

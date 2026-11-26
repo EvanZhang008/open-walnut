@@ -30,7 +30,7 @@ import { assertTestRuntime } from './runtime-deps';
 import { assertNoMachineHold } from '../../src/lib/machine-hold';
 import { VITEST_PROJECT_TMP_RULE, sweepStaleTmpDirs } from './stale-tmp';
 // Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
-import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
+import { RUNTIME_DIR_PREFIX, isCallerChosenRuntime, pointsAtProductionRuntime } from './runtime-dir-choice';
 import { stripGitRedirectEnv } from './git-env-isolation';
 import { EXEC_GUARD_HOME_PREFIX, formatHit, unattributedHitsSince, unreadHitsOfRun, type ExecGuardHit } from './exec-guard-core';
 
@@ -96,10 +96,8 @@ export async function setup(): Promise<void> {
  */
 function isolateRuntimeDir(): void {
   const current = process.env.WALNUT_DAEMON_DIR;
-  const isProd = !current
-    || current === PROD_RUNTIME_DIR
-    || current.startsWith(PROD_RUNTIME_DIR + path.sep);
-  if (!isProd) return;
+  // Either production dir: the runner of a test run inside a Walnut session inherits its daemon's.
+  if (!pointsAtProductionRuntime(current)) return;
 
   const testRuntime = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`);
   fs.mkdirSync(testRuntime, { recursive: true });

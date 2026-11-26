@@ -208,7 +208,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 const ctx: OutsideRootContext = {
-  env: process.env, userHome: os.homedir(), daemonDir: constants.LOG_DIR, claudeHome: constants.CLAUDE_HOME,
+  env: process.env, userHome: os.homedir(), daemonDir: constants.LOG_DIR, logDir: constants.LOG_DIR, claudeHome: constants.CLAUDE_HOME,
 }
 
 describe('every state path the code names has a manifest entry', () => {

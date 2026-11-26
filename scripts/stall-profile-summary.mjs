@@ -19,7 +19,7 @@
 // heaviest stacks.
 import fs from 'node:fs'
 import path from 'node:path'
-import { localDaemonDirChoice } from '../src/lib/daemon-dir.ts'
+import { localLogDirChoice } from '../src/lib/daemon-dir.ts'
 
 const args = process.argv.slice(2)
 const flag = (name) => args.includes(name)
@@ -29,7 +29,7 @@ const opt = (name, fallback) => {
 }
 const top = Number(opt('--top', 20))
 let target = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--top')
-  ?? path.join(localDaemonDirChoice().dir, 'stall-profiles')
+  ?? path.join(localLogDirChoice().dir, 'stall-profiles')
 
 if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
   const files = fs.readdirSync(target).filter((f) => f.endsWith('.cpuprofile'))

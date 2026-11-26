@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { accountInfo } from './lib/account.js';
-import { localDaemonDirChoice } from './lib/daemon-dir.js';
+import { localLogDirChoice } from './lib/daemon-dir.js';
 import { demoTerminalDirFromEnv } from './lib/demo-terminal-dir.js';
 
 export const WALNUT_HOME = resolveOpenWalnutHome();
@@ -315,8 +315,10 @@ export const USAGE_DB_FILE = path.join(WALNUT_HOME, 'usage.sqlite');
 // the env must be set by the launching shell (see dev:demo) before node starts,
 // same constraint as IS_EPHEMERAL above. Production sets nothing → /tmp/open-walnut,
 // or ~/.cache/open-walnut when another user on this machine owns that one
-// (src/lib/daemon-dir.ts).
-export const LOG_DIR = localDaemonDirChoice().dir;
+// (src/lib/daemon-dir.ts). The server's scratch only: the local session daemon's own
+// files are in its own dir (localDaemonDirChoice there), the same path only when
+// WALNUT_DAEMON_DIR names one.
+export const LOG_DIR = localLogDirChoice().dir;
 export const SESSION_STREAMS_DIR = path.join(LOG_DIR, 'streams');
 /**
  * Per-session dtach unix sockets for the embedded terminal (one per terminal:

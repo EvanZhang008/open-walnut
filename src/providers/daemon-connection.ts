@@ -5311,7 +5311,7 @@ export class DaemonConnection {
     const choice: DaemonDirChoice = own ? { path: own.dir, fallback: false } : chooseDaemonDir(probe)
     this._remoteSet = own?.set ?? ''
     if (choice.path !== this._remoteDir || choice.fallback !== this._dirChoice?.fallback) {
-      const logFn = choice.fallback || choice.unusable ? log.session.warn : log.session.info
+      const logFn = choice.reason || choice.unusable ? log.session.warn : log.session.info
       logFn.call(log.session, 'DaemonConnection: daemon dir chosen', {
         host: this.hostKey, dir: choice.path, fallback: choice.fallback, reason: choice.reason,
         freeMb: choice.freeMb, unusable: choice.unusable, tmp: probe.tmp, cache: probe.cache,
@@ -5361,9 +5361,7 @@ export class DaemonConnection {
       host: this.hostKey, from: this._remoteDir, to: dir,
     })
     this._remoteDir = dir
-    this._dirChoice = fallback
-      ? { path: dir, fallback: true, reason: 'a daemon started there earlier is still running', ...(this._dirChoice?.freeMb !== undefined && this._dirChoice.path === dir ? { freeMb: this._dirChoice.freeMb } : {}) }
-      : { path: dir, fallback: false }
+    this._dirChoice = { path: dir, fallback, ...(this._dirChoice?.freeMb !== undefined && this._dirChoice.path === dir ? { freeMb: this._dirChoice.freeMb } : {}) }
   }
 
   /** `env K='V' ` for commands that must find the relocated daemon (its --status), '' on /tmp. */

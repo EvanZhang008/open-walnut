@@ -136,7 +136,7 @@ function hostStatus(h: HostDiagnostics): string {
 function hostCells(h: HostDiagnostics): string[] {
   const r = h.connected ? h.readiness : null
   const daemon = h.daemonVersion || h.runtime ? `daemon ${h.daemonVersion ?? '?'}${h.runtime ? ` ${h.runtime}` : ''}` : '-'
-  const dir = h.daemonDir ? `dir ${h.daemonDir.display}${h.daemonDir.fallback ? ' (fallback)' : ''}` : '-'
+  const dir = h.daemonDir ? `dir ${h.daemonDir.display}` : '-'
   const platform = r?.platform ? `${r.platform}/${r.arch ?? '?'}` : '-'
   let claude = '-'
   if (r) {

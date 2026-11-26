@@ -36,7 +36,7 @@ import { execRunsReason, execRunsWait, holdingJobs } from './exec-runs-hold.js'
 import { daemonUpdateOverdue } from './daemon-update-behind.js'
 import { fenceDaemonFileChanges } from './daemon-file-fence.js'
 import { OVER_BUSY_FLAG } from './daemon-over-busy.js'
-import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { DAEMON_BINARIES_DIR, IMAGES_DIR } from '../constants.js'
 import { parseServes, thisWalnutSharedVerdict, REPLACE_BREAKER_MS, type DaemonServes } from './daemon-shared.js'
 import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
@@ -1765,6 +1765,10 @@ export class LocalDaemon {
     const env: NodeJS.ProcessEnv = {
       ...(service ? service.env : process.env),
       WALNUT_DAEMON_DIR: this.daemonDir,
+      // Where this server saves a session's pictures: its scratch dir, not the daemon's dir
+      // (lib/daemon-dir.ts). The daemon attaches pictures from there and stages a phone's there
+      // (daemon-fs-write.ts serverImagesDirOf).
+      WALNUT_DAEMON_IMAGES_DIR: IMAGES_DIR,
     }
     // Opt-in session-only cron policy (config session.cron_policy) — the daemon
     // reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must ride the spawn env.

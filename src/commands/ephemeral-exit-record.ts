@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { exitTraceFileFor, localProductionDaemonDir } from '../lib/daemon-dir.js'
+import { exitTraceFileFor, localProductionLogDir } from '../lib/daemon-dir.js'
 
 /** The rules that end an ephemeral server. */
 export type EphemeralExitRule =
@@ -50,7 +50,7 @@ export interface EphemeralExitFacts {
 export function ephemeralExitLogFile(env: NodeJS.ProcessEnv = process.env): string {
   if (env.WALNUT_EPHEMERAL_EXIT_LOG) return env.WALNUT_EPHEMERAL_EXIT_LOG
   if (env.VITEST) return path.join(os.tmpdir(), 'walnut-test-ephemeral-exit.log')
-  return exitTraceFileFor(localProductionDaemonDir())
+  return exitTraceFileFor(localProductionLogDir())
 }
 
 /** The line, in the exit log's shape. Pure. */

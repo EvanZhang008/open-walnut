@@ -556,6 +556,113 @@ export function keepRuntimeFiles(io: {
 /** How often keepRuntimeFiles runs: well inside the shortest cleanup age (3 days). */
 export const RUNTIME_KEEP_MS = 60 * 60_000
 
+/** A gone daemon's log is kept this long after its last line. */
+export const DAEMON_LOG_KEEP_MS = 14 * 24 * 3600_000
+/** A picture nobody read or wrote for this long is removed (systemd-tmpfiles' age for /tmp, the longer of the two cleanups). */
+export const DAEMON_PICTURE_KEEP_MS = 10 * 24 * 3600_000
+const DAEMON_LOG_NAME = /^daemon-(exit-)?d-\d+-[0-9a-f]+\.log$/
+
+/**
+ * Removes what the system's temp cleanup removed for this daemon while its dir was in /tmp. The dir
+ * is in the home now (lib/daemon-dir.ts), which nothing empties, so the daemon ages its own scratch:
+ * the logs of daemons that are gone (`daemon-<instance>.log`, `daemon-exit-<instance>.log`, never
+ * `ownLogs`) once their last line is DAEMON_LOG_KEEP_MS old, and the pictures under `images/` and
+ * `<dir>-images/` (a session's attachments: the CLI read them when the message was sent) once
+ * nobody read or wrote them for DAEMON_PICTURE_KEEP_MS. Regular files only, never through a
+ * symlink, never a dir. Returns the paths removed.
+ */
+export function pruneDaemonScratch(io: {
+  fs: {
+    readdirSync(p: string, o: { withFileTypes: true }): Array<{ name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }>
+    lstatSync(p: string): { mtimeMs: number; atimeMs: number; isFile(): boolean }
+    unlinkSync(p: string): void
+  }
+  dir: string
+  ownLogs: string[]
+  now: number
+}): string[] {
+  const removed: string[] = []
+  const list = (p: string) => { try { return io.fs.readdirSync(p, { withFileTypes: true }) } catch { return [] } }
+  const remove = (file: string, olderThan: number, age: (st: { mtimeMs: number; atimeMs: number }) => number): void => {
+    try {
+      const st = io.fs.lstatSync(file)
+      if (!st.isFile() || age(st) > olderThan) return
+      io.fs.unlinkSync(file)
+      removed.push(file)
+    } catch { /* gone, or not ours to remove */ }
+  }
+  const own = new Set(io.ownLogs.map((p) => p.slice(p.lastIndexOf('/') + 1)))
+  for (const e of list(io.dir)) {
+    if (e.isFile() && DAEMON_LOG_NAME.test(e.name) && !own.has(e.name)) remove(io.dir + '/' + e.name, io.now - DAEMON_LOG_KEEP_MS, (st) => st.mtimeMs)
+  }
+  const pictures = (p: string, depth: number): void => {
+    for (const e of list(p)) {
+      if (e.isSymbolicLink()) continue
+      if (e.isDirectory()) { if (depth < 4) pictures(p + '/' + e.name, depth + 1) }
+      else if (e.isFile()) remove(p + '/' + e.name, io.now - DAEMON_PICTURE_KEEP_MS, (st) => Math.max(st.mtimeMs, st.atimeMs))
+    }
+  }
+  pictures(io.dir + '/images', 0)
+  pictures(io.dir + '-images', 0)
+  return removed
+}
+
+/**
+ * A release from before the session daemon's files left the temp dir (lib/daemon-dir.ts, 2026-11-26)
+ * starts its daemon in /tmp/open-walnut whenever none runs, and reads `sessions.json` there. After a
+ * downgrade it found none: it removed the stdin FIFOs of the sessions this daemon had started, then
+ * adopted their CLIs by pid, and those sessions never took a line again. So a daemon whose dir is
+ * the home one leaves that name in the shared dir as a symlink to its own registry: the older
+ * daemon reads through it, adopts the sessions as any restarted daemon does, and writes its own
+ * file over the link at its first change. The dir rule never counts a link as a daemon's file.
+ *
+ * Only inside a shared dir that is a real directory of this user (the server's log dir; never
+ * created here). What is at the name decides: nothing, or a link to somewhere else, gets the
+ * link; a real file is left alone unless it is from before this machine booted (a registry of
+ * sessions that ended with the boot). Returns what it did.
+ */
+export function linkRegistryForOlderReleases(io: {
+  fs: {
+    lstatSync(p: string): { uid: number; mtimeMs: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean }
+    readlinkSync(p: string): string
+    symlinkSync(target: string, p: string): void
+    renameSync(from: string, to: string): void
+    unlinkSync(p: string): void
+  }
+  sharedDir: string
+  registryFile: string
+  uid: number
+  pid: number
+  /** When this machine booted (ms), or null when it cannot be read: then a real file is never replaced. */
+  bootMs: number | null
+}): 'linked' | 'kept' | 'skipped' {
+  const gone = (err: unknown): boolean => (err as { code?: string } | null)?.code === 'ENOENT'
+  try {
+    const dir = io.fs.lstatSync(io.sharedDir)
+    if (!dir.isDirectory() || dir.uid !== io.uid) return 'skipped'
+  } catch { return 'skipped' }
+  const link = io.sharedDir + '/sessions.json'
+  try {
+    const st = io.fs.lstatSync(link)
+    if (st.isSymbolicLink()) {
+      if (io.fs.readlinkSync(link) === io.registryFile) return 'kept'
+    } else if (!st.isFile() || io.bootMs === null || st.mtimeMs >= io.bootMs - 5_000) {
+      return 'skipped'
+    }
+  } catch (err) { if (!gone(err)) return 'skipped' }
+  // Made beside it and renamed over: the name is never missing, and never half a link.
+  const next = `${link}.${io.pid}.link`
+  try {
+    try { io.fs.unlinkSync(next) } catch { /* none left from an earlier try */ }
+    io.fs.symlinkSync(io.registryFile, next)
+    io.fs.renameSync(next, link)
+    return 'linked'
+  } catch {
+    try { io.fs.unlinkSync(next) } catch { /* never made */ }
+    return 'skipped'
+  }
+}
+
 /**
  * The Walnut instruction notice (core/sessions/instruction-notice.ts) reaches a session by two
  * paths: the server's queue and this host's own same-host delivery (offline-host-core.ts
@@ -1124,13 +1231,19 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
 
     // Zombie FIFO sweep — unlink *.pipe files in streams dir that don't
     // belong to a registered session. Prevents unbounded file growth across
-    // crash/restart cycles.
+    // crash/restart cycles. A sid whose `.pgid` is still there is left to the
+    // startup cleanup that follows (daemon-idle-scan.ts): it adopts a CLI that
+    // still runs, which is reached only through this FIFO, and a daemon whose
+    // registry is in another dir than the one that started the session (after a
+    // downgrade, 2026-11-26) otherwise adopted a CLI it could never write to.
+    // A dead session's FIFO goes with its other files (sweepDeadStreams).
     try {
       const files = fs.readdirSync(streamsDir)
+      const names = new Set(files)
       for (const f of files) {
         if (!f.endsWith('.pipe')) continue
         const sid = f.replace('.pipe', '')
-        if (!sessions.has(sid)) {
+        if (!sessions.has(sid) && !names.has(sid + '.pgid')) {
           try { fs.unlinkSync(`${streamsDir}/${f}`) } catch {}
         }
       }

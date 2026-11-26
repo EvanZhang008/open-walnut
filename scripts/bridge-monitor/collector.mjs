@@ -28,7 +28,7 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { loadConfig, readDaemonBridgeUrl } from './lib/config.mjs'
+import { daemonLogDirs, loadConfig, readDaemonBridgeUrl } from './lib/config.mjs'
 import { Store, localDay, prevDay, pruneStore } from './lib/store.mjs'
 import { Tailer } from './lib/tail.mjs'
 import { parseDaemonLine, parseServerLine } from './lib/parse-bridge.mjs'
@@ -182,17 +182,23 @@ async function firstSeenPolicy(file) {
 }
 
 async function tailPass() {
-  let names = []
-  try { names = await fsp.readdir(cfg.daemonLogDir) } catch (err) { recordError('tail', err); return }
   const recs = []
-  for (const name of names.filter((n) => /^daemon-d-.+\.log$/.test(n))) {
-    const file = path.join(cfg.daemonLogDir, name)
-    const lines = await tailer.read(file, { firstSeen: await firstSeenPolicy(file), filter: (l) => l.includes('"msg":"bridge') })
-    for (const line of lines) {
-      const e = parseDaemonLine(line)
-      if (e) recs.push({ ...e, kind: 'daemon', file: name })
+  let read = 0
+  let failure = null
+  for (const dir of daemonLogDirs(cfg)) {
+    let names = []
+    try { names = await fsp.readdir(dir); read++ } catch (err) { failure = err; continue }
+    for (const name of names.filter((n) => /^daemon-d-.+\.log$/.test(n))) {
+      const file = path.join(dir, name)
+      const lines = await tailer.read(file, { firstSeen: await firstSeenPolicy(file), filter: (l) => l.includes('"msg":"bridge') })
+      for (const line of lines) {
+        const e = parseDaemonLine(line)
+        if (e) recs.push({ ...e, kind: 'daemon', file: name })
+      }
     }
   }
+  // Only when none of the daemon's dirs can be read: one of the two not existing is the usual case.
+  if (read === 0) { recordError('tail', failure ?? new Error('no daemon log dir')); return }
   for (const file of serverLogFiles()) {
     const lines = await tailer.read(file, { firstSeen: await firstSeenPolicy(file), filter: (l) => l.includes('DaemonConnection: ') })
     for (const line of lines) {
@@ -240,7 +246,7 @@ async function alertPass() {
 
 // Periodic samplers
 function bridgeHost() {
-  const url = cfg.bridgeUrl || readDaemonBridgeUrl(cfg.daemonLogDir)
+  const url = cfg.bridgeUrl || readDaemonBridgeUrl(daemonLogDirs(cfg))
   try { return url ? new URL(url).hostname : null } catch { return null }
 }
 

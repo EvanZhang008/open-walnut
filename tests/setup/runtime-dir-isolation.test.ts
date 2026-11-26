@@ -33,11 +33,11 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import fs from 'node:fs'
+import { pointsAtProductionRuntime } from './runtime-dir-choice.js'
 
-const PROD_RUNTIME_DIR = '/tmp/open-walnut' // safe: comparison only
-
+/** Either production dir: /tmp/open-walnut, and the daemon's `<home>/.cache/open-walnut`. */
 function isUnderProduction(p: string): boolean {
-  return p === PROD_RUNTIME_DIR || p.startsWith(PROD_RUNTIME_DIR + path.sep)
+  return pointsAtProductionRuntime(p)
 }
 
 describe('test runtime-dir isolation', () => {

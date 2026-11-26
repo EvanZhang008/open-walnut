@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { LOG_DIR, WALNUT_HOME } from '../constants.js';
+import { localDaemonDirChoice } from '../lib/daemon-dir.js';
 import { notesRoot } from '../core/notes/note-paths.js';
 import { withFileLock } from './file-lock.js';
 
@@ -40,10 +41,10 @@ function isInside(child: string, root: string): boolean {
 
 /** The path `withUserFileLock` hands to `withFileLock` for `filePath`. */
 export async function userFileLockTarget(filePath: string): Promise<string> {
-  const [real, home, daemonDir, vault] = await Promise.all(
-    [filePath, WALNUT_HOME, LOG_DIR, notesRoot()].map(resolveReal),
+  const [real, home, logDir, daemonDir, vault] = await Promise.all(
+    [filePath, WALNUT_HOME, LOG_DIR, localDaemonDirChoice().dir, notesRoot()].map(resolveReal),
   );
-  if ((isInside(real, home) || isInside(real, daemonDir)) && !isInside(real, vault)) return real;
+  if ((isInside(real, home) || isInside(real, logDir) || isInside(real, daemonDir)) && !isInside(real, vault)) return real;
   return path.join(WALNUT_HOME, 'locks', crypto.createHash('sha256').update(real).digest('hex'));
 }
 

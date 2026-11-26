@@ -30,10 +30,23 @@ export interface LogEntry {
 
 let dirEnsured = false;
 
+/**
+ * The log dir, owner-only: logs and pasted pictures are private, and /tmp is everyone's. The local
+ * daemon used to do this as a side effect, when its dir was this one (lib/daemon-dir.ts); a dir this
+ * user does not own is left as it is.
+ */
+function makeLogDir(): void {
+  fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+  try {
+    const st = fs.statSync(LOG_DIR);
+    if ((st.mode & 0o077) !== 0 && typeof process.getuid === 'function' && st.uid === process.getuid()) fs.chmodSync(LOG_DIR, 0o700);
+  } catch { /* the mkdir's mode stands */ }
+}
+
 function ensureLogDir(): void {
   if (dirEnsured) return;
   try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
+    makeLogDir();
     dirEnsured = true;
   } catch {
     // Best-effort — don't throw from the logger.
@@ -166,7 +179,7 @@ process.on('exit', flushLogBufferSync);
 export function initFileLogger(): void {
   // Always mkdir (callers expect the directory to exist after this call),
   // then mark dirEnsured so the first flush skips redundant mkdir.
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+  makeLogDir();
   dirEnsured = true;
   pruneOldLogs(LOG_KEEP_DAYS);
   // A replica (the companion, a host server or replica) runs for weeks: it prunes

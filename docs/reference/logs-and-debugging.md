@@ -15,14 +15,35 @@ Use the structured logger (`log.info('subsystem', 'message', { sessionId, taskId
 | Server structured JSON (+ forwarded browser console) | `/tmp/open-walnut/open-walnut-<date>.log`: filter browser lines with `jq 'select(.subsystem=="browser")'` or `open-walnut logs -s browser` |
 | Every HTTP request (method/path/status/ms/reqId) | same file, `subsystem=web` (request-logger middleware) |
 | Uncaught JS exceptions / unhandled rejections / React render crashes | forwarded as `subsystem=browser` `[uncaught]` / `[unhandledrejection]` / `[react]` / `[error-boundary]` entries. Delivery: WS RPC when connected; REST `POST /api/browser-logs` fallback when WS is down (e.g. crash before mount) |
-| Daemon logs | `/tmp/open-walnut/daemon-d-*.log` |
+| Daemon logs | `~/.cache/open-walnut/daemon-d-*.log` (the daemon's own dir; `/tmp/open-walnut` on an install whose daemon still runs from there). `scripts/walnut-logs.sh daemon <sid>` reads both |
 | Server exit trace | `/tmp/open-walnut-exit.log` |
 
-`/tmp/open-walnut` belongs to the first Unix user who starts Walnut on a machine. Anyone else's
-Walnut uses `~/.cache/open-walnut` for all of these (the exit trace is `exit.log` inside it), the
-dir remote hosts already fall back to; a daemon running in either keeps its dir, and so does a
-login service that pins the home one (`src/lib/daemon-dir.ts`; `scripts/lib/daemon-dir.sh`, which
-`walnut-logs.sh` sources, is its sh twin). The server always names the dir to its daemon
+Two dirs, chosen apart (`src/lib/daemon-dir.ts`; `scripts/lib/daemon-dir.sh`, which
+`walnut-logs.sh` sources, is its sh twin, and `tests/scripts/daemon-dir-sh.test.ts` runs both on
+the same cases):
+
+- **The log dir**, the server's scratch (logs, pasted pictures, incident bundles, terminal
+  sockets): `/tmp/open-walnut`, where the system's temp cleanup removing what nobody touched for
+  days is wanted. It belongs to the first Unix user who starts Walnut on a machine; anyone else's
+  Walnut uses `~/.cache/open-walnut` (the exit trace is `exit.log` inside it).
+- **The daemon's dir**, the local session daemon's own files (`daemon.port`, `daemon.pid`,
+  `daemon.instance`, `sessions.json`, its sockets, programs, trigger state and logs):
+  `~/.cache/open-walnut`, which no temp cleanup empties. It was `/tmp/open-walnut` until
+  2026-11-26: the temp cleanup (macOS: files untouched for 3 days; systemd-tmpfiles: 10 days) then
+  removed a running daemon's files, and whoever looked for the daemon by them started a second
+  one that gave way to the first, so no session started. Nothing that runs is moved: a running
+  daemon keeps its dir, so does the dir a login service pins, and so does the dir a daemon wrote
+  its files in since the machine booted (its sessions may still run), so an existing install
+  changes dir at its next reboot. `/tmp/open-walnut` is still the daemon's dir when the home dir
+  cannot hold it (its socket paths would be too long, or it cannot be written). The daemon ages
+  its own scratch there (old daemons' logs after 14 days, pictures nobody read for 10 days:
+  `pruneDaemonScratch` in `src/providers/daemon-core.ts`). A release from before the move starts
+  its daemon in `/tmp/open-walnut` whenever none runs (after a downgrade), so the home daemon
+  leaves `/tmp/open-walnut/sessions.json` there as a link to its registry
+  (`linkRegistryForOlderReleases`): the older daemon adopts the sessions that still run instead of
+  cutting them off. The dir rule never counts a link as a daemon's file.
+
+The server always names the daemon's dir to its daemon
 (`WALNUT_DAEMON_DIR`); both daemon builds treat either dir as production. A second user's remote terminal
 sockets go to `/tmp/open-walnut/term-<local uid>` on the remote host. 2026-10-30: a second user's server exited at
 boot with `EACCES: permission denied, mkdir '/tmp/open-walnut/streams'`.

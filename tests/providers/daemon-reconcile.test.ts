@@ -171,6 +171,24 @@ describe('L1.3 daemon-reconcile: startup adopt/reap', () => {
     expect(fs.existsSync(other)).toBe(true)
   })
 
+  // The startup cleanup that follows adopts a CLI that still runs by its .pgid file, and reaches
+  // it only through this FIFO: a daemon whose registry does not list the session (it is in the
+  // dir of the daemon that started it, 2026-11-26) must not remove it first.
+  it('the FIFO of a sid whose .pgid is still there is left for the cleanup that adopts it', async () => {
+    ctx = await buildDeps({ killImpl: () => {}, readStartTimeImpl: () => null })
+    const pipeUnlisted = path.join(ctx.streamsDir, 'unlisted.pipe')
+    const pipeZombie = path.join(ctx.streamsDir, 'zombie.pipe')
+    fs.writeFileSync(pipeUnlisted, '')
+    fs.writeFileSync(path.join(ctx.streamsDir, 'unlisted.pgid'), '4242')
+    fs.writeFileSync(pipeZombie, '')
+    await writeRegistry({})
+    const core = createDaemonCore(ctx.deps)
+    await core.reconcileRegistry()
+
+    expect(fs.existsSync(pipeUnlisted)).toBe(true)
+    expect(fs.existsSync(pipeZombie)).toBe(false)
+  })
+
   // C9 — adopted session has parented=false
   it('adopted session has parented=false', async () => {
     ctx = await buildDeps({ killImpl: () => {}, readStartTimeImpl: () => null })

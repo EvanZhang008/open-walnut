@@ -217,6 +217,12 @@ and hands it over to the login service like any running daemon; the CI job's
 `existing-swept` Mac rehearses it. Daemons from this version on keep their own files fresh
 (`keepRuntimeFiles` in `src/providers/daemon-core.ts`).
 
+Since 2026-11-26 a daemon's files are no longer in /tmp at all: a daemon started on a machine
+where none ran since the boot keeps them in `~/.cache/open-walnut` (`src/lib/daemon-dir.ts`, and
+`src/providers/remote-daemon-dir.ts` for a host reached over ssh), which no temp cleanup empties.
+The lock and the freshening stay for the daemons that still run from /tmp/open-walnut: a daemon,
+and the sessions it started, keep their dir until the machine's next reboot.
+
 The same daemon is found by everything else that looks for it by those files
 (`src/providers/daemon-lost-files.ts`). The server's own start asks the lock before it looks,
 and before it decides whether the daemon runs in its own process: without that, every session

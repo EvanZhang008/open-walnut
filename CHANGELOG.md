@@ -8,6 +8,7 @@ breaking changes).
 
 ### Changed
 
+- The session daemon keeps its own files (port, pid, session registry, programs, trigger state, logs) in `~/.cache/open-walnut` instead of `/tmp/open-walnut`, where the system's temp cleanup removed them after days of nobody touching them. Logs and pasted pictures stay in `/tmp/open-walnut`. Nothing that runs is moved: an existing install changes dir at its next reboot, and an older release still finds the daemon and its sessions (a downgrade keeps running sessions)
 - Remote Linux hosts now always run the compiled daemon (a daemon binary or the walnut file); a host where neither runs (node-only) is no longer supported
 - The one Walnut service is on by default: a remote Linux host under the service launcher runs its Walnut server and its session helper as one program; `hosts.<name>.service_offer: false` or a stored `host_service_offer` list keeps a host on two programs, macOS hosts are not offered it yet, and a `host_service_offer` set to null now means every host, not none
 - A remote host two Walnuts share becomes the one service of whichever leader asks first; the other Walnut's running sessions keep their CLI and their conversation, and it keeps sending to them and hearing them

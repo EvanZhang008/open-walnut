@@ -40,6 +40,8 @@ import {
   type SessionMode,
   LIVE_FIFO_MODE,
   keepRuntimeFiles,
+  pruneDaemonScratch,
+  linkRegistryForOlderReleases,
   RUNTIME_KEEP_MS,
 } from './daemon-core.js'
 import { Subscribers, type SessionData as SessionDataOf, type AgentSub as AgentSubOf, type WsData } from './daemon-session-types.js'
@@ -96,7 +98,7 @@ import { resolveAgentCommand } from './agent-command-map.js'
 import { createDaemonGit } from './daemon-git.js'
 import { createDaemonSkills } from './daemon-skills.js'
 import { createDaemonFsRead } from './daemon-fs-read.js'
-import { createDaemonFsWrite } from './daemon-fs-write.js'
+import { createDaemonFsWrite, serverImagesDirOf } from './daemon-fs-write.js'
 import { createDaemonChanges } from './daemon-changes.js'
 import { createDaemonTranscripts } from './daemon-transcripts.js'
 import { createDaemonSessionOwner } from './daemon-session-owner.js'
@@ -399,9 +401,9 @@ const checkCallers = createCheckCallers()
 // the server's images dir (it names this dir to its daemon), an upload from another
 // machine, and image.save. Both spellings of a symlinked /tmp.
 const PICTURE_ROOTS: string[] = (() => {
-  const dirs = [DAEMON_DIR]
-  try { const real = fs.realpathSync(DAEMON_DIR); if (real !== DAEMON_DIR) dirs.push(real) } catch { /* not made yet */ }
-  return dirs.flatMap((d) => [`${d}/images/`, `${d}-images/`])
+  const both = (d: string): string[] => { try { const real = fs.realpathSync(d); return real !== d ? [d, real] : [d] } catch { return [d] /* not made yet */ } }
+  const named = serverImagesDirOf(daemonEnv)
+  return [...new Set([...both(DAEMON_DIR).flatMap((d) => [`${d}/images/`, `${d}-images/`]), ...(named ? both(named).map((d) => `${d}/`) : [])])]
 })()
 
 // Which Walnut a pushed setting belongs to, and where its copy is kept
@@ -1330,6 +1332,23 @@ function updateCronMetadata(sid: string, session: SessionData, line?: string) {
 // only provides Bun-specific I/O bindings.
 const REGISTRY_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'sessions.json')
 type RegistryEntry = CoreRegistryEntry
+// A release from before the daemon's files left /tmp/open-walnut looks for this registry there
+// (linkRegistryForOlderReleases, daemon-core.ts). Only the account's own production daemon in its
+// home dir leaves the link: by the passwd home, so a daemon under a faked HOME (a test, a demo)
+// never writes into the real shared dir. A login service's daemon is found by its unit instead.
+const LINKS_REGISTRY_FOR_OLDER_RELEASES = ((): boolean => {
+  if (SERVICE_MODE || process.platform === 'win32') return false
+  try { return path.resolve(DAEMON_DIR) === path.join(os.userInfo().homedir, '.cache', 'open-walnut') } catch { return false }
+})()
+function keepOlderReleaseLink(): void {
+  if (!LINKS_REGISTRY_FOR_OLDER_RELEASES) return
+  const up = os.uptime()
+  const did = linkRegistryForOlderReleases({
+    fs, sharedDir: PROD_DAEMON_DIR, registryFile: REGISTRY_FILE, uid: os.userInfo().uid, pid: process.pid,
+    bootMs: up > 0 ? Date.now() - up * 1000 : null,
+  })
+  if (did === 'linked') logMsg('info', 'registry linked for older releases', { link: path.join(PROD_DAEMON_DIR, 'sessions.json'), registryFile: REGISTRY_FILE })
+}
 
 // ── Agent subscriptions ──
 const agentSubs = new Map<string, AgentSub>()
@@ -6483,6 +6502,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     // Process start to sessions ready: the new daemon's share of an upgrade swap.
     bootMs: Math.round(process.uptime() * 1000),
   })
+  keepOlderReleaseLink()
 
   if (SERVICE_MODE) {
     cronRuntime = await createDaemonCronRuntime({
@@ -6678,6 +6698,10 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     ]
     const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), STAMP_FILE, SERVES_FILE, BRIDGE_FILE, ...[...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
     if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored })
+    // The same clock ages this dir's own scratch: no temp cleanup does it in the home dir (daemon-core.ts).
+    const pruned = pruneDaemonScratch({ fs, dir: DAEMON_DIR, ownLogs: [LOG_FILE, EXIT_BREADCRUMB_FILE], now: Date.now() })
+    if (pruned.length > 0) logMsg('info', 'old daemon logs and pictures removed', { count: pruned.length })
+    keepOlderReleaseLink()
   }, Number(daemonEnv.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(daemonEnv.WALNUT_RUNTIME_KEEP_MS) : RUNTIME_KEEP_MS)
   runtimeKeepTimer.unref?.()
 

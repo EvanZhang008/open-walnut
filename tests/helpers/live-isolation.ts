@@ -94,9 +94,11 @@ const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\])$/i
  */
 export function realWalnutPorts(env: NodeJS.ProcessEnv = process.env): number[] {
   const ports = new Set<number>([3456])
-  const prodDir = path.join(real('/tmp'), 'open-walnut')
-  try { const n = Number(fs.readFileSync(path.join(prodDir, 'daemon.port'), 'utf8').trim()); if (Number.isInteger(n) && n > 0) ports.add(n) } catch { /* no production daemon here */ }
-  ports.add(daemonLockPort(process.getuid?.() ?? 0, prodDir))
+  // Both production daemon dirs (src/lib/daemon-dir.ts): /tmp/open-walnut and the home one.
+  for (const prodDir of [path.join(real('/tmp'), 'open-walnut'), path.join(real(os.userInfo().homedir), '.cache', 'open-walnut')]) {
+    try { const n = Number(fs.readFileSync(path.join(prodDir, 'daemon.port'), 'utf8').trim()); if (Number.isInteger(n) && n > 0) ports.add(n) } catch { /* no production daemon here */ }
+    ports.add(daemonLockPort(process.getuid?.() ?? 0, prodDir))
+  }
   for (const k of ['OPEN_WALNUT_API_URL', 'WALNUT_SERVER_URL', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) {
     try { const u = new URL(String(env[k])); if (LOOPBACK.test(u.hostname) && u.port) ports.add(Number(u.port)) } catch { /* unset or not a URL */ }
   }

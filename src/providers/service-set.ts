@@ -39,6 +39,11 @@ export const SET_SOCKET_MAX_BYTES = 100
 /** The longest socket a runtime dir holds without a fallback of its own (host-call-token-core.ts). */
 const LONGEST_SOCKET = path.join('host-call', '0123456789abcdef.sock')
 
+/** True when the longest socket a daemon makes in `dir` fits a sun_path (the default dir in $HOME, lib/daemon-dir.ts, and a set's R/rt). */
+export function runtimeDirSocketsFit(dir: string): boolean {
+  return Buffer.byteLength(path.join(dir, LONGEST_SOCKET)) <= SET_SOCKET_MAX_BYTES
+}
+
 export type ServicePlatform = 'linux' | 'darwin'
 
 export interface ServiceSet {
@@ -84,7 +89,7 @@ export function serviceSetBase(home: string, id: string): string {
 /** A set's runtime dir: R/rt, or a /tmp one of this account when R/rt's sockets would not fit sun_path. */
 export function serviceSetRuntimeDir(home: string, id: string, uid: number): string {
   const rt = path.join(serviceSetBase(home, id), 'rt')
-  return Buffer.byteLength(path.join(rt, LONGEST_SOCKET)) <= SET_SOCKET_MAX_BYTES ? rt : `/tmp/open-walnut-set-${uid}-${id}`
+  return runtimeDirSocketsFit(rt) ? rt : `/tmp/open-walnut-set-${uid}-${id}`
 }
 
 /** The names of a set's boot item; '' gives today's. */

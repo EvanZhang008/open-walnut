@@ -129,6 +129,10 @@ const ACCOUNT_HOME_READERS = new Set([
   'tests/e2e/companion-old-box-e2e.test.ts',
   // Keeps tests off a second user's real ~/.cache/open-walnut, which a faked HOME hides.
   'tests/setup/prod-server-guard.ts',
+  // Keeps a test run's runtime dir off the account's real ~/.cache/open-walnut (the session daemon's
+  // production dir), which a faked HOME hides.
+  'tests/setup/runtime-dir-choice.ts',
+  'tests/setup/runtime-dir-choice.test.ts',
 ])
 
 function walk(dir: string, out: string[] = []): string[] {
