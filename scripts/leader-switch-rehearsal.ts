@@ -25,7 +25,9 @@
  * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs). It runs
  * the default configuration (each server runs its machine's daemon in its own process, experiment
  * `in_process_daemon`); `--in-process-daemon off` pins the daemon program of its own (the legacy shape).
- * The header and every TIME line name the setting. `--git-watch <log>` (diagnostics) puts a git shim first on every
+ * The header and every TIME line name the setting. After its scenarios (a) runs `mac-shaped` in a world of its own
+ * (B keeps no witness and nobody dials it: it commits through the companion's witness relay with A's server stopped);
+ * `--only mac-shaped` runs that alone. `--git-watch <log>` (diagnostics) puts a git shim first on every
  * machine's PATH and logs each git on a machine's home there, and who wrote a home's empty tree object (leader-switch/git-watch.ts).
  * `--real <host>` is rehearsal (b) (leader-switch/real-world.ts): the same scenarios with machine B on that host, every
  * link an ssh tunnel through the control socket of a master connection a person opened on the clouddev host

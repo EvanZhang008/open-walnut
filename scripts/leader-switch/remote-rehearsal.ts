@@ -18,6 +18,7 @@ import { compareKept, describeKept, type HomeSnapshot } from '../../src/core/hom
 import type { MayActLine } from '../../src/core/leader/switch/records.js'
 import type { SwitchState, TargetState } from '../../src/core/leader/switch/flow.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
+import { WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_PATH, WITNESS_RELAY_SUB } from '../../src/core/leader/switch/witness-wire.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
 import { Checks, KILL_POINTS, NOT_CAUGHT_UP, PreflightRefusedCaughtUp, StandbyNotCaughtUp, catchUpBoundMs, caughtUpBeforeSwitch, caughtUpSaid, switchOnCaughtUp, type CaughtUp, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, serverLog, startLoad, status, untilCaughtUp, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
 import { inProcessDaemonLabel, makeRemoteWorld, type InProcessDaemonSetting, type RemoteWorld, type WorldOptions } from './remote-world.js'
@@ -27,7 +28,7 @@ import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
 import { machineIdFile } from '../../src/core/machine-id.js'
 import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, leaderRelaySocketPath } from '../../src/core/leader/switch/leader-relay.js'
 import { RELAY_SOCKET_MAX_BYTES } from '../../src/lib/leader-relay-names.js'
-import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
+import { checkReportName, newSwitchId, switchFolder, type CheckReport } from '../../src/core/leader/switch/ticket.js'
 import { retakeAfterRestartMs } from '../../src/core/leader/switch/runtime.js'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../../src/core/leader/permit/types.js'
 import { witnessHoldMs } from '../../src/core/leader/permit/rules.js'
@@ -203,6 +204,11 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
   // A daemon built from older source would rehearse that one: nothing runs on a stale build.
   const daemon = builtDaemon()
   if (!c.add('boot: the built daemon every machine runs is built from this source', daemon.ok, daemon.why)) return { checks: c, times, inProcessDaemon, notes }
+  // `--only mac-shaped`: its own world alone.
+  if (opts.only?.length && opts.only.every((n) => n === 'mac-shaped') && !opts.world) {
+    await rehearseMacShaped(root, c, { ...opts, inProcessDaemon: setting }, times, notes, log)
+    return { checks: c, times, inProcessDaemon, notes }
+  }
   let w: RemoteWorld
   try {
     w = await (opts.world ?? makeRemoteWorld)(root, { portA: opts.portA, portB: opts.portB, log, inProcessDaemon: setting, ...(opts.gitWatch ? { gitWatch: opts.gitWatch } : {}) })
@@ -221,35 +227,11 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
   try {
     // A work dir too deep for the leader relay's unix socket: every machine's service refuses to serve the relay (its
     // `.sock.why` says so), and the forwarded scenario fails for that alone (the lead's 2026-11-26 run, 177 bytes).
-    const deep = (['a', 'b', 'h'] as const).map((k) => leaderRelaySocketPath(w.daemons[k].dir, 'any')).filter((p) => Buffer.byteLength(p) > RELAY_SOCKET_MAX_BYTES)
-    if (!c.add(`boot: the work dir is short enough for the leader relay's socket (${RELAY_SOCKET_MAX_BYTES} bytes at most)`, deep.length === 0,
-      deep.length ? `${Buffer.byteLength(deep[0]!)} bytes: ${deep[0]}; use a shorter work dir` : '')) return { checks: c, times, inProcessDaemon, notes }
+    if (!shortEnough(c, w)) return { checks: c, times, inProcessDaemon, notes }
     if (want('flag-off')) await flagOff(c, w)
-    // ---- boot: A leads on the three witnesses (init sets them up as an operator runs it) ----
-    const started = await w.side(w.a).startServer('leader', 300_000)
-    if (!c.add('boot: A starts (non-ephemeral, its own daemon, its links to B and H through proxies)', started.ok, started.why ?? '')) return { checks: c, times, inProcessDaemon, notes }
-    const walnutId = (await instanceIdAt(w.a.home))!
-    await w.startServiceB(walnutId)
-    const init1 = await w.cli(w.a, ['leader', 'witnesses', 'init'], w.a.env)
-    log(init1.out)
-    const leads = await waitFor('A to lead', async () => (await status(w, w.a))?.mayAct, 120_000).catch(() => false)
-    const init2 = await w.cli(w.a, ['leader', 'witnesses', 'init'], w.a.env)
-    log(init2.out)
-    const allThree = await waitFor('the three witnesses to hold A', async () => (await Promise.all((['w-a', 'w-b', 'w-k'] as const).map((id) => recordAt(w.witnessRoot[id], walnutId, id)))).every((r) => r?.holder === w.a.id), 120_000).then(() => true).catch(() => false)
-    // A host replica's witness is set up only over a link to its service: in rehearsal (a) way c's, in (b) a
-    // setup-only link, closed now; from here on (b)'s A reaches w-b only through its door (way c is (a)'s).
-    const setupClosed = w.wayC ? true : await w.endSetupLink().catch(() => false)
-    if (!w.wayC && setupClosed) notes.push(`${w.kind === 'two-machines' ? '(b)' : 'this run'} did not use way c: after the one-time setup of w-b (over a setup-only link to its machine, closed right after init), A reached w-b only through its door (w-b's host replica on ${w.label})`)
-    if (!c.add(`boot: init sets up w-a and w-k from nothing, A leads, init again adds w-b ${w.wayC ? 'over A\'s link to B\'s service' : 'over a setup-only link to its machine, closed after it (no way c from here on)'}; all three hold A`, leads === true && init2.code === 0 && allThree && setupClosed,
-      `init 1 exit ${init1.code}, init 2 exit ${init2.code}, setup link closed ${setupClosed}: ${last(init2.out, 4)}`)) return { checks: c, times, inProcessDaemon, notes }
-    if (fillerGb) await writeFiller(w.a.home, fillerGb, log, opts.filler)
-    const s = await seed(w, w.a, 8)
-    c.add('boot: seed on A (tasks, notes, a plugin file, a routine)', s.tasks.length === 8 && !!s.cronId)
-    const t0 = Date.now()
-    const b1 = await waitForBatch(w.b.standbyDir, t0, fillerGb ? 7_200_000 : 180_000).catch(() => 0)
-    times['first standby batch over the copy link'] = `${((Date.now() - t0) / 1000).toFixed(1)} s`
-    c.add('boot: A\'s standby batches reach B\'s standby folder over A\'s link to B\'s daemon (standby.host)', b1 > 0, `batch ${b1}; ${w.links.copy.accepted()} connection(s) through the copy link`)
-
+    const booted = await bootWorld(c, w, { fillerGb, filler: opts.filler, log, times, notes })
+    if (!booted) return { checks: c, times, inProcessDaemon, notes }
+    const { walnutId, s } = booted
     const catchUpMs = catchUpBoundMs(fillerGb)
     const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log, catchUpMs, seen: null }
     // The command run on B while B is no host of A yet (no host service of this Walnut there): refused, naming A.
@@ -269,13 +251,56 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
       })
       await everyWitnessHoldsLeader(ctx, name, walnutId)
     }
-    return { checks: c, times, inProcessDaemon, notes }
   } catch (err) {
     c.add('the rehearsal ran to its end', false, err instanceof Error ? err.stack ?? err.message : String(err))
     return { checks: c, times, inProcessDaemon, notes }
   } finally {
     await w.stop().catch(() => {})
   }
+  // The Mac shape, a world of its own (rehearsal (a) only: its B keeps no witness).
+  if (want('mac-shaped') && !opts.world) await rehearseMacShaped(root, c, { ...opts, inProcessDaemon: setting }, times, notes, log)
+  return { checks: c, times, inProcessDaemon, notes }
+}
+
+/** The work dir is short enough for every machine's leader relay socket (a check of its own). */
+function shortEnough(c: Checks, w: RemoteWorld): boolean {
+  const deep = (['a', 'b', 'h'] as const).map((k) => leaderRelaySocketPath(w.daemons[k].dir, 'any')).filter((p) => Buffer.byteLength(p) > RELAY_SOCKET_MAX_BYTES)
+  return c.add(`boot: the work dir is short enough for the leader relay's socket (${RELAY_SOCKET_MAX_BYTES} bytes at most)${w.shape === 'mac' ? ' (the Mac-shaped world)' : ''}`, deep.length === 0,
+    deep.length ? `${Buffer.byteLength(deep[0]!)} bytes: ${deep[0]}; use a shorter work dir` : '')
+}
+
+/**
+ * The boot every world takes: A leads on the three witnesses (init sets them up as an operator runs it), a seed on A,
+ * and A's first batch at B's standby folder. Null when a boot check failed (the run stops there).
+ */
+async function bootWorld(c: Checks, w: RemoteWorld, o: { fillerGb?: number; filler?: FillerPlace; log: (s: string) => void; times: Record<string, string>; notes: string[] }): Promise<{ walnutId: string; s: Seeded } | null> {
+  const { log, times, notes, fillerGb } = o
+  const [, third] = w.witnessIds as [string, string, string]
+  const started = await w.side(w.a).startServer('leader', 300_000)
+  if (!c.add('boot: A starts (non-ephemeral, its own daemon, its links to B and H through proxies)', started.ok, started.why ?? '')) return null
+  const walnutId = (await instanceIdAt(w.a.home))!
+  await w.startWitnessServices(walnutId)
+  const init1 = await w.cli(w.a, ['leader', 'witnesses', 'init'], w.a.env)
+  log(init1.out)
+  const leads = await waitFor('A to lead', async () => (await status(w, w.a))?.mayAct, 120_000).catch(() => false)
+  const init2 = await w.cli(w.a, ['leader', 'witnesses', 'init'], w.a.env)
+  log(init2.out)
+  const allThree = await waitFor('the three witnesses to hold A', async () => (await Promise.all(w.witnessIds.map((id) => recordAt(w.witnessRoot[id]!, walnutId, id)))).every((r) => r?.holder === w.a.id), 120_000).then(() => true).catch(() => false)
+  // A host replica's witness is set up only over a link to its service: in rehearsal (a) way c's, in (b) a
+  // setup-only link, closed now; from here on (b)'s A reaches w-b only through its door (way c is (a)'s). The Mac
+  // shape: w-h's door answered init's reads only and closes now (nobody reaches a dev box's door from the Mac).
+  const setupClosed = w.wayC && w.shape !== 'mac' ? true : await w.endSetupLink().catch(() => false)
+  if (!w.wayC && setupClosed) notes.push(`${w.kind === 'two-machines' ? '(b)' : 'this run'} did not use way c: after the one-time setup of w-b (over a setup-only link to its machine, closed right after init), A reached w-b only through its door (w-b's host replica on ${w.label})`)
+  if (!c.add(`boot: init sets up w-a and w-k from nothing, A leads, init again adds ${third} ${w.shape === 'mac' ? 'over A\'s link to H\'s service (way c), and w-h\'s door closes for good' : w.wayC ? 'over A\'s link to B\'s service' : 'over a setup-only link to its machine, closed after it (no way c from here on)'}; all three hold A`, leads === true && init2.code === 0 && allThree && setupClosed,
+    `init 1 exit ${init1.code}, A leads ${leads === true}, init 2 exit ${init2.code}, setup link closed ${setupClosed}: ${last(init2.out, 4)}${init2.code === 0 ? '' : ` (init 1: ${last(init1.out, 4)})`}`)) return null
+  if (fillerGb) await writeFiller(w.a.home, fillerGb, log, o.filler)
+  const s = await seed(w, w.a, 8)
+  c.add('boot: seed on A (tasks, notes, a plugin file, a routine)', s.tasks.length === 8 && !!s.cronId)
+  const t0 = Date.now()
+  const b1 = await waitForBatch(w.b.standbyDir, t0, fillerGb ? 7_200_000 : 180_000).catch(() => 0)
+  times['first standby batch over the copy link'] = `${((Date.now() - t0) / 1000).toFixed(1)} s`
+  c.add('boot: A\'s standby batches reach B\'s standby folder over A\'s link to B\'s daemon (standby.host)', b1 > 0, `batch ${b1}; ${w.links.copy.accepted()} connection(s) through the copy link`)
+  return { walnutId, s }
 }
 
 /** A to B under load, every B2a check with the witnesses and the other side remote, the third host's session, and back. */
@@ -1052,8 +1077,8 @@ function switchWhenCaughtUp(x: Ctx, label: string, seen: Extract<CaughtUp, { ok:
 async function everyWitnessHoldsLeader(x: Ctx, scenario: string, walnutId: string): Promise<void> {
   const { c, w, roles } = x
   const L = roles.leader
-  const ids = ['w-a', 'w-b', 'w-k'] as const
-  const read = () => Promise.all(ids.map((id) => recordAt(w.witnessRoot[id], walnutId, id)))
+  const ids = w.witnessIds
+  const read = () => Promise.all(ids.map((id) => recordAt(w.witnessRoot[id]!, walnutId, id)))
   const same = (held: Held[]) => held.every((h) => h?.holder === L.id && h.kind !== 'handover' && h.nonce === held[0]?.nonce)
     && Math.max(...held.map((h) => h!.number)) - Math.min(...held.map((h) => h!.number)) <= 1
   // A witness back with a live record of another process of the leader (a restart, a failed trial) takes the grant only
@@ -1176,6 +1201,138 @@ async function standbyBehind(x: Ctx): Promise<void> {
   await waitForBatch(O.standbyDir, Date.now(), 600_000).catch(() => 0)
   await w.io(L).op('rm', dir)
   await waitForBatch(O.standbyDir, Date.now(), 600_000).catch(() => 0)
+}
+
+// ---- step 5's accept test: a Mac-shaped candidate commits with the old leader's server stopped ----
+
+/**
+ * A world of the Mac shape (remote-world.ts): B keeps no witness and nobody dials it but A's server (the copy link,
+ * which ends at A's stop); w-a's door is out of its reach; H's one service keeps w-h, relayed by the companion's door
+ * (docs/reference/leader-switch.md, "The witness relay"). Its own boot, then macShaped.
+ */
+async function rehearseMacShaped(root: string, c: Checks, opts: { portA: number; portB: number; inProcessDaemon: InProcessDaemonSetting }, times: Record<string, string>, notes: string[], log: (s: string) => void): Promise<void> {
+  let w: RemoteWorld
+  try {
+    w = await makeRemoteWorld(path.join(root, 'mac'), { portA: opts.portA + 20, portB: opts.portB + 20, log, inProcessDaemon: opts.inProcessDaemon, shape: 'mac' })
+  } catch (err) {
+    c.add('mac-shaped: the world starts (B keeps no witness, H\'s service keeps w-h)', false, err instanceof Error ? err.message : String(err))
+    return
+  }
+  try {
+    log('--- mac-shaped: a world of its own')
+    if (!shortEnough(c, w)) return
+    const booted = await bootWorld(c, w, { log, times, notes })
+    if (!booted) return
+    const x: Ctx = { c, w, roles: { leader: w.a, other: w.b }, carried: { tasks: [...booted.s.tasks], notes: [...booted.s.notes], pluginFiles: [...booted.s.pluginFiles] }, times, log, catchUpMs: catchUpBoundMs(0), seen: null }
+    await macShaped(x, booted.walnutId).catch((err: unknown) => {
+      if (err instanceof StandbyNotCaughtUp) c.add('mac-shaped: the standby caught up before its switch (no switch was tried)', false, err.message)
+      else c.add('mac-shaped: ran to its end', false, err instanceof Error ? err.stack ?? err.message : String(err))
+    })
+    await everyWitnessHoldsLeader(x, 'mac-shaped', booted.walnutId)
+  } finally {
+    await w.stop().catch(() => {})
+  }
+}
+
+/**
+ * The switch A -> B (B Mac-shaped), three times, then back:
+ *   1. relay_commit off (the default): the preflight refuses it, as this phase wants, and nothing changes;
+ *   2. the red control: relay_commit on, w-h's `relay` taken out of the config: the preflight refuses it, 1 of 3;
+ *   3. both on: A's server stops, B commits by w-k's door and w-h through the companion's relay (2 of 3), B leads;
+ *   4. back to A, a dev box with its own witness.
+ */
+async function macShaped(x: Ctx, walnutId: string): Promise<void> {
+  const { c, w } = x
+  const A = w.a
+  const B = w.b
+  const cfgFile = path.join(A.home, 'config.yaml')
+  const editSwitch = async (edit: (ls: { witnesses: Array<Record<string, unknown>>; relay_commit?: boolean }) => void): Promise<void> => {
+    const cfg = YAML.parse((await text(cfgFile)) ?? '') as { leader_switch: { witnesses: Array<Record<string, unknown>>; relay_commit?: boolean } }
+    edit(cfg.leader_switch)
+    await write(cfgFile, YAML.stringify(cfg))
+  }
+  const unchanged = async (label: string, before: string | null) => {
+    c.add(`mac-shaped: ${label} changes nothing (no switch on A, no marker, A still leads)`,
+      ((await switchState(A.home))?.id ?? null) === before && !(await marker(A.home)) && !!(await status(w, A))?.mayAct)
+  }
+
+  // 0. H's service parks w-h's relay at the companion: a call there for w-h reaches w-h's own door on H (any answer
+  // of that door, a challenge here), not the relay's own 503 no_relay. Whether B reaches it is B's check's (1, 3).
+  // It waits for H's bridge: A's first push of H's bridge setting came before A held the permission (refused: no
+  // machine token), and the next comes with DaemonConnection's re-push, every 5 minutes. A fresh world only: on a
+  // running Walnut the dev box's bridge stands long before any switch.
+  const relayAnswer = async (): Promise<{ status: number; error?: string } | null> => {
+    const res = await fetch(`http://127.0.0.1:${w.links.doorK.port}${WITNESS_DOOR_PATH}${WITNESS_RELAY_SUB}${WITNESS_DOOR_CHALLENGE}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: 1, walnutId, witness: 'w-h', digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }), signal: AbortSignal.timeout(15_000),
+    }).catch(() => null)
+    if (!res) return null
+    return { status: res.status, ...((await res.json().catch(() => ({}))) as { error?: string }) }
+  }
+  const parkWait = Date.now()
+  const parked = await waitFor('the companion\'s relay to answer for w-h', async () => {
+    const r = await relayAnswer()
+    return r && r.status === 200 ? r : null
+  }, 420_000, 5_000).catch(async () => relayAnswer())
+  x.times['mac-shaped: the relay answered for w-h, after the boot'] = `${((Date.now() - parkWait) / 1000).toFixed(1)} s (H's bridge waits for DaemonConnection's 5-minute re-push)`
+  c.add('mac-shaped: the companion\'s relay answers for w-h with w-h\'s own door (H\'s service, a real follower of A on H\'s daemon, parked its streams at the companion over H\'s bridge)',
+    parked?.status === 200, JSON.stringify(parked))
+
+  // 1. The refusal of this phase: relay_commit is off.
+  await writeAndBatch(x, 'mac-1')
+  let before = (await switchState(A.home))?.id ?? null
+  const r1 = await runSwitch(x, 'mac-shaped: relay_commit off', { notCaughtUp: 'return' })
+  c.add('mac-shaped: with relay_commit off (the default) the preflight refuses the switch to B: its commit majority needs the relay (refused in this phase)',
+    r1.code === 1 && /commit majority needs a relay \(w-h through w-k\): without it 1 of 3 answer \(2 needed\)\. A switch to a machine that reaches a majority only through a relay is refused in this phase/.test(r1.out), `exit ${r1.code}: ${last(r1.out, 2)}`)
+  await unchanged('the refused switch', before)
+
+  // 2. The red control: without the relay (the segment), B reaches 1 of 3 at its commit.
+  await editSwitch((ls) => { ls.relay_commit = true; for (const e of ls.witnesses) if (e.id === 'w-h') delete e.relay })
+  await writeAndBatch(x, 'mac-2')
+  before = (await switchState(A.home))?.id ?? null
+  const r2 = await runSwitch(x, 'mac-shaped: no relay (red control)', { notCaughtUp: 'return' })
+  c.add('mac-shaped (red control): with relay_commit on but no relay for w-h, B reaches 1 of 3 without a leader link and the preflight refuses',
+    r2.code === 1 && /machine-b reaches 1 of 3 witnesses without a leader link \(w-k \(its direct door\)\)/.test(r2.out), `exit ${r2.code}: ${last(r2.out, 2)}`)
+  await unchanged('the red control', before)
+
+  // 3. The accept test: A's server stops, B commits by 2 of 3, nobody dials B.
+  await editSwitch((ls) => { for (const e of ls.witnesses) if (e.id === 'w-h') e.relay = 'w-k' })
+  await writeAndBatch(x, 'mac-3')
+  let aStoppedAt = 0
+  let dialsAtStop = -1
+  const r3 = await runSwitch(x, 'mac-shaped: the switch', {
+    during: async () => {
+      // When A's server is gone (its pid), and what had come in to B by then (the copy link is the only way in).
+      const gone = await waitFor('A\'s server to stop', async () => ((await w.side(A).runningPid()) === null ? true : null), 300_000, 200).then(() => true).catch(() => false)
+      if (gone) { aStoppedAt = Date.now(); dialsAtStop = w.links.copy.accepted() }
+    },
+  })
+  const t = r3.target
+  const done = r3.code === 0 && r3.state?.step === 'done' && t?.step === 'done'
+  c.add('mac-shaped: the switch to the Mac-shaped B completes (relay_commit on, w-h relayed by w-k)', done, `exit ${r3.code}; source ${r3.state?.step}; target ${t?.step}; ${last(r3.out, 3)}`)
+  const stood = t?.log.find((e) => e.step === 'start-target')?.at
+  c.add('mac-shaped: B\'s commit stood after A\'s server had stopped (its pid gone, before the target job\'s start-target)',
+    aStoppedAt > 0 && !!stood && Date.parse(stood) >= aStoppedAt, `A's server gone at ${aStoppedAt ? new Date(aStoppedAt).toISOString() : 'never seen'}; commit stood at ${stood ?? 'never'}`)
+  const report = r3.state ? JSON.parse((await text(path.join(switchFolder(B.standbyDir), checkReportName(r3.state.id)))) ?? 'null') as CheckReport | null : null
+  const by = Object.fromEntries((report?.reach ?? []).map((r) => [r.id, r.answered ? `${r.way}${r.via ? `:${r.via}` : ''}` : 'no']))
+  c.add('mac-shaped: B\'s check reached w-k by its door and w-h through w-k\'s relay, and not w-a (no witness of its own, no door of a dev box)',
+    by['w-k'] === 'direct' && by['w-h'] === 'relay:w-k' && by['w-a'] === 'no', JSON.stringify(by))
+  c.add('mac-shaped: the check said the commit goes through the companion alone (one path for two votes)',
+    /goes through w-k's door alone/.test(r3.out) || (report?.notes ?? []).some((n) => /goes through w-k's door alone/.test(n)), (report?.notes ?? []).join(' | '))
+  const held = await Promise.all(['w-h', 'w-k'].map((id) => recordAt(w.witnessRoot[id]!, walnutId, id)))
+  c.add('mac-shaped: w-h and w-k hold B\'s record (B\'s own commit, through the relay and the door)', held.every((h) => h?.holder === B.id), held.map((h) => `${h?.kind} ${h?.number} of ${h?.holder}`).join('; '))
+  c.add('mac-shaped: nobody dialed B after A\'s stop (the copy link, A\'s server\'s, is its only way in)', dialsAtStop >= 0 && w.links.copy.accepted() === dialsAtStop, `copy link connections: ${dialsAtStop} at A's stop, ${w.links.copy.accepted()} now`)
+  if (!done) return
+  x.roles.leader = B
+  x.roles.other = A
+  await checkCarried(c, w, B, A, x.carried, 'mac-shaped A -> B')
+  await oneLeader(x, 'mac-shaped', B)
+
+  // 4. Back to A: a dev box with its own witness (here, and the companion's door).
+  await writeAndBatch(x, 'mac-back')
+  const r4 = await runSwitch(x, 'mac-shaped: back to A')
+  c.add('mac-shaped: back to A (its own witness and the companion\'s door)', r4.code === 0 && r4.target?.step === 'done', `exit ${r4.code}: ${last(r4.out, 3)}`)
+  if (r4.code === 0) await oneLeader(x, 'mac-shaped back', A)
 }
 
 const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [

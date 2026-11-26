@@ -18,6 +18,20 @@
  *   w-k      the companion: the repo's companion test cluster (a WALNUT_CLOUD_MODE replica with
  *            `witness-door` on), behind TLS on loopback. A and B are paired with it (bridge-local)
  *
+ * The Mac shape (WorldOptions.shape 'mac', rehearsal (a) only): the lead's layout seen from a switch back to the Mac.
+ * B is the Mac: it keeps NO witness and nobody dials it but A's server (the copy link, which ends at A's stop); its
+ * only ways out are its own links (to A's and H's daemons, used once it leads) and the companion. H is the other dev
+ * box: its one Walnut service (a real host replica of A's Walnut on H's daemon, host-services.ts) keeps
+ *
+ *   w-h      on machine H: its service's leader door (way c for the leader: in rehearsal (a) a witness machine on H's
+ *            state root, as w-b's), and through the companion's relay (`relay: w-k`), over streams H's service parks
+ *            at the companion over H's own bridge. Its door url answers only for the one-time `witnesses init` (a
+ *            stand-in host replica on H, as A's leader reaches the other dev box's door), then refuses every
+ *            connection (endSetupLink): the Mac reaches no dev box's door, and here A cannot either (one url for both)
+ *
+ * and w-a has no door anybody else reaches (the dev box's door is out of the Mac's reach): the leader reaches it by
+ * way a, a later leader by way c over its link to A's host service.
+ *
  * Every link is a startSilentLinkProxy on THIS computer (the cuts and slowdowns are the same code in both
  * rehearsals): A to B's, A to H's, B to A's and B to H's daemon; each door (w-a, w-b, w-k: a door is one proxy, so
  * its cut is that witness out of reach for every machine); in (a), A to B's host service (way c). Each machine's
@@ -66,6 +80,8 @@ export interface ByHandRun { ok: boolean; pid?: number; log: string; logText(): 
 
 export interface RemoteWorld {
   root: string
+  /** 'dev': two dev boxes that each keep a witness; 'mac': B keeps none and nobody dials it (see the top of this file). */
+  shape: WorldShape
   /** Rehearsal (a): B on this computer; (b): B on another, `label` says which. */
   kind: 'one-box' | 'two-machines'
   label: string
@@ -86,11 +102,13 @@ export interface RemoteWorld {
   daemons: Record<'a' | 'b' | 'h', MachineDaemon>
   companion: CloudBoxReplica
   /** The links, each a proxy here: `copy` is A to B's daemon (the copy link). */
-  links: { copy: SilentLinkProxy; aToH: SilentLinkProxy; bToA: SilentLinkProxy; bToH: SilentLinkProxy; doorA: SilentLinkProxy; doorB: SilentLinkProxy; doorK: SilentLinkProxy; aToBService: SilentLinkProxy | null }
-  /** The TLS fronts of the three doors. */
-  fronts: { a: TlsFront; b: TlsFront; k: TlsFront }
+  links: { copy: SilentLinkProxy; aToH: SilentLinkProxy; bToA: SilentLinkProxy; bToH: SilentLinkProxy; doorA: SilentLinkProxy; doorB: SilentLinkProxy; doorK: SilentLinkProxy; aToBService: SilentLinkProxy | null; doorH: SilentLinkProxy | null; aToHService: SilentLinkProxy | null }
+  /** The TLS fronts of the doors (H's in shape 'mac' only). */
+  fronts: { a: TlsFront; b: TlsFront; k: TlsFront; h: TlsFront | null }
+  /** The witnesses of the list, in its order. */
+  witnessIds: string[]
   /** The witness roots (each machine's state dir), by witness id: paths on that witness's machine. */
-  witnessRoot: Record<'w-a' | 'w-b' | 'w-k', string>
+  witnessRoot: Record<string, string>
   walnutId: string
   /** What the world measured of itself (rehearsal (b): the other machine's clock, the link's round trip). */
   times: Record<string, string>
@@ -99,13 +117,15 @@ export interface RemoteWorld {
   /** Every daemon link one machine's server dials (to the other machines' daemons, and A's to B's host service), cut or back. A door is one proxy for every machine: witnessDown. */
   cutMachine(m: 'a' | 'b', mode: 'drop-hold' | 'severed' | 'pass'): void
   /** One witness out of reach (its door, and in (a) its way c link), and back. */
-  witnessDown(id: 'w-a' | 'w-b' | 'w-k', down: boolean): void
-  /** Start B's host replica once the Walnut id is known (after A's first boot). */
-  startServiceB(walnutId: string): Promise<void>
+  witnessDown(id: 'w-a' | 'w-b' | 'w-h' | 'w-k', down: boolean): void
+  /** Start the witness machines' services once the Walnut id is known (after A's first boot): B's host replica (shape 'dev'); in shape 'mac' A's server keeps H's (host-services.ts). */
+  startWitnessServices(walnutId: string): Promise<void>
   /**
    * Rehearsal (b): A's link to w-b's machine for the one-time setup only (a host replica's witness has no setup
    * route on its door: in a real deployment its setup comes over the leader's daemon link to that service). Closed
-   * here, after `witnesses init`: from then on A reaches w-b only through its door. False when the world has none.
+   * here, after `witnesses init`: from then on A reaches w-b only through its door. Shape 'mac': w-h's door, which
+   * answers only that setup's reads; from then on nobody reaches it (A over way c, B through the relay). False when
+   * the world has none.
    */
   endSetupLink(): Promise<boolean>
   stop(): Promise<void>
@@ -147,6 +167,15 @@ export interface BPlacement {
   stop(): Promise<void>
 }
 
+/** A free loopback port now (H's service listens there). */
+function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer()
+    s.once('error', reject)
+    s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) })
+  })
+}
+
 /** A third machine: a folder (its HOME) and a machine id, no server. */
 function hostMachine(root: string, name: string): Machine {
   const dir = path.join(root, name)
@@ -180,8 +209,12 @@ export function localDaemonPort(d: MachineDaemon): () => number {
   }
 }
 
+export type WorldShape = 'dev' | 'mac'
+
 export interface WorldOptions {
   portA: number; portB: number; log?: (s: string) => void; inProcessDaemon?: InProcessDaemonSetting
+  /** 'mac': B keeps no witness and nobody dials it (the top of this file); rehearsal (a) only. Default 'dev'. */
+  shape?: WorldShape
   /** Rehearsal diagnostics: log every git on a machine's home here (git-watch.ts; the machines on this computer only). */
   gitWatch?: string
 }
@@ -208,6 +241,8 @@ export async function makeRemoteWorld(root: string, opts: WorldOptions): Promise
 /** The world around machine B's placement: A, H, the companion, every link and the config, here. */
 export async function buildRemoteWorld(root: string, opts: WorldOptions, place: BPlacement): Promise<RemoteWorld> {
   const inProcessDaemon = opts.inProcessDaemon ?? 'default'
+  const mac = opts.shape === 'mac'
+  if (mac && place.kind !== 'one-box') throw new Error('the Mac shape is rehearsal (a)\'s only')
   const log = opts.log ?? (() => {})
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const cert = makeLoopbackCert(path.join(root, 'tls'))
@@ -254,8 +289,12 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     const portOf = (k: 'a' | 'b' | 'h') => (k === 'b' ? place.daemonPort(daemons.b) : localDaemonPort(daemons[k]))
     const proxy = (port: () => number) => startSilentLinkProxy(port)
     let replicaPortB = 0
-    const wmB: WitnessMachine | null = place.wayC ? await startWitnessMachine({ host: 'machine-b', root: path.join(b.dir, 'leader-witness'), walnutId: null }) : null
+    const wmB: WitnessMachine | null = place.wayC && !mac ? await startWitnessMachine({ host: 'machine-b', root: path.join(b.dir, 'leader-witness'), walnutId: null }) : null
     if (wmB) undo.push(() => wmB.close())
+    // Shape 'mac': A's way c to w-h (a witness machine on H's state root, as w-b's above), and w-h's door for the setup.
+    const wmH: WitnessMachine | null = mac ? await startWitnessMachine({ host: h.id, root: path.join(h.dir, 'leader-witness'), walnutId: null }) : null
+    if (wmH) undo.push(() => wmH.close())
+    let doorPortH = 0
     // Without way c, a setup-only link to w-b's machine (endSetupLink), the witness's record root on B.
     let setupB: { handle: string; port: number } | null = null
     let setupTarget = 0
@@ -274,10 +313,11 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
       bToA: await proxy(portOf('a')), bToH: await proxy(portOf('h')),
       doorA: await proxy(() => a.port), doorB: await proxy(() => replicaPortB), doorK: await proxy(() => companion.port),
       aToBService: wmB ? await proxy(() => wmB.port) : setupB ? await proxy(() => setupTarget) : null,
+      doorH: mac ? await proxy(() => doorPortH) : null, aToHService: wmH ? await proxy(() => wmH.port) : null,
     }
     undo.push(() => Promise.all(Object.values(links).map((p) => p?.close())))
-    const fronts = { a: await startTlsFront(cert, () => links.doorA.port), b: await startTlsFront(cert, () => links.doorB.port), k: await startTlsFront(cert, () => links.doorK.port) }
-    undo.push(() => Promise.all(Object.values(fronts).map((f) => f.close())))
+    const fronts = { a: await startTlsFront(cert, () => links.doorA.port), b: await startTlsFront(cert, () => links.doorB.port), k: await startTlsFront(cert, () => links.doorK.port), h: links.doorH ? await startTlsFront(cert, () => links.doorH!.port) : null }
+    undo.push(() => Promise.all(Object.values(fronts).map((f) => f?.close())))
     // What B dials on this computer, at the same port on B: its links to A's and H's daemons, every door (B is a
     // client of all three witnesses), the companion's git, and A's door for hosts. What this computer dials on B:
     // B's door for hosts (and its API), its daemon (above, followed as it moves) and its host service (startServiceB).
@@ -310,8 +350,11 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     const server = async (x: Machine) => { const r = await ioOf(x).op('runtime'); return [r.bun, path.join(r.repo, 'scripts/leader-switch/machine-server.ts'), '--port', String(x.port), '--dev'] }
     a.start = await server(a)
     b.start = await server(b)
-    a.env = machineEnv(a, 'a', { [b.id]: routeFromA(b, links.copy), [h.id]: routeFromA(h, links.aToH) }, links.aToBService ? { WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ [b.id]: links.aToBService.port }) } : {})
-    b.env = machineEnv(b, 'b', { [a.id]: routeFromB(a, links.bToA), [h.id]: routeFromB(h, links.bToH) })
+    // Shape 'mac': H's one service, as the host-server manager would run it there (host-services.ts), with its witness.
+    const hostServices = mac ? { WALNUT_REHEARSAL_HOST_SERVICES: JSON.stringify({ [h.id]: { port: await freeLoopbackPort(), dir: h.dir, env: { HOME: h.dir, WALNUT_MACHINE_ID_FILE: h.idFile, WALNUT_CAPABILITIES: 'witness-door', NODE_EXTRA_CA_CERTS: cert.certFile } } }) } : {}
+    const witnessLinks = { ...(links.aToBService ? { [b.id]: links.aToBService.port } : {}), ...(links.aToHService ? { [h.id]: links.aToHService.port } : {}) }
+    a.env = machineEnv(a, 'a', { [b.id]: routeFromA(b, links.copy), [h.id]: routeFromA(h, links.aToH) }, { ...(Object.keys(witnessLinks).length ? { WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify(witnessLinks) } : {}), ...hostServices })
+    b.env = machineEnv(b, 'b', { [a.id]: routeFromB(a, links.bToA), [h.id]: routeFromB(h, links.bToH) }, hostServices)
     // Its door for hosts (the leader's /host-door, ws:// to loopback): the handover's host steps run only when the new leader names one.
     const m = (x: Machine) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env, host_key: x.id, doors: [`ws://127.0.0.1:${x.port}/host-door`] })
     // Where a session on a leader's own daemon works (it becomes a session of the old machine as a host after a switch).
@@ -322,10 +365,16 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
       experimental: { switchable_leader: true, ...(inProcessDaemon === 'off' ? { in_process_daemon: false } : {}) },
       // The copy goes to B over A's link to B's daemon (the copy link kind daemon); B's program runs `standby receive` there.
       standby: { dir: b.standbyDir, host: b.id, walnut: place.walnut, interval_seconds: 5 },
-      hosts: { [a.id]: { hostname: a.id }, [b.id]: { hostname: b.id }, [h.id]: { hostname: h.id } },
+      // Shape 'mac': H's follower is the person's choice (not the default), so the manager, which cannot install it here,
+      // never takes down the one host-services.ts keeps.
+      hosts: { [a.id]: { hostname: a.id }, [b.id]: { hostname: b.id }, [h.id]: { hostname: h.id, ...(mac ? { server: { enabled: true } } : {}) } },
       cloud_bridge: { url: `wss://127.0.0.1:${fronts.k.port}/bridge` },
       leader_switch: {
-        witnesses: [
+        witnesses: mac ? [
+          { id: 'w-a', machine: a.id, host: a.id },
+          { id: 'w-h', machine: h.id, host: h.id, url: door(fronts.h!), relay: 'w-k' },
+          { id: 'w-k', url: door(fronts.k) },
+        ] : [
           { id: 'w-a', machine: a.id, url: door(fronts.a) },
           { id: 'w-b', machine: b.id, host: b.id, url: door(fronts.b) },
           { id: 'w-k', url: door(fronts.k) },
@@ -340,9 +389,10 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     // a cut of the companion cuts its git sync as well, as on a real machine.
     await seedPrimaryPairing(a.home, `127.0.0.1:${links.doorK.port}`, companion.tokens)
     const serviceB: { handle: string | null } = { handle: null }
+    const setupH: { handle: string | null } = { handle: null }
     const all = Object.values(links).filter((p): p is SilentLinkProxy => !!p)
     // Read at each cut: the setup-only link leaves once it is closed (endSetupLink), so no cut or mend touches it.
-    const ofMachine = { a: () => [links.copy, links.aToH, ...(links.aToBService ? [links.aToBService] : [])], b: () => [links.bToA, links.bToH] }
+    const ofMachine = { a: () => [links.copy, links.aToH, ...(links.aToBService ? [links.aToBService] : []), ...(links.aToHService ? [links.aToHService] : [])], b: () => [links.bToA, links.bToH] }
     const side = (x: Machine): MachineSide => {
       const call = (c: SideCall) => ioOf(x).op('side', x, c)
       return {
@@ -363,8 +413,12 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
       return { status: res.status, json: await res.json().catch(() => null), headers: res.headers }
     }
     const world: RemoteWorld = {
-      root, kind: place.kind, label: place.label, wayC: place.wayC, a, b, h, daemons, companion, links, fronts,
-      witnessRoot: { 'w-a': path.join(a.dir, 'leader-witness'), 'w-b': path.join(b.dir, 'leader-witness'), 'w-k': path.join(companion.box.home, '.local', 'state', 'open-walnut', 'leader-witness') },
+      root, shape: mac ? 'mac' : 'dev', kind: place.kind, label: place.label, wayC: place.wayC, a, b, h, daemons, companion, links, fronts,
+      witnessIds: mac ? ['w-a', 'w-h', 'w-k'] : ['w-a', 'w-b', 'w-k'],
+      witnessRoot: {
+        'w-a': path.join(a.dir, 'leader-witness'), [mac ? 'w-h' : 'w-b']: path.join(mac ? h.dir : b.dir, 'leader-witness'),
+        'w-k': path.join(companion.box.home, '.local', 'state', 'open-walnut', 'leader-witness'),
+      },
       walnutId: '',
       times: place.times,
       io: ioOf,
@@ -391,9 +445,18 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
         if (id === 'w-a') links.doorA.setMode(mode)
         if (id === 'w-b') { links.doorB.setMode(mode); links.aToBService?.setMode(mode) }
         if (id === 'w-k') links.doorK.setMode(mode)
+        if (id === 'w-h') { links.doorH?.setMode(mode); links.aToHService?.setMode(mode) }
       },
-      async startServiceB(walnutId) {
+      async startWitnessServices(walnutId) {
         world.walnutId = walnutId
+        if (mac) {
+          wmH!.walnutId = walnutId
+          // w-h's door for the setup's reads only (endSetupLink closes it): a host replica on H's state root, as B's below.
+          const r = await LOCAL.op('startService', { base: path.join(h.dir, 'setup-service'), machineDir: h.dir, machineId: h.id, walnutId, witness: 'w-h' })
+          setupH.handle = r.handle
+          doorPortH = r.port
+          return
+        }
         if (wmB) wmB.walnutId = walnutId
         if (setupB) await place.io.op('setSetupWitnessWalnut', setupB.handle, walnutId)
         const r = await place.io.op('startService', { base: path.join(b.dir, 'service'), machineDir: b.dir, machineId: b.id, walnutId, witness: 'w-b' })
@@ -402,6 +465,18 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
         replicaPortB = r.port
       },
       async endSetupLink() {
+        if (mac) {
+          if (!setupH.handle) return false
+          const handle = setupH.handle
+          setupH.handle = null
+          // The proxy stays and dials a listener that closes every connection at once: a reach to w-h's door fails at once.
+          const refuser = net.createServer((sock) => sock.destroy())
+          await new Promise<void>((r) => refuser.listen(0, '127.0.0.1', () => r()))
+          stops.push(() => new Promise<void>((r) => refuser.close(() => r())))
+          doorPortH = (refuser.address() as net.AddressInfo).port
+          await LOCAL.op('stopKept', handle)
+          return true
+        }
         if (!setupB) return false
         const { handle, port } = setupB
         setupB = null
@@ -423,7 +498,8 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
         for (const x of [a, b]) await side(x).stopServer(10_000).catch(() => {})
         if (serviceB.handle) await place.io.op('stopKept', serviceB.handle).catch(() => {})
         await wmB?.close().catch(() => {})
-        await Promise.all(Object.values(fronts).map((f) => f.close().catch(() => {})))
+        await wmH?.close().catch(() => {})
+        await Promise.all(Object.values(fronts).map((f) => f?.close().catch(() => {})))
         await Promise.all(all.map((p) => p.close().catch(() => {})))
         for (const s of stops) await s()
         await companion.stop().catch(() => {})

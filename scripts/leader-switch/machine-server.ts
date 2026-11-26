@@ -8,7 +8,8 @@
  *
  * The test seams: the other machines' daemons are reached on loopback ports (daemon-routes.ts,
  * WALNUT_REHEARSAL_DAEMON_ROUTES), never ssh, and this server's own code decides when it dials; the
- * rehearsal's witness links (witness-links.ts); and a net host that misses the member lists (below).
+ * rehearsal's witness links (witness-links.ts); a host's one service, as the host-server manager would run it
+ * (host-services.ts); and a net host that misses the member lists (below).
  *
  *   bun scripts/leader-switch/machine-server.ts --port <n> [--dev]
  */
@@ -57,6 +58,8 @@ if (c.WALNUT_HOME !== path.resolve(process.env.OPEN_WALNUT_HOME!) || c.CLOUD_MOD
 const routes = process.env.WALNUT_REHEARSAL_DAEMON_ROUTES
 if (routes) await (await import('./daemon-routes.js')).routeDaemonLinks(JSON.parse(routes))
 await (await import('./witness-links.js')).linkRehearsalWitnesses()
+// A host's one service where the rehearsal names one (host-services.ts): what the host-server manager would run there.
+await (await import('./host-services.js')).keepRehearsalHostServices()
 // A net host that misses the member lists, as the rehearsal asks: while <HOME>/rehearsal-retell-miss names a
 // host, the handover's retell says it missed that host (host-follow-steps.ts retellNetMembers), so the switch
 // waits and then takes its handover back. The real step runs whenever the file is not there.
