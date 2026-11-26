@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { log } from '@/utils/log';
 import { MicInput } from '@/components/common/BoxMic';
 import { useDirectorActions, type DirectorProject } from './director-actions';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 interface Props {
   projects: readonly DirectorProject[];
@@ -62,7 +63,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
         {...(inList ? { role: 'option', 'aria-selected': false } : {})}
         title="Make a task that is a Director from the start; your first message in its chat starts it"
         onClick={() => onEditing(true)}
-      ><span aria-hidden="true">+</span> New Director</button>
+      >{ICON_PLUS}New director</button>
     );
   }
   return (
@@ -81,7 +82,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
         // A one-line name, made on Enter (as a rename is): nothing long to keep.
         data-no-draft="rename"
         data-testid="org-new-director-input"
-        aria-label="New Director's title"
+        aria-label="New director's title"
         placeholder="Director's title"
         value={title}
         disabled={busy}

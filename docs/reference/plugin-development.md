@@ -1029,7 +1029,7 @@ export function activate(walnut: WalnutWebApi) {
     const [count, setCount] = useState(0)
     return (
       <main className="my-plugin-app">
-        <h1>My Plugin</h1>
+        <h1 className="page-title">My Plugin</h1>
         <p>Section: {subpath || '/'}</p>
         <button type="button" onClick={() => setCount((value) => value + 1)}>
           Clicked {count} times

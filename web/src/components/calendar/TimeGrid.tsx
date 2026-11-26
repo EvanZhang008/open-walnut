@@ -811,7 +811,7 @@ export const TimeGrid = memo(function TimeGrid({
                   '--cal-chip-tint': createTint,
                 } as React.CSSProperties}
               >
-                <span className="cal-chip-title">{createKind === 'task' ? 'New Task' : 'New Event'}</span>
+                <span className="cal-chip-title">{createKind === 'task' ? 'New task' : 'New event'}</span>
                 <span className="cal-chip-time">{clockRange(createSel.startMin, createSel.endMin)}</span>
               </div>
             </GridOverlay>

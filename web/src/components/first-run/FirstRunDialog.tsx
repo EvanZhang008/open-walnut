@@ -261,7 +261,7 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
       )}
       <div className="fr-hosts-foot">
         <button type="button" tabIndex={0} className="fr-link" onClick={onAddByHand} data-testid="first-run-add-by-hand">
-          + Add a machine that is not listed
+          Add a machine that is not listed
         </button>
         {/* Every host still waiting, in one click (2026-11-12, the user: "pelase have a connect to all button"). */}
         {waiting.length > 1 && (

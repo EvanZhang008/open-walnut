@@ -21,6 +21,7 @@ import { HostStatusDot } from './HostStatusDot';
 import { isMoreRow, moreRowText } from './history-cap';
 import { hostTagTitle } from './host-tag';
 import { LOCAL_HOST_LABEL } from '@/utils/host-display-label';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 interface PathParts {
   parent: string;
@@ -280,7 +281,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
 
       {createOption && (
         <div className="sps-create-row" onClick={onCreate}>
-          <span className="sps-create-icon">+</span>
+          <span className="sps-create-icon" aria-hidden="true">{ICON_PLUS}</span>
           {/* "Create folder … in it" — a bare "Create …" read as "create session". */}
           <span>Create folder <code>{createOption}</code> &amp; start session in it</span>
         </div>

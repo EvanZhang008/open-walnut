@@ -159,12 +159,12 @@ export function FileTreeContextMenu({
   const createGroup: ReactNode[] = [];
   if (onNewFile) {
     createGroup.push(
-      <button key="newfile" role="menuitem" onClick={run(() => onNewFile(createDir))}>New File…</button>,
+      <button key="newfile" role="menuitem" onClick={run(() => onNewFile(createDir))}>New file…</button>,
     );
   }
   if (onNewFolder) {
     createGroup.push(
-      <button key="newfolder" role="menuitem" onClick={run(() => onNewFolder(createDir))}>New Folder…</button>,
+      <button key="newfolder" role="menuitem" onClick={run(() => onNewFolder(createDir))}>New folder…</button>,
     );
   }
 

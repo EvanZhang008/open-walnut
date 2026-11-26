@@ -45,7 +45,7 @@ export function CreatePlaceholderBlock({
   // Off this host's day or kind (the date was moved, all-day toggled): keep the
   // box for the arrow, but draw nothing where the item will not be.
   const away = (timedHost ? offset < 0 || offset > 1 : offset !== 0) || allDay === timedHost;
-  const title = preview?.title || (kind === 'event' ? 'New Event' : 'New Task');
+  const title = preview?.title || (kind === 'event' ? 'New event' : 'New task');
   const style: React.CSSProperties & Record<string, string | number> = {};
   // The colour it will have: the form's calendar once it reports one, its default calendar's
   // before that (the drag that opened it was already drawn in it), a task's otherwise.

@@ -110,7 +110,7 @@ test('a folder with a same-named note is one row that opens the note', async ({ 
   await childA.click({ button: 'right' })
   const menu = page.locator('.notes-context-menu')
   await expect(menu).toBeVisible()
-  for (const label of ['Open in new tab', 'Rename note', 'Delete note', 'New Note', 'New Folder', 'Delete folder']) {
+  for (const label of ['Open in new tab', 'Rename note', 'Delete note', 'New note', 'New folder', 'Delete folder']) {
     await expect(menu.getByRole('button', { name: label, exact: true })).toBeVisible()
   }
   // A plain folder's menu has no note actions.

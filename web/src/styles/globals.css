@@ -1136,29 +1136,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .phase-hook-indicator { margin-left: 4px; font-size: var(--font-size-xs); opacity: 0.7; cursor: help; }
 
 
-/* ===== Page Header ===== */
-
-.page-header {
-  margin-bottom: 24px;
-}
-
-.page-title {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
-  color: var(--fg);
-}
-
-.page-subtitle {
-  color: var(--fg-muted);
-  font-size: 14px;
-  margin-top: 4px;
-}
-
-/* A page header on the header rule (header-fit.css; Agents, Commands): the title and the line
-   under it take the room left, the title cutting last; the button keeps its words whole. */
-.page-header[data-fit-header] > .page-header-text { flex: 1 1 auto; min-width: 0; }
-.page-header[data-fit-header] > .btn { flex: none; white-space: nowrap; }
+/* ===== Page Header: styles/page-head.css ===== */
 
 /* A page that is one list of cards (Agents, Commands): a readable width, so a card's
    menu sits beside its short text and a long description wraps, instead of the card
@@ -4048,11 +4026,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   padding: 14px 16px 8px;
 }
 
-.memory-tree-header-title {
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
 
 .memory-tree-filter {
   padding: 0 12px 8px;
@@ -9527,9 +9500,9 @@ body.walnut-dragging {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* The drawn plus (ICON_PLUS): a box for it, level with the words. */
 .focus-inline-add-plus {
-  font-size: 14px;
-  font-weight: 700;
+  display: inline-flex;
   line-height: 1;
 }
 .focus-inline-add {
@@ -10796,12 +10769,15 @@ body.walnut-dragging {
 }
 
 .global-notes-label {
+  flex: 1;
+}
+/* The folding section's label (not a pane's title: that one is .pane-title). */
+.global-notes-label:not(.pane-title) {
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  flex: 1;
 }
 
 .global-notes-saving {
@@ -14856,7 +14832,7 @@ html .sps-section-label.wn-menu-heading {
   border-color: var(--accent);
 }
 .sps-create-row .sps-create-icon {
-  font-weight: 700;
+  display: inline-flex;
   color: var(--accent);
 }
 .sps-create-row code {
@@ -19046,12 +19022,7 @@ html .notes-chat-switcher-group-first.wn-menu-heading {
   border-bottom: 1px solid var(--border);
 }
 
-.notes-tree-header h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
-}
+/* .notes-tree-header h3 is a .pane-title (page-head.css). */
 
 .notes-tree-actions {
   display: flex;
@@ -24185,10 +24156,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-width: 0;
 }
 
+/* Its type is the pane title's (.pane-title, page-head.css). */
 .cal-title {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -26644,7 +26613,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .create-plugin-hero h1 {
   margin: 0 0 8px;
-  font-size: 26px;
 }
 
 .create-plugin-lede {

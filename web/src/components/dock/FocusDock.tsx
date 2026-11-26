@@ -14,7 +14,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
-import { ICON_CHAT } from '@/components/common/Icons';
+import { ICON_CHAT, ICON_PLUS } from '@/components/common/Icons';
 import { EmptyState } from '@/components/common/EmptyState';
 import { readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
@@ -267,7 +267,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
         title="Add a task to Focus"
         aria-label="Add a task to Focus"
       >
-        +
+        {ICON_PLUS}
       </button>
     );
   }

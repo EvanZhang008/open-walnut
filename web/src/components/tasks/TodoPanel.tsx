@@ -2067,7 +2067,7 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
     if (hideClosed) return null;
     return (
       <button type="button" className="focus-inline-add-trigger" onClick={() => setOpen(true)} title={label}>
-        <span className="focus-inline-add-plus">+</span>
+        <span className="focus-inline-add-plus" aria-hidden="true">{ICONS.ICON_PLUS}</span>
         <span>{label}</span>
       </button>
     );

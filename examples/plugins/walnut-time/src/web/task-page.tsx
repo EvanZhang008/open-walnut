@@ -51,7 +51,7 @@ export function TaskTimePage({ page, store, paths, basePath, navigate }: TaskTim
             <DirectionMark dir="right" />
             <span>{page.kind === 'task' ? 'Time on a task' : 'Time in a session'}</span>
           </nav>
-          <h1 data-testid="time-task-title">{title}</h1>
+          <h1 className="page-title" data-testid="time-task-title">{title}</h1>
           <p>
             Your time and agent time on this {page.kind === 'task' ? 'task' : 'session'} are counted separately, day by day.
             They often overlap (you and an agent work at the same moment, and sessions run in parallel), so they are never added together.

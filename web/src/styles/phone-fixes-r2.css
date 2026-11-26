@@ -292,10 +292,7 @@
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* N2-19: Routines on a phone. The bar already names the page, so the page's
-     own title goes; every control takes a finger; badges read 12 px. */
-  .app-shell-navigation .page-header:has(+ .routines-view) .page-title {
-    display: none;
-  }
+     own title goes (routines-groups.css); every control takes a finger; badges read 12 px. */
   /* A box or a radio keeps its 16 px; its whole row is the finger's target (.cron-form-radio). */
   .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden'], .wn-check, .wn-seg-input), select) {
     min-height: 44px;

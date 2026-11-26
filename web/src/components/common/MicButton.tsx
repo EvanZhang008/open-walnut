@@ -21,6 +21,7 @@ import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
 import { DisclosureChevron, MenuCaret } from '@/components/controls';
+import { ICON_PLUS } from './Icons';
 
 /** How long the mic may take to send its first sound before the button says so in words. */
 const SLOW_START_HINT_MS = 700;
@@ -648,8 +649,9 @@ export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef,
               onClick={handleAddVocab}
               type="button"
               disabled={!vocabInput.trim()}
+              aria-label="Add word"
             >
-              +
+              {ICON_PLUS}
             </button>
           </div>
           {vocabStatus && <div className="mic-vocab-status">{vocabStatus}</div>}

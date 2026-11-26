@@ -17,6 +17,7 @@ import { useOpenTopic } from './topic-entry';
 import { useTopicsOn } from './topics-flag';
 import { useTopicList } from './useTopics';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 export function TopicDialogsHost() {
   const on = useTopicsOn();
@@ -82,7 +83,7 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
           {error && <p className="topic-error" data-testid="topic-add-error">{error}</p>}
           <div className="app-modal-actions wn-dialog-foot">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn btn-primary" data-testid="topic-add-new" onClick={() => openNewTopic(members)}>+ New topic with them</button>
+            <button type="button" className="btn btn-primary" data-testid="topic-add-new" onClick={() => openNewTopic(members)}>{ICON_PLUS}New topic with them</button>
           </div>
         </div>
       </div>

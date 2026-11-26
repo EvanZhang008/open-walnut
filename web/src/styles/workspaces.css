@@ -332,6 +332,10 @@
 .project-scripts-link.is-danger:hover:not(:disabled) { color: var(--error); }
 .project-scripts-link:disabled { opacity: 0.5; cursor: default; }
 .project-scripts-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   margin-top: 8px;
   padding: 6px 12px;
   border: 1px dashed var(--border);

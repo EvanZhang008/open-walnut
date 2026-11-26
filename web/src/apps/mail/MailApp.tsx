@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState, LoadingState, UnavailableState, type EmptyStateAction } from '@/components/common/EmptyState';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import type { AppComponentProps } from '../registry';
@@ -280,10 +281,5 @@ export function MailApp(props: AppComponentProps) {
 }
 
 function MailHeader() {
-  return (
-    <div className="page-header">
-      <h1 className="page-title">Mail</h1>
-      <p className="page-subtitle">Accounts come from mail provider plugins</p>
-    </div>
-  );
+  return <PageHeader title="Mail" subtitle="Accounts come from mail provider plugins" />;
 }

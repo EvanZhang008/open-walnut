@@ -23,7 +23,7 @@ import { EmptyState, LoadingState, UnavailableState } from '@/components/common/
 import '@/styles/header-fit.css';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
-import { ICON_CLOSE } from '../common/Icons';
+import { ICON_CLOSE, ICON_PLUS } from '../common/Icons';
 
 /** `timeout_sec` has no field here (the API sets it); an edit keeps it. */
 type Draft = { id?: string; name: string; command: string; setup: boolean; wait: boolean; teardown: boolean; timeout_sec?: number };
@@ -313,7 +313,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
         {draft && !draft.id && form}
         {!draft && error && <div className="project-scripts-error" data-testid="project-scripts-error">{error}</div>}
         {answer && !draft && (
-          <button className="project-scripts-add" onClick={() => { setError(null); setBadField(null); openForm(); }} disabled={saving} data-testid="project-script-add">+ Add script</button>
+          <button className="project-scripts-add" onClick={() => { setError(null); setBadField(null); openForm(); }} disabled={saving} data-testid="project-script-add">{ICON_PLUS}Add script</button>
         )}
 
         {answer && (

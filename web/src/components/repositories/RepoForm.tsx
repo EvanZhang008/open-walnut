@@ -5,6 +5,7 @@ import { fetchRepository } from '@/api/repositories';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { LoadingState } from '@/components/common/EmptyState';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 interface RepoFormProps {
   editSlug: string | null;
@@ -352,7 +353,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
   return (
     <form className="repo-form" onSubmit={handleSubmit}>
       <div className="repo-form-header">
-        <h2>{editSlug ? 'Edit Repository' : 'Add Repository'}</h2>
+        <h2>{editSlug ? 'Edit repository' : 'Add repository'}</h2>
       </div>
 
       {error && <div className="repo-form-error">{error}</div>}
@@ -464,7 +465,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
               )}
             </div>
           ))}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={addHost}>+ Add Host</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={addHost}>{ICON_PLUS}Add host</button>
         </div>
       </div>
 

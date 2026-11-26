@@ -74,7 +74,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="cmd-form card">
-      <h3 className="cmd-form-title">{isEditing ? `Edit /${command.name}` : 'New Command'}</h3>
+      <h3 className="cmd-form-title">{isEditing ? `Edit /${command.name}` : 'New command'}</h3>
 
       {error && <div className="cmd-form-error">{error}</div>}
 

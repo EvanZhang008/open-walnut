@@ -157,7 +157,7 @@ function PlusControl({ actions, restLabel, wrapClassName }: {
         aria-expanded={single ? undefined : open}
         data-testid="plus-menu-trigger"
       >
-        +
+        {ICONS.ICON_PLUS}
       </button>
       {open && !single && createPortal(
         <div

@@ -45,7 +45,8 @@
    hover edge sits 3px past each side of them (.org-name-edit). The title pads 4px (the spacing grid) and
    its margins take them back, so the edge shows whole inside the title's own clip, the words stay where
    they were, and no part of the title runs out of its box (header-fit-check.ts). */
-.org-list-title { display: flex; min-width: 0; margin: 0 4px 0 -4px; padding: 0 4px; font-size: var(--font-size-xl); font-weight: 600; }
+/* Its type is the pane title's (.pane-title, page-head.css). */
+.org-list-title { display: flex; min-width: 0; margin: 0 4px 0 -4px; padding: 0 4px; }
 .org-search-field { margin: 0 12px 8px; }
 /* Its end clears the notice stack while one shows (--corner-stack-room, corner-stack.css). */
 .org-list-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 6px 12px; padding-bottom: max(12px, var(--corner-stack-room, 0px)); scrollbar-gutter: stable; }

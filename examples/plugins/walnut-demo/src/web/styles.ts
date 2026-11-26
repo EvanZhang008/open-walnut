@@ -11,7 +11,7 @@ export const DEMO_CSS = `
   overflow-x: hidden;
 }
 .wd-root *, .wd-root *::before, .wd-root *::after { box-sizing: border-box; }
-.wd-root h1 { margin: 4px 0 6px; font-size: 22px; line-height: 1.2; }
+.wd-root h1 { margin: 4px 0 6px; } /* its type is the console's page title (.page-title) */
 .wd-root h3 { margin: 0; font-size: 14px; font-weight: 650; }
 .wd-root p { margin: 0; }
 .wd-root code { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }

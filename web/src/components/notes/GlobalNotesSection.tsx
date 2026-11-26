@@ -94,7 +94,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           {/* In fill mode the section tab above already reads "Notes" \u2014 repeating it
               here is pure duplication. The row itself stays: it carries the
               saving/error status and the pop-out + fullscreen buttons. */}
-          {(!fill || title) && <span className="global-notes-label">{fill ? title : 'Notes'}</span>}
+          {(!fill || title) && <span className={fill ? 'global-notes-label pane-title' : 'global-notes-label'}>{fill ? title : 'Notes'}</span>}
           {saving && <span className="global-notes-saving">Saving...</span>}
           {saveError && <span className="global-notes-error" title={saveError}>Save failed</span>}
           {/* Open in a new browser tab (standalone, lightweight) */}

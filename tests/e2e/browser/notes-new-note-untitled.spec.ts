@@ -79,7 +79,7 @@ test.afterEach(async ({ request }) => {
 
 test('New note opens an Untitled note at once, ready to type, and the file takes its title', async ({ page, request }) => {
   await openNotes(page)
-  const untitled = await newNote(page, () => page.getByTitle('New Note', { exact: true }).click())
+  const untitled = await newNote(page, () => page.getByTitle('New note', { exact: true }).click())
   expect(untitled).toMatch(/^Untitled( \d+)?\.md$/)
   // No name step: no input in the tree, the note is open with the caret in it.
   await expect(page.getByPlaceholder('note name', { exact: true })).toHaveCount(0)
@@ -116,7 +116,7 @@ test('a title another note has gets the next number, and that note is untouched'
   const seeded = await request.post('/api/v1/notes', { data: { path: taken, content: 'the other note\n' } })
   expect(seeded.status()).toBe(201)
   await openNotes(page)
-  await newNote(page, () => page.getByTitle('New Note', { exact: true }).click())
+  await newNote(page, () => page.getByTitle('New note', { exact: true }).click())
   await expect(editor(page)).toBeFocused()
   const numbered = `${title} 1.md`
   made.add(numbered)
@@ -134,7 +134,7 @@ test('New note from a folder\'s menu makes it in that folder', async ({ page, re
     const row = page.locator(`.notes-tree-folder[data-node-path="${folder}"]`).first()
     await expect(row).toBeVisible({ timeout: 15_000 })
     await row.click({ button: 'right' })
-    const inFolder = await newNote(page, () => page.locator('.notes-context-menu').getByRole('button', { name: 'New Note', exact: true }).click())
+    const inFolder = await newNote(page, () => page.locator('.notes-context-menu').getByRole('button', { name: 'New note', exact: true }).click())
     expect(inFolder).toBe(`${folder}/Untitled.md`)
     await expect(editor(page)).toBeFocused()
     await expect(treeRow(page, inFolder)).toBeVisible()
@@ -151,7 +151,7 @@ test('New note from a folder\'s menu makes it in that folder', async ({ page, re
 
 test('a name given in the tree ends the following: a later title edit keeps it', async ({ page, request }) => {
   await openNotes(page)
-  const untitled = await newNote(page, () => page.getByTitle('New Note', { exact: true }).click())
+  const untitled = await newNote(page, () => page.getByTitle('New note', { exact: true }).click())
   await expect(editor(page)).toBeFocused()
   const chosen = `Chosen ${STAMP}`
   made.add(`${chosen}.md`)

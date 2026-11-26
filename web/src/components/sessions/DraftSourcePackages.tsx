@@ -76,7 +76,7 @@ function FieldChips({ field, onChange }: { field: SourceArrayField; onChange: (v
           autoFocus
         />
       ) : (
-        <Chip pressed={undefined} data-testid="draft-source-add" onClick={() => setAdding(true)}>+ Add</Chip>
+        <Chip pressed={undefined} data-testid="draft-source-add" onClick={() => setAdding(true)}>{ICONS.ICON_PLUS}Add</Chip>
       )}
       {field.required && !field.values.length && <span className="draft-v6-package-required">Pick at least one to start</span>}{/* empty-state-ok: a required-field hint, not an empty state */}
     </ChipGroup>

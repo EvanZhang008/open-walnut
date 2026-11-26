@@ -64,7 +64,7 @@ export async function newNoteInFolder(page: Page, folder: string): Promise<strin
   await expect(row).toBeVisible({ timeout: 15_000 })
   await row.click({ button: 'right' })
   const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/notes')
-  await page.locator('.notes-context-menu').getByRole('button', { name: 'New Note', exact: true }).click()
+  await page.locator('.notes-context-menu').getByRole('button', { name: 'New note', exact: true }).click()
   const res = await created
   expect(res.status()).toBe(201)
   return (await res.json()).path as string

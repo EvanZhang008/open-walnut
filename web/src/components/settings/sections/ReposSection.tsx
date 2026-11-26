@@ -7,6 +7,7 @@ import { RepoForm } from '@/components/repositories/RepoForm';
 import { RepoDetail } from '@/components/repositories/RepoDetail';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { RepoSummary } from '@/api/repositories';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 const REPOS_DESCRIPTION = 'Repositories Walnut knows about: what each one is, its tech stack, and where it lives on this machine.';
 
@@ -126,7 +127,8 @@ export function ReposSection() {
       description={REPOS_DESCRIPTION}
       actions={(
         <button className="btn btn-primary" onClick={handleCreate}>
-          + Add Repository
+          {ICON_PLUS}
+          Add repository
         </button>
       )}
     >

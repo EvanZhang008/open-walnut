@@ -328,7 +328,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
               Part of {store.nameOf(parentId)}
             </button>
           )}
-          <h1>{row.name}</h1>
+          <h1 className="page-title">{row.name}</h1>
           {/* A tagline only when the description says more than its first sentence (About has it all). */}
           {tagline && <p className="apps-detail-line">{tagline}</p>}
           <div className="apps-detail-actions">

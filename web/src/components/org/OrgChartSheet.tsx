@@ -42,7 +42,7 @@ import { useOrgSettings } from './useOrgSettings';
 import { cardOf, ceoLine, dropPlan, nowLine, theVp, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
-import { ICON_CLOSE } from '../common/Icons';
+import { ICON_CLOSE, ICON_PLUS } from '../common/Icons';
 import { EmptyState } from '@/components/common/EmptyState';
 import '@/styles/header-fit.css';
 
@@ -261,7 +261,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
     return [
       { key: 'open', label: 'Open chat', onSelect: () => pick(card.key) },
       // Its Directors' fold opens on a name input (director-actions.ts), for a VP with none yet too.
-      ...(leadersOn && card.projects.length ? [{ key: 'director', label: 'New Director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
+      ...(leadersOn && card.projects.length ? [{ key: 'director', label: 'New director…', onSelect: () => askNewDirector(card.key, 'chart') }] : []),
       ...topicMenuItems(orgNodeMember(card.row)),
       {
         key: 'edit', label: 'Edit name and instructions…',
@@ -404,8 +404,8 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
               </li>
             ))}
             <li className="oc-vp-new" data-testid="org-chart-new">
-              <button type="button" data-testid="org-chart-new-vp" onClick={(e) => openEditor({ kind: 'new-vp' }, e.currentTarget)}>+ New VP</button>
-              <button type="button" data-testid="org-chart-new-project" onClick={(e) => openEditor({ kind: 'new-project' }, e.currentTarget)}>+ New project</button>
+              <button type="button" className="btn btn-sm" data-testid="org-chart-new-vp" onClick={(e) => openEditor({ kind: 'new-vp' }, e.currentTarget)}>{ICON_PLUS}New VP</button>
+              <button type="button" className="btn btn-sm" data-testid="org-chart-new-project" onClick={(e) => openEditor({ kind: 'new-project' }, e.currentTarget)}>{ICON_PLUS}New project</button>
             </li>
           </ul>
         </div>

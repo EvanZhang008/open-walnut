@@ -36,7 +36,7 @@ export const BASE_CSS = `
 }
 
 .wt-root *, .wt-root *::before, .wt-root *::after { box-sizing: border-box; }
-.wt-root h1 { margin: 4px 0 6px; font-size: 24px; line-height: 1.2; }
+.wt-root h1 { margin: 4px 0 6px; } /* its type is the console's page title (.page-title) */
 .wt-root h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .wt-root h4 { margin: 0; }
 .wt-root p { margin: 0; }
@@ -53,8 +53,6 @@ export const BASE_CSS = `
 }
 
 .wt-header p {
-  color: var(--fg-secondary);
-  font-size: 13px;
   max-width: 68ch;
 }
 

@@ -450,7 +450,7 @@ test('a ⌘S save and a new folder nobody answers: plain words when the browser 
   // 2. A new folder reaches nobody: the tree says it is still waiting, not an error.
   await page.route('**/api/files/mkdir', () => { /* held: nobody answers */ })
   await column.locator('.session-file-explorer-tree').first().click({ button: 'right', position: { x: 60, y: 300 } })
-  await page.getByRole('menuitem', { name: 'New Folder…' }).click({ timeout: 10_000 })
+  await page.getByRole('menuitem', { name: 'New folder…' }).click({ timeout: 10_000 })
   const input = page.locator('input.sfe-edit-input').first()
   await expect(input).toBeVisible({ timeout: 10_000 })
   await input.fill(`held-folder-${browserName}`)

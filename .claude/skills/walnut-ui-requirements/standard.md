@@ -62,6 +62,7 @@ beside `btn` carries only layout (margin, flex, width).
 | `.btn` | any action (Save draft, Edit, Retry) | the text colour mixed into the page colour, 8 % (18 % in dark), as a solid fill (never see-through), no border, round: a capsule (`--radius-full`; a row of a list, `.btn-block.btn-ghost`, keeps 8 px), min-height 34 px, padding 4 px 12 px, 13 px weight 500; hover +4 %, pressed +8 %; disabled 0.5 opacity (a disabled main action loses its blue); `aria-pressed="true"` is the on state (`--accent-subtle` with a half-accent hairline and `--accent-text` label, kept under the pointer, so even in a chat, whose accent is grey, an on key never reads as merely hovered; `data-on="true"` is the same look), and so is a menu trigger whose menu is open (`aria-haspopup` with `aria-expanded="true"`) |
 | `.btn-sm` | rows, toolbars, settings (`SettingsButton` is this; a settings page's header action too) | min-height 28 px, padding 2 px 10 px, 12 px |
 | `.btn-sm.btn-tight` | a small key in a row that must give up room before a control leaves it (the composer's condensed row) | the sides narrow to 4 px |
+| `.btn-tight` | a key of the default size that fills a narrow line (Mail's New message in its folder column) | 7 px sides, 5 px gap: the same look wherever it has room |
 | `.btn-round` | a count that opens its list, on a header's line (the Org node's "5 threads", "51 working": the user's pick, 2026-11-23) | the plain key's fill, min-height 24 px, padding 0 10 px, round as every key, 12 px `--fg-secondary` label (`--fg` on hover) |
 | `.btn-primary` | the one main action of a view | `--btn-primary-fill` (the accent 86 % toward black, so white reads at 4.5:1 in both themes), `--on-accent` text, hover `--btn-primary-fill-hover` (74 %) |
 | `.btn-danger` | a destructive action | `--btn-danger-text` label (the error red 70 % toward the text colour, 4.5:1 on the grey key) on the plain key; with `.btn-primary` the solid red confirm (Yes, delete, `--btn-danger-fill`) |
@@ -530,6 +531,30 @@ room; Org names were cut at every tree level while right-edge counts stayed.
   the field or button they lead to, never hundreds of pixels away.
 - **Width goes by content.** A list whose rows are cut never sits beside an empty reader or an empty
   form at its full width: the list takes the room first, the empty pane shrinks to its content.
+
+## Page heads
+
+One look for the title of a page, the title of a pane and the key that makes a new thing. The type
+lives only in `web/src/styles/page-head.css`; a view sets only the margin, padding or line height
+around it.
+
+| Part | Where | Look |
+|---|---|---|
+| Page title | `.page-title` on the page's `h1` (`PageHeader` writes it; a Settings pane, an app's detail and a plugin's page wear the class) | `--font-size-2xl` 20 px, weight 700, `--fg` |
+| Line under it | `.page-subtitle` | `--font-size-md` 13 px, `--fg-muted` |
+| Pane title | `.pane-title`: the list column of a split view (Org, Notes, Memory, Settings, Passwords, Scratchpad), a sheet's head (Board), the calendar's dates | `--font-size-xl` 17 px, weight 600, `--fg` |
+| New key | `NewKey` (`components/common/PageHeader.tsx`): `.btn.btn-primary`, a drawn plus (Mail's drawn pencil), its words in sentence case | on the page title's line, at the right (`PageHeader`'s `action`); in Mail, at the head of its folder column; grey with `aria-pressed` while the form it opened is open |
+
+- A page has at most one New key, and it is the main key of the page. A pane head's own create
+  (Notes' new note, Passwords' new item) is an icon key (`.btn.btn-icon`) beside the pane title.
+- No create key shows a typed "+": the plus is drawn (`ICON_PLUS`), and the words are sentence case
+  ("New agent", "Add host"), on a page, in a menu or in a dialog.
+- A centred card that stands alone on an empty screen (a sign-in, an unlock, a first run) is not a
+  page head and keeps its own heading.
+- Guard: `tests/web/page-head-guard.test.ts` (every `h1` in the console and the shipped plugins is a
+  page or pane title, no other stylesheet sets their type, no typed "+" or Title Case create key).
+  Source: the UI audit of 2026-11-26 on the user's data, when page titles came in five sizes (28,
+  26, 24, 22, 20 px), pane titles in four sizes and two weights, and the New key three ways.
 
 ## Words
 

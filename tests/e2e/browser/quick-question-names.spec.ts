@@ -90,7 +90,7 @@ test('New quick question: the drawer and composer read Quick question, and the s
   await expect(drawer(page).locator('.ask-walnut-drawer-title')).toHaveText(/^Quick question$/)
   await expect(drawer(page).getByTestId('ask-walnut-search')).toHaveAttribute('placeholder', 'Search quick questions')
   const newButton = drawer(page).getByTestId('ask-walnut-new')
-  await expect(newButton).toHaveText('+ New quick question')
+  await expect(newButton).toHaveText('New quick question')
   await shotSlot(page, '2-drawer')
 
   await pointAt(page, newButton)
@@ -246,7 +246,7 @@ test('a mouse-selected note task reference finds display and stored names withou
   // New note makes an Untitled note at once and opens it, no name asked first; its
   // file then takes the title typed into it, so the note is read where the page has it.
   const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/notes');
-  await pointAt(page, page.getByTitle('New Note', { exact: true }));
+  await pointAt(page, page.getByTitle('New note', { exact: true }));
   const createdPath: string = (await (await created).json()).path;
   const openPath = () => new URL(page.url()).searchParams.get('path') ?? createdPath;
   const editor = page.locator('.notes-editor .tiptap').first();

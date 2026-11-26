@@ -85,13 +85,13 @@ describe('the Org row menu', () => {
     const row = ch.rows.find((r) => r.name === 'Kitchen')!
     const asked: string[] = []
     const on = orgRowMenu({ target: { row }, cards, select, openChart, pick: () => {}, newDirector: (k) => { asked.push(k) } })
-    expect(labels(on)).toEqual(['Kitchen', 'Open chat', 'Open tasks', 'New Director…', 'Move under another VP…'])
+    expect(labels(on)).toEqual(['Kitchen', 'Open chat', 'Open tasks', 'New director…', 'Move under another VP…'])
     on.find((i) => i.key === 'director')!.onSelect!()
     expect(asked).toEqual([row.key])
     const off = orgRowMenu({ target: { row }, cards, select, openChart, pick: () => {} })
-    expect(labels(off)).not.toContain('New Director…')
+    expect(labels(off)).not.toContain('New director…')
     // The CEO's row has none.
     const main = orgRowMenu({ target: { row: ch.main }, cards, select, openChart, pick: () => {}, newDirector: () => {} })
-    expect(labels(main)).not.toContain('New Director…')
+    expect(labels(main)).not.toContain('New director…')
   })
 })

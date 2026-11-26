@@ -58,6 +58,7 @@ import {
   type ConditionField,
   type ConditionRow,
 } from './mail-rules-model';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 export const PREVIEW_DEBOUNCE_MS = 400;
 const PLACEHOLDERS: Partial<Record<ConditionField, string>> = {
@@ -408,7 +409,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       {attempted && problems.get(-1) && <p className="mail-rule-field-error" role="alert">{problems.get(-1)}</p>}
       <SettingsButton className="mail-rule-add-condition" data-testid="mail-rule-add-condition"
         onClick={() => { markDirty(); typedRef.current = false; setRows((prev) => [...prev, { key: nextKeyOf(prev), field: 'subject', value: '' }]); }}>
-        + Add condition
+        {ICON_PLUS}
+        Add condition
       </SettingsButton>
       <div className="mail-rule-editor-head">Then</div>
       <div className="mail-rule-then">

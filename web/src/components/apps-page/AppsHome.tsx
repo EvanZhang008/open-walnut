@@ -154,7 +154,7 @@ export function AppsHome({ store, builtins, folded, heldFacts, held, onOpenPlugi
   return (
     <div className="apps-home" data-testid="apps-home" data-tab={tab}>
       <header className="apps-home-head" data-fit-header>
-        <h1 data-fit-title>Apps</h1>
+        <h1 className="page-title" data-fit-title>Apps</h1>
         <SegmentedControl<AppsTab>
           value={tab}
           onChange={setTab}

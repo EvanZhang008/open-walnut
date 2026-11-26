@@ -238,7 +238,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
       <section className="pw-list" aria-label={sectionTitle}>
         <div className="pw-list-head" data-fit-header="">
           <div className="pw-list-titles">
-            <h1 data-fit-title="">{sectionTitle}</h1>
+            <h1 className="pane-title" data-fit-title="">{sectionTitle}</h1>
             <span className="pw-list-count">{items ? `${shownItems.length} item${shownItems.length === 1 ? '' : 's'}` : ''}</span>
           </div>
           {section !== 'trash' && <NewItemButton onPick={(t) => { setEditing({ kind: 'new', type: t }); setSelectedId('') }} />}

@@ -31,7 +31,7 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type 
 import type { Task } from '@open-walnut/core';
 import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder, askProjectDisplay, } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
+import { ICON_PLUS, ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
 import { MenuCaret } from '@/components/controls';
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
@@ -287,7 +287,7 @@ export function AskWalnutDrawer({
               onClick={act(onNew)}
               title={`Start a new quick question${forAgent}`}
             >
-              <span aria-hidden="true">+</span> New quick question
+              {ICON_PLUS}New quick question
             </button>
           ) : (
             <button
@@ -424,7 +424,7 @@ export function AskWalnutDrawer({
             onClick={act(onNew)}
             title={`Start a new quick question${forAgent}`}
           >
-            <span aria-hidden="true">+</span> New quick question
+            {ICON_PLUS}New quick question
           </button>
           {/* Two links about THIS surface, not launchers: what Walnut sends the
               session (Context) and a shortcut into Walnut's own checkout (Fix). */}

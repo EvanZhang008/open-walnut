@@ -170,7 +170,7 @@ export function OrgLeaders({ groups, surface = 'chart', vpKey, vpName, projects,
   // No Director yet: nothing, unless the VP's "New Director…" asked for the input.
   if (!total) {
     return adding ? (
-      <div className={`org-leaders is-${surface} is-empty`} data-testid="org-leaders" data-key={vpKey} {...group(`New Director under ${vpName}`)}>
+      <div className={`org-leaders is-${surface} is-empty`} data-testid="org-leaders" data-key={vpKey} {...group(`New director under ${vpName}`)}>
         {newRow}
       </div>
     ) : null;

@@ -169,16 +169,7 @@
   padding-top: 0;
 }
 
-.settings-pane-title.settings-section-title,
-.settings-pane-title {
-  margin: 0;
-  font-size: 22px;
-  line-height: 28px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--fg);
-  text-transform: none;
-}
+/* A pane's title is the page title: its type is .page-title's (page-head.css). */
 
 .settings-pane-title:focus {
   outline: none;

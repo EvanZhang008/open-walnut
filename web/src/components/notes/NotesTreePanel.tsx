@@ -967,12 +967,12 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   return (
     <div className="notes-tree-panel">
       <div className="notes-tree-header" data-fit-header="">
-        <h3 data-fit-title="">Notes</h3>
+        <h3 className="pane-title" data-fit-title="">Notes</h3>
         <div className="notes-tree-actions" data-fit-actions="">
           <button
             className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
             onClick={() => handleNewItem(null, 'file')}
-            title="New Note"
+            title="New note"
             aria-label="New note"
           >
             <PlusFileIcon />
@@ -980,7 +980,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           <button
             className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
             onClick={() => handleNewItem(null, 'folder')}
-            title="New Folder"
+            title="New folder"
             aria-label="New folder"
           >
             <PlusFolderIcon />
@@ -1156,10 +1156,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           {contextMenu.node.type === 'folder' && (
             <>
               <button onClick={() => { handleNewItem(contextMenu.node.path, 'file'); setContextMenu(null); }}>
-                New Note
+                New note
               </button>
               <button onClick={() => { handleNewItem(contextMenu.node.path, 'folder'); setContextMenu(null); }}>
-                New Folder
+                New folder
               </button>
             </>
           )}

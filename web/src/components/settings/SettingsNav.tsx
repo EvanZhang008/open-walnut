@@ -373,7 +373,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
       className={`settings-nav${overlay ? ' is-overlay-open' : ''}${listScrolled ? ' is-list-scrolled' : ''}`}
       aria-label="Settings sections"
     >
-      <h1 className="settings-nav-title">Settings</h1>
+      <h1 className="pane-title settings-nav-title">Settings</h1>
       <button
         type="button"
         className="btn btn-icon settings-nav-find-button"

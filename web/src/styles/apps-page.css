@@ -60,17 +60,7 @@
   box-shadow: var(--shadow-sm);
 }
 .apps-hero-text { min-width: 0; }
-.apps-hero h1 {
-  margin: 0;
-  font-size: 26px;
-  line-height: 32px;
-  letter-spacing: -0.02em;
-  color: var(--fg);
-}
-.apps-hero p {
-  margin: 2px 0 0;
-  color: var(--fg-muted);
-}
+/* .apps-hero h1 is a .page-title (page-head.css). */
 /* The page's search: the one search field (SearchField, styles/input-box.css). */
 .apps-search {
   margin-left: auto;
@@ -292,7 +282,7 @@
 .apps-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-full); }
 .apps-detail-head { display: flex; gap: 18px; align-items: flex-start; margin: 0 0 20px; }
 .apps-detail-title { min-width: 0; flex: 1; }
-.apps-detail-title h1 { margin: 0; font-size: 24px; line-height: 30px; letter-spacing: -0.02em; color: var(--fg); }
+/* .apps-detail-title h1 is a .page-title (page-head.css). */
 .apps-detail-parent {
   border: 0;
   background: transparent;

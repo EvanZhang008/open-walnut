@@ -80,11 +80,11 @@ test('a new item is an Event by default, and the side picked last is kept across
   await open()
   await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
   await expect(popover(page).locator('.cal-event-form')).toBeVisible()
-  await expect(placeholder(page)).toContainText('New Event')
+  await expect(placeholder(page)).toContainText('New event')
 
   // Pick Task: the placeholder says so, and the choice is stored.
   await pickCalendarTaskSide(page)
-  await expect(placeholder(page)).toContainText('New Task')
+  await expect(placeholder(page)).toContainText('New task')
   await shot(page, 'task-side')
   await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), KIND_KEY)).toBe('"task"')
   await page.keyboard.press('Escape')
@@ -169,7 +169,7 @@ test('drag-select, change the calendar and add: the event lands in the grid wher
   await page.mouse.down()
   await page.mouse.move(slot.x, slot.y + hourPx * 1.5 - 4, { steps: 10 })
   // While dragging: a solid "New Event" block with its range.
-  await expect(page.locator('.cal-create-sel')).toContainText('New Event')
+  await expect(page.locator('.cal-create-sel')).toContainText('New event')
   await page.mouse.up()
 
   await expect(popover(page)).toBeVisible()
@@ -201,7 +201,7 @@ test('drag-select, change the calendar and add: the event lands in the grid wher
   await popover(page).getByLabel('Event title').fill(title)
   await expect(block).toContainText(title)
   await shot(page, 'week-drag-titled')
-  await popover(page).getByRole('button', { name: 'Add Event', exact: true }).click()
+  await popover(page).getByRole('button', { name: 'Add event', exact: true }).click()
   await expect(popover(page)).toHaveCount(0)
   await expect(placeholder(page)).toHaveCount(0)
 
@@ -299,7 +299,7 @@ test('context menu: "New task…" opens on Task with the placeholder, and the sw
   await expect(menu).toBeVisible()
   await menu.locator('button:has-text("New task…")').click()
   await expect(tab(page, 'Task')).toHaveAttribute('aria-checked', 'true')
-  await expect(placeholder(page)).toContainText('New Task')
+  await expect(placeholder(page)).toContainText('New task')
   expect(overlaps(await box(placeholder(page)), await box(popover(page)))).toBe(false)
   await tab(page, 'Event').click()
   await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
@@ -357,7 +357,7 @@ test('a drag past midnight keeps its real end: the end date shows and the event 
 
   const title = `PastMidnight ${Date.now()}`
   await popover(page).getByLabel('Event title').fill(title)
-  await popover(page).getByRole('button', { name: 'Add Event', exact: true }).click()
+  await popover(page).getByRole('button', { name: 'Add event', exact: true }).click()
   await expect(popover(page)).toHaveCount(0)
   let id = ''
   await expect.poll(async () => {

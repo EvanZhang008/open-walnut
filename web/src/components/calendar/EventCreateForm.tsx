@@ -227,7 +227,7 @@ export function EventCreateForm({
             ref={titleBox}
             data-draft-key={titleDraft.key ?? undefined}
             className="cal-event-form-title"
-            placeholder="New Event"
+            placeholder="New event"
             aria-label="Event title"
             value={title}
             maxLength={200}
@@ -274,7 +274,7 @@ export function EventCreateForm({
           onClick={gate.send}
           {...dictationWaitProps(gate)}
         >
-          {submitting ? 'Adding…' : 'Add Event'}
+          {submitting ? 'Adding…' : 'Add event'}
         </button>
       </div>
     </div>

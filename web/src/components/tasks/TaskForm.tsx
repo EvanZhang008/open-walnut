@@ -71,7 +71,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <form className="modal card" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
-        <h2 className="mb-4">{initial ? 'Edit Task' : 'Add Task'}</h2>
+        <h2 className="mb-4">{initial ? 'Edit task' : 'Add task'}</h2>
 
         <div className="form-group">
           <label htmlFor="task-title">Title</label>
@@ -155,7 +155,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
 
         <div className="form-actions">
           <button type="button" className="btn btn-ghost" onClick={cancel}>Cancel</button>
-          <button type="submit" className="btn btn-primary" {...dictationWaitProps(gate)}>{initial ? 'Save' : 'Add Task'}</button>
+          <button type="submit" className="btn btn-primary" {...dictationWaitProps(gate)}>{initial ? 'Save' : 'Add task'}</button>
         </div>
       </form>
     </div>

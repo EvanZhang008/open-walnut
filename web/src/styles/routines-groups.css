@@ -36,6 +36,11 @@
   flex: 0 0 auto;
 }
 
+/* The page's head is the view's first line: the view's 12 px gap plus this make the head's 24. */
+.routines-view > .routines-page-head {
+  margin-bottom: 12px;
+}
+
 .routine-groups {
   display: flex;
   flex-direction: column;
@@ -410,9 +415,29 @@
   .app-shell-navigation .routines-view .routine-fold {
     margin-top: 0;
   }
-  /* The first screen on a phone is the list: the top bar names the page (its title
-     is hidden by phone-fixes-r2.css), so the header, sentence and gap go too. */
-  .app-shell-navigation .page-header:has(+ .routines-view) {
+  /* The first screen on a phone is the list: the top bar names the page, so the
+     page's title and sentence go, and New routine sits at the end of the count's line,
+     where it was before it moved onto the title's line on a wide screen. */
+  .app-shell-navigation .routines-view:has(> .routines-page-head) {
+    position: relative;
+  }
+  .app-shell-navigation .routines-page-head .page-header-text {
+    display: none;
+  }
+  .app-shell-navigation .routines-page-head {
+    position: absolute;
+    top: 0;
+    right: 0;
+    margin: 0;
+  }
+  .app-shell-navigation .routines-page-head > .btn {
+    margin-block: 0;
+  }
+  .app-shell-navigation .routines-view:has(> .routines-page-head > .btn) > .routines-toolbar {
+    min-height: 44px;
+    padding-right: 140px;
+  }
+  .app-shell-navigation .routines-page-head:not(:has(> .btn)) {
     display: none;
   }
 }

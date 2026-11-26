@@ -6,6 +6,8 @@
  */
 import './buttons.css';
 import './globals.css';
+// The page and pane titles and the page head's row (one look: standard "Page heads").
+import './page-head.css';
 import './badge.css';
 import './list-box.css';
 // After globals.css: a Working task's glyph breathes (task-working-pulse).

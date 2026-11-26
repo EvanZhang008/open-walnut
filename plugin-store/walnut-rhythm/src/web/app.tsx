@@ -181,7 +181,7 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
     const error = store.loadError()
     return (
       <div className="rhythm-root" data-testid="rhythm-app">
-        <header><h1>Rhythm</h1></header>
+        <header><h1 className="page-title">Rhythm</h1></header>
         {error
           ? <p className="rhythm-error" data-testid="rhythm-load-error">Rhythm could not load its state: {error} <button type="button" className="btn btn-link" onClick={refresh}>Try again</button></p>
           : <p className="rhythm-muted">Loading…</p>}
@@ -194,7 +194,7 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
   return (
     <div className="rhythm-root" data-testid="rhythm-app">
       <header>
-        <h1>Rhythm</h1>
+        <h1 className="page-title">Rhythm</h1>
         <p className="rhythm-lede">Focus blocks you start yourself, a break after each, and quiet while you focus. Rhythm is off until you press Start.</p>
         {message && (
           <p className={message.ok ? 'rhythm-status' : 'rhythm-error'} role="status" data-testid="rhythm-message" style={{ marginTop: 8 }}>{message.text}</p>

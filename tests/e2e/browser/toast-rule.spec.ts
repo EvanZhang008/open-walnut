@@ -58,7 +58,7 @@ test('creating and moving a calendar event shows no toast, and mod+z still takes
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
     await popover.getByLabel('Event title').fill(title)
-    await popover.getByRole('button', { name: 'Add Event', exact: true }).click()
+    await popover.getByRole('button', { name: 'Add event', exact: true }).click()
     const chip = page.locator(`.cal-day-col[data-day="${today}"] .cal-chip:has-text("${title}")`).first()
     await expect(chip).toBeVisible()
     await expect.poll(() => eventTitled(title, today).then((e) => !!e), { timeout: 10_000 }).toBe(true)

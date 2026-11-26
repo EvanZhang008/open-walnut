@@ -185,7 +185,7 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
   return (
     <aside className="org-list" aria-label={orgName.settings.name}>
       <header className="org-list-head" data-fit-header="">
-        <h1 className="org-list-title" data-fit-title="">
+        <h1 className="pane-title org-list-title" data-fit-title="">
           <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
         </h1>
         <span className="org-list-actions" data-fit-actions="">

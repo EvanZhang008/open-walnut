@@ -12,13 +12,8 @@
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
-.apps-home-head h1 {
-  margin: 0;
-  font-size: var(--font-size-2xl);
-  line-height: 32px;
-  letter-spacing: -0.02em;
-  color: var(--fg);
-}
+/* Its type is the page title's (page-head.css); the head's 32 px line keeps the bar level with it. */
+.apps-home-head h1 { line-height: 32px; }
 .apps-home-grow { flex: 1 1 0; }
 .apps-home-head .apps-home-search { margin-left: 0; width: 220px; }
 

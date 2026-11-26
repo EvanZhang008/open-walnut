@@ -183,8 +183,8 @@ export function TimeApp({ api, log, useView = useStateView, basePath, subpath, n
               Time UI: the console's own "Time Tracking" section was deleted, so there is
               no second surface left to disambiguate from. */}
           <span className="wt-kicker">Time</span>
-          <h1>Your day</h1>
-          <p>
+          <h1 className="page-title">Your day</h1>
+          <p className="page-subtitle">
             Where your attention went, what your agents ran, and where the rest of your screen
             time went. Never mixed into one number.
           </p>

@@ -6,6 +6,7 @@ import { RoutineForm } from './RoutineForm';
 import { RoutineRow } from './RoutineRow';
 import { changedSince, editKey, groupKeyOf, groupRoutines, keepShownOrder, routineHealth } from './routine-groups';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { NewKey, PageHeader } from '@/components/common/PageHeader';
 import { DisclosureChevron } from '@/components/controls';
 import { discardDraft, draftKey, readDraft } from '@/utils/drafts';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -25,7 +26,11 @@ const COLLAPSED_KEY = 'walnut:routines.collapsed.v1';
  * button, which opens the plain-language composer; a draft the composer still holds
  * opens it again on the next visit, so unsent words are never out of sight.
  */
-export function RoutinesView({ compact = false }: { compact?: boolean }) {
+export function RoutinesView({ compact = false, head }: {
+  compact?: boolean;
+  /** The page's own head (the /routines page): its title, with New routine on the title's line. */
+  head?: { title: string; subtitle: string };
+}) {
   const { routines, loading, error, create, update, setEnabled, remove, runNow, catchUp, dismissMissed } = useRoutines(true);
   const { executors, options } = useExecutors();
   const [draft, setDraft] = useState<CreateRoutineInput | undefined>(undefined);
@@ -217,12 +222,29 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     setEditing(undefined);
   }, []);
 
-  if (loading) return <LoadingState size="section" title="Loading routines…" />;
-
   const empty = routines.length === 0;
+  const newKey = !loading && !empty && (
+    <NewKey
+      label="New routine"
+      className="routines-new-btn"
+      aria-expanded={composing}
+      aria-pressed={composing}
+      title={composing ? 'Hide the new routine box' : undefined}
+      onClick={() => { composeFocus.current = true; setComposing((v) => !v); }}
+    />
+  );
+  // On the page the New key sits on the title's line (standard "Page heads"); in the Home
+  // panel, which has no page title, it stays at the end of the count's line.
+  const pageHead = head && <PageHeader className="routines-page-head" title={head.title} subtitle={head.subtitle} action={newKey} />;
+
+  if (loading) {
+    const spinner = <LoadingState size="section" title="Loading routines…" />;
+    return pageHead ? <div className="routines-view">{pageHead}{spinner}</div> : spinner;
+  }
 
   return (
     <div className={`routines-view${compact ? ' routines-view-compact' : ''}`}>
+      {pageHead}
       <div className="routines-toolbar">
         <span className="routines-summary">
           {empty ? 'No routines yet' : `${routines.length} ${routines.length === 1 ? 'routine' : 'routines'}`}{/* empty-state-ok: the toolbar's count label */}
@@ -232,18 +254,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
             </button>
           )}
         </span>
-        {!empty && (
-          <button
-            type="button"
-            className={`btn ${composing ? '' : 'btn-primary'} routines-new-btn`}
-            aria-expanded={composing}
-            aria-pressed={composing}
-            title={composing ? 'Hide the new routine box' : undefined}
-            onClick={() => { composeFocus.current = true; setComposing((v) => !v); }}
-          >
-            New routine
-          </button>
-        )}
+        {!head && newKey}
       </div>
 
       {(composing || empty) && (

@@ -173,7 +173,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
   return (
     <div className="agent-form card">
       <h3 className="agent-form-title">
-        {isEdit ? 'Edit Agent' : cloneFrom ? 'Clone Agent' : 'New Agent'}
+        {isEdit ? 'Edit agent' : cloneFrom ? 'Clone agent' : 'New agent'}
       </h3>
       <form onSubmit={handleSubmit}>
         {error && <div className="agent-form-error">{error}</div>}

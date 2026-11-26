@@ -84,7 +84,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
             {ICON_CHEVRON_RIGHT}
           </button>
         </div>
-        <h2 className="cal-title" data-fit-title="">{title(view, anchor)}</h2>
+        <h2 className="pane-title cal-title" data-fit-title="">{title(view, anchor)}</h2>
       </div>
       <div className="cal-toolbar-right">
         {view !== 'month' && <CalendarGridControls />}

@@ -4,6 +4,7 @@ import { useAgents } from '@/hooks/useAgents';
 import { AgentCard } from '@/components/agents/AgentCard';
 import { AgentForm } from '@/components/agents/AgentForm';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { NewKey, PageHeader } from '@/components/common/PageHeader';
 import { ICON_ROBOT } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
@@ -88,17 +89,13 @@ export function AgentsPage() {
 
   return (
     <div className="page-readable">
-      <div className="page-header flex justify-between items-center" data-fit-header="">
-        <div className="page-header-text">
-          <h1 className="page-title" data-fit-title="">Agents</h1>
-          <p className="page-subtitle">Agents you chat with on Home and agents that run in the background: edit their prompts or make your own.</p>
-        </div>
-        {!showForm && (
-          <button className="btn btn-primary" onClick={() => { setEditingAgent(undefined); setCloningFrom(undefined); setShowForm(true); }}>
-            + New Agent
-          </button>
+      <PageHeader
+        title="Agents"
+        subtitle="Agents you chat with on Home and agents that run in the background: edit their prompts or make your own."
+        action={!showForm && (
+          <NewKey label="New agent" onClick={() => { setEditingAgent(undefined); setCloningFrom(undefined); setShowForm(true); }} />
         )}
-      </div>
+      />
 
       {showForm && (
         <div className="mb-4">

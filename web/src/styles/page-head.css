@@ -1,0 +1,54 @@
+/* Page heads: the one look for the title of a page, the title of a pane, and the page's New key.
+   The standard (.claude/skills/walnut-ui-requirements/standard.md, "Page heads") names each part;
+   tests/web/page-head-guard.test.ts fails on a page or pane title drawn any other way.
+
+   2026-11-26, the UI audit: page titles came in five sizes (28, 26, 24, 22 and 20 px), pane titles
+   in four sizes and two weights, and the New key three ways ("+ New Agent" with a typed plus, "New
+   routine" under the title, Mail's own blue key). The user: "why the ui still not consistent ...
+   why they are not even consistent come on".
+
+   Layout lives with each view (a margin, a padding, the row it sits in); the type lives only here. */
+
+/* A page's head: its title and the line under it at the left, its one main key (New ...) on the
+   title's line at the right. `PageHeader` (components/common/PageHeader.tsx) writes it. */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.page-header-text { flex: 1 1 auto; min-width: 0; }
+/* The key's middle on the title's middle: a 34 px key beside a 26 px title line. */
+.page-header > .btn { flex: none; white-space: nowrap; margin-block: -4px; }
+
+/* The title of a whole page (Routines, Agents, Apps, a Settings pane, a plugin's page). */
+.page-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  line-height: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  text-transform: none;
+}
+
+/* The sentence under a page's title. */
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: var(--font-size-md);
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
+/* The title of a pane: the list column of a split view (Org, Notes, Memory, Settings, Scratchpad),
+   a sheet's head (Board), a view's range (the calendar's dates). */
+.pane-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  text-transform: none;
+}

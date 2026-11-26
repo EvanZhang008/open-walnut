@@ -3,7 +3,7 @@
     "styles/inline-answer.css": 1
   },
   "ownControl": {
-    "apps/mail/mail-compose.css": 3,
+    "apps/mail/mail-compose.css": 2,
     "apps/mail/mail-groups.css": 1,
     "apps/mail/mail.css": 6,
     "components/approvals/approvals.css": 4,
@@ -291,7 +291,7 @@
     "components/notes/wiki-embed.css": 1,
     "components/settings/sections/triage-rules.css": 1,
     "popout/ext-panel.css": 5,
-    "styles/apps-page.css": 5,
+    "styles/apps-page.css": 3,
     "styles/attachments.css": 2,
     "styles/attention-banner.css": 1,
     "styles/away-sync-mark.css": 1,
@@ -303,7 +303,7 @@
     "styles/engine-settings.css": 1,
     "styles/first-use.css": 2,
     "styles/git-glance.css": 1,
-    "styles/globals.css": 128,
+    "styles/globals.css": 123,
     "styles/home-navigation.css": 1,
     "styles/host-fleet.css": 2,
     "styles/human-inbox-items.css": 1,
@@ -334,7 +334,7 @@
     "styles/settings-plugin-icon.css": 1,
     "styles/settings-rows.css": 2,
     "styles/settings-sections-addons.css": 5,
-    "styles/settings-shell.css": 2,
+    "styles/settings-shell.css": 1,
     "styles/sidebar-peek.css": 1,
     "styles/sidebar-status-items.css": 1,
     "styles/step-rows.css": 9,
@@ -349,8 +349,8 @@
     "styles/unpaired-notice.css": 3,
     "styles/walnut-agent.css": 1,
     "styles/workspaces.css": 1,
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 30,
-    "../../plugin-store/notes-import/src/web/styles.ts": 18
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 29,
+    "../../plugin-store/notes-import/src/web/styles.ts": 17
   },
   "shadowLiteral": {
     "apps/mail/mail-reader.css": 1,
@@ -447,7 +447,7 @@
     "styles/workspaces.css": 1
   },
   "spacingOffGrid": {
-    "apps/mail/mail-compose.css": 9,
+    "apps/mail/mail-compose.css": 7,
     "apps/mail/mail-groups.css": 9,
     "apps/mail/mail-learn.css": 1,
     "apps/mail/mail-reader.css": 1,
@@ -463,6 +463,7 @@
     "styles/board-kanban-controls.css": 3,
     "styles/board-kanban.css": 4,
     "styles/board-status.css": 4,
+    "styles/buttons.css": 2,
     "styles/change-card.css": 3,
     "styles/code-block.css": 1,
     "styles/composer-controls.css": 2,
@@ -560,7 +561,7 @@
   "bareButton": {
     "apps/mail/AddAccountDialog.tsx": 1,
     "apps/mail/MailAccountFolders.tsx": 3,
-    "apps/mail/MailAccountsPane.tsx": 3,
+    "apps/mail/MailAccountsPane.tsx": 2,
     "apps/mail/MailAskRouter.tsx": 1,
     "apps/mail/MailCorrectStepRule.tsx": 4,
     "apps/mail/MailFolderContextMenu.tsx": 1,
@@ -701,7 +702,7 @@
     "components/org/AgentMemoryPanel.tsx": 2,
     "components/org/OrgAvatarDialog.tsx": 3,
     "components/org/OrgChartProject.tsx": 1,
-    "components/org/OrgChartSheet.tsx": 3,
+    "components/org/OrgChartSheet.tsx": 1,
     "components/org/OrgEditableName.tsx": 1,
     "components/org/OrgLeaders.tsx": 1,
     "components/org/OrgNodeDetail.tsx": 3,
@@ -938,6 +939,7 @@
     "styles/phone-session.css": 1
   },
   "cutTitle": {
+    "apps/mail/mail-compose.css": 1,
     "components/actions/ask-card.css": 1,
     "styles/globals.css": 8,
     "styles/thread-card.css": 1,
@@ -963,7 +965,7 @@
     "../../plugin-store/notes-import/src/web/styles.ts": 8
   },
   "ownLabel": {
-    "apps/mail/mail-compose.css": 3,
+    "apps/mail/mail-compose.css": 2,
     "components/settings/sections/mail-rules.css": 1,
     "popout/ext-panel.css": 1,
     "styles/chat-reading.css": 1,

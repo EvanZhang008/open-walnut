@@ -4,6 +4,7 @@ import { useCommands } from '@/hooks/useCommands';
 import { CommandCard, COMMAND_SOURCE_LABEL } from '@/components/commands/CommandCard';
 import { CommandForm } from '@/components/commands/CommandForm';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { NewKey, PageHeader } from '@/components/common/PageHeader';
 import { ICON_TERMINAL } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import { useAlert } from '@/hooks/useConfirm';
@@ -65,17 +66,13 @@ export function CommandsPage() {
 
   return (
     <div className="page-readable">
-      <div className="page-header flex justify-between items-center" data-fit-header="">
-        <div className="page-header-text">
-          <h1 className="page-title" data-fit-title="">Commands</h1>
-          <p className="page-subtitle">Manage slash commands for quick prompts</p>
-        </div>
-        {!showForm && (
-          <button className="btn btn-primary" onClick={() => { setEditingCommand(undefined); setShowForm(true); }}>
-            + New Command
-          </button>
+      <PageHeader
+        title="Commands"
+        subtitle="Manage slash commands for quick prompts"
+        action={!showForm && (
+          <NewKey label="New command" onClick={() => { setEditingCommand(undefined); setShowForm(true); }} />
         )}
-      </div>
+      />
 
       {showForm && (
         <div style={{ marginBottom: 16 }}>

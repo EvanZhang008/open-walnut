@@ -112,7 +112,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
 
     // ── New Folder… ──────────────────────────────────────────────────────────
     let menu = await rightClick(page, explorer.locator('.sfe-root-header').first())
-    await menu.getByRole('menuitem', { name: 'New Folder…' }).click()
+    await menu.getByRole('menuitem', { name: 'New folder…' }).click()
     const folderInput = explorer.getByRole('textbox', { name: 'New folder name' })
     await expect(folderInput).toBeVisible()
     await folderInput.pressSequentially(dirName, { delay: 45 })
@@ -122,7 +122,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
 
     // ── New File… inside that folder ─────────────────────────────────────────
     menu = await rightClick(page, rowByName(explorer, dirName))
-    await menu.getByRole('menuitem', { name: 'New File…' }).click()
+    await menu.getByRole('menuitem', { name: 'New file…' }).click()
     const fileInput = explorer.getByRole('textbox', { name: 'New file name' })
     await expect(fileInput).toBeVisible()
     await fileInput.pressSequentially(fileName, { delay: 45 })

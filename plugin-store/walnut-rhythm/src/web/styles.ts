@@ -21,7 +21,7 @@ export const RHYTHM_CSS = `
   gap: 22px;
 }
 .rhythm-root *, .rhythm-root *::before, .rhythm-root *::after { box-sizing: border-box; }
-.rhythm-root h1 { margin: 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.rhythm-root h1 { margin: 0; } /* its type is the console's page title (.page-title) */
 .rhythm-root h2 { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
 .rhythm-root p { margin: 0; }
 .rhythm-lede { margin-top: 4px; max-width: 64ch; color: var(--fg-muted); font-size: 13px; line-height: 18px; }

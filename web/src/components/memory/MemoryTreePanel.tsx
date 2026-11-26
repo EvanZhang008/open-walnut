@@ -146,7 +146,7 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
   return (
     <div className="memory-tree-panel">
       <div className="memory-tree-header">
-        <span className="memory-tree-header-title">Memory</span>
+        <h1 className="pane-title memory-tree-header-title">Memory</h1>
       </div>
       <div className="memory-tree-filter">
         <SearchField data-no-draft="search"

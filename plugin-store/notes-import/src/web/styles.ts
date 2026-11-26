@@ -15,7 +15,7 @@ export const IMPORT_CSS = `
   gap: 22px;
 }
 .ni-root *, .ni-root *::before, .ni-root *::after { box-sizing: border-box; }
-.ni-root h1 { margin: 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.ni-root h1 { margin: 0; } /* its type is the console's page title (.page-title) */
 .ni-root h2 { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
 .ni-root p { margin: 0; }
 .ni-lede { margin-top: 4px; max-width: 64ch; color: var(--fg-muted); font-size: 13px; line-height: 18px; }

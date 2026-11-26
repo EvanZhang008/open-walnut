@@ -44,13 +44,10 @@
   border-bottom: 0;
 }
 
+/* Its type is the pane title's (.pane-title, page-head.css). */
 .settings-container .settings-nav-title {
   margin: 0;
   padding: 18px 8px 10px;
-  font-size: var(--font-size-lg);
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--fg);
 }
 
 /* The only scroller in the nav: the title and filter above it never move. */

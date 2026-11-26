@@ -45,7 +45,7 @@ import { SessionNotesBar, SessionNotesPill, useSessionNote } from '@/components/
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useHidesHighlights } from '@/hooks/useHidesHighlights';
-import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
+import { ICON_COLLAPSE, ICON_EXPAND, ICON_PLUS } from '@/components/common/Icons';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -771,7 +771,7 @@ function SideQuestionDrawerBody({
               onClick={startNewThread}
               title="Start a new side chat"
             >
-              {'+ New'}
+              {ICON_PLUS}New
             </Chip>
             {archivedThreads.length > 0 && (
               <DisclosureButton

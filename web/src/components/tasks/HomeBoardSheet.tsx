@@ -327,7 +327,7 @@ export function HomeBoardSheet() {
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
     else if (!e.shiftKey && current === items.length - 1) { e.preventDefault(); items[0]?.focus(); }
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
-    <header className="home-board-head" data-fit-header=""><h1 data-fit-title="">Board</h1><span className="home-board-count" data-fit-sub="">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
+    <header className="home-board-head" data-fit-header=""><h1 className="pane-title" data-fit-title="">Board</h1><span className="home-board-count" data-fit-sub="">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
       <div className="home-board-controls"><SegmentedControl className="home-board-mode" aria-label="Group board" value={mode} onChange={setMode} options={BOARD_MODES} />
         <MicInput fieldClassName="home-board-search" data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} setText={setQuery} />
         <button type="button" className="btn btn-icon home-board-close wn-dialog-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>

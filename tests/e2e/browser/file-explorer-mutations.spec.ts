@@ -96,7 +96,7 @@ test('create → rename → duplicate → delete, all inline in the tree', async
     // ── 1. New File… from the cwd root header ────────────────────────────────
     const rootHeader = explorer.locator('.sfe-root-header').first()
     let menu = await rightClick(page, rootHeader)
-    await menu.getByRole('menuitem', { name: 'New File…' }).click()
+    await menu.getByRole('menuitem', { name: 'New file…' }).click()
 
     const newFileInput = explorer.getByRole('textbox', { name: 'New file name' })
     await expect(newFileInput).toBeVisible()
@@ -175,7 +175,7 @@ test('New Folder… adds a folder row to the tree', async ({ page }) => {
 
   try {
     const menu = await rightClick(page, explorer.locator('.sfe-root-header').first())
-    await menu.getByRole('menuitem', { name: 'New Folder…' }).click()
+    await menu.getByRole('menuitem', { name: 'New folder…' }).click()
 
     const input = explorer.getByRole('textbox', { name: 'New folder name' })
     await expect(input).toBeVisible()
@@ -195,7 +195,7 @@ test('an invalid name is rejected inline and keeps the row', async ({ page }) =>
   const explorer = await openFilesPanel(page)
 
   const menu = await rightClick(page, explorer.locator('.sfe-root-header').first())
-  await menu.getByRole('menuitem', { name: 'New File…' }).click()
+  await menu.getByRole('menuitem', { name: 'New file…' }).click()
 
   const input = explorer.getByRole('textbox', { name: 'New file name' })
   await expect(input).toBeVisible()

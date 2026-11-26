@@ -59,6 +59,8 @@ import { syncLineFor } from './mail-sync-line';
 import { MailSmartRows } from './MailSmartRows';
 import { MailAccountFolders } from './MailAccountFolders';
 import { ComposeIcon, RefreshIcon } from './mail-icons';
+import { NewKey } from '@/components/common/PageHeader';
+import { ICON_PLUS } from '@/components/common/Icons';
 
 interface Props {
   accounts: MailAccountDto[];
@@ -420,18 +422,16 @@ export function MailAccountsPane({
       {/* No pane title: the folders are directly below and name themselves, and the 232px head has
           three controls to fit. The primary action gets the room instead. */}
       <div className="mail-pane-head">
-        <button
-          type="button"
-          className="mail-compose-new"
+        <NewKey
+          label="New message"
+          icon={<ComposeIcon />}
+          className="btn-tight mail-compose-new"
+          labelClassName="mail-compose-new-label"
           data-testid="mail-compose-new"
           title={composeTitle}
-          aria-label="New message"
           disabled={!composeAccount || !canCompose}
           onClick={() => { if (composeAccount) void openMailComposer(composeAccount); }}
-        >
-          <ComposeIcon />
-          <span className="mail-compose-new-label">New message</span>
-        </button>
+        />
         <button
           type="button"
           className="btn btn-icon mail-icon-btn"
@@ -513,7 +513,8 @@ export function MailAccountsPane({
         data-testid="mail-add-account"
         onClick={onAddAccount}
       >
-        + Add account
+        {ICON_PLUS}
+        Add account
       </button>
 
       {refreshNote && (

@@ -429,7 +429,7 @@
   border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 .home-companion-scratchpad .global-notes-header { justify-content: flex-start; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-.home-companion-scratchpad .global-notes-label { font-size: var(--font-size-md); font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: 0; }
+/* Its label is the pane title (.global-notes-label.pane-title: GlobalNotesSection, page-head.css). */
 .home-companion-scratchpad .global-notes-body { padding: 8px 14px; }
 /* A narrow window overlays the column from the task panel's right edge (the panel's width
    rides in as --home-companion-left, a % of .main-page like the panel's own width). */
