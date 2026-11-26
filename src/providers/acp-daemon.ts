@@ -261,10 +261,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   const keptRows = new Map<string, Exclude<PidRow, number>>()
   // The last daemon life's workers on stdio, until startupRepair's sweep settled each: 'unknown' = ps could not say
   // whether the pid is still that worker's (left alone); a strict stop waits for the sweep and refuses on 'unknown'.
-  const stragglers = new Map<string, Promise<'settled' | 'unknown'>>()
+  const stragglers = new Map<string, { row: PidRow; settled: Promise<'settled' | 'unknown'> }>()
   // A worker that exited on its own (not stopping) while its process group lives on (the adapter, its tools): only
-  // a strict stop looks at it, and ends that group (in memory: a daemon restart's sweep takes the rest).
-  const leftGroups = new Map<string, number>()
+  // a strict stop looks at it, and ends that group once ps proves it still runs this worker's adapter (in memory:
+  // a daemon restart's sweep takes the rest).
+  const leftGroups = new Map<string, { pid: number; cmd: string; adapter: string }>()
   ensureOwnerOnlyAcpStorage()
 
   function journalPathFor(sid: string): string {
@@ -466,7 +467,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (entry.pid && !entry.exited()) {
       signalProcessGroup(entry.pid, 'SIGKILL')
     }
-    if (!entry.stopping && entry.pid && entry.exited() && isProcessGroupAlive(entry.pid)) leftGroups.set(sid, entry.pid)
+    if (!entry.stopping && entry.pid && entry.exited() && isProcessGroupAlive(entry.pid)) leftGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter })
     if ((deps.strictStop?.() || entry.strictStop) && entry.stopping && entry.pid && isProcessGroupAlive(entry.pid)) {
       exitedGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
     }
@@ -664,11 +665,13 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         log('warn', 'acp: start refused, the working folder is in a handed-over data home', { sid, cwd, home: refusal.home, state: refusal.state, to: refusal.to })
         return { ok: false, error, errorKind, refusal }
       }
-      // The files took an await: a Demo that began stopping meanwhile starts no worker.
-      if (files && deps.maySpawn && !deps.maySpawn()) {
-        void files.close()
-        try { fs.closeSync(files.inFd) } catch { /* closed */ }
-        void removeSurviveFiles(paths)
+      // The awaits above: a Demo that began stopping meanwhile starts no worker.
+      if (deps.maySpawn && !deps.maySpawn()) {
+        if (files) {
+          void files.close()
+          try { fs.closeSync(files.inFd) } catch { /* closed */ }
+          void removeSurviveFiles(paths)
+        }
         return { ok: false, error: 'acpStart: Demo is stopping; no new worker starts', errorKind: 'demo_stopping' }
       }
       try {
@@ -989,7 +992,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (workers.get(sid) === entry) reapWorker(sid, 'stopped')
     // The group this stop waited on is gone; an older one of the same runtime must be too.
     if (exitedGroups.get(sid)?.pid === pid) { exitedGroups.delete(sid); persistPids() }
-    if (leftGroups.get(sid) === pid) leftGroups.delete(sid)
+    if (leftGroups.get(sid)?.pid === pid) leftGroups.delete(sid)
     await (strict ? endGroupsStrict(sid) : awaitExitedGroup(sid))
   }
 
@@ -1004,10 +1007,13 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    */
   async function settleForStrictStop(sid: string): Promise<void> {
     if (!(await adopted(sid))) throw new Error(adoptingRefusal(sid).error)
-    const sweep = stragglers.get(sid)
-    if (sweep && await sweep === 'unknown') {
+    const straggler = stragglers.get(sid)
+    if (!straggler || await straggler.settled !== 'unknown') return
+    // ps gave the boot sweep no answer: asked once more now, as adopted() does for a kept row.
+    if (await sweepStraggler(sid, straggler.row).catch(() => 'unknown' as const) === 'unknown') {
       throw new Error(`the ACP worker for ${sid} from the last daemon life could not be checked (ps gave no answer); its process may still run`)
     }
+    if (stragglers.get(sid) === straggler) stragglers.delete(sid)
   }
 
   /**
@@ -1016,14 +1022,28 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    * group's id is not reused while it has members.
    */
   async function endGroupsStrict(sid: string): Promise<void> {
-    for (const pid of [exitedGroups.get(sid)?.pid, leftGroups.get(sid)]) {
-      if (!pid || pid <= 1) continue
-      if (isProcessGroupAlive(pid) && !await waitFor(() => !isProcessGroupAlive(pid), 500)) {
-        signalProcessGroup(pid, 'SIGTERM')
-        if (!await waitFor(() => !isProcessGroupAlive(pid), 6000)) throw new Error('ACP worker shutdown is still pending; its process group has not exited')
+    for (const group of [exitedGroups.get(sid), leftGroups.get(sid)]) {
+      const pid = group?.pid
+      if (!group || !pid || pid <= 1) continue
+      const forget = () => {
+        if (exitedGroups.get(sid) === group) { exitedGroups.delete(sid); persistPids() }
+        if (leftGroups.get(sid) === group) leftGroups.delete(sid)
       }
-      if (exitedGroups.get(sid)?.pid === pid) { exitedGroups.delete(sid); persistPids() }
-      if (leftGroups.get(sid) === pid) leftGroups.delete(sid)
+      if (!isProcessGroupAlive(pid) || await waitFor(() => !isProcessGroupAlive(pid), 500)) { forget(); continue }
+      // The id was this worker's group when it was kept, maybe hours ago: signalled only while ps shows it still
+      // runs this worker's adapter or worker (as the straggler sweep proves it). Anything else is no proof: an
+      // error, and no signal (a group of that id may be another program's now).
+      const members = await groupCommands(pid)
+      if (!isProcessGroupAlive(pid)) { forget(); continue }
+      const ours = !!members?.some((command) => (!!group.adapter && command.includes(group.adapter)) || (!!group.cmd && command.includes(group.cmd)))
+      if (!ours) {
+        throw new Error(members === null
+          ? `ACP worker shutdown is still pending; ps gave no answer about its process group ${pid}, not signalled`
+          : `ACP worker shutdown is still pending; process group ${pid} no longer shows this worker's adapter, not signalled`)
+      }
+      signalProcessGroup(pid, 'SIGTERM')
+      if (!await waitFor(() => !isProcessGroupAlive(pid), 6000)) throw new Error('ACP worker shutdown is still pending; its process group has not exited')
+      forget()
     }
   }
 
@@ -1061,8 +1081,16 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
   /** Whether `sid` names a worker of this daemon: running, still being adopted, or a stopped one whose group lives on. */
   function holds(sid: string): boolean {
-    return workers.has(sid) || keptRows.has(sid) || adopting.has(sid) || stragglers.has(sid) || exitedGroupAlive(sid)
-      || (leftGroups.has(sid) && isProcessGroupAlive(leftGroups.get(sid)!))
+    return workers.has(sid) || keptRows.has(sid) || adopting.has(sid) || stragglers.has(sid) || exitedGroupAlive(sid) || leftGroupAlive(sid)
+  }
+
+  /** True while the group a worker left when it exited on its own still runs; forgets it once the group is gone. */
+  function leftGroupAlive(sid: string): boolean {
+    const group = leftGroups.get(sid)
+    if (!group) return false
+    if (isProcessGroupAlive(group.pid)) return true
+    leftGroups.delete(sid)
+    return false
   }
 
   /** Read only: every worker this daemon holds (demo.quiesce answers with them, so a reset stops each). */
@@ -1360,8 +1388,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     let chain: Promise<unknown> = Promise.all([...adopting.values()])
     for (const [sid, row] of rows) {
       const settled = chain.then(() => sweepStraggler(sid, row)).catch(() => 'unknown' as const)
-      stragglers.set(sid, settled)
-      void settled.then((r) => { if (r !== 'unknown' && stragglers.get(sid) === settled) stragglers.delete(sid) })
+      const entry = { row, settled }
+      stragglers.set(sid, entry)
+      void settled.then((r) => { if (r !== 'unknown' && stragglers.get(sid) === entry) stragglers.delete(sid) })
       chain = settled
     }
     return chain.then(() => {})
