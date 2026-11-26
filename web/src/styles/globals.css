@@ -20704,10 +20704,6 @@ a.file-link:hover {
 /* The strip is the shared Tabs (controls/Tabs.tsx); here only its place. */
 .session-terminal-tabs { padding: 0 8px; flex-shrink: 0; }
 .session-terminal-tabs-wrap { flex-shrink: 0; background: var(--bg-secondary); }
-/* More tabs than fit: the strip fades out where more are (it scrolls; the shown one is kept in view). */
-.session-terminal-tabs.fade-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
-.session-terminal-tabs.fade-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
-.session-terminal-tabs.fade-left.fade-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
 /* One tab and its close button. */
 .session-terminal-tab {
   display: flex;

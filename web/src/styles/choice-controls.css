@@ -87,6 +87,21 @@
   scrollbar-width: none;
 }
 
+/* A strip that scrolls sideways (a TabList or a SegmentedControl wider than its room) fades the
+   edge with more past it (utils/strip-edges.ts sets data-more), so a phone sees the row goes on. */
+:is(.wn-tabs, .wn-seg)[data-more='right'] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+:is(.wn-tabs, .wn-seg)[data-more='left'] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
+}
+:is(.wn-tabs, .wn-seg)[data-more='left right'] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+}
+
 .wn-tabs::-webkit-scrollbar {
   display: none;
 }

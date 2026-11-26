@@ -9,7 +9,7 @@
  * (ways-model `landingWay`), so its first screen answers "how does my phone reach
  * Walnut".
  */
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tab, TabList } from '@/components/controls';
 import { SettingsSection } from '../../SettingsSection';
@@ -129,39 +129,10 @@ export function usePhonesCloudView(): PhonesCloudView {
 
 export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: PhonesCloudTab | null }) {
   const navigate = useNavigate();
-  // Wider than a phone the bar wraps into a grid (devices-ways.css); a phone's one row scrolls
-  // sideways: bring the open tab into it (the bar only, never the page).
-  const barRef = useRef<HTMLDivElement>(null);
-  // A tab's tag and dot arrive with the data and widen it: the open tab is brought into
-  // view again then (it stayed cut off at the right edge of a phone).
-  const shape = tabs.map((t) => `${t.id}:${t.label}:${t.tag ?? ''}:${t.dot ?? ''}`).join('|');
-  useLayoutEffect(() => {
-    const bar = barRef.current;
-    const tab = bar?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (!bar || !tab) return;
-    const left = tab.getBoundingClientRect().left - bar.getBoundingClientRect().left + bar.scrollLeft;
-    const right = left + tab.offsetWidth;
-    if (left < bar.scrollLeft) bar.scrollLeft = Math.max(0, left - 12);
-    else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth + 12;
-  }, [current, shape]);
-  // Which sides have more tabs past the edge: that edge fades, so a phone sees the bar scrolls.
-  const [more, setMore] = useState('');
-  useLayoutEffect(() => {
-    const bar = barRef.current;
-    if (!bar) return;
-    const read = () => {
-      const left = bar.scrollLeft > 1;
-      const right = bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1;
-      setMore([left ? 'left' : '', right ? 'right' : ''].filter(Boolean).join(' '));
-    };
-    read();
-    bar.addEventListener('scroll', read, { passive: true });
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
-    ro?.observe(bar);
-    return () => { bar.removeEventListener('scroll', read); ro?.disconnect(); };
-  }, [shape]);
+  // A phone's one row scrolls sideways: TabList keeps the open tab in view and fades the edge
+  // with more tabs past it (utils/strip-edges.ts). Wider than a phone the bar wraps into a grid.
   return (
-    <TabList ref={barRef} className="pc-tabs" wrap aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
+    <TabList className="pc-tabs" wrap aria-label={PANE_TITLE} data-testid="pc-tabs">
       {tabs.map((t, i) => (
         // Each tab is its own pane at its own hash: picked, the address is replaced, as a nav click does.
         // Always, even for the tab this bar calls current: a router navigation renders in a transition,

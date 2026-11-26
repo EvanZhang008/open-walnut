@@ -9,7 +9,7 @@
  * mis-renders an inactive row.
  */
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { Tab, TabList } from '@/components/controls';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
@@ -63,13 +63,7 @@ export function NotesTabStrip({
   tabs, activePath, onActivate, onClose, onNewTab, trailing, leading,
   onCloseOthers, onCloseAll, onLocate, onOpenInNewWindow, isFavorite, onToggleFavorite,
 }: NotesTabStripProps) {
-  const activeRef = useRef<HTMLButtonElement>(null);
   const menu = useContextMenu<OpenTab>({ ignorePressSelection: true });
-
-  // Keep the active tab visible when activated (the strip scrolls horizontally on overflow).
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  }, [activePath]);
 
   /**
    * "Copy full path" / "Reveal in Finder" need the ABSOLUTE path, which only the
@@ -131,7 +125,6 @@ export function NotesTabStrip({
         return (
           <Tab
             key={tab.path}
-            ref={isActive ? activeRef : undefined}
             selected={isActive}
             className={`notes-tab${tab.kind === 'attachment' ? ' attachment' : ''}`}
             title={tab.path}

@@ -76,7 +76,11 @@
     scrollbar-width: none;
   }
   .app-shell-navigation .todo-section-tabs-list::-webkit-scrollbar { display: none; }
-  .app-shell-navigation .todo-section-tab {
+  /* Named through the bar, so it outranks the desktop's give-way rule for a tab that is not the
+     current one (globals.css `.todo-section-tabs .todo-section-tab:not([aria-selected])`): with that
+     one winning, the whole names shrank under each other and overlapped (2026-11-26 audit). */
+  .app-shell-navigation .todo-section-tabs .todo-section-tab,
+  .app-shell-navigation .todo-section-tabs .todo-section-tab:not([aria-selected='true']) {
     flex: 0 0 auto;
     min-height: 44px;
     min-width: 44px;

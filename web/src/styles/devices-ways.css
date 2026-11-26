@@ -7,19 +7,6 @@
    way, and Devices. Scrolls sideways when the pane is narrow. */
 .pc-head { margin: 0 0 18px; }
 .pc-tabs { margin: 0 0 14px; }
-/* More tabs past an edge (PhonesCloudTabs.tsx TabBar): that edge fades out. */
-.pc-tabs[data-more='right'] {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
-}
-.pc-tabs[data-more='left'] {
-  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
-  mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent);
-}
-.pc-tabs[data-more='left right'] {
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
-  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
-}
 /* Wider than a phone the bar wraps into columns (TabList `wrap`, choice-controls.css), so each
    tab's hint reads in one or two lines; a phone keeps the one scrolling row (2026-11-22 audit). */
 

@@ -377,33 +377,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   // The phone header is narrow: its folder name keeps the room.
   const endLabel = compact ? 'End' : focused !== null && shown && shown.slots.length > 1 ? `End ${terminalName(focused)}` : 'End terminal';
 
-  // The shown tab stays in view in a strip that scrolls (many tabs, the phone).
+  // The shown tab stays in view and the strip's edges fade: TabList does both (utils/strip-edges.ts).
   const tabsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const strip = tabsRef.current;
-    const tab = strip?.querySelector<HTMLElement>('.session-terminal-tab.is-active');
-    if (!strip || !tab) return;
-    const left = tab.offsetLeft - strip.offsetLeft;
-    if (left < strip.scrollLeft) strip.scrollLeft = left - 6;
-    else if (left + tab.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + tab.offsetWidth - strip.clientWidth + 6;
-  }, [viewActive, viewTabs.length]);
-  // A strip wider than its room fades at the side that has more tabs.
-  const [tabsFade, setTabsFade] = useState('');
-  const measureTabs = useCallback(() => {
-    const el = tabsRef.current;
-    if (!el) { setTabsFade(''); return; }
-    const left = el.scrollLeft > 2;
-    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
-    setTabsFade(`${left ? ' fade-left' : ''}${right ? ' fade-right' : ''}`);
-  }, []);
-  useEffect(() => {
-    measureTabs();
-    const el = tabsRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(measureTabs);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [measureTabs, viewTabs.length, viewActive]);
   // Arrow keys move between tabs (the strip is a tablist).
   const onTabKey = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
@@ -483,7 +458,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   // The strip sits on a backing of its own colour: its fade (a mask) shows that, not the terminal under it.
   const tabStrip = viewTabs.length > 1 && (
     <div className="session-terminal-tabs-wrap">
-    <TabList className={`session-terminal-tabs${tabsFade}`} aria-label="Terminals" ref={tabsRef} onKeyDown={onTabKey} onScroll={measureTabs}>
+    <TabList className="session-terminal-tabs" aria-label="Terminals" ref={tabsRef} onKeyDown={onTabKey}>
       {viewTabs.map((tab) => {
         const on = tab.id === viewActive;
         const name = tabLabel(tab, states);

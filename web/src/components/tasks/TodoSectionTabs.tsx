@@ -78,11 +78,6 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
   const phone = usePhoneLayout();
   const shown = visibleTabBarTabs(tabs, { active, counts, held: heldCounts, hidden, hideEmpty: hideEmpty && countsReady && !phone });
   const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!phone) return;
-    const el = listRef.current?.querySelector<HTMLElement>('.todo-section-tab[aria-selected="true"]');
-    el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  }, [phone, active]);
   // The empty tier's "Show recent tasks" (PhoneTierEmpty) switches tabs here.
   useEffect(() => {
     if (!phone) return;

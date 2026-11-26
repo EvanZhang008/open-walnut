@@ -5,6 +5,7 @@
  * activation in Chromium and WebKit alike. Arrow keys move and select.
  */
 import { useSelectionSlide } from '@/utils/selection-slide'
+import { useStripEdges } from '@/utils/strip-edges'
 import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { useControlGroupOff } from '@/components/controls/ControlGroup'
 import '@/styles/choice-controls.css'
@@ -94,6 +95,8 @@ export function SegmentedControl<V extends string>({
   const rootRef = useRef<HTMLDivElement>(null)
   // The thumb slides to the new pick (utils/selection-slide.ts); a strip that wraps onto rows jumps.
   useSelectionSlide(rootRef, ':scope > [role="radio"][aria-checked="true"]', !wrap)
+  // A strip wider than its room scrolls: its edges say so and the pick stays in view.
+  useStripEdges(rootRef, '[role="radio"][aria-checked="true"]', !wrap)
   const selectedIndex = options.findIndex((o) => o.value === value)
 
   // From the keyboard the segment that takes the focus shows its ring (data-keyed): WebKit draws no

@@ -10,6 +10,7 @@
  * thing at the top of a form (the new task draft's Start task / Quick chat); the keys stay.
  */
 import { useRef, type ButtonHTMLAttributes, type HTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useStripEdges } from '@/utils/strip-edges'
 import { useSelectionSlide } from '@/utils/selection-slide'
 import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { segmentIndexForKey } from '../settings/inputs/SegmentedControl'
@@ -66,6 +67,8 @@ export function TabList({ className, flush, tiles, wrap, children, onKeyDown, re
   // edge, and a strip that wraps onto rows jumps.
   const own = useRef<HTMLDivElement | null>(null)
   useSelectionSlide(own, ':scope > [role="tab"][aria-selected="true"]', !tiles && !wrap)
+  // A strip wider than its room scrolls: its edges say so and the picked tab stays in view.
+  useStripEdges(own, '[role="tab"][aria-selected="true"]', !tiles)
   const setRef = useLeanCallback((el: HTMLDivElement | null) => {
     own.current = el
     if (typeof ref === 'function') ref(el)
