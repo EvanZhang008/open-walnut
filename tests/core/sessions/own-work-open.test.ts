@@ -57,6 +57,9 @@ describe('pendingLines: words that say the work is not over', () => {
     '修好了部署会卡住的问题，已上线',
     '改了 A、B 等，已部署',
     'land.sh deploys only after the tests are green.',
+    // A kind of trigger named, not a wait of its own: "the wait-for-live trigger", "the trigger that waits for review results".
+    '完成检查会看自己的后台工作、子任务和等上线的触发器',
+    '新增一种等评审的状态标签',
     'Fixed: the board refreshes once the task lands.',
     'The review came back clean; landed and live, checked on production.',
   ])('not: %s', (line) => {

@@ -51,10 +51,10 @@ const EN_PENDING: readonly RegExp[] = [
 const ZH_EVENT = '(?:\\u4e0a\\u7ebf|\\u90e8\\u7f72|\\u843d\\u5730|land|\\u8dd1\\u5b8c|\\u6d4b\\u5b8c)';
 const ZH_PENDING: readonly RegExp[] = [
   new RegExp(`${ZH_EVENT}(?:\\u4e86)?\\u540e(?:\\u6211)?(?:\\u518d|\\u4f1a|\\u8981|\\u5c06)`, 'u'),
-  new RegExp(`\\u7b49(?:\\u5b83|\\u6539\\u52a8)?${ZH_EVENT}`, 'u'),
+  new RegExp(`\\u7b49(?:\\u5b83|\\u6539\\u52a8)?${ZH_EVENT}(?:\\u4e86|\\u540e|\\u5b8c)*(?:\\u6211)?\\u518d`, 'u'),
   /\u8fd8\u5728(?:\u8dd1|land|\u90e8\u7f72|\u843d\u5730|\u6d4b)/u,
   // "wait for the review (findings) to come back", "review is still running / in progress".
-  /\u7b49(?:\u8bc4\u5ba1|\u5ba1\u67e5|review|\u5b50\u4efb\u52a1)/u,
+  /\u7b49(?:\u8bc4\u5ba1|\u5ba1\u67e5|review|\u5b50\u4efb\u52a1)[^\u3002\uff1b;.\n]{0,8}(?:\u56de\u6765|\u7ed3\u679c|\u8dd1\u5b8c|\u518d)/u,
   /(?:\u8bc4\u5ba1|\u5ba1\u67e5|\u5b50\u4efb\u52a1)(?:\u8fd8|\u6b63)\u5728/u,
   new RegExp(`\\u8fd8\\u6ca1(?:\\u6709)?${ZH_EVENT}`, 'u'),
 ];
