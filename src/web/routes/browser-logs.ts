@@ -114,7 +114,7 @@ function writeEntries(entries: BrowserLogEntry[]): void {
       ...meta,
     })
     // Real use (core/usage-watch): a page's failed request or uncaught error, as its kind only.
-    if (entry.level === 'error' && entrySubsystem(entry) === 'browser') recordPageLine(entry.message, entry.args, entry.count)
+    if (entry.level === 'error' && entrySubsystem(entry) === 'browser') recordPageLine(entry.message, entry.args, entry.count, entry.url)
   }
 }
 

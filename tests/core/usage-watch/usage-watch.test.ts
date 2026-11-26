@@ -371,12 +371,15 @@ describe('a watch', () => {
     for (let i = 0; i < 30; i++) recordPageError(kindOf(i % 2 ? 'failed' : 'rejected'), T0 + H + i)
     flushUsage(T0 + H + 60_000)
     for (let m = 0; m < 5 * 60; m++) flushUsage(T0 + m * 60_000)
+    // An older target naming no page Walnut counts visits of: no error of its own fails it, and with no
+    // visit it never passes (page-uses.test.ts holds a counted page).
     const away = judgeWatch(watch, T0 + 5 * H)
-    expect(away.state).toBe('passed')
+    expect(away.state).toBe('extended')
+    expect(away.summary).toContain('No use, cannot judge so far')
     expect(away.summary).toContain('30 requests that went wrong on the way')
     recordPageError(kindOf('timed out'), T0 + 2 * H)
     flushUsage(T0 + 2 * H + 60_000)
-    expect(judgeWatch(watch, T0 + 5 * H).state).toBe('passed')
+    expect(judgeWatch(watch, T0 + 5 * H).state).toBe('extended')
     recordPageError(kindOf('refused'), T0 + 2 * H)
     recordPageError({ kind: 'TypeError in the session-chat chunk', request: false }, T0 + 2 * H)
     flushUsage(T0 + 2 * H + 60_000)

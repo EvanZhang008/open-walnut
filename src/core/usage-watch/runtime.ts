@@ -8,7 +8,7 @@ import { flushUsage, setWatchedOps, startUsageRecorder, stopUsageRecorder } from
 import { lastEventLine, routeUsageAlarm, sendDueNotes, type RouteDeps } from './route.js'
 import { usageTargetOf } from '../health-monitor/usage-alarms.js'
 import type { RouteAlarmInput, RouteAlarmResult } from '../health-monitor/types.js'
-import { REJUDGE_UNKNOWN_MS, judgeWatch, listWatches, putWatch, rejudgeUnknown, type Watch } from './watches.js'
+import { REJUDGE_UNKNOWN_MS, judgeWatch, listWatches, passedOnNoUse, putWatch, rejudgeEnded, type JudgeInputs, type Watch } from './watches.js'
 import { clause } from '../../utils/format.js'
 
 export const NOTE_FROM = 'Walnut: real use'
@@ -78,11 +78,24 @@ export async function routeHealthAlarm(input: RouteAlarmInput): Promise<RouteAla
   }, routeDeps)
 }
 
+/** Page use's visits by the day (core/page-visits.ts), for a page target's hours before its rows were kept. */
+async function judgeInputs(): Promise<JudgeInputs> {
+  try {
+    const { readVisits } = await import('../page-visits.js')
+    const visits = await readVisits()
+    return { visitDays: (key) => visits.keys[key]?.days }
+  } catch (err) {
+    log.obs.warn('usage watch: page visits unreadable', { error: err instanceof Error ? err.message : String(err) })
+    return {}
+  }
+}
+
 /** A watch's check time came: judge it, keep the verdict, tell whoever still owns it. */
 async function checkDueWatches(now = Date.now()): Promise<void> {
   const due = listWatches({ states: ['watching'] }).filter((w) => w.checkAt <= now)
+  const inputs = due.length ? await judgeInputs() : {}
   for (const w of due) {
-    const v = judgeWatch(w, now)
+    const v = judgeWatch(w, now, inputs)
     if (v.state === 'extended') {
       putWatch({ ...w, extended: true, checkAt: now + (w.checkAt - w.createdAt), result: v.results })
       continue
@@ -99,19 +112,24 @@ async function checkDueWatches(now = Date.now()): Promise<void> {
 let rejudged = false
 
 /**
- * Once a server start: watches that ended Unknown in the last week, judged again (watches.ts
- * rejudgeUnknown). Each new verdict is kept and told as a fresh one is; one still Unknown is left.
+ * Once a server start: watches that ended Unknown in the last week, or passed with a target of no use,
+ * judged again (watches.ts rejudgeEnded). A new verdict on an Unknown is kept and told as a fresh one
+ * is. One that had passed is kept quietly: its owner was told Nothing to do, and a lead hearing of
+ * every page watch at once would be noise; the Real Use page shows it. One reading as before is left.
  */
-export async function rejudgeUnknownWatches(now = Date.now()): Promise<void> {
+export async function rejudgeEndedWatches(now = Date.now()): Promise<void> {
   if (rejudged) return
   rejudged = true
-  const recent = listWatches({ states: ['unknown'], limit: 1_000 }).filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS)
+  const recent = listWatches({ states: ['unknown', 'passed'], limit: 2_000 })
+    .filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS && (w.state === 'unknown' || passedOnNoUse(w)))
+  const inputs = recent.length ? await judgeInputs() : {}
   for (const w of recent) {
-    const v = rejudgeUnknown(w)
+    const v = rejudgeEnded(w, inputs)
     if (!v) continue
     const done: Watch = { ...w, state: v.state, result: v.results }
     putWatch(done)
-    log.obs.info('usage watch: judged again', { watch: w.id, taskId: w.taskId, state: v.state })
+    log.obs.info('usage watch: judged again', { watch: w.id, taskId: w.taskId, was: w.state, state: v.state })
+    if (w.state === 'passed') continue
     if (!(await routeDeps.enabled())) continue
     const summary = `Judged again (it had read Unknown, the machine's sleep counted as time not recorded): ${v.summary}`
     // Its own row id: the Unknown one may still wait in a queue, and a queue keeps one line per id.
@@ -176,7 +194,7 @@ export function startRealUse(): void {
     void (async () => {
       try {
         setWatchedOps(listWatches({ states: ['watching'] }).flatMap((w) => w.targets.filter((t) => t.startsWith('op:')).map((t) => t.slice(3))))
-        await rejudgeUnknownWatches()
+        await rejudgeEndedWatches()
         await checkDueWatches()
         await sendDueNotes(routeDeps)
       } catch (err) {

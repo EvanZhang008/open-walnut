@@ -17,7 +17,7 @@
  * Every UI close goes through the layer, so Back and the close button agree.
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
@@ -25,6 +25,7 @@ import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { TaskDetailPane } from './TaskDetailPane';
 import { PhoneTaskDetailHead } from './PhoneTaskDetailHead';
+import { recordVisit } from '@/api/page-visits';
 
 export function TaskDetailModal({
   task, allTasks, onClose, onOpenTriageForTask,
@@ -35,6 +36,8 @@ export function TaskDetailModal({
   onOpenTriageForTask?: (taskId: string) => void;
 }) {
   const phone = usePhoneLayout();
+  // Page use and real use count each task opened (src/core/page-places.ts PAGE_PARTS).
+  useEffect(() => { recordVisit('part:task-detail'); }, [task.id]);
   const afterCloseRef = useRef<(() => void) | null>(null);
   const layer = usePhoneOverlay({
     id: `task-detail:${task.id}`,

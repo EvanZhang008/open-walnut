@@ -77,6 +77,9 @@ function create(file: string): DB {
     CREATE INDEX IF NOT EXISTS tool_errors_at ON tool_errors (at);
     CREATE TABLE IF NOT EXISTS companion_batches (id TEXT PRIMARY KEY, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS client_failures (sid TEXT NOT NULL, id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (sid, id));
+    CREATE TABLE IF NOT EXISTS page_uses (
+      hour INTEGER NOT NULL, key TEXT NOT NULL, visits INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (hour, key));
   `)
   // The minutes an hour's machine slept (addSlept), kept beside its recorded ones. A file an older
   // version wrote gets the column, empty; an older version reading this file never names it.
@@ -283,6 +286,33 @@ export function readSlept(sinceHour: number): Map<number, number> {
   return withStore(new Map(), (d) => new Map((d.prepare('SELECT hour, slept FROM alive WHERE hour >= ? AND slept IS NOT NULL').all(sinceHour) as Array<{ hour: number; slept: number }>).map((r) => [r.hour, r.slept])))
 }
 
+/**
+ * A page's visits and its own errors, by the hour (page-uses.ts). Their own table: an older version
+ * reads only the hours, so it never takes a visit for a page error.
+ */
+export function addPageUses(rows: ReadonlyArray<{ hour: number; key: string; visits: number; errors: number }>): void {
+  if (!rows.length) return
+  withStore(undefined, (d) => {
+    const up = d.prepare('INSERT INTO page_uses (hour, key, visits, errors) VALUES (?, ?, ?, ?) ON CONFLICT(hour, key) DO UPDATE SET visits = visits + excluded.visits, errors = errors + excluded.errors')
+    d.transaction(() => { for (const r of rows) up.run(r.hour, r.key, r.visits, r.errors) })()
+  })
+}
+
+/** The page rows from `sinceHour` on, of one key or all. */
+export function readPageUses(sinceHour: number, key?: string): Array<{ hour: number; key: string; visits: number; errors: number }> {
+  return withStore([], (d) => (key
+    ? d.prepare('SELECT hour, key, visits, errors FROM page_uses WHERE hour >= ? AND key = ?').all(sinceHour, key)
+    : d.prepare('SELECT hour, key, visits, errors FROM page_uses WHERE hour >= ?').all(sinceHour)) as Array<{ hour: number; key: string; visits: number; errors: number }>)
+}
+
+/** The first hour any page row was kept, or null: before it, a page's visits are known only by the day. */
+export function firstPageUseHour(): number | null {
+  return withStore(null, (d) => {
+    const r = d.prepare('SELECT MIN(hour) AS h FROM page_uses').get() as { h: number | null } | undefined
+    return r?.h ?? null
+  })
+}
+
 /** Drops what is older than the retention, and events past the cap. */
 export function pruneStore(now = Date.now()): void {
   withStore(undefined, (d) => {
@@ -291,6 +321,7 @@ export function pruneStore(now = Date.now()): void {
     d.prepare('DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY at DESC LIMIT ?)').run(MAX_EVENTS)
     d.prepare('DELETE FROM sends WHERE due_at < ?').run(now - 7 * 86_400_000)
     d.prepare('DELETE FROM alive WHERE hour < ?').run(now - RETAIN_HOURS * 3_600_000)
+    d.prepare('DELETE FROM page_uses WHERE hour < ?').run(now - RETAIN_HOURS * 3_600_000)
     // A batch older than the rows a companion still sends (companion-uses.ts KEEP_HOURS) is never resent.
     d.prepare('DELETE FROM companion_batches WHERE at < ?').run(now - 8 * 86_400_000)
     // A client tells a failure at most a day after it (NO_ANSWER_MAX_AGE_MS): two days of ids cover any resend.

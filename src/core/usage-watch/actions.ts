@@ -7,6 +7,9 @@ import { lastShipOf, recordShip } from './ships.js'
 import { readRange, usageReport, targetEvents, type ReportRow } from './report.js'
 import { callerSide, ownFaults } from './agg.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
+import { isPlaceKey, pageTargetProblem, placeUseOf } from './page-uses.js'
+import { readPageUses } from './store.js'
+import { visitKeyOfTarget } from '../page-places.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
   type ExemptKind, type Watch, type WatchChecks,
@@ -107,7 +110,7 @@ function problemScore(r: ReportRow): number {
  * a week and each was refused as a bad argument, as were exemptions under kinds they made up.
  */
 const USAGE_WATCH_HELP = {
-  set: '{"action":"set","targets":["op:task_send","route:GET /api/tasks/:id","page:session"],"who":"this task","check_after":"24h"}',
+  set: '{"action":"set","targets":["op:task_send","route:GET /api/tasks/:id","page:session-panel"],"who":"this task","check_after":"24h"}',
   exempt: `{"action":"exempt","kind":"not_shipped","reason":"Investigation only: nothing was landed or deployed."} (kind: ${EXEMPT_KINDS.join(', ')})`,
   report: '{"action":"report","target":"op:task_send","range":"24h"} (no target: the names with the most problems)',
   errors: '{"action":"errors","by":"code","op":"task_send","range":"24h"} (by: op, code, session or host; session: one session or task; code: one error code\'s)',
@@ -125,6 +128,17 @@ export function probeFiller(chars: number): string {
   return s
 }
 
+/** The places a visit was counted for so far: Page use's keys and the page rows real use kept. */
+async function countedPlaces(now: number): Promise<Set<string>> {
+  const out = new Set<string>()
+  try {
+    const { readVisits } = await import('../page-visits.js')
+    for (const k of Object.keys((await readVisits()).keys)) out.add(k)
+  } catch { /* unreadable: the app's own places still count */ }
+  for (const r of readPageUses(now - 28 * 86_400_000)) out.add(r.key)
+  return out
+}
+
 export async function runUsageWatchAction(body: Record<string, unknown>, ctx: ActionContext): Promise<Record<string, unknown>> {
   const now = ctx.now ?? Date.now()
   const action = String(body.action ?? '')
@@ -133,9 +147,14 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       const task = await subjectTask(body, ctx)
       const targets = Array.isArray(body.targets) ? body.targets.map(String) : typeof body.targets === 'string' ? [body.targets] : []
       const trigger = typeof body.trigger === 'string' && body.trigger.trim() ? body.trigger.trim() : undefined
-      if (!targets.length && !trigger) throw new UsageWatchError(400, 'no_targets', 'Name what to watch: "targets":["op:<tool>","route:GET /api/...","page:<part>"] (or a "trigger" that checks it).')
+      if (!targets.length && !trigger) throw new UsageWatchError(400, 'no_targets', 'Name what to watch: "targets":["op:<tool>","route:GET /api/...","page:<page>"] (or a "trigger" that checks it).')
       if (targets.length > 10) throw new UsageWatchError(400, 'too_many_targets', 'At most 10 targets in one watch.')
       for (const t of targets) { const p = targetProblem(t); if (p) throw new UsageWatchError(400, 'bad_target', p) }
+      // A page target names a place whose visits are counted, or its watch could never see a use.
+      if (targets.some((t) => t.startsWith('page:'))) {
+        const known = await countedPlaces(now)
+        for (const t of targets) { const p = t.startsWith('page:') ? pageTargetProblem(t, known) : null; if (p) throw new UsageWatchError(400, 'bad_target', p) }
+      }
       const span = parseSpan(body.check_after ?? '24h')
       if (span === null || span < MIN_CHECK_AFTER_MS || span > MAX_CHECK_AFTER_MS) throw new UsageWatchError(400, 'bad_check_after', 'check_after is a time from 1h to 14d, like "24h" or "3d".')
       const checks = readChecks(body.checks)
@@ -189,10 +208,14 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       if (target) { const p = targetProblem(target); if (p) throw new UsageWatchError(400, 'bad_target', p) }
       const range = readRange(body.range)
       const rep = usageReport(range, { now, ...(target ? { target } : {}) })
+      // A page's uses are its visits, kept apart from the rows (page-uses.ts).
+      const placeKey = target ? visitKeyOfTarget(target) : null
+      const placeUse = placeKey && isPlaceKey(placeKey) ? placeUseOf(placeKey, rep.from, now) : null
       const rows = rep.rows.sort((a, b) => problemScore(b) - problemScore(a) || b.calls - a.calls).slice(0, 15)
       return {
         range, from: new Date(rep.from).toISOString(), recorded: rep.recorded,
         rows: rows.map(rowView),
+        ...(placeUse ? { page: { visits: placeUse.visits, errors: placeUse.errors } } : {}),
         // The caller's side, reported apart: the tools agents most often call wrong or a rule refuses.
         ...(target ? {} : { caller_side: callerTop(rep.rows) }),
         ...(target ? { recent_problems: targetEvents(target, 10).map((e) => ({ at: new Date(e.at).toISOString(), problem: e.problem, ...(e.code ? { code: e.code } : {}), ...(e.chars ? { size: e.chars } : {}), ...(e.ms ? { ms: e.ms } : {}) })) } : {}),

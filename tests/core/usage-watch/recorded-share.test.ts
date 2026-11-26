@@ -22,9 +22,9 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetUsageRecorderForTesting, flushUsage, recordOpCall } from '../../../src/core/usage-watch/record.js'
 import { closeUsageWatchStore, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
-import { getWatch, judgeWatch, newWatch, putWatch, recordedShare, rejudgeUnknown } from '../../../src/core/usage-watch/watches.js'
+import { getWatch, judgeWatch, newWatch, putWatch, recordedShare, rejudgeEnded } from '../../../src/core/usage-watch/watches.js'
 import { readSlept } from '../../../src/core/usage-watch/store.js'
-import { rejudgeUnknownWatches, routeDeps, stopRealUse } from '../../../src/core/usage-watch/runtime.js'
+import { rejudgeEndedWatches, routeDeps, stopRealUse } from '../../../src/core/usage-watch/runtime.js'
 import { __resetSleepLedgerForTest, noteSleepSinceLastLook, sleptBetween as sleptReal } from '../../../src/lib/sleep-ledger.js'
 
 const MIN = 60_000
@@ -119,15 +119,15 @@ describe('a watch reads Unknown only for time the server was awake and not recor
   it('a watch that ended Unknown is judged again at its own check time; one still Unknown stays so', () => {
     liveTheDay()
     const ended = { ...watch(), state: 'unknown' as const, checkedAt: END + MIN }
-    const again = rejudgeUnknown(ended)
+    const again = rejudgeEnded(ended)
     expect(again?.state).toBe('passed')
-    expect(rejudgeUnknown({ ...ended, state: 'passed' })).toBeNull()
-    expect(rejudgeUnknown({ ...ended, checkedAt: undefined })).toBeNull()
+    expect(rejudgeEnded({ ...ended, state: 'passed' })).toBeNull()
+    expect(rejudgeEnded({ ...ended, checkedAt: undefined })).toBeNull()
   })
 
   it('a watch still Unknown when judged again is left as it is', () => {
     liveTheDay({ downFrom: T('2026-11-25T10:00:00Z'), downTo: T('2026-11-25T13:00:00Z') })
-    expect(rejudgeUnknown({ ...watch(), state: 'unknown', checkedAt: END + MIN })).toBeNull()
+    expect(rejudgeEnded({ ...watch(), state: 'unknown', checkedAt: END + MIN })).toBeNull()
   })
 
   it('the server judges them again once a start, the last week only, on a row of their own, and a lead told the Unknown hears it', async () => {
@@ -145,13 +145,13 @@ describe('a watch reads Unknown only for time the server was awake and not recor
       putWatch(recent)
       const old = { ...watch(), state: 'unknown' as const, checkedAt: END - 8 * 24 * 60 * MIN }
       putWatch(old)
-      await rejudgeUnknownWatches(END + 2 * MIN)
+      await rejudgeEndedWatches(END + 2 * MIN)
       expect(getWatch(recent.id)).toMatchObject({ state: 'passed', checkedAt: END + MIN, told: 'lead-1' })
       expect(getWatch(old.id)?.state).toBe('unknown')
       expect(told).toEqual([{ to: 'lead-1', rowId: `${recent.id}-rejudged`, text: expect.stringContaining('Judged again (it had read Unknown') }])
       // Once a start: a second pass judges nothing.
       putWatch({ ...recent, state: 'unknown' })
-      await rejudgeUnknownWatches(END + 3 * MIN)
+      await rejudgeEndedWatches(END + 3 * MIN)
       expect(getWatch(recent.id)?.state).toBe('unknown')
     } finally {
       Object.assign(routeDeps, saved)

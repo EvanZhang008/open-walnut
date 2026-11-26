@@ -241,6 +241,7 @@ import { setTaskThreads, takeThreadsViewAsk, threadsKeptBy, threadsOffered, useT
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import { threadCounts } from '@open-walnut/thread-groups';
 import '@/styles/session-threads.css';
+import { recordVisit } from '@/api/page-visits';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -526,6 +527,8 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
     log.info('session-panel', 'following the replacing session (the host does not)', { sessionId: oldId, newSessionId: newId, hostSessionId: sessionId });
     setFollowed({ from: sessionId, to: newId });
   }, [onSessionReplaced, sessionId]);
+  // Page use and real use count each session opened in a panel (src/core/page-places.ts PAGE_PARTS).
+  useEffect(() => { recordVisit('part:session-panel'); }, [sessionId]);
   return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
 });
 

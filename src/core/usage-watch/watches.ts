@@ -1,6 +1,6 @@
 /**
  * Watches: what a task that shipped a change asks real use to show, and until when. A watch
- * names its targets (`op:task_get`, `route:GET /api/tasks/:id`, `page:ThreadCard`) and checks
+ * names its targets (`op:task_get`, `route:GET /api/tasks/:id`, `page:home`) and checks
  * a machine can judge; at its check time each target is judged on the hours since it was set:
  *  - Passed: every op or route target had enough use and met every check;
  *  - Failed: a check failed (it names which);
@@ -14,6 +14,8 @@ import { readAlive, readHours, readSlept, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 import { RECORDED_NON_OPS } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
+import { visitKeyOfTarget } from '../page-places.js'
+import { isPlaceKey, placeUseOf } from './page-uses.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -82,15 +84,20 @@ export interface TargetResult {
    * rule's design, their share and any codes new since the week before.
    */
   callerSide?: { calls: number; pct: number; badArgs: number; refused: number; newCodes?: string[] }
+  /** A page target: of its uses (visits), those known only by the day (page-uses.ts placeUseOf). */
+  byDay?: number
 }
+
+/** What a judge reads besides the store: Page use's visits by the day, for hours before page rows were kept. */
+export interface JudgeInputs { visitDays?: (key: string) => Record<string, number> | undefined }
 
 // An op, or a name real use counts that is no op (a session's Walnut mount: counters.ts RECORDED_NON_OPS,
 // plain `word/word` names that need no escaping).
-const TARGET_RE = new RegExp(`^(op:(?:[a-z][a-z0-9_]{0,63}|${RECORDED_NON_OPS.join('|')})|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\\/[A-Za-z0-9_\\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$`)
+export const TARGET_RE = new RegExp(`^(op:(?:[a-z][a-z0-9_]{0,63}|${RECORDED_NON_OPS.join('|')})|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\\/[A-Za-z0-9_\\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$`)
 
 /** Why a target is not one the monitor can watch, or null. */
 export function targetProblem(t: string): string | null {
-  return TARGET_RE.test(t) ? null : `"${t.slice(0, 80)}" is not a target: use op:<op name>, route:<METHOD> <route template> (route:GET /api/tasks/:id), or page:<chunk or kind>`
+  return TARGET_RE.test(t) ? null : `"${t.slice(0, 80)}" is not a target: use op:<op name>, route:<METHOD> <route template> (route:GET /api/tasks/:id), or page:<page> (page:home, page:session-panel, page:settings:<pane id>)`
 }
 
 /**
@@ -108,6 +115,10 @@ export function targetCovers(target: string, kind: UsageKind, name: string): boo
     const want = target.slice(6)
     return want.includes(' ') ? name === want : name.endsWith(` ${want}`)
   }
+  // A page Walnut counts visits of is judged by its own rows (page-uses.ts); an older target's words
+  // name page errors, as before.
+  const key = visitKeyOfTarget(target)
+  if (key && isPlaceKey(key)) return false
   return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
 }
 
@@ -188,19 +199,33 @@ function mergedFor(target: string, since: number, until: number): Agg {
   return out
 }
 
+/**
+ * A page target over [since, until): its uses are the visits of the place it names, and only the
+ * page's own errors on it fail it (page-uses.ts). An older target naming no place (a component, an
+ * error's words) has no visits: only the page errors its words name, as before.
+ */
+function judgePageTarget(target: string, since: number, until: number, inputs: JudgeInputs): TargetResult {
+  const key = visitKeyOfTarget(target)
+  const place = key !== null && isPlaceKey(key)
+  const use = key ? placeUseOf(key, since, until, inputs.visitDays?.(key)) : { visits: 0, errors: 0, byDay: 0 }
+  const errors = use.errors + (place ? 0 : mergedFor(target, since, until).calls)
+  const notes: string[] = []
+  if (errors > 0) notes.push(`${errors} page error${errors === 1 ? '' : 's'}`)
+  const ok = notes.length === 0
+  // Its requests that went wrong on the way are named, never counted.
+  const theirs = place ? 0 : pageRequestsOf(target.slice(5), since, until)
+  if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
+  if (!place) notes.push('names no page Walnut counts visits of')
+  else if (use.byDay > 0) notes.push(`${use.byDay} of its visits counted by the day (before visits were kept by the hour)`)
+  return { target, uses: use.visits, ok, notes, ...(use.byDay ? { byDay: use.byDay } : {}) }
+}
+
 /** Judges one target over [since, until): its uses and each check. */
-export function judgeTarget(target: string, checks: WatchChecks, since: number, until: number): TargetResult {
+export function judgeTarget(target: string, checks: WatchChecks, since: number, until: number, inputs: JudgeInputs = {}): TargetResult {
+  if (target.startsWith('page:')) return judgePageTarget(target, since, until, inputs)
   const c = { ...DEFAULT_CHECKS, ...checks }
   const agg = mergedFor(target, since, until)
   const notes: string[] = []
-  if (target.startsWith('page:')) {
-    // Only the page's own errors fail it (targetCovers); its requests that went wrong on the way are named.
-    const theirs = pageRequestsOf(target.slice(5), since, until)
-    if (agg.calls > 0) notes.push(`${agg.calls} page error${agg.calls === 1 ? '' : 's'}`)
-    const ok = notes.length === 0
-    if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
-    return { target, uses: agg.calls + theirs, ok, notes }
-  }
   // Only Walnut's own faults make the failure rate; the caller's side is reported apart (agg.ts).
   const pct = (n: number) => (agg.calls ? Math.round((n / agg.calls) * 1000) / 10 : 0)
   const failPct = pct(ownFaults(agg))
@@ -233,18 +258,25 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
   return out
 }
 
-/** How far back a watch that ended Unknown is judged again (rejudgeUnknown): the sleep ledger keeps a week. */
+/** How far back a watch that ended Unknown, or passed on no use, is judged again (rejudgeEnded): the sleep ledger keeps a week. */
 export const REJUDGE_UNKNOWN_MS = 7 * 86_400_000
 
+/** A watch that passed with a target of no use: judged before a page's visits were its uses (2026-11-25). */
+export function passedOnNoUse(w: Watch): boolean {
+  return w.state === 'passed' && (w.result ?? []).some((r) => r.uses === 0)
+}
+
 /**
- * A watch that ended Unknown, judged again at its own check time with what is known now, or null when it
- * still reads Unknown (or never did). Its time is over, so too little use is final, never extended. For
- * the watches judged before the machine's sleep was left out of the recorded share (2026-11-25).
+ * A watch that ended Unknown, or passed with a target of no use, judged again at its own check time with
+ * what is known now, or null when it reads as before. Its time is over, so too little use is final,
+ * never extended. For the watches judged before the machine's sleep was left out of the recorded share,
+ * and before a page's visits were its uses (2026-11-25).
  */
-export function rejudgeUnknown(w: Watch): (WatchVerdict & { state: Exclude<WatchState, 'watching' | 'dropped'> }) | null {
-  if (w.state !== 'unknown' || !w.checkedAt) return null
-  const v = judgeWatch({ ...w, state: 'watching', extended: true }, w.checkAt)
-  return v.state === 'unknown' || v.state === 'extended' ? null : { ...v, state: v.state }
+export function rejudgeEnded(w: Watch, inputs: JudgeInputs = {}): (WatchVerdict & { state: Exclude<WatchState, 'watching' | 'dropped'> }) | null {
+  if (!w.checkedAt || !(w.state === 'unknown' || passedOnNoUse(w))) return null
+  const v = judgeWatch({ ...w, state: 'watching', extended: true }, w.checkAt, inputs)
+  if (v.state === 'unknown' || v.state === 'extended') return null
+  return { ...v, state: v.state }
 }
 
 /**
@@ -285,18 +317,29 @@ export function callerLine(r: TargetResult): string {
   return ` (not failures: ${parts}, ${c.pct}% of uses${c.newCodes?.length ? `; new codes ${c.newCodes.slice(0, 5).join(', ')}` : ''})`
 }
 
+/**
+ * The least use a target needs for a verdict: the watch's min_uses, else 20 calls of an op or a route
+ * and one visit of a page (a page is opened far less often than an op is called). Never less than one.
+ */
+export function leastUses(checks: WatchChecks, target: string): number {
+  const set = checks.min_uses ?? (target.startsWith('page:') ? 1 : DEFAULT_CHECKS.min_uses)
+  return Math.max(1, set)
+}
+
 /** The verdict on a watch at its check time. */
-export function judgeWatch(w: Watch, now = Date.now()): WatchVerdict {
+export function judgeWatch(w: Watch, now = Date.now(), inputs: JudgeInputs = {}): WatchVerdict {
   const until = Math.min(now, w.checkAt)
-  const results = w.targets.map((t) => judgeTarget(t, w.checks, w.createdAt, until))
-  const min = w.checks.min_uses ?? DEFAULT_CHECKS.min_uses
+  const results = w.targets.map((t) => judgeTarget(t, w.checks, w.createdAt, until, inputs))
   const failed = results.filter((r) => !r.ok)
-  const short = results.filter((r) => !r.target.startsWith('page:') && r.uses < min)
+  const short = results.filter((r) => r.uses < leastUses(w.checks, r.target))
   const line = (r: TargetResult) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'}${r.notes.length ? `, ${r.notes.join('; ')}` : ''}${callerLine(r)}`
   if (failed.length) return { state: 'failed', results, summary: `Failed: ${failed.map(line).join(' · ')}` }
   if (short.length) {
-    const words = short.map((r) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'} (needs ${min})`).join(' · ')
-    return w.extended ? { state: 'too_little_use', results, summary: `Too little use: ${words}` } : { state: 'extended', results, summary: `Too little use so far, checked again: ${words}` }
+    // A target nobody used verified nothing: never a pass (2026-11-25: 31 watches passed on page targets of 0 uses).
+    const none = short.some((r) => r.uses === 0)
+    const words = short.map((r) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'} (needs ${leastUses(w.checks, r.target)})${r.uses === 0 && r.notes.length ? `, ${r.notes.join('; ')}` : ''}`).join(' · ')
+    const head = none ? 'No use, cannot judge' : 'Too little use'
+    return w.extended ? { state: 'too_little_use', results, summary: `${head}: ${words}` } : { state: 'extended', results, summary: `${head} so far, checked again: ${words}` }
   }
   if (recordedShare(w.createdAt, until) < 0.9) return { state: 'unknown', results, summary: 'Unknown: the server was not recording for more than a tenth of the time' }
   return { state: 'passed', results, summary: `Passed: ${results.map(line).join(' · ')}` }

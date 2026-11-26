@@ -10,8 +10,8 @@ defineOp({
   title: 'Watch a shipped change in real use',
   description:
     'Real use of Walnut\'s tools, requests and pages (Settings > Diagnostics > Real Use). '
-    + '`set`: after you ship a change, name what real use should show: `targets` (op:<tool>, route:<METHOD> <route template>, page:<part>), '
-    + '`checks` ({max_answer_chars, max_fail_pct, no_new_codes, max_p95_ms, min_uses}; defaults 20000, 5, true, 2000, 20; failures and new codes are Walnut\'s own errors and timeouts, while bad arguments and designed refusals come apart as caller_side), `who` ("this task" or an open task id), '
+    + '`set`: after you ship a change, name what real use should show: `targets` (op:<tool>, route:<METHOD> <route template>, page:<page>: page:home, page:session-panel, page:task-detail, page:settings:<pane id>, page:app:<app id>; a page\'s uses are its visits, its own errors fail it), '
+    + '`checks` ({max_answer_chars, max_fail_pct, no_new_codes, max_p95_ms, min_uses}; defaults 20000, 5, true, 2000, 20 (a page: 1 visit); a target with no use is never Passed; failures and new codes are Walnut\'s own errors and timeouts, while bad arguments and designed refusals come apart as caller_side), `who` ("this task" or an open task id), '
     + '`check_after` ("24h", 1h to 14d), or a `trigger` aimed at another open task for a check only a script can make. Until then an alarm on a target '
     + 'comes to that task, and at the check time each target is judged (Passed, Failed, Too little use, Unknown). A task that shipped cannot complete without one. '
     + '`exempt`: no watch, with `kind` (copy, colour, docs, tests, not_shipped, or watched_elsewhere: real use is watched outside Walnut, a pipeline alarm or a dashboard) and a `reason` of 20+ characters saying why (for watched_elsewhere: what watches it, who reads it, when). '
@@ -20,7 +20,7 @@ defineOp({
     + '`ship` (record a ship from another release tool, `how`), `probe` (an answer of `chars` filler characters, for testing the alarms), `help` (each action with an example).',
   input: {
     action: z.enum(['set', 'exempt', 'get', 'drop', 'list', 'report', 'errors', 'ship', 'probe', 'help']).describe('What to do (help: each action with an example)'),
-    targets: z.union([z.string(), z.array(z.string().max(200)).max(10)]).optional().describe('set: op:<tool>, route:<METHOD> <template>, page:<part>'),
+    targets: z.union([z.string(), z.array(z.string().max(200)).max(10)]).optional().describe('set: op:<tool>, route:<METHOD> <template>, page:<page> (page:home, page:session-panel)'),
     checks: z.object({
       max_answer_chars: z.number().optional(), max_fail_pct: z.number().optional(), no_new_codes: z.boolean().optional(),
       max_p95_ms: z.number().optional(), min_uses: z.number().optional(),

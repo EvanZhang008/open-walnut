@@ -19,12 +19,13 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
+import { VISIT_KEY_RE } from './page-places.js'
+import { recordPageVisit } from './usage-watch/record.js'
 
 export const MAX_KEYS = 400
 export const KEEP_DAYS = 120
 export const FLUSH_MS = 30_000
-/** `page:org`, `settings:sessions`, `app:walnut-notes~main`. */
-export const VISIT_KEY_RE = /^(page|settings|app):[A-Za-z0-9._~-]{1,72}$/
+export { VISIT_KEY_RE }
 
 export interface VisitEntry {
   count: number
@@ -146,6 +147,8 @@ async function writeNow(): Promise<void> {
 export async function recordVisits(keys: readonly string[], now: Date = new Date()): Promise<number> {
   const s = await load()
   const counted = applyVisits(s, keys, now)
+  // Real use counts them by the hour too: a `page:` watch target's uses are its visits (page-places.ts).
+  for (const key of keys) if (typeof key === 'string' && VISIT_KEY_RE.test(key)) recordPageVisit(key, now.getTime())
   if (counted) {
     dirty = true
     if (!timer) {

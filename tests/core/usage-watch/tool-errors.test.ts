@@ -250,11 +250,13 @@ describe('usage_watch errors reads them grouped', () => {
       const args = JSON.parse(ex.replace(/\s+\(.*\)$/, ''))
       expect(parseOpArgs(getOp('usage_watch')!, args).ok, a).toBe(true)
     }
-    // Its targets are ones a watch takes, and its page one a name real use records (page names hold it).
+    // Its targets are ones a watch takes, and its page one whose visits real use counts (page-places.ts).
     const { targetProblem } = await import('../../../src/core/usage-watch/watches.js')
+    const { pageTargetProblem } = await import('../../../src/core/usage-watch/page-uses.js')
     const set = JSON.parse(r.actions.set) as { targets: string[] }
     expect(set.targets.map(targetProblem)).toEqual(set.targets.map(() => null))
-    expect(set.targets).toContain('page:session')
+    expect(set.targets).toContain('page:session-panel')
+    expect(pageTargetProblem('page:session-panel', new Set())).toBeNull()
   })
 
   it('the session\'s line names the exemption kinds the op takes, so none is made up', async () => {

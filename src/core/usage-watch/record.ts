@@ -11,11 +11,12 @@
 import { count } from '../observability/metrics.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
-import { addClientFailures, addEvents, addHours, addSlept, addToolErrors, clientFailureKnown, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
+import { addClientFailures, addEvents, addHours, addPageUses, addSlept, addToolErrors, clientFailureKnown, markAlive, pruneStore, readHours, readToolErrors, type ToolErrorRow, type UsageEvent } from './store.js'
 import { NO_ANSWER_CODES } from '../../lib/no-answer-report.js'
-import { ASLEEP_CODE, TemplateMatcher, type PageErrorKind } from './normalize.js'
+import { ASLEEP_CODE, TemplateMatcher, pageKindIsPagesOwn, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { MOUNT_OP, labelValue } from './counters.js'
+import { _resetPageUsesForTesting, notePageUse, takePageUses } from './page-uses.js'
 export { MOUNT_OP } from './counters.js'
 import { sleepIntervals, sleptBetween } from '../../lib/sleep-ledger.js'
 
@@ -327,9 +328,18 @@ export function recordHttp(r: HttpRequest): void {
   }
 }
 
-/** One error a page reported, as its kind. */
-export function recordPageError(k: PageErrorKind, now = Date.now()): void {
+/** One visit of a place Page use counts (core/page-visits.ts): a use of a `page:` target (page-uses.ts). */
+export function recordPageVisit(key: string, now = Date.now()): void {
+  if (active) notePageUse(key, 'visit', now)
+}
+
+/**
+ * One error a page reported, as its kind; `place` is the page it came from (page-uses.ts
+ * placeOfPagePath), where an error of the page's own counts too.
+ */
+export function recordPageError(k: PageErrorKind, now = Date.now(), place: string | null = null): void {
   if (!active) return
+  if (place && pageKindIsPagesOwn(k.kind)) notePageUse(place, 'error', now)
   const agg = bucket('page', k.kind, now)
   addCall(agg, { cls: 'error', chars: 0, ms: 0 })
   // The same cause rang on its route this hour (server errors, slow reads): counted here, alarmed there.
@@ -393,6 +403,7 @@ export function flushUsage(now = Date.now()): void {
   events = []
   const errs = toolErrors
   toolErrors = []
+  const pageRows = takePageUses()
   if (rowSink) {
     rowSink(rows)
     // A replica keeps no store: its told ids stay in memory only.
@@ -401,6 +412,7 @@ export function flushUsage(now = Date.now()): void {
     return
   }
   addHours(rows)
+  addPageUses(pageRows)
   addEvents(evs)
   addToolErrors(errs)
   const ids = clientIdsToWrite
@@ -465,6 +477,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0, sink: type
   held = []
   lastStallAt = -Infinity
   pending = new Map()
+  _resetPageUsesForTesting()
   events = []
   toolErrors = []
   noAnswerSeen = []
