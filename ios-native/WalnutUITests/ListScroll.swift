@@ -14,12 +14,17 @@ import XCTest
 // `tests/web/ios-ui-test-list-scroll-guard.test.ts` keeps new scroll-until loops coming here.
 
 /// Where a list row can be seen and tapped: under the navigation bar, and clear of the tab bar
-/// (iOS 26's tab bar floats over the list, and a tap on a row under it lands on the bar).
+/// (iOS 26's tab bar floats over the list, and a tap on a row under it lands on the bar) and of
+/// the keyboard while one is up: a drag that starts on the keyboard never scrolls the list
+/// (2026-11-26, CI: 24 drags from y 734 under a keyboard from y 540 left a thread's Follow up box
+/// at y 1111).
 func listBand(_ app: XCUIApplication, clearOfTabBar: CGFloat = 8) -> ClosedRange<CGFloat> {
     let nav = app.navigationBars.firstMatch
     let tabs = app.tabBars.firstMatch
+    let keyboard = app.keyboards.firstMatch
     let top = nav.exists ? nav.frame.maxY : app.frame.minY
-    let bottom = (tabs.exists ? tabs.frame.minY : app.frame.maxY) - clearOfTabBar
+    let cover = min(tabs.exists ? tabs.frame.minY : app.frame.maxY, keyboard.exists ? keyboard.frame.minY : .infinity)
+    let bottom = cover - clearOfTabBar
     return top...max(top + 1, bottom)
 }
 
@@ -37,10 +42,10 @@ func distanceIntoBand(_ frame: CGRect, _ band: ClosedRange<CGFloat>, margin: CGF
     return top - frame.minY
 }
 
-/// Drags the list `dy` points (down positive) in the middle of the list band: a slow drag that
-/// holds before it lifts, so the list stops about where the finger does.
-func dragList(_ app: XCUIApplication, by dy: CGFloat) {
-    let band = listBand(app)
+/// Drags the list `dy` points (down positive) in the middle of the list band (`shown`, else
+/// `listBand`): a slow drag that holds before it lifts, so the list stops about where the finger does.
+func dragList(_ app: XCUIApplication, by dy: CGFloat, in shown: ClosedRange<CGFloat>? = nil) {
+    let band = shown ?? listBand(app)
     let mid = (band.lowerBound + band.upperBound) / 2
     let origin = app.coordinate(withNormalizedOffset: .zero)
     let from = origin.withOffset(CGVector(dx: app.frame.midX, dy: mid - dy / 2))
@@ -53,10 +58,12 @@ func dragList(_ app: XCUIApplication, by dy: CGFloat) {
 /// still move. An element the list has not built yet is looked for upward with `up`, else
 /// downward, a band's height a drag for up to `searches` drags (at the largest text sizes a list
 /// is a dozen screens long); one a drag carried out of the list (a lazy list drops it) is looked
-/// for back the way it came.
+/// for back the way it came. `band` is where the drags start and how far they go, when the list
+/// shows less than `listBand` (a sticky header over its top).
 @discardableResult
 func scrollList(_ app: XCUIApplication, _ target: XCUIElement, up: Bool = false, tries: Int = 16,
-                searches: Int = 30, need: (CGRect) -> CGFloat) -> Bool {
+                searches: Int = 30, band shown: (() -> ClosedRange<CGFloat>)? = nil,
+                need: (CGRect) -> CGFloat) -> Bool {
     // Content moved per point of drag, learned from the element's own moves: under 1 for the
     // touch slop, over 1 when the simulator lets a held drag glide on.
     var gain: CGFloat = 1
@@ -66,11 +73,11 @@ func scrollList(_ app: XCUIApplication, _ target: XCUIElement, up: Bool = false,
     var least: CGFloat = 24
     var aimed = 0, searched = 0
     while aimed < tries, searched < searches {
-        let band = listBand(app)
+        let band = shown?() ?? listBand(app)
         let room = max(60, band.upperBound - band.lowerBound - 60)
         guard target.exists, !target.frame.isEmpty else {
             // Not built yet: about a band's height a drag, so the row comes into the band.
-            dragList(app, by: toward * room / max(1, gain))
+            dragList(app, by: toward * room / max(1, gain), in: band)
             searched += 1
             continue
         }
@@ -82,7 +89,7 @@ func scrollList(_ app: XCUIApplication, _ target: XCUIElement, up: Bool = false,
         if wanted == 0 { return true }
         toward = wanted > 0 ? 1 : -1
         let command = toward * min(room, max(least, abs(wanted) / gain))
-        dragList(app, by: command)
+        dragList(app, by: command, in: band)
         waitStill(target, timeout: 3)
         guard target.exists, !target.frame.isEmpty else {
             // Carried past the band and out of the list: back the other way, in shorter drags.

@@ -135,9 +135,9 @@ class ThreadPushUITestCase: XCTestCase {
         }
     }
 
-    /// Closed-loop drags of the thread list until thread `threadId`'s Follow up box sits whole between
-    /// the sticky header and what covers the page's bottom: the tab bar, or the keyboard while one is
-    /// up. Asserts it got there.
+    /// Scrolls the thread list (`scrollList`) until thread `threadId`'s Follow up box sits whole
+    /// between the sticky header and what covers the page's bottom: the tab bar, or the keyboard
+    /// while one is up (`listBand`). Asserts it got there.
     ///
     /// The box is on the card since bb0a87a737 (it was a sheet over the keyboard): with another card's
     /// box still focused, the keyboard covers the page from its top, so the box must clear the
@@ -148,32 +148,21 @@ class ThreadPushUITestCase: XCTestCase {
         // At accessibility text sizes the view switch is a menu, not the
         // segmented control `viewport()` looks for.
         let list = el("org.threads")
-        let window = app.windows.firstMatch
-        let bar = app.tabBars.firstMatch
         let viewSwitch = el("org.node.tabs")
-        let keyboard = app.keyboards.firstMatch
-        let top = max(list.frame.minY, viewSwitch.frame.maxY) + 12
-        let cover = min(bar.exists ? bar.frame.minY : window.frame.maxY - 20, keyboard.exists ? keyboard.frame.minY : .infinity)
-        let bottom = cover - 12
-        for _ in 0..<24 {
-            let frame = follow.frame
-            if frame.minY >= top && frame.maxY <= bottom { break }
-            let below = frame.maxY > bottom
-            let gap = below ? frame.maxY - bottom : top - frame.minY
-            // A full-height swipe overshoots the box and oscillates past it.
-            let distance = min(220, max(35, gap + 24))
-            let fromY = below ? bottom - 45 : top + 45
-            let toY = below ? fromY - distance : fromY + distance
-            // Coordinates are screen points. The accessibility container's
-            // normalized origin can be the content origin, above the viewport.
-            app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: window.frame.midX, dy: fromY))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: .zero)
-                    .withOffset(CGVector(dx: window.frame.midX, dy: toY)),
-                    withVelocity: .slow, thenHoldForDuration: 0.3)
+        let header = max(list.frame.minY, viewSwitch.frame.maxY) + 12
+        func band() -> ClosedRange<CGFloat> {
+            let shown = listBand(app, clearOfTabBar: 12)
+            return max(shown.lowerBound, header)...max(max(shown.lowerBound, header) + 1, shown.upperBound)
         }
-        XCTAssertGreaterThanOrEqual(follow.frame.minY, top, "the Follow up box must clear the sticky header", file: file, line: line)
-        XCTAssertLessThanOrEqual(follow.frame.maxY, bottom, "the Follow up box must clear the tab bar and the keyboard", file: file, line: line)
+        // The drags start under the header, and the aim is a point inside the band's own edges:
+        // `distanceIntoBand` calls a frame within 1 pt of them in place.
+        scrollList(app, follow, tries: 24, band: band) { frame in
+            let b = band()
+            return distanceIntoBand(frame, (b.lowerBound + 1)...max(b.lowerBound + 2, b.upperBound - 1), margin: 12)
+        }
+        let end = band()
+        XCTAssertGreaterThanOrEqual(follow.frame.minY, end.lowerBound, "the Follow up box must clear the sticky header", file: file, line: line)
+        XCTAssertLessThanOrEqual(follow.frame.maxY, end.upperBound, "the Follow up box must clear the tab bar and the keyboard", file: file, line: line)
     }
 
     /// Empty a text input whatever an earlier run left in it.

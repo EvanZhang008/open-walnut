@@ -42,7 +42,6 @@ const KNOWN: Record<string, number> = {
   'TalkToWalnutUITests.swift': 8,
   'TaskAnchorTapUITests.swift': 3,
   'TasksDrawerUITests.swift': 5,
-  'ThreadFollowUpVoiceUITests.swift': 1,
   'ThreadPushLiveUITests.swift': 1,
   'ThreadPushNavigationUITests.swift': 2,
   'ThreadPushR3ClaudeReviewUITests.swift': 1,
