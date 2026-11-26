@@ -48,13 +48,10 @@ frames, real input, dialogs, recording a tab's requests, uploads, taking a tab o
   `take <tab>` when they are not on it. `fill-login` there answers `site_open_in_person_tab`;
   `--fresh-sign-in` only when they asked for a new sign-in (they approve it).
 - **Sign in with `fill-login`, then `fill-code`** where a one-time code is asked; you never see
-  the password or the code. While Walnut Passwords is locked they fill from the user's Bitwarden
-  (when it is one of their password sources), so a locked vault is no reason to ask the user to
-  unlock it; `vault_locked` means neither had the login, and says why. `which_login`: run again
-  with `--item <id>`. `no_code`: ask the user to enter it. `page_tampered`: navigate to the page
-  again, then fill. Never copy a password from `bw`, a file or a chat into a page yourself: typed
-  text stays in the tab's replay. A sign-in only the user can do (no saved login anywhere, a code
-  to their phone, a check): `request-sign-in "<what>"` and wait for it.
+  the password or the code; a locked vault fills from Bitwarden. `which_login`: run again with
+  `--item <id>`. `no_code`: ask the user. `page_tampered`: reload, then fill. Never type a
+  password yourself. A sign-in only the user can do (no saved
+  login, a code to their phone, a check): `request-sign-in "<what>"` and wait for it.
 - **A code to the user's phone or mail is announced first, and never at night.** Before a step
   that sends one (Send code, Text me, a sign-in that texts a code), say in one line where they
   read it (your chat, or a `request-sign-in`) which task, which site and why the code is needed;

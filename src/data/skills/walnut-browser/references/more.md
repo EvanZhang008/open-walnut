@@ -127,9 +127,11 @@ While Walnut Passwords is locked, `fill-login` and `fill-code` take the login fr
 Bitwarden instead, when they added it as a password source: Walnut runs `bw` itself, picks the
 login saved for the page by the same rules (`which_login` names Bitwarden's ids), and fills it the
 same way; the answer says `"source": "bitwarden"`. It does so only where the vault would release
-the login without asking the user (agent access Allow, or approvals off). `vault_locked` then means
+the login with no ask of its own (agent access Allow, or approvals off). `vault_locked` then means
 Bitwarden could not help either, and its message says why (not added, no session, no login for the
 page, or an ask that needs Passwords unlocked): only then ask the user to unlock Passwords.
+Never copy a password from `bw`, a file or a chat into a page yourself: typed text stays in the
+tab's replay.
 
 When the site then asks for a one-time code (two-step verification from an authenticator app),
 use `fill-code` (`action: "fill_code"`): Walnut computes the current code of the saved login's
