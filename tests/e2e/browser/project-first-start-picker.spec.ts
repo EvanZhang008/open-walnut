@@ -2,7 +2,8 @@
  * The v6 draft's Where picker, design A (experiment project_first_start), part three: Recent and
  * Most used, a search that keeps nothing once cleared, a machine that is only browsed until "Use
  * this folder", the Finder columns (a double click uses the folder clicked, never its child), the
- * levels row that cuts a path back, and the keyboard and focus. How to run: project-first-start.spec.ts.
+ * levels row that cuts a path back, and the keyboard and focus; and the draft's own Recent / Most
+ * used list under the composer. How to run: project-first-start.spec.ts.
  */
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -29,6 +30,66 @@ async function freshDraft(page: Page): Promise<Locator> {
   return openDraft(page)
 }
 
+test('the draft lists five places under the composer, Recent or Most used; a click picks one', async ({ page, request }) => {
+  // Evan, 2026-11-25: "still only 1 recent. I want at least 5 but in a nice way ... recently, most used also".
+  await setFlag(request, true)
+  const errors = watchErrors(page)
+  const ws = path.join(fx.home, 'ws-fixture')
+  const names = ['place-a', 'place-b', 'place-c', 'place-d', 'place-e', 'place-f']
+  await withDirs(page, [
+    ...names.map((n, i) => ({ cwd: path.join(ws, n), count: i + 1, lastUsed: minutesAgo(5 + i * 10) })),
+    { cwd: '/srv/elsewhere', host: DEVBOX.key, hostLabel: DEVBOX.label, count: 40, lastUsed: minutesAgo(900) },
+  ], { only: true })
+  const panel = await freshDraft(page)
+  const list = panel.getByTestId('draft-v6-recent-list')
+  const items = list.getByTestId('draft-v6-recent-row')
+  // Five rows, newest first, each whole inside the panel.
+  await expect(items).toHaveCount(5)
+  expect((await items.allInnerTexts()).map((t) => t.split('\n')[0])).toEqual(names.slice(0, 5))
+  const panelBox = (await panel.boundingBox())!
+  for (const b of await Promise.all((await items.all()).map((r) => r.boundingBox()))) {
+    expect(b!.x + b!.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1)
+    expect(b!.height).toBeGreaterThanOrEqual(29)
+  }
+  // Recent says when; Most used says how many starts (one number a row, the one it is ordered by).
+  await expect(items.first()).toContainText(/\d+m ago/)
+  await expect(items.first()).not.toContainText('start')
+  await shot(page, 'draft-recent-list')
+  // Most used: the remote folder with 40 starts first, the rest by their starts.
+  const below = (await panel.getByTestId('draft-v6-recent-list').boundingBox())!
+  await panel.getByTestId('draft-v6-recent-kind').getByText('Most used').click()
+  await expect(items.first()).toContainText('elsewhere')
+  await expect(items.first()).toContainText(DEVBOX.label)
+  await expect(items.first()).toContainText('40 starts')
+  expect((await items.allInnerTexts()).slice(1).map((t) => t.split('\n')[0])).toEqual(['place-f', 'place-e', 'place-d', 'place-c'])
+  expect(Math.round((await list.boundingBox())!.height)).toBe(Math.round(below.height))
+  // A click uses that folder: Where shows it and the row reads picked.
+  await items.nth(1).click()
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText('place-f')
+  await expect(items.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await expect(list.locator('[aria-selected="true"]')).toHaveCount(1)
+  // One Tab stop, the arrows move, Enter picks.
+  await items.nth(1).focus()
+  await page.keyboard.press('ArrowDown')
+  await expect(items.nth(2)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(panel.getByTestId('draft-v6-folder')).toContainText('place-e')
+  // One row reads picked, the folder in use.
+  await expect(list.locator('[aria-selected="true"]')).toHaveCount(1)
+  // "Browse folders": every folder, in the Where picker, in the same order (Most used).
+  await panel.getByTestId('draft-v6-recent-more').click()
+  await expect(whereMenu(page)).toBeVisible()
+  await expect(whereMenu(page).getByTestId('draft-v6-folder-row').first()).toHaveAttribute('data-name', 'elsewhere')
+  await page.keyboard.press('Escape')
+  await expect(whereMenu(page)).toHaveCount(0)
+  // The choice of list is kept: a new draft opens on Most used.
+  await page.keyboard.press('Escape')
+  const again = await freshDraft(page)
+  await expect(again.getByTestId('draft-v6-recent-list').getByTestId('draft-v6-recent-row').first()).toContainText('elsewhere')
+  await again.getByTestId('draft-v6-recent-kind').getByText('Recent').click()
+  expect(errors).toEqual([])
+})
+
 test('Recent and Most used on every machine; a cleared search keeps the saved folder', async ({ page, request }) => {
   await setFlag(request, true)
   const errors = watchErrors(page)
@@ -41,6 +102,8 @@ test('Recent and Most used on every machine; a cleared search keeps the saved fo
   const panel = await freshDraft(page)
   const before = await whereField(panel).getAttribute('aria-label')
   const menu = await openWhere(page, panel)
+  // The order is one choice with the draft's own list (another test may have left Most used).
+  await menu.getByTestId('draft-v6-where-list').getByText('Recent').click()
   await expect(rows(menu).first()).toHaveAttribute('data-name', 'recent-one')
   await expect(rows(menu).filter({ hasText: DEVBOX.label })).toHaveCount(1)
   // Nothing picked at open: the button keeps what the draft has.

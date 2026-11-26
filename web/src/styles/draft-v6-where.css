@@ -101,6 +101,13 @@
 .draft-v6-wm-row.draft-v6-wp-row { box-sizing: border-box; padding-left: 8px; padding-right: 8px; }
 .draft-v6-wp-auto { flex: none; padding: 0 6px 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 .draft-v6-wp-row:hover { background: var(--bg-hover); }
+/* The place row (DraftPlaceRow) sets its own type size, in the picker and under the draft alike. */
+.draft-v6-wp-row { font-size: var(--font-size-md); }
+.draft-v6-wp-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Compact: five of them under the draft's composer, 4 px less above and below, the same look. */
+.draft-v6-wm-row.draft-v6-wp-row.is-compact { padding-top: 4px; padding-bottom: 4px; }
+.draft-v6-wp-row.is-compact .draft-v6-wm-name { line-height: 18px; }
+.draft-v6-wp-row.is-compact .draft-v6-wm-line { line-height: 15px; }
 /* A long parent path keeps its tail (the levels nearest the folder). */
 .draft-v6-wp-parent { direction: rtl; text-align: left; }
 .draft-v6-wp-meta { flex: none; display: inline-flex; align-items: center; gap: 8px; }

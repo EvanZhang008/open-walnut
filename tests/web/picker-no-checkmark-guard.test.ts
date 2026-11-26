@@ -138,7 +138,8 @@ describe('pickers show the current item by colour', () => {
       ['web/src/components/board/kanban/KanbanLaneMenu.tsx', /' wn-pick-row'/],
       ['web/src/components/tasks/FilterSearchResults.tsx', /fb-hit wn-pick-row/],
       ['web/src/components/tasks/FilterValueList.tsx', /' wn-pick-row'/],
-      ['web/src/components/sessions/DraftWhereMenu.tsx', /draft-v6-wm-row wn-pick-row/],
+      // The Where picker's and the draft's place rows: one row, DraftPlaceRow.
+      ['web/src/components/sessions/DraftPlaceRow.tsx', /draft-v6-wm-row wn-pick-row/],
       ['web/src/components/sessions/DraftWhereRow.tsx', /draft-v6-option wn-pick-row/],
       ['web/src/components/sessions/DraftProjectMenu.tsx', /draft-v6-option wn-pick-row/],
     ] as const) expect(read(f), f).toMatch(re)

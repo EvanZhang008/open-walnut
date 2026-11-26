@@ -1,11 +1,12 @@
 /**
  * The row under the v6 draft's composer (experiment `project_first_start`):
  *
- *   Start task:  Recent [⑂ Walnut] [▣ Acme] [▭ notes]      [Task source: Tracker]  ☑ Save as task  More ▾
+ *   Start task:                                           [Task source: Tracker]  ☑ Save as task  More ▾
+ *                (Recent / Most used and five places under it: DraftRecentList)
  *   Quick chat:  Try [⌕ Find a task] [▦ Schedule my day] …  |  Recent chats [▢ Plan my Friday] …   More ▾
  *
- * Recent holds the places used last (up to three; the rest are in the Project menu), "Start with"
- * and a few projects for someone who has none yet; Quick chat's Recent chats are the agent's newest
+ * Start task lists the places used before, Recent or Most used, five rows under the row;
+ * "Start with" and a few projects for someone who has none yet; Quick chat's Recent chats are the agent's newest
  * quick chats (the Ask Walnut drawer's list), a click opens one there. A chip that does not fit whole
  * is not shown. More is the draft's one menu (tier, priority,
  * dates) plus the task's source for a project that syncs; the tag shows while that service is
@@ -17,7 +18,6 @@ import { GENERAL_ASK_AGENT, recentAsks, toAskAgent, type AskAgent, type RecentAs
 import * as ICONS from '@/components/common/Icons';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { projectDisplayName } from '@/utils/project-display';
-import { shownFolderName } from '@/utils/home-folder';
 import { SyncChoiceMenuRow, SyncChoiceTag } from '@/components/tasks/SyncChoice';
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { DraftWorkspaceAutoChip } from '@/components/workspaces/DraftWorkspaceRow';
@@ -27,7 +27,8 @@ import { WhereIcon, whereKindOf, type WhereKind } from './DraftWhereIcons';
 import type { DraftColumn, DraftTaskField, DraftTaskFieldPatch } from './draft-column';
 import type { DraftWhere } from './useDraftWhere';
 import { useDraftMoreMenu } from './useDraftMoreMenu';
-import { draftHostFor, projectMenuOrder, recentPlaces, whereHostKey } from './draft-work-in';
+import { projectMenuOrder, recentPlaces } from './draft-work-in';
+import { DraftRecentList } from './DraftRecentList';
 
 export interface TryChip { label: string; icon: ReactNode; onClick: () => void }
 
@@ -51,7 +52,7 @@ export function DraftLowerRow({
   onReturnFieldToWalnut?: (draftId: string, field: DraftTaskField) => void;
   onSaveAsTask: () => void;
   saveBusy: boolean;
-  /** "+N": the rest of the recent places are in the Project menu. */
+  /** "Browse folders" under the row: every folder, in the Where picker. */
   onMoreRecent: () => void;
   /** Opens a quick chat in the Ask Walnut slot; without it there are no Recent chats. */
   onOpenAsk?: (taskId: string) => void;
@@ -62,9 +63,6 @@ export function DraftLowerRow({
   const recent = recentPlaces(where.dirs, (n) => byName.get(n.toLowerCase())?.name ?? null);
   const fresh = recent.length === 0;
   const starters = fresh ? projectMenuOrder(where.rows, (n) => favoriteByName.has(n.toLowerCase()), '').slice(0, 3) : [];
-  const room = narrow ? 1 : 3;
-  const shown = recent.slice(0, room);
-  const rest = recent.length - shown.length;
   const local = draft.meta.sync !== 'project';
   const openMore = () => { if (more.moreRef.current) more.menu.openFrom(more.moreRef.current, { detail: 1 }); };
   const chats = useRecentAsks(draft.agent ? toAskAgent(draft.agent) : GENERAL_ASK_AGENT, walnut && !!onOpenAsk, narrow ? 1 : RECENT_CHATS);
@@ -72,9 +70,10 @@ export function DraftLowerRow({
   useFitWhole(quickRef, `${walnut}:${narrow}:${chats.map((c) => c.id).join(',')}`);
   // Recent too: a tag at the row's end (the Task source) never cuts a chip, it hides it whole.
   const recentRef = useRef<HTMLDivElement>(null);
-  useFitWhole(recentRef, `${walnut}:${narrow}:${draft.meta.sync ?? ''}:${shown.map((p) => (p.kind === 'project' ? p.project : p.cwd)).join(',')}:${rest}`);
+  useFitWhole(recentRef, `${walnut}:${narrow}:${draft.meta.sync ?? ''}:${starters.map((r) => r.name).join(',')}`);
 
   return (
+    <>
     <div className="draft-v6-lower" data-testid="draft-v6-lower">
       {walnut ? (
         <div ref={quickRef} className="draft-v6-chips" data-testid="draft-v6-quick-lower">
@@ -101,25 +100,12 @@ export function DraftLowerRow({
           )}
         </div>
       ) : (
-        <div ref={recentRef} className="draft-v6-chips" role="group" aria-label={fresh ? 'Start with' : 'Recent'} data-testid="draft-v6-recent">
-          <span className="draft-v6-lower-key" data-fit="key">{fresh ? 'Start with' : 'Recent'}</span>
+        <div ref={recentRef} className="draft-v6-chips" role="group" aria-label="Start with" data-testid="draft-v6-recent">
+          {fresh && <span className="draft-v6-lower-key" data-fit="key">Start with</span>}
           {fresh && starters.map((r) => (
             <RecentChip key={r.name} kind={r.startSource ? whereKindOf(r.startSource) : 'folder'} label={projectDisplayName(r.name)}
               current={where.project.toLowerCase() === r.name.toLowerCase()} onClick={() => where.pickProject(r.name)} />
           ))}
-          {shown.map((p) => (p.kind === 'project' ? (
-            <RecentChip key={`p:${p.project}`} kind={(() => { const r = byName.get(p.project.toLowerCase()); return r?.startSource ? whereKindOf(r.startSource) : 'folder'; })()}
-              label={projectDisplayName(p.project)} current={where.project.toLowerCase() === p.project.toLowerCase()}
-              onClick={() => where.pickProject(p.project)} />
-          ) : (
-            <RecentChip key={`f:${p.host}:${p.cwd}`} kind="folder" label={shownFolderName(p.cwd, draftHostFor(p.host))} title={p.cwd}
-              current={!where.autoCurrent && draft.cwd === p.cwd && whereHostKey(draft.host) === p.host}
-              onClick={() => where.pickFolder(p.cwd, p.host, p.hostLabel)} />
-          )))}
-          {rest > 0 && (
-            <button type="button" className="btn btn-sm draft-v6-place" data-fit="chip" data-testid="draft-v6-recent-more" title="More recent places: the Project menu"
-              onMouseDown={(e) => e.preventDefault()} onClick={onMoreRecent}>+{rest}</button>
-          )}
         </div>
       )}
       <span className="draft-v6-lower-end">
@@ -159,6 +145,8 @@ export function DraftLowerRow({
         />
       )}
     </div>
+    {!walnut && !fresh && <DraftRecentList draft={draft} where={where} places={recent} byName={byName} onBrowse={onMoreRecent} />}
+    </>
   );
 }
 

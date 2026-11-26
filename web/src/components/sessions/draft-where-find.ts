@@ -11,8 +11,7 @@
  */
 import type { WorkingDirEntry } from '@/api/sessions';
 import { tildePath } from '@/utils/home-folder';
-import { WORKSPACES_DIR_PART } from './draft-column';
-import { timeOf, whereHostKey } from './draft-work-in';
+import { isMadeFolder, timeOf, whereHostKey } from './draft-work-in';
 
 /** A folder the person started tasks in, once per machine and path. */
 export interface UsedFolder {
@@ -27,8 +26,6 @@ export interface UsedFolder {
   lastLaunch?: WorkingDirEntry['lastLaunch'];
 }
 
-/** A folder Walnut made itself (a task's workspace, a task's own folder): never a place to pick. */
-const MADE_PARTS = [WORKSPACES_DIR_PART, '/open-walnut/tasks/'];
 export const LIST_SIZE = 10;
 const SEARCH_SIZE = 40;
 const RECENT_DAYS = 14;
@@ -42,7 +39,7 @@ export const nameOfPath = (p: string): string => { const d = trim(p); return d.s
 export function usedFolders(dirs: readonly WorkingDirEntry[]): UsedFolder[] {
   const byKey = new Map<string, UsedFolder>();
   for (const d of dirs) {
-    if (!d.cwd || MADE_PARTS.some((part) => d.cwd.includes(part))) continue;
+    if (!d.cwd || isMadeFolder(d.cwd)) continue;
     const host = whereHostKey(d.host);
     const cwd = trim(d.cwd);
     const key = `${host}\t${cwd}`;
@@ -146,7 +143,7 @@ export function searchFolders(query: string, used: readonly UsedFolder[], listed
     out.push({ host, cwd: trim(cwd), shown, match, ...(u ? { used: u } : {}), rank });
   };
   for (const u of used) add(u.host, u.cwd);
-  for (const l of listed) if (!MADE_PARTS.some((part) => l.cwd.includes(part))) add(l.host, l.cwd);
+  for (const l of listed) if (!isMadeFolder(l.cwd)) add(l.host, l.cwd);
   return out.sort((a, b) => b.rank - a.rank).slice(0, SEARCH_SIZE).map(({ rank: _rank, ...hit }) => hit);
 }
 

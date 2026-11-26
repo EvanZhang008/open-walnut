@@ -175,10 +175,11 @@ test('a git source: Auto is the Where menu\'s first row, Start files a task whos
   await expect(first).toHaveAttribute('aria-selected', 'true')
   await expect(first).toContainText(`Auto · New worktree on ${LOCAL_NAME}`)
   await expect(first).toContainText('Fresh copy of the default branch, removed when merged')
-  // The picker never covers the row it edits or the composer (review N6): it opens upward, over the row.
+  // The picker never covers the row it edits (review N6): upward over the row where the room is,
+  // else under it (the five recent places under the composer take the room above at this height).
   const menuBox = (await menu.boundingBox())!
   const rowBox = (await panel.locator('.draft-v6-row').boundingBox())!
-  expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(rowBox.y)
+  expect(menuBox.y + menuBox.height <= rowBox.y + 1 || menuBox.y >= rowBox.y + rowBox.height - 1).toBe(true)
   await shot(page, 'v6-where-auto')
   await page.keyboard.press('Escape')
 

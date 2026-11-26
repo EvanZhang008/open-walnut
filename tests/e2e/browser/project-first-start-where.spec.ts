@@ -193,8 +193,12 @@ test('a narrow draft: the host and the folder name only, the whole field opens W
   expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(right.x + 1)
   await shot(page, 'v6-narrow')
   await page.keyboard.press('Escape')
-  // One recent place at most in a narrow row.
-  expect(await panel.getByTestId('draft-v6-recent-chip').count()).toBeLessThanOrEqual(1)
+  // The places used before stay a list of whole rows in a narrow draft (no chip row to cut).
+  await expect(panel.getByTestId('draft-v6-recent-chip')).toHaveCount(0)
+  const narrowBox = (await panel.boundingBox())!
+  for (const b of await Promise.all((await panel.getByTestId('draft-v6-recent-row').all()).map((r) => r.boundingBox()))) {
+    expect(b!.x + b!.width).toBeLessThanOrEqual(narrowBox.x + narrowBox.width + 1)
+  }
   expect(errors).toEqual([])
 })
 

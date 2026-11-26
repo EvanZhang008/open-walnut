@@ -145,7 +145,7 @@ export function DraftV6Body({
         </div>
         <DraftLowerRow draft={lowerDraft} where={where} walnut={walnut} narrow={narrow} tryChips={tryChips} composerText={composerText}
           getComposer={getComposer} openMenuNonce={openMenuNonce} onTaskFieldChange={onTaskFieldChange} onReturnFieldToWalnut={onReturnFieldToWalnut}
-          onSaveAsTask={onSaveAsTask} saveBusy={saveBusy} onMoreRecent={() => { if (repair) leaveRepair(); setMenu({ kind: 'project' }); }} onOpenAsk={onOpenAsk} />
+          onSaveAsTask={onSaveAsTask} saveBusy={saveBusy} onMoreRecent={() => { if (repair) leaveRepair(); setMenu({ kind: 'where', query: '' }); }} onOpenAsk={onOpenAsk} />
         {target && (repair || onCustomizeWalnut) && (
           <DraftFixWalnutRow target={target} on={repair} hidden={walnut} onClick={repair ? leaveRepair : () => onCustomizeWalnut?.()} />
         )}

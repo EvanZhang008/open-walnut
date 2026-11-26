@@ -19,14 +19,12 @@ import { SegmentedControl } from '@/components/controls';
 import { badge } from '@/components/common/badge';
 import { EmptyState } from '@/components/common/EmptyState';
 import { KeyHints } from '@/components/common/KeyHints';
-import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { knownHomeOf, tildePath, untildePath } from '@/utils/home-folder';
 import { timeAgo } from '@/utils/time';
-import { usePageView } from '@/utils/view-memory';
 import { HostStatusDot } from './path-selector/HostStatusDot';
-import { WhereIcon } from './DraftWhereIcons';
-import { DraftWhereAuto, Title } from './DraftWhereAuto';
+import { DraftWhereAuto } from './DraftWhereAuto';
 import { DraftWhereSide } from './DraftWhereSide';
+import { DraftPlaceRow, placeMeta, usePlaceOrder, type PlaceOrder } from './DraftPlaceRow';
 import { DraftWhereLevels } from './DraftWhereLevels';
 import { DraftWhereColumns, columnChain, lastColumnFolders, useFolderListings, useHomeFolders } from './DraftWhereColumns';
 import type { DraftColumn } from './draft-column';
@@ -39,8 +37,6 @@ import {
 } from './draft-where-find';
 import '@/styles/draft-v6-where.css';
 
-type ListKind = 'recent' | 'most';
-const isListKind = (v: unknown): v is ListKind => v === 'recent' || v === 'most';
 /** One list row's height: the list shows whole rows only. */
 const ROW_PX = 42;
 
@@ -77,7 +73,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onPicked, 
   const [query, setQuery] = useState(initialQuery);
   const [sel, setSel] = useState(-1);
   const [keyed, setKeyed] = useState('');
-  const [listKind, setListKind] = usePageView<ListKind>('draft-where', 'list', 'recent', isListKind);
+  const [listKind, setListKind] = usePlaceOrder();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Whole rows under the list's last shown one, said in its title (more to scroll to).
@@ -273,7 +269,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onPicked, 
               </div>}
               <WholeRows listRef={listRef} onBelow={setBelow}>
                 {items.map((it, i) => (
-                  <FolderRow key={`${it.host}\t${it.cwd}`} item={it} active={sel === i + (showAuto ? 1 : 0)} hostName={where.hostName(it.host)}
+                  <FolderRow key={`${it.host}\t${it.cwd}`} item={it} order={searching ? 'search' : listKind} active={sel === i + (showAuto ? 1 : 0)} hostName={where.hostName(it.host)}
                     project={detectProjectForFolder(it.cwd, it.host, where.rows, { home: homeOf(it.host) })?.project}
                     current={!where.autoCurrent && it.host === savedHost && it.cwd === trim(draft.cwd ?? '')}
                     onPick={() => saveFolder(it.host, it.cwd)} onOpen={() => goBrowse(it.shown, it.host)} />
@@ -346,8 +342,8 @@ function Marked({ text, hits }: { text: string; hits: readonly number[] }) {
   return <>{text.split('').map((c, i) => (on.has(i) ? <mark key={i} className="draft-v6-wp-hit">{c}</mark> : c))}</>;
 }
 
-function FolderRow({ item, active, hostName, project, current, onPick, onOpen }: {
-  item: ListItem; active: boolean; hostName: string; project?: string; current: boolean; onPick: () => void; onOpen: () => void;
+function FolderRow({ item, order, active, hostName, project, current, onPick, onOpen }: {
+  item: ListItem; order: PlaceOrder | 'search'; active: boolean; hostName: string; project?: string; current: boolean; onPick: () => void; onOpen: () => void;
 }) {
   const name = item.shown === '~' ? '~ (home)' : nameOfPath(item.shown);
   const nameStart = item.shown.length - nameOfPath(item.shown).length;
@@ -355,21 +351,9 @@ function FolderRow({ item, active, hostName, project, current, onPick, onOpen }:
   const parent = parentLevel(item.shown);
   const u = item.used;
   return (
-    <div className={`draft-v6-wm-row wn-pick-row draft-v6-wp-row${active ? ' is-active' : ''}`} role="option" aria-selected={current}
-      data-testid="draft-v6-folder-row" data-name={name} data-host={item.host} title={`Use ${hostName}: ${item.shown}`} onClick={onPick}>
-      <span className="draft-v6-wm-ico"><WhereIcon kind="folder" size={15} /></span>
-      <span className="draft-v6-wm-text">
-        <span className="draft-v6-wm-name wn-pick-name"><Title>{item.shown === '~' ? name : <Marked text={name} hits={hits} />}</Title>
-          {project && <span className={`${badge()} draft-v6-tag`}><span>{projectDisplayName(project)}</span></span>}</span>
-        {/* The parent's tail wins when it is long: the folder's own levels stay readable. */}
-        <span className="draft-v6-wm-line is-path draft-v6-wp-parent"><bdi>{item.shown === parent ? '' : parent}</bdi></span>
-      </span>
-      <span className="draft-v6-wp-meta">
-        <span className={`${badge()} draft-v6-tag`}><span>{hostName}</span></span>
-        <span className="draft-v6-wm-time">{u ? `${u.count.toLocaleString()} ${u.count === 1 ? 'start' : 'starts'} · ${timeAgo(u.last)}` : 'not used yet'}</span>{/* empty-state-ok: a row's meta */}
-      </span>
-      <button type="button" className="btn btn-sm btn-icon draft-v6-wp-go" aria-label={`Open the folders in ${name}`} title="Open its folders"
-        onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); onOpen(); }}>{ICON_CHEVRON_RIGHT}</button>
-    </div>
+    <DraftPlaceRow kind="folder" name={item.shown === '~' ? name : <Marked text={name} hits={hits} />} tag={project ? projectDisplayName(project) : undefined}
+      line={item.shown === parent ? '' : parent} hostName={hostName} meta={u ? placeMeta(order, u.count, timeAgo(u.last)) : 'not used yet'} /* empty-state-ok: a row's meta */
+      current={current} active={active} title={`Use ${hostName}: ${item.shown}`} onPick={onPick} onOpen={onOpen} openLabel={`Open the folders in ${name}`}
+      testId="draft-v6-folder-row" data={{ name, host: item.host }} />
   );
 }

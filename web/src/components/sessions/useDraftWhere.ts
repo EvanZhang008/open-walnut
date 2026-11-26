@@ -101,6 +101,8 @@ export interface DraftWhere {
   /** Start cannot run as the row stands: why (said near the button). */
   blocked: string | null;
   pickProject: (project: string) => void;
+  /** Where picking `project` puts the draft (what pickProject restores), for a list that names it. */
+  placeOf: (project: string) => WherePlace;
   pickAuto: (hostKey?: string) => void;
   pickFolder: (cwd: string, hostKey: string, hostLabel?: string, lastLaunch?: WorkingDirEntry['lastLaunch']) => void;
   pickHost: (hostKey: string) => void;
@@ -182,6 +184,9 @@ export function useDraftWhere(draft: DraftColumn, opts: {
     return moveDraftHost(picked, draftHostFor(key), labelOf(key), { home: true });
   };
 
+  const placeOf = (name: string): WherePlace => placeFor(rows.find((x) => x.name.toLowerCase() === name.toLowerCase()),
+    localPlaces.get(draft.id)?.get(name.toLowerCase()), derivedPlace(name, dirs, roots));
+
   const pickProject = (picked: string) => {
     const name = startSourceOf(rows, picked, resolveProjectName).project || picked;
     const r = rows.find((x) => x.name.toLowerCase() === name.toLowerCase());
@@ -190,7 +195,7 @@ export function useDraftWhere(draft: DraftColumn, opts: {
       forget();
       return;
     }
-    const place = placeFor(r, localPlaces.get(draft.id)?.get(name.toLowerCase()), derivedPlace(name, dirs, roots));
+    const place = placeOf(name);
     onUpdate(draft.id, (d) => (place.auto
       ? autoWrite(d, name, r, place.host)
       : restoreFolderPlace(pickProjectForStart(d, name, null), place.cwd ?? '', draftHostFor(place.host), place.hostLabel ?? labelOf(place.host))));
@@ -239,7 +244,7 @@ export function useDraftWhere(draft: DraftColumn, opts: {
 
   return {
     ps, rows, row, project, hostKey, hostName, hosts, dirs, roots, autoCurrent, readsWorkspace: startReadsDraftWorkspace(ps), sourceGone, verdict, what, offHost, detected, line, blocked,
-    pickProject, pickAuto, pickFolder, pickHost, backToAuto, keepFolder, useFresh,
+    pickProject, placeOf, pickAuto, pickFolder, pickHost, backToAuto, keepFolder, useFresh,
   };
 }
 

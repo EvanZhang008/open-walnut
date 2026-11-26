@@ -264,10 +264,14 @@ html .draft-v6-field > .draft-v6-field-open:focus-visible { outline: none; }
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  height: clamp(12px, calc(100cqh - 292px - 184px), 184px);
+  /* 184 px: the row, the composer and the lower row; 254 px: the places list under them
+     (DraftRecentList: its 36 px switch row and five 42 px rows); 40 px: the Fix Walnut key under
+     it (DraftFixWalnutRow). Kept in Quick chat too, so a switch never moves the composer. */
+  height: clamp(12px, calc(100cqh - 292px - 184px - 254px - 40px), 184px);
 }
 /* In the flow at the gap's foot: a taller stack overflows upward, never into the composer. */
-.draft-v6-notices { flex: none; display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
+/* A short draft: the stack overflows upward over the tiles, painted over them (position: it comes later). */
+.draft-v6-notices { position: relative; flex: none; display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; }
 
 /* The composer: today's ChatInput, at its fixed place. */
 /* The composer spans the v6 column like the row above it: the chat's reading column
@@ -351,3 +355,18 @@ html .draft-v6-field > .draft-v6-field-open:focus-visible { outline: none; }
 .draft-v6-match-title { flex: 1 1 auto; min-width: 0; font-size: var(--font-size-md); }
 .draft-v6-match.is-done .draft-v6-match-title { color: var(--fg-muted); }
 .draft-v6-match-done { flex: none; display: inline-flex; color: var(--fg-muted); }
+
+/* The places used before (DraftRecentList): its Recent / Most used switch and Browse folders,
+   then five of the Where picker's own rows (DraftPlaceRow, compact: draft-v6-where.css), always
+   five rows high so nothing under it moves when it holds fewer. */
+.draft-v6-rl-box { flex: none; display: flex; flex-direction: column; container: draft-v6-rl / inline-size; }
+.draft-v6-rl-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 32px; margin-top: 4px; }
+.draft-v6-rl-browse { flex: none; }
+.draft-v6-rl {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--draft-v6-rl-rows) * 42px);
+  margin-top: 4px;
+}
+/* A narrow draft: a row keeps its name, its place and its machine; the time or starts go. */
+@container draft-v6-rl (max-width: 460px) { .draft-v6-rl .draft-v6-wm-time { display: none; } }

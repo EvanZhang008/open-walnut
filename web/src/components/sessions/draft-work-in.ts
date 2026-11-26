@@ -440,33 +440,39 @@ export function lastUsedParts(r: { project: string; place: WherePlace }, ctx: {
   return [lead, { text: ' ' }, { text: ctx.folderName(r.place.cwd ?? '', r.place.host), style: 'code' }, { text: ` on ${host}${when}.` }];
 }
 
-// ── Recent: the lower row's chips ──
+// ── Recent: the lower row's list ──
 
+/** A folder Walnut made itself (a task's workspace, a task's own folder): never a place to pick. */
+const MADE_PARTS = [WORKSPACES_DIR_PART, '/open-walnut/tasks/'];
+export const isMadeFolder = (cwd: string): boolean => MADE_PARTS.some((part) => cwd.includes(part));
+
+/** A place used before: a known project (its newest folder and host), or a folder of none. */
 export type RecentPlace =
-  | { kind: 'project'; project: string; at: string }
-  | { kind: 'folder'; cwd: string; host: string; hostLabel?: string; at: string };
+  | { kind: 'project'; project: string; at: string; count: number; cwd: string; host: string }
+  | { kind: 'folder'; cwd: string; host: string; hostLabel?: string; at: string; count: number };
 
 /** The places used last, newest first: a folder of a known project is that project (its pick
- *  restores the folder), any other folder itself. A task's own workspace is never a chip. */
+ *  restores the folder), any other folder itself; `count` adds up the starts of every folder it
+ *  stands for. A folder Walnut made (a task's workspace or own folder) is never a place. */
 export function recentPlaces(dirs: readonly WorkingDirEntry[], projectOf: (name: string) => string | null): RecentPlace[] {
   const sorted = [...dirs].sort((a, b) => timeOf(b.lastUsed) - timeOf(a.lastUsed));
-  const seen = new Set<string>();
-  const out: RecentPlace[] = [];
+  const byKey = new Map<string, RecentPlace>();
   for (const d of sorted) {
     const project = d.project ? projectOf(d.project) : null;
-    if (project) {
-      const key = `p:${project.toLowerCase()}`;
-      if (!seen.has(key)) { seen.add(key); out.push({ kind: 'project', project, at: d.lastUsed }); }
-      continue;
-    }
-    if (d.cwd.includes(WORKSPACES_DIR_PART)) continue;
-    const key = `f:${workInFolderKey(d)}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push({ kind: 'folder', cwd: d.cwd, host: whereHostKey(d.host), ...(d.hostLabel ? { hostLabel: d.hostLabel } : {}), at: d.lastUsed });
-    }
+    if (!project && isMadeFolder(d.cwd)) continue;
+    const key = project ? `p:${project.toLowerCase()}` : `f:${workInFolderKey(d)}`;
+    const had = byKey.get(key);
+    if (had) { had.count += d.count || 0; continue; }
+    byKey.set(key, project
+      ? { kind: 'project', project, at: d.lastUsed, count: d.count || 0, cwd: d.cwd, host: whereHostKey(d.host) }
+      : { kind: 'folder', cwd: d.cwd, host: whereHostKey(d.host), ...(d.hostLabel ? { hostLabel: d.hostLabel } : {}), at: d.lastUsed, count: d.count || 0 });
   }
-  return out;
+  return [...byKey.values()];
+}
+
+/** The same places, most starts first (the newest first among equals). */
+export function mostUsedPlaces(recent: readonly RecentPlace[]): RecentPlace[] {
+  return [...recent].sort((a, b) => b.count - a.count || timeOf(b.at) - timeOf(a.at));
 }
 
 /** The Host menu's second line: never the name again. */

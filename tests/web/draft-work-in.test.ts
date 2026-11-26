@@ -408,13 +408,29 @@ describe('Recent chips and the Host menu\'s words', () => {
       dir('/home/u/notes', null, '', '2026-11-20T00:00:00Z'),
       dir('/home/u/.open-walnut-worktrees/app/x', null, '', '2026-11-22T00:00:00Z'),
       dir('/srv/thing', 'big-box', 'Ghost', '2026-11-18T00:00:00Z'),
+      // A task's own folder is Walnut's, never a place (Evan's list showed one, 2026-11-25).
+      dir('/home/u/.local/state/open-walnut/tasks/t-1', null, '', '2026-11-23T00:00:00Z'),
     ];
     const known = (n: string) => (n.toLowerCase() === 'marina' ? 'Marina' : null);
     expect(wi.recentPlaces(dirs, known)).toEqual([
-      { kind: 'project', project: 'Marina', at: '2026-11-21T00:00:00Z' },
-      { kind: 'folder', cwd: '/home/u/notes', host: '__local__', at: '2026-11-20T00:00:00Z' },
-      { kind: 'folder', cwd: '/srv/thing', host: 'big-box', at: '2026-11-18T00:00:00Z' },
+      { kind: 'project', project: 'Marina', at: '2026-11-21T00:00:00Z', count: 2, cwd: '/repos/b', host: '__local__' },
+      { kind: 'folder', cwd: '/home/u/notes', host: '__local__', at: '2026-11-20T00:00:00Z', count: 1 },
+      { kind: 'folder', cwd: '/srv/thing', host: 'big-box', at: '2026-11-18T00:00:00Z', count: 1 },
     ]);
+  });
+
+  it('Most used: the most starts first, a project adding up its folders, the newest first among equals', () => {
+    const dirs = [
+      dir('/repos/a', null, 'Marina', '2026-11-19T00:00:00Z', { count: 30 }),
+      dir('/repos/b', null, 'Marina', '2026-11-21T00:00:00Z', { count: 5 }),
+      dir('/home/u/notes', null, '', '2026-11-22T00:00:00Z', { count: 34 }),
+      dir('/srv/one', 'big-box', '', '2026-11-18T00:00:00Z', { count: 2 }),
+      dir('/srv/two', 'big-box', '', '2026-11-20T00:00:00Z', { count: 2 }),
+    ];
+    const known = (n: string) => (n.toLowerCase() === 'marina' ? 'Marina' : null);
+    const most = wi.mostUsedPlaces(wi.recentPlaces(dirs, known));
+    expect(most.map((p) => (p.kind === 'project' ? p.project : p.cwd))).toEqual(['Marina', '/home/u/notes', '/srv/two', '/srv/one']);
+    expect(most[0].count).toBe(35);
   });
 
   it('the Host menu\'s second line never repeats the name', () => {
