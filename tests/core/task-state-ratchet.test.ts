@@ -206,9 +206,8 @@ const OWN_MAP = /\bneeds:\s*['"]Needs you['"]/
 const OLD_WORD_OK: Record<string, string> = {
   'src/core/human-inbox/walnut-letters/mail-digest.ts': 'counts mail messages that need the user, not tasks (the digest letter\'s text, moved from mail/digest.ts)',
   'web/src/components/sessions/TriggerPickerPopover.tsx': 'an example prompt the user may type, not a state',
-  'src/core/user-status.ts': 'its doc names the retired words',
-  'web/src/components/org/top-thread-model.ts': 'counts threads waiting on him ("16 threads (1 needs you)"), not tasks',
   'web/src/components/common/NotificationProblems.tsx': 'counts remote hosts that need him ("2 need you"), not tasks',
+  'web/src/components/org/top-thread-model.ts': 'counts threads waiting on him ("16 threads (1 needs you)"), not tasks',
 }
 const OWN_MAP_OK: Record<string, string> = {
   'src/core/user-status.ts': 'the names themselves',
@@ -224,11 +223,14 @@ function walkAll(dir: string, out: string[] = []): string[] {
   return out
 }
 
+/** Whether a file's code (comments aside) holds an old state word or a count in the old words: the one question both tests below ask. */
+const usesOldWord = (source: string): boolean => { const src = code(source); return OLD_WORD.test(src) || OLD_COUNT.test(src) }
+
 describe('one set of state names', () => {
   const files = ['src', 'web/src', 'ios-native/Walnut'].flatMap((d) => walkAll(path.join(ROOT, d)))
 
   it('no string a person reads uses an old state word', () => {
-    const hits = files.filter((f) => !OLD_WORD_OK[rel(f)] && (OLD_WORD.test(code(fs.readFileSync(f, 'utf8'))) || OLD_COUNT.test(code(fs.readFileSync(f, 'utf8'))))).map(rel)
+    const hits = files.filter((f) => !OLD_WORD_OK[rel(f)] && usesOldWord(fs.readFileSync(f, 'utf8'))).map(rel)
     expect(hits, 'Use the names in USER_STATE_LABELS (src/core/user-status.ts): Needs you, Working, Waiting, '
       + `Completed; stateCountLabel for a count. Or list the file with why the word is not a task state: ${hits.join(', ')}`).toEqual([])
   })
@@ -249,7 +251,10 @@ describe('one set of state names', () => {
   })
 
   it('a listed exception still uses the word (the list only shrinks)', () => {
-    const stale = Object.keys(OLD_WORD_OK).filter((f) => !fs.existsSync(path.join(ROOT, f)) || !OLD_WORD.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+    // The same question as the test above asks (2026-11-26: this one read OLD_WORD on the raw text only,
+    // so a count rewritten into a nested template, which only OLD_COUNT reads, was "stale" here and
+    // still a hit there: no list could satisfy both).
+    const stale = Object.keys(OLD_WORD_OK).filter((f) => !fs.existsSync(path.join(ROOT, f)) || !usesOldWord(fs.readFileSync(path.join(ROOT, f), 'utf8')))
     expect(stale).toEqual([])
   })
 })
