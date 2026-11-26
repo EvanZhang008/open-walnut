@@ -87,6 +87,7 @@ const AUDITED_READERS: readonly string[] = [
   'src/core/replication/kinds/sessions.ts',
   'src/core/router/session-policy.ts',
   'src/core/router/simplify-migration.ts',
+  'src/core/session-db.ts', // names the fields in the cache scan's SQL (sessionCacheRowsSql); reads no record
   'src/core/session-tracker.ts',
   'src/core/sessions/ask-profile-prefix.ts',
   'src/core/sessions/cloud-chat-lane.ts',

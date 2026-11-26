@@ -17,7 +17,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionCacheRowsSql, SLIM_SESSION_STATUSES, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isFollower, isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -79,7 +79,7 @@ async function ensureSessionInit(): Promise<void> {
 }
 
 // ── Whole-store read cache ────────────────────────────────────────────────
-// readStore() runs `SELECT * FROM sessions` + rows.map(rowToSession) over the
+// readStore() runs a whole-table SELECT + rows.map(rowToSession) over the
 // WHOLE table (5000+ rows) on EVERY call. The single scan is ~30-45ms, but it
 // is re-run uncached on every concurrent request AND multiple times per page
 // render (e.g. /api/tasks calls listSessions() a second time to enrich). On a
@@ -170,8 +170,9 @@ function sessionRowChanges(db: NonNullable<ReturnType<typeof getDb>>, total: num
 // or errored session therefore leaves them out; the one list reader that needs them
 // (host-slice's notice) takes the row through withHeavyFields. A row that comes back to
 // life is re-read by the write-through patch and carries them again.
-// Ratchet: tests/core/session-store-heavy-fields.test.ts.
-const SLIM_STATUSES = new Set(['stopped', 'error']);
+// A scan never reads them into JS at all (session-db.ts sessionCacheRowsSql).
+// Ratchets: tests/core/session-store-heavy-fields.test.ts, tests/core/session-store-scan-bytes.test.ts.
+const SLIM_STATUSES = new Set(SLIM_SESSION_STATUSES);
 
 /** The cached copy of a row: without the heavy prompt fields when the session is not live. */
 function slimForCache(record: SessionRecord): SessionRecord {
@@ -234,7 +235,7 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
   for (let i = 0; i < wanted.length; i += 500) {
     const chunk = wanted.slice(i, i + 500);
     const rows = db
-      .prepare(`SELECT * FROM sessions WHERE claude_session_id IN (${chunk.map(() => '?').join(',')})`)
+      .prepare(sessionCacheRowsSql(`claude_session_id IN (${chunk.map(() => '?').join(',')})`))
       .all(...chunk) as Record<string, any>[];
     const present = new Map(rows.map((r) => [r.claude_session_id as string, r]));
     for (const id of chunk) {
@@ -616,7 +617,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     let after: string;
     do {
       before = dataVersion();
-      rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
+      rows = prepared(db, sessionCacheRowsSql()).all() as Record<string, any>[];
       after = dataVersion();
     } while (before !== after);
     sessionStoreCache = rows.map((row) => slimForCache(rowToSession(row)));

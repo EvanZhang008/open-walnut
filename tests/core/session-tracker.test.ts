@@ -1500,23 +1500,16 @@ describe('session store read cache', () => {
   it('serves repeated reads from cache — only ONE SELECT * scan for N reads', async () => {
     await createSessionRecord('cache-seed', 'task-1', 'proj', undefined, { pid: 1001 });
 
-    // Spy on the SQLite handle's prepare() and count whole-table scans.
-    const { getDb } = await import('../../src/core/session-db.js');
-    const db = getDb()!;
-    const prepareSpy = vi.spyOn(db, 'prepare');
-
-    // 50 consecutive reads should trigger AT MOST one `SELECT * FROM sessions`
-    // (the cache priming) — the rest are served from the cached array.
+    // 50 consecutive reads should run AT MOST one whole-table scan (the cache
+    // priming) — the rest are served from the cached array.
+    const { _sessionStoreStatsForTesting, _dropSessionStoreCacheForTesting } = await import('../../src/core/session-tracker.js');
+    // From a cold cache: exactly one scan primes it (zero means the reads bypassed the cache).
+    _dropSessionStoreCacheForTesting();
+    const scansBefore = _sessionStoreStatsForTesting().fullScans;
     for (let i = 0; i < 50; i++) {
       await listSessions();
     }
-
-    const fullScans = prepareSpy.mock.calls.filter(
-      (call) => String(call[0]).replace(/\s+/g, ' ').includes('SELECT * FROM sessions'),
-    );
-    expect(fullScans.length).toBeLessThanOrEqual(1);
-
-    prepareSpy.mockRestore();
+    expect(_sessionStoreStatsForTesting().fullScans - scansBefore).toBe(1);
   });
 
   it('invalidates the cache on write so the next read reflects the mutation', async () => {

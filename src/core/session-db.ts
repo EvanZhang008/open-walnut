@@ -1135,6 +1135,36 @@ export function sessionToRow(session: Partial<SessionRecord>): Record<string, an
 export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
 
 /**
+ * The statuses whose cached row leaves out the two heavy prompt fields below (session-tracker.ts
+ * slimForCache): a session that is not live reads them from its own row when it needs them.
+ */
+export const SLIM_SESSION_STATUSES: readonly string[] = ['stopped', 'error'];
+/** The heavy prompt fields a slim cached row leaves out, as JSON paths into `payload`. */
+const SLIM_PAYLOAD_PATHS = ['$.appliedAppendSystemPrompt', '$.profile.systemPrompt'];
+
+/**
+ * The store cache's read of session rows (session-tracker.ts: the full scan and the write-through
+ * patch): the columns rowToSession reads, and for a stopped or errored row a payload SQLite already
+ * took the heavy prompt fields out of, so their text never reaches JS. On the Mac (2026-11-25, 7.7k
+ * rows) the payloads came to 75 MB, 56 MB of it those two fields of stopped sessions, and one
+ * `SELECT *` scan made about 380 MB of row text and records against about 150 MB this way; a start
+ * ran 5 to 17 scans in its first minutes, the burst the memory lines showed. Only a valid JSON
+ * payload is rewritten (any other comes back as it is, as rowToSession reads it), and the
+ * `instr` test skips the parse for a row without either field. The rows are the same records
+ * slimForCache makes of a `SELECT *` row (tests/core/session-store-scan-bytes.test.ts).
+ */
+export function sessionCacheRowsSql(where = ''): string {
+  // Spliced into the SQL as literals: only plain names and JSON paths, never a quote.
+  for (const v of [...SLIM_SESSION_STATUSES, ...SLIM_PAYLOAD_PATHS]) {
+    if (!/^[$a-zA-Z_.]+$/.test(v)) throw new Error(`sessionCacheRowsSql: unsafe literal ${v}`);
+  }
+  const slim = SLIM_SESSION_STATUSES.map((s) => `'${s}'`).join(', ');
+  const payload = `CASE WHEN process_status IN (${slim}) AND instr(payload, 'ystemPrompt') > 0 AND json_valid(payload)`
+    + ` THEN json_remove(payload, ${SLIM_PAYLOAD_PATHS.map((p) => `'${p}'`).join(', ')}) ELSE payload END AS payload`;
+  return `SELECT ${EXPLICIT_SESSION_COLUMNS.join(', ')}, ${payload} FROM sessions${where ? ` WHERE ${where}` : ''}`;
+}
+
+/**
  * The payload fields a query filters sessions by, each with its own partial
  * index (SCHEMA_SQL). A query uses that index only when its WHERE names the
  * same expression AND `json_valid(payload)` (the index's own condition, which
