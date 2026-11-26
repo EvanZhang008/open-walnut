@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { admitOwnWorkEnded, pendingLines, type OwnWorkDeps } from '../../../src/core/sessions/own-work-open.js'
 
-const quiet: OwnWorkDeps = { outliving: async () => [], armedTriggers: async () => [] }
+const quiet: OwnWorkDeps = { outliving: async () => [], openSubtasks: async () => [], armedTriggers: async () => [] }
 const task = { id: 'task-own-work' }
 
 describe('pendingLines: words that say the work is not over', () => {
@@ -29,6 +29,12 @@ describe('pendingLines: words that say the work is not over', () => {
     'land 还在跑',
     '等它上线了再验证',
     '还没部署',
+    // 713c0d39, 2026-11-26 05:5x Z, its own words when it closed with its review still open.
+    'Commit e1b20d7bf1 is done and the review task mwx3sskd-d3d4 is running; I land once its findings come back',
+    'I will land it after the review comes back.',
+    // "Waiting for the review to come back before landing", "the review is still running".
+    '等评审回来再 land',
+    '评审还在跑',
   ])('%s', (line) => {
     expect(pendingLines([line]).length).toBeGreaterThan(0)
   })
@@ -50,6 +56,9 @@ describe('pendingLines: words that say the work is not over', () => {
     // "Fixed deploy hanging (the deploy would hang), live already"; "changed A, B and so on, deployed".
     '修好了部署会卡住的问题，已上线',
     '改了 A、B 等，已部署',
+    'land.sh deploys only after the tests are green.',
+    'Fixed: the board refreshes once the task lands.',
+    'The review came back clean; landed and live, checked on production.',
   ])('not: %s', (line) => {
     expect(pendingLines([line])).toEqual([])
   })
@@ -64,6 +73,12 @@ describe('admitOwnWorkEnded', () => {
     const r = await admitOwnWorkEnded(task, 'sid', { fields: { result: 'Fixed.' } }, { ...quiet, outliving: async () => ['a background command or subagent it started'] })
     expect(r).toMatchObject({ ok: false, code: 'own_work_open', items: [{ source: 'background' }] })
     expect(r!.message).toMatch(/Wait for it to end/)
+  })
+
+  it('refuses while a subtask of its own is still open (713c0d39: its review task still running)', async () => {
+    const r = await admitOwnWorkEnded(task, 'sid', { fields: { result: 'Commit is done.' } }, { ...quiet, openSubtasks: async () => ['"Review: thread folds" (mwx3sskd-d3d4)'] })
+    expect(r?.items).toEqual([{ source: 'subtask', text: '"Review: thread folds" (mwx3sskd-d3d4)' }])
+    expect(r!.message).toMatch(/read its findings/)
   })
 
   it('refuses while a trigger still delivers into it (the deploy watch of its land)', async () => {
