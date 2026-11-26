@@ -13,7 +13,7 @@
  * A replica (the companion) keeps no store: its visits stay its own (record.ts flushUsage drops them).
  * The verdict (watches.ts judgeWatch) never passes a target with no use.
  */
-import { CORE_PAGE_KEYS, PAGE_PARTS, VISIT_KEY_RE, pageKeyForPath, visitKeyOfTarget } from '../page-places.js'
+import { ALL_SETTINGS, CORE_PAGE_KEYS, PAGE_PARTS, VISIT_KEY_RE, pageKeyForPath, visitKeyOfTarget } from '../page-places.js'
 import { firstPageUseHour, readPageUseKeys, readPageUses } from './store.js'
 
 const HOUR_MS = 3_600_000
@@ -102,7 +102,9 @@ export function placeUseOf(key: string, since: number, until: number, days?: Rec
   const next = Math.ceil(since / HOUR_MS) * HOUR_MS
   const from = next + HOUR_MS <= until ? next : Math.floor(since / HOUR_MS) * HOUR_MS
   const out: PlaceUse = { visits: 0, errors: 0, byDay: 0 }
-  for (const r of readPageUses(from, key)) {
+  // Every Settings pane at once (page:settings) sums the panes' rows.
+  const rows = key === ALL_SETTINGS ? readPageUses(from).filter((r) => r.key.startsWith(ALL_SETTINGS)) : readPageUses(from, key)
+  for (const r of rows) {
     if (r.hour >= until) continue
     out.visits += r.visits
     out.errors += r.errors

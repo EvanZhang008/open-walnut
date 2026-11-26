@@ -367,7 +367,8 @@ describe('a watch', () => {
     }
     expect(pageKindIsPagesOwn('TypeError in the SessionChat chunk')).toBe(true)
     const kindOf = (how: PageRequestHow) => pageErrorKind(LINES[how][0], LINES[how][1], t)!
-    const watch = newWatch({ taskId: 't1', targets: ['page:session'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 })
+    // An older target naming no counted page (page:session now reads as the session panel: page-places.ts PAGE_ALIASES).
+    const watch = newWatch({ taskId: 't1', targets: ['page:sessions'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 })
     for (let i = 0; i < 30; i++) recordPageError(kindOf(i % 2 ? 'failed' : 'rejected'), T0 + H + i)
     flushUsage(T0 + H + 60_000)
     for (let m = 0; m < 5 * 60; m++) flushUsage(T0 + m * 60_000)
@@ -381,7 +382,7 @@ describe('a watch', () => {
     flushUsage(T0 + 2 * H + 60_000)
     expect(judgeWatch(watch, T0 + 5 * H).state).toBe('extended')
     recordPageError(kindOf('refused'), T0 + 2 * H)
-    recordPageError({ kind: 'TypeError in the session-chat chunk', request: false }, T0 + 2 * H)
+    recordPageError({ kind: 'TypeError in the sessions-chat chunk', request: false }, T0 + 2 * H)
     flushUsage(T0 + 2 * H + 60_000)
     const own = judgeWatch(watch, T0 + 5 * H)
     expect(own.state).toBe('failed')
@@ -398,22 +399,22 @@ describe('a watch', () => {
     t.add('GET', '/api/sessions/:sessionId/supervision')
     const slowKind = pageErrorKind(LINES['timed out'][0], LINES['timed out'][1], t)!
     expect(pageRequestOf(slowKind.kind)).toEqual({ route: 'GET /api/sessions/:sessionId/supervision', how: 'timed out' })
-    expect(pageRequestOf('TypeError in the session-chat chunk')).toBeNull()
+    expect(pageRequestOf('TypeError in the sessions-chat chunk')).toBeNull()
     expect(pageRequestOf('GET unknown request timed out in the page')).toEqual({ route: 'GET unknown request', how: 'timed out' })
     const ROUTE = 'route:GET /api/sessions/:sessionId/supervision'
-    putWatch(newWatch({ taskId: 't-page', targets: ['page:session'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 }))
+    putWatch(newWatch({ taskId: 't-page', targets: ['page:sessions'], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 }))
     putWatch(newWatch({ taskId: 't-route', targets: [ROUTE], checks: {}, who: 'this task', checkAt: T0 + 5 * H, createdAt: T0 }))
     // Every way on the way, enumerated from the source: a new one is checked here as it lands.
     for (const how of PAGE_REQUEST_HOWS) {
       const kind = `GET /api/sessions/:sessionId/supervision ${how} in the page`
       expect(pageRequestOf(kind)?.how, how).toBe(how)
-      for (const target of ['page:session', 'page:supervision', ROUTE, 'route:/api/sessions/:sessionId/supervision']) expect(targetCovers(target, 'page', kind), `${how} ${target}`).toBe(false)
+      for (const target of ['page:sessions', 'page:supervision', ROUTE, 'route:/api/sessions/:sessionId/supervision']) expect(targetCovers(target, 'page', kind), `${how} ${target}`).toBe(false)
       expect(armedWatchesFor('page', kind, T0 + H), how).toEqual([])
     }
     expect(targetCovers(ROUTE, 'http', 'GET /api/sessions/:sessionId/supervision')).toBe(true)
     const refused = pageErrorKind(LINES.refused[0], LINES.refused[1], t)!
-    expect(targetCovers('page:session', 'page', refused.kind)).toBe(true)
-    expect(armedWatchesFor('page', 'TypeError in the session-chat chunk', T0 + H).map((w) => w.taskId)).toEqual(['t-page'])
+    expect(targetCovers('page:sessions', 'page', refused.kind)).toBe(true)
+    expect(armedWatchesFor('page', 'TypeError in the sessions-chat chunk', T0 + H).map((w) => w.taskId)).toEqual(['t-page'])
     const seen: string[] = []
     const off = addObserveTap((name, _v, labels) => { if (name.startsWith('usage.page') || name === 'usage.http.slow') seen.push(`${name} ${labels?.kind ?? labels?.route ?? ''}`) })
     try {

@@ -14,7 +14,7 @@ import { readAlive, readHours, readSlept, usageDb } from './store.js'
 import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 import { RECORDED_NON_OPS } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
-import { visitKeyOfTarget } from '../page-places.js'
+import { PAGE_ALIASES, pageOfPart, targetOfVisitKey, visitKeyOfTarget } from '../page-places.js'
 import { isCountedPlace, placeUseOf } from './page-uses.js'
 
 const HOUR_MS = 3_600_000
@@ -206,7 +206,9 @@ function mergedFor(target: string, since: number, until: number): Agg {
  */
 function judgePageTarget(target: string, since: number, until: number, inputs: JudgeInputs): TargetResult {
   const key = visitKeyOfTarget(target)
-  const days = key ? inputs.visitDays?.(key) : undefined
+  // A part was counted from the hour page rows began: by the day, before it, its page's visits stand for it.
+  const host = key ? pageOfPart(key) : null
+  const days = key ? inputs.visitDays?.(host ?? key) : undefined
   const place = key !== null && isCountedPlace(key, days)
   const use = key && place ? placeUseOf(key, since, until, days) : { visits: 0, errors: 0, byDay: 0 }
   const errors = use.errors + (place ? 0 : mergedFor(target, since, until).calls)
@@ -217,7 +219,11 @@ function judgePageTarget(target: string, since: number, until: number, inputs: J
   const theirs = place ? 0 : pageRequestsOf(target.slice(5), since, until)
   if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
   if (!place) notes.push('names no page Walnut counts visits of')
-  else if (use.byDay > 0) notes.push(`${use.byDay} of its visits counted by the day (whole days, the day it was set included: before visits were kept by the hour)`)
+  else {
+    // A name given before only counted places were taken, read as the place it is part of.
+    if (Object.prototype.hasOwnProperty.call(PAGE_ALIASES, target.slice(5)) && key && targetOfVisitKey(key) !== target) notes.push(`counted as ${targetOfVisitKey(key)}`)
+    if (use.byDay > 0) notes.push(`${use.byDay} of its visits counted by the day${host ? ` as its page's, ${host}'s` : ''} (whole days, the day it was set included: before visits were kept by the hour)`)
+  }
   return { target, uses: use.visits, ok, notes, ...(use.byDay ? { byDay: use.byDay } : {}) }
 }
 
@@ -262,9 +268,14 @@ export function judgeTarget(target: string, checks: WatchChecks, since: number, 
 /** How far back a watch that ended Unknown, or passed on no use, is judged again (rejudgeEnded): the sleep ledger keeps a week. */
 export const REJUDGE_UNKNOWN_MS = 7 * 86_400_000
 
-/** A watch that passed with a target of no use: judged before a page's visits were its uses (2026-11-25). */
+/**
+ * A watch that passed with a target of no use (judged before a page's visits were its uses), or ended
+ * with too little use on a page target of no use (its name may be one a page now answers for: an alias,
+ * every Settings pane, a part read by its page's days). 2026-11-25 and 26.
+ */
 export function passedOnNoUse(w: Watch): boolean {
-  return w.state === 'passed' && (w.result ?? []).some((r) => r.uses === 0)
+  if (w.state === 'passed') return (w.result ?? []).some((r) => r.uses === 0)
+  return w.state === 'too_little_use' && (w.result ?? []).some((r) => r.uses === 0 && r.target.startsWith('page:'))
 }
 
 /**

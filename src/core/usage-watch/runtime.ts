@@ -10,6 +10,7 @@ import { usageTargetOf } from '../health-monitor/usage-alarms.js'
 import type { RouteAlarmInput, RouteAlarmResult } from '../health-monitor/types.js'
 import { REJUDGE_UNKNOWN_MS, judgeWatch, listWatches, passedOnNoUse, putWatch, rejudgeEnded, type JudgeInputs, type Watch } from './watches.js'
 import { clause } from '../../utils/format.js'
+import { ALL_SETTINGS } from '../page-places.js'
 
 export const NOTE_FROM = 'Walnut: real use'
 
@@ -83,7 +84,13 @@ async function judgeInputs(): Promise<JudgeInputs> {
   try {
     const { readVisits } = await import('../page-visits.js')
     const visits = await readVisits()
-    return { visitDays: (key) => visits.keys[key]?.days }
+    // Every Settings pane at once (page:settings) sums the panes' days.
+    const allSettings = (): Record<string, number> | undefined => {
+      const out: Record<string, number> = {}
+      for (const [k, v] of Object.entries(visits.keys)) if (k.startsWith(ALL_SETTINGS)) for (const [d, n] of Object.entries(v.days)) out[d] = (out[d] ?? 0) + n
+      return Object.keys(out).length ? out : undefined
+    }
+    return { visitDays: (key) => (key === ALL_SETTINGS ? allSettings() : visits.keys[key]?.days) }
   } catch (err) {
     log.obs.warn('usage watch: page visits unreadable', { error: err instanceof Error ? err.message : String(err) })
     return {}
@@ -113,23 +120,26 @@ let rejudged = false
 
 /**
  * Once a server start: watches that ended Unknown in the last week, or passed with a target of no use,
- * judged again (watches.ts rejudgeEnded). A new verdict on an Unknown is kept and told as a fresh one
+ * or ended short on a page target of no use, judged again (watches.ts rejudgeEnded, passedOnNoUse). A new verdict on an Unknown is kept and told as a fresh one
  * is. One that had passed is kept quietly: its owner was told Nothing to do, and a lead hearing of
  * every page watch at once would be noise; the Real Use page shows it. One reading as before is left.
  */
 export async function rejudgeEndedWatches(now = Date.now()): Promise<void> {
   if (rejudged) return
   rejudged = true
-  const recent = listWatches({ states: ['unknown', 'passed'], limit: 2_000 })
+  const recent = listWatches({ states: ['unknown', 'passed', 'too_little_use'], limit: 2_000 })
     .filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS && (w.state === 'unknown' || passedOnNoUse(w)))
   const inputs = recent.length ? await judgeInputs() : {}
   for (const w of recent) {
     const v = rejudgeEnded(w, inputs)
     if (!v) continue
+    // Read as before (each start judges the ones still short again): nothing to keep.
+    const uses = (r: { results?: Array<{ uses: number }>; result?: Array<{ uses: number }> }) => JSON.stringify((r.results ?? r.result ?? []).map((x) => x.uses))
+    if (v.state === w.state && uses(v) === uses(w)) continue
     const done: Watch = { ...w, state: v.state, result: v.results }
     putWatch(done)
     log.obs.info('usage watch: judged again', { watch: w.id, taskId: w.taskId, was: w.state, state: v.state })
-    if (w.state === 'passed') continue
+    if (w.state !== 'unknown') continue
     if (!(await routeDeps.enabled())) continue
     const summary = `Judged again (it had read Unknown, the machine's sleep counted as time not recorded): ${v.summary}`
     // Its own row id: the Unknown one may still wait in a queue, and a queue keeps one line per id.

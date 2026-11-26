@@ -25,7 +25,8 @@ import { TARGET_RE, getWatch, judgeWatch, newWatch, putWatch, rejudgeEnded, type
 import { pageTargetProblem } from '../../../src/core/usage-watch/page-uses.js'
 import { recordPageLine } from '../../../src/core/usage-watch/page-record.js'
 import { flushVisitsNow, recordVisits, setPageVisitsFileForTesting } from '../../../src/core/page-visits.js'
-import { CORE_PAGE_KEYS, PAGE_PARTS, pageKeyForPath, visitKeyOfTarget } from '../../../src/core/page-places.js'
+import { CORE_PAGE_KEYS, PAGE_ALIASES, PAGE_PARTS, pageKeyForPath, visitKeyOfTarget } from '../../../src/core/page-places.js'
+import { isPlaceKey } from '../../../src/core/usage-watch/page-uses.js'
 import { runUsageWatchAction } from '../../../src/core/usage-watch/actions.js'
 import { rejudgeEndedWatches, routeDeps, stopRealUse } from '../../../src/core/usage-watch/runtime.js'
 
@@ -117,11 +118,11 @@ describe('a page target names a place whose visits are counted', () => {
       expect(pageTargetProblem(t, new Set()), t).toBeNull()
     }
     expect(visitKeyOfTarget('page:session-panel')).toBe('part:session-panel')
-    expect(pageTargetProblem('page:scroll-to-bottom-btn', new Set())).toContain('is no page Walnut counts visits of')
+    expect(pageTargetProblem('page:sidebar', new Set())).toContain('is no page Walnut counts visits of')
     expect(pageTargetProblem('page:GET /api/x rejected in the page', new Set())).toContain('names no page')
     expect(pageTargetProblem('page:weather', new Set(['page:weather']))).toBeNull()
     const ctx = { callerTask: 't1', taskInfo: async (id: string) => ({ id, title: id, complete: false }), now: T0 }
-    await expect(runUsageWatchAction({ action: 'set', targets: ['op:task_get', 'page:scroll-to-bottom-btn'] }, ctx)).rejects.toMatchObject({ code: 'bad_target' })
+    await expect(runUsageWatchAction({ action: 'set', targets: ['op:task_get', 'page:sidebar'] }, ctx)).rejects.toMatchObject({ code: 'bad_target' })
     // An app's or a plugin pane's key holds a ~ (2026-11-26 review: the target pattern refused them).
     await expect(runUsageWatchAction({ action: 'set', targets: ['page:app:walnut-notes~main', 'page:settings:mail~rules'] }, ctx)).resolves.toBeTruthy()
     // A page opened once (Page use's own record) is one a watch may name.
@@ -201,6 +202,55 @@ describe('a watch that passed on a page target of no use', () => {
       await rejudgeEndedWatches(T0 + 6 * H)
       expect(getWatch(home.id)).toMatchObject({ state: 'passed', result: [expect.objectContaining({ uses: 1, byDay: 1 })] })
       expect(getWatch(draft.id)?.state).toBe('too_little_use')
+      expect(told).toEqual([])
+    } finally {
+      Object.assign(routeDeps, saved)
+    }
+  })
+})
+
+// 2026-11-26, the lead: 27 watches re-judged to too_little_use named their pages the old way
+// (page:task-panel, page:session, page:settings); each name that is part of one counted place reads as it.
+describe('a page named the old way reads as the place it is part of', () => {
+  it('every old name is one counted place, and Settings sums its panes', async () => {
+    for (const [word, key] of Object.entries(PAGE_ALIASES)) {
+      expect(visitKeyOfTarget(`page:${word}`), word).toBe(key)
+      expect(isPlaceKey(key), word).toBe(true)
+      expect(pageTargetProblem(`page:${word}`, new Set()), word).toBeNull()
+    }
+    expect(visitKeyOfTarget('page:settings-sessions')).toBe('settings:sessions')
+    for (let i = 0; i < 4; i++) await recordVisits(['page:home'], new Date(T0 + H + i))
+    await recordVisits(['settings:sessions', 'settings:usage', 'settings:sessions'], new Date(T0 + 2 * H))
+    live()
+    const v = judgeWatch(watchOf(['page:task-panel', 'page:settings']), T0 + 5 * H)
+    expect(v.state).toBe('passed')
+    expect(v.summary).toBe('Passed: page:task-panel: 4 uses, counted as page:home · page:settings: 3 uses')
+  })
+
+  it('a part judged before it was counted reads its page\'s days, and the watch that ended short on it is judged again quietly', async () => {
+    live()
+    const short: Watch = {
+      ...watchOf(['page:session-panel', 'page:session']), state: 'too_little_use', checkedAt: T0 + 5 * H + 60_000,
+      result: [{ target: 'page:session-panel', uses: 0, ok: true, notes: [] }, { target: 'page:session', uses: 0, ok: true, notes: [] }],
+    }
+    const again = rejudgeEnded(short, { visitDays: (k) => (k === 'page:home' ? { '2026-11-25': 7 } : undefined) })
+    expect(again?.state).toBe('passed')
+    expect(again?.results.map((r) => r.uses)).toEqual([7, 7])
+    expect(again?.summary).toContain("counted by the day as its page's, page:home's")
+    // The server's pass: Page use holds the page's day; nobody is told.
+    _resetUsageRecorderForTesting(false)
+    await recordVisits(['page:home'], new Date(T0 + H))
+    await flushVisitsNow()
+    const told: string[] = []
+    const saved = { ...routeDeps }
+    Object.assign(routeDeps, { enabled: async () => true, deliver: async (to: string) => { told.push(to); return { ok: true } } })
+    try {
+      putWatch(short)
+      const nobody = { ...short, id: 'uw-nobody-0001', targets: ['page:sidebar'], result: [{ target: 'page:sidebar', uses: 0, ok: true, notes: [] }] }
+      putWatch(nobody)
+      await rejudgeEndedWatches(T0 + 6 * H)
+      expect(getWatch(short.id)).toMatchObject({ state: 'passed', result: [expect.objectContaining({ uses: 1 }), expect.objectContaining({ uses: 1 })] })
+      expect(getWatch(nobody.id)).toMatchObject({ state: 'too_little_use', result: [expect.objectContaining({ uses: 0, notes: [] })] })
       expect(told).toEqual([])
     } finally {
       Object.assign(routeDeps, saved)
