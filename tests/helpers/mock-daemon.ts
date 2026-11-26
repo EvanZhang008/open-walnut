@@ -18,6 +18,7 @@ import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
 import { createServer } from 'node:net'
+import { writeFifoLine } from './mock-fifo-write.mjs'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { unpackReplicaSyncLists } from '../../src/providers/replica-sync-gz.js'
@@ -71,24 +72,15 @@ function streamJsonInput(args: string[]): boolean {
 }
 
 /** A non-blocking FIFO write takes at most the pipe's free space (8192 bytes on macOS), so a
- *  longer line (a turn-end self-report prompt is ~9 KB) must be written in pieces, as
- *  daemon-core's writeFifoFullyAsync does; one writeSync dropped the tail and the CLI never saw it.
+ *  longer line (a turn-end self-report prompt is ~9 KB) is written in pieces, as daemon-core's
+ *  writeFifoFullyAsync does; one writeSync dropped the tail and the CLI never saw it.
  *  Synchronous, unlike the daemon's: a CLI that stops reading holds the fixture's loop up to 5 s,
- *  then the write throws with the line half written, as a dead reader would leave it. */
-function writeFifoFully(fd: number, buf: Buffer): void {
-  const deadline = Date.now() + 5_000
-  let off = 0
-  while (off < buf.length) {
-    try {
-      off += fs.writeSync(fd, buf, off)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline) throw err
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
-    }
-  }
-}
+ *  then the write answers EAGAIN with the line half written, as a dead reader would leave it.
+ *  EPIPE (the reader closed after the open) is the CLI's death, as ENXIO: mock-fifo-write.mjs. */
+const FIFO_WAIT_MS = 5_000
+type FifoWriteOutcome = ReturnType<typeof writeFifoLine>
 
-/** writeFifoFully off the loop, for a start's own line: the CLI may still be booting, so the
+/** writeFifoLine off the loop, for a start's own line: the CLI may still be booting, so the
  *  rest of a line past the pipe's free space waits for it to read, as the real daemon's boot-wait
  *  write does, without holding the fixture's loop (and the server in it). */
 async function writeFifoFullyAsync(fd: number, buf: Buffer, timeoutMs = 60_000): Promise<void> {
@@ -655,15 +647,15 @@ export class MockDaemon {
     const live = this.sessions.get(sid)
     if (resume && (message || cmd.deferMessage === true) && live && live.exitCode === null && live.pid) {
       if (message) {
+        let outcome: string
         try {
-          const fd = fs.openSync(live.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-          writeFifoFully(fd, Buffer.from(JSON.stringify({ type: 'user', message: { role: 'user', content: message }, ...(typeof cmd.uuid === 'string' && cmd.uuid ? { uuid: cmd.uuid } : {}) }) + '\n'))
-          fs.closeSync(fd)
-          this._fifoWrites.push({ sid, message, timestamp: Date.now() })
-          this._turnActive.add(sid)
+          outcome = writeFifoLine(live.pipePath, Buffer.from(JSON.stringify({ type: 'user', message: { role: 'user', content: message }, ...(typeof cmd.uuid === 'string' && cmd.uuid ? { uuid: cmd.uuid } : {}) }) + '\n'), { waitMs: FIFO_WAIT_MS })
         } catch (err) {
-          return this.sendError(ws, id, `start: live-adopt delivery failed: ${(err as Error).message}`)
+          outcome = (err as Error).message
         }
+        if (outcome !== 'ok') return this.sendError(ws, id, `start: live-adopt delivery failed: ${outcome}`)
+        this._fifoWrites.push({ sid, message, timestamp: Date.now() })
+        this._turnActive.add(sid)
       }
       let offset = 0
       try { offset = fs.statSync(live.jsonlPath).size } catch { /* no output yet */ }
@@ -931,41 +923,47 @@ export class MockDaemon {
     }
 
     // 3. Normal path — write to FIFO
+    // Same envelope as daemon-core: the pre-assigned uuid rides the line when set.
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+      ...(uuid ? { uuid } : {}),
+    })
+    let outcome: FifoWriteOutcome
     try {
-      // Same envelope as daemon-core: the pre-assigned uuid rides the line when set.
-      const payload = JSON.stringify({
-        type: 'user',
-        message: { role: 'user', content: message },
-        ...(uuid ? { uuid } : {}),
-      })
-      const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-      writeFifoFully(fd, Buffer.from(payload + '\n'))
-      fs.closeSync(fd)
-      this._fifoWrites.push({ sid, message, timestamp: Date.now() })
-      this._turnActive.add(sid)
-      if (ids.length > 0 && session.pid) {
-        this._lineRecords.set(sid, (this._lineRecords.get(sid) ?? '')
-          + JSON.stringify({ pid: session.pid, ...(uuid ? { uuid } : {}), ids }) + '\n')
-      }
-      this.sendOk(ws, id, { ok: true })
+      outcome = writeFifoLine(session.pipePath, Buffer.from(payload + '\n'), { waitMs: FIFO_WAIT_MS })
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code === 'ENXIO') {
-        const exitCode = reapExitCode(session)
-        this.reap(sid, exitCode, 'send-enxio')
-        session.exitCode = exitCode
-        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
-      }
-      if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
-      this.sendError(ws, id, `write failed: ${(err as Error).message}`)
+      return this.sendError(ws, id, `write failed: ${(err as Error).message}`)
     }
+    if (outcome === 'ENXIO') return this.reapOnRefusedWrite(ws, id, sid, session, 'send-enxio')
+    if (outcome === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+    this._fifoWrites.push({ sid, message, timestamp: Date.now() })
+    this._turnActive.add(sid)
+    if (ids.length > 0 && session.pid) {
+      this._lineRecords.set(sid, (this._lineRecords.get(sid) ?? '')
+        + JSON.stringify({ pid: session.pid, ...(uuid ? { uuid } : {}), ids }) + '\n')
+    }
+    this.sendOk(ws, id, { ok: true })
+  }
+
+  /** A write that found the CLI gone (ENXIO, or EPIPE once its reader closed). The real daemon
+   *  reaps here (handleSendCommand / handleSendRawCommand → reapSession), so the process's own
+   *  exit reports nothing more and the next send is refused as session_dead. It answers with
+   *  reapSession's normalized code: 0 when the stream ends in a completed turn (the mock CLI exits
+   *  right after its result, so a control request sent at turn end races that exit), never a
+   *  blanket -1. */
+  private reapOnRefusedWrite(ws: WebSocket, id: number, sid: string, session: DaemonSession, why: string): void {
+    const exitCode = reapExitCode(session)
+    this.reap(sid, exitCode, why)
+    session.exitCode = exitCode
+    this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
   }
 
   /** SIMPLIFIED mirror of daemon-core.handleSendRawCommand — writes a
    *  pre-serialized JSON envelope (control_request / control_response) verbatim
    *  to the FIFO, with the same strict-ack error shape (ok:false + reason).
    *  Not mirrored: pid kill-0 precheck, pendingCtrl clearing, the async write
-   *  chain (a long line is written in pieces, synchronously: writeFifoFully). */
+   *  chain (a long line is written in pieces, synchronously: writeFifoLine). */
   private cmdSendRaw(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const sid = cmd.sid as string
     const raw = cmd.raw as string
@@ -995,33 +993,19 @@ export class MockDaemon {
     }
     const session = this.sessions.get(sid)
     if (!session) return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
+    // Mirror daemon-core.handleSendRawCommand's strict-ack envelope: write
+    // failures come back as {ok:false, reason} — NOT a protocol-level error —
+    // so writeRaw() resolves false and callers take their no-FIFO fallback
+    // exactly like production.
+    let outcome: FifoWriteOutcome
     try {
-      const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-      writeFifoFully(fd, Buffer.from(raw.endsWith('\n') ? raw : raw + '\n'))
-      fs.closeSync(fd)
-      this.sendOk(ws, id, { ok: true })
+      outcome = writeFifoLine(session.pipePath, Buffer.from(raw.endsWith('\n') ? raw : raw + '\n'), { waitMs: FIFO_WAIT_MS })
     } catch (err) {
-      // Mirror daemon-core.handleSendRawCommand's strict-ack envelope: write
-      // failures come back as {ok:false, reason} — NOT a protocol-level error —
-      // so writeRaw() resolves false and callers take their no-FIFO fallback
-      // exactly like production.
-      const code = (err as NodeJS.ErrnoException).code
-      // A readerless FIFO means the CLI is gone. The real daemon reaps it here and
-      // answers with reapSession's normalized code: 0 when the stream ends in a
-      // completed turn (the mock CLI exits right after its result, so a control
-      // request sent at turn end races that exit), never a blanket -1.
-      if (code === 'ENXIO') {
-        // The real daemon reaps here too (handleSendRawCommand → reapSession), so
-        // the process's own exit reports nothing more and the next send is refused
-        // as session_dead.
-        const exitCode = reapExitCode(session)
-        this.reap(sid, exitCode, 'sendraw-enxio')
-        session.exitCode = exitCode
-        return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode })
-      }
-      if (code === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
-      this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
+      return this.sendError(ws, id, `sendRaw write failed: ${(err as Error).message}`)
     }
+    if (outcome === 'ENXIO') return this.reapOnRefusedWrite(ws, id, sid, session, 'sendraw-enxio')
+    if (outcome === 'EAGAIN') return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+    this.sendOk(ws, id, { ok: true })
   }
 
   /** Mirrors daemon-core.handleAppendUserMarker — appends the walnut-injected

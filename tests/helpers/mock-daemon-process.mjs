@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createServer } from 'node:net'
+import { writeFifoLine } from './mock-fifo-write.mjs'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 // How late a CLI's own exit is reported (100 ms, so its last lines are on disk).
@@ -252,21 +253,15 @@ function writeFifo(ws, id, sid, line, what) {
     reapOnce(sid, session)
     return sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: reapExitCode(session) })
   }
-  try {
-    const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-    try { fs.writeSync(fd, Buffer.from(line)) } finally { fs.closeSync(fd) }
-    sendOk(ws, id, { ok: true })
-  } catch (err) {
-    // A readerless FIFO means the CLI is gone: the real daemon reaps it and
-    // answers with reapSession's normalized exit code.
-    if (err.code === 'ENXIO') {
-      drainBeforeDeath(sid, session)
-      reapOnce(sid, session)
-      return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
-    }
-    if (err.code === 'EAGAIN') return sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
-    sendError(ws, id, `${what} failed: ${err.message}`)
-  }
+  let outcome
+  try { outcome = writeFifoLine(session.pipePath, Buffer.from(line)) } catch (err) { return sendError(ws, id, `${what} failed: ${err.message}`) }
+  if (outcome === 'ok') return sendOk(ws, id, { ok: true })
+  if (outcome === 'EAGAIN') return sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+  // The CLI is gone (no reader at the open, or EPIPE once it closed): the real daemon
+  // drains, reaps it and answers with reapSession's normalized exit code.
+  drainBeforeDeath(sid, session)
+  reapOnce(sid, session)
+  return sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: reapExitCode(session) })
 }
 
 /**
