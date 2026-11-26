@@ -34,6 +34,7 @@ const NOT_SENT_WHY: Record<NonNullable<DayEntry['notSent']>, string> = {
   no_session: 'no known session to send to', task_done: 'the task is complete', not_managed: 'the task is not in this node\'s team now',
   duty_off: 'the node\'s reflection switch is off', org_off: 'the org is off', gone: 'the task or the node is gone', off: 'cause not recorded',
   card_corrected: 'the same ask or card got a correction a short while ago, and he wrote nothing about it since',
+  handled_since: 'his words were hours or days old, and what they asked was done or answered since',
 };
 
 export interface GuidanceLine { text: string; from?: string; date?: string }
@@ -171,7 +172,7 @@ export interface DayEntry {
   /** A held correction never sent (it waited too long, or more waited for its task): when it was dropped. */
   heldDropped?: string;
   /** With `off`: why it was not sent (pipeline.ts SendCheck). */
-  notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off' | 'card_corrected';
+  notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off' | 'card_corrected' | 'handled_since';
   /** Sent to the task's session now, about a turn of an earlier one. */
   earlierSession?: boolean;
   rule: DayRule;
@@ -181,6 +182,8 @@ export interface DayEntry {
    * fixed note instead, and its lesson was not written.
    */
   gated?: { steps: string[]; why: string; by: 'words' | 'model' | 'failed' };
+  /** When he wrote the words `finding.user_quote` is from (moment-age.ts quoteTimeOf). */
+  saidAt?: string;
   /** The task its correction was sent to; absent when none was sent. */
   handedTo?: { taskId: string; title: string };
   /** The pain registry entry his complaint went to (pains.ts), and whether it opened it. */
@@ -228,7 +231,7 @@ export function renderDayEntry(e: DayEntry): string {
     `- Why looked: ${SIGNAL_LABEL[e.signal] ?? e.signal}. Kind: ${f.kind}.`,
     ...(e.thread ? [`- Thread: ${e.thread.title} (${e.thread.id})`] : []),
     `- The session said: "${f.session_quote}"`,
-    ...(f.user_quote ? [`- The user said: "${f.user_quote}"`] : []),
+    ...(f.user_quote ? [`- The user said${e.saidAt ? ` (at ${e.saidAt.slice(0, 16).replace('T', ' ')} UTC)` : ''}: "${f.user_quote}"`] : []),
     ...(f.rule_quote ? [`- Rule quoted: "${f.rule_quote}"`] : []),
     `- What went wrong: ${f.what_went_wrong}`,
     `- The right way: ${f.correct_action}`,

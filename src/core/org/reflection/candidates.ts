@@ -149,7 +149,11 @@ async function signalStep(
 
 /** The closed many-round windows of one place's messages. */
 function roundsStep(p: Pass, msgs: readonly SpokenMessage[], keyOf: (w: RoundsWindow) => string, place: (w: RoundsWindow) => Place & Partial<Candidate>): void {
+  // The windows of every message, never only those after the floor: cut at the floor, an old talk's
+  // tail made a new window that was judged days late as if new (2026-11-26: his 11-23 words, judged
+  // on 11-26 by two nodes). A window that began at or before the floor was judged then, or is too old.
   for (const w of manyRoundWindows(msgs, p.now)) {
+    if (w.from <= p.floor) continue;
     const key = keyOf(w);
     if (has(p, key)) continue;
     const mine = msgs.filter((m) => w.ids.includes(m.id));
@@ -192,7 +196,8 @@ function answersToHim(turns: readonly TurnText[], since: string): Array<{ his: T
 
 /** His messages to one ordinary task: a signal, a closed many-round window, an answer in the wrong language. */
 async function taskCandidates(task: Task, p: Pass): Promise<void> {
-  const all = (await p.deps.readMessages(task.id)).filter((m) => m.at > p.floor).sort((a, b) => a.at.localeCompare(b.at));
+  const every = [...await p.deps.readMessages(task.id)].sort((a, b) => a.at.localeCompare(b.at));
+  const all = every.filter((m) => m.at > p.floor);
   const cache = new Map<string, Promise<TurnText[]>>();
   const turns = (sid: string, from: string, to: string) => {
     if (!sid) return Promise.resolve([]);
@@ -208,7 +213,7 @@ async function taskCandidates(task: Task, p: Pass): Promise<void> {
     const sid = sidOf.get(m.id) ?? '';
     await signalStep(p, `msg:${task.id}:${m.id}`, m, { task, sessionId: sid }, async () => lastAssistantBefore(await turns(sid, m.at, m.at), m.at));
   }
-  roundsStep(p, all, (w) => `rounds:${task.id}:${w.ids[0]}`, (w) => ({ task, sessionId: sidOf.get(w.ids[w.ids.length - 1]) ?? '' }));
+  roundsStep(p, every, (w) => `rounds:${task.id}:${w.ids[0]}`, (w) => ({ task, sessionId: sidOf.get(w.ids[w.ids.length - 1]) ?? '' }));
   if (!p.lang || !all.length) return;
   // The session's answers to him since his first new message, read once until he writes again.
   const last = all[all.length - 1];
@@ -239,8 +244,7 @@ async function threadCandidates(owner: Task, p: Pass): Promise<void> {
         async () => msgs[i - 1]?.answer?.text, { context: threadTurns(msgs, i), later: threadLater(msgs, i) });
       if (hit) judged.add(m.id);
     }
-    const fresh = msgs.filter((m) => m.at > p.floor);
-    roundsStep(p, fresh, (w) => `trounds:${th.id}:${w.ids[0]}`, (w) => {
+    roundsStep(p, msgs, (w) => `trounds:${th.id}:${w.ids[0]}`, (w) => {
       const lastIdx = msgs.findIndex((m) => m.id === w.ids[w.ids.length - 1]);
       return { ...place(msgs[lastIdx]?.sid), context: threadTurns(msgs, lastIdx, w.ids.length), later: threadLater(msgs, lastIdx) };
     });

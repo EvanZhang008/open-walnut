@@ -83,6 +83,8 @@ export interface HeldCorrection {
   merged?: Array<{ date: string; entryAt: string }>;
   /** Its text passed the step check already (step-gate.ts); one kept before the check is checked at its send. */
   checked?: true;
+  /** When he wrote the words it is about (moment-age.ts): its send says it, and what was done since counts from it. */
+  saidAt?: string;
 }
 
 /** Longer than the user's messages are kept (user-asks: open 7 days, then closed 30), so one is never judged twice. */

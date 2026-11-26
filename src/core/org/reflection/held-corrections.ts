@@ -14,7 +14,8 @@
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import type { CallModel, Finding } from './judge.js';
-import { renderTurns, turnsSince, type ReadTranscript } from './context.js';
+import { turnsSince, type ReadTranscript } from './context.js';
+import { takenUp, userSaidLine } from './moment-age.js';
 import { checkCached, checkStepOf, stepWords, verdictOf, type GatedStep, type StepCheck } from './step-gate.js';
 import { appendDayNote, markHeld, nearlySame } from './records.js';
 import { sessionNowOf } from './candidates.js';
@@ -41,12 +42,6 @@ export function gatedPoint(steps: readonly GatedStep[]): string {
   return `A fix that would have you ${stepWords(steps)}. The reflection never tells a session to take such a step: if it is still needed, ask the person your rules name for it, and take it only on their word.`;
 }
 
-export const STILL_NEEDED_SYSTEM = [
-  'An automated reviewer held some corrections for an AI agent session and is about to send them. LATER is what the session wrote since they were judged.',
-  'Name the corrections LATER shows the session already took up in full (it did the right way, or answered what was missing). A correction LATER does not touch is still needed.',
-  'Answer only JSON: {"done": [the numbers of the corrections already taken up]}',
-].join('\n');
-
 /**
  * The held items the session has not taken up since they were judged (2026-11-25 audit: one sent an
  * hour later was out of date; the session had answered within minutes). One call; when it cannot be
@@ -54,26 +49,19 @@ export const STILL_NEEDED_SYSTEM = [
  */
 export async function stillNeeded(items: readonly HeldCorrection[], sessionId: string, deps: Pick<HeldDeps, 'readTranscript' | 'callModel'>, nodeId: string): Promise<{ keep: HeldCorrection[]; done: HeldCorrection[] }> {
   if (!items.length || !sessionId || !deps.readTranscript || !deps.callModel) return { keep: [...items], done: [] };
-  const oldest = items.map((h) => h.entryAt).sort()[0];
+  const oldest = items.map((h) => h.saidAt ?? h.entryAt).sort()[0];
   const later = await turnsSince(sessionId, oldest, deps.readTranscript, 4).catch(() => []);
-  if (!later.length) return { keep: [...items], done: [] };
-  let raw = '';
-  try {
-    raw = await deps.callModel(STILL_NEEDED_SYSTEM, ['CORRECTIONS:', ...items.map((h, i) => `${i + 1}. [judged ${h.entryAt}] ${h.text}`), '', 'LATER:', renderTurns(later)].join('\n'), nodeId);
-  } catch { return { keep: [...items], done: [] }; }
-  let done: number[] = [];
-  try {
-    const a = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as { done?: unknown };
-    done = Array.isArray(a.done) ? a.done.filter((n): n is number => Number.isInteger(n)) : [];
-  } catch { return { keep: [...items], done: [] }; }
+  const done = await takenUp(items.map((h) => `[judged ${h.entryAt}] ${h.text}`), later, deps.callModel, nodeId);
+  if (!done) return { keep: [...items], done: [] };
   const gone = new Set(done.map((n) => n - 1));
   return { keep: items.filter((_, i) => !gone.has(i)), done: items.filter((_, i) => gone.has(i)) };
 }
 
-/** The point a held correction makes, short: the correction, the right way, his words. Pure. */
-export function heldPoint(f: Pick<Finding, 'correction' | 'correct_action' | 'user_quote'>): string {
-  const text = [f.correction.trim(), f.correct_action ? `The right way: ${f.correct_action.trim()}` : '', f.user_quote ? `The user said: "${f.user_quote.trim()}"` : '']
-    .filter(Boolean).join(' ');
+/** The point a held correction makes, short: the correction, the right way, his words with when he wrote them. Pure. */
+export function heldPoint(f: Pick<Finding, 'correction' | 'correct_action' | 'user_quote'>, saidAt: string): string {
+  // The time alone: it is sent later, when an age said now would be wrong.
+  const said = f.user_quote ? userSaidLine(f.user_quote.trim(), saidAt) : '';
+  const text = [f.correction.trim(), f.correct_action ? `The right way: ${f.correct_action.trim()}` : '', said].filter(Boolean).join(' ');
   return text.length > POINT_MAX ? `${text.slice(0, POINT_MAX)} [...]` : text;
 }
 
@@ -110,7 +98,7 @@ export async function holdCorrection(node: Task, nodeName: string, taskTitle: st
 /** The one message that carries a task's held corrections. Pure. */
 export function heldText(nodeId: string, nodeName: string, items: readonly HeldCorrection[]): string {
   return [
-    `${nodeName}'s reflection held ${items.length} correction${items.length === 1 ? '' : 's'} for this task (one message a pass, a lead's chat at most one an hour). Each is from a turn judged at the time it names; one you already took up since needs nothing more.`,
+    `${nodeName}'s reflection held ${items.length} correction${items.length === 1 ? '' : 's'} for this task (one message a pass, a lead's chat at most one an hour). Each is from a turn judged at the time it names and says when the user wrote the words it quotes: none is a new ask, and one done or answered since needs nothing more.`,
     '',
     ...items.map((h, i) => `${i + 1}. [${h.entryAt.slice(0, 16).replace('T', ' ')} UTC] ${h.text}`),
     '',
