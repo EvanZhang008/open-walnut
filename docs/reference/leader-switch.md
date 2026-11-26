@@ -124,7 +124,8 @@ Source job:
 
 1. **preflight**: the old leader runs with the permission (only its process can hand it over), the copy link answers
    (for kind `daemon`: the new machine's daemon says hello with every capability the link uses), the standby copy has
-   a complete batch under 5 minutes old (checked in the candidate's own check, on its machine) and verifies without
+   a complete batch that landed under 5 minutes ago (checked in the candidate's own check, on its machine; when none did, its
+   refusal says whether a batch is still on its way: [The preflight from the candidate's side](#the-preflight-from-the-candidates-side)) and verifies without
    drift (the copy link's `verify`, run where the copy is), the copy's config has the
    experiment and the section, a majority of witnesses answers and names the old leader. Then the
    old leader's server is asked to begin (`POST /api/leader/switch/begin`, the trust rule below; it records who
@@ -1089,6 +1090,49 @@ host stay in its offline journal until a daemon link returns. Adding a feature m
 | someone starts the old home by hand | it runs as a standby, experiment on or off, witnesses reachable or not: leads nothing, opens nothing in the home | `/api/leader/status` says who leads; every other request 409 `handed_over` |
 | someone starts the half-promoted new home by hand | it refuses to boot | "the standby copy that switch X is making into the new leader's home" |
 
+## Between two machines, end to end
+
+A leads, B will lead; H is any other host. Everything below is the sections above in the order a switch meets
+them, with the machine and the process that does each step. Built and rehearsed on one computer with real servers
+and daemons (`--remote`); not yet run on two real machines ([Not built yet](#not-built-yet)).
+
+| # | On | Process | What happens | What crosses between A and B |
+|---|---|---|---|---|
+| 0 | A | A's server | its standby runner sends a batch every `standby.interval_seconds` to B's `standby_dir` | the copy link (A's host link to B's daemon): chunks, then `walnut standby receive apply` there |
+| 1 | A or B | the command | on A it starts the source job; on B it runs the candidate check, then asks A over B's host link to begin ([Running the command on either machine](#running-the-command-on-either-machine)) | B to A: the forwarded begin, then the source job's lines back |
+| 2 | A, then B, then A | source job; B's target job `--check`; A's server | preflight: A runs with the permit and a majority names it; B's own check (its copy recent or a batch on its way, its disk, its version, a majority of witnesses it reaches with no leader link); the copy verifies; the standby caught up | the check started and read over the copy link |
+| 3 | A | A's server | handover: the marker, the host steps for A, the `handover` record at a majority; the ticket, then B's target job | the ticket and the job's start over the copy link |
+| 4 | A | A's server | the switch stop: last look, doors closed, writers settled, the final batch until a pass finds nothing changed, the final mark, every host link closed, exit | the final batch and the mark: the last bytes from A |
+| 5 | B | target job | waits for the mark, promotes the copy, the trial start, the commit by B's own ways to the witnesses, the real start; the downtime ends | nothing: only the witnesses |
+| 6 | A | source job | reads the commit at the witnesses, marks the old home handed over, sets A's service role to replica | nothing |
+| 7 | B | B's server | dials its hosts, H and A among them, declaring the move; A's sessions are B's on host A; A's console is served by A's host replica of B | B's links to A's and H's daemons |
+| 8 | B | B's server | its standby now goes to A's `standby_dir` (`standby.host` is A): the first batch is the whole home | B's copy link to A |
+| 9 | B | the command, `--back` | the same flow the other way, once that copy caught up | as above, roles swapped |
+
+Each failure, and what a person sees (the command's exit: 0 switched, 1 refused, 3 rolled back, 4 a job died):
+
+| Failure | What happens | What the person sees |
+|---|---|---|
+| the standby is behind (a large write, a slow link) | refused in the preflight, nothing handed over, A never stops | `leader: the standby on <B> is not caught up, so the final batch would not fit in the commit window: ...`, exit 1 |
+| B's copy has no recent batch, but one is sending | refused, nothing changes | `... so the copy is not caught up yet, but its standby runs: a batch has been under way here for N s (...): wait for it to land, then try again` ([above](#the-preflight-from-the-candidates-side)) |
+| B's copy has no recent batch and none comes | refused, nothing changes | `... and no batch is under way here ...: is the standby running on the leader?` (or a batch that stopped moving) |
+| B cannot reach a majority on its own, or only through its host link to A | refused | the reach sentence of [The preflight from the candidate's side](#the-preflight-from-the-candidates-side) |
+| two witnesses down | refused | `leader: only 1 of 3 witnesses answered`, exit 1 |
+| one witness down, before or during | the switch completes on the other two | `Switched: ...` |
+| the command run on B with no host link to A | refused, nothing asked of anyone | `this machine has no link to the leader <A> ...: run ... on <A>` |
+| a net host does not take the new member lists | A takes its handover back after its retell wait; nothing stopped | `Rolled back: ...` naming the host, exit 3 |
+| the copy link cut after the handover | the final batch cannot reach B: the stop fails, A leads again; B has no mark and changes nothing | `Rolled back: ...`, exit 3; B's target job rolls back |
+| the copy link cut after the stop | B has its mark and goes on alone; A reads the commit when it can | on A `waiting for <B> (its last note: ...)`, then `Switched: <B> leads` |
+| B's job dies between the commit's majority and its records, and B is cut off | B stops acting within its lease; nobody acts while no side has a majority; `--resume` on B finishes once the links return | `--status` on each machine |
+| a job killed at any step | the next `--resume` on that machine finishes the switch | the step it resumes at, then `Switched: ...` |
+| the trial on B fails | both roll back: B demotes the tried home (kept as `<home>.trial-failed-<id>`), A leads again within 113.3 s of its boot | `Rolled back: ...`, exit 3 |
+| B loses every other witness after the commit | its `mayAct` goes false within the lease, its doors close, nothing goes out; it acts again once one answers | `/api/leader/status` names the permit state |
+| A's old home started by hand afterwards | a standby naming B; writes answered 409 `handed_over`; its home unchanged | `/api/leader/status` names B |
+
+The switch back is the same table the other way, with one more wait first: the copy the other way starts as a new
+copy, so the whole home has to reach A before `--back` passes its catch-up ([Downtime](#downtime): about 13 to 18
+minutes for 20 GB on an unslowed link, hours on a slow one).
+
 ## Restarts
 
 The witnesses take a renew only from the process that wrote the record, so a new process of
@@ -1251,7 +1295,22 @@ not fit in the commit window.
 | 20 GB of leader data (80 files of 256 MB, 20,000 small files, the databases) | 28.2 s: final batch and its second look 4.1 s, promotion 11.8 s (most of it making every file writable, made parallel since), trial 8.4 s, real start 3.8 s |
 
 Between machines (the remote rehearsal, `--remote`: real daemons, the copy link of kind `daemon` through a loopback
-proxy, on clouddev under a load of 60 to 100 on 48 cores, 2026-11-24):
+proxy). Each figure names the `in_process_daemon` value it ran under (`true`: each server runs its machine's
+daemon in its own process, the default since 2026-11-25; `false`: the daemon program of its own). The newest runs
+first (clouddev, a load of about 40 on 48 cores, commit 783e6a9019, 2026-11-26, one run each):
+
+| Home | Copy link | `in_process_daemon` | Downtime | Every host connected to the new leader after |
+|---|---|---|---|---|
+| small | unslowed | true | 13.2 s (main), 8.0 s (main, back), 10.3 s (measure) | 4.9 s, 1.1 s |
+| small | 20 Mbit/s | true | 12.3 s | 2.7 s |
+| small | unslowed | false | 11.7 s (main), 10.5 s (main, back), 12.8 s (measure) | 3.4 s, 1.1 s |
+| small | 20 Mbit/s | false | 12.9 s | 2.2 s |
+
+The same at a load of about 50 (commit 49e4c30ec3, 2026-11-25, `false`): 18.1 s, 19.8 s back, 20.9 s unslowed and
+14.7 s at 20 Mbit/s; every host connected after 7.1 s, 1.9 s and 3.2 s.
+
+Earlier runs, all under `in_process_daemon: false` (the default then), on clouddev under a load of 60 to 100 on
+48 cores, 2026-11-24:
 
 | Home | Copy link | Downtime | Every host connected to the new leader after |
 |---|---|---|---|
@@ -1261,9 +1320,9 @@ proxy, on clouddev under a load of 60 to 100 on 48 cores, 2026-11-24):
 | 1 GB of filler | 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`) | 22.9 s | 5.0 s |
 
 20 GB of filler between machines (`--remote --gb 20`, 80 files of 256 MB and 20,000 small files, on clouddev
-under a load of 50 to 75 on 48 cores with three other rehearsals running, 2026-11-25). Each switch ran its
-catch-up first (the time in brackets); the first standby batch over the copy link took 1,057 s (tracked) and
-1,023 s (ignored):
+under a load of 50 to 75 on 48 cores with three other rehearsals running, 2026-11-25, commit 440b1ddf53,
+`in_process_daemon: false`). Each switch ran its catch-up first (the time in brackets); the first standby batch
+over the copy link took 1,057 s (tracked) and 1,023 s (ignored):
 
 | Filler | Copy link | Downtime | Every host connected to the new leader after |
 |---|---|---|---|
@@ -1272,8 +1331,30 @@ catch-up first (the time in brackets); the first standby batch over the copy lin
 | ignored by git (`voice-archive/`) | unslowed | 29.1 s (catch-up 2.5 s) | 7.9 s |
 | ignored by git (`voice-archive/`) | 20 Mbit/s | 34.8 s (catch-up 2.6 s) | 7.0 s |
 
-At a load of about 30 (one rehearsal, 2026-11-24) the tracked group took 21.1 s unslowed and 26.2 s at
-20 Mbit/s.
+At a load of about 30 (one rehearsal, 2026-11-24, `false`) the tracked group took 21.1 s unslowed and 26.2 s at
+20 Mbit/s. Later 20 GB runs, all `in_process_daemon: false`:
+
+| Run | Filler | Downtime unslowed | Downtime at 20 Mbit/s | First batch | The whole home back (the first batch the other way) |
+|---|---|---|---|---|---|
+| f5b6728559, load 50, 2026-11-25 | ignored | 25.6 s | 26.1 s | 862.7 s | 801.7 s, 20.5 GB |
+| f5b6728559, load 60, 2026-11-25 | tracked | 41.8 s | 22.0 s | 1,057.8 s | 1,197.6 s, 28.4 GB |
+| f3c042ae8a, load 40 to 55, 2026-11-25 | ignored | 20.3 s | 32.1 s | 675.4 s | 718.2 s, 20.5 GB |
+| f3c042ae8a, load 40 to 55, 2026-11-25 | tracked | 24.5 s (catch-up 108.6 s: 7.7 GB, 1.8 GB, 0.8 GB) | 24.1 s | 927.8 s | 982.6 s, 33.3 GB |
+| ddeacdea67 (the lead's run), 2026-11-25 | tracked | 35.2 s (catch-up 35.9 s) | not measured: the standby was not caught up (below) | 1,101.0 s | 1,091.2 s, 29.7 GB |
+
+Every host was connected to the new leader 6.0 to 8.4 s after the switch was done in these runs.
+
+**A switch back after a switch waits for a whole copy.** After a switch, the switch back has to wait until the new
+leader has copied the whole home back to the old machine (the copy the other way is a new one): about 13 to 18
+minutes for 20 GB on an unslowed link, and hours on a slow link. The runs above measured 718 to 1,198 s for that
+first batch back; at 20 Mbit/s (2.5 MB/s) 20 GB is about 8,200 s, 2.3 hours, by arithmetic (not measured). Until
+that batch landed and a later one fits the catch-up's budget, the switch back is refused as not caught up
+([The standby caught up first](#the-standby-caught-up-first)). In the lead's run the 20 Mbit/s switch back was
+tried while the copy back was still sending: its catch-up ran 300 s and refused, and the try a minute later was
+refused by the candidate's check as "is the standby running?" while a batch was still under way. Both are what
+the rehearsal now waits out first, and the check now says the second case for what it is
+([The preflight from the candidate's side](#the-preflight-from-the-candidates-side)). Seeding the copy back from
+the old machine's handed-over home, so that the first batch back sends only what changed, is not built.
 
 The `.gitignore` is leader data, copied with `.git` (until 2026-11-25 it was left out as rebuildable, and the
 promoted home booted a repo with no ignore list: its auto-commit took in `tmp/`, where the standby spools its
@@ -1380,8 +1461,22 @@ and on B after it, each slot once in total; at each kill point the job died ther
 found dead and resumed) and the resumed switch finishes with both jobs `done`, no roll back. `standby-behind` writes
 about 1.2 GB of new leader data just before a switch over a 20 Mbit/s copy link: the preflight's catch-up refuses
 it, and the old leader never stopped (its permission sampled every second, its mayAct and door lines, its server
-process, the witnesses' record). `measure` tries a switch the catch-up refuses again a minute later, prints each
+process, the witnesses' record). `measure` switches with the copy link unslowed, then back at 20 Mbit/s, prints each
 catch-up's batches, and checks the old leader's log: no git line writes the data repo once its switch stop began.
+
+**Every switch starts from a standby that caught up.** Wherever a rehearsal starts a switch (each scenario of `--remote`,
+each one-computer case), it first waits until a batch of the leader's standby runner that began after the writes the
+switch must carry took at most the catch-up's budget (50 s of the default window) and landed at the copy
+(`untilCaughtUp` in `scripts/leader-switch/rehearsal.ts`, read from the leader's log line `standby: batch committed`
+and the copy's status): the test the switch's own catch-up runs. The wait is bounded by the home's size
+(`catchUpBoundMs`: 180 s for a small home; with `--gb N`, 30 minutes or 3 minutes per GB, the larger: the first
+batch the other way after a switch is the whole home). When the bound runs out the check reads `<scenario>: the
+standby caught up before its switch (no switch was tried)`, FAIL, with the leader's batches since and what is under
+way at the copy: a standby that did not catch up, never a failed switch. `measure` waits unslowed first, then again
+with the copy link at 20 Mbit/s, so it measures the final batch over that link and not the backlog; a switch its
+preflight refuses as not caught up waits and is tried again within the same bound. `standby-behind` waits the same
+way before it writes its 1.2 GB (its earlier 180 s wait for one batch failed on a 20 GB tracked home, whose second
+batch carries the git objects of the whole filler).
 `--gb N` puts the large filler under `artifacts/` (`--filler tracked`, the default: the leader's own git writes
 about as much again into `.git`, the pressure case) or under `voice-archive/` (`--filler ignored`: leader data git
 never takes, as a real home's recordings).
@@ -1650,6 +1745,28 @@ the new one's commit start no server runs: the target job then reads the witness
 new leader first. A step after the commit that cannot read the witnesses stops and says to rerun with `--cancel` or `--resume`; it
 never goes round again by itself. The probe runs in the candidate's own target job (`--check` for the preflight), a process with
 that machine's identity (its machine-id file and witness root from its env), so it is the same on one computer or two.
+
+**Its copy is recent, or a batch is on its way.** The check also wants the copy's last batch to have landed (`committedAt`, when the
+target made it current, by this machine's clock) within 300 s. When it landed longer ago, the check looks at the copy's own disk for
+a batch under way (`src/core/standby/under-way.ts`, read-only: the chunks staged or renamed into `chunks/` and a running apply job's
+status in `.incoming/` after that landing; a status that says done or failed does not count) and says which of three it is:
+
+```
+the standby copy's last batch landed 617 s ago (more than 300 s), so the copy is not caught up yet, but its standby runs: a batch
+has been under way here for 560 s (since ...; 1630 chunk(s), 1630.0 MB received, the last 2 s ago). A batch over a slow link, or
+the one after a batch of the whole home, takes this long: wait for it to land, then try again
+
+the standby copy's last batch landed 617 s ago (more than 300 s), and the batch that began here at ... has not moved for 140 s
+(...): is the standby running on the leader, and does its link to this machine carry?
+
+the standby copy's last batch landed 617 s ago (more than 300 s), and no batch is under way here (nothing received since it
+landed): is the standby running on the leader?
+```
+
+A batch that moved in the last 120 s (`UNDER_WAY_MOVED_S`) runs. A leader's batch that sends nothing new (a walk of its home that
+finds nothing changed) leaves nothing on the copy's disk, but such a batch is short and lands. Each is a refusal that changes
+nothing; only the first says to wait. Before 2026-11-26 all three read "is the standby running?", the first included (the lead's
+20 GB run: a batch at 20 Mbit/s still sending after 300 s).
 
 ### Where the witnesses are
 
