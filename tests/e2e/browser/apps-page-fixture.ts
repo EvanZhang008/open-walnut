@@ -6,9 +6,9 @@
  * server per file) and hands back its port.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { reservePort } from './fixture-port'
 
 interface Fixture { port: number; home: string; [key: string]: unknown }
 
@@ -16,18 +16,6 @@ interface Fixture { port: number; home: string; [key: string]: unknown }
 export interface AppsFixtureServer { script: string; readyMark: string; portEnv: string }
 
 const PLUGIN_STORE: AppsFixtureServer = { script: 'tests/e2e/browser/plugin-store-server.ts', readyMark: 'PLUGIN_STORE_READY', portEnv: 'PW_PLUGIN_STORE_PORT' }
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve an apps-page fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 /**
  * Registers this file's beforeAll/afterAll; `port` (and the server's own `info`) read once

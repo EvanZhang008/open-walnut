@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import path from 'node:path'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { reservePort } from './fixture-port'
 
 /**
  * The page's memory under a realistic multi-hour push load (2026-11-09: the Mac app's page
@@ -74,18 +74,6 @@ interface SoakFixture { port: number; home: string; liveTaskId: string; liveSess
 
 let fixture: SoakFixture | null = null
 let child: ChildProcessWithoutNullStreams | null = null
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 async function startFixture(): Promise<SoakFixture> {
   const port = await reservePort()

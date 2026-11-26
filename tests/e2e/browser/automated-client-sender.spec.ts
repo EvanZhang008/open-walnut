@@ -1,10 +1,10 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import path from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { sessionComposer } from './session-composer'
+import { reservePort } from './fixture-port'
 
 /**
  * A browser under automation types into the composer: the words are an agent's, never the
@@ -32,18 +32,6 @@ test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 820 } })
 
 const SAFARI_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15'
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 function waitForReady(): Promise<Fixture> {
   return new Promise((resolve, reject) => {

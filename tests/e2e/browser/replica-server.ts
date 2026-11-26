@@ -48,11 +48,11 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
-import net from 'node:net'
 import path from 'node:path'
 import Database from '../../../src/lib/sqlite.js'
 import { HOST_TURN, MAC_FAVORITES, MAC_LETTER, MAC_NOTE, MAC_ROUTINE, MAC_THEME, MAC_USER_NAME, startReplicaCluster, type ReplicaCluster, type Twin } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
+import { reservePort as freePort } from './fixture-port.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3472)
 if (port === 3456 || port === 3457) throw new Error(`port ${port} is not this fixture's`)
@@ -130,12 +130,6 @@ const waitUntil = async (fn: () => boolean, ms: number, what: string): Promise<v
     await new Promise((r) => setTimeout(r, 250))
   }
 }
-
-const freePort = () => new Promise<number>((resolve, reject) => {
-  const s = net.createServer()
-  s.once('error', reject)
-  s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) })
-})
 
 let pagePort: number | undefined
 if (!built) {

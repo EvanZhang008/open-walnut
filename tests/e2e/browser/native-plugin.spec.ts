@@ -1,7 +1,6 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -13,6 +12,7 @@ import { backToApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
 // The first wait on this spec's own server allows for its cold Vite boot (COLD_SHELL_MS).
 import { expandSidebar } from './plugin-update-fixture'
+import { reservePort } from './fixture-port'
 
 const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
@@ -179,18 +179,6 @@ async function expectAppStaysInItsBox(page: Page): Promise<void> {
   expect(seen.movedAt.x, 'a popover the plugin moves out after opening, with a transition on everything, ends in the App').toBe(seen.box.x)
   if (seen.fullscreen === 'unavailable') test.info().annotations.push({ type: 'note', description: 'this browser offers no fullscreen: the refusal went unchecked' })
   else expect(seen.fullscreen, 'fullscreen asked for inside the App is left at once').toBe('refused')
-}
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a Plugin fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
 }
 
 async function waitForServer(port: number): Promise<void> {

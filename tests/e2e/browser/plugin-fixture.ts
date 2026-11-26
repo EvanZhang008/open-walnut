@@ -5,25 +5,16 @@
  * a real plugin runs against this one: never :3456, never the developer's data.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import net from 'node:net'
 import { test } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { returningVisitorStorage } from './pw-storage'
+import { reservePort } from './fixture-port'
 
 export interface PluginFixture {
   /** The fixture's origin, `http://127.0.0.1:<port>` (valid once beforeAll ran). */
   base(): string
   /** Its throwaway data home. */
   home(): string
-}
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
 }
 
 export function usePluginFixture(fixture: string): PluginFixture {

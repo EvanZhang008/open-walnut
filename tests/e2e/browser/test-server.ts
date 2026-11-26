@@ -2661,13 +2661,7 @@ await fs.mkdir(serviceFixtureRoot, { recursive: true })
     res.end(page('SERVICE_LOCKED_MARKER'))
   })
   // Bound then released: nothing listens here until the spec starts a server on it.
-  const deadPortFree = await new Promise<number>((resolve) => {
-    const srv = http.createServer()
-    srv.listen(0, '127.0.0.1', () => {
-      const port = (srv.address() as { port: number }).port
-      srv.close(() => resolve(port))
-    })
-  })
+  const deadPortFree = await (await import('./fixture-port')).reservePort()
   const encodedCwd = serviceFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
   const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
   await fs.mkdir(jsonlDir, { recursive: true })

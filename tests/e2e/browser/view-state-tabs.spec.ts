@@ -13,9 +13,9 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { reservePort } from './fixture-port'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
@@ -28,15 +28,6 @@ let child: ChildProcessWithoutNullStreams | null = null
 test.setTimeout(300_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 
 test.beforeAll(async () => {
   test.setTimeout(240_000)
@@ -92,7 +83,6 @@ async function boot(page: Page, path = '/'): Promise<string[]> {
   await expect(page.locator('.app-shell, .todo-panel').first()).toBeVisible({ timeout: 60_000 })
   return errors
 }
-
 
 async function openTab(page: Page): Promise<string[]> {
   const errors = await boot(page, APP_PATH)

@@ -1,11 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 import { leaveFullscreen } from './draft-helpers'
 import { goToSessionFolder } from './todo-panel-helpers'
+import { reservePort } from './fixture-port'
 
 /**
  * Plugin link handlers (`walnut.ui.link`, web/src/plugins/link-handlers.ts and
@@ -41,15 +41,6 @@ let child: ChildProcessWithoutNullStreams | null = null
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 
 test.beforeAll(async () => {
   test.setTimeout(240_000)

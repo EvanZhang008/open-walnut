@@ -1,12 +1,12 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import yaml from 'js-yaml'
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
 import { openPluginDetail } from './apps-store-helpers'
 import { openHostParts } from './host-problems-fixture-helpers'
+import { reservePort } from './fixture-port'
 
 /**
  * Editing hidden secrets in Settings, through real clicks, and what lands on disk.
@@ -69,18 +69,6 @@ test.setTimeout(240_000)
 // Not serial: each test stands alone, so a failure in one still runs the others (a failed test
 // restarts the worker, and the next one gets a fresh fixture).
 test.use({ viewport: { width: 1280, height: 900 } })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 function waitForReady(): Promise<Fixture> {
   return new Promise((resolve, reject) => {

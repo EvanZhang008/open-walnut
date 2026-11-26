@@ -11,23 +11,14 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import net from 'node:net'
 import { bunRuntime } from '../../helpers/bun-runtime'
 import { askView, openPanel, selectText, startPanelLab, type PanelLab } from './extension-panel-harness'
+import { reservePort as freePort } from './fixture-port'
 
 test.describe.configure({ mode: 'serial' })
 
 let server: ChildProcess | undefined
 let lab: PanelLab
-
-async function freePort(): Promise<number> {
-  const s = net.createServer()
-  await new Promise<void>((resolve, reject) => { s.once('error', reject); s.listen(0, '127.0.0.1', resolve) })
-  const a = s.address()
-  await new Promise<void>((resolve) => s.close(() => resolve()))
-  if (!a || typeof a === 'string') throw new Error('no port')
-  return a.port
-}
 
 test.beforeAll(async () => {
   test.setTimeout(300_000)

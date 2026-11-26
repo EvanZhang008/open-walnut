@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import { test, expect, type Browser, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
 import { specLock } from './spec-lock'
+import { reservePort as freePort } from './fixture-port'
 
 const SESSION_ID = 'pw-servers-session'
 const TASK_ID = 'pw-task-servers'
@@ -35,18 +36,6 @@ test.afterEach(() => {
 // fixture session, and each counts that session's servers: one test of either at a time.
 // Declared after the kill above, so a test's servers are gone before the next one starts.
 specLock('servers-session').hold('test')
-
-async function freePort(): Promise<number> {
-  for (;;) {
-    const port = 20_000 + Math.floor(Math.random() * 10_000)
-    const ok = await new Promise<boolean>((resolve) => {
-      const srv = net.createServer()
-      srv.once('error', () => resolve(false))
-      srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)))
-    })
-    if (ok) return port
-  }
-}
 
 const WEB = [
   'import http.server, sys',

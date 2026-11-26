@@ -13,13 +13,13 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Page, type Request } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { clearBesideMic } from './search-mic-layout-helpers'
 import {
   PHONE, backButton, expectNoHorizontalOverflow, findSmallTargets, findSmallText, menuButton, openDrawer,
 } from './phone-helpers'
+import { reservePort } from './fixture-port'
 
 const SHOTS = '/tmp/mobile-web/phone-pages'
 const SESSION_TASK_TITLE = 'Quarterly invoice reconciliation'
@@ -640,14 +640,7 @@ test.describe('Mail on a phone', () => {
 
   test.beforeAll(async () => {
     test.setTimeout(300_000)
-    const port = await new Promise<number>((resolve, reject) => {
-      const srv = net.createServer()
-      srv.once('error', reject)
-      srv.listen(0, '127.0.0.1', () => {
-        const a = srv.address()
-        srv.close(() => (a && typeof a === 'object' ? resolve(a.port) : reject(new Error('no port'))))
-      })
-    })
+    const port = await reservePort()
     child = spawn(bunRuntime(), ['tests/e2e/browser/mail-app-server.ts'], {
       cwd: process.cwd(), env: { ...process.env, PW_MAIL_PORT: String(port), PW_MAIL_DENSE: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
     })

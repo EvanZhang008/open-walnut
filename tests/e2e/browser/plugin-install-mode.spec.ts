@@ -1,10 +1,10 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
 import { startProofVideo } from './proof-video'
+import { reservePort } from './fixture-port'
 
 /**
  * Plugin Store install modes on the Apps page (manifest `install`,
@@ -32,15 +32,6 @@ let output = ''
 test.setTimeout(300_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('no port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 
 async function pluginConfig(): Promise<Record<string, { enabled?: boolean } | undefined>> {
   const yaml = await import('js-yaml')

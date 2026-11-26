@@ -1,8 +1,8 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
+import { reservePort } from './fixture-port'
 
 /**
  * A plugin install link (`open-walnut://install-plugin?…`) reaching the console,
@@ -43,15 +43,6 @@ test.use({
 const pause = (page: Page, ms = 1200) => (process.env.PW_VIDEO ? page.waitForTimeout(ms) : Promise.resolve())
 const fragment = (link: string) => `#open-link=${encodeURIComponent(link)}`
 const linkTo = (url: string, ref?: string) => `open-walnut://install-plugin?url=${encodeURIComponent(url)}${ref ? `&ref=${ref}` : ''}`
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('no port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 
 async function configSources(): Promise<string[]> {
   const yaml = await import('js-yaml')

@@ -1,9 +1,9 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { openPluginDetail } from './apps-store-helpers'
+import { reservePort } from './fixture-port'
 
 /**
  * A plugin's account link, end to end: the sync loop finds a dead credential,
@@ -46,18 +46,6 @@ let output = ''
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 900 } })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 function waitForReady(): Promise<Fixture> {
   return new Promise((resolve, reject) => {

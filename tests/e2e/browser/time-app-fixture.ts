@@ -1,6 +1,6 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import net from 'node:net'
+import { reservePort } from './fixture-port'
 
 /**
  * Start the walnut-time fixture server (time-app-server.ts) for one spec file and stop it
@@ -12,18 +12,6 @@ export interface TimeFixture {
   port: number
   home: string
   slots: { taskId: string; emptyTaskId: string; sessionIds: string[]; today: string }
-}
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
 }
 
 export async function startTimeFixture(env: Record<string, string>): Promise<{ fixture: TimeFixture; stop: () => Promise<void> }> {

@@ -15,13 +15,13 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { expect, test } from './shortcut-test-fixture'
 import type { Page } from '@playwright/test'
 import { expandSidebar, openPlugins } from './plugin-update-fixture'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { reservePort } from './fixture-port'
 
 const SCREENSHOT_DIR = '/tmp/plugin-app-visibility'
 const PLUGIN_ID = 'restart-demo'
@@ -34,18 +34,6 @@ let vitePort = 0
 let api: ChildProcessWithoutNullStreams | null = null
 let vite: ChildProcessWithoutNullStreams | null = null
 let output = ''
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 function spawnRole(role: 'api' | 'vite'): ChildProcessWithoutNullStreams {
   const child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-restart-server.ts'], {

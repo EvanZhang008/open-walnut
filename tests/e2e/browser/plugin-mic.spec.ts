@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { useSyntheticMic } from './stt-failure-helpers'
 import { stubSttStatus } from './voice-selection-helpers'
+import { reservePort } from './fixture-port'
 
 /**
  * Dictation in a plugin's own text box (`walnut.ui.views.MicButton`, web/src/plugins/views.tsx),
@@ -36,15 +36,6 @@ let child: ChildProcessWithoutNullStreams | null = null
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return address.port
-}
 
 test.beforeAll(async () => {
   test.setTimeout(240_000)

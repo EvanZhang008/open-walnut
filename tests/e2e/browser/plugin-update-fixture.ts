@@ -6,13 +6,13 @@
  */
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { execFile, spawn } from 'node:child_process'
-import net from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { reservePort } from './fixture-port'
 
 const execFileAsync = promisify(execFile)
 
@@ -20,15 +20,6 @@ export interface PluginFixture {
   port: number
   home: string
   stop(): Promise<void>
-}
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
 }
 
 export async function startPluginFixture(): Promise<PluginFixture> {

@@ -1,9 +1,9 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { devices, type Locator, type Page } from '@playwright/test'
+import { reservePort } from './fixture-port'
 
 /**
  * The merged row's account label, measured in WebKit at the widths this console is actually used at.
@@ -39,18 +39,6 @@ let output = ''
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(420_000)
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a mail fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 function waitForReady(): Promise<Fixture> {
   return new Promise((resolve, reject) => {

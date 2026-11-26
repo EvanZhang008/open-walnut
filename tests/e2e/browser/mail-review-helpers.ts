@@ -11,9 +11,9 @@
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
-import net from 'node:net'
 import { expect, type Browser, type Locator, type Page } from '@playwright/test'
 import { withCssColor } from './css-color'
+import { reservePort } from './fixture-port'
 
 export const PANE = '.mail-accounts-pane'
 export const HARBOUR = 'dense:harbour'
@@ -22,18 +22,6 @@ export const MARINA = 'dense:marina'
 export const TAIL_FOLDER = 'harbour/label/receipts'
 
 export interface MailFixture { port: number, home: string }
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('Could not reserve a mail fixture port')
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  return address.port
-}
 
 /** One fixture server with a throwaway home. `stop` removes the home it made. */
 export class MailFixtureServer {

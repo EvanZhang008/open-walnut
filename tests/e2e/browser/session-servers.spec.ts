@@ -15,6 +15,7 @@ import net from 'node:net'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
 import { specLock } from './spec-lock'
+import { reservePort as freePort } from './fixture-port'
 
 const SESSION_ID = 'pw-servers-session'
 const TASK_ID = 'pw-task-servers'
@@ -35,25 +36,6 @@ test.afterEach(() => {
 // fixture session, and each counts that session's servers: one test of either at a time.
 // Declared after the kill above, so a test's servers are gone before the next one starts.
 specLock('servers-session').hold('test')
-
-/**
- * A free port below the OS-assigned range, the way a dev server picks one: a young
- * listener on an OS-assigned port is not probed (it may serve a single login callback).
- */
-const handedOut = new Set<number>()
-async function freePort(): Promise<number> {
-  for (;;) {
-    const port = 20_000 + Math.floor(Math.random() * 10_000)
-    if (handedOut.has(port)) continue
-    handedOut.add(port)
-    const ok = await new Promise<boolean>((resolve) => {
-      const srv = net.createServer()
-      srv.once('error', () => resolve(false))
-      srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)))
-    })
-    if (ok) return port
-  }
-}
 
 /**
  * A real server as an agent's Bash tool leaves one: started in the background of a shell
