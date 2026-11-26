@@ -108,12 +108,12 @@ describe('the read env', () => {
   it('gitChildEnv adds it only with a cwd in a marked home, and there no caller\'s env turns it back on', () => {
     const free = home('child-free')
     const over = home('child-over', JSON.stringify({ state: 'handed-over' }))
-    const base = { PATH: '/bin', GIT_DIR: '/inherited' }
-    expect(gitChildEnv(undefined, base)).toEqual({ PATH: '/bin' })
-    expect(gitChildEnv(undefined, base, free)).toEqual({ PATH: '/bin' })
-    expect(gitChildEnv({ GIT_TERMINAL_PROMPT: '0' }, base, free)).toEqual({ PATH: '/bin', GIT_TERMINAL_PROMPT: '0' })
+    const base = { LANG: 'C', GIT_DIR: '/inherited' }
+    expect(gitChildEnv(undefined, base)).toEqual({ LANG: 'C' })
+    expect(gitChildEnv(undefined, base, free)).toEqual({ LANG: 'C' })
+    expect(gitChildEnv({ GIT_TERMINAL_PROMPT: '0' }, base, free)).toEqual({ LANG: 'C', GIT_TERMINAL_PROMPT: '0' })
     expect(gitChildEnv({ GIT_OPTIONAL_LOCKS: '1' }, base, over)).toEqual({
-      PATH: '/bin', GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_0: 'false',
+      LANG: 'C', GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_0: 'false',
     })
   })
 })
