@@ -24,6 +24,8 @@ import {
 } from './state.js'
 // The locked-notes key's backup in the data folder follows every vault write (a new master password too).
 import './locked-notes-key-backup.js'
+// The person's Never and sensitive marks, kept readable for an agent's Bitwarden sign-in while locked.
+import './sources/bitwarden/agent-holds.js'
 
 export { VAULT_FORMAT, VAULT_VERSION, VaultError, closeVault, isOpen, openKey, resetVaultForTest } from './state.js'
 export type { VaultFile } from './state.js'

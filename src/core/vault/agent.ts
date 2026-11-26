@@ -202,6 +202,23 @@ export function bumpAgentEpoch(): void {
 }
 
 const askerOf = (r: AgentRequester) => (r.taskId ? `task:${r.taskId}` : `host:${r.host}`)
+
+/** Bumped by Lock all and by a move of the agents switch: work that started before it is withdrawn. */
+export function agentEpoch(): number {
+  return epoch
+}
+
+/**
+ * A login released outside the vault (an agent's Bitwarden fill while Passwords is locked) counts
+ * toward the same per-task brake as the vault's own: refused past RELEASE_MAX in RELEASE_WINDOW_MS.
+ */
+export function takeOutsideRelease(r: AgentRequester): void {
+  const now = Date.now()
+  const asker = askerOf(r)
+  const had = recent(releases, asker, RELEASE_WINDOW_MS, now)
+  if (had.length >= RELEASE_MAX) refuse(429, 'agent_rate', `This task got ${RELEASE_MAX} passwords in ${RELEASE_WINDOW_MS / 60_000} minutes; wait before asking again.`)
+  releases.set(asker, [...had, now])
+}
 /** A grant is the task's in the session that asked, on the host it asked from. */
 const grantHolder = (r: AgentRequester) => `${askerOf(r)}|${r.sessionId ?? ''}|${r.host}`
 

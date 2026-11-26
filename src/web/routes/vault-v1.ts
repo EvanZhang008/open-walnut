@@ -462,6 +462,8 @@ vaultV1Router.post('/vault/unlock', async (req, res, next) => {
       await st.unlockVault({ passwordKey, ...(typeof body.secretKey === 'string' && body.secretKey ? { secretKey: body.secretKey } : {}) })
       return { session: s.createSession(clientName(req), minutes, deviceOf(req), unlockedHere(req)) }
     })
+    // The person's own unlock ends a Lock all's stop of agents' Bitwarden sign-in (agent-holds.ts).
+    if (r) await (await import('../../core/vault/sources/bitwarden/agent-holds.js')).refreshAgentHolds({ clearStop: true })
     return r ? { ...r.value, ...(await browserKeyFor(req)) } : SENT
   })
 })
@@ -565,6 +567,8 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
       const { endAllGrants } = await import('../../core/vault/agent.js')
       const { endAgentAccess } = await import('./vault-agent-v1.js')
       await endAgentAccess(endAllGrants())
+      // And an agent's sign-in from Bitwarden, until Passwords is unlocked again.
+      await (await import('../../core/vault/sources/bitwarden/agent-holds.js')).stopAgentHolds()
     } else if (body.everywhere) {
       // A person's Lock (a window's Lock button): every window and the extension lock with it.
       // No body is one window only, what an older client (and an auto-lock) means by it.
@@ -572,6 +576,8 @@ vaultV1Router.post('/vault/lock', async (req, res, next) => {
     } else s.endSession(header(req, s.SESSION_HEADER), deviceOf(req) ?? await windowSelfLock(req))
     // Written before the answer: a restart right after a Lock must not bring the windows back.
     await (await import('../../core/vault/session-store.js')).saveSessionsNow()
+    // A holds write still due goes in first, so an edit right before a Lock is not left stale.
+    if (!body.all) await (await import('../../core/vault/sources/bitwarden/agent-holds.js')).settleAgentHolds()
     await closeIfNobody()
     return { ended }
   })

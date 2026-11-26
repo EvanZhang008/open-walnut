@@ -124,12 +124,15 @@ type somewhere `fill-login` cannot reach. On a page you ran `evaluate` or real i
 loaded, `fill-login` answers `page_tampered`: navigate to the page again (a reload), then fill.
 
 While Walnut Passwords is locked, `fill-login` and `fill-code` take the login from the user's
-Bitwarden instead, when they added it as a password source: Walnut runs `bw` itself, picks the
-login saved for the page by the same rules (`which_login` names Bitwarden's ids), and fills it the
-same way; the answer says `"source": "bitwarden"`. It does so only where the vault would release
-the login with no ask of its own (agent access Allow, or approvals off). `vault_locked` then means
-Bitwarden could not help either, and its message says why (not added, no session, no login for the
-page, or an ask that needs Passwords unlocked): only then ask the user to unlock Passwords.
+Bitwarden instead, when the user turned that on (Settings, Passwords, Agents, "Sign in with
+Bitwarden while locked"): Walnut runs `bw` itself, picks the login saved for the page by the same
+rules (`which_login` names Bitwarden's ids; once Passwords is open again the same id still names
+the login), and fills it the same way; the answer says `"source": "bitwarden"`. It does so only
+where the vault would release the login with no ask of its own (agent access Any, or approvals
+off), never for a login the user keeps from agents (Never, sensitive), and not after Lock all.
+`vault_locked` then means Bitwarden could not help either, and its message says why (the switch
+is off, no session, no login for the page, kept from agents, Lock all, or an ask that needs
+Passwords unlocked): only then ask the user to unlock Passwords, once, saying that reason.
 Never copy a password from `bw`, a file or a chat into a page yourself: typed text stays in the
 tab's replay.
 

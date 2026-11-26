@@ -338,19 +338,19 @@ describe('the log and the switch, sealed', () => {
     // A new vault's setup wrote Any and 48 h explicitly.
     resetPolicyForTest()
     expect(fs.existsSync(file)).toBe(true)
-    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000 })
+    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000, bitwardenWhileLocked: false })
     // No file at all (a vault set up before Any existed): ask, never Any.
     const written = fs.readFileSync(file, 'utf8')
     fs.rmSync(file)
     resetPolicyForTest()
-    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000, bitwardenWhileLocked: false })
     fs.writeFileSync(file, written)
-    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000 })
+    expect(await readPolicy()).toEqual({ agents: 'allow', grantMs: 172_800_000, bitwardenWhileLocked: false })
     await writePolicy({ agents: 'ask' })
     // A file an older Walnut wrote (no grantMs) keeps its switch.
-    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
-    await writePolicy({ grantMs: 0 })
-    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 0 })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000, bitwardenWhileLocked: false })
+    await writePolicy({ grantMs: 0, bitwardenWhileLocked: false })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 0, bitwardenWhileLocked: false })
     await writePolicy({ grantMs: 12345 })
     expect((await readPolicy()).grantMs).toBe(172_800_000)
     // Deleted while this server runs: what it last read, never the Any default.
@@ -361,6 +361,6 @@ describe('the log and the switch, sealed', () => {
     const body = JSON.parse(fs.readFileSync(file, 'utf8'))
     body.data.ct = Buffer.from('tampered').toString('base64')
     fs.writeFileSync(file, JSON.stringify(body))
-    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000 })
+    expect(await readPolicy()).toEqual({ agents: 'ask', grantMs: 172_800_000, bitwardenWhileLocked: false })
   })
 })

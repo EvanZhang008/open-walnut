@@ -68,7 +68,8 @@ export interface AgentGrant {
   /** What the person approved: reveal covers env and fill; fill or env only itself. */
   use?: 'fill' | 'env' | 'reveal'
 }
-export interface AgentPolicy { agents: AgentsSwitch; grantMs: number; grants: AgentGrant[] }
+/** `bitwardenWhileLocked`: an agent's browser sign-in reads the login from Bitwarden while Passwords is locked (absent from an older server). */
+export interface AgentPolicy { agents: AgentsSwitch; grantMs: number; bitwardenWhileLocked?: boolean; grants: AgentGrant[] }
 export interface AgentLogEntry {
   at: string
   kind: 'released' | 'fill' | 'asked' | 'denied' | 'refused' | 'expired' | 'listed' | 'revoked' | 'synced'
@@ -333,6 +334,7 @@ export const vaultApi = {
   agentPolicy: () => vaultCall<AgentPolicy>('GET', '/vault/agent/policy'),
   setAgentsSwitch: (agents: AgentsSwitch) => vaultCall<AgentPolicy>('PUT', '/vault/agent/policy', { agents }),
   setGrantLength: (grantMs: number) => vaultCall<AgentPolicy>('PUT', '/vault/agent/policy', { grantMs }),
+  setBitwardenWhileLocked: (on: boolean) => vaultCall<AgentPolicy>('PUT', '/vault/agent/policy', { bitwardenWhileLocked: on }),
   endAgentGrants: () => vaultCall<{ grants: number; asks: number }>('POST', '/vault/agent/grants/end'),
   revokeGrant: (id: string) => vaultCall<{ revoked: AgentGrant }>('POST', `/vault/agent/grants/${encodeURIComponent(id)}/revoke`),
   bitwardenSync: () => vaultCall<BitwardenSyncStatus>('GET', '/vault/sync/bitwarden'),

@@ -50,6 +50,8 @@ export function PasswordsSection({ config, onSave }: Props) {
   const [confirmPw, setConfirmPw] = useState('')
   const [agents, setAgents] = useState<AgentsSwitch | null>(null)
   const [grantMs, setGrantMs] = useState<number | null>(null)
+  // null: not read (locked), or an older server without the switch.
+  const [bwLocked, setBwLocked] = useState<boolean | null>(null)
   // A move to or from Forever (the machine key) waits for the master password here.
   const [foreverTo, setForeverTo] = useState<UnlockFor | null>(null)
   const [foreverPw, setForeverPw] = useState('')
@@ -69,8 +71,8 @@ export function PasswordsSection({ config, onSave }: Props) {
     vaultApi.status().then((st) => {
       setStatus(st)
       if (st.unlocked) {
-        vaultApi.agentPolicy().then((p) => { setAgents(p.agents); setGrantMs(p.grantMs) }).catch(() => {}) // a failed read keeps the switch it showed
-      } else { setAgents(null); setGrantMs(null) }
+        vaultApi.agentPolicy().then((p) => { setAgents(p.agents); setGrantMs(p.grantMs); setBwLocked(typeof p.bitwardenWhileLocked === 'boolean' ? p.bitwardenWhileLocked : null) }).catch(() => {}) // a failed read keeps the switch it showed
+      } else { setAgents(null); setGrantMs(null); setBwLocked(null) }
       vaultApi.keychain().then(setKeychain).catch(() => {}) // a failed read keeps what it showed
     }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }, [])
@@ -195,6 +197,16 @@ export function PasswordsSection({ config, onSave }: Props) {
             control={<SegmentedControl<string> id="pw-grant-length" aria-label="An approval lasts" value={String(grantMs ?? 172_800_000)} disabled={!unlocked || grantMs === null || busy === 'grant'}
               options={GRANT_OPTIONS.map((o) => ({ value: String(o.value), label: o.label, testId: `pw-grant-${o.value}` }))}
               onChange={(v) => void run('grant', async () => { setGrantMs((await vaultApi.setGrantLength(Number(v))).grantMs) })} />}
+          />
+          <SettingsRow
+            label="Sign in with Bitwarden while locked"
+            htmlFor="pw-bw-locked"
+            help={needUnlock ?? 'While Passwords is locked, an agent\'s browser sign-in fills the login from Bitwarden (the bw CLI on this computer), never showing it to the agent. Items you set to Never or mark sensitive stay kept from agents; Lock all stops it until you unlock again.'}
+            control={<ToggleSwitch id="pw-bw-locked" data-testid="pw-bw-locked" checked={bwLocked === true} disabled={!unlocked || bwLocked === null || busy === 'bw-locked'}
+              onChange={(on) => void run('bw-locked', async () => {
+                setBwLocked((await vaultApi.setBitwardenWhileLocked(on)).bitwardenWhileLocked === true)
+                return on ? 'Agents sign in with Bitwarden while Passwords is locked.' : 'Agents no longer sign in with Bitwarden while Passwords is locked.'
+              })} />}
           />
         </SettingsGroup>
       )}

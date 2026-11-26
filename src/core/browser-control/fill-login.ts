@@ -100,6 +100,8 @@ async function pick(url: string, named: string | undefined, agents: AgentsSwitch
   // The page's own host in the words (a login saved for shop.example.com is "for shop.example.com", not for example.com).
   const here = (() => { try { return new URL(url).host } catch { return site } })()
   const need = what === 'code' ? 'totp' : 'password'
+  // A Bitwarden id a locked fill's which_login gave, used once Passwords is open: its linked Walnut item.
+  if (named) { const { walnutIdOfBitwarden } = await import('../vault/sources/bitwarden/agent-holds.js'); named = (await walnutIdOfBitwarden(named).catch(() => null)) ?? named }
   const logins = (await agentItems({ site: url, agents, forUse: true })).filter((i) => i.type === 'login' && i.fields.includes(need))
   const users = new Map((await listItems()).map((s) => [s.id, s.username ?? '']))
   const list = (items: AgentItemView[]) => items.slice(0, 20).map((i) => ({ id: i.id, title: i.title, ...(users.get(i.id) ? { username: users.get(i.id) } : {}) }))
@@ -192,8 +194,15 @@ export async function sendFill(deps: FillDeps, tab: number, url: string, item: {
   return { status: 200, body: { filled: true, fields: Object.keys(values).filter((f) => f === 'username' || f === 'password'), item, tab } }
 }
 
+const isLocked = (err: unknown) => (err as { code?: string } | null)?.code === 'vault_locked'
+
 export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillOutcome> {
-  const agents = await deps.agents()
+  let agents: AgentsSwitch
+  try { agents = await deps.agents() } catch (err) {
+    // Walnut Passwords is locked (the switch is sealed in it): the person's Bitwarden, when they turned that on, fills instead.
+    if (!isLocked(err) || input.request) throw err
+    return fillWhileLocked(input, deps, err as Error)
+  }
   const now = Date.now()
   for (const [id, p] of pendingFills) if (now - p.at > PENDING_MS) { pendingFills.delete(id); fillTokens.delete(id) }
   if (input.request) {
@@ -222,12 +231,9 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
   try {
     view = await pick(url, input.item, agents, what)
   } catch (err) {
-    // Walnut Passwords is locked: the person's Bitwarden, when they added it, fills it instead.
-    if ((err as { code?: string }).code !== 'vault_locked') throw err
-    const { fillFromBitwarden } = await import('./fill-from-bitwarden.js')
-    const out = await fillFromBitwarden({ ...input, what }, deps, url, agents, err as Error)
-    await recordFill(input, url, what, out.username)
-    return out.outcome
+    // Locked meanwhile: the same as locked from the start.
+    if (!isLocked(err)) throw err
+    return fillWhileLocked(input, deps, err as Error, url)
   }
   const item = { id: view.id, title: view.title }
   const fields = what === 'code' ? ['totp'] : ['username', 'password'].filter((f) => view.fields.includes(f))
@@ -244,6 +250,16 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
   const result = await fill(deps, input.tab, url, item, u.values, what)
   await recordFill(input, url, what, u.values.username)
   return result
+}
+
+async function fillWhileLocked(input: FillInput, deps: FillDeps, locked: Error, at?: string): Promise<FillOutcome> {
+  const url = at ?? await tabUrl(deps, input.owner, input.tab)
+  if (!at) await onCheckedSite(input, url)
+  const what = input.what ?? 'login'
+  const { fillFromBitwarden } = await import('./fill-from-bitwarden.js')
+  const out = await fillFromBitwarden({ ...input, what }, deps, url, locked)
+  await recordFill(input, url, what, out.username)
+  return out.outcome
 }
 
 async function recordFill(input: FillInput, url: string, what: 'login' | 'code', account?: string) {

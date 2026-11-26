@@ -7,6 +7,9 @@
  *   grantMs         how long an approved ask lets that task use that item: 0 (only that use),
  *                   3600000 (1 h), 43200000 (12 h), 172800000 (48 h, default), -1 (forever:
  *                   until the person revokes it)
+ *   bitwardenWhileLocked
+ *                   an agent's browser sign-in reads the login from the person's Bitwarden while
+ *                   Passwords is locked (browser-control/fill-from-bitwarden.ts); off unless set
  *
  * A vault with no policy file reads `ask` (48-hour grants): a vault set up before Any existed
  * keeps asking. A new vault's setup writes `allow` explicitly (writeNewVaultPolicy, from
@@ -33,13 +36,13 @@ export const DEFAULT_AGENTS: AgentsSwitch = 'ask'
 /** What a new vault's setup writes: Any. */
 export const NEW_VAULT_AGENTS: AgentsSwitch = 'allow'
 
-export interface Policy { agents: AgentsSwitch; grantMs: number }
+export interface Policy { agents: AgentsSwitch; grantMs: number; bitwardenWhileLocked: boolean }
 
 const cleanAgents = (v: unknown): AgentsSwitch => (v === 'off' || v === 'allow' || v === 'ask' ? v : 'ask')
 export const cleanGrantMs = (v: unknown): number => (GRANT_CHOICES as readonly number[]).includes(v as number) ? v as number : DEFAULT_GRANT_MS
 
 function clean(p: Partial<Policy> | null | undefined): Policy {
-  return { agents: cleanAgents(p?.agents), grantMs: cleanGrantMs(p?.grantMs) }
+  return { agents: cleanAgents(p?.agents), grantMs: cleanGrantMs(p?.grantMs), bitwardenWhileLocked: p?.bitwardenWhileLocked === true }
 }
 
 /** What this server last read, per vault (a vault set up anew never inherits another's). */
@@ -59,9 +62,9 @@ export async function readPolicy(): Promise<Policy> {
   const { vaultId } = await openKey()
   const p = await openSide<Partial<Policy>>(FILE)
   if (p) { const policy = clean(p); lastKnown = { vaultId, policy }; return policy }
-  if (await fileThere()) return { agents: 'ask', grantMs: DEFAULT_GRANT_MS }
+  if (await fileThere()) return { agents: 'ask', grantMs: DEFAULT_GRANT_MS, bitwardenWhileLocked: false }
   if (lastKnown?.vaultId === vaultId) return lastKnown.policy
-  return { agents: DEFAULT_AGENTS, grantMs: DEFAULT_GRANT_MS }
+  return { agents: DEFAULT_AGENTS, grantMs: DEFAULT_GRANT_MS, bitwardenWhileLocked: false }
 }
 
 /** Change some settings; the rest stay as they are. */

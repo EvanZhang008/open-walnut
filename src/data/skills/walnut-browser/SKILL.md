@@ -48,7 +48,7 @@ frames, real input, dialogs, recording a tab's requests, uploads, taking a tab o
   `take <tab>` when they are not on it. `fill-login` there answers `site_open_in_person_tab`;
   `--fresh-sign-in` only when they asked for a new sign-in (they approve it).
 - **Sign in with `fill-login`, then `fill-code`** where a one-time code is asked; you never see
-  the password or the code; a locked vault fills from Bitwarden. `which_login`: run again with
+  the password or the code; a locked vault fills from Bitwarden if the user turned that on. `which_login`: run again with
   `--item <id>`. `no_code`: ask the user. `page_tampered`: reload, then fill. Never type a
   password yourself. A sign-in only the user can do (no saved
   login, a code to their phone, a check): `request-sign-in "<what>"` and wait for it.

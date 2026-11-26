@@ -205,15 +205,19 @@ vaultAgentV1Router.put('/vault/agent/policy', async (req, res, next) => {
     const { writePolicy } = await import('../../core/vault/policy.js')
     const { listGrants, endAllGrants, bumpAgentEpoch } = await import('../../core/vault/agent.js')
     const { readPolicy } = await import('../../core/vault/policy.js')
-    const body = (req.body ?? {}) as { agents?: string; grantMs?: unknown }
-    const before = (await readPolicy()).agents
+    const body = (req.body ?? {}) as { agents?: string; grantMs?: unknown; bitwardenWhileLocked?: unknown }
+    const prior = await readPolicy()
     const { cleanGrantMs } = await import('../../core/vault/policy.js')
-    const patch: { agents?: 'off' | 'ask' | 'allow'; grantMs?: number } = {}
+    const patch: { agents?: 'off' | 'ask' | 'allow'; grantMs?: number; bitwardenWhileLocked?: boolean } = {}
     if (typeof body.agents === 'string') patch.agents = body.agents === 'off' || body.agents === 'allow' ? body.agents : 'ask'
     if (body.grantMs !== undefined) patch.grantMs = cleanGrantMs(body.grantMs)
+    if (body.bitwardenWhileLocked !== undefined) patch.bitwardenWhileLocked = body.bitwardenWhileLocked === true
     const out = await writePolicy(patch)
-    // Any move of the switch stops releases still running under the old one.
-    if (out.agents !== before) bumpAgentEpoch()
+    // Any move of a switch stops releases still running under the old one.
+    if (out.agents !== prior.agents || out.bitwardenWhileLocked !== prior.bitwardenWhileLocked) bumpAgentEpoch()
+    // The copy a locked Bitwarden fill reads (agent-holds.ts) follows at once.
+    // In line with the debounced writes; one that fails leaves the copy stale, which refuses.
+    await (await import('../../core/vault/sources/bitwarden/agent-holds.js')).refreshAgentHolds()
     if (out.agents === 'off') await endAgentAccess(endAllGrants())
     return { ...out, grants: listGrants() }
   })
