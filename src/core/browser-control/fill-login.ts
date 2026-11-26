@@ -162,10 +162,18 @@ async function fill(deps: FillDeps, tab: number, url: string, item: { id: string
   if (!now || now.trashedAt || !matchItem(now.urls, url)) {
     throw new BrowserError(`"${item.title}" is not saved for the page the tab is on now: nothing was filled.`, 409, 'other_site')
   }
+  // The code of now, from the item as it is now (an approval may have taken longer than one code lasts).
+  return sendFill(deps, tab, url, item, what === 'code' ? { totp: now.totp ?? '' } : values, what)
+}
+
+/**
+ * The login (or its one-time code, computed now from `values.totp`) to the extension alone, which
+ * fills the page: shared by a fill from Walnut's vault and one from Bitwarden (fill-from-bitwarden.ts).
+ */
+export async function sendFill(deps: FillDeps, tab: number, url: string, item: { id: string; title: string }, values: Record<string, string>, what: 'login' | 'code'): Promise<FillOutcome> {
   if (what === 'code') {
-    // The code of now, from the item as it is now (an approval may have taken longer than one code lasts).
     const { parseTotp, totpAt } = await import('../vault/totp.js')
-    const p = now.totp ? parseTotp(now.totp) : null
+    const p = values.totp ? parseTotp(values.totp) : null
     if (!p) throw new BrowserError(`"${item.title}" has no one-time code any more: nothing was filled.`, 409, 'no_code')
     const code = (await totpAt(p, Date.now())).code
     let r: { filled?: boolean }
@@ -210,7 +218,17 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
   const url = await tabUrl(deps, input.owner, input.tab)
   await onCheckedSite(input, url)
   const what = input.what ?? 'login'
-  const view = await pick(url, input.item, agents, what)
+  let view: AgentItemView
+  try {
+    view = await pick(url, input.item, agents, what)
+  } catch (err) {
+    // Walnut Passwords is locked: the person's Bitwarden, when they added it, fills it instead.
+    if ((err as { code?: string }).code !== 'vault_locked') throw err
+    const { fillFromBitwarden } = await import('./fill-from-bitwarden.js')
+    const out = await fillFromBitwarden({ ...input, what }, deps, url, agents, err as Error)
+    await recordFill(input, url, what, out.username)
+    return out.outcome
+  }
   const item = { id: view.id, title: view.title }
   const fields = what === 'code' ? ['totp'] : ['username', 'password'].filter((f) => view.fields.includes(f))
   const { agentUse } = await import('../vault/agent.js')

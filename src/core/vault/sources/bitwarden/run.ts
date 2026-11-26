@@ -21,14 +21,15 @@ const BW_PATHS = ['bw', '/opt/homebrew/bin/bw', '/usr/local/bin/bw']
 
 let running: Promise<SyncReport> | null = null
 
-async function bwSession(): Promise<string | null> {
+/** The Bitwarden CLI's session: the server's environment, else this Mac's keychain (BW_SESSION). */
+export async function bwSession(): Promise<string | null> {
   const env = process.env.BW_SESSION?.trim()
   if (env) return env
   return readKeychainSecret('BW_SESSION')
 }
 
 /** Run bw with the first path that exists. */
-async function bw(args: string[], session: string, timeoutMs: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
+export async function bw(args: string[], session: string, timeoutMs: number): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
   const env = { ...process.env, BW_SESSION: session, BW_NOINTERACTION: 'true' }
   const paths = process.env.WALNUT_BW_PATH ? [process.env.WALNUT_BW_PATH] : BW_PATHS
   let last = 'the Bitwarden CLI (bw) is not installed'

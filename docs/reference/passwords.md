@@ -484,7 +484,8 @@ when it has no login form, the first frame on its site that has one, matched to 
 fill that names no frame (the popup's Fill) puts
 a login into a frame of another origin only when the item's own sites take that frame's page too:
 a login saved for one host never goes into a sibling host's frame. An agent's `fill_login` fills
-the top page's own origin only.
+the top page's own origin only, from the vault, or from Bitwarden while the vault is locked
+(`docs/reference/browser-control.md`, "Passwords stay yours").
 
 **The in-page menu and save bar** are the extension's own pages framed into the site, inside
 closed shadow roots, so the site cannot read them. Each open has a one-time nonce that every

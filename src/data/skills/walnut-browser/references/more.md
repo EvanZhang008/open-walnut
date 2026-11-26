@@ -123,6 +123,14 @@ each (id, name, username): run it again with `--item <id>`. A login that needs t
 type somewhere `fill-login` cannot reach. On a page you ran `evaluate` or real input in since it
 loaded, `fill-login` answers `page_tampered`: navigate to the page again (a reload), then fill.
 
+While Walnut Passwords is locked, `fill-login` and `fill-code` take the login from the user's
+Bitwarden instead, when they added it as a password source: Walnut runs `bw` itself, picks the
+login saved for the page by the same rules (`which_login` names Bitwarden's ids), and fills it the
+same way; the answer says `"source": "bitwarden"`. It does so only where the vault would release
+the login without asking the user (agent access Allow, or approvals off). `vault_locked` then means
+Bitwarden could not help either, and its message says why (not added, no session, no login for the
+page, or an ask that needs Passwords unlocked): only then ask the user to unlock Passwords.
+
 When the site then asks for a one-time code (two-step verification from an authenticator app),
 use `fill-code` (`action: "fill_code"`): Walnut computes the current code of the saved login's
 two-step setup and fills it into the page's code field; you never see the code. The same rules

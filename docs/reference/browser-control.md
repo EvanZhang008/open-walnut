@@ -72,7 +72,13 @@ extension's Settings, reached from the key's popover in the side panel or the to
   approval), and then the extension fills the saved login for the tab's site the way its own
   autofill does. The agent hears only `{ filled, fields, item: { id, title } }`; the password is
   never in its result, the route's logs or its transcript. Each fill is in the vault's agent
-  activity as a fill. A login saved for another site is never filled there: after your approval
+  activity as a fill. While the vault is locked, a fill comes from your Bitwarden instead when you
+  added it as a password source (`src/core/browser-control/fill-from-bitwarden.ts`): Walnut runs
+  `bw list items --url <page>` itself, keeps the answer in memory, picks the login by the same
+  match rules, skips one Bitwarden asks your master password again for, and fills only where the
+  vault would release the login without asking you (agent access Allow, or approvals off); the
+  answer adds `"source": "bitwarden"`, and the fill is in the task's actions (the agent activity
+  is sealed with the vault key). A login saved for another site is never filled there: after your approval
   the tab must still be on the origin the ask named (scheme, host and port), and right before the
   fill the item's own sites must still match the page. A page an agent ran `evaluate` or any real
   input (the debugger) in since it loaded is refused (`page_tampered`: reload it first), since a
