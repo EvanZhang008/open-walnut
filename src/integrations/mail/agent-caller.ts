@@ -45,15 +45,17 @@ const CALLER_KIND_HEADER = 'x-walnut-caller-kind'
  * device. The origin header is the one the host's plugin dispatcher stamps over anything the client sent.
  */
 export function isAgentCaller(request: Pick<PluginRouteRequest, 'headers'>): boolean {
-  if (request.headers[CALLER_SID_HEADER]?.trim() || request.headers[CALLER_KIND_HEADER]?.trim()) return true
-  const origin = request.headers[ORIGIN_HEADER]?.trim()
+  // A request with no headers at all (an in-process caller, a test's stub) names no agent.
+  const headers: Partial<Record<string, string>> = request.headers ?? {}
+  if (headers[CALLER_SID_HEADER]?.trim() || headers[CALLER_KIND_HEADER]?.trim()) return true
+  const origin = headers[ORIGIN_HEADER]?.trim()
   return !!origin && origin !== LOCAL_ORIGIN && origin !== REMOTE_HTTP_ORIGIN
 }
 
 /** A call that is not the person's own click: an agent, a script, or a browser under automation on the user's install. */
 export async function isNotThePerson(request: Pick<PluginRouteRequest, 'headers'>): Promise<boolean> {
   if (isAgentCaller(request)) return true
-  return !!automatedClientOf(request.headers) && await automatedClientIsAgent()
+  return !!automatedClientOf(request.headers ?? {}) && await automatedClientIsAgent()
 }
 
 export { WALNUT_NOTE_FIELD }
@@ -236,7 +238,7 @@ export function agentAwareRoutes(walnut: WalnutServerPluginApi): WalnutServerPlu
       return (method: string, path: string, handler: PluginRouteHandler) => {
         const framed: PluginRouteHandler = async (request) => {
           // Run as the caller's session, so a step that goes ahead unasked names it (caller-scope.ts).
-          const reply = await withMailCaller(request.headers[CALLER_SID_HEADER], () => handler(request))
+          const reply = await withMailCaller(request.headers?.[CALLER_SID_HEADER], () => handler(request))
           return isAgentCaller(request) ? frameForAgent(reply) : reply
         }
         Object.assign(framed, { [FRAMED]: true, ...(isPersonAct(handler) ? { [PERSON_ACT]: true } : {}) })
