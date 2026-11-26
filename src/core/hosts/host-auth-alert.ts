@@ -146,8 +146,13 @@ export interface HostAuthAlertDeps {
   /**
    * A letter already open about this login running out (ssh-cert-expiry-alert.ts joinLetter): a
    * login episode joins it (its id) instead of sending a second letter, so one expiry is one thread.
+   * A plain key refusal joins it only once the certificate is past its expiry (`pastExpiry`): a
+   * refusal read without the certificate's reason (2026-11-26) is still that expiry, while one
+   * before it is some other key's trouble and keeps its own letter.
    */
-  joinLetter?: (hosts: string[], error?: string) => Promise<string | null>
+  joinLetter?: (hosts: string[], error?: string, opts?: { pastExpiry?: boolean }) => Promise<string | null>
+  /** It archived its own letter (ssh-cert-expiry-alert.ts letterGone): never awaited, it runs on that alert's queue. */
+  letterArchived?: (letterId: string) => Promise<void>
   /**
    * An outside reminder that owns sign-in and has its OWN open letter asking the user to sign in
    * now (sign-in-ask.ts readSignInOwnerLetter): a login failure sends no letter while that letter is
@@ -171,17 +176,20 @@ export interface HostAuthAlert {
   /** The open episodes' letter ids (sent ones only). */
   openLetterIds: () => Promise<string[]>
   /**
-   * Its own sent login letter (not one joined to the certificate letter) naming one of `hosts`, or
-   * null: the certificate alert sends no second letter for the same expiry.
+   * Its own sent letter (not one joined to the certificate letter) naming one of `hosts`, or null:
+   * the certificate alert, past its expiry with a fresh sign-in refused, sends no second letter for
+   * the same refusal. A key refusal's letter counts only when opened at or after `sinceMs` (the
+   * expiry): one before it is another key's trouble. Never waits on this alert's queue: a send here
+   * waits on the certificate alert (joinLetter), whose check may be the caller.
    */
-  loginLetterFor: (hosts: string[]) => Promise<string | null>
+  loginLetterFor: (hosts: string[], sinceMs?: number) => Promise<string | null>
   /** Off: no new letter; a host connecting still archives one already sent. Test seam for the grace too. */
   configure: (opts: { enabled?: boolean; graceMs?: number }) => void
   /**
    * The certificate letter `letterId` was archived by its own alert: a login episode joined to it
    * has no letter any more, and a login still failing gets its own (or waits on an owner).
    */
-  unjoin: (letterId: string) => Promise<void>
+  unjoin: (letterId: string, opts?: { renewed?: boolean }) => Promise<void>
   stop: () => void
 }
 
@@ -201,6 +209,8 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
   let stopped = false
   // The owner a login failure was last held for (logged once, not at every recheck).
   let heldBy: string | null = null
+  /** Sends past their join check, by episode: loginLetterFor waits on these, never on the queue. */
+  const sending = new Map<string, Promise<unknown>>()
   // Frames come in bursts (several per connect); one at a time keeps the episode file consistent.
   let chain: Promise<void> = Promise.resolve()
   const serial = (fn: () => Promise<void>): Promise<void> => {
@@ -224,6 +234,18 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     if (ep.joined) { log.session.info('host sign-in episode closed; its joined certificate letter stays', { letterId: ep.letterId, why }); return }
     try { await deps.archive({ ...(ep.letterId ? { letterId: ep.letterId } : {}), opKey: ep.opKey }) } catch (err) {
       log.session.warn('host sign-in letter could not be archived', { letterId: ep.letterId, opKey: ep.opKey, error: err instanceof Error ? err.message : String(err) })
+    }
+    if (ep.letterId) {
+      // Episodes joined to this letter (the certificate alert lent it out) are on their own again.
+      let again = false
+      for (const other of episodes.values()) {
+        if (!other.joined || other.letterId !== ep.letterId) continue
+        delete other.letterId
+        delete other.joined
+        again = true
+      }
+      if (again) { await save(); schedule(now()) }
+      void deps.letterArchived?.(ep.letterId).catch(() => {})
     }
     log.session.info('host sign-in letter archived', { episode: ep.key, letterId: ep.letterId, why })
   }
@@ -270,8 +292,9 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     for (const [h] of hosts) if (!ep.hosts.includes(h)) ep.hosts.push(h)
     episodes.set(key, ep)
     await save()
-    if (key === 'login' && deps.joinLetter) {
-      const joined = await deps.joinLetter(ep.hosts, hosts.find(([, f]) => f.error)?.[1].error).catch(() => null)
+    if (deps.joinLetter) {
+      const error = hosts.find(([, f]) => f.error)?.[1].error
+      const joined = await deps.joinLetter(ep.hosts, error, key === 'login' ? {} : { pastExpiry: true }).catch(() => null)
       if (joined) {
         ep.letterId = joined
         ep.joined = true
@@ -280,6 +303,12 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
         return
       }
     }
+    let sent!: () => void
+    sending.set(key, new Promise<void>((r) => { sent = r }))
+    try { await sendOwn(key, ep, hosts) } finally { sending.delete(key); sent() }
+  }
+
+  async function sendOwn(key: string, ep: Episode, hosts: Array<[string, FailingHost]>): Promise<void> {
     const letter = signInLetter(
       hosts.map(([, f]) => ({ label: f.label, ...(f.error ? { error: f.error } : {}) })),
       await deps.loginHint().catch(() => undefined),
@@ -381,20 +410,29 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     observe,
     check,
     openLetterIds: async () => { await chain; return [...episodes.values()].flatMap((e) => (e.letterId ? [e.letterId] : [])) },
-    loginLetterFor: async (hosts) => {
-      await chain
-      const ep = episodes.get('login')
-      return ep?.letterId && !ep.joined && ep.hosts.some((h) => hosts.includes(h)) ? ep.letterId : null
-    },
-    unjoin: (letterId) => serial(async () => {
+    loginLetterFor: async (hosts, sinceMs) => {
       await loaded
-      const ep = [...episodes.values()].find((e) => e.joined && e.letterId === letterId)
-      if (!ep) return
-      delete ep.letterId
-      delete ep.joined
+      await Promise.all([...sending.values()])
+      const ep = [...episodes.values()].find((e) => e.letterId && !e.joined && e.hosts.some((h) => hosts.includes(h))
+        && (e.key === 'login' || sinceMs === undefined || e.openedAt >= sinceMs))
+      return ep?.letterId ?? null
+    },
+    unjoin: (letterId, opts = {}) => serial(async () => {
+      await loaded
+      // Joined to it, or (the certificate alert told the expiry in it) the episode's own letter.
+      const joined = [...episodes.values()].filter((e) => e.letterId === letterId)
+      if (!joined.length) return
+      // Closed by a renewal: a failure seen before it says nothing of now, so only a fresh failure
+      // frame on these hosts (the link retries on its own) sends their own letter. Handed off or its
+      // hosts gone: what still fails gets its own letter now.
+      for (const ep of joined) {
+        delete ep.letterId
+        delete ep.joined
+        if (opts.renewed) for (const h of ep.hosts) failing.delete(h)
+      }
       await save()
-      log.session.info('host sign-in episode: its joined certificate letter was archived', { letterId })
-      if ([...failing.values()].some((f) => f.cls === 'login')) schedule(now())
+      log.session.info('host sign-in episode: its joined certificate letter was archived', { letterId, episodes: joined.map((e) => e.key) })
+      if (failing.size > 0) schedule(now())
       else await settle()
     }),
     configure: (opts) => {
@@ -438,9 +476,10 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
     language: walnutLetterLanguage,
     knownHosts: opts.knownHosts,
     isConnected: (host) => isDaemonConnected(host),
-    joinLetter: async (hosts, error) => {
+    letterArchived: async (letterId) => { await (await import('./ssh-cert-expiry-alert.js')).runningCertExpiryAlert()?.letterGone(letterId) },
+    joinLetter: async (hosts, error, joinOpts) => {
       const { runningCertExpiryAlert } = await import('./ssh-cert-expiry-alert.js')
-      return (await runningCertExpiryAlert()?.joinLetter(hosts, error)) ?? null
+      return (await runningCertExpiryAlert()?.joinLetter(hosts, error, joinOpts)) ?? null
     },
     signInOwner: async () => (await import('../sign-in-ask.js')).readSignInOwnerLetter(),
     ...(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS && Number.isFinite(graceEnv) && graceEnv >= 0 ? { graceMs: graceEnv } : {}),

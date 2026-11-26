@@ -12,7 +12,7 @@
  * The kinds come from LOGIN_FAILURE_KINDS, so a new kind is covered by itself; the source ratchet
  * fails on a new caller of the broad owner reader outside the warning ahead.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -211,7 +211,7 @@ describe('both orders are one letter', () => {
       archive: async () => {},
       loginHint: async () => undefined,
       handedOff: (phase) => certLetterHandedOff(undefined, clock, dir, phase, isOpen),
-      loginLetterOpen: async (h) => !!(await auth.loginLetterFor(h)),
+      loginLetterOf: (h, since) => auth.loginLetterFor(h, since),
       statePath: path.join(dir, 'cert.json'),
       now: () => clock,
       setTimer: () => ({ unref: () => {} }),
@@ -221,8 +221,8 @@ describe('both orders are one letter', () => {
     await c.check()
     expect(certSent).toEqual([])
     expect((await c.episode())?.expiredTold).toBe(true)
-    // The renewal closes the certificate's episode; the sign-in letter closes on its own connect.
-    expect(await c.joinLetter(['olddev'], 'denied')).toBeNull()
+    // The sign-in letter holds the expiry now: another refusal of these hosts joins that one letter.
+    expect(await c.joinLetter(['olddev'], 'denied')).toBe('auth-1')
   })
 
   it('a config switch that hands the certificate letter off reads no host at all', async () => {
@@ -237,6 +237,216 @@ describe('both orders are one letter', () => {
     })
     await c.check()
     expect(reads).toBe(0)
+  })
+})
+
+describe('a plain key refusal is the same expiry once the certificate is past it (2026-11-26)', () => {
+  // The refusal's reason was not read (no certificatefile, the certificate beside the identity
+  // file): the frame said `auth`, a key refusal, and its own letter went out ten hours after the
+  // certificate letter. Readers agreeing is tests/providers/host-certificate-readers-agree.test.ts;
+  // this pins the letters, so a refusal read without its reason still lands on the one letter.
+  function certAlert(sent: unknown[], turns: string[], over: Partial<Parameters<typeof createCertExpiryAlert>[0]> = {}) {
+    return createCertExpiryAlert({
+      hosts: async () => [{ host: 'clouddev', label: 'clouddev' }],
+      certExpiry: async () => EXPIRES,
+      freshSignIn: async () => ({ ok: false, error: 'Permission denied (publickey).' }),
+      send: async (l) => { sent.push(l); return `cert-${sent.length}` },
+      addTurn: async (_id, text) => { turns.push(text) },
+      archive: async () => {}, loginHint: async () => undefined,
+      handedOff: (phase) => certLetterHandedOff(undefined, clock, dir, phase, isOpen),
+      statePath: path.join(dir, 'cert.json'), now: () => clock, setTimer: () => ({ unref: () => {} }), clearTimer: () => {},
+      ...over,
+    })
+  }
+  function authAlert(sent: string[], over: Partial<Parameters<typeof createHostAuthAlert>[0]> = {}) {
+    return createHostAuthAlert({
+      send: async (l) => { sent.push(l.opKey); return `auth-${sent.length}` },
+      archive: async () => {}, loginHint: async () => undefined,
+      knownHosts: () => new Set(['clouddev']),
+      signInOwner: () => readSignInOwnerLetter(clock, dir, isOpen),
+      statePath: path.join(dir, 'auth.json'), graceMs: 0, now: () => clock, setTimer: () => ({ unref: () => {} }), clearTimer: () => {},
+      ...over,
+    })
+  }
+  const KEY_REFUSAL = { host: 'clouddev', label: 'clouddev', connected: false, phase: 'failed', kind: 'auth', error: 'Permission denied (publickey).' }
+
+  it('the warning went out ahead, the expiry was told, then a key refusal: it joins, no second letter', async () => {
+    const certSent: unknown[] = []
+    const turns: string[] = []
+    const c = certAlert(certSent, turns)
+    clock = EXPIRES - 3 * HOUR
+    await c.check()
+    clock = EXPIRES + 10 * HOUR
+    await c.check()
+    expect(certSent).toHaveLength(1)
+    expect(turns).toHaveLength(1)
+    const authSent: string[] = []
+    const auth = authAlert(authSent, { joinLetter: (h, e, o) => c.joinLetter(h, e, o) })
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    await auth.check()
+    expect(authSent).toEqual([])
+    expect(await auth.openLetterIds()).toEqual(['cert-1'])
+    expect(turns).toHaveLength(1)
+  })
+
+  it('a key refusal BEFORE the expiry is another key\'s trouble: its own letter', async () => {
+    const certSent: unknown[] = []
+    const c = certAlert(certSent, [])
+    clock = EXPIRES - 3 * HOUR
+    await c.check()
+    const authSent: string[] = []
+    const auth = authAlert(authSent, { joinLetter: (h, e, o) => c.joinLetter(h, e, o) })
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    expect(authSent).toHaveLength(1)
+  })
+
+  it('the key refusal letter first, the certificate first seen past its expiry: no second letter, the renewal step goes into it', async () => {
+    const authSent: string[] = []
+    const auth = authAlert(authSent)
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    expect(authSent).toHaveLength(1)
+    const certSent: unknown[] = []
+    const into: string[] = []
+    const c = certAlert(certSent, [], { loginLetterOf: (h, since) => auth.loginLetterFor(h, since), addTurn: async (id) => { into.push(id) } })
+    await c.check()
+    await c.check()
+    expect(certSent).toEqual([])
+    expect(into).toEqual(['auth-1'])
+  })
+
+  it('a key refusal letter opened before the expiry is another key\'s: the certificate letter still goes out', async () => {
+    clock = EXPIRES - HOUR
+    const authSent: string[] = []
+    const auth = authAlert(authSent)
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    clock = EXPIRES + HOUR
+    const certSent: unknown[] = []
+    const c = certAlert(certSent, [], { loginLetterOf: (h, since) => auth.loginLetterFor(h, since) })
+    await c.check()
+    expect(certSent).toHaveLength(1)
+  })
+
+  it('a refusal due while the certificate check probes: neither alert waits on the other forever, one letter', async () => {
+    let probeDone!: (v: { ok: boolean; error?: string }) => void
+    const probe = new Promise<{ ok: boolean; error?: string }>((r) => { probeDone = r })
+    const certSent: unknown[] = []
+    let auth: ReturnType<typeof createHostAuthAlert> | null = null
+    let probing = false
+    let joining = false
+    const c = certAlert(certSent, [], { freshSignIn: () => { probing = true; return probe }, loginLetterOf: (h, since) => auth!.loginLetterFor(h, since) })
+    const authSent: string[] = []
+    auth = authAlert(authSent, { joinLetter: (h, e, o) => { joining = true; return c.joinLetter(h, e, o) } })
+    const certCheck = c.check()
+    await vi.waitFor(() => expect(probing).toBe(true))
+    await auth.observe(KEY_REFUSAL)
+    const authCheck = auth.check()
+    await vi.waitFor(() => expect(joining).toBe(true))
+    probeDone({ ok: false, error: 'Permission denied (publickey).' })
+    const settled = await Promise.race([Promise.all([certCheck, authCheck]).then(() => 'done'), new Promise((r) => setTimeout(() => r('stuck'), 2_000))])
+    expect(settled).toBe('done')
+    expect(certSent).toHaveLength(1)
+    expect(authSent).toEqual([])
+  })
+
+  it('a renewal found while a refusal waits to join: neither alert waits on the other forever (close never awaits unjoin)', async () => {
+    const certSent: unknown[] = []
+    let expiry = EXPIRES
+    let readDone!: () => void
+    let slow: Promise<void> | null = null
+    let reading = false
+    let joining = false
+    let auth: ReturnType<typeof createHostAuthAlert> | null = null
+    const c = certAlert(certSent, [], {
+      certExpiry: async () => { if (slow) { reading = true; await slow } return expiry },
+      onLetterClosed: async (id, o) => { await auth?.unjoin(id, o) },
+    })
+    clock = EXPIRES - 3 * HOUR
+    await c.check()
+    clock = EXPIRES + HOUR
+    await c.check()
+    const authSent: string[] = []
+    auth = authAlert(authSent, { joinLetter: (h, e, o) => { joining = true; return c.joinLetter(h, e, o) } })
+    expiry = EXPIRES + 24 * HOUR
+    slow = new Promise<void>((r) => { readDone = r })
+    const certCheck = c.check()
+    await vi.waitFor(() => expect(reading).toBe(true))
+    await auth.observe({ ...KEY_REFUSAL, host: 'clouddev' })
+    const authCheck = auth.check()
+    await vi.waitFor(() => expect(joining).toBe(true))
+    readDone()
+    const settled = await Promise.race([Promise.all([certCheck, authCheck]).then(() => 'done'), new Promise((r) => setTimeout(() => r('stuck'), 2_000))])
+    expect(settled).toBe('done')
+  })
+
+  it('a sign-in letter still being sent when the certificate check looks: it waits for that letter, one letter', async () => {
+    let sendDone!: () => void
+    const sendGate = new Promise<void>((r) => { sendDone = r })
+    const authSent: string[] = []
+    let sending = false
+    let asked = false
+    const auth = authAlert(authSent, { send: async (l) => { sending = true; await sendGate; authSent.push(l.opKey); return 'auth-1' } })
+    await auth.observe(KEY_REFUSAL)
+    const authCheck = auth.check()
+    await vi.waitFor(() => expect(sending).toBe(true))
+    const certSent: unknown[] = []
+    const into: string[] = []
+    const c = certAlert(certSent, [], { loginLetterOf: (h, since) => { asked = true; return auth.loginLetterFor(h, since) }, addTurn: async (id) => { into.push(id) } })
+    const certCheck = c.check()
+    await vi.waitFor(() => expect(asked).toBe(true))
+    sendDone()
+    await Promise.all([authCheck, certCheck])
+    expect(authSent).toHaveLength(1)
+    expect(certSent).toEqual([])
+    expect(into).toEqual(['auth-1'])
+  })
+
+  it('the sign-in letter that holds the expiry is archived on a connect while the certificate is still expired: the expiry is told again', async () => {
+    let c: ReturnType<typeof createCertExpiryAlert> | null = null
+    const authSent: string[] = []
+    const archived: string[] = []
+    const auth = authAlert(authSent, { archive: async ({ letterId }) => { if (letterId) archived.push(letterId) }, letterArchived: (id) => c!.letterGone(id) })
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    const certSent: unknown[] = []
+    c = certAlert(certSent, [], { loginLetterOf: (h, since) => auth.loginLetterFor(h, since) })
+    await c.check()
+    expect(certSent).toEqual([])
+    expect((await c.episode())?.letterId).toBe('auth-1')
+    // A connection opened before the expiry comes back: the sign-in letter goes.
+    await auth.observe({ host: 'clouddev', label: 'clouddev', connected: true })
+    expect(archived).toEqual(['auth-1'])
+    await vi.waitFor(async () => expect((await c!.episode())?.letterId).toBeUndefined())
+    await c.check()
+    expect(certSent).toHaveLength(1)
+  })
+
+  it('the renewal archives the joined letter: nothing goes out for the refusal before it; a fresh refusal gets its own', async () => {
+    const certSent: unknown[] = []
+    let expiry = EXPIRES
+    const closed: string[] = []
+    let auth: ReturnType<typeof createHostAuthAlert> | null = null
+    const c = certAlert(certSent, [], { certExpiry: async () => expiry, onLetterClosed: async (id, o) => { closed.push(id); await auth?.unjoin(id, o) } })
+    clock = EXPIRES - 3 * HOUR
+    await c.check()
+    clock = EXPIRES + HOUR
+    await c.check()
+    const authSent: string[] = []
+    auth = authAlert(authSent, { joinLetter: (h, e, o) => c.joinLetter(h, e, o) })
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    expect(authSent).toEqual([])
+    expiry = EXPIRES + 24 * HOUR
+    await c.check()
+    expect(closed).toEqual(['cert-1'])
+    await auth.check()
+    expect(authSent).toEqual([])
+    await auth.observe(KEY_REFUSAL)
+    await auth.check()
+    expect(authSent).toHaveLength(1)
   })
 })
 

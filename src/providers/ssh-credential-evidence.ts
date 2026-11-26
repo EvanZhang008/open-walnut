@@ -119,6 +119,35 @@ export function identityFilesFromSshG(output: string, home: string): string[] {
   return filesFromSshG(output, 'identityfile', home)
 }
 
+/**
+ * The certificate files this host signs in with, as ssh loads them: the `certificatefile`s it names
+ * (`named`), or when it names none the `<identityfile>-cert.pub` ssh loads beside each identity file
+ * by itself. An old certificate beside a file that never expires must not hide the named one running
+ * out, nor stand in for one not readable.
+ */
+export function hostCertificateFiles(output: string, home: string): { files: string[]; named: boolean } {
+  const named = certificateFilesFromSshG(output, home)
+  const files = named.length ? named : identityFilesFromSshG(output, home).map((f) => `${f}-cert.pub`)
+  return { files: [...new Set(files)].slice(0, MAX_ITEMS), named: named.length > 0 }
+}
+
+/**
+ * The ONE reader of a host's own certificates (hostCertificateFiles, read): the expiry ahead
+ * (sshCertificateExpiry) and the reason a refused dial gives (gatherSshCredentialEvidence) both read
+ * it, so a certificate that runs out is also the reason its refusal names (2026-11-26: only the
+ * expiry reader looked beside the identity file, so the refusal read as a plain key refusal and sent
+ * a second letter). `own`: the host names it, so it is the one that mattered even with other keys
+ * refused; one found beside an identity file counts like the agent's, only when no other key was.
+ */
+export async function hostCertificateLines(sshGOutput: string, home: string, readFile: (p: string) => Promise<string>): Promise<Array<{ line: string; own: boolean }>> {
+  const { files, named } = hostCertificateFiles(sshGOutput, home)
+  const out: Array<{ line: string; own: boolean }> = []
+  for (const file of files) {
+    try { for (const line of certLines(await readFile(file))) out.push({ line, own: named }) } catch { /* configured but absent */ }
+  }
+  return out.slice(0, MAX_ITEMS)
+}
+
 /** Plain (non-certificate) public key lines of `ssh-add -L`. */
 export function plainKeyLines(text: string): string[] {
   return text.split('\n').map((l) => l.trim())
@@ -161,9 +190,7 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   let identityFiles: string[] = []
   try {
     const g = await run('ssh', ['-G', sshTarget])
-    for (const file of certificateFilesFromSshG(g.stdout, home).slice(0, MAX_ITEMS)) {
-      try { for (const line of certLines(await readFile(file))) certs.push({ line, own: true }) } catch { /* configured but absent */ }
-    }
+    certs.push(...await hostCertificateLines(g.stdout, home, readFile))
     identityFiles = identityFilesFromSshG(g.stdout, home).slice(0, MAX_ITEMS)
   } catch { /* ssh -G unavailable */ }
 
@@ -223,21 +250,10 @@ export async function sshCertificateExpiry(sshTarget: string, deps: EvidenceDeps
   const run = deps.run ?? defaultRun
   const readFile = deps.readFile ?? ((p: string) => fs.readFile(p, 'utf-8'))
   const home = sshHome(env)
-  const own: string[] = []
+  let lines: string[] = []
   try {
-    const g = await run('ssh', ['-G', sshTarget])
-    const readAll = async (files: string[]) => {
-      for (const file of [...new Set(files)].slice(0, MAX_ITEMS)) {
-        try { own.push(...certLines(await readFile(file))) } catch { /* configured but absent */ }
-      }
-    }
-    // The certificate the host names is the one it signs in with; only when it names none does the
-    // `<identityfile>-cert.pub` ssh loads beside an identity file count (an old one there that
-    // never expires must not hide the named one running out, nor stand in for one not readable).
-    const named = certificateFilesFromSshG(g.stdout, home)
-    await readAll(named.length ? named : identityFilesFromSshG(g.stdout, home).map((f) => `${f}-cert.pub`))
+    lines = (await hostCertificateLines((await run('ssh', ['-G', sshTarget])).stdout, home, readFile)).map((c) => c.line)
   } catch { /* ssh -G unavailable */ }
-  let lines = own.slice(0, MAX_ITEMS)
   if (!lines.length && sshAgentSock(env)) {
     const listed = await run('ssh-add', ['-L']).catch(() => null)
     if (listed?.code === 0) lines = certLines(listed.stdout).slice(0, MAX_ITEMS)
