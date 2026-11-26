@@ -85,7 +85,8 @@ test.describe('a host nothing uses for sessions', () => {
     const claude = await draftEngineButton(page, panel, 'claude')
     await expect(claude).toHaveAttribute('aria-selected', 'true')
     await expect(claude).toHaveClass(/provider-rail-item-unavailable/, { timeout: 10_000 })
-    await expect(claude).toHaveAttribute('title', 'Not available on fleet: Claude Code is not installed on Fleet Mac')
+    // The rail's tooltip names the engine first, then why (ea800b085f: provider icons carry their names).
+    await expect(claude).toHaveAttribute('title', 'Claude Code: Not available on fleet: Claude Code is not installed on Fleet Mac')
     await expect(draftModelPicker(page).getByTestId('model-picker-engine-unavailable')).toHaveText('Not available on fleet: Claude Code is not installed on Fleet Mac')
     fs.mkdirSync(SHOTS, { recursive: true })
     await draftModelPicker(page).screenshot({ path: `${SHOTS}/06-picker-missing.png` })
