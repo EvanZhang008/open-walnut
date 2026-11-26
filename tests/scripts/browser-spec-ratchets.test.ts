@@ -416,7 +416,9 @@ describe('specs that open a gated Settings pane', () => {
   // opens panes by a variable and names the pane's id opens it too.
   const opens = (text: string, id: string) => text.includes(`settings-nav-${id}'`)
     || new RegExp(`clickNav\\(\\s*page\\s*,\\s*['"]${id}['"]`).test(text)
-    || (/clickNav\(\s*page\s*,\s*[A-Za-z_$][\w$.]*\s*\)/.test(text) && new RegExp(`['"]${id}['"]`).test(text))
+    // A pane id only counts as walked when it sits in a list literal: `NAV('permissions')` reading the
+    // nav entry's count is not opening the pane (572414e727 read it so in settings-panes.spec.ts).
+    || (/clickNav\(\s*page\s*,\s*[A-Za-z_$][\w$.]*\s*\)/.test(text) && new RegExp(`\\[[^\\]]*['"]${id}['"][^\\]]*\\]`).test(text))
   const registry = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
   const gated = [...registry.matchAll(/\bid: '([\w-]+)'[^{}]*?\brequires: '([\w-]+)'/g)].map((m) => ({ id: m[1]!, gate: m[2]! }))
 
@@ -439,6 +441,7 @@ describe('specs that open a gated Settings pane', () => {
     expect(opens("await clickNav(page, 'general')", 'permissions')).toBe(false)
     expect(opens("const PANES = ['calendar', 'permissions']\nfor (const id of PANES) await clickNav(page, id)", 'permissions')).toBe(true)
     expect(opens("const PANES = ['calendar']\nfor (const id of PANES) await clickNav(page, id)", 'permissions')).toBe(false)
+    expect(opens("await expect(page.getByTestId(NAV('permissions'))).toHaveCount(0)\nfor (const id of PANES) await clickNav(page, id)", 'permissions')).toBe(false)
   })
 })
 
