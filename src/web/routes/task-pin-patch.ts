@@ -10,6 +10,7 @@
  */
 
 import { bus, EventNames } from '../../core/event-bus.js'
+import { refusal } from '../../lib/coded-refusal.js'
 import { migrateFocusTier, PIN_TIER_POLICY, type Task } from '../../core/types.js'
 
 export interface PinPatch {
@@ -78,7 +79,8 @@ export async function applyPinPatch(task: Task, patch: PinPatch): Promise<boolea
   if (tier === undefined) return false
   const result = await setPinTierBulk([task.id], tier)
   const failure = result.failed[0]
-  if (failure) throw new Error(failure.error === 'complete' ? `Cannot pin a completed task: ${task.title}` : `Task not found: ${task.id}`)
+  // The task was completed or deleted between the check and the write: the answers the check gives.
+  if (failure) throw failure.error === 'complete' ? refusal('conflict', `Cannot pin a completed task: ${task.title}`, 409) : refusal('not_found', `Task not found: ${task.id}`, 404)
   if (result.changed.length > 0) bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
   return result.changed.length > 0
 }

@@ -82,7 +82,7 @@ describe('an executor refusal is read by its code everywhere', () => {
     // the server not running), the API's own answer, or a message the op itself gave (its result's,
     // its throw's): each already names what it is. Anything else is a refusal of the executor's own.
     // A handler's refusal it came to with no server answering is answered as unreachable, in its own words.
-    const known = /message: `Invalid arguments for|message: `Unknown op:|notRunningMessage\(|message: `Walnut request|API_ERROR_OPENING|^ok: false, message, result|message: err instanceof Error|message: err\.message, code: err\.code|message: err\.words, unreachable: true|\$\{outcome\.message\}/
+    const known = /message: `Invalid arguments for|message: `Unknown op:|notRunningMessage\(|message: `Walnut request|API_ERROR_OPENING|^ok: false, message, result|message: err instanceof Error|message: own\.message, code: own\.code|message: own\.words, unreachable: true|\$\{outcome\.message\}/
     expect(literals.length).toBeGreaterThan(10)
     expect(literals.filter((l) => !known.test(l))).toEqual([])
   })
@@ -145,6 +145,68 @@ describe('an executor refusal is read by its code everywhere', () => {
     // An argument that says nothing to change: the same class on another op.
     const none = await executeOp('task_update', { id: 'mtaskaaa-0001' }, { origin: hostOrigin('remote-dev'), apiBase: 'http://127.0.0.1:9/api' })
     expect(none).toMatchObject({ ok: false, invalidArgs: true, code: BAD_INPUT_CODE })
+  })
+
+  it('a plugin op that refuses with a status and a code reads that code; its bare Error is still a fault', async () => {
+    const { failureClass } = await import('../../../src/core/usage-watch/normalize.js')
+    const { definePluginOp } = await import('../../../src/ops/index.js')
+    const { z } = await import('zod')
+    // What a plugin's handler throws (src/lib/coded-refusal.ts): any error with a status and a code.
+    const op = definePluginOp('garden-plugin', {
+      name: 'garden_plugin_water', title: 'Water a bed', description: 'Waters one bed of the garden.',
+      input: { bed: z.string() },
+      handler: async (args) => {
+        if (args.bed === 'closed') throw Object.assign(new Error('That bed is closed for the winter'), { status: 409, code: 'bed_closed' })
+        if (args.bed === '') throw Object.assign(new Error('Name a bed'), { status: 400, code: 'bad_input' })
+        throw new Error('the pump did not start')
+      },
+      tags: { readonly: true, remote: 'allow' },
+    })
+    try {
+      const opts = { origin: hostOrigin('remote-dev'), apiBase: 'http://127.0.0.1:9' }
+      const closed = await executeOp('garden_plugin_water', { bed: 'closed' }, opts)
+      expect(closed).toMatchObject({ ok: false, status: 409, code: 'bed_closed' })
+      if (closed.ok) return
+      expect(closed.message).toContain('That bed is closed for the winter')
+      expect(failureClass(closed as never)).toEqual({ cls: 'refused', code: 'bed_closed' })
+      expect(clientCodes(closed.message, 'internal')).toEqual({ cli: 'bed_closed', cliRead: 'bed_closed', mcpRead: 'bed_closed' })
+      const unnamed = await executeOp('garden_plugin_water', { bed: '' }, opts)
+      expect(unnamed).toMatchObject({ ok: false, invalidArgs: true, code: BAD_INPUT_CODE })
+      expect(failureClass(unnamed as never)).toEqual({ cls: 'bad_args', code: BAD_INPUT_CODE })
+      const fault = await executeOp('garden_plugin_water', { bed: 'north' }, opts)
+      expect(failureClass(fault as never)).toEqual({ cls: 'error', code: 'thrown' })
+    } finally { await op.dispose() }
+  })
+
+  it('ratchet: a file that registers a plugin\'s ops holds no bare Error but the listed ones', () => {
+    // The plugins this repository ships (the store, the examples, the built-in integrations): a
+    // handler there refuses with a status and a code. A new bare Error fails until it is one.
+    const LISTED: Record<string, [number, string]> = {
+      'plugin-store/walnut-rhythm/src/server/ops.ts': [1, 'a replica\'s refusal: changed with the plugin\'s next build (its built file is committed)'],
+      'src/integrations/calendar/index.ts': [1, 'a helper\'s own error text passed on: Walnut cannot tell whose it is'],
+    }
+    const root = new URL('../../../', import.meta.url)
+    const walk = (dir: URL, out: string[] = []): string[] => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name === 'dist') continue
+        const at = new URL(e.name + (e.isDirectory() ? '/' : ''), dir)
+        if (e.isDirectory()) walk(at, out)
+        else if (/\.(?:ts|mjs|js)$/.test(e.name) && !/\.test\./.test(e.name)) out.push(at.pathname)
+      }
+      return out
+    }
+    const files = ['plugin-store/', 'examples/plugins/', 'src/integrations/'].flatMap((d) => walk(new URL(d, root)))
+    const found: Record<string, number> = {}
+    let registering = 0
+    for (const file of files) {
+      const src = fs.readFileSync(file, 'utf8')
+      if (!/\bregistry\.op\(/.test(src)) continue
+      registering += 1
+      const n = [...src.matchAll(/throw (?:new )?Error\(/g)].length
+      if (n) found[file.slice(root.pathname.length)] = n
+    }
+    expect(registering).toBeGreaterThanOrEqual(5)
+    expect(found).toEqual(Object.fromEntries(Object.entries(LISTED).map(([file, [n]]) => [file, n])))
   })
 
   it('a reworded refusal keeps its class, code and status', () => {

@@ -29,7 +29,7 @@ import { assertTopicsOn, listTopics, readTopic } from '../../core/topics/topics-
 import { callerMemberAsync, changeMembers, chooseTopicMail, closeTopic, confirmMember, createTopic, parseMemberRef, postMessage, topicMailAccounts, userName } from '../../core/topics/topic-post.js';
 import { body, header, param } from './board-v1.js';
 import { isPersonNotAutomation } from './person-caller.js';
-import { sendLinkFailure } from '../middleware/link-failure-answer.js';
+import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js';
 import { sendV1Error as sendError } from './v1-control-relay.js';
 
 export const topicsV1Router = Router();
@@ -43,7 +43,7 @@ function route(fn: (req: Request, res: Response) => Promise<Answer>) {
       (err: unknown) => {
         if (err instanceof TopicError) return sendError(res, err.status, err.code, err.message);
         // A lost host link (a member's session on another host) answers as one, not a bug.
-        if (sendLinkFailure(req, res, err)) return;
+        if (sendOwnAnswer(req, res, err)) return;
         sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err));
       },
     );

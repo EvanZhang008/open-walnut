@@ -137,7 +137,11 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `primary_unreachable` (health) | 503 | Any `/health/*` call that could not be served by the primary (bridge down, its server down, a primary that predates the action, or a sync whose SQLite transaction did not commit). Nothing was stored; keep the batch and retry |
 | `store_mismatch` | 409 | `POST /health/sync` named a `storeId` the primary no longer has (the health data was deleted). Extra `storeId` is the new id: clear every sync anchor and resync from scratch under it |
 | `primary_timeout` | 504 | Cloud companion only: a write it carried to the primary got no answer in time. It may have been applied there; read before trying again |
+| `content_rule` | 422 | A task write (create, update, note, description, summary) whose text the task's sync plugin refuses: `message` is the plugin's own reason. Nothing is written (additive, 2026-11-26: it was a 500 `internal` before) |
+| `bad_input` | 400 | A thread write that cannot be applied as asked (`merge_into` with another field, a state the thread cannot take). The op's own check answers the same code |
 | `internal` | 500 | Unhandled server error |
+
+A refusal that carries its own status and code is answered by them on every route, whichever router it came through (`src/lib/coded-refusal.ts`): only an error with neither is a 500 `internal`.
 
 **On the cloud companion**, a call is answered by the primary while the primary
 answers (its bridge is up, its heartbeat is fresh, and "Cloud companion takes

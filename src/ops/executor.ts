@@ -51,6 +51,7 @@ import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
 import { GATE_SETTING_PATH, REPLY_LANGUAGE_CODE, gateSettingFor, replyLanguageRefusal } from './reply-language-gate.js'
 import { API_ERROR_OPENING, LOCAL_ONLY_CODE, OwnRefusalError, SHORTENED_TEXT_CODE, ownRefusal } from './own-refusal.js'
+import { codedRefusalOf, isBadArgumentStatus } from '../lib/coded-refusal.js'
 
 /** How long an op's call to the server waits by default (an op's own `timeoutMs` replaces it). */
 export const REQUEST_TIMEOUT_MS = 10_000
@@ -804,10 +805,14 @@ async function runOp(
       // The handler's own refusal under a code (an `api` write of a shortened read): nothing ran.
       // One it came to because no server answered (a read of the caller that came back empty) is
       // the server being away, never the caller's argument.
-      if (err instanceof OwnRefusalError) {
+      // A refusal thrown with its own status and code (lib/coded-refusal.ts: a plugin's handler, a
+      // core call made in-process) is the same answer.
+      const coded = err instanceof OwnRefusalError || err instanceof SelfCallError ? null : codedRefusalOf(err)
+      const own = coded ? new OwnRefusalError(coded.code, coded.message, { status: coded.status, ...(isBadArgumentStatus(coded.status) ? { invalidArgs: true as const } : {}) }) : err
+      if (own instanceof OwnRefusalError) {
         return reachedNoServer(prov)
-          ? { ok: false, message: err.words, unreachable: true as const }
-          : { ok: false, message: err.message, code: err.code, ...err.extra }
+          ? { ok: false, message: own.words, unreachable: true as const }
+          : { ok: false, message: own.message, code: own.code, ...own.extra }
       }
       // A write of this call whose answer was lost (also inside a handler) may have applied.
       const lost = err instanceof SelfCallError && err.lost

@@ -15,7 +15,7 @@
  * a network hop away, and a pinned response starves the browser's connection pool.
  */
 import { Router, type Request, type Response } from 'express'
-import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
 import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
 import { cancelInvite, inviteStatus, makeInvite } from '../../core/net/net-invites.js'
 import { joinedTwins } from '../../core/hosts/joined-twins.js'
@@ -36,7 +36,7 @@ function within<T>(ms: number, work: Promise<T>): Promise<T> {
 
 function sendError(req: Request, res: Response, err: unknown): void {
   if (err instanceof NetError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
-  if (sendLinkFailure(req, res, err)) return
+  if (sendOwnAnswer(req, res, err)) return
   res.status(500).json({ error: (err as Error).message ?? String(err), code: 'failed' })
 }
 

@@ -91,6 +91,9 @@ const CJK_DETECT_REGEX = /[一-鿿㐀-䶿぀-ヿ]/;
  *  rule as feedback" apart from real failures. `.message` is the plugin's own
  *  human-readable reason, suitable to feed back to a model verbatim. */
 export class ContentValidationError extends Error {
+  /** The caller's to fix: every door answers it under this code, never as a 500 (lib/coded-refusal.ts). */
+  public readonly status = 422;
+  public readonly code = 'content_rule';
   constructor(message: string, public field: string) {
     super(message);
     this.name = 'ContentValidationError';
@@ -1321,6 +1324,8 @@ export interface AddTaskInput {
 
 /** addTask with an explicitId that another task already has. */
 export class TaskIdTakenError extends Error {
+  public readonly status = 409;
+  public readonly code = 'id_taken';
   constructor(readonly id: string, readonly createdByOp: string | undefined) {
     super(`A task with id ${id} already exists`);
   }
@@ -1361,6 +1366,8 @@ export function newTaskPinDefault(explicit?: unknown): boolean {
  * from a human's picker, so a wrong tier is worth an error, not a guess.
  */
 export class InvalidFocusTierError extends Error {
+  public readonly status = 400;
+  public readonly code = 'bad_request';
   public readonly tier: string;
   constructor(message: string, tier: string) {
     super(message);
@@ -1473,6 +1480,8 @@ function inboxKeyOf(projects: Record<string, ProjectRecord> | undefined): string
  * conflict). Typed so routes can map it to 400 rather than 500.
  */
 export class InvalidProjectNameError extends Error {
+  public readonly status = 400;
+  public readonly code = 'bad_request';
   public readonly project: string;
   constructor(message: string, project: string) {
     super(message);
@@ -2296,6 +2305,8 @@ export async function removeTestRunProject(name: string): Promise<boolean> {
  * whose container was gone but whose rows still claimed the provider.
  */
 export class ProjectRemoteDeleteUnsupportedError extends Error {
+  public readonly status = 409;
+  public readonly code = 'remote_delete_unsupported';
   public readonly project: string;
   public readonly source: string;
   constructor(project: string, source: string) {
@@ -5708,6 +5719,8 @@ export async function getTask(idPrefix: string): Promise<Task> {
  * the retired category-level conflict error so the 409 payload is unchanged.
  */
 export class ProjectSourceConflictError extends Error {
+  public readonly status = 409;
+  public readonly code = 'conflict';
   public readonly project: string;
   public readonly intendedSource: TaskSource;
   public readonly existingSource: TaskSource;
@@ -5795,6 +5808,8 @@ export function validateProjectSource(
  * Error thrown when attempting to delete a task that has active sessions.
  */
 export class ActiveSessionError extends Error {
+  public readonly status = 409;
+  public readonly code = 'active_session';
   public readonly activeSessionIds: string[];
   constructor(taskId: string, activeSessionIds: string[]) {
     super(
@@ -5814,6 +5829,7 @@ export class ActiveSessionError extends Error {
 export class DependencyValidationError extends Error {
   /** The caller's input is wrong: the web error handler answers 400, never a 500 route card. */
   public readonly status = 400;
+  public readonly code = 'bad_request';
   public readonly taskId: string;
   public readonly depId: string;
   constructor(message: string, taskId: string, depId: string) {
@@ -5828,6 +5844,8 @@ export class DependencyValidationError extends Error {
  * Error thrown when a dependency mutation would create a circular dependency chain.
  */
 export class CircularDependencyError extends Error {
+  public readonly status = 409;
+  public readonly code = 'circular_dependency';
   public readonly taskId: string;
   public readonly depId: string;
   constructor(taskId: string, depId: string, taskTitle?: string, depTitle?: string) {
@@ -6145,6 +6163,8 @@ export function _mergesInFlightForTesting(): number {
  * the merge route answers 404 when nothing was merged, not 500 (r5 gate, L-29).
  */
 export class MergeTaskMissingError extends Error {
+  public readonly status = 404;
+  public readonly code = 'not_found';
   public readonly role: 'survivor' | 'victim';
   public readonly taskId: string;
   constructor(role: 'survivor' | 'victim', taskId: string) {

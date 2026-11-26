@@ -56,7 +56,7 @@ import { threadCounts, threadStateOf, threadsForHim } from '../../core/org/threa
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
-import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
 import { keepsThreads } from '../../core/org/keeps-threads.js'
 import { carriedRows, elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUpOn } from '../../core/org/thread-popup.js'
 import { oneIdOn } from '../../core/org/thread-one-id.js'
@@ -70,7 +70,7 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
     fn(req, res).catch((err: unknown) => {
       if (err instanceof RouteError) return sendError(res, err.status, err.code, err.message, err.extra)
       if (err instanceof ThreadError) return sendError(res, err.status, err.code, err.message)
-      if (sendLinkFailure(req, res, err)) return
+      if (sendOwnAnswer(req, res, err)) return
       sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err))
     })
   }
@@ -444,7 +444,8 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   if (mergeInto) delete patch.user_words
   // A merge removes this thread: anything else asked of it would be written and then lost.
   if (mergeInto && Object.keys(patch).length) {
-    throw new RouteError(400, 'bad_request', `merge_into goes alone (this thread is gone after the merge, so ${Object.keys(patch).join(', ')} would be lost): send { merge_into } by itself, then change ${mergeInto} with its own update.`)
+    // The same refusal as the op's own check (ops/org-threads.ts), under the same code.
+    throw new ThreadError('bad_input', 400, `merge_into goes alone (this thread is gone after the merge, so ${Object.keys(patch).join(', ')} would be lost): send { merge_into } by itself, then change ${mergeInto} with its own update.`)
   }
   let thread
   // A task's thread below: changed on its one record, where it lives.

@@ -16,7 +16,7 @@ import { Router, type Request, type Response } from 'express'
 import { followerName, isFollower } from '../../core/server-role.js'
 import { body, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error } from './v1-control-relay.js'
-import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
 import { ANSWER_BY_HEADER, parseAnswerBy } from '../../lib/answer-by.js'
 import { log } from '../../logging/index.js'
 
@@ -48,7 +48,7 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
 function fail(req: Request, res: Response, err: unknown): void {
   if (err instanceof RouteError) { sendV1Error(res, err.status, err.code, err.message); return }
   // A run tells the node, which can be a session on another host: a link that failed says so.
-  if (sendLinkFailure(req, res, err)) return
+  if (sendOwnAnswer(req, res, err)) return
   sendV1Error(res, 500, 'internal', err instanceof Error ? err.message : String(err))
 }
 

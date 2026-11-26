@@ -141,7 +141,8 @@ function codeOnly(text: string): string {
 /**
  * Every place a route answers 500 itself, besides the funnels: in the v1 error
  * vocabulary (`500, 'internal'`) anywhere, and any 500 in a file that talks to a host.
- * Each must first answer a link failure (`sendLinkFailure`, or hand it on), or be
+ * Each must first answer a link failure (`sendLinkFailure`, `sendOwnAnswer` which also answers
+ * a refusal with its own code, or hand it on), or be
  * listed here with why no host command can reach it.
  */
 const LOCAL_ONLY_500: Record<string, string> = {
@@ -180,7 +181,7 @@ describe('every route that answers 500 itself answers a link failure first', () 
       return file === site.file && site.line.includes(words)
     })
     if (exempt) return
-    expect(/sendLinkFailure\(|handsToAppErrorHandler\(/.test(site.before),
+    expect(/sendLinkFailure\(|sendOwnAnswer\(|handsToAppErrorHandler\(/.test(site.before),
       `${site.line}: answer a link failure first with sendLinkFailure(req, res, err), or list it in LOCAL_ONLY_500 with why no host command reaches it`).toBe(true)
   })
 
@@ -227,7 +228,7 @@ describe('every route that answers a caught error with a 5xx fallback answers a 
 
   it.each(sites.map((s) => [s.key, s]))('%s', (_key, site) => {
     if (exemptFor(site)) return
-    expect(/sendLinkFailure\(|handsToAppErrorHandler\(/.test(site.context),
+    expect(/sendLinkFailure\(|sendOwnAnswer\(|handsToAppErrorHandler\(/.test(site.context),
       `${site.line}: answer a link failure first with sendLinkFailure(req, res, err), or list it in NO_LINK_5XX_FALLBACK with why no host link failure reaches it`).toBe(true)
   })
 

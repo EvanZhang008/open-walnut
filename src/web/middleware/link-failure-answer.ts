@@ -27,6 +27,7 @@
 import type { Request, Response } from 'express'
 import { linkFailureKind, type LinkFailureKind } from '../../providers/link-failure.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { codedRefusalOf } from '../../lib/coded-refusal.js'
 import { log } from '../../logging/index.js'
 import { routeLogMessage } from '../../core/notifications/route-condition.js'
 
@@ -53,9 +54,13 @@ export function linkFailureAnswer(err: unknown, method = 'GET'): LinkFailureAnsw
   return { status: 504, code: 'host_no_answer', kind, message: `${words} The change may have gone through there; check before trying again.` }
 }
 
-/** True for an error a router's own funnel passes on (`next(err)`) for the app error handler to answer. */
+/**
+ * True for an error a router's own funnel passes on (`next(err)`) for the app error handler to
+ * answer: a needs-leader refusal, a host link failure, and a refusal with its own status and code
+ * (coded-refusal-answer.ts), which is never the funnel's 500.
+ */
 export function handsToAppErrorHandler(err: unknown): boolean {
-  return isNeedsLeaderError(err) || linkFailureKind(err) !== null
+  return isNeedsLeaderError(err) || linkFailureKind(err) !== null || codedRefusalOf(err) !== null
 }
 
 /** Answer a host link failure (true), or leave `err` to the caller (false). */
