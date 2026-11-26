@@ -223,7 +223,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     // `.sock.why` says so), and the forwarded scenario fails for that alone (the lead's 2026-11-26 run, 177 bytes).
     const deep = (['a', 'b', 'h'] as const).map((k) => leaderRelaySocketPath(w.daemons[k].dir, 'any')).filter((p) => Buffer.byteLength(p) > RELAY_SOCKET_MAX_BYTES)
     if (!c.add(`boot: the work dir is short enough for the leader relay's socket (${RELAY_SOCKET_MAX_BYTES} bytes at most)`, deep.length === 0,
-      deep.length ? `${Buffer.byteLength(deep[0]!)} bytes: ${deep[0]}; use a shorter work dir` : '')) return { checks: c, times, inProcessDaemon }
+      deep.length ? `${Buffer.byteLength(deep[0]!)} bytes: ${deep[0]}; use a shorter work dir` : '')) return { checks: c, times, inProcessDaemon, notes }
     if (want('flag-off')) await flagOff(c, w)
     // ---- boot: A leads on the three witnesses (init sets them up as an operator runs it) ----
     const started = await w.side(w.a).startServer('leader', 300_000)
@@ -1053,15 +1053,15 @@ async function everyWitnessHoldsLeader(x: Ctx, scenario: string, walnutId: strin
   const { c, w, roles } = x
   const L = roles.leader
   const ids = ['w-a', 'w-b', 'w-k'] as const
-  const read = () => ids.map((id) => recordAt(w.witnessRoot[id], walnutId, id))
+  const read = () => Promise.all(ids.map((id) => recordAt(w.witnessRoot[id], walnutId, id)))
   const same = (held: Held[]) => held.every((h) => h?.holder === L.id && h.kind !== 'handover' && h.nonce === held[0]?.nonce)
     && Math.max(...held.map((h) => h!.number)) - Math.min(...held.map((h) => h!.number)) <= 1
   // A witness back with a live record of another process of the leader (a restart, a failed trial) takes the grant only
   // once that record ran out there: up to its hold, then a renew round or two.
-  const params = readPermitParams(L)
+  const params = await readPermitParams(L)
   const within = witnessHoldMs(params) + 2 * params.renewEveryMs + 10_000
-  const ok = await waitFor(`every witness to hold ${L.id}`, async () => same(read()), within, 1_000).then(() => true).catch(() => false)
-  const held = read()
+  const ok = await waitFor(`every witness to hold ${L.id}`, async () => same(await read()), within, 1_000).then(() => true).catch(() => false)
+  const held = await read()
   c.add(`${scenario}: afterwards every witness holds ${L.id}'s own record (one process, within ${(within / 1000).toFixed(0)} s)`, ok,
     held.map((h, i) => `${ids[i]} #${h?.number} ${h?.kind} of ${h?.holder} by ${h?.by}/${h?.nonce}`).join('; '))
 }

@@ -868,7 +868,7 @@ export async function writeFiller(home: string, gb: number, log: (s: string) => 
 
 /** What is left of a machine's console (core/handed-over-console.ts): its console files and the console devices in its home's auth.json. */
 export function consoleLeft(m: Machine): { files: string[]; devices: string[] } {
-  const dir = consoleDirOfAccount(m.env.HOME ?? m.dir)
+  const dir = consoleDirOfAccount(m.env?.HOME ?? m.dir)
   const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith('.json') && !n.endsWith('.holder.json')) : []
   let devices: string[] = []
   try {
