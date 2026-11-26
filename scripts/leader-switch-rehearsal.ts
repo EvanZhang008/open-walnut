@@ -5,6 +5,8 @@
  *
  *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
  *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--in-process-daemon default|off] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote --real <host> --real-socket <ssh control socket> --real-root <folder there> [--real-evidence <dir>] [--keep-real-root] [the --remote flags]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote --real-fake <folder here> [--real-evidence <dir>] [--keep-real-root] [the --remote flags]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
@@ -24,8 +26,18 @@
  * the default configuration (each server runs its machine's daemon in its own process, experiment
  * `in_process_daemon`); `--in-process-daemon off` pins the daemon program of its own (the legacy shape).
  * The header and every TIME line name the setting.
+ * `--real <host>` is rehearsal (b) (leader-switch/real-world.ts): the same scenarios with machine B on that host, every
+ * link an ssh tunnel through the control socket of a master connection a person opened on the clouddev host
+ * (leader-switch/real/ssh-master.sh), B's root `--real-root` made fresh there and removed at the end
+ * (`--keep-real-root` keeps it; every process of the run there is ended either way). It runs only a clean tree whose
+ * commit is on trunk. `--real-fake <folder>` runs the same driver with B in `<folder>/b2b-real` on this computer (the
+ * driver's own test: no other machine, any commit). With `--real-confined` (only with `--real-fake`) it then lists every
+ * file of this computer created or changed during the run outside B's root and A's own places (the work dir, the
+ * evidence, the driver's HOME and TMPDIR, which must then be folders of their own): B's environment writes nothing
+ * outside its root, or the check fails naming what it wrote.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { rehearseConsole } from './leader-switch/console-rehearsal.js'
@@ -69,6 +81,7 @@ const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 
 if (has('--remote')) {
   const { rehearseRemote } = await import('./leader-switch/remote-rehearsal.js')
+  const real = await realWorld()
   const onlyAt = args.indexOf('--only')
   const ipdAt = args.indexOf('--in-process-daemon')
   const ipd = ipdAt >= 0 ? args[ipdAt + 1] : 'default'
@@ -76,9 +89,169 @@ if (has('--remote')) {
   const { inProcessDaemonLabel } = await import('./leader-switch/remote-world.js')
   // Every result of this run is under this setting: the header says it, and so does every measured line.
   console.log(`REMOTE  under ${inProcessDaemonLabel(ipd)}`)
-  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, inProcessDaemon: ipd, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}) })
+  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, inProcessDaemon: ipd, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}), ...(real ? { world: real.make, onWorld: real.onWorld } : {}) })
+  for (const n of r.notes) console.log(`NOTE  ${n}`)
   for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v} (under ${r.inProcessDaemon})`)
+  real?.after()
   finish()
+}
+
+/**
+ * `--real <host>` / `--real-fake <folder>`: rehearsal (b)'s world (real-world.ts), and what the run prints and checks
+ * of the other machine itself once it ended: its cleanup there, and its production processes before and after.
+ * A changed production process there, SIGINT or SIGTERM: the world is stopped (cleanup there first) and the run ends.
+ */
+async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehearsal.js').MakeWorld; onWorld: (w: import('./leader-switch/remote-world.js').RemoteWorld) => void; after: () => void } | null> {
+  const flag = (f: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined }
+  const host = flag('--real')
+  const fakeDir = flag('--real-fake')
+  if (!host && !fakeDir) return null
+  const { makeRealWorld, RealRefused } = await import('./leader-switch/real-world.js')
+  const { FakeTransport, SshTransport } = await import('./leader-switch/transport.js')
+  const repo = path.resolve(import.meta.dirname, '..')
+  const git = (a: string[]) => { try { return execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim() } catch { return '' } }
+  const commit = git(['rev-parse', 'HEAD'])
+  let transport
+  let bRoot: string
+  if (host) {
+    // The other machine runs only a commit that is on trunk, from a clean tree.
+    const dirty = git(['status', '--porcelain', '--untracked-files=no'])
+    const onTrunk = (() => { try { execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', commit, 'refs/trunk/main']); return true } catch { return false } })()
+    if (dirty || !onTrunk) { console.error(`--real: refused: the commit ${commit} ${dirty ? 'has a changed tree' : 'is not on trunk (refs/trunk/main)'}; the other machine runs only a landed commit`); process.exit(2) }
+    const socket = flag('--real-socket')
+    bRoot = flag('--real-root') ?? ''
+    if (!socket || !bRoot) { console.error('--real <host> needs --real-socket <the master\'s control socket> and --real-root <the folder there>'); process.exit(2) }
+    const ssh = new SshTransport({ host, socket })
+    const up = await ssh.check()
+    if (!up.ok) { console.error(`--real: no ssh master for ${host} at ${socket} (${up.why}). On the clouddev host: sh scripts/leader-switch/real/ssh-master.sh open ${host} ${socket}`); process.exit(2) }
+    transport = ssh
+  } else {
+    bRoot = path.join(path.resolve(fakeDir!), 'b2b-real')
+    transport = new FakeTransport()
+  }
+  // The other machine's own evidence (its preflight, process snapshots, the agent's log, the cleanup's output): a
+  // folder that outlives the dev container (`--real-evidence`), else beside the run.
+  const evidence = path.resolve(flag('--real-evidence') ?? path.join(work, 'real'), path.basename(work))
+  console.log(`REAL  B on ${transport.label}, its root ${bRoot}; commit ${commit}${host ? ' (on trunk)' : ' (the driver\'s own test: any commit)'}; (b) did not use way c: after w-b's one-time setup over a setup-only link, A reaches w-b only through its door; evidence ${evidence}`)
+  // `--real-confined`: the time before anything of B starts, and A's own places (each a folder of its own).
+  const confined = has('--real-confined')
+  const marker = path.join(work, 'confined-since')
+  const aPlaces = [path.resolve(work), evidence, path.resolve(process.env.HOME ?? '/'), path.resolve(os.tmpdir())]
+  if (confined) {
+    if (host) { console.error('--real-confined runs only with --real-fake (it lists the files of this computer)'); process.exit(2) }
+    const shallow = aPlaces.filter((p) => p.split('/').filter(Boolean).length < 2)
+    if (shallow.length) { console.error(`--real-confined: HOME and TMPDIR must be folders of their own for this run (not ${shallow.join(', ')}): set them, e.g. HOME=/tmp/rb-a-home TMPDIR=/tmp/rb-a-tmp`); process.exit(2) }
+    fs.writeFileSync(marker, '')
+  }
+  // `--real-confined`: this driver's own children (the companion, the TLS fronts' helpers: A's side, which in (b)
+  // runs in the dev container), every few seconds, to tell their lines in a machine-wide file from B's.
+  const aChildren = new Map<number, string>()
+  const childTimer = confined ? setInterval(() => {
+    for (const d of (() => { try { return fs.readdirSync('/proc') } catch { return [] } })()) {
+      if (!/^\d+$/.test(d) || aChildren.has(Number(d))) continue
+      try {
+        const stat = fs.readFileSync(`/proc/${d}/stat`, 'utf8')
+        if (Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) === process.pid) aChildren.set(Number(d), fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').split('\0').join(' ').slice(0, 160))
+      } catch { /* gone */ }
+    }
+  }, 2_000) : null
+  childTimer?.unref()
+  let world: Awaited<ReturnType<typeof makeRealWorld>> | null = null
+  // Until the world is built, what ends the run on the other machine (its cleanup), once its root is made.
+  let stopThere: (() => Promise<void>) | null = null
+  let ending = false
+  const abort = async (why: string, code: number) => {
+    if (ending) return
+    ending = true
+    console.log(`ABORT  ${why}: stopping the world (cleanup there first)`)
+    failed++
+    await Promise.race([world ? world.stop() : stopThere?.(), new Promise((r) => setTimeout(r, 300_000))]).catch(() => {})
+    const out = (() => { try { return fs.readFileSync(path.join(evidence, 'cleanup.txt'), 'utf8') } catch { return 'none ran (nothing was made there)' } })()
+    console.log(`REAL  cleanup there:\n${out.trim()}`)
+    makeWritable(work)
+    process.exit(code)
+  }
+  process.on('SIGINT', () => { void abort('SIGINT', 130) })
+  process.on('SIGTERM', () => { void abort('SIGTERM', 143) })
+  return {
+    make: async (root, o) => {
+      try {
+        world = await makeRealWorld(root, { ...o, transport, bRoot, evidence, fillerGb: gb, keepRoot: has('--keep-real-root'),
+          ...(host ? {} : { notProduction: [repo, path.resolve(work)] }),
+          onStop: (stop) => { stopThere = stop },
+          onProductionChange: (why) => { void abort(why, 3) } })
+        return world
+      } catch (err) {
+        if (err instanceof RealRefused) { console.log(`FAIL  real: the other machine allows the run  (${err.message})`); failed++; finish() }
+        throw err
+      }
+    },
+    onWorld: () => {},
+    after: () => {
+      if (!world) return
+      const out = world.cleanupOut()
+      print({ name: `real: the cleanup on ${transport.label} ended every process of the run there by pid${has('--keep-real-root') ? '' : ' and removed its root'}`, ok: /\[exit 0\]\s*$/.test(out), detail: out.trim().split('\n').filter((l) => /^(TERM|KILL|LEFT|cleanup:)/.test(l)).slice(-6).join(' | ') })
+      if (!host) {
+        const hits = world.localAccess()
+        print({ name: 'real-fake: the driver never read or wrote a file of B itself (each one through the agent, as over ssh)', ok: hits.length === 0, detail: hits.length ? hits.slice(0, 3).join(' | ') : 'none' })
+      }
+      const l = world.listeners()
+      print({ name: `real: every port the run's processes on ${transport.label} listened on was on its loopback`, ok: l.samples > 0 && l.open.length === 0, detail: `${l.samples} sample(s), ${l.seen} port(s)${l.open.length ? `; not on loopback: ${l.open.slice(0, 4).join('; ')}` : ''}` })
+      const diff = (() => { try { return fs.readFileSync(path.join(evidence, 'procs-diff.txt'), 'utf8').trim() } catch { return 'no snapshot after' } })()
+      print({ name: `real: ${transport.label}'s production processes are the same before and after the run`, ok: diff === '(the same)', detail: diff.split('\n').slice(0, 6).join(' | ') })
+      if (confined) {
+        // Every file (not a folder: a folder's time moves with what is made or removed in it) created or changed
+        // since the marker, outside B's root and A's places (and /proc, /sys, /dev), each place by every name it has
+        // here (this account's home is mounted as /home/<user> and /local/home/<user>). The places other sessions
+        // write too (the repo's shared git dir, this task's folder, the account's real home) are listed apart, not counted.
+        const aliases = (p: string): string[] => {
+          const r = (() => { try { return fs.realpathSync(p) } catch { return p } })()
+          return [...new Set([p, r].flatMap((x) => [x, x.startsWith('/local/home/') ? x.slice('/local'.length) : x.startsWith('/home/') ? `/local${x}` : x]))]
+        }
+        const skip = [...new Set(['/proc', '/sys', '/dev', bRoot, ...aPlaces].flatMap(aliases))]
+        // The folder of the evidence folder's task (<task>/evidence/<topic>/<run>): the task's other sessions write there.
+        const taskDir = (() => { const e = flag('--real-evidence'); const d = e ? path.dirname(path.dirname(path.dirname(path.resolve(e)))) : ''; return d.split('/').filter(Boolean).length >= 3 ? d : '' })()
+        // The driver's own checkout too: B runs its staged copy, so a file there is A's or another session's.
+        // The account's real home (from its user record: Bun's os.userInfo() follows $HOME, and no process of B has
+        // it as HOME), which every dev container of this account shares (their npm logs, the Playwright cache).
+        const accountHome = (() => { try { return execFileSync('getent', ['passwd', String(process.getuid?.() ?? '')], { encoding: 'utf8' }).split(':')[5]!.trim() } catch { return '' } })()
+        const shared = [...new Set([repo, ...(accountHome ? [accountHome] : []), (() => { const d = git(['rev-parse', '--git-common-dir']); return d ? path.resolve(repo, d) : '' })(), taskDir].filter(Boolean).flatMap(aliases))]
+        const prune = [...skip, ...shared].flatMap((p, i) => [...(i ? ['-o'] : []), '-path', p])
+        const sharedPrune = skip.flatMap((p, i) => [...(i ? ['-o'] : []), '-path', p])
+        const list = (roots: string[], pr: string[]) => {
+          let out = ''
+          try { out = execFileSync('find', [...roots, '(', ...pr, ')', '-prune', '-o', '!', '-type', 'd', '-newer', marker, '-print'], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] }) } catch (err) { out = String((err as { stdout?: string }).stdout ?? '') }
+          return out.split('\n').filter(Boolean)
+        }
+        if (childTimer) clearInterval(childTimer)
+        // The machine-wide exit trace (/tmp/open-walnut-exit.log, server.ts exitTraceFile): A's when every line's
+        // pid is a child of this driver (in (b) it is the dev container's own /tmp), else B's.
+        const exitTrace = '/tmp/open-walnut-exit.log'
+        const traceOf = (f: string) => f === exitTrace ? (() => { const pids = [...(fs.readFileSync(f, 'utf8').matchAll(/ pid=(\d+)/g))].map((m) => Number(m[1])); return { pids, mine: pids.length > 0 && pids.every((p) => aChildren.has(p)) } })() : null
+        const ofA: string[] = []
+        const found = list(['/'], prune).filter((f) => {
+          const t = (() => { try { return traceOf(f) } catch { return null } })()
+          if (!t?.mine) return true
+          ofA.push(`${f}: pid(s) ${t.pids.map((p) => `${p} (${aChildren.get(p)})`).join(', ')}, each a child of this driver`)
+          return false
+        })
+        for (const l of ofA) console.log(`OF-A  ${l}`)
+        fs.writeFileSync(path.join(evidence, 'confined-of-a.txt'), `${ofA.join('\n')}\n`)
+        const onShared = list(shared.filter((p) => fs.existsSync(p)), sharedPrune)
+        // Who wrote it: each one's first and last lines (a small file), for the record.
+        const heads = found.map((f) => {
+          let body = ''
+          try { const st = fs.statSync(f); body = st.isFile() && st.size <= 256 << 10 ? (() => { const l = fs.readFileSync(f, 'utf8').split('\n'); return [...l.slice(0, 5), ...(l.length > 10 ? ['...'] : []), ...l.slice(Math.max(5, l.length - 5))].join('\n') })() : `(${st.size} bytes)` } catch (err) { body = `(${err instanceof Error ? err.message : String(err)})` }
+          return `== ${f}\n${body}`
+        })
+        fs.writeFileSync(path.join(evidence, 'confined-outside.txt'), `${found.join('\n')}\n${heads.length ? `\n${heads.join('\n')}\n` : ''}`)
+        fs.writeFileSync(path.join(evidence, 'confined-shared.txt'), `${onShared.join('\n')}\n`)
+        for (const f of found.slice(0, 50)) console.log(`OUTSIDE  ${f}`)
+        for (const f of onShared.slice(0, 20)) console.log(`SHARED  ${f}`)
+        print({ name: `real-fake: no file was written outside B's root (${bRoot}) and A's own places during the run`, ok: found.length === 0, detail: `${found.length} file(s) outside (left out: ${skip.join(', ')}); list in ${path.join(evidence, 'confined-outside.txt')}; ${onShared.length} on places other sessions write too (${shared.join(', ')}), in confined-shared.txt` })
+      }
+    },
+  }
 }
 
 const main = !has('--kills') && !has('--stops') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--paths') && !has('--console')

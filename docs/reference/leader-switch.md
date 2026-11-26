@@ -1494,6 +1494,52 @@ the shape before the experiment's default). The header and every `TIME` line nam
 (`under in_process_daemon=...`). A link to a machine's daemon dials the port in that machine's
 `daemon.port` at each connect, as a leader's tunnel does: in process the port moves with each holder.
 
+**Rehearsal (b): B on another computer.** `--remote --real <host> --real-socket <socket> --real-root <folder there>`
+runs the same scenarios (one code path: the world is an interface, `RemoteWorld` in
+`scripts/leader-switch/remote-world.ts`, with machine B on this computer in (a) and on `<host>` in (b),
+`scripts/leader-switch/real-world.ts`) with only synthetic homes. A, H and the companion stay in the dev container;
+B's processes run on the other machine through an agent (`scripts/leader-switch/machine-agent.ts`) the driver starts
+there over one ssh channel, and every read of B's files (`readTargetState`, `readMayAct`, `readMarker`,
+`snapshotHome`, the server log, `sessions.json`, the CLI transcripts, `/proc/<pid>/environ`, the leader relay socket,
+git) runs there, through the same operations (`scripts/leader-switch/machine-ops.ts`) rehearsal (a) runs in its own
+process: a path names its machine (`machine-io.ts` `ioAt`). Every link between the two machines is an ssh tunnel at
+the same port on both ends (`transport.ts`), and every cut or slowdown is the same proxy on the clouddev end. The ssh
+connection is ONE master a person opens on the clouddev host with the account's own key and known_hosts
+(`scripts/leader-switch/real/ssh-master.sh open`, `StrictHostKeyChecking=yes`: a host whose key is not there stops it,
+and nothing ever adds one); the driver's clients only use its control socket (`ProxyCommand=/bin/false`: a client that
+finds no master fails instead of connecting). On the other machine it first reads its load, memory and disk
+(`real/preflight.sh`): no run when the load is not below its core count, under 3 GiB of memory is available, or the
+disk has less than 3 times the data (3 GiB for the small-data scenarios); `--gb N` asks for 3 x (3 + 2N) GiB, and
+without it the run goes on with no filler and says so (`NOTE`). It makes a fresh owner-only root
+(`real/make-root.sh`), stages the commit's tree, its build and packages and this Bun there, and runs only a clean
+tree whose commit is on trunk (the header prints it). A production process of that machine that changes during the
+run (`real/snapshot.sh`, every minute) ends the run at once, cleanup first. The cleanup (`real/cleanup.sh`, at every
+end and on SIGINT or SIGTERM) ends the run's processes there by pid only: a process of this account whose cwd or
+program is under the root and that started after the root was made; any other pid is printed and left alone; then
+it removes the root and compares the machine's processes with the snapshot from before. (b) does not use way c: A
+reaches w-b only through its door, as a real deployment does; rehearsal (a) still covers way c. One exception, the
+setup: a host replica's witness has no setup route on its door (above), so `witnesses init` sets w-b up over a
+setup-only link to its machine (the leader door of a host's service over w-b's root, run by the agent there, the
+stand-in of the leader's daemon link a real deployment sets it up over), which the world closes right after
+(`endSetupLink`): every permit round after that reaches w-b through its door. A rehearsal machine's server
+(`machine-server.ts`) also keeps its exit trace in its own daemon dir: a server appends it to
+`/tmp/open-walnut-exit.log` whenever the account's production daemon dir is `/tmp/open-walnut`, even with its own
+`WALNUT_DAEMON_DIR` (`exitTraceFile`), which on the other machine is its real service's exit log. `--real-fake
+<folder>` runs the whole driver against a folder of this computer instead (the fake transport: a local shell, the
+same loopback), and `--real-confined` then lists every file (not folder) written outside B's root and A's own places
+during the run, and apart from them the ones on places other sessions write too (the repo's git dir, the task's
+evidence folder).
+
+**The relay socket's path limit.** The leader relay's socket is `<daemon dir>/leader-relay/<16 hex>.sock`, 35 bytes
+after the daemon dir, and a host service takes no socket path over 103 bytes (a unix socket's `sun_path` on macOS, the
+one limit on every platform: `src/replica/leader-relay-entry.ts`), so a daemon dir longer than 68 bytes cannot carry
+it. The service then serves no relay, logs why once and writes it beside the socket (`<socket>.why`: "the socket path
+is N bytes, more than a unix socket takes (103): the daemon dir is too deep"), and the command on that machine reports
+that instead of "no relay socket". When it is hit, give that machine's daemon a shorter dir (`WALNUT_DAEMON_DIR`; in a
+rehearsal, a shorter work dir or root): rehearsal (b)'s daemon dir is `<root>/machine/daemon`, with
+a root of 29 bytes (`/local/home/<user>/b2b-real` for an 8-letter user) a socket path of 79 bytes. The ssh control socket of rehearsal (b) has its own limit:
+`real/ssh-master.sh` takes one of at most 90 bytes (ssh adds 17 while it makes it, and Linux takes 107).
+
 ## Witnesses on other machines
 
 A witness entry is `{ id, dir }` (a directory on this computer) or a witness kept by a machine,
@@ -1821,9 +1867,9 @@ witness, above).
   the command on that machine reports it. Use a shorter daemon dir (`WALNUT_DAEMON_DIR`; in the rehearsal a short work
   dir such as `/tmp/x`, since one under a task folder gives a 187-byte path).
 - **The copy link to another machine** is [built](#the-copy-link-to-another-machine) and rehearsed on one computer with
-  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)): it needs a
-  driver that starts the second machine's daemon, witness service and home on the other box over the account's existing ssh,
-  puts a tunnel where each loopback proxy is, and reads that machine's files over ssh for the checks. The old leader's
+  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes. Rehearsal (b)'s driver is
+  built (`--remote --real <host>`) and tested only against a folder of this computer (`--real-fake`); its first run on
+  the other box waits for the lead's approval of its command list. The old leader's
   own sessions follow by their host key ([Paths](#paths), where a session runs); a subagent run's or a detached record's host
   is not moved.
 - **The command on the machine that will lead** is [built](#running-the-command-on-either-machine) and rehearsed with real
