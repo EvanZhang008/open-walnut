@@ -964,6 +964,31 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     fs.writeFileSync(path.join(unit, 'RecorderTests.swift'), 'final class RecorderTests: XCTestCase {\n  func testIt() { _ = try? AVAudioRecorder(url: u, settings: [:]) }\n}\n')
     expect(why('unit')).toBe('RecorderTests starts audio hardware (AVAudioRecorder)')
     expect(why('unit', '-only-testing:WalnutTests/RepoTests')).toBe('')
+    // 2026-11-26: a reply test recorded through the letter's mic on a Mac where a person sat; its
+    // class and test names said nothing of voice. A UI test that TAPS a mic control counts, through
+    // a helper of any file (a nested function inside it too), at the mic's frame as well; one that
+    // only reads where the mic sits does not, and skipping the tapping tests leaves none.
+    fs.writeFileSync(path.join(ui, 'ReplyUITests.swift'), [
+      'final class ReplyUITests: XCTestCase {',
+      '  func testTakeGivenUp() async throws { try await discard(app, mic: "inbox.letter.mic") }',
+      '  func testPillWidth() { XCTAssertLessThan(pill.frame.maxX, app.buttons["chat.mic"].frame.minX, "runs into the mic") }',
+      '  func testSlowPull() { app.buttons["inbox.send"].tap() } // not the mic: .tap() of "chat.mic"',
+      '  func testTapBesideTheField() { let micFrame = element(app, "chat.mic").frame; origin.withOffset(CGVector(dx: micFrame.midX, dy: micFrame.midY)).tap() }',
+      '  private func discard(_ app: XCUIApplication, mic: String) async throws {',
+      '    func left() -> String { "(no sentence)" }',
+      '    try await speak(app, mic: mic)',
+      '  }',
+      '}',
+    ].join('\n'))
+    fs.writeFileSync(path.join(ui, 'SharedSteps.swift'),
+      'extension XCTestCase {\n  func speak(_ app: XCUIApplication, mic: String) async throws {\n    let mic = app.buttons[mic]\n    mic.tap()\n  }\n}\n')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests/testTakeGivenUp')).toBe('it runs ReplyUITests/testTakeGivenUp, which taps the microphone')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests/testTapBesideTheField')).toBe('it runs ReplyUITests/testTapBesideTheField, which taps the microphone')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests/testPillWidth')).toBe('')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests/testSlowPull')).toBe('')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests')).toContain('which taps the microphone')
+    expect(why('ui', '-only-testing:WalnutUITests/ReplyUITests', '-skip-testing:WalnutUITests/ReplyUITests/testTakeGivenUp',
+      '-skip-testing:WalnutUITests/ReplyUITests/testTapBesideTheField')).toBe('')
     // A command is judged by the tests it names, else by its own words.
     expect(why('run', 'xcodebuild', 'test', '-only-testing:WalnutUITests/VoiceDictationUITests')).toContain('VoiceDictationUITests')
     expect(why('run', 'bash', 'tests/voice/record.sh')).toBe('its command names "voice"')
