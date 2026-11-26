@@ -32,6 +32,9 @@ import { isApprovalId, loadToken, removeToken, saveToken, sha256Hex, sweepTokens
 
 export const APPROVE_EXIT = { approved: 0, denied: 1, timeout: 2, error: 3, pending: 4, interrupted: 130 } as const
 
+/** The words a held refusal carries (held-asks.ts HELD_MARK; kept here so the host CLI imports no store). */
+export const HELD_MARK = 'Walnut holds this ask'
+
 export interface OpCallResult {
   ok: boolean
   result?: unknown
@@ -294,6 +297,15 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     })
     const asked = approvalOf(created)
     const tok = ((created.result ?? {}) as { waitToken?: string }).waitToken
+    if (!created.ok && created.message?.includes(HELD_MARK)) {
+      // Not now (the person is away, or another single-use ask is on his devices): Walnut holds it
+      // and tells this session when to take the step again (held-asks.ts). Asked, not answered: 4.
+      io.say(`walnut approve: not asked yet: ${created.message}`)
+      // No approval id (nothing was asked): a --json reader tells it from --request-only's by its status.
+      const heldId = /\((held-[\w-]+)\)/.exec(created.message)?.[1]
+      if (args.json) io.out(JSON.stringify({ status: 'held', ...(heldId ? { held: heldId } : {}) }))
+      return APPROVE_EXIT.pending
+    }
     if (!created.ok || !asked || !tok) {
       io.say(`walnut approve: could not ask for approval: ${created.message ?? 'no answer from Walnut'}`)
       return APPROVE_EXIT.error

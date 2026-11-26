@@ -118,6 +118,9 @@ export async function resetHostFixture(): Promise<string[]> {
 }
 
 type Body = Record<string, unknown>
+
+/** What the held-approval sweep told the asking tasks on this fixture server (it runs no task session). */
+const fixtureTells: unknown[] = []
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 
 class FixtureError extends Error {
@@ -268,15 +271,24 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
       })
       // A dialog fixture: its specs show several at once with nobody in a chat (single-use-fence.ts).
+      // `fenced`: asked as the Git gate asks, through the fence (held while the person is away).
       const { _unfencedForFixture } = await import('../../core/approvals/single-use-fence.js')
-      const made = await _unfencedForFixture(() => createApproval({
+      const make = () => createApproval({
         what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context, detailRole: 'technical',
         singleUse: true, outsideSwitch: true,
         requester: {
           host: str(body.host) ?? 'this computer', local: !str(body.host), taskId: str(body.taskId) ?? 't-fixture',
-          taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: 's-fixture', cwd: repository, command, identity: 'verified',
+          taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: str(body.sessionId) ?? 's-fixture', cwd: repository, command, identity: 'verified',
         },
-      }))
+      })
+      if (body.fenced === true) {
+        const { ApprovalError } = await import('../../core/approvals/store.js')
+        try { return await make() } catch (err) {
+          if (err instanceof ApprovalError) return { refused: { code: err.code, message: err.message } }
+          throw err
+        }
+      }
+      const made = await _unfencedForFixture(make)
       // The summary Walnut writes for it (summary.ts), arriving after the dialog first shows, as a model's would.
       const summary = str(body.summary)
       if (summary) {
@@ -285,6 +297,26 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
         t.unref?.()
       }
       return made
+    }
+    case 'held-approval': {
+      // Held single-use asks (held-asks.ts): the person away or back, and the sweep run now, its
+      // tells recorded here instead of a task session the fixture does not run.
+      const { _setFenceDepsForTest } = await import('../../core/approvals/single-use-fence.js')
+      const held = await import('../../core/approvals/held-asks.js')
+      const { heldSweepDeps } = await import('../../core/approvals/store.js')
+      const op = str(body.op)
+      if (op === 'away' || op === 'present') {
+        const at = op === 'away' ? Date.now() - 2 * 60 * 60_000 : null
+        _setFenceDepsForTest({ activity: async () => ({ lastSeenAt: at ?? Date.now(), streaming: false }) })
+        held.setHeldSweepDeps(heldSweepDeps(async (t) => { fixtureTells.push(t); return true }))
+        return { ok: true }
+      }
+      if (op === 'real') { _setFenceDepsForTest(null); held.setHeldSweepDeps(heldSweepDeps()); fixtureTells.length = 0; return { ok: true } }
+      if (op === 'sweep') return { told: await held.sweepHeld() }
+      if (op === 'list') return { held: await held.listHeld({ all: true }), told: fixtureTells }
+      // A spec starts with nothing held (an earlier attempt's record would be released first).
+      if (op === 'clear') { await held._clearHeldForFixture(); fixtureTells.length = 0; return { ok: true } }
+      throw new FixtureError(400, 'held-approval op is away, present, real, sweep, list or clear')
     }
     case 'advance-clock': {
       advanceFixtureClock(typeof body.ms === 'number' ? body.ms : 0)

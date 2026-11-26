@@ -169,7 +169,7 @@ walnut recall "auth fixture"               # search tasks + memory
 walnut projects                            # projects with task counts
 walnut sessions                            # the user's other running work
 walnut wait 9f3a --timeout 600             # block until a task settles or an rq-… request resolves
-walnut approve "Deploy to prod"            # block until the USER approves on a device they are signed in on: exit 0 yes, 1 no, 2 no answer
+walnut approve "Deploy to prod"            # block until the USER approves on a device they are signed in on: exit 0 yes, 1 no, 2 no answer, 4 held until they are back
 walnut pass run --purpose "run the billing tests" --env STRIPE_API_KEY -- npm test
                                            # a command gets a vault secret as an env var, masked in its output
 walnut mcp list                            # MCP servers Walnut runs for its plugins

@@ -30,7 +30,7 @@ vi.mock('../../../src/core/session-tracker.js', () => ({
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { answerApproval, cancelApproval, createApproval, getApproval, noteAskerRead, sweepExpired, waitApproval, _resetApprovalTimersForTesting } from '../../../src/core/approvals/store.js'
-import { _resetToldForTesting, askerNoticeFor, rearmAskerNotices, tellAsker } from '../../../src/core/approvals/tell-asker.js'
+import { _resetToldForTesting, askerNoticeFor, rearmAskerNotices, tellAsker, tellHeldAsker } from '../../../src/core/approvals/tell-asker.js'
 
 const requester = { host: 'clouddev', sessionId: 'sess-asker', taskId: 'task-asker', command: 'git push origin main' }
 
@@ -183,6 +183,37 @@ describe('nobody is told twice, or about their own withdrawal', () => {
 
   it('an approval with no session or task behind it (a person\'s own script)', () => {
     expect(askerNoticeFor({ id: 'apr-1', what: 'x', status: 'approved', requester: { host: 'mac' } })).toBeNull()
+  })
+})
+
+describe('a held ask\'s task hears when to ask again, or that it lapsed (held-asks.ts)', () => {
+  const held = {
+    id: 'held-1', what: 'Push the release', requester, reason: 'user_away' as const, state: 'released' as const,
+    heldAt: '2026-11-25T08:00:00Z', until: '2026-11-26T08:00:00Z', releases: 1,
+  }
+
+  it('its asking session, woken from a wait it parked on the ask', async () => {
+    expect(await tellHeldAsker({ kind: 'release', held })).toBe(true)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].sid).toBe('sess-asker')
+    expect(sent[0].text).toContain('outcome="ask_again"')
+    expect(sent[0].text).toContain('git push origin main')
+    expect(sent[0].opts).toMatchObject({ source: 'walnut-notify', taskId: 'task-asker', endsWait: true })
+  })
+
+  it('the task\'s live session when the asking one is gone; nobody for a closed task', async () => {
+    const gone = { host: 'clouddev', sessionId: 'sess-gone', taskId: 'task-replaced' }
+    expect(await tellHeldAsker({ kind: 'lapse', held: { ...held, requester: gone, state: 'lapsed' as const, lapsedWhy: 'deadline' as const } })).toBe(true)
+    expect(sent.map((s) => [s.sid, /outcome="(\w+)"/.exec(s.text)?.[1]])).toEqual([['sess-new', 'lapsed']])
+    phases['task-asker'] = 'COMPLETE'
+    expect(await tellHeldAsker({ kind: 'release', held })).toBe(false)
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a send that fails throws (the sweep holds it again), never reads as "no session"', async () => {
+    const { sendMessageToSession } = await import('../../../src/core/session-message-queue.js')
+    vi.mocked(sendMessageToSession).mockRejectedValueOnce(new Error('queue refused'))
+    await expect(tellHeldAsker({ kind: 'release', held })).rejects.toThrow('queue refused')
   })
 })
 

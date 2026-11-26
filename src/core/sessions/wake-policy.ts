@@ -76,6 +76,8 @@ export const NOTICE_WAKES: Readonly<Record<string, string>> = {
   approved: 'the user approved what the session waits on: it goes on',
   denied: 'the user refused what the session waits on: it must take another way',
   expired: 'an approval the session waits on expired: it must ask again or stop',
+  ask_again: 'the user is back and the approval Walnut held for him while he was away may be asked now: the session takes its step again',
+  lapsed: 'an approval Walnut held while the user was away ended unasked: the session asks again or reports it waits on him',
   check_failed: 'the session\'s own trigger check fails: only its owner can fix the script',
   check_failing: 'the session\'s own trigger check keeps failing: only its owner can fix the script',
   check_repaired: 'the session\'s own trigger check broke its output contract and the daemon repaired it: only its owner can fix the script (told at most once a day, trigger-health.ts)',

@@ -51,13 +51,14 @@ describe('single-use fence', () => {
     expect(await code(ask('t-d'))).toBe('biometric_pending')
   })
 
-  it('a second task asking while one is pending is refused, naming the first; nothing is recorded', async () => {
+  it('a second task asking while one is pending is refused, naming the first; nothing is recorded, its ask is held', async () => {
     const a = await ask('t-a', URL_A)
     const err = await ask('t-b', URL_A_OTHER_REPO).then(() => null, (e: ApprovalError) => e)
     expect(err?.code).toBe('biometric_pending')
     expect(err?.message).toContain(a.approval.id)
     expect(err?.message).toContain('t-a')
-    expect(err?.message).toContain('Do not ask again by yourself')
+    // Held until the first one ended (held-asks.ts), never "do not ask again" with nobody asking.
+    expect(err?.message).toContain('Walnut holds this ask')
     expect((await listApprovals()).map((x) => x.id)).toEqual([a.approval.id])
   })
 
@@ -158,5 +159,18 @@ describe('single-use fence on the real activity of the person (org/user-away.ts)
     expect((await userActivityAnywhere([{ claudeSessionId: 's1', chatInputAt: new Date(1_000).toISOString() }], 5_000)).lastSeenAt).toBe(3_000)
     expect((await userActivityAnywhere([{ claudeSessionId: 's1', chatInputAt: new Date(4_000).toISOString() }], 5_000)).lastSeenAt).toBe(4_000)
     _resetUserAwayForTest()
+  })
+
+  it('the phone app open on a tab with no task (Inbox, Home) is the person seen; no node\'s own chat counts it', async () => {
+    const { startUserAway, stopUserAway, userActivityAnywhere, userInTaskChat } = await import('../../../src/core/org/user-away.js')
+    const { bus, EventNames } = await import('../../../src/core/event-bus.js')
+    startUserAway()
+    try {
+      const ts = new Date(Date.now() - 60_000).toISOString()
+      bus.emit(EventNames.TIME_BANKED, { records: [{ ts, durationMs: 60_000, kind: 'triage', source: 'ios' }] }, [], { source: 'time-tracking' })
+      const seen = await userActivityAnywhere([])
+      expect(seen.lastSeenAt).toBe(Date.parse(ts) + 60_000)
+      expect(await userInTaskChat('t-node', [], 10 * 60_000)).toBe(false)
+    } finally { stopUserAway() }
   })
 })

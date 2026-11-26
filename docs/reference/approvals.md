@@ -14,7 +14,7 @@ walnut approve "Publish v2.3.0 to npm" --timeout 30m || exit 1
 | 1 | denied, or its answer was already used |
 | 2 | nobody answered before `--timeout` (default 10 minutes), or it was withdrawn |
 | 3 | it could not ask (bad usage, Walnut not reachable) |
-| 4 | `--request-only`: asked, not answered yet (below) |
+| 4 | `--request-only`: asked, not answered yet (below); or a single-use ask Walnut holds until the person is back ("Walnut holds this ask", on stderr; its session is told when to take the step again, below) |
 | 130 | the script was stopped (Ctrl-C); the request is withdrawn on every device |
 
 Options: `--timeout 90s|10m|2h` (10 seconds to 24 hours), `--detail <file>` (`-` reads stdin; up
@@ -276,6 +276,32 @@ expiry under its file lock. Success returns `{approval, used:true}` and durably 
 Every later consume is `409 approval_used`, including a retry within a second. A lost response is
 not permission to run: ask again. Deny, timeout, an answer the switch gave instead of a person, and
 mismatches never grant a use.
+
+#### Only to a person who is there, and held until he is back
+
+A single-use ask rings every device the person is signed in on, so only one is out at a time and
+only while he is there: he did something in Walnut in the last 10 minutes (typed in a chat, or a
+window or the phone app reported attention, on any screen, the phone's Inbox tab too) or a phone
+streams a session; after one ended unanswered, he must have done something since
+(`src/core/approvals/single-use-fence.ts`). An ask that fails that, or finds 20 asks already
+waiting, is refused with nothing sent (`user_away`, `presence_unknown`, `unanswered_retry`,
+`biometric_pending`, `too_many_pending`), and since 2026-11-25 it is not dropped: Walnut holds it
+(`src/core/approvals/held-asks.ts`, `held.json` beside the approvals) and the refusal says
+"Walnut holds this ask (held-…)"; a newer `walnut approve` exits 4 on it, with no approval id
+(`--json` prints `{"status":"held","held":"held-…"}`; an older one exits 3 and prints the same
+words). Once a fresh ask of it would be let through (the sweep makes createApproval's own checks:
+he is back, the other ask ended, the cap has room), the oldest held ask is released: its task's
+session gets one notice (`ask_again`) to take the step again, and for 10 minutes the fence keeps
+his devices for that ask, so it goes to him, one tap. One at a time; one held ask per step of a
+task (the command and folder it runs, else its line: asking again finds it, a new commit's line
+takes its place); at most 3 per task and 20 in all; a release whose ask is refused again waits
+again, and after 3 releases it ends. A held ask lapses after 72 hours
+(`WALNUT_APPROVAL_HOLD_HOURS`): it is void, its task is told (`lapsed`) to report that the step
+waits for his approval, and the same step is not held again for another 72 hours (unless it was
+released: he did come back). A task told nothing is a closed one, so an asker keeps its task open
+while its ask is held. Never held, and dropped when held: a step the person denied, or one that
+reached him twice and got no answer, within 72 hours and since he last approved that step; a
+second ask of a step already on his devices.
 
 This step guards scripts that call it. It does not prevent a process from deleting the call,
 rewriting user-owned code or using credentials it already holds. Strong enforcement of a Git

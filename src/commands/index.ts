@@ -69,7 +69,7 @@ export function registerCommands(program: Command): void {
 
   program
     .command('approve [what...]')
-    .description('Ask a person to approve before going on: exit 0 on Approve, 1 on Deny, 2 when nobody answers in time, 4 when asked with --request-only')
+    .description('Ask a person to approve before going on: exit 0 on Approve, 1 on Deny, 2 when nobody answers in time, 4 when asked with --request-only or held until the person is back')
     // An older script's flags, kept so it still runs: every approval is a tap on any device the person is signed in on.
     .option('--biometric', 'No effect (any device you are signed in on approves with a tap)')
     .option('--face-id', 'No effect, like --biometric')

@@ -12,6 +12,7 @@
  * task that is closed.
  */
 import { log } from '../../logging/index.js'
+import type { HeldTell } from './held-asks.js'
 import type { ApprovalRecord } from './types.js'
 
 /** How long a waiting command has to read the decision itself before Walnut tells the session. */
@@ -108,8 +109,57 @@ export async function tellAsker(id: string): Promise<'told' | 'read' | 'none'> {
   }
 }
 
+/** The words a held ask's task hears (held-asks.ts): ask again now, or it lapsed. Pure. */
+export function heldNoticeFor(t: HeldTell): { outcome: 'ask_again' | 'lapsed'; body: string } {
+  const h = t.held
+  const what = h.what.length > 300 ? `${h.what.slice(0, 297)}...` : h.what
+  const step = h.requester.command ? ` (${h.requester.command})` : ''
+  if (t.kind === 'release') {
+    // Lines of the same step held before it (a fixed --from label over several targets): named, so none is lost.
+    const earlier = h.earlier?.length ? ` It replaced earlier held lines of the same step: ${h.earlier.map((w) => `"${w.length > 120 ? `${w.slice(0, 117)}...` : w}"`).join(', ')}; take any of them that is still needed too.` : ''
+    return {
+      outcome: 'ask_again',
+      body: `The user is back in Walnut. Your approval request "${what}" was held (${h.id}, since ${h.heldAt}) and never reached him. `
+        + `Ask again now, once: take the same step again${step}, and its approval goes to his devices. Never take the step without its approval.${earlier} `
+        + 'If the step is no longer needed, do nothing: the held ask lapses by itself.',
+    }
+  }
+  const head = `Lapsed, not approved: "${what}". Your held approval request ${h.id} ended, and the step did not run${step}.`
+  if (h.lapsedWhy === 'denied') {
+    return { outcome: 'lapsed', body: `${head} The user denied this same step meanwhile: Walnut asks it no more. Ask again only if something changed.` }
+  }
+  const report = 'Do not ask again by yourself and do not ask the user about it: say in your report that the step waits for his approval.'
+  if (h.lapsedWhy === 'unanswered') {
+    return { outcome: 'lapsed', body: `${head} This step reached the user more than once and got no answer: Walnut asks it no more on its own. ${report}` }
+  }
+  if (h.lapsedWhy === 'not_reached') {
+    return { outcome: 'lapsed', body: `${head} Walnut released it ${h.releases} times (told this task to ask again, or could not reach it) and its ask never went through, so Walnut holds it no more. ${report}` }
+  }
+  return {
+    outcome: 'lapsed',
+    body: `${head} The user did not come back to Walnut by ${h.until}, so it is void, and Walnut does not hold this step again for a while. ${report}`,
+  }
+}
+
+/** Tell a held ask's task (held-asks.ts sweep); false when it has no open session to tell; a failed send throws. */
+export async function tellHeldAsker(t: HeldTell): Promise<boolean> {
+  const target = await targetSession({ requester: t.held.requester as ApprovalRecord['requester'] })
+  if (!target) return false
+  const notice = heldNoticeFor(t)
+  const { buildWalnutMessage } = await import('../peers/walnut-message-tag.js')
+  const { sendMessageToSession } = await import('../session-message-queue.js')
+  const text = buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: 'Walnut: approvals', outcome: notice.outcome, note: `your held approval request ${t.held.id}` },
+    body: notice.body,
+  })
+  // Both end a wait the task parked on its ask: it has a step to take, or to give up.
+  await sendMessageToSession(target.sessionId, text, { source: 'walnut-notify', ...(target.taskId ? { taskId: target.taskId } : {}), endsWait: true })
+  return true
+}
+
 /** The session that asked, else the task's own live session; none for a closed task. */
-async function targetSession(rec: ApprovalRecord): Promise<{ sessionId: string; taskId?: string } | null> {
+async function targetSession(rec: Pick<ApprovalRecord, 'requester'>): Promise<{ sessionId: string; taskId?: string } | null> {
   const { getSessionByClaudeId, getSessionsForTask } = await import('../session-tracker.js')
   const sid = rec.requester.sessionId
   const own = sid ? await getSessionByClaudeId(sid).catch(() => null) : null

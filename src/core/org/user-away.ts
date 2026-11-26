@@ -33,9 +33,15 @@ export interface AwayState {
   lastSeenAt: number | null;
 }
 
-/** Last attention heartbeat per task id and per session id. */
+/** Last attention heartbeat per task id and per session id, and of any screen (ANY). */
 const seen = new Map<string, number>();
 const SUBSCRIBER = 'org-user-away';
+/**
+ * Any human heartbeat, with or without a task: the phone app open on its Inbox or Home tab, the
+ * console's inbox or chat. Only "seen anywhere" (userActivityAnywhere) reads it, never a node's own
+ * away state (2026-11-25: a held approval waited for him while the phone app was open on Inbox).
+ */
+const ANY = 'any';
 
 export function noteSeen(key: string, at: number): void {
   if (!key || !Number.isFinite(at)) return;
@@ -47,6 +53,7 @@ function onBanked(event: BusEvent): void {
   for (const r of data?.records ?? []) {
     const end = Date.parse(r.ts) + (Number.isFinite(r.durationMs) ? r.durationMs : 0);
     if (!Number.isFinite(end)) continue;
+    noteSeen(ANY, end);
     if (r.taskId) noteSeen(`task:${r.taskId}`, end);
     if (r.sessionId) noteSeen(`session:${r.sessionId}`, end);
   }
@@ -130,17 +137,17 @@ export async function userInTaskChat(
 export async function userActivityAnywhere(
   sessions: readonly Pick<SessionRecord, 'claudeSessionId' | 'chatInputAt'>[], now = Date.now(),
 ): Promise<{ lastSeenAt: number | null; streaming: boolean }> {
+  // Imported first, so `sessions` (a store view) is read in one synchronous pass, never across an await.
+  let count: ((key: string) => number) | null = null;
+  try { count = (await import('../../web/sse-channels.js')).sseConnCount; } catch { /* no web server in this process */ }
   let last = 0;
   for (const at of seen.values()) if (at > last) last = at;
+  let streaming = false;
   for (const s of sessions) {
     const typed = s.chatInputAt ? Date.parse(s.chatInputAt) : NaN;
     if (Number.isFinite(typed) && typed > last) last = typed;
+    if (!streaming && count && count(`session:${s.claudeSessionId}`) > 0) streaming = true;
   }
-  let streaming = false;
-  try {
-    const { sseConnCount } = await import('../../web/sse-channels.js');
-    streaming = sessions.some((s) => sseConnCount(`session:${s.claudeSessionId}`) > 0);
-  } catch { /* no web server in this process */ }
   return { lastSeenAt: last > 0 ? Math.min(last, now) : null, streaming };
 }
 

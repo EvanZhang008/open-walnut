@@ -18,7 +18,10 @@ import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
 import { bus } from '../event-bus.js'
 import { tellAskerLater } from './tell-asker.js'
-import { fenceRefusal, fenceSkipped, fenced, readActivity, type FenceRefusal, type FenceSubject, type UserActivity } from './single-use-fence.js'
+import { FenceRefusal, fenceRefusal, fenceSkipped, fenced, notHeldNow, readActivity, type FenceSubject, type UserActivity } from './single-use-fence.js'
+import {
+  heldWords, holdAsk, kick as kickHeld, markAsked, reservedHeld, startHeldSweep, stepKey, type HeldAsk, type HeldVerdict, type SweepDeps,
+} from './held-asks.js'
 import { log } from '../../logging/index.js'
 import { approvalDigest } from './digest.js'
 import { deviceLabel } from './device-name.js'
@@ -100,6 +103,8 @@ function announce(recs: ApprovalRecord[]): void {
     armExpiry(rec)
     // The asking session hears the decision when nothing of it is waiting to read it (tell-asker.ts).
     tellAskerLater(rec)
+    // A single-use ask that ended frees the person's devices for the next held one (held-asks.ts).
+    if (rec.singleUse && rec.status !== 'pending') kickHeld()
   }
 }
 
@@ -143,6 +148,31 @@ export async function initApprovals(): Promise<void> {
   const { rearmAskerNotices } = await import('./tell-asker.js')
   rearmAskerNotices(file.approvals)
   for (const a of file.approvals) armExpiry(a)
+  // Held single-use asks: the minute clock and the person's attention release the next (held-asks.ts).
+  startHeldSweep(heldSweepDeps())
+}
+
+/**
+ * Held single-use asks (held-asks.ts): one goes when a fresh ask of it would be let through now, by
+ * the same checks createApproval makes (the fence, then the pending cap); one that never may is dropped.
+ */
+export function heldSweepDeps(tell?: SweepDeps['tell']): SweepDeps {
+  return {
+    verdict: async () => {
+      const activity = await readActivity()
+      const read = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
+      const now = Date.now()
+      // As createApproval sees it after settleClock: an ask past its time counts as expired (a view, never written).
+      const file: ApprovalsFile = { ...read, approvals: read.approvals.map((a) => (a.status === 'pending' && Date.parse(a.expiresAt) <= now ? { ...a, status: 'expired' as const } : a)) }
+      return (h: HeldAsk): HeldVerdict => {
+        const subject = { singleUse: true, requester: { taskId: h.requester.taskId }, testRun: h.testRun, what: h.what }
+        const never = notHeldNow(file, subject, now)
+        if (never === 'denied' || never === 'unanswered') return never
+        return fenceRefusal(file, subject, now, activity) === null && pendingCapMessage(file, h.testRun, now) === null ? 'go' : 'wait'
+      }
+    },
+    tell: tell ?? (async (t) => (await import('./tell-asker.js')).tellHeldAsker(t)),
+  }
 }
 
 /**
@@ -183,7 +213,7 @@ export interface CreateInput {
   needsPasswords?: boolean
 }
 
-const fenceError = (r: FenceRefusal) => new ApprovalError(409, r.code, r.message)
+const fenceError = (r: FenceRefusal) => new ApprovalError(r.code === 'too_many_pending' ? 429 : 409, r.code, r.message)
 
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
 export function visibleTo(rec: Pick<ApprovalRecord, 'testRun'>, viewer: string | undefined): boolean {
@@ -210,6 +240,12 @@ export function cleanWhat(raw: unknown): string {
 }
 
 /** A single-use envelope (createApproval) for this asker: its session, task and host, a nonce, the context. */
+/** A looping script must not flood the phone: the refusal past the cap of asks waiting, else null. */
+function pendingCapMessage(file: ApprovalsFile, testRun: string | undefined, now: number): string | null {
+  const open = file.approvals.filter((a) => a.status === 'pending' && Date.parse(a.expiresAt) > now && (a.testRun ?? null) === (testRun ?? null)).length
+  return open >= APPROVAL_PENDING_MAX ? `${open} approvals are already waiting for an answer; answer or withdraw some first.` : null
+}
+
 function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester): boolean {
   if (!detail || !requester.sessionId || !requester.taskId) return false
   try {
@@ -245,7 +281,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session and detail, with at most five minutes to use them.')
   }
   // One single-use ask per account at a time, only to a person who is there (single-use-fence.ts).
-  const subject: FenceSubject & { detail?: string } = { singleUse: input.singleUse, unasked: input.unasked, requester: input.requester, testRun: input.testRun, detail }
+  const subject: FenceSubject & { detail?: string } = { singleUse: input.singleUse, unasked: input.unasked, requester: input.requester, testRun: input.testRun, detail, what }
   const fence = fenced(subject) && !fenceSkipped()
   const activity: UserActivity | null = fence ? await readActivity() : null
   const now = Date.now()
@@ -274,19 +310,40 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
       answer: { decision: 'approve' as const, at: createdAt, mode: 'tap' as const, device: { name: 'Approvals off', kind: 'setting' as const } },
     } : {}),
   }
+  // A held ask of another task released just now keeps the person's devices for its ask (held-asks.ts).
+  const reserved = fence ? await reservedHeld(input.testRun, now) : null
   let settled: ApprovalRecord[] = []
+  let refused: FenceRefusal | null = null
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     settled = settleClock(file, now)
-    const held = fence ? fenceRefusal(file, subject, now, activity) : null
-    if (held) throw fenceError(held)
-    // A looping script must not flood the phone: past the cap a new ask is refused.
-    const open = file.approvals.filter((a) => a.status === 'pending' && (a.testRun ?? null) === (rec.testRun ?? null)).length
-    if (!rec.unasked && open >= APPROVAL_PENDING_MAX) {
-      throw new ApprovalError(429, 'too_many_pending', `${open} approvals are already waiting for an answer; answer or withdraw some first.`)
+    refused = fence ? fenceRefusal(file, subject, now, activity, reserved) : null
+    if (refused) throw fenceError(refused)
+    // Past the cap a new ask is refused (the held sweep makes this same check before a release).
+    const message = rec.unasked ? null : pendingCapMessage(file, rec.testRun, now)
+    if (message) {
+      // A single-use ask of a task is "not now" here too: held until the person is back.
+      if (fence) { refused = new FenceRefusal('too_many_pending', message, undefined, notHeldNow(file, subject, now)); throw fenceError(refused) }
+      throw new ApprovalError(429, 'too_many_pending', message)
     }
     file.approvals.push(rec)
     return file
-  }))
+  })).catch(async (err) => {
+    const r = refused as FenceRefusal | null
+    if (!r || !r.holdable) throw err
+    // "Not now": kept until the person is back, and its task is told then (held-asks.ts). A hold
+    // that cannot be kept (full, the disk refused it, void after its deadline) answers the fence's refusal.
+    const status = err instanceof ApprovalError ? err.status : 409
+    const held = await holdAsk({ ...subject, what, requester }, r.code, now).catch((e) => {
+      log.web.warn('approvals: holding a refused single-use ask failed', { taskId: requester.taskId, error: String(e) })
+      return { full: true } as const
+    })
+    if ('void' in held) {
+      throw new ApprovalError(status, r.code, `${r.message} Walnut held this same step until ${held.void.until} and the user did not come back, so it is void and Walnut does not hold it again now: do not ask again by yourself; say in your report that the step waits for the user's approval.`)
+    }
+    if (!('id' in held)) throw new ApprovalError(status, r.code, `${r.message} Walnut could not hold it either: do not ask again by yourself; say in your report that the step waits for the user's approval.`)
+    throw new ApprovalError(status, r.code, `${r.message} ${heldWords(held)}`)
+  })
+  if (fence) await markAsked({ testRun: rec.testRun, taskId: requester.taskId, step: stepKey(what, requester) }, id, now)
   log.web.info(rec.unasked ? 'approval not asked: approvals are off' : 'approval created', { approvalId: id, mode: rec.mode, host: requester.host, taskId: requester.taskId, ...(rec.unasked ? { gate: rec.unasked } : {}) })
   // One done without asking pops up nowhere and tells no one; the history lists it.
   const out = !rec.unasked

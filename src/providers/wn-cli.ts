@@ -251,7 +251,7 @@ USAGE
   walnut mcp list | <server> tools ...      MCP servers Walnut runs (see \`walnut mcp --help\`)
   walnut mcp-server                         serve these same operations as an MCP stdio server
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
-  walnut approve "<what>" [--timeout 10m] [--detail file|-] [--why "<line>"]   wait for a person's yes (any device they are signed in on): exit 0 approve, 1 deny, 2 no answer, 3 error
+  walnut approve "<what>" [--timeout 10m] [--detail file|-] [--why "<line>"]   wait for a person's yes (any device they are signed in on): exit 0 approve, 1 deny, 2 no answer, 3 error, 4 held until they are back (you are told when to ask again)
     [--single-use]   strict: bound to this run's --detail, checked here, used once (5m at most)
     [--request-only | --approval <id>]   ask, print the id and exit 4; later rerun the same command with --approval <id> to wait and go on
   walnut pass list | get <item> --purpose "<why>" | run --purpose "<why>" --env NAME=<item> -- <cmd> | sync-bitwarden (Walnut runs bw)   passwords from the vault (run masks them in output)

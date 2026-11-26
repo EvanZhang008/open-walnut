@@ -59,8 +59,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/boards/board-delivery.ts': 1,          // a due reminder is `board-reminder`; a user's thread message is theirs
   'src/core/sessions/start-queue.ts': 3,           // a queued start run as `start-queue`, framed as the asking session's (the pass's, the user's Start now), and its failure told to the asker
   'src/core/hooks/actions.ts': 1,
-  // The answer to a session's own approval request: one Walnut notice (walnut-notify).
-  'src/core/approvals/tell-asker.ts': 1,
+  // The answer to a session's own approval request, and its held ask's "ask again" or lapse: one Walnut notice each (walnut-notify).
+  'src/core/approvals/tell-asker.ts': 2,
   'src/core/hosts/exec-grants.ts': 1,
   'src/core/human-inbox/letter-ops.ts': 2,         // the user's letter answer; a task's answer is framed
   'src/core/offline-handover.ts': 1,

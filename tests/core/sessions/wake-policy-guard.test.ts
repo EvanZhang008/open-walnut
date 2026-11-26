@@ -84,8 +84,8 @@ const DYNAMIC_OUTCOMES: Record<string, string[]> = {
   HANDED_OVER: ['handed-over'],
   // instruction-notice.ts: its attrs are one constant (OUTCOME, read below).
   'attrs: NOTICE_ATTRS': ['task-routing-policy'],
-  // approvals/tell-asker.ts askerNoticeFor.
-  'notice.outcome': ['approved', 'denied', 'expired'],
+  // approvals/tell-asker.ts askerNoticeFor, and heldNoticeFor (a held ask: ask again, or lapsed).
+  'notice.outcome': ['approved', 'denied', 'expired', 'ask_again', 'lapsed'],
 };
 
 /**

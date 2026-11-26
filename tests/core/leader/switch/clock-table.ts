@@ -24,6 +24,7 @@ export const CLOCKS: Record<string, Clock[]> = {
   'src/commands/ephemeral-owner.ts': [['not-server', 'Ephemeral test server (commands/web-ephemeral.ts, its own temp data home), not the leader server of a real home.']],
   'src/commands/logs.ts': [['not-server', 'CLI command `walnut logs --follow` (own process).']],
   'src/commands/web-ephemeral.ts': [['not-server', 'Ephemeral test server launcher and its server (own temp data home), not the leader server of a real home.']],
+  'src/core/approvals/held-asks.ts': [['gated', 'Every 60 s (and 2 s after a kick: attention banked, a single-use ask ended) sweepHeld() releases or lapses held asks in approvals/held.json and tells the asking session; run() asks first.']],
   'src/core/audio-capture.ts': [['stopped', 'stopped by stopServer before the final batch', 'audioCaptureService.stop('], 'same'],
   'src/core/browser-control/replay-store.ts': [['stopped', 'stopped by stopServer before the final batch', 'replaySweeperHandle.stop(']],
   'src/core/browser-sign-in.ts': [['gated', 'sweepIdleBrowserSignIns (every 6 h, first at 60 s) reads auth.json device records;']],
