@@ -56,11 +56,28 @@ export function manifestDigest(manifest: KindManifest<unknown>, ordered = false)
 }
 
 /** What each target took whole last (key -> hash, in the manifest's order), kept against its kind state. */
-const taken = new WeakMap<KindState, Map<string, string>>()
+const taken = new WeakMap<KindState, ReadonlyMap<string, string>>()
 
-function entriesMap(manifest: KindManifest<unknown>): Map<string, string> {
-  return new Map(manifest.entries.map((e) => [e.k, e.h]))
+/**
+ * A manifest's key -> hash, built once per manifest object and shared by every target that takes
+ * it (read only: deltaKeys never changes it). 2026-11-25: a new map of about 8,000 rows per target
+ * per round was about 1 MB each, some 200 of them every 5 minutes.
+ */
+const entryMaps = new WeakMap<object, ReadonlyMap<string, string>>()
+let entryMapBuilds = 0
+
+function entriesMap(manifest: KindManifest<unknown>): ReadonlyMap<string, string> {
+  let m = entryMaps.get(manifest)
+  if (!m) {
+    m = new Map(manifest.entries.map((e) => [e.k, e.h]))
+    entryMaps.set(manifest, m)
+    entryMapBuilds++
+  }
+  return m
 }
+
+/** For tests: how many key -> hash maps were built since this module loaded. */
+export const _entryMapBuildsForTesting = (): number => entryMapBuilds
 
 /** The target took this manifest whole (a manifest round that held nothing back): later rounds may go as deltas. */
 export function noteManifestTaken(st: KindState, manifest: KindManifest<unknown>): void {
