@@ -103,7 +103,12 @@ describe('every write that asks the user is checked', () => {
 
   it('a Thread handed to the user: both writes in the store run the check', () => {
     const writers = filesWith(/\b(openThread|updateThread)\(/)
-    expect(writers).toEqual(['src/core/org/thread-ack.ts', 'src/core/org/threads-model.ts', 'src/core/org/threads-store.ts'])
+    expect(writers).toEqual(['src/core/org/thread-ack.ts', 'src/core/org/thread-answered-check.ts', 'src/core/org/threads-model.ts', 'src/core/org/threads-store.ts'])
+    // The answered check (a reply that answers his question) writes only answered: a result for him to read, never a decision asked of him.
+    const answered = [...code('src/core/org/thread-answered-check.ts').matchAll(/\bupdateThread\(([^;]*)\)\.file;/g)].map((m) => m[1])
+    expect(answered.length).toBe(1)
+    expect(answered[0]).toMatch(/state: 'answered'/)
+    expect(answered[0]).not.toMatch(/needs/)
     // His Acknowledge kept open (ack_means_known) writes only pending, as him: it never hands a thread to him.
     const ack = [...code('src/core/org/thread-ack.ts').matchAll(/\bupdateThread\(([^;]*)\);/g)].map((m) => m[1])
     expect(ack.length).toBe(1)
