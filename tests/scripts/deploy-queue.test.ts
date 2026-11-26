@@ -130,6 +130,16 @@ afterEach(async () => {
 })
 
 describe('the deploy queue', () => {
+  // 2026-11-26: with a 5-minute gap every land was its own restart (104 in a day), and each one drops
+  // every window's socket and every host's link for a moment. The default holds restarts 20 minutes
+  // apart; a build still starts up to WALNUT_DEPLOY_PREBUILD_SECS before the gap's end.
+  it('by default production restarts at most once per 20 minutes, and the build may start 7 minutes before', () => {
+    const out = spawnSync('bash', ['-c', `source "${path.join(SCRIPTS, 'lib', 'deploy-queue.sh')}"; echo "$DQ_GAP $DQ_PREBUILD"`], {
+      encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: os.tmpdir() },
+    })
+    expect(out.stdout.trim().split('\n').pop()).toBe('1200 420')
+  })
+
   it('one caller with no recent restart deploys at once and is told it is live', async () => {
     const f = fixture()
     const head = git(f.repo, 'rev-parse', 'HEAD')

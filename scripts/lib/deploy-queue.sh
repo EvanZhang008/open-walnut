@@ -9,7 +9,7 @@
 #
 # Now a caller files a request (its commit) and waits; ONE runner, detached from
 # every caller so a caller's timeout never cuts a deploy, does the deploys:
-#   - nothing goes out sooner than WALNUT_DEPLOY_MIN_GAP_SECS (300) after the last
+#   - nothing goes out sooner than WALNUT_DEPLOY_MIN_GAP_SECS (1200) after the last
 #     restart (this queue's own record, dev-prod.sh's success stamp, the served
 #     build's time, whichever is latest) or 125 s after a deploy attempt;
 #   - the build starts WALNUT_DEPLOY_PREBUILD_SECS (420) before the gap ends, and the
@@ -42,11 +42,15 @@
 # Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT (the runner;
 # dev-prod.sh sources it for dq_hold_moves only).
 
-# 300 since 2026-11-23 (600 before): a deploy now stops production for under 5 s and keeps every
-# session (ten deploys in a row measured 4.2 to 4.9 s), and the gap was the largest part left of a
-# land's way to production.
-DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-300}"
-[[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=300
+# 1200 since 2026-11-26 (300 from 2026-11-23, 600 before). The 5-minute gap made every land its own
+# restart: 104 restarts in a day (42 to 69 a day before it), and each one, short as its stop is
+# (4.2 to 4.9 s), drops every open window's socket, every host's link and every open session's
+# history read, which all come back after it (2026-11-26: 104 socket drops in the browser, 34 of
+# 34 newdev disconnects, 68 failed history reads). Replayed over that day's 237 lands that change
+# production, 20 minutes halves the restarts and puts a land live in about 16 minutes (median),
+# as before 2026-11-23; the build still starts WALNUT_DEPLOY_PREBUILD_SECS before the gap's end.
+DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-1200}"
+[[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=1200
 # After any deploy attempt (dev-prod.sh's own 120 s cooldown answers sooner). WALNUT_DEPLOY_ATTEMPT_GAP_SECS
 # for tests, whose stub has no cooldown.
 DQ_ATTEMPT_GAP="${WALNUT_DEPLOY_ATTEMPT_GAP_SECS:-125}"

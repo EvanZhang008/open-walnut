@@ -7,7 +7,7 @@
 #   WALNUT_DEPLOY_NO_WAIT=1 bash scripts/deploy-committed.sh   # queue it, do not wait
 #
 # Deploys queue (scripts/lib/deploy-queue.sh): production restarts at most once per
-# 10 minutes, each time with the newest commit, and every caller hears whether
+# 20 minutes, each time with the newest commit, and every caller hears whether
 # the deploy that carried its commit went out.
 #
 # Several agents share one checkout, and `bun run dev:prod` builds whatever is on
