@@ -123,15 +123,22 @@ export interface LeaderHomeMark { home: string; state: 'switching' | 'handed-ove
 /** A marked home with the marker's `to` (the machine the lead goes or went to) when the marker reads. */
 export interface HandedOverHome extends LeaderHomeMark { to?: string }
 
-/** A read error that means "no marker here": a missing file, or a missing folder on the way. */
-function noMarker(err: unknown): boolean {
-  const code = (err as NodeJS.ErrnoException).code
-  return code === 'ENOENT' || code === 'ENOTDIR'
+/** The marker's folder in a data home: a level of the walk is a home only when this exists there. */
+const LEADER_SWITCH_DIR_REL = path.dirname(LEADER_SWITCH_MARKER_REL)
+
+/**
+ * One level of the walk (both walks below): `at` is a home only when its local/leader-switch exists (lstat; one that cannot be looked at
+ * is no home: nothing names it one). Under an existing one a missing marker is no mark (a cancelled switch removed it)
+ * and any other failure to read it marks the home (fail closed). With no leader-switch folder anywhere above (every
+ * machine that never switched, the experiment off) the walk reads nothing but lstat.
+ */
+function noMark(readError: unknown): boolean {
+  return (readError as NodeJS.ErrnoException).code === 'ENOENT'
 }
 
 /**
- * The mark of `home` from its marker's text; null text = a marker that exists but cannot be read (EACCES, EIO, a
- * folder where the file should be). Either that or a torn file marks the home as handed over (records.ts readMarker:
+ * The mark of `home` from its marker's text; null text = a marker that cannot be read (EACCES, EIO, a folder where
+ * the file should be). Either that or a torn file marks the home as handed over (records.ts readMarker:
  * never "not handed over"): a wrong refusal costs one snapshot or one start, a wrong pass the old home.
  */
 function markOf(home: string, text: string | null): HandedOverHome {
@@ -147,10 +154,14 @@ function markOf(home: string, text: string | null): HandedOverHome {
 export function leaderHomeMarkAt(dir: string): HandedOverHome | null {
   let at = path.resolve(dir)
   for (;;) {
-    try {
-      return markOf(at, fs.readFileSync(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
-    } catch (err) {
-      if (!noMarker(err)) return markOf(at, null)
+    let lstatError: unknown = null
+    try { fs.lstatSync(path.join(at, LEADER_SWITCH_DIR_REL)) } catch (err) { lstatError = err }
+    if (lstatError === null) {
+      try {
+        return markOf(at, fs.readFileSync(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
+      } catch (err) {
+        if (!noMark(err)) return markOf(at, null)
+      }
     }
     const up = path.dirname(at)
     if (up === at) return null
@@ -162,16 +173,20 @@ export function leaderHomeMarkAt(dir: string): HandedOverHome | null {
  * The session spawn guard (the daemon twins' session start and acpStart, capability
  * leader-switch-home-stop-v1): the marked data home at the real path of `cwd` or above it, or null.
  * By folder only (never by "homes this daemon knows"), async fs only, so the start path does no sync IO;
- * fail-closed as leaderHomeMarkAt. A cwd that does not resolve (gone) is walked as given.
+ * the same levels as leaderHomeMarkAt. A cwd that does not resolve (gone) is walked as given.
  */
 export async function handedOverHomeAt(cwd: string): Promise<HandedOverHome | null> {
   let at: string
   try { at = await fs.promises.realpath(cwd) } catch { at = path.resolve(cwd) }
   for (;;) {
-    try {
-      return markOf(at, await fs.promises.readFile(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
-    } catch (err) {
-      if (!noMarker(err)) return markOf(at, null)
+    let lstatError: unknown = null
+    try { await fs.promises.lstat(path.join(at, LEADER_SWITCH_DIR_REL)) } catch (err) { lstatError = err }
+    if (lstatError === null) {
+      try {
+        return markOf(at, await fs.promises.readFile(path.join(at, LEADER_SWITCH_MARKER_REL), 'utf8'))
+      } catch (err) {
+        if (!noMark(err)) return markOf(at, null)
+      }
     }
     const up = path.dirname(at)
     if (up === at) return null

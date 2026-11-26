@@ -2,7 +2,7 @@
  * The one rule for git writes into a data home under a leader switch (src/lib/leader-home-gate.ts): which argv
  * writes, where it runs, and what each side refuses.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -126,6 +126,47 @@ describe('the session spawn guard (handedOverHomeAt)', () => {
     const f = home('g-notdir')
     fs.writeFileSync(path.join(f, 'local'), 'a file')
     expect(await handedOverHomeAt(f)).toBeNull()
+  })
+
+  it('a level is a home only when its local/leader-switch exists: an unreadable local/ elsewhere refuses nothing', async () => {
+    // <a>/local cannot be looked into (EACCES on its leader-switch): no home is named there, for neither walk.
+    const a = fs.realpathSync(home('g-eacces'))
+    fs.mkdirSync(path.join(a, 'local'), { recursive: true })
+    fs.chmodSync(path.join(a, 'local'), 0o000)
+    try {
+      expect(await handedOverHomeAt(path.join(a, 'plugins', 'p'))).toBeNull()
+      expect(leaderHomeMarkAt(path.join(a, 'plugins', 'p'))).toBeNull()
+      expect(daemonGitWriteRefusal(['git', 'write-tree'], a)).toBeNull()
+    } finally { fs.chmodSync(path.join(a, 'local'), 0o700) }
+    // The folder exists and the marker is gone (a cancelled switch removed it): no mark.
+    const cancelled = fs.realpathSync(home('g-cancelled'))
+    fs.mkdirSync(path.join(cancelled, 'local', 'leader-switch'), { recursive: true })
+    expect(await handedOverHomeAt(cancelled)).toBeNull()
+    expect(leaderHomeMarkAt(cancelled)).toBeNull()
+    // The folder exists and the marker cannot be read: marked (fail closed), for both walks.
+    const locked = fs.realpathSync(home('g-locked', JSON.stringify({ state: 'switching', to: 'm' })))
+    fs.chmodSync(path.join(locked, LEADER_SWITCH_MARKER_REL), 0o000)
+    try {
+      expect(await handedOverHomeAt(locked)).toEqual({ home: locked, state: 'handed-over' })
+      expect(leaderHomeMarkAt(locked)).toEqual({ home: locked, state: 'handed-over' })
+    } finally { fs.chmodSync(path.join(locked, LEADER_SWITCH_MARKER_REL), 0o600) }
+  })
+
+  it('with no leader-switch folder anywhere above (the experiment never used) it reads nothing but lstat and never refuses', async () => {
+    const free = fs.realpathSync(home('g-free'))
+    const readFile = vi.spyOn(fs.promises, 'readFile')
+    const readFileSync = vi.spyOn(fs, 'readFileSync')
+    const open = vi.spyOn(fs.promises, 'open')
+    const lstat = vi.spyOn(fs.promises, 'lstat')
+    try {
+      expect(await handedOverHomeAt(path.join(free, 'plugins', 'p'))).toBeNull()
+      expect(readFile).not.toHaveBeenCalled()
+      expect(readFileSync).not.toHaveBeenCalled()
+      expect(open).not.toHaveBeenCalled()
+      // One look per level, for local/leader-switch only.
+      expect(lstat.mock.calls.length).toBe(path.join(free, 'plugins', 'p').split(path.sep).length)
+      expect(lstat.mock.calls.every(([p]) => String(p).endsWith(path.join('local', 'leader-switch')))).toBe(true)
+    } finally { vi.restoreAllMocks() }
   })
 
   it('a cwd that does not resolve is walked as given', async () => {
