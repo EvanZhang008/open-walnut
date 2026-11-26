@@ -659,7 +659,8 @@ after the answer (`reactedSince`, per node by design: a remark seldom sits in th
   close, finish or drop something, or say it is done or no longer wanted. A thanks about another
   answer, quoted, does not close it and is not moved under it (`carryHisWords` is skipped), and
   the refusal no longer tells the node to retry with `user_words`. No answer on the quote leaves
-  the thread open.
+  the thread open. The call reads whether the words ask for a close, not which thread they mean:
+  "the first one is done, close it", quoted to close another thread, still closes that one (open).
 - Measured with a real small model on the trial's recorded turns (three answered threads, 23 later
   messages, five runs each, twice: 690 verdicts): no answer he had not reacted to was marked; the
   recorded remark marked only the thread it names in 100 runs of 100 (50 more runs of it alone);

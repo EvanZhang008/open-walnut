@@ -93,11 +93,16 @@ export function hisWordsSince(file: ThreadsFile, since: string): Array<{ at: str
   return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
-/** When the node spoke on a thread: its first post, its summary, each answer under a message of his. Pure. */
-function nodeWordTimes(t: OrgThread): string[] {
+/**
+ * When the node spoke on a thread: its first post and each answer under a message of his (what he
+ * read in the chat), and with `summaries` the time its summary was written too. A summary is
+ * written after the turn's answer, seconds later (the card line waits on the turn's end and on
+ * this check): it ends a turn, but it is not the answer he was given last. Pure.
+ */
+function nodeWordTimes(t: OrgThread, summaries: boolean): string[] {
   return [
     ...(t.opener?.text?.trim() ? [t.opener.at] : []),
-    ...(t.reply?.trim() && t.replyAt ? [t.replyAt] : []),
+    ...(summaries && t.reply?.trim() && t.replyAt ? [t.replyAt] : []),
     ...t.messages.flatMap((m) => (m.answer?.text?.trim() ? [m.answer.at] : [])),
   ];
 }
@@ -125,16 +130,20 @@ export function seenClaims(file: ThreadsFile, claimed: readonly OrgThread[]): Se
   // The node's newest word before his newest message, on any thread: his messages since are this turn's.
   // Every word of a thread counts, not only its newest: the answer to that newest message may be kept
   // under it already (it came after it), and the thread's answer before it is then the one that counts.
+  // The answer he got last is the newest of its answers, never a summary's write time (review 2026-11-26:
+  // a summary written eight seconds after its answer made that answer read as not the last, and his bare ok counted for none).
   let latest = '';
+  let answered = '';
   for (const t of file.threads) {
     if (t.movedTo) continue;
-    for (const at of nodeWordTimes(t)) if (at <= newest && at > latest) latest = at;
+    for (const at of nodeWordTimes(t, true)) if (at <= newest && at > latest) latest = at;
+    for (const at of nodeWordTimes(t, false)) if (at <= newest && at > answered) answered = at;
   }
   return words
     .map(({ t, word }) => ({
       t, word, asked: (t.messages.find((m) => m.answer?.at === word.at) ?? t.messages[0])?.text,
       his: all.filter((m) => m.at > latest && readAfter(word, m.at)).slice(-SEEN_MESSAGES_MAX),
-      last: !!latest && Date.parse(latest) - Date.parse(word.at) <= LAST_WINDOW_MS,
+      last: !!answered && Date.parse(answered) - Date.parse(word.at) <= LAST_WINDOW_MS,
     }))
     .filter((r) => r.his.length)
     .sort((a, b) => b.word.at.localeCompare(a.word.at));

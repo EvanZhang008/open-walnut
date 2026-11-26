@@ -134,6 +134,18 @@ describe('what the judge reads', () => {
     }
   })
 
+  // Review 2026-11-26: a summary is written seconds after the turn's answer (the card line waits on
+  // the turn's end); its time made the answer read as not the last one, and his bare ok counted for none.
+  it('a summary written after the answer does not make that answer an older one', () => {
+    const b = answered()
+    const late: ThreadsFile = { ...b.f, threads: b.f.threads.map((t) => t.id === b.grit ? { ...t, reply: 'Grit 120, then 220.', replyAt: at(328) } : t) }
+    const f = fileMessage(late, { text: 'ok thanks', via: 'chat', at: at(900) }).file
+    const claims = seenClaims(f, f.threads.filter((t) => t.id === b.grit || t.id === b.glue))
+    expect(claims.map((c) => [c.t.id, c.last])).toEqual([[b.grit, true], [b.glue, false]])
+    // The summary still ends that turn: only what he wrote after it is read.
+    expect(claims[0].his.map((m) => m.text)).toEqual(['ok thanks'])
+  })
+
   it('several messages of one turn are read together, the newest few', () => {
     let b: { f: ThreadsFile; glue: string } = remarked('thanks for the glue tip')
     for (let i = 0; i < SEEN_MESSAGES_MAX + 2; i++) b = { ...b, f: fileMessage(b.f, { text: `note ${i} about the lathe`, via: 'chat', at: at(1000 + i * 20) }).file }
