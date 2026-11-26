@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { closeUsageWatchStore, readHours, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
 import { _resetUsageRecorderForTesting, flushUsage } from '../../../src/core/usage-watch/record.js'
 import { handleGatewayCapability, type CapabilityRouterDeps } from '../../../src/core/peers/capability-router.js'
@@ -64,5 +65,45 @@ describe('the gateway names the answers no agent read shaped', () => {
     expect(a.calls).toBe(3)
     expect(a.charsMax).toBeGreaterThan(0)
     expect(a.charsMax).toBeLessThan(20_000)
+  })
+
+  // 2026-11-26: open_items read "over the limit" 103 times in a day; each was the compaction hook's
+  // readback (`hook: "compact"`, 12,888 to 16,596 characters), which the op answers whole by its rule.
+  it('an answer the op gives whole by its own rule is sized and never over a limit', async () => {
+    definePluginOp('whole-answers-test', {
+      name: 'whole_answers_hook', title: 'Hook answer', description: 'Answers a hook whole, as open_items answers a compaction hook.', input: { hook: z.string().optional() },
+      answer: { kind: 'content', whole_for: (args) => args.hook !== undefined },
+      handler: async () => ({ text: BIG }),
+      tags: { readonly: true, remote: 'allow' },
+    })
+    const deps: CapabilityRouterDeps = { throttle: new PeerThrottle(), cloudMode: false }
+    const hook = await handleGatewayCapability('tools.call', SID, { name: 'whole_answers_hook', args: { hook: 'compact' }, client: 'cli' }, 'clouddev', deps)
+    expect(hook.ok).toBe(true)
+    let a = aggOf('whole_answers_hook')
+    expect(a.calls).toBe(1)
+    expect(a.charsMax).toBeGreaterThan(BIG.length)
+    expect(a.overLimit).toBe(0)
+    // The same op's other calls are held to the surface: one that came out over it would count.
+    const plain = await handleGatewayCapability('tools.call', SID, { name: 'whole_answers_hook', args: {}, client: 'cli' }, 'clouddev', deps)
+    expect(plain.ok).toBe(true)
+    a = aggOf('whole_answers_hook')
+    expect(a).toMatchObject({ calls: 2, overLimit: 0 })
+  })
+
+  it('every reader of an op\'s whole_for rule goes through answersWhole', () => {
+    // A new reader that tests the rule itself would again disagree with the recorder (the class above).
+    const root = path.resolve(__dirname, '../../../src')
+    const readers: string[] = []
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name)
+        if (e.isDirectory()) walk(f)
+        else if (/\.tsx?$/.test(e.name) && /whole_for\s*(\?\.)?\(/.test(fs.readFileSync(f, 'utf8'))) readers.push(path.relative(root, f))
+      }
+    }
+    walk(root)
+    expect(readers).toEqual(['ops/answer.ts'])
+    const calls = fs.readFileSync(path.join(root, 'core/peers/capability-router.ts'), 'utf8')
+    expect(calls).toMatch(/answersWhole\(op, args\)/)
   })
 })

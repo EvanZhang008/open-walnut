@@ -44,7 +44,7 @@ import { declaredKeysNote, inferRenames, invalidTypeHint, renameNote, unknownKey
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { heldAwayResult, isBareAwayQueued } from './outcome.js'
-import { FULL_ARG, agentAnswer, answerFit, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
+import { FULL_ARG, agentAnswer, answerFit, answersWhole, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { capOverCounts, countCapNote } from './count-cap.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
@@ -636,7 +636,7 @@ export async function executeOp(
   // An agent's answer is held to the op's cap on the surface that prints it (answer.ts). An untyped
   // caller's `true` names no surface, so it gets the smaller one. A handler builds a part for it.
   const surface: AnswerSurface | undefined = options.forAgent ? (options.forAgent === 'mcp' ? 'mcp' : 'cli') : undefined
-  const fit = surface && !full && !human && !pluginId && !op.answer?.whole_for?.(args) ? answerFit(op, surface) : undefined
+  const fit = surface && !full && !human && !pluginId && !answersWhole(op, args) ? answerFit(op, surface) : undefined
   const run = async (): Promise<OpOutcome> => {
     // A session's words for the user in another language than his setting are not sent
     // (reply-language-gate.ts): only an agent's own tool call (forAgent), never a program's fixed

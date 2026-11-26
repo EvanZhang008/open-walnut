@@ -132,6 +132,16 @@ export function takeFullArg(args: Record<string, unknown>): { full: boolean; bad
   return { full: given }
 }
 
+/**
+ * The op answers this call whole whoever asks (`whole_for`: a hook's output a harness reads as it
+ * is, a read the caller named as whole). The one test of it: the executor, agentAnswer and the
+ * real-use recorder all ask here, so a whole answer is never held to a surface nor counted over one.
+ */
+export function answersWhole(op: Pick<WalnutOp, 'answer'> | undefined, args: unknown): boolean {
+  if (!op?.answer?.whole_for || typeof args !== 'object' || args === null || Array.isArray(args)) return false
+  try { return op.answer.whole_for(args as Record<string, unknown>) === true } catch { return false }
+}
+
 export interface AnswerPolicy { kind: 'receipt' | 'content'; max: number; whole?: string }
 
 /** The policy an op answers under: its own, else a receipt for a write and content for a read. */
@@ -438,7 +448,7 @@ export function agentAnswer(
   surface: AnswerSurface = 'cli',
 ): unknown {
   if (full || result === undefined || result === null) return result
-  if (op.answer?.whole_for?.(args)) return result
+  if (answersWhole(op, args)) return result
   const policy = answerPolicy(op)
   const fit = answerFit(op, surface)
   const shape = op.answer?.shape

@@ -452,6 +452,10 @@ async function handleToolsCall(
   // Asked for whole (`_full`, taken out of the arguments by executeOp): read before the call.
   const { FULL_ARG } = await import('../../ops/answer.js');
   const askedWhole = typeof args === 'object' && args !== null && (args as Record<string, unknown>)[FULL_ARG] === true;
+  // The op itself answers this call whole (answer.whole_for: a hook's output, a single-use read): it
+  // has no cap to be over, and its size still counts as what the session read.
+  const { answersWhole } = await import('../../ops/answer.js');
+  const uncapped = answersWhole(op, args);
   const startedAt = Date.now();
   // The daemon could not prove the session sid (lib/caller-unproven.ts): the sid stays the call's
   // provenance, and the start-mode ceiling of every self-call reads the caller as anonymous.
@@ -469,7 +473,7 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
   // A test run's calls stay out of it.
   if (!testRun) {
     const { recordGatewayCall } = await import('../usage-watch/gateway-record.js');
-    recordGatewayCall(name, payload.client, r, Date.now() - startedAt, !forAgent || askedWhole);
+    recordGatewayCall(name, payload.client, r, Date.now() - startedAt, !forAgent || askedWhole, uncapped);
   }
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.

@@ -129,6 +129,13 @@ export interface OpCall {
    * (`_full`). Its size is no agent's read: counted as a call, in no size number and never over a limit.
    */
   whole?: boolean
+  /**
+   * The op answers this call whole by its own rule (ops/answer.ts answersWhole: a hook's output the
+   * harness reads as it is, a single-use read): there is no cap to be over. Its size still counts,
+   * since a session read it. 2026-11-26: 103 of open_items' 1,818 calls in a day read over the
+   * limit, each one the compaction hook's readback (`hook: "compact"`), which is never cut.
+   */
+  uncapped?: boolean
   ms: number
   now?: number
 }
@@ -142,7 +149,7 @@ export function recordOpCall(call: OpCall): void {
   const slept = call.cls === 'timeout' ? sleptOf(now, call.ms) : 0
   const c: OpCall = slept > 0 && slept * 2 >= call.ms ? { ...call, cls: 'unreachable', code: ASLEEP_CODE, ms: call.ms - slept } : call
   const agg = bucket('op', c.op, now)
-  const overLimit = c.overLimit && !c.whole
+  const overLimit = c.overLimit && !c.whole && !c.uncapped
   addCall(agg, { cls: c.cls, ...(c.code ? { code: c.code } : {}), ...(c.whole && c.cls === 'ok' ? {} : { chars: c.size }), ms: c.ms })
   if (overLimit) agg.overLimit++
   if (c.spilled) agg.spilled++
