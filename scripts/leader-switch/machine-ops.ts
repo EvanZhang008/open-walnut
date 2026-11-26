@@ -254,6 +254,10 @@ export const OPS = {
     }
     return { inProcess, program }
   },
+  /** The processes of this account whose cwd is one of `roots` or under it (src/lib/home-processes.ts): pid, name, cwd. */
+  processesIn: async (roots: string[]) => (await import('../../src/lib/home-processes.js')).processesInFolders(roots),
+  /** A file's size in bytes, or null. */
+  size: (p: string): number | null => { try { return fs.statSync(p).size } catch { return null } },
   /** The door port a machine's daemon publishes now (daemon.port), or null. */
   daemonPort: (daemonDir: string): number | null => {
     try {

@@ -151,9 +151,9 @@ async function checkHandedOverByHand(c: Checks, w: RemoteWorld, m: Machine, lead
 }
 
 /** A turn of a session: started on `on` (default the third host H; `local`: the leader's own daemon), or a message to it. */
-async function sessionTurn(w: RemoteWorld, m: Machine, o: { taskId: string; sid?: string; message: string; on?: 'h' | 'local' }): Promise<{ sid: string; ok: boolean; why?: string }> {
+async function sessionTurn(w: RemoteWorld, m: Machine, o: { taskId: string; sid?: string; message: string; on?: 'h' | 'local'; cwd?: string }): Promise<{ sid: string; ok: boolean; why?: string }> {
   if (!o.sid) {
-    const where = o.on === 'local' ? { cwd: path.join(m.dir, 'work') } : { host: w.h.id, cwd: path.join(w.h.dir, 'work') }
+    const where = o.cwd ? { cwd: o.cwd } : o.on === 'local' ? { cwd: path.join(m.dir, 'work') } : { host: w.h.id, cwd: path.join(w.h.dir, 'work') }
     const r = await w.api(m, 'POST', `/api/v1/tasks/${o.taskId}/start`, { ...where, mode: 'bypass', message: o.message })
     if (r.status !== 202) return { sid: '', ok: false, why: `start ${r.status} ${JSON.stringify(r.json)?.slice(0, 200)}` }
     return { sid: r.json.sessionId as string, ok: true }
@@ -1335,6 +1335,156 @@ async function macShaped(x: Ctx, walnutId: string): Promise<void> {
   if (r4.code === 0) await oneLeader(x, 'mac-shaped back', A)
 }
 
+// ---- sessions working in the data home (core/leader/switch/home-sessions.ts) ----
+
+/** A session's record as a machine's server has it (GET /api/v1/sessions/:id), or null. */
+async function sessionOn(w: RemoteWorld, m: Machine, sid: string): Promise<Record<string, any> | null> {
+  const r = await w.api(m, 'GET', `/api/v1/sessions/${sid}`).catch(() => null)
+  return r?.status === 200 ? (r.json?.session ?? r.json) as Record<string, any> : null
+}
+
+/** A message to a session on `m` answered there once ("echo: <message>"), within 2 min. */
+async function turnAnswered(w: RemoteWorld, m: Machine, taskId: string, sid: string, message: string): Promise<{ ok: boolean; why: string }> {
+  const t = await sessionTurn(w, m, { taskId, sid, message })
+  if (!t.ok) return { ok: false, why: t.why ?? 'not sent' }
+  const ok = await waitFor(`the answer to "${message}" on ${m.id}`, async () => ((await answersOn(w, m, sid)).get(`echo: ${message}`) ?? 0) > 0, 120_000).then(() => true).catch(() => false)
+  const n = (await answersOn(w, m, sid)).get(`echo: ${message}`) ?? 0
+  return { ok: ok && n === 1, why: `answered ${n} time(s)` }
+}
+
+/** The transcript of `sid` in machine `m`'s Claude Code dir, in the folder Claude Code names for `cwd`. */
+const transcriptIn = (m: Machine, cwd: string, sid: string) => path.join(m.dir, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sid}.jsonl`)
+
+/** The lines of the old leader's log about its sessions in the data home, for one switch. */
+async function homeStopLines(m: Machine, switchId: string | undefined): Promise<{ stop?: Record<string, any>; carry?: Record<string, any> }> {
+  const lines = await serverLog(m)
+  const mine = lines.filter((l) => l.switchId === switchId)
+  return {
+    stop: mine.find((l) => /the sessions in the data home are stopped for the switch/.test(String(l.message))),
+    carry: mine.find((l) => /the sessions' records sent/.test(String(l.message))),
+  }
+}
+
+/**
+ * Sessions whose folder is the leader's data home (Main, Ask Walnut and the routines run there): an idle one and one
+ * mid-turn. A switch that rolls back after the stop: both go on in place, same id. A switch started by a command
+ * that a session in the home runs (its CLI is ended in the stop, the switch job is not): both move with the leader,
+ * their history with them, and go on there with the same id; nothing of them stays in the old home. Then back.
+ */
+async function homeSessions(x: Ctx): Promise<void> {
+  const { c, w, roles } = x
+  const L = roles.leader
+  const O = roles.other
+  const label = 'home sessions'
+  const task = async (title: string) => (await w.api(L, 'POST', '/api/tasks', { title, project: 'Rehearsal' })).json?.task?.id as string
+  const tIdle = await task('An idle session in the data home')
+  const tTurn = await task('A session mid-turn in the data home')
+  const tCmd = await task('The session that runs the switch')
+  const idle = await sessionTurn(w, L, { taskId: tIdle, message: 'ROUND home idle on A', cwd: L.home })
+  const idleOk = idle.ok && await waitFor('the idle home session to answer', async () => ((await answersOn(w, L, idle.sid)).get('echo: ROUND home idle on A') ?? 0) > 0, 120_000).then(() => true).catch(() => false)
+  if (!c.add(`${label}: a session in ${L.id}'s data home answers there`, idleOk, idle.why ?? idle.sid)) return
+  const heldTurn = async (m: Machine, sid: string | undefined, taskId: string) => {
+    const gate = path.join(m.dir, `gate-${randomBytes(3).toString('hex')}`)
+    const t = await sessionTurn(w, m, { taskId, ...(sid ? { sid } : { cwd: m.home }), message: `please hold until ${gate}` })
+    const running = t.ok && await waitFor('the held turn to run', async () => (await sessionOn(w, m, t.sid))?.process_status === 'running', 90_000, 500).then(() => true).catch(() => false)
+    return { sid: t.sid, running, why: t.why ?? '', gate }
+  }
+  const turn = await heldTurn(L, undefined, tTurn)
+  if (!c.add(`${label}: a second session in the data home is mid-turn`, turn.running, turn.why || turn.sid)) return
+
+  // ---- 1. a switch that rolls back after the stop (its trial fails): both go on in place ----
+  await writeAndBatch(x, 'home-sessions')
+  const back = await runSwitch(x, `${label}: rolled back`, {
+    env: { WALNUT_LEADER_SWITCH_KILL_AT: 'after-promote' },
+    during: async (from, to) => {
+      const st = await deadTarget(w, from, 300_000)
+      if (!st) return
+      const db = path.join(to.home, 'tasks', 'tasks.sqlite')
+      await w.io(to).op('chmod', db, 0o600)
+      await w.io(to).op('corrupt', db, 4096, 8192)
+      await resumeTargetOn(w, to, st)
+    },
+  })
+  c.add(`${label}: a switch whose trial fails after the stop rolls back`, back.state?.step === 'rolled-back', `${back.state?.step} (${back.state?.rollbackWhy?.slice(0, 160)})`)
+  await oneLeader(x, `${label}: after the rollback`, L)
+  const stopRb = await homeStopLines(L, back.state?.id)
+  c.add(`${label}: the rolled-back switch's stop ended both sessions' CLIs in the data home first (a turn and an idle one)`, (stopRb.stop?.stopped?.turn ?? 0) >= 1 && (stopRb.stop?.stopped?.idle ?? 0) >= 1, JSON.stringify(stopRb.stop ?? null)?.slice(0, 300))
+  for (const [sid, taskId, name] of [[idle.sid, tIdle, 'the idle one'], [turn.sid, tTurn, 'the one mid-turn']] as const) {
+    const a = await turnAnswered(w, L, taskId, sid, `ROUND home after rollback ${name === 'the idle one' ? 'idle' : 'turn'}`)
+    const row = await sessionOn(w, L, sid)
+    c.add(`${label}: after the rollback ${name} goes on in place on ${L.id}, the same id, in its folder`, a.ok && row?.cwd === L.home && (!row?.host || row.host === '__local__'),
+      `${a.why}; cwd ${row?.cwd}; host ${row?.host ?? null}; rolled back ${row?.leaderSwitch?.rolledBack ?? 'no stamp'}`)
+  }
+
+  // ---- 2. the switch, started by a command a session in the home runs ----
+  const again = await heldTurn(L, turn.sid, tTurn)
+  c.add(`${label}: the second session is mid-turn again`, again.running, again.why)
+  await writeAndBatch(x, 'home-sessions-2')
+  const before = await switchState(L.home)
+  const script = path.join(L.dir, 'switch-from-session.sh')
+  const outFile = path.join(L.dir, 'switch-from-session.out.json')
+  const env = { ...L.env, OPEN_WALNUT_HOME: L.home, ...JOB_SESSION_ENV }
+  const { bun, repo } = await w.io(L).op('runtime')
+  await write(script, `#!/bin/sh\n${Object.entries(env).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`).join('\n')}\nexec ${JSON.stringify(bun)} ${JSON.stringify(path.join(repo, 'src', 'cli.ts'))} leader switch --to ${O.id}\n`)
+  const gate = path.join(L.dir, `gate-cmd-${randomBytes(3).toString('hex')}`)
+  await write(gate, 'go')
+  const t0 = Date.now()
+  const cmd = await sessionTurn(w, L, { taskId: tCmd, cwd: L.home, message: `please hold until ${gate} then exec ${script} into ${outFile}` })
+  const st = await waitFor('the switch started from a session in the home to end', async () => {
+    const s2 = await switchState(L.home)
+    return s2 && s2.id !== before?.id && (s2.step === 'done' || s2.step === 'rolled-back') ? s2 : null
+  }, 900_000, 2_000).catch(() => null)
+  const tgt = st ? await targetDone(st) : null
+  const done = st?.step === 'done' && tgt?.step === 'done'
+  if (done) { roles.leader = O; roles.other = L }
+  const cmdRow = cmd.ok ? await sessionOn(w, O, cmd.sid) : null
+  c.add(`${label}: a switch started by a command inside a session in the data home completes (the job outlives that session's CLI, ended in the stop)`, done,
+    `session ${cmd.sid} ${cmd.why ?? ''}; source ${st?.step ?? 'none'} (${st?.rollbackWhy?.slice(0, 160) ?? ''}); target ${tgt?.step ?? 'none'}; the command's own result ${(await text(outFile))?.slice(0, 200) ?? 'none (its CLI ended first)'}; in ${((Date.now() - t0) / 1000).toFixed(0)} s`)
+  if (!done) return
+  await oneLeader(x, `${label}: after the switch`, O)
+  const lines = await homeStopLines(L, st!.id)
+  x.times[`${label}: the stop of the sessions in the data home (old leader)`] = lines.stop ? `${lines.stop.ms} ms for ${JSON.stringify(lines.stop.stopped)} of ${lines.stop.rows} row(s)` : 'no line'
+  x.times[`${label}: the final batch of their records`] = lines.carry ? `${lines.carry.ms} ms (batch ${lines.carry.batch}, ${lines.carry.batches} batch(es))` : 'no line'
+  c.add(`${label}: the old leader stopped its sessions in the data home (the turn, the idle ones, the switch's own) and sent their records before its mark`, !!lines.stop && (lines.stop.stopped?.turn ?? 0) >= 2 && !!lines.carry, JSON.stringify(lines).slice(0, 400))
+  const left = await w.io(L).op('processesIn', [L.home])
+  c.add(`${label}: no process works in ${L.id}'s old home after the switch`, left.length === 0, JSON.stringify(left.slice(0, 5)))
+  const kept0 = await snapshot(L.home)
+  for (const [sid, taskId, name, said] of [[idle.sid, tIdle, 'idle', 'ROUND home idle on A'], [turn.sid, tTurn, 'turn', 'ROUND home after rollback turn'], [cmd.sid, tCmd, 'cmd', 'please hold until']] as const) {
+    const row = await waitFor(`the ${name} session on ${O.id}`, async () => {
+      const r = await sessionOn(w, O, sid)
+      return r?.cwd === O.home && r?.leaderSwitch?.moved?.records === 'placed' ? r : null
+    }, 120_000, 1_000).catch(() => null)
+    const file = transcriptIn(O, O.home, sid)
+    const size = await w.io(O).op('size', file)
+    x.times[`${label}: bytes moved for the ${name} session`] = size === null ? 'none' : `${size} B (its transcript; ${O.id}:${file})`
+    c.add(`${label}: the ${name} session moved to ${O.id}: its folder the same place in the new home, its own daemon, its history in the folder Claude Code names for it there`,
+      !!row && (!row.host || row.host === '__local__') && (await text(file))?.includes(said) === true,
+      `cwd ${row?.cwd ?? (await sessionOn(w, O, sid))?.cwd}; host ${row?.host ?? null}; records ${(await sessionOn(w, O, sid))?.leaderSwitch?.moved?.records}; transcript ${size ?? 'missing'} B`)
+    if (name === 'cmd') continue
+    const a = await turnAnswered(w, O, taskId, sid, `ROUND home on B ${name}`)
+    const onOld = await w.io(L).op('exists', transcriptIn(L, L.home, sid)) ? (await text(transcriptIn(L, L.home, sid)))?.includes(`ROUND home on B ${name}`) : false
+    c.add(`${label}: the ${name} session goes on on ${O.id}, the same id, its earlier turns in its history`, a.ok && (await text(file))?.includes(`ROUND home on B ${name}`) === true && (await text(file))?.includes(said) === true && !onOld,
+      `${a.why}; on the old machine's transcript too: ${onOld}`)
+  }
+  const kept = compareKept(kept0, await snapshot(L.home))
+  c.add(`${label}: the old home stays as it was while the moved sessions work on ${O.id}`, kept.ok, describeKept(kept, 8, L.home))
+
+  // ---- 3. back: they move again, and go on where they started ----
+  await writeAndBatch(x, 'home-sessions-back')
+  const sb = await runSwitch(x, `${label}: back`)
+  if (!c.add(`${label}: the switch back completes`, sb.state?.step === 'done' && sb.target?.step === 'done', `${sb.state?.step}; ${last(sb.out, 3)}`)) return
+  for (const [sid, taskId, name] of [[idle.sid, tIdle, 'idle'], [turn.sid, tTurn, 'turn']] as const) {
+    const row = await waitFor(`the ${name} session back on ${L.id}`, async () => {
+      const r = await sessionOn(w, L, sid)
+      return r?.cwd === L.home && r?.leaderSwitch?.moved?.records === 'placed' ? r : null
+    }, 120_000, 1_000).catch(() => null)
+    const a = await turnAnswered(w, L, taskId, sid, `ROUND home back on A ${name}`)
+    const file = transcriptIn(L, L.home, sid)
+    c.add(`${label}: after the switch back the ${name} session goes on on ${L.id}, the same id, with every turn of both machines`, !!row && a.ok && (await text(file))?.includes(`ROUND home on B ${name}`) === true,
+      `${a.why}; cwd ${row?.cwd}; ${file}`)
+  }
+}
+
 const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
   ['forwarded', forwarded],
   ['net-miss', netMiss],
@@ -1346,6 +1496,7 @@ const SCENARIOS: Array<[string, (x: Ctx) => Promise<void>]> = [
   ['cut-after-commit', cutAfterCommit],
   ['trial-fails', trialFails],
   ['kills', kills],
+  ['home-sessions', homeSessions],
   ['standby-behind', standbyBehind],
   ['measure', measure],
 ]
