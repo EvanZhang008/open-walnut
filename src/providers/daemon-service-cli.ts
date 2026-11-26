@@ -6,7 +6,7 @@ import { WebSocket } from '#ws'
 import { ADOPTED_WORK_CAPABILITIES } from './detached-registry.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
-import { readDaemonServiceExecutable } from './daemon-service-config.js'
+import { readDaemonServiceExecutable, servicePath } from './daemon-service-config.js'
 import { serviceSetLine, type ServiceSet } from './service-set.js'
 import { serviceSetFlagAt, serviceSetOfAction, WALNUT_FLAG, WALNUT_HOME_FLAG } from './service-set-choice.js'
 import { afterServiceUninstall } from './daemon-service-uninstall-tail.js'
@@ -352,18 +352,6 @@ async function reportMoved(names: string[], where: string): Promise<void> {
 function serviceExecutableOf(platform: 'linux' | 'darwin', scope: DaemonServiceScope, text: string | null): string | null {
   if (!text) return null
   try { return scope === 'cron' ? readDaemonBootExecutable(text) : readDaemonServiceExecutable(platform, text) } catch { return null }
-}
-
-/**
- * The PATH a service runs with: this shell's absolute entries, then the usual
- * places for a user's own tools. An install over ssh runs with the server's
- * bare PATH, and a boot start has only cron's, so neither alone finds a
- * `claude` the user installed under their home.
- */
-export function servicePath(current: string | undefined, home: string): string {
-  const extra = [path.join(home, '.local', 'bin'), path.join(home, 'bin'), path.join(home, '.bun', 'bin'), '/usr/local/bin', '/usr/bin', '/bin']
-  const parts = [...(current ?? '').split(':'), ...extra].filter((part) => path.isAbsolute(part) && part === part.trim() && !/[\u0000-\u001f\u007f]/.test(part))
-  return [...new Set(parts)].join(':')
 }
 
 /** The server passes it when the experiment service_launcher is on (daemon-service-update.ts). */

@@ -62,12 +62,42 @@ function checkAbsolutePath(label: string, value: unknown): string {
   return text
 }
 
+/**
+ * The PATH a service runs with: this shell's absolute entries, then the usual
+ * places for a user's own tools. An install over ssh runs with the server's
+ * bare PATH, and a boot start has only cron's, so neither alone finds a
+ * `claude` the user installed under their home.
+ */
+export function servicePath(current: string | undefined, home: string): string {
+  const extra = [path.join(home, '.local', 'bin'), path.join(home, 'bin'), path.join(home, '.bun', 'bin'), '/usr/local/bin', '/usr/bin', '/bin']
+  return absoluteSearchPath([current ?? '', ...extra].join(':'))
+}
+
+/**
+ * The entries of a PATH that checkSearchPath accepts, in order, each once: absolute, no surrounding
+ * space, no control character. A shell's PATH often has an empty entry (`a::b`, a trailing `:`),
+ * which means "the current folder" and which a service's config refuses; it is dropped, never
+ * passed on (2026-11-26: one in a deploying session's PATH stopped the Mac's production deploy).
+ */
+export function absoluteSearchPath(current: string | undefined): string {
+  const parts = (current ?? '').split(':').filter((part) => searchPathEntryProblem('path', part) === null)
+  return [...new Set(parts)].join(':')
+}
+
+/** Why one PATH entry is refused, or null: the one rule the check and absoluteSearchPath share. */
+function searchPathEntryProblem(label: string, entry: string): string | null {
+  if (entry.length === 0) return `${label} must not contain an empty entry`
+  if (!entry.startsWith('/')) return `${label} entries must be absolute, got ${JSON.stringify(entry)}`
+  if (entry !== entry.trim()) return `${label} entries must not have leading or trailing whitespace`
+  if (CONTROL_CHAR.test(entry)) return `${label} must not contain control characters (NUL, newline, tab)`
+  return null
+}
+
 function checkSearchPath(label: string, value: unknown): string {
   const text = checkText(label, value)
   for (const entry of text.split(':')) {
-    if (entry.length === 0) fail(`${label} must not contain an empty entry`)
-    if (!entry.startsWith('/')) fail(`${label} entries must be absolute, got ${JSON.stringify(entry)}`)
-    if (entry !== entry.trim()) fail(`${label} entries must not have leading or trailing whitespace`)
+    const problem = searchPathEntryProblem(label, entry)
+    if (problem) fail(problem)
   }
   return text
 }

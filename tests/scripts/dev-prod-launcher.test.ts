@@ -105,6 +105,24 @@ function startRun(run: string, env: Record<string, string> = {}): ChildProcess {
 
 const hasPerl = fs.existsSync('/usr/bin/perl')
 
+describe('the PATH a version runs with', () => {
+  it('keeps only the absolute entries of the deploying shell\'s PATH (an empty entry stopped a deploy, 2026-11-26)', () => {
+    const f = fixture()
+    const r = lib(f, `svc_abs_path '/usr/bin::/bin:relative/bin:/usr/bin: /opt/x:'; echo; svc_abs_path '::'; echo; svc_abs_path ''`)
+    expect(r.status).toBe(0)
+    expect(r.stdout.split('\n').slice(0, 3)).toEqual(['/usr/bin:/bin', '/usr/bin:/bin:/usr/sbin:/sbin', '/usr/bin:/bin:/usr/sbin:/sbin'])
+  })
+
+  it('the run script writes the filtered PATH', () => {
+    const f = fixture()
+    const run = path.join(f.dir, 'run')
+    expect(lib(f, `PATH+='::relative/bin:'; svc_write_run '${run}'`).status).toBe(0)
+    const m = read(run).match(/ PATH\x3d'([^']*)'/)
+    expect(m, 'the run script sets PATH').not.toBeNull()
+    expect(m![1].split(':')).not.toContain('')
+  })
+})
+
 describe('a version\'s run script', () => {
   it.skipIf(!hasPerl)('leads its own group, passes its pid down through the host, and a TERM ends the server and then itself', async () => {
     const f = fixture()

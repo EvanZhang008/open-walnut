@@ -38,6 +38,24 @@ SVC_TRIAL_SECS="${WALNUT_DEVPROD_LAUNCHER_TRIAL_SECS:-180}"
 
 svc_shq() { local s=${1//\'/\'\\\'\'}; printf "'%s'" "$s"; }
 
+# The absolute entries of a PATH, in order, each once (the rule of absoluteSearchPath in
+# src/providers/daemon-service-config.ts). A deploying shell's PATH can carry an empty entry
+# (`a::b`), which in the run script would mean the serve root it cds into (2026-11-26).
+svc_abs_path() {
+  local out='' e
+  local -a parts=()
+  IFS=: read -r -a parts <<< "$1" || true
+  if [ "${#parts[@]}" -gt 0 ]; then
+    for e in "${parts[@]}"; do
+      case "$e" in /*) ;; *) continue ;; esac
+      [ "$e" = "${e#[[:space:]]}" ] && [ "$e" = "${e%[[:space:]]}" ] || continue
+      case ":$out:" in *":$e:"*) continue ;; esac
+      out="${out:+$out:}$e"
+    done
+  fi
+  printf '%s' "${out:-/usr/bin:/bin:/usr/sbin:/sbin}"
+}
+
 # The launcher's files and the mode of this deploy.
 svc_init() {
   [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1 || { SVC_MODE=plain; return 0; }
@@ -194,7 +212,7 @@ svc_write_run() {
     printf '%s\n' 'WALNUT_LAUNCHER_SERVICE_PID=$$; export WALNUT_LAUNCHER_SERVICE_PID'
     printf '%s\n' 'c='
     printf 'run() { /usr/bin/env -u OPEN_WALNUT_EPHEMERAL -u OPEN_WALNUT_HOME -u WALNUT_DAEMON_DIR -u WALNUT_DAEMON_STATE_DIR -u WALNUT_DAEMON_SUPERVISOR -u VITEST -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN -u WALNUT_LAUNCHER -u WALNUT_LAUNCHD_LABEL -u WALNUT_LAUNCHER_PUTBACK -u L_LOCKED PATH=%s%s "$@" %s web --port %s </dev/null & c=$!; }\n' \
-      "$(svc_shq "$PATH")" "$envs" "$(svc_shq "$file")" "$(svc_shq "$PORT")"
+      "$(svc_shq "$(svc_abs_path "$PATH")")" "$envs" "$(svc_shq "$file")" "$(svc_shq "$PORT")"
     printf '%s\n' 'term=0'
     printf '%s\n' 'trap '"'"'term=1; [ -n "$c" ] && kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP'
     printf '%s\n' 'wait_c() { while :; do wait "$c"; r=$?; kill -0 "$c" 2>/dev/null || return $r; done; }'

@@ -11,8 +11,11 @@
  *  --trial  seconds a new version has to write ready before it is put back (default TRIAL_SECONDS)
  *
  * The run script sets up the server's environment itself, so the launcher's ARGS is empty and its
- * HOME and PATH are the deploy's. Exit 0 with the script on stdout, 2 with a reason for bad words.
+ * HOME and PATH are the deploy's: its PATH's absolute entries (absoluteSearchPath), so an empty entry in the
+ * deploying shell's PATH (`a::b`, which the config check refuses) no longer stops a deploy
+ * (2026-11-26, 6cfb4bdfc8's deploy). Exit 0 with the script on stdout, 2 with a reason for bad words.
  */
+import { absoluteSearchPath } from './daemon-service-config.js'
 import { renderLauncherScript, TRIAL_SECONDS } from './service-launcher-script.js'
 
 export function serveLauncherScript(argv: string[], env: NodeJS.ProcessEnv = process.env): string {
@@ -30,7 +33,7 @@ export function serveLauncherScript(argv: string[], env: NodeJS.ProcessEnv = pro
   const home = env.HOME
   if (!home) throw new Error('HOME is not set')
   return renderLauncherScript({
-    platform: 'linux', home, executable: seed, args: [], runtimeDir: state, stateDir: state, path: env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin',
+    platform: 'linux', home, executable: seed, args: [], runtimeDir: state, stateDir: state, path: absoluteSearchPath(env.PATH) || '/usr/bin:/bin:/usr/sbin:/sbin',
   }, { backend: 'launchd', self, clocks: { trial } })
 }
 

@@ -3,7 +3,7 @@
  * was dispatched ahead of the daemon runtime.
  *
  * The service config the install writes takes its PATH from the CLI's own
- * (daemon-service-cli.ts servicePath(process.env.PATH, home)), and the commands it runs
+ * (daemon-service-config.ts servicePath(process.env.PATH, home)), and the commands it runs
  * (systemctl, launchctl, crontab) are looked up on it. The daemon runtime used to set that PATH
  * (computeDaemonPath: the login shell's PATH first) before the CLI ran; with the CLI dispatched
  * first (it sets no daemon up), a host whose tools live in a login-shell dir (nvm, a toolbox bin)

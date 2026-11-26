@@ -6,7 +6,7 @@
  *
  * The CLI is dispatched before the daemon runtime is created (it sets no daemon up), and the
  * runtime is what used to put that PATH on the process. The service commands need it: the service
- * config takes its PATH from the CLI's (daemon-service-cli.ts servicePath), and systemctl,
+ * config takes its PATH from the CLI's (daemon-service-config.ts servicePath), and systemctl,
  * launchctl and crontab are looked up on it, so a host whose tools live in a login-shell dir (nvm,
  * a toolbox bin) kept them. Spawns the login shell once and writes no file; other CLI commands
  * (tools, wait, guide) need none of it and skip the shell.
