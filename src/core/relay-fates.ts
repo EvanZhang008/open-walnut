@@ -68,6 +68,14 @@ export const MOVE_HELD_REASON = 'Held while its task moves to another host';
 /** Why a message that can wait is held for an idle session whose prompt cache expired (core/sessions/cold-hold.ts). */
 export const COLD_HOLD_REASON = 'Held for the session\'s next wake: it is idle and its prompt cache has expired';
 
+/**
+ * The parks that are holds on their own clock: the row goes by itself when that clears (a turn's
+ * end, a cold session's wake, a restart's recovery, a move's end), never a failure. The delivery
+ * ledger marks such a park `via: wait` (session-queue-exits.ts), and its sender is told only if it
+ * still waits long after (sessions/undelivered-tell.ts WAIT_TELL_MS).
+ */
+export const HOLD_REASONS: ReadonlySet<string> = new Set([COLD_HOLD_REASON, AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, MOVE_HELD_REASON]);
+
 /** The slice of the queue store the fates work on. */
 export interface FateStore {
   queues: Record<string, Array<{ id: string; status: string; parkedReason?: string; lineInDoubt?: true }>>;

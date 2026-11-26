@@ -283,7 +283,8 @@ export async function flushDropTells(now = Date.now()): Promise<number> {
   const bySession = new Map<string, DropTell[]>();
   for (const t of batch) {
     // Delivered or dropped since it was queued: "not delivered yet" is no longer so (a drop has its own tell).
-    if (t.kind === 'waiting' && (!t.mid || !waitingNote(t.mid))) continue;
+    // A message's tell (undelivered-tell.ts) is no held note: it forgets its own (forgetWaitingTells).
+    if (t.kind === 'waiting' && t.subject !== 'message' && (!t.mid || !waitingNote(t.mid))) continue;
     try {
       const where = await tellWhere(t);
       if (typeof where !== 'string') { tellUndeliverable(t, where.why, now, where.final); continue; }
@@ -296,13 +297,13 @@ export async function flushDropTells(now = Date.now()): Promise<number> {
   const minutes = bySession.size ? Math.round((await import('./cold-hold.js')).COLD_HOLD_MAX_MS / 60_000) : 0;
   for (const [sid, all] of bySession) {
     // Read again after the awaits: a note delivered or dropped meanwhile is not told "not delivered yet".
-    const list = all.filter((t) => t.kind !== 'waiting' || (!!t.mid && !!waitingNote(t.mid)));
+    const list = all.filter((t) => t.kind !== 'waiting' || t.subject === 'message' || (!!t.mid && !!waitingNote(t.mid)));
     if (!list.length) continue;
     try {
       // It names the notes it tells of: dropped in turn (this session gone too), their fates say so.
       const notes = list.map((t) => ({
         callerSid: t.callerSid, op: t.op, reason: t.reason, taskId: t.taskId, kind: t.kind ?? 'dropped' as TellKind,
-        ...(t.mid ? { mid: t.mid } : {}), ...(t.fromTask ? { fromTask: t.fromTask } : {}),
+        ...(t.mid ? { mid: t.mid } : {}), ...(t.fromTask ? { fromTask: t.fromTask } : {}), ...(t.subject ? { subject: t.subject } : {}),
       }));
       const text = renderTell(notes, minutes);
       const task = list.find((t) => t.fromTask)?.fromTask;

@@ -9,7 +9,8 @@
  * it), `carried` (held notes that rode the queue row named), `dropped` (a held note the hold let go
  * unsent, with why), `queued` (a row in the session's queue), `parked` (held back, with why),
  * `written` (in the CLI's input), `read` (the CLI started the line), `failed`, `cancelled`,
- * `removed` (a row that left the queue unsent, with what it was: session-queue-exits.ts), and
+ * `removed` (a row that left the queue unsent, with what it was: session-queue-exits.ts), `told`
+ * (its sender was told it was set aside or voided unsent: undelivered-tell.ts), and
  * `server_start` (where the server restarted, for reading a trail).
  *
  * Every way into a session is recorded where it cannot be skipped (2026-11-24 audit: a person's words
@@ -33,7 +34,8 @@ import { eventData } from '../event-types.js';
 export const DELIVERY_LEDGER_DIR = (): string => path.join(WALNUT_HOME, 'cache', 'delivery-ledger');
 export const DELIVERY_KEEP_DAYS = 14;
 
-export type DeliveryStep = 'sent' | 'held' | 'carried' | 'dropped' | 'queued' | 'parked' | 'written' | 'read' | 'failed' | 'cancelled' | 'removed' | 'server_start';
+/** `told`: the sender of a message set aside or voided unsent was told so (undelivered-tell.ts); never a state. */
+export type DeliveryStep = 'sent' | 'held' | 'carried' | 'dropped' | 'queued' | 'parked' | 'written' | 'read' | 'failed' | 'cancelled' | 'removed' | 'told' | 'server_start';
 
 export interface DeliveryLine {
   at: string;
@@ -53,9 +55,16 @@ export interface DeliveryLine {
   lineUuid?: string;
   /** parked, failed, dropped, removed: why. */
   why?: string;
-  /** read: how, when no CLI line carried it (`threads`: its owner read it in its Threads; `cli`: the CLI took a row put back while its line's fate was unknown). */
+  /**
+   * read: how, when no CLI line carried it (`threads`: its owner read it in its Threads; `cli`: the CLI
+   * took a row put back while its line's fate was unknown). parked: `wait` for a hold that goes by
+   * itself. dropped: `hold` for a note the hold dropped (its sender told there). told: what the
+   * sender was told of (`park`, `wait`, `void`, `request`).
+   */
   via?: string;
   requestId?: string;
+  /** told: the session told (the message's sender). */
+  told?: string;
 }
 
 /** The id a session's first line (carried by its start, never a queue row) is kept under. */
@@ -92,10 +101,46 @@ export function setDeliveryTaskResolver(fn: ((sessionId: string) => Promise<stri
 const fileOf = (at: string) => path.join(DELIVERY_LEDGER_DIR(), `${at.slice(0, 10)}.ndjson`);
 let chain: Promise<unknown> = Promise.resolve();
 
+/**
+ * The last step recorded per message id, in this process: a park two ways say at once (the queue's
+ * own write, sessions/session-queue-exits.ts, and a delivery's failure event) is one step.
+ */
+const lastStep = new Map<string, { step: DeliveryStep; at: number; why?: string; via?: string }>();
+const LAST_STEP_MAX = 10_000;
+/** A second `parked` of one message within this of the first, with no other step between, is the same park. */
+export const SAME_PARK_MS = 15_000;
+
+/**
+ * Who hears each step once it is written (installed by startDeliveryLedger): the senders of a
+ * message set aside or voided unsent are told there (sessions/undelivered-tell.ts), so no way of
+ * parking or dropping a message can skip telling them.
+ */
+let stepObserver: ((line: DeliveryLine) => void) | null = null;
+
+/**
+ * Two reports of one park: the same `via`, and the same reason (the batch-failure event's error text
+ * and the queue row's stored reason may differ only after the reason's words: one starts the other).
+ */
+function samePark(a: { why?: string; via?: string }, b: { why?: string; via?: string }): boolean {
+  if ((a.via ?? '') !== (b.via ?? '')) return false;
+  const x = (a.why ?? '').slice(0, 200);
+  const y = (b.why ?? '').slice(0, 200);
+  return x === y || (!!x && !!y && (x.startsWith(y) || y.startsWith(x)));
+}
+
 /** Append one step. Never throws; resolves once it is written (tests await it). */
 export function recordDelivery(line: Omit<DeliveryLine, 'at'> & { at?: string }): Promise<unknown> {
   const row: DeliveryLine = { at: line.at ?? new Date().toISOString(), ...line } as DeliveryLine;
   if (row.title) row.title = row.title.replace(/\s+/g, ' ').slice(0, 120);
+  if (row.id) {
+    const was = lastStep.get(row.id);
+    const at = Date.parse(row.at) || Date.now();
+    // The same park said twice (same why and via, within SAME_PARK_MS): one step. Another reason is a new park.
+    if (row.step === 'parked' && was?.step === 'parked' && Math.abs(at - was.at) < SAME_PARK_MS && samePark(was, row)) return chain;
+    if (lastStep.size >= LAST_STEP_MAX) lastStep.delete(lastStep.keys().next().value!);
+    lastStep.delete(row.id);
+    lastStep.set(row.id, { step: row.step, at, ...(row.why ? { why: row.why } : {}), ...(row.via ? { via: row.via } : {}) });
+  }
   chain = chain.then(async () => {
     if (!row.taskId && row.sessionId && taskOfSession) {
       const taskId = await taskOf(row.sessionId);
@@ -103,6 +148,7 @@ export function recordDelivery(line: Omit<DeliveryLine, 'at'> & { at?: string })
     }
     await fsp.mkdir(DELIVERY_LEDGER_DIR(), { recursive: true });
     await fsp.appendFile(fileOf(row.at), `${JSON.stringify(row)}\n`, 'utf-8');
+    try { stepObserver?.(row); } catch { /* best effort */ }
   }).catch((err) => log.session.warn('delivery ledger: a step was not recorded', { step: row.step, id: row.id, error: err instanceof Error ? err.message : String(err) }));
   return chain;
 }
@@ -135,7 +181,7 @@ export function recordStartLine(line: { sessionId: string; taskId?: string; sour
 }
 
 /** The steps a SESSION_QUEUE_LEFT may name (session-queue-exits.ts): no other comes from it. */
-const EXIT_STEPS: ReadonlySet<string> = new Set(['removed', 'dropped', 'read', 'written', 'queued']);
+const EXIT_STEPS: ReadonlySet<string> = new Set(['removed', 'dropped', 'read', 'written', 'queued', 'parked']);
 
 export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
   switch (event.name) {
@@ -160,7 +206,8 @@ export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
     }
     case EventNames.SESSION_DELIVERY_HELD: {
       const d = eventData<'session:delivery-held'>(event);
-      return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'parked', id, sessionId: d.sessionId, why: d.reason.slice(0, 200) })));
+      // Held behind a prompt, a line still unconfirmed or a slow host: it goes by itself (`wait`).
+      return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'parked', id, sessionId: d.sessionId, why: d.reason.slice(0, 200), via: 'wait' })));
     }
     case EventNames.SESSION_QUEUE_LEFT: {
       const d = eventData<'session:queue-left'>(event);
@@ -176,7 +223,7 @@ export function onDeliveryEvent(event: BusEvent): Promise<unknown> | undefined {
     }
     case EventNames.SESSION_QUEUED_CANCELLED: {
       const d = eventData<'session:queued-cancelled'>(event);
-      return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'cancelled', id, sessionId: d.sessionId })));
+      return Promise.all(d.messageIds.map((id) => recordDelivery({ step: 'cancelled', id, sessionId: d.sessionId, why: 'cancelled before Claude Code ran it (a Stop in that session)' })));
     }
     default:
       return undefined;
@@ -199,11 +246,18 @@ export function startDeliveryLedger(): { stop: () => void } {
   setDeliveryTaskResolver(async (sid) => (await (await import('../session-tracker.js')).getSessionByClaudeId(sid))?.taskId ?? undefined);
   void recordDelivery({ step: 'server_start' });
   void pruneDeliveryLedger();
+  let observing = true;
+  let stopTell: (() => void) | null = null;
+  void import('./undelivered-tell.js').then((m) => {
+    if (!observing) return;
+    stepObserver = m.observeDeliveryStep;
+    stopTell = m.startUndeliveredTell();
+  }).catch(() => {});
   bus.subscribe(SUBSCRIBER, (event) => { void onDeliveryEvent(event); }, {
     global: true,
     interest: [...DELIVERY_LEDGER_EVENTS],
   });
-  return { stop: () => { bus.unsubscribe(SUBSCRIBER); setDeliveryTaskResolver(null); } };
+  return { stop: () => { observing = false; stepObserver = null; stopTell?.(); bus.unsubscribe(SUBSCRIBER); setDeliveryTaskResolver(null); } };
 }
 
 export async function pruneDeliveryLedger(nowMs = Date.now()): Promise<void> {
@@ -228,7 +282,7 @@ export interface DeliveryTrail {
 /** Where one message's own steps got it to (a held note's carrier aside): read stays, else its last step. Pure. */
 function stateOf(steps: readonly DeliveryLine[]): DeliveryState {
   if (steps.some((s) => s.step === 'read')) return 'read';
-  const last = [...steps].reverse().find((s) => s.step !== 'sent');
+  const last = [...steps].reverse().find((s) => s.step !== 'sent' && s.step !== 'told');
   return last ? (last.step as DeliveryState) : 'sent';
 }
 

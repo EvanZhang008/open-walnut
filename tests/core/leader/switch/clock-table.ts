@@ -102,6 +102,7 @@ export const CLOCKS: Record<string, Clock[]> = {
   'src/core/session-reaper.ts': [['stopped', 'stopped by stopServer before the final batch', 'sessionReaper.stop(']],
   'src/core/sessions/cold-hold.ts': [['gated', 'While any row is held, each lap reads session-message-queue.json and, for a due or no-longer-cold hold, mutateStore on it (releaseColdHolds, leader: \'session-queue\') and emits SESSION_SEND;']],
   'src/core/sessions/delivery-retry.ts': [['gated', 'Every 60 s sweepDeliveryRetries reads session-message-queue.json; for due parked rows it does mutateStore on it (leader: \'session-queue\') and emits SESSION_SEND;']],
+  'src/core/sessions/undelivered-tell.ts': [['gated', 'Every 5 min sweepWaits tells the senders of holds still set aside past WAIT_TELL_MS: queues their notice in held-notices.json and appends `told` to the delivery ledger; the tick asks first.']],
   'src/core/sessions/held-notices-sweep.ts': [['stopped', 'stopped by stopServer before the final batch', 'stopHeldNotices(']],
   'src/core/sessions/host-lost.ts': [['none', 'Memory only: AwakeDownClock.sample(Date.now()) every AWAKE_TICK_MS keeps an awake-time counter (src/providers/awake-down-clock.ts has no file or fs access). Line 168 is a one-shot probe deadline race.']],
   'src/core/sessions/lane-turn-gate.ts': [['none', 'Per drained lane, every tickMs: reads the lane\'s session record (getSessionByClaudeId) and, once per windowMs, emits SESSION_INTERRUPT on the bus for the session runner. The tick itself writes nothing;']],

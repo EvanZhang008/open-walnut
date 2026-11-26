@@ -610,7 +610,7 @@ export async function sendMessageToSession(
     // of up to an hour reads as held, and why, not as queued (2026-11-23 audit).
     if (holdsCold || holdsRow) {
       const why = holdsCold ? `held for the session's next wake (it is cold), at the latest ${heldShown?.heldRetryAt ?? 'within the hour'}` : 'held for the end of the running turn';
-      void import('./sessions/delivery-ledger.js').then((l) => l.recordDelivery({ step: 'parked', id: msg.id, sessionId, why })).catch(() => {});
+      void import('./sessions/delivery-ledger.js').then((l) => l.recordDelivery({ step: 'parked', id: msg.id, sessionId, why, via: 'wait' })).catch(() => {});
     }
 
     // Tell session-runner to process the queued message (a row held for a move, for the turn's end or

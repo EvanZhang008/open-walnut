@@ -255,6 +255,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'core/sessions/event-rows.ts': 1, // queuedEventRow: news of a key still waiting to go (its pending-row look moved here from subtask-notices)
   'core/sessions/session-send-core.ts': 1,
   'core/sessions/undelivered-requests.ts': 2,
+  'core/sessions/undelivered-tell.ts': 1, // rowHere: whether a parked message is still in this server's queue, to word its sender's tell; nothing is listed to a person
   'core/sessions/folder-gone.ts': 3,
   'core/sessions/held-notices-sweep.ts': 2, // quietCarries: is anything else in line (a quiet row must go alone); listenQuietEnds: is the quiet line still pending
   'core/sessions/idle-compaction.ts': 1,

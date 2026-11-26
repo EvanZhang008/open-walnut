@@ -34,6 +34,12 @@ import { clause } from '../../utils/format.js';
 
 export { FOLD_PARTS_MAX, HOLD_MAX_MS, type DropTell };
 
+/**
+ * The ledger's `via` of a note the hold dropped (dropParts): its sender is told here, so the ledger's
+ * own teller (undelivered-tell.ts) leaves it alone.
+ */
+export const HOLD_DROP_VIA = 'hold';
+
 /** Why a note left the hold unread (the sender's notice and op_result say it). */
 export const DROP_WHY = {
   age: `it waited ${HOLD_MAX_MS / 86_400_000} days and its target sent no message in that time`,
@@ -59,7 +65,8 @@ export function tellUndeliverable(
   log.session.warn(t.kind === 'waiting' ? 'held notices: the sender of a note that still waits could not be told' : 'held notices: the sender of a dropped note could not be told', {
     messageId: t.mid, note: t.reason, callerSid: t.callerSid, taskId: t.taskId, fromTaskId: t.fromTask, tries: t.tries, kind: t.kind ?? 'dropped', why,
   });
-  if (!t.mid) return;
+  // A message's tell (undelivered-tell.ts): its ledger trail says it was told, and this line that it did not reach.
+  if (!t.mid || t.subject === 'message') return;
   if (t.kind === 'waiting') {
     const w = waitingNote(t.mid);
     if (!w) return;
@@ -90,7 +97,7 @@ export function dropParts(sid: string, parts: readonly unknown[], why: string, n
       continue;
     }
     recordFate(m.mid, { state: 'dropped', at: now, sid, why });
-    void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why })).catch(() => {});
+    void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why, via: HOLD_DROP_VIA })).catch(() => {});
     log.session.info('held note dropped unread', { messageId: m.mid, sessionId: sid, fromSessionId: m.from, taskId: m.task, why });
     if (!m.from) continue;
     queueTell({
@@ -122,9 +129,29 @@ export function renderTell(list: readonly ToldItem[], holdMinutes: number): stri
     body: lines.join('\n'),
   });
   const line = (t: ToldItem) => callerItemLine({ callerSid: t.callerSid, op: t.op ?? 'task_send', taskId: t.taskId, reason: t.reason });
-  const dropped = list.filter((t) => (t.kind ?? 'dropped') === 'dropped');
-  const waiting = list.filter((t) => t.kind === 'waiting');
+  const notes = list.filter((t) => t.subject !== 'message');
+  const dropped = notes.filter((t) => (t.kind ?? 'dropped') === 'dropped');
+  const waiting = notes.filter((t) => t.kind === 'waiting');
   const out: string[] = [];
+  // Messages of the sender's set aside or voided unsent (sessions/undelivered-tell.ts): each line says what next.
+  const voided = list.filter((t) => t.subject === 'message' && (t.kind ?? 'dropped') === 'dropped');
+  const aside = list.filter((t) => t.subject === 'message' && t.kind === 'waiting');
+  if (voided.length) {
+    const one = voided.length === 1;
+    out.push(notice('dropped', [
+      `${one ? 'A message' : `${voided.length} messages`} you sent ${one ? 'was' : 'were'} NOT delivered, and ${one ? 'it' : 'they'} will not be:`,
+      ...voided.map(line),
+      'If one still matters, send it again (to that task once it is open again, or to whoever does that work now), and correct anything you said on the belief that it arrived.',
+    ]));
+  }
+  if (aside.length) {
+    const one = aside.length === 1;
+    out.push(notice('waiting', [
+      `${one ? 'A message' : `${aside.length} messages`} you sent ${one ? 'is' : 'are'} not delivered yet: set aside in the target's queue.`,
+      ...aside.map(line),
+      'You are told again if one is dropped.',
+    ]));
+  }
   if (dropped.length) {
     const one = dropped.length === 1;
     out.push(notice('dropped', [
@@ -189,7 +216,7 @@ function noteLabel(m: PartMeta): string {
 }
 
 /** Batched: one notice per sender for what one sweep, one lap or one burst queued. */
-function flushTellsSoon(): void {
+export function flushTellsSoon(): void {
   if (tellTimer) return;
   tellTimer = setTimeout(() => {
     tellTimer = null;

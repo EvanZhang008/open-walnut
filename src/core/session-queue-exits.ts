@@ -1,9 +1,14 @@
 /**
- * Every row that leaves the session message queue unsent leaves a step in the delivery ledger
- * (sessions/delivery-ledger.ts, from SESSION_QUEUE_LEFT), told where the queue file is written
- * (session-queue-store.ts persist), so no way out can skip it (2026-11-25, the Reflection VP's audit: 12 messages read
- * `parked` for 31 to 39 hours and 3 `queued` for up to 44 hours, all long gone from the queue; a
- * Discard, a cleanup, a fold or a move took them out and none of those ways wrote a step).
+ * Every row that leaves the session message queue unsent, and every row set aside in it, leaves a
+ * step in the delivery ledger (sessions/delivery-ledger.ts, from SESSION_QUEUE_LEFT), told where the
+ * queue file is written (session-queue-store.ts persist), so no way out and no park can skip it
+ * (2026-11-25, the Reflection VP's audit: 12 messages read `parked` for 31 to 39 hours and 3 `queued`
+ * for up to 44 hours, all long gone from the queue; a Discard, a cleanup, a fold or a move took them
+ * out and none of those ways wrote a step. 2026-11-26: a host's refusal parked a peer's message and a
+ * trigger's reminder, and neither park was in the ledger: only the batch-failure event wrote one).
+ *
+ * A row that goes from waiting to `parked` is `parked` with its reason (its sender is told:
+ * sessions/undelivered-tell.ts), and one put back in line from a park is `queued` again.
  *
  * A row that leaves while `processing` is in its session's hands: its delivery records its own steps
  * (`written`, `read`), so it is not recorded here, unless the way that took it out named its step
@@ -14,6 +19,7 @@
  * Ratchet: tests/core/sessions/delivery-ledger-facts-ratchet.test.ts.
  */
 import type { QueuedMessage, QueueStore } from './session-queue-store.js';
+import { HOLD_REASONS } from './relay-fates.js';
 import type { SessionQueueLeftEvent } from './event-types.js';
 
 /**
@@ -21,7 +27,7 @@ import type { SessionQueueLeftEvent } from './event-types.js';
  * its way between queues (session-queue-transit.ts: an engine switch's or a host hand's), kept under
  * the session it was taken from.
  */
-export type RowPlaces = Map<string, { sid: string; status: QueuedMessage['status']; parkedReason?: string; transit?: 'switch' | 'host' }>;
+export type RowPlaces = Map<string, { sid: string; status: QueuedMessage['status']; parkedReason?: string; transit?: 'switch' | 'host'; parkedAt?: string }>;
 
 export function placesOf(s: QueueStore): RowPlaces {
   const out: RowPlaces = new Map();
@@ -30,7 +36,9 @@ export function placesOf(s: QueueStore): RowPlaces {
   }
   // A row in a queue is where it is, whatever a transit also names.
   for (const [sid, rows] of Object.entries(s.queues)) {
-    for (const m of rows ?? []) out.set(m.id, { sid, status: m.status, ...(m.parkedReason ? { parkedReason: m.parkedReason } : {}) });
+    for (const m of rows ?? []) {
+      out.set(m.id, { sid, status: m.status, ...(m.parkedReason ? { parkedReason: m.parkedReason } : {}), ...(m.parkedAt ? { parkedAt: m.parkedAt } : {}) });
+    }
   }
   return out;
 }
@@ -38,7 +46,10 @@ export function placesOf(s: QueueStore): RowPlaces {
 /** `silent`: the way out says nothing of it (a host giving back a line its leader delivers itself). */
 export type ExitStep = 'removed' | 'dropped' | 'read' | 'written' | 'silent';
 export type ExitNote = { step: ExitStep; why?: string; via?: string };
-export interface QueueExit { step: Exclude<ExitStep, 'silent'> | 'queued'; id: string; sessionId: string; why?: string; via?: string }
+export interface QueueExit { step: Exclude<ExitStep, 'silent'> | 'queued' | 'parked'; id: string; sessionId: string; why?: string; via?: string }
+
+/** The ledger's `via` of a park that is a hold on its own clock (relay-fates.ts HOLD_REASONS): it goes by itself. */
+export const PARK_WAIT_VIA = 'wait';
 
 /** Steps the way out named, by row id, for the next write that takes the row out. */
 const named = new Map<string, ExitNote>();
@@ -62,6 +73,10 @@ export function exitsBetween(was: RowPlaces, now: QueueStore): QueueExit[] {
     if (at) {
       // Into a transit is not an exit; out of one, or straight, into another session's queue is a move.
       if (!at.transit && at.sid !== before.sid) out.push({ step: 'queued', id, sessionId: at.sid, why: `moved from session ${before.sid}` });
+      else if (!at.transit && !before.transit) {
+        const step = parkStep(before, at);
+        if (step) out.push({ ...step, id, sessionId: at.sid });
+      }
       continue;
     }
     const step = named.get(id);
@@ -75,6 +90,23 @@ export function exitsBetween(was: RowPlaces, now: QueueStore): QueueExit[] {
   // A note for a row this write left where it was (a recheck under the lock kept it) is not for a later write.
   for (const id of [...named.keys()]) if (after.has(id)) named.delete(id);
   return out;
+}
+
+/**
+ * A row set aside where it is (into `parked`, or parked again for another reason) or put back in line
+ * from a park. Any other change of a row that stays is no step here.
+ */
+function parkStep(
+  before: NonNullable<ReturnType<RowPlaces['get']>>, at: NonNullable<ReturnType<RowPlaces['get']>>,
+): { step: 'parked' | 'queued'; why: string; via?: string } | null {
+  if (at.status === 'parked' && (before.status !== 'parked' || (at.parkedReason ?? '') !== (before.parkedReason ?? '') || at.parkedAt !== before.parkedAt)) {
+    // A hold on its own clock goes by itself: `wait` (sessions/undelivered-tell.ts tells it only if it lasts).
+    return { step: 'parked', why: (at.parkedReason || 'set aside in its queue').slice(0, 200), ...(HOLD_REASONS.has(at.parkedReason ?? '') ? { via: PARK_WAIT_VIA } : {}) };
+  }
+  if (before.status === 'parked' && at.status === 'pending') {
+    return { step: 'queued', why: `back in line (it was parked: ${before.parkedReason || 'no reason given'})`.slice(0, 200) };
+  }
+  return null;
 }
 
 /**

@@ -49,6 +49,7 @@ const NOT_MEMBERS: Record<string, string> = {
   'src/core/session-tracker': 'the session command gate\'s filters (stale-row repair, capacity eviction, the orphan sweep): a host-judged row is its host\'s to repair, evict or sweep, so these leave it out; no job of the resend family',
   'src/providers/service-set-move-checks': 'a service set move\'s list of sessions to move: a host-judged one is its host service\'s already; no job of the resend family',
   'src/web/routes/delivery': 'the delivery ledger\'s read: a waiting trail is settled only against a queue this server holds (settleGone); read only, no job',
+  'src/core/sessions/undelivered-tell': 'the ledger\'s sender teller (primary only, as the ledger): a long hold is told only while its row is still parked here or its queue is a host\'s; read only, no job of the resend family',
   'src/core/sessions/task-complete-stop': 'a completed task\'s turn-end stops read back at startup on each side (the leader\'s boot migration, host-boot.ts on a host): each side resumes only the rows it judges; no job of the resend family',
 }
 

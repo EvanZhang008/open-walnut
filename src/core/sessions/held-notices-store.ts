@@ -123,6 +123,12 @@ export interface DropTell {
   /** The dropped note's message id: its fate says so when no session can be told. */
   mid?: string;
   fromTask?: string;
+  /**
+   * `message`: a message of the sender's (a queue row, or a note that rode one) set aside or voided
+   * unsent, told by sessions/undelivered-tell.ts; absent: a wake=false note the hold itself dropped
+   * or still holds.
+   */
+  subject?: 'message';
 }
 
 /**
@@ -274,6 +280,19 @@ export function queueTell(t: DropTell): void {
   tells.push(t);
 }
 
+/**
+ * Take back queued tells that a message is not delivered yet (undelivered-tell.ts): it was delivered
+ * since, or its void says what became of it. A tell already being told (takeTells) is left alone.
+ * Returns whether one was taken back (the caller writes the file).
+ */
+export function forgetQueuedTells(mids: readonly string[]): boolean {
+  const gone = new Set(mids);
+  const keep = tells.filter((t) => !(t.subject === 'message' && t.kind === 'waiting' && t.mid && gone.has(t.mid)));
+  if (keep.length === tells.length) return false;
+  tells.splice(0, tells.length, ...keep);
+  return true;
+}
+
 /** The senders to tell now; they stay in the file until settleTells says how it went. */
 export function takeTells(): DropTell[] {
   const out = tells.splice(0, tells.length);
@@ -400,6 +419,7 @@ function validTell(v: unknown): DropTell | null {
     ...(typeof t.mid === 'string' ? { mid: t.mid } : {}),
     ...(typeof t.fromTask === 'string' ? { fromTask: t.fromTask } : {}),
     ...(t.kind === 'waiting' || t.kind === 'dropped' ? { kind: t.kind } : {}),
+    ...(t.subject === 'message' ? { subject: 'message' as const } : {}),
   };
 }
 

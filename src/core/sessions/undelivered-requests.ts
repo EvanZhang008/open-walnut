@@ -63,6 +63,10 @@ export function parkMeansNeverRan(reason: string | undefined): boolean {
     // Read and never answered, twice (claude-code-session.ts LINE_NOT_ANSWERED_REASON): no answer will come.
     || /^Not answered:/.test(reason)
     || /^Not sent: the session budget is paused/.test(reason)
+    // The host that runs the session would not take the line (providers/host-judged-send.ts
+    // HOST_REFUSED_REASON, e.g. its sessions switch is off). 2026-11-26: a peer's ask parked so was
+    // never told to its asker, and was retired an hour later unread.
+    || /^The host that runs this session refused the message/.test(reason)
     || /dropped this message without running it/.test(reason)
     || /working directory (no longer exists|not set|not available)|cwd does not exist on this host/i.test(reason)
     || /no active session found for session id/i.test(reason);
@@ -133,6 +137,16 @@ export async function recentNeverRanPark(sessionId: string | undefined, sinceMs:
   return failed.sort((a, b) => (b.parkedAt ?? '').localeCompare(a.parkedAt ?? ''))[0];
 }
 
+/**
+ * Whether notifyParkedRequests (called where every park of this server's queue is logged:
+ * session-queue-park.ts logParked) answers `requestId` for this parked row: the row names that
+ * request and its park proves it never ran. The ledger's teller (undelivered-tell.ts) leaves such a
+ * park to it, never a second notice.
+ */
+export function parkAnsweredByRequest(row: Pick<QueuedMessage, 'message' | 'parkedReason'>, requestId: string): boolean {
+  return requestIdOf(row) === requestId && parkMeansNeverRan(row.parkedReason);
+}
+
 /** Tell each asker whose message was just parked for good. Never throws. */
 export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Promise<void> {
   for (const row of rows) {
@@ -162,7 +176,13 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       // Told it was not delivered (a folder of the user's own that went): never sent by itself after.
       if (!retried) await noteToldUndelivered(row);
       const { notifyRequesterFallback } = await import('./session-request-notify.js');
-      await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
+      const told = await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
+      // The ledger says its asker was told (sessions/undelivered-tell.ts leaves such a park to this).
+      const { recordDelivery } = await import('./delivery-ledger.js');
+      if (told) void recordDelivery({
+        step: 'told', id: row.id, sessionId: row.sessionId, told: request.fromSessionId, via: 'request',
+        why: `its request ${id} was answered: ${retried ? 'not delivered yet, Walnut tries again' : 'not delivered'}: ${row.parkedReason ?? ''}`.slice(0, 200),
+      });
     } catch (err) {
       log.session.warn('parked request: notifying the asker failed', {
         requestId: id, sessionId: row.sessionId, messageId: row.id,

@@ -34,7 +34,7 @@
  */
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
-import { AFTER_TURN_REASON, COLD_HOLD_REASON, MOVE_HELD_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from '../relay-fates.js';
+import { HOLD_REASONS, STOP_PARKED_REASON } from '../relay-fates.js';
 import { leaveParked } from '../queue-held-spans.js';
 import { _resetFolderLooksForTesting, endFolderWaits, FOLDER_WAIT_ENDED, FOLDER_WAIT_MAX_AGE_MS, folderIsBackFor, waitsForFolder } from './folder-wait.js';
 import { mutateStore, readQueueFileFresh, type QueuedMessage } from '../session-queue-store.js';
@@ -48,7 +48,7 @@ const SWEEP_MS = 60_000;
 export const STUCK_PENDING_MS = 5 * 60_000;
 
 /** Parks a person or a hold decided: never tried again by this clock. */
-const HELD_REASONS: ReadonlySet<string> = new Set([STOP_PARKED_REASON, COLD_HOLD_REASON, AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, MOVE_HELD_REASON]);
+const HELD_REASONS: ReadonlySet<string> = new Set([STOP_PARKED_REASON, ...HOLD_REASONS]);
 
 /**
  * Parks of a line Claude Code read and then stopped before answering: the words are in the session's
@@ -155,7 +155,7 @@ async function leftAloneWhy(sessionId: string): Promise<{ why: string; since: nu
  * Discard in that task's chat), and so does a row a hold keeps on its own clock.
  */
 export const RETIRE_AFTER_MS = 60 * 60_000;
-const OWN_CLOCK_REASONS: ReadonlySet<string> = new Set([COLD_HOLD_REASON, AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, MOVE_HELD_REASON]);
+const OWN_CLOCK_REASONS = HOLD_REASONS;
 
 /**
  * Is this row one a session left alone retires: an agent's park, not on a hold's own clock, parked

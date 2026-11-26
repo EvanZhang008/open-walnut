@@ -518,8 +518,13 @@ export interface SessionQueueLeftEvent {
   sessionId: string;
   /** The rows (a host's fact keeps only its own session's: session-channel/fact-keys.ts). */
   messageIds: string[];
-  /** Each row's step, by id: `removed` (left unsent), `dropped` (retired), `read` (the CLI took it), `written` (its words rode another line), `queued` (moved here from another session). Read only for the ids in messageIds. */
-  exits: Record<string, { step: 'removed' | 'dropped' | 'read' | 'written' | 'queued'; why?: string; via?: string }>;
+  /**
+   * Each row's step, by id: `removed` (left unsent), `dropped` (retired), `read` (the CLI took it),
+   * `written` (its words rode another line), `queued` (moved here from another session, or back in
+   * line from a park), `parked` (set aside where it is, with why; `via: wait` for a hold on its own
+   * clock). Read only for the ids in messageIds. An older leader skips a step it does not know.
+   */
+  exits: Record<string, { step: 'removed' | 'dropped' | 'read' | 'written' | 'queued' | 'parked'; why?: string; via?: string }>;
 }
 
 export interface SessionBatchCompletedEvent {

@@ -40,6 +40,8 @@ describe('every place that settles a request is classified', () => {
       'core/sessions/undelivered-requests.ts': 1,
       // A message that stopped waiting on its gone folder (its day passed, or its remake failed): it never ran.
       'core/sessions/folder-wait.ts': 1,
+      // A message voided unsent (dropped, removed, cancelled) whose ask is still open: it never ran.
+      'core/sessions/undelivered-tell.ts': 1,
       // The notify module: both definitions, the wrapper's delegation, the group settle, the sweeper's timeout.
       'core/sessions/session-request-notify.ts': 5,
       // Turn edges, which must hold for progress: the deferred pass after the report, and the hook.

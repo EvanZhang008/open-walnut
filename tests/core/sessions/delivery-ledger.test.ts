@@ -150,7 +150,7 @@ describe('the send path', () => {
     expect(core).toMatch(/step: 'held', id: noteId, sessionId: targetSid/)
     expect(core).toMatch(/step: 'sent', id: messageId \?\? rowId/)
     expect(hold).toContain("l.recordDelivery({ step: 'carried', ...(row ? { id: row } : {}), sessionId, ids: mids })")
-    expect(hold).toContain("l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why })")
+    expect(hold).toContain("l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why, via: HOLD_DROP_VIA })")
     // A row held for a cold session's next wake or a turn's end is parked, with why.
     const queue = await fs.readFile('src/core/session-message-queue.ts', 'utf-8')
     expect(queue).toMatch(/if \(holdsCold \|\| holdsRow\) \{[\s\S]{0,400}step: 'parked', id: msg\.id, sessionId, why/)
