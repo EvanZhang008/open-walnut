@@ -497,6 +497,11 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
     const by = `task:${taskId}` as const;
     const lang = joins ? await (await import('../human-inbox/walnut-letters/languages.js')).walnutLetterLanguage() : 'en';
     const steps = answerSteps(report, marks, by, lang);
+    // A seen mark, and a done line (it may close), rest on his reaction: his words since are read,
+    // not only their time (org/thread-seen-check.ts). The write the claim rests on is refused for
+    // the threads it names, so their answer stays on his card.
+    const claimed = [...new Set([...(marks.seen ?? []).map((m) => m.id), ...lines.filter((l) => l.state === 'done').map((l) => l.id)])];
+    const unseen = claimed.length ? await (await import('../org/thread-seen-check.js')).unseenClaims(taskId, claimed) : undefined;
     let held: string[] = [];
     let asked: string[] = [];
     let written: string[] = [];
@@ -507,7 +512,7 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
       asked = p.asked;
       written = p.writes.map((w) => w.id);
       return p;
-    }, by, ask !== undefined ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined, steps.pre);
+    }, by, ask !== undefined ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined, steps.pre, unseen);
     const did = steps.done();
     if (did.opened.length) log.session.info('status question: joined messages split into threads of their own', { taskId, opened: did.opened });
     if (did.merged.length || did.held.length) log.session.info('status question: repeated titles held or merged', { taskId, merged: did.merged, held: did.held });

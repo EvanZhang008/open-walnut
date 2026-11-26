@@ -103,6 +103,7 @@ const FEATURE: Record<string, string> = {
   'thread-join-check': 'Subject checks of messages joined to a thread by timing',
   'same-ask-meaning': 'Checks that a new ask is not a decision already asked in other words',
   'thread-answered-check': 'Checks of whether a reply answers his question',
+  'thread-seen-check': 'Checks that his words react to an answer an agent marks seen',
   'thread-audit': 'Thread checks for cards on one subject',
   'reply-language': 'Reply language rewrites',
   drawing: 'Drawing diagrams', reflection: 'Org reflection', avatar: 'Org avatars',

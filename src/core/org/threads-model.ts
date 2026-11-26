@@ -1049,26 +1049,31 @@ export function isAcknowledgement(text: string): boolean {
  * I had not acknowledged it ... you cannot remove it"). His last message may be that reaction
  * ("ok, thanks", the node replying to it is fine); a question of his the node is still answering,
  * or answered and he has not reacted to, is not, unless the node quotes his own words asking for
- * the close (`user_words`, closeAskOf). His own Acknowledge needs no check.
+ * the close (`user_words`, closeAskOf). His own Acknowledge needs no check. `unseen`: the threads
+ * whose answer his words since were read as not being about (thread-seen-check.ts): for these the
+ * time of his message is no reaction.
  */
-function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: string): void {
+function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: string, unseen?: ReadonlySet<string>): void {
   if (by === 'human') return;
   if (closeAskOf(t, words)) return;
   const lastIdx = t.messages.length - 1;
   const last = t.messages[lastIdx];
   // His Acknowledge kept it pending while its work ran (thread-ack.ts): his reaction to all said before it, until either wrote again.
   if (t.ackedAt && t.state === 'pending' && (!last || last.at <= t.ackedAt) && nodeWordAt(t, lastIdx) <= t.ackedAt && (!t.replyAt || t.replyAt <= t.ackedAt)) return;
+  // He wrote since, but those words were read and are not about this thread's answer (thread-seen-check.ts):
+  // the time of his message alone no longer closes it, nor does a message only its timing put here.
+  const read = !!unseen?.has(t.id);
   if (!last) {
     // Only the node's own post: closed once he wrote to it after it (anywhere, the node's judgment).
     if (t.opener && reactedSince(file, t.opener)) return;
     throw notReacted('closed', t.opener?.at ?? '', words);
   }
-  if (last.answer && reactedSince(file, last.answer)) return;
+  if (last.answer && reactedSince(file, last.answer) && !read) return;
   // His last message is a plain reaction to what the node said before it, sent after he could read
   // it (thread-view.ts readAfter: an "ok" a second after a long answer is not his reading of it).
   const before = nodeWordOf(t, lastIdx - 1);
-  if (before && readAfter(before, last.at) && isAcknowledgement(last.text)) return;
-  throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx), words);
+  if (before && readAfter(before, last.at) && isAcknowledgement(last.text) && (!read || readsAsReaction(last))) return;
+  throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx), words, read);
 }
 
 /** The shortest quote that names a message of his, unless it is the whole message: a word or two is no quote. */
@@ -1145,8 +1150,10 @@ function afterAllSaid(t: OrgThread, m: ThreadMessage): boolean {
  * answer Walnut has read and he wrote after. A later mark asked for is cut back to it; none at all
  * is refused.
  */
-function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadWriter): number {
+function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadWriter, unseen?: ReadonlySet<string>): number {
   if (by === 'human') return upTo;
+  // He wrote since, but those words were read and are not about this thread's answer (thread-seen-check.ts).
+  if (unseen?.has(t.id)) throw notReacted('marked known', nodeWordAt(t, upTo), undefined, true);
   for (let k = upTo; k >= 0; k--) {
     const a = t.messages[k].answer;
     if (a && reactedSince(file, a)) return k;
@@ -1154,9 +1161,10 @@ function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadW
   throw notReacted('marked known', nodeWordAt(t, upTo));
 }
 
-function notReacted(what: string, at: string, words?: string): ThreadError {
+function notReacted(what: string, at: string, words?: string, read = false): ThreadError {
   return new ThreadError('not_reacted', 409,
-    `Not ${what}: ${at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
+    `Not ${what}: ${read ? `the user wrote to you since your last word in it${at ? ` (${at})` : ''}, but Walnut read those words and they do not react to it (they are about something else, or name no subject)`
+      : at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
     + 'An answer he has not reacted to is not known: the thread stays open (answered, your answer in full) until he replies, says ok or '
     + 'thanks, follows up, or acknowledges it. '
     + (words?.trim()
@@ -1190,7 +1198,7 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  * `source`: the writer's own session as Walnut verified it (ThreadTextSource); absent for the user
  * and for a caller Walnut could not place, whose summary then reads as written by an unknown session.
  */
-export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
+export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean; unseen?: ReadonlySet<string> } = {}): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts),
   // a closed card too, for its week in Done (a close needs no summary, but words given with one are his card's).
@@ -1310,7 +1318,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     const upTo = patch.known === 'all' ? cur.messages.length - 1 : cur.messages.findIndex((m) => m.id === patch.known);
     if (upTo < 0 && patch.known === 'all') throw new ThreadError('no_message', 409, `Thread ${id} holds no message of his yet: there is nothing he knows.`);
     if (upTo < 0) throw new ThreadError('no_message', 404, `No message ${patch.known} in thread ${id}.`);
-    const through = knownThrough(file, cur, upTo, by);
+    const through = knownThrough(file, cur, upTo, by, opts.unseen);
     next.known = { through: cur.messages[through].id, by, at };
     // An agent's prefix mark never proves the user read this thread's summary.
     if (by === 'human') next.reactedAt = at;
@@ -1326,7 +1334,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     // Acknowledge was his reaction (thread-known.ts ackHoldsResult; 2026-11-23, a node refused
     // not_reacted three times on cards he had acknowledged).
     const ackCovers = ackHoldsResult(cur);
-    if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words);
+    if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words, opts.unseen);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;
   }

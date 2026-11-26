@@ -91,7 +91,7 @@ export const REMARK_WINDOW_MS = 6 * 3600_000;
 const REMARK_TEXT_MAX = 300;
 
 /** The node's newest word on a thread, which he can react to: its first post, its summary, or an answer under one of his messages. */
-function nodeWord(t: OrgThread): { at: string; text: string } | null {
+export function nodeWord(t: OrgThread): { at: string; text: string } | null {
   let word = t.opener?.text?.trim() ? { at: t.opener.at, text: t.opener.text } : null;
   if (t.reply?.trim() && t.replyAt && t.replyAt > (word?.at ?? '')) word = { at: t.replyAt, text: t.reply };
   for (const m of t.messages) if (m.answer?.text?.trim() && m.answer.at > (word?.at ?? '')) word = { at: m.answer.at, text: m.answer.text };

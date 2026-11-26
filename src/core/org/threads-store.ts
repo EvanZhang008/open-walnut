@@ -430,6 +430,10 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   const held: { reading?: import('./thread-ack-outcome.js').AckReading } = {};
   // A node's close that quotes him: the language a thread left behind is titled in (carryHisWords).
   const carryLang = rest.close && rest.user_words && by !== 'human' ? await letterLang() : null;
+  // A node's known mark or close rests on his reaction: his words since are read, not only their
+  // time (thread-seen-check.ts). A close that quotes him, or one his Acknowledge placed, is no such claim.
+  const unseen = by !== 'human' && !placing && (rest.known !== undefined || (rest.close && !rest.user_words))
+    ? await (await import('./thread-seen-check.js')).unseenClaims(taskId, [id]) : undefined;
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
     // He knows where it stands: it goes to Acknowledged and the node decides where it goes (thread-known.ts).
@@ -438,7 +442,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     // His words that close it, filed on another thread, go under it first (carryHisWords): no card of their own stays behind.
     if (carryLang) cur = carryHisWords(cur, id, rest.user_words, by, at, carryLang, (t) => !!closeAskOf(t, rest.user_words));
     const r = held.reading ? ack!.ackKnown(cur, id, at)
-      : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };
+      : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source, unseen?.size ? { unseen } : undefined) : { file: cur, thread: before };
     let next = r.thread;
     if (ackMod) next = ackMod.nodePlaced(before, next, placing, at);
     if (owner) next = { ...next, askOwner: owner };
@@ -665,6 +669,8 @@ export async function writeOwnThreads(
   ask?: { ask: TaskAsk | null; named?: string },
   /** Runs first under the same lock (the answer's splits, sessions/status-thread-split.ts): its threads, and the ids it changed. */
   pre?: (cur: ThreadsFile) => { file: ThreadsFile; out: string[] },
+  /** The threads whose answer his words since were read as not being about (thread-seen-check.ts): a known mark or a close there is refused. */
+  unseen?: ReadonlySet<string>,
 ): Promise<string[]> {
   const at = new Date().toISOString();
   const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
@@ -687,7 +693,7 @@ export async function writeOwnThreads(
       for (const p of [w.patch, w.fallback]) {
         if (!p || handsToUser(p)) continue;
         // `line`: the state it moves is the answer's own (lineState), so a later answer may move it again.
-        try { file = updateThread(file, w.id, p, by, at, undefined, { line: true }).file; done.push(w.id); break; } catch (err) { if (!(err instanceof ThreadError)) throw err; }
+        try { file = updateThread(file, w.id, p, by, at, undefined, { line: true, ...(unseen?.size ? { unseen } : {}) }).file; done.push(w.id); break; } catch (err) { if (!(err instanceof ThreadError)) throw err; }
       }
     }
     const open = new Set(file.threads.filter((t) => !t.closed).map((t) => t.title.trim().toLowerCase()));

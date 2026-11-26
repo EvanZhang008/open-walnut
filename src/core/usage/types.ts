@@ -36,6 +36,7 @@ export type UsageSource =
   | 'thread-join-check' // whether a message joined to a thread by timing is that thread's subject (core/org/thread-join-check.ts)
   | 'same-ask-meaning' // whether a new ask of the user is a decision his team already asks him, in other words (core/same-ask-meaning.ts)
   | 'thread-answered-check' // whether a node's reply answers a question of his whose thread reads working (core/org/thread-answered-check.ts)
+  | 'thread-seen-check' // whether his words since an answer are about it, when a node says he reacted to it (core/org/thread-seen-check.ts)
   | 'thread-audit' // the thread check: which open cards are one subject (core/org/thread-audit.ts, experiment threads_audit)
   | 'reply-language' // retired: older rows only (a progress line rewritten in the user's language)
   | 'drawing'      // a drawing turned into a clean diagram, or a description drawn as one

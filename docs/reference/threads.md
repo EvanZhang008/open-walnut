@@ -73,7 +73,7 @@ Guard tests for the wording: `tests/core/org/thread-rules-guard.test.ts`,
 
 `task_threads`, `threads_sqlite`, `threads_pop_up`, `action_needed_everywhere`, `top_thread`,
 `reply_thread_line`, `letters_as_threads`, `threads_one_card`, `threads_kept_by_walnut`,
-`brief_off`, `threads_each_question` (all in `src/core/experimental.ts`; "Every experiment on" turns on each one never set alone).
+`brief_off`, `threads_each_question`, `threads_seen_check` (all in `src/core/experimental.ts`; "Every experiment on" turns on each one never set alone).
 
 The Threads plan of 2026-11-25, five parts, each its own switch that "Every experiment on" never
 turns on (`ownSwitchOnly`), so each is measured alone: `threads_reply_tag` (the chat reply carries
@@ -626,6 +626,41 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   `splitMessageInto(`, and every join kind of `fileMessage`, listed with its test),
   `tests/core/org/thread-each-question-prompt.test.ts`, `tests/e2e/thread-each-question.test.ts`.
 
+### threads_seen_check
+
+A node's claim that he reacted to an answer is read against his words (2026-11-26, a trial with a
+real session: he wrote "ok got it, thanks, the first one is clear", and the node marked the answer
+of another thread seen too, in 5 runs of 5 with `threads_reply_tag` on and off; on a lead that
+thread closed). The rule such a claim rested on was time alone: he wrote to the node, anywhere,
+after the answer (`reactedSince`, per node by design: a remark seldom sits in the thread it is about).
+
+- The claim: a line's seen mark (`FOR_USER_THREAD_SEEN`, or `seen="yes"` on a card line), a line's
+  `done` (it may close the thread), and the node's own `thread_update` with `known` or `close`. Not
+  a claim: his own Acknowledge, a close that quotes his words asking for it (`user_words`), and a
+  place after his Acknowledge.
+- The read (`src/core/org/thread-seen-check.ts`): for each claimed thread whose answer only time
+  vouches for (he did not react in the thread itself), a small model gets his question, the answer,
+  whether it was the last answer he got, and his newest messages (the ones written since the node
+  last spoke), and answers one line: the words of his that react to it, then YES or NO. One call
+  per claim, side by side, at most four for one write, six seconds each at most.
+- The write: a NO makes the thread `unseen` for that write, and `updateThread` refuses the known
+  mark or the close there (`checkClose`, `knownThrough`), so the answer stays on his card,
+  answered. The node's `thread_update` reads `not_reacted` with the reason; a line's close falls
+  back to answered and its seen mark is left out. A claim past the four read is unseen too. No
+  answer from the model (no fast model, a timeout) keeps the time rule for that claim.
+- Measured with a real small model on the trial's recorded turns (three answered threads, 23 later
+  messages, five runs each, 345 verdicts): the recorded remark marked only the thread it names in
+  25 of 25; a follow-up question on an answer's subject counted as a reaction in 22 of 30 (four
+  cases 5 of 5, one 2 of 5, and never for a follow-up on one of two things a single message had
+  asked); a new request, two new questions, a thanks followed by a new subject and an instruction
+  typed as a message marked nothing in 25 of 25; one wrong yes in the 345 (a bare ok read once as
+  about an older answer). Its misses keep a card he may have read, which he acknowledges; before,
+  every such claim went through.
+- Log rows: `org threads: seen claims read against his words` (claimed, unseen, unread, ms).
+- Off: time alone, as before. Guards: `tests/core/org/thread-seen-check.test.ts`,
+  `tests/core/org/thread-seen-claims-guard.test.ts` (every use of the time rule and every write
+  through `updateThread`, listed from the source), `tests/e2e/thread-seen-check.test.ts`.
+
 ## What the user's data showed (2026-11-23)
 
 Read from one leader task and its six subtasks (64 threads), the tree the user reported:
@@ -658,7 +693,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 | 11-26 | Not seen by him (review): one reply answered two unrelated questions, and the one card it left was titled by the first alone | the merge kept the oldest thread's title | fixed: the kept thread is titled by every question it holds (`titledForAll` in `thread-answered-check.ts`) |
 | 11-26 | Not seen by him (review): after a lost receipt, tapping the same option again sends the answer a second time (the second is filed under the same thread, no second card; the session reads it twice) | a tap from a card has no box key, so the send hook's "same words wait to go out" check (`sameWaitingSend`) never applies and the second tap gets a new user line | open, low: the web's send hook already resends a lost send by itself under the same user line; only a manual second tap doubles it. Owner: the Threads task |
 | 11-26 | Not seen by him (a trial with a real session on a lead, 2 runs of 2 with `threads_reply_tag` on): "ok got it, thanks, the first one is clear" ended as a card of its own to acknowledge | it was filed by timing under his newest thread, judged another subject and taken out; the thread it thanked for closed without it, so nothing could take it back | fixed: a message that asks nothing and is judged another subject is read beside his other open threads first (one more fast-model call), and goes under the one it is about, as a join by timing does (the card keeps its state, the message its mark until the node has checked it); NONE, a question, or a run of joined messages is split out as before (`judgeRemark`, `moveRemark` in `thread-join-check.ts`). With the real fast model on the three recorded lead runs it named the right thread each time, and NONE for two messages on another subject and one about two threads. Guard: `tests/core/org/thread-join-check.test.ts`, and the movers list in `tests/core/org/thread-each-question-guard.test.ts` |
-| 11-26 | Not seen by him (the same trial, 4 runs): after "ok got it, thanks, the first one is clear" the node also marked another answered thread as seen, and it closed | a reaction is judged by the node from his words since each answer (`reactedSince` is per node, by design: a remark seldom sits in the thread it is about); the node read "ok got it, thanks" as covering both answers | open, measured again once the remark sits under the thread it names (the row above): the question then shows his words under that thread's ref. Owner: the Threads task |
+| 11-26 | Not seen by him (the same trial, 4 runs): after "ok got it, thanks, the first one is clear" the node also marked another answered thread as seen, and it closed | a reaction is judged by the node from his words since each answer (`reactedSince` is per node, by design: a remark seldom sits in the thread it is about); the node read "ok got it, thanks" as covering both answers; measured again with the remark under the thread it names: still 5 runs of 5 | fixed behind `threads_seen_check`: the node's claim is read against his words by a small model, and a claim it answers NO to is refused where the known mark and the close are checked (the section above). Guards: `tests/core/org/thread-seen-check.test.ts`, `tests/core/org/thread-seen-claims-guard.test.ts`, `tests/e2e/thread-seen-check.test.ts` |
 | 11-26 | Not seen by him (the same trial, 7 runs of 7): a follow-up question on a subject he had asked about before got a card of its own beside the first one, and stayed there once answered | a node is told to merge a question, once answered, with a thread on the same matter; nothing asks it at that moment (the question thread is titled and answered in one line, and the status question offers a merge only for an untitled thread), and no node did | open, next: Walnut checks an answered question against his other answered threads and merges the same matter. Owner: the Threads task |
 | 11-25 | Two cards for one matter on a task, and the old one stayed after he answered (his words, translated: "this thread is completely duplicated ... I already gave it the new update, and the old thread did not go away") | the task asked one decision three ways (its report's ask, a decision letter, the letter's thread); his tap on the report's ask reached the chat as a card answer naming no thread, the quoted ask's question mark read as his own question (`threads_each_question`), so it opened a thread no merge could take, and nothing told the letter it was answered | fixed: a card answer is never his question, is filed under the thread that asked, and answers the decision letter that thread holds (`card-answer-thread.ts`; see threads_each_question) |
 | 11-26 | Two cards on one subject from one node (the 7-day monitor's duplicate check) | he asked two questions on one subject a few minutes apart, past the join window; each was his own question, each was answered on its own card, and under the first each-question rule a question thread could never merge, answered or not | fixed by the rule's second version (an answered question merges with a thread on the same matter; `thread-question.ts` `ownQuestionRefusal`) and reported by `threads_audit` with the merge call; no code change of its own |

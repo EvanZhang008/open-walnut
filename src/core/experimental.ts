@@ -253,6 +253,13 @@ export const EXPERIMENTAL_FEATURES = [
     ownSwitchOnly: true,
   },
   {
+    id: 'threads_seen_check',
+    name: 'A seen mark is checked against your words',
+    description: 'When an agent says you reacted to one of its answers (it marks the answer seen, or closes the thread as acknowledged), Walnut used to check only that you wrote to that agent after the answer. With this on, a small model also reads what you wrote since: the mark or the close goes through only when your words are about that answer (a reply about it, a thanks or an ok that is about it, a follow-up that builds on it). Words about something else leave the answer on its card until you react to it or acknowledge it. When the small model gives no answer, the earlier rule applies. Off: only the time of your later message is checked.',
+    summary: 'An agent\'s claim that you saw an answer counts only when a small model reads your later words as about it.',
+    default: false,
+  },
+  {
     id: 'threads_related',
     name: 'Related threads beside a new one',
     description: 'When a message of yours opens a new thread, Walnut looks for up to five threads on the same subject, open or closed in the last week, on that agent\'s Threads and on the tasks above, below and beside it (by shared words, and by meaning where search by meaning is on and already running), and shows them to the agent beside your message, so it joins yours to the right one instead of keeping two. Off: only titles that share words are compared. "Every experiment on" does not turn this on: its effect is measured alone, so it keeps its own switch.',
