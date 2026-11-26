@@ -980,7 +980,7 @@ export class DaemonConnection {
   private readonly bridgeRetry = new BridgePushRetry(() => {
     if (this._destroyed || !this._connected || this.pushesNoLeaderState || homeWritesStopped()) return
     this.pushBridgeConfig()
-  })
+  }, () => this.hostKey)
   /** hooks.configure serialization (see pushDaemonHooks): in-flight guard +
    *  coalesced rerun flag + last-acked hash for RPC dedup. The hash resets on
    *  disconnect so a reconnect always re-pushes (the daemon may be a fresh
@@ -11122,16 +11122,17 @@ export function lookAtServiceSetsOnAllHosts(): void {
 
 /** Re-arm every connected host — the connect-time and boot-time sweep. */
 export function pushTriggersToAllHosts(): void {
-  for (const conn of connectionPool.values()) {
+  // One connection can sit under several pool keys: each is pushed once.
+  for (const conn of new Set(connectionPool.values())) {
     if (conn.connected) conn.pushTriggers()
   }
 }
 
 /** Push every connected host's bridge config: this server just got the write permission, so its machine tokens can be minted. */
 export function pushBridgeConfigToAllHosts(): void {
-  for (const conn of connectionPool.values()) {
-    if (conn.connected) conn.pushBridgeConfig()
-  }
+  const conns = [...new Set(connectionPool.values())].filter((c) => c.connected)
+  log.session.info('DaemonConnection: write permission held, bridge config pushed again to every connected host', { hosts: conns.length })
+  for (const conn of conns) conn.pushBridgeConfig()
 }
 
 /**

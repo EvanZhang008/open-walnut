@@ -12,6 +12,8 @@
  * went through resets it, and the connection closing clears it.
  */
 
+import { log } from '../logging/index.js'
+
 export const BRIDGE_RETRY_DELAYS_MS: readonly number[] = [10_000, 20_000, 40_000, 80_000]
 
 let delays: readonly number[] = BRIDGE_RETRY_DELAYS_MS
@@ -25,12 +27,14 @@ export class BridgePushRetry {
   private attempt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(private readonly retry: () => void) {}
+  /** `host`: the connection's host, read when it logs. */
+  constructor(private readonly retry: () => void, private readonly host: () => string = () => '') {}
 
   /** A push was refused or failed: try again after the next delay, unless one waits already or the delays are spent. */
   failed(): void {
     if (this.timer || this.attempt >= delays.length) return
     const ms = delays[this.attempt++]
+    log.session.info('DaemonConnection: bridge config push tried again soon', { host: this.host(), attempt: this.attempt, inMs: ms })
     this.timer = setTimeout(() => {
       this.timer = null
       this.retry()
