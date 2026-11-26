@@ -1373,8 +1373,9 @@ describe('a test that loads a page again after it opened full screen or a split 
     // The full screen Source view and the reading mode that come back after a reload are the check.
     'files-changed-ask-here.spec.ts': ['Files: saved questions in the full screen Source view survive reloads', 'Files: an unscrolled reading mode is kept immediately across reloads'],
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
-    // The full-screen split that comes back holds each pane's reading place, the check.
-    'session-reading-place.spec.ts': ['a reload brings each pane back to its place'],
+    // The full-screen split that comes back holds each pane's reading place, the check; a fling's
+    // end is the place it must bring back.
+    'session-reading-place.spec.ts': ['a reload brings each pane back to its place', 'a fling that coasts past the second'],
     // The full-screen reading split that comes back is the check: the pane, its side-by-side way
     // and the place measured in full screen before the reload, then the split staying closed.
     'session-reader-split.spec.ts': ['read a message on top, ask below: open, hold, re-land, resize, turn, reload, close'],
