@@ -59,6 +59,7 @@ import { WITNESS_DOOR_PATH } from '../../src/core/leader/switch/witness-wire.js'
 import { installGitWatch, watchEmptyTree } from './git-watch.js'
 import type { StartResult } from '../../src/core/leader/switch/side.js'
 import { LOCAL, type MachineIO } from './machine-io.js'
+import { freePort } from '../lib/free-port.mjs'
 import type { SideCall } from './machine-ops.js'
 
 /** A machine's daemon: its dir and bin there, its handle in the ops that keep it, its first door port. */
@@ -165,15 +166,6 @@ export interface BPlacement {
   times: Record<string, string>
   /** After the world stopped its own: B's leftovers, the tunnels, B's root. */
   stop(): Promise<void>
-}
-
-/** A free loopback port now (H's service listens there). */
-function freeLoopbackPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer()
-    s.once('error', reject)
-    s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) })
-  })
 }
 
 /** A third machine: a folder (its HOME) and a machine id, no server. */
@@ -351,7 +343,7 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     a.start = await server(a)
     b.start = await server(b)
     // Shape 'mac': H's one service, as the host-server manager would run it there (host-services.ts), with its witness.
-    const hostServices = mac ? { WALNUT_REHEARSAL_HOST_SERVICES: JSON.stringify({ [h.id]: { port: await freeLoopbackPort(), dir: h.dir, env: { HOME: h.dir, WALNUT_MACHINE_ID_FILE: h.idFile, WALNUT_CAPABILITIES: 'witness-door', NODE_EXTRA_CA_CERTS: cert.certFile } } }) } : {}
+    const hostServices = mac ? { WALNUT_REHEARSAL_HOST_SERVICES: JSON.stringify({ [h.id]: { port: await freePort(), dir: h.dir, env: { HOME: h.dir, WALNUT_MACHINE_ID_FILE: h.idFile, WALNUT_CAPABILITIES: 'witness-door', NODE_EXTRA_CA_CERTS: cert.certFile } } }) } : {}
     const witnessLinks = { ...(links.aToBService ? { [b.id]: links.aToBService.port } : {}), ...(links.aToHService ? { [h.id]: links.aToHService.port } : {}) }
     a.env = machineEnv(a, 'a', { [b.id]: routeFromA(b, links.copy), [h.id]: routeFromA(h, links.aToH) }, { ...(Object.keys(witnessLinks).length ? { WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify(witnessLinks) } : {}), ...hostServices })
     b.env = machineEnv(b, 'b', { [a.id]: routeFromB(a, links.bToA), [h.id]: routeFromB(h, links.bToH) }, hostServices)

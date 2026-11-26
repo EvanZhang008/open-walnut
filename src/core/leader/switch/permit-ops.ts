@@ -104,7 +104,7 @@ export async function readStanding(h: PermitHandle, waitMs = READ_WAIT_MS, expec
   while (Date.now() < deadline) {
     await tick(20)
     if (h.client.readBack().length + absent().length >= expected) break
-    if (Date.now() >= askAt && deadline - Date.now() > 200) { h.client.readAgain(absent()); askAt = Date.now() + READ_WAIT_MS }
+    if (Date.now() >= askAt && deadline - Date.now() > 200) { h.client.askWitnessesAgain(absent()); askAt = Date.now() + READ_WAIT_MS }
   }
   const replies = h.client.readBack()
   return { standing: h.client.standing(), answered: replies.length, replies, absent: absent() }
