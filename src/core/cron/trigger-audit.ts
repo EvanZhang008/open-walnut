@@ -317,7 +317,9 @@ export function mergeFireAttempt(
 ): TriggerAuditEntry[] {
   const base = Array.isArray(list) ? list : [];
   const at = base.findIndex((e) => e.outcome === 'fired' && e.seq === entry.seq && (e.epoch ?? '') === (entry.epoch ?? ''));
-  if (at < 0) return appendAudit(base, entry, max);
+  // A first attempt is a fire's own row: a run that ended while it was being delivered (a clock
+  // routine's session that answered at once) left its outcome waiting for it.
+  if (at < 0) return appendFireRow(base, entry, max);
   const merged = [...base];
   // Spread the OLD row first: a later attempt that failed before building the
   // envelope carries no injected preview, and dropping the one attempt 1 did

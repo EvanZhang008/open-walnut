@@ -297,6 +297,23 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
    */
   const runTasks = new Set<string>();
   let seeding: Promise<void> | null = null;
+  /**
+   * A run's journal line and the state's copy of it (the line the NEXT envelope shows) are written
+   * as one step, one run after another. Two runs settling together otherwise interleaved the two
+   * writes: run 1 appended, run 2 appended and recorded, then run 1 recorded, so the state carried
+   * run 1 while the journal's newest line was run 2's. One subscriber writes them (the primary's),
+   * so its own queue keeps the state equal to the journal's newest line.
+   */
+  let journalTail: Promise<unknown> = Promise.resolve();
+  const writeJournal = (line: string, nowMs: number): Promise<string> => {
+    const next = journalTail.then(async () => {
+      const notePath = await appendJournal(line, nowMs);
+      await recordTriageJournalLine(line, home);
+      return notePath;
+    });
+    journalTail = next.catch(() => undefined);
+    return next;
+  };
 
   /** One-time seed. Lazy, so a box that never runs triage never pays for it. */
   function seedRunTasks(): Promise<void> {
@@ -432,8 +449,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
     };
     const line = triageJournalLine(journal);
     try {
-      const notePath = await appendJournal(line, nowMs);
-      await recordTriageJournalLine(line, home);
+      const notePath = await writeJournal(line, nowMs);
       log.cron.info('triage: run recorded in the journal', { taskId: task.id, notePath });
     } catch (err) {
       log.cron.warn('triage: journal append failed', {
