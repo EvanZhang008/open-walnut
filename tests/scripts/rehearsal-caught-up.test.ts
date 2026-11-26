@@ -110,13 +110,13 @@ describe('the rehearsal waits until the standby caught up before a switch', () =
 
     it('refused once, caught up again, switched: the switch ran', async () => {
       let n = 0
-      const r = await switchOnCaughtUp({ seen, trySwitch: async () => (++n === 1 ? refusal : { code: 0, out: 'Switched' }), waitAgain: async () => ok(8), deadline: Date.now() + 60_000 })
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => (++n === 1 ? refusal : { code: 0, out: 'Switched' }), waitAgain: async () => ok(8), boundMs: 60_000 })
       expect(r).toMatchObject({ kind: 'ran', refused: 1, r: { code: 0 } })
     })
 
     it('refused after each time the rehearsal saw it caught up: the switch failed, naming the batch it saw', async () => {
       const waits: number[] = []
-      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async (ms) => { waits.push(ms); return ok(8) }, deadline: Date.now() + 60_000 })
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async (ms) => { waits.push(ms); return ok(8) }, boundMs: 60_000 })
       expect(r.kind).toBe('refused-after-caught-up')
       expect(r.refused).toBe(2)
       expect(waits).toHaveLength(1)
@@ -126,14 +126,27 @@ describe('the rehearsal waits until the standby caught up before a switch', () =
     })
 
     it('refused, then the standby never caught up again within the bound: the standby\'s failure', async () => {
-      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async () => ({ ok: false, why: 'standby not caught up: within 0.0 s ...', waitedMs: 0 }), deadline: Date.now() })
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async () => ({ ok: false, why: 'standby not caught up: within 0.0 s ...', waitedMs: 0 }), boundMs: 0 })
       expect(r.kind).toBe('not-caught-up')
       expect(r.kind === 'ran' ? '' : r.why).toMatch(/then standby not caught up: within 0\.0 s/)
     })
 
+    // Review round 2: an attempt's own catch-up may run a whole commit window (300 s) before it refuses, longer than
+    // a small home's bound (180 s). The wait after a refusal still gets the whole bound, so a standby the rehearsal
+    // saw caught up and refused again is the switch's failure, not "not caught up within 0.0 s".
+    it('an attempt that outlasts the bound before it refuses: the wait after it still gets the whole bound', async () => {
+      const waits: number[] = []
+      const slowRefusal = async () => { await new Promise((r) => setTimeout(r, 60)); return refusal }
+      // A wait handed no time left cannot see the standby caught up: it fails as the standby's.
+      const waitAgain = async (ms: number): Promise<CaughtUp> => { waits.push(ms); return ms > 0 ? ok(8) : { ok: false, why: 'standby not caught up: within 0.0 s ...', waitedMs: 0 } }
+      const r = await switchOnCaughtUp({ seen, trySwitch: slowRefusal, waitAgain, boundMs: 20 })
+      expect(waits).toEqual([20])
+      expect(r.kind).toBe('refused-after-caught-up')
+    })
+
     it('any other refusal or failure is the switch\'s own result, never retried', async () => {
       let n = 0
-      const r = await switchOnCaughtUp({ seen, trySwitch: async () => { n++; return { code: 1, out: 'leader: only 1 of 3 witnesses answered' } }, waitAgain: async () => ok(9), deadline: Date.now() + 60_000 })
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => { n++; return { code: 1, out: 'leader: only 1 of 3 witnesses answered' } }, waitAgain: async () => ok(9), boundMs: 60_000 })
       expect(r).toMatchObject({ kind: 'ran', refused: 0 })
       expect(n).toBe(1)
     })

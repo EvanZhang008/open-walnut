@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getVersion } from '../../version.js'
-import { batchUnderWay, verifyStandby, StandbyTarget, standbyStatus, type BatchUnderWay } from '../../standby/index.js'
+import { APPLY_MAX_MS, batchUnderWay, verifyStandby, StandbyTarget, standbyStatus, type BatchUnderWay } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readMarker, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
@@ -77,8 +77,12 @@ const secsSince = (iso: string, now: number) => Math.max(0, Math.round((now - Da
  *                                       after a batch of the whole home; the 2026-11-25 rehearsal: a 20 Mbit/s
  *                                       batch ran past 300 s, and the check called it not running)
  *   batches begin, nothing arrives      every remote batch writes its init's export first, a void one too: a
- *                                       runner whose batches all void reads so, never as "wait"
+ *                                       runner whose batches all void and bring no chunk reads so, not as "wait"
  *   no trace at all, or none lately     "is the standby running?"
+ *
+ * Two kinds are told to wait and may never land: an apply stuck with a live process and heartbeat (its run time is
+ * in the message; the daemon ends it at APPLY_MAX_MS, 2 h, and then it is no progress), and batches that bring
+ * chunks but void each time.
  *
  * `underWay` 'unknown': an older copy state with no landing time (committedAt), where the batch's own moment, by
  * the leader's clock, would count that batch's own chunks as under way: not looked for.
@@ -89,7 +93,7 @@ export function staleCopyProblem(status: { ageSeconds: number | null; committedA
   const head = `the standby copy's last batch landed ${landed} s ago (more than ${RECENT_BATCH_S} s)`
   if (underWay === 'unknown') return `${head}: is the standby running on the leader? (this copy's state does not say when its batch landed, so a batch under way here is not looked for)`
   if (!underWay) return `${head}, and no batch is under way here (nothing received since it landed): is the standby running on the leader?`
-  const got = `${underWay.chunks} chunk(s), ${(underWay.bytes / 1_048_576).toFixed(1)} MB received${underWay.applying ? ', its apply running' : ''}`
+  const got = `${underWay.chunks} chunk(s), ${(underWay.bytes / 1_048_576).toFixed(1)} MB received${underWay.applyingSince ? `, its apply running for ${secsSince(underWay.applyingSince, now)} s (the daemon ends one at ${APPLY_MAX_MS / 3_600_000} h)` : ''}`
   const moved = underWay.progressAt ? secsSince(underWay.progressAt, now) : null
   if (moved !== null && moved <= UNDER_WAY_MOVED_S) return `${head}, so the copy is not caught up yet, but its standby runs: a batch has been under way here for ${secsSince(underWay.since, now)} s (since ${underWay.since}; ${got}, the last ${moved} s ago). A batch over a slow link, or the one after a batch of the whole home, takes this long: wait for it to land, then try again`
   const begun = secsSince(underWay.lastAt, now)

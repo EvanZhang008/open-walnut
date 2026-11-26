@@ -1776,10 +1776,13 @@ landed): is the standby running on the leader?
 ```
 
 A batch whose progress is under 120 s old (`UNDER_WAY_MOVED_S`) runs; one that only began lately does not, so a runner whose
-batches all void is never told to wait. A copy state with no landing time (older than `committedAt`) is not looked at: the batch's
-own moment is the leader's clock and earlier than its own chunks, and the check says so. Each is a refusal that changes nothing;
-only the first says to wait. Before 2026-11-26 all three read "is the standby running?", the first included (the lead's
-20 GB run: a batch at 20 Mbit/s still sending after 300 s).
+batches all void and bring no chunk is not told to wait. Two cases are told to wait and may never land: an apply that is stuck
+while its process lives and its heartbeat goes on (the message says how long it has run; the daemon ends a background run
+at 2 hours, `APPLY_MAX_MS`, and after that it is no longer progress), and batches that bring new chunks but void each time
+(writes faster than the copy, an apply that fails each time). A copy state with no landing time (older than `committedAt`) is
+not looked at: the batch's own moment is the leader's clock and earlier than its own chunks, and the check says so. Each is a
+refusal that changes nothing; only the first says to wait. Before 2026-11-26 all four read "is the standby running?", the first
+included (the lead's 20 GB run: a batch at 20 Mbit/s still sending after 300 s).
 
 ### Where the witnesses are
 

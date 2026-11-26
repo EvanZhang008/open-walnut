@@ -88,20 +88,23 @@ export type CaughtUpSwitch<R> =
 
 /**
  * A switch started on a standby the rehearsal saw caught up (`seen`). Refused by its preflight as not caught up
- * (the standby fell behind again meanwhile, a batch over a slow link), it waits again (`waitAgain`, within what is
- * left until `deadline`) and tries again; refused that way `maxRefusals` times, each after the rehearsal saw it
+ * (the standby fell behind again meanwhile, a batch over a slow link), it waits again (`waitAgain`, a whole
+ * `boundMs` from the refusal) and tries again; refused that way `maxRefusals` times, each after the rehearsal saw it
  * caught up, it is the switch's failure (`refused-after-caught-up`, with the batch the rehearsal saw); a wait that
  * runs out is the standby's (`not-caught-up`). Any other answer is the switch's own result (`ran`).
+ *
+ * The bound starts at each refusal, not before the first attempt: an attempt's own catch-up may take a whole
+ * commit window (300 s) before it refuses, longer than a small home's bound (180 s), and a bound already spent
+ * then would put a refusal of a standby seen caught up on the standby (review round 2). `maxRefusals` keeps the
+ * whole at most that many attempts and waits.
  */
 export async function switchOnCaughtUp<R extends { code: number | null; out: string }>(o: {
   seen: Extract<CaughtUp, { ok: true }>
   trySwitch: () => Promise<R>
   waitAgain: (boundMs: number) => Promise<CaughtUp>
-  deadline: number
+  boundMs: number
   maxRefusals?: number
-  now?: () => number
 }): Promise<CaughtUpSwitch<R>> {
-  const now = o.now ?? Date.now
   const max = o.maxRefusals ?? 2
   let seen = o.seen
   let refused = 0
@@ -111,7 +114,7 @@ export async function switchOnCaughtUp<R extends { code: number | null; out: str
     refused++
     const line = r.out.trim().split('\n').at(-1) ?? ''
     if (refused >= max) return { kind: 'refused-after-caught-up', refused, why: `the rehearsal saw the standby caught up (${caughtUpSaid(seen)}) and the switch's preflight still refused it as not caught up, ${refused} time(s); the last: ${line}` }
-    const cu = await o.waitAgain(Math.max(0, o.deadline - now()))
+    const cu = await o.waitAgain(o.boundMs)
     if (!cu.ok) return { kind: 'not-caught-up', refused, why: `the switch's preflight refused it as not caught up (the last: ${line}); then ${cu.why}` }
     seen = cu
   }

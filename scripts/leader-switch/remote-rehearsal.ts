@@ -1037,7 +1037,7 @@ function switchWhenCaughtUp(x: Ctx, label: string, seen: Extract<CaughtUp, { ok:
     seen,
     trySwitch: () => runSwitch(x, label, { notCaughtUp: 'return' }),
     waitAgain: (boundMs) => { x.log(`${label}: refused (not caught up), waiting for the standby again`); return untilCaughtUp(from, to.standbyDir, { boundMs }) },
-    deadline: Date.now() + x.catchUpMs,
+    boundMs: x.catchUpMs,
   })
 }
 

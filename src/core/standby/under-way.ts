@@ -35,8 +35,8 @@ export interface BatchUnderWay {
   chunks: number
   /** Their bytes. */
   bytes: number
-  /** An apply job runs there now (apply-status.ts runningApply). */
-  applying: boolean
+  /** When the apply job that runs there now started (apply-status.ts runningApply), or null: none runs. */
+  applyingSince: string | null
 }
 
 interface Seen { first: number; progress: number; last: number; chunks: number; bytes: number }
@@ -83,5 +83,5 @@ export async function batchUnderWay(dir: string, landedAt: string | null, now = 
   }
   if (!Number.isFinite(seen.first)) return null
   const iso = (x: number) => new Date(x).toISOString()
-  return { since: iso(seen.first), progressAt: Number.isFinite(seen.progress) ? iso(seen.progress) : null, lastAt: iso(seen.last), chunks: seen.chunks, bytes: seen.bytes, applying: !!applying }
+  return { since: iso(seen.first), progressAt: Number.isFinite(seen.progress) ? iso(seen.progress) : null, lastAt: iso(seen.last), chunks: seen.chunks, bytes: seen.bytes, applyingSince: applying ? applying.startedAt : null }
 }

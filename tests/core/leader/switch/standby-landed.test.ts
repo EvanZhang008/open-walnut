@@ -58,7 +58,7 @@ describe('when the standby copy last landed', () => {
 
   it('a recent batch: no problem, whatever is under way', () => {
     expect(staleCopyProblem({ ageSeconds: 40, committedAt: ago(10) }, null, now)).toBeNull()
-    expect(staleCopyProblem({ ageSeconds: 40, committedAt: ago(10) }, { since: ago(5), progressAt: ago(1), lastAt: ago(1), chunks: 3, bytes: 3 << 20, applying: false }, now)).toBeNull()
+    expect(staleCopyProblem({ ageSeconds: 40, committedAt: ago(10) }, { since: ago(5), progressAt: ago(1), lastAt: ago(1), chunks: 3, bytes: 3 << 20, applyingSince: null }, now)).toBeNull()
   })
 
   it('an old batch and nothing under way: is the standby running on the leader?', () => {
@@ -69,30 +69,31 @@ describe('when the standby copy last landed', () => {
   })
 
   it('an old batch and one under way that still moves: not caught up yet, its standby runs (wait), never "is it running?"', () => {
-    const p = staleCopyProblem(stale, { since: ago(560), progressAt: ago(2), lastAt: ago(2), chunks: 1630, bytes: 1630 << 20, applying: false }, now)
+    const p = staleCopyProblem(stale, { since: ago(560), progressAt: ago(2), lastAt: ago(2), chunks: 1630, bytes: 1630 << 20, applyingSince: null }, now)
     expect(p).toMatch(/not caught up yet, but its standby runs: a batch has been under way here for 560 s/)
     expect(p).toMatch(/1630 chunk\(s\), 1630\.0 MB received, the last 2 s ago/)
     expect(p).toMatch(/wait for it to land, then try again/)
     expect(p).not.toMatch(/is the standby running/)
-    // Its apply on this machine, after the last chunk: still moving by the apply's heartbeat.
-    expect(staleCopyProblem(stale, { since: ago(560), progressAt: ago(8), lastAt: ago(8), chunks: 1630, bytes: 1630 << 20, applying: true }, now)).toMatch(/its apply running/)
+    // Its apply on this machine, after the last chunk: still moving by the apply's heartbeat, and how long it has run
+    // (review round 2: a stuck apply with a live heartbeat is told to wait, until the daemon's 2 h cap ends it).
+    expect(staleCopyProblem(stale, { since: ago(560), progressAt: ago(8), lastAt: ago(8), chunks: 1630, bytes: 1630 << 20, applyingSince: ago(1900) }, now)).toMatch(/its apply running for 1900 s \(the daemon ends one at 2 h\)/)
   })
 
   // Review round 1, M1: every remote batch's init writes an export into .incoming/, a batch that sends nothing
   // and voids too. Batches that begin and bring nothing are never "its standby runs, wait".
   it('batches that begin but bring nothing (no chunk, no apply): never "wait", the leader\'s batches may be void', () => {
-    const p = staleCopyProblem(stale, { since: ago(500), progressAt: null, lastAt: ago(3), chunks: 0, bytes: 0, applying: false }, now)
+    const p = staleCopyProblem(stale, { since: ago(500), progressAt: null, lastAt: ago(3), chunks: 0, bytes: 0, applyingSince: null }, now)
     expect(p).toMatch(/batches still begin here \(the last 3 s ago\) but bring nothing: no chunk arrived since/)
     expect(p).toMatch(/standby: batch void/)
     expect(p).not.toMatch(/its standby runs|wait for it to land/)
     // Chunks long ago, a start lately: the same, with how long nothing arrived.
-    const q = staleCopyProblem(stale, { since: ago(500), progressAt: ago(400), lastAt: ago(3), chunks: 2, bytes: 2 << 20, applying: false }, now)
+    const q = staleCopyProblem(stale, { since: ago(500), progressAt: ago(400), lastAt: ago(3), chunks: 2, bytes: 2 << 20, applyingSince: null }, now)
     expect(q).toMatch(/no chunk arrived and no apply ran for 400 s/)
     expect(q).not.toMatch(/its standby runs/)
   })
 
   it('an old batch and one that stopped moving: names when it began, and asks for the standby and its link', () => {
-    const p = staleCopyProblem(stale, { since: ago(560), progressAt: ago(UNDER_WAY_MOVED_S + 1), lastAt: ago(UNDER_WAY_MOVED_S + 1), chunks: 40, bytes: 40 << 20, applying: false }, now)
+    const p = staleCopyProblem(stale, { since: ago(560), progressAt: ago(UNDER_WAY_MOVED_S + 1), lastAt: ago(UNDER_WAY_MOVED_S + 1), chunks: 40, bytes: 40 << 20, applyingSince: null }, now)
     expect(p).toMatch(new RegExp(`the batch that began here at ${ago(560).replace(/[.]/g, '\\.')} has not moved for ${UNDER_WAY_MOVED_S + 1} s`))
     expect(p).toMatch(/is the standby running on the leader, and does its link to this machine carry\?/)
   })
