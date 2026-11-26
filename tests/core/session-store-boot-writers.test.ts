@@ -213,6 +213,7 @@ const SNAPSHOT_SEES: Record<string, Record<string, string>> = {
   },
   'src/core/leader/switch/session-hosts.ts': {
     moveSessionHosts: 'a leader switch, on a connection of its own to a file no server has open yet',
+    moveHomeRows: 'the same promotion (moveSessionHosts\' transaction): the data home\'s sessions moved to the new home',
   },
   'src/hooks/on-compact.ts': {
     '(any)': "the on-compact hook process's own connection (a foreign commit: data_version drops the snapshot)",

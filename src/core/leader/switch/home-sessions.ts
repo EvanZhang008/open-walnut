@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto'
 import type { LeaderSwitchSessionStamp, SessionRecord, SessionRestartLoss } from '../../types.js'
 import { homePathClass, isMachineRuntimePath } from '../../home-manifest/index.js'
 import { encodeProjectPath, isSafeForProjectEncoding } from '../../session-file-reader.js'
+import { execHostOf, judgedByHost } from '../../sessions/session-row-owner.js'
 
 /** The ways a home's path is written: as configured (resolved) and its real path. */
 export function homeSpellings(home: string): string[] {
@@ -51,10 +52,9 @@ export function relInHome(cwd: string | null | undefined, spellings: readonly st
   return null
 }
 
-/** A row of the leader's own daemon (no host, '' or '__local__'), judged by the leader. */
+/** A row of the leader's own daemon (no host to run it elsewhere), judged by the leader. */
 export function ownDaemonRow(r: Pick<SessionRecord, 'host' | 'judge'>): boolean {
-  const own = !r.host || r.host === '__local__'
-  return own && !(r.judge === 'host' && !!r.host)
+  return execHostOf(r) === undefined && !judgedByHost(r)
 }
 
 /** The rows of the class in `records`: the leader's own daemon's, with the cwd in the home. */

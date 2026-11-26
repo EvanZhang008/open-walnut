@@ -225,7 +225,7 @@ describe('which session may be replaced', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/core/types.ts'), 'utf8');
     const body = src.slice(src.indexOf('export interface SessionRecord {'));
     const fields = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/^  ([A-Za-z_]*[sS]witch[A-Za-z_]*)\??:/gm)].map((m) => m[1]);
-    const NOT_AN_ENGINE_SWITCH = ['safeguardSwitch'];
+    const NOT_AN_ENGINE_SWITCH = ['safeguardSwitch', 'leaderSwitch'];
     expect(fields.length).toBeGreaterThan(2);
     expect(fields.filter((f) => !NOT_AN_ENGINE_SWITCH.includes(f)).sort()).toEqual([...ENGINE_SWITCH_MARKS].sort());
     const failed = [

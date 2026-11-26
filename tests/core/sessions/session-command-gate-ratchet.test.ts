@@ -92,6 +92,8 @@ type Way = 'gated' | 'legacy-only' | 'host-side' | 'maintenance'
 /** file -> session-process command -> [how it keeps off a host-judged session, how many call sites]. */
 const CALL_SITES: Record<string, Record<string, [Way, number]>> = {
   'src/commands/demo-server.ts': { acpState: ['maintenance', 1] },
+  // The switch stop of the sessions in the data home and a rollback's re-enable: rows this leader judges, asked again per send.
+  'src/core/leader/switch/home-session-runtime.ts': { 'cron.supervision': ['gated', 1], stop: ['gated', 1] },
   'src/core/human-inbox/item-status.ts': { acpState: ['gated', 1], getState: ['gated', 1] },
   'src/core/session-channel/host-boot.ts': { acpState: ['host-side', 1], status: ['host-side', 2] },
   'src/core/session-health-monitor.ts': { getState: ['gated', 1] },

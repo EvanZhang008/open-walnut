@@ -33,7 +33,7 @@ describe('every field of SessionRecord has an owner', () => {
 
   it('the leader fields are the ones a person, the leader\'s hooks, its send path or its engine switch write', () => {
     expect([...LEADER_SESSION_FIELDS].sort()).toEqual([
-      'archive_reason', 'archived', 'engineSwitch', 'hintState', 'human_note', 'leftContext', 'output_mode', 'output_mode_injected', 'outputModeHookAtByLeader', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
+      'archive_reason', 'archived', 'engineSwitch', 'hintState', 'human_note', 'leaderSwitch', 'leftContext', 'output_mode', 'output_mode_injected', 'outputModeHookAtByLeader', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
       'placeNotedByLeader', 'recap', 'recapAt', 'resumedBySwitch', 'summary', 'summaryGeneratedAt', 'supersededBy', 'taskRoutingNotedByLeader', 'threadAnchors', 'threadMeta', 'title', 'workspaceToldByLeader',
     ].sort())
   })

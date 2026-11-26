@@ -40,15 +40,17 @@ export async function homeStopRuntimeRefusal(live: number): Promise<string | nul
 }
 
 export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
-  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }] = await Promise.all([
+  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }, { judgeOf }] = await Promise.all([
     store(), import('../../../providers/daemon-connection.js'), import('../../sessions/session-supervision.js'),
-    import('../../sessions/stop-provenance.js'), import('../../../lib/home-processes.js'),
+    import('../../sessions/stop-provenance.js'), import('../../../lib/home-processes.js'), import('../../sessions/judge-of.js'),
   ])
   return {
     list: listSessions,
     save,
     supervised: async (sid) => ((await readSessionSupervision(sid)).supervision as { enabled?: unknown } | null)?.enabled === true,
     stop: async (rec, stopRequestId) => {
+      // The class holds only rows this leader judges (home-sessions.ts ownDaemonRow); asked again at the send.
+      if (judgeOf(rec.claudeSessionId) === 'host') return { ok: false, why: 'a host judges this session, so this machine\'s runtime may not stop it' }
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) return { ok: false, why: 'this machine\'s session runtime is not connected' }
       if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return { ok: false, why: `this machine's session runtime lacks ${HOME_STOP_CAPABILITY}` }
@@ -72,11 +74,12 @@ export function stopTargetOf(rec: Pick<SessionRecord, 'claudeSessionId' | 'acpRu
 }
 
 export async function rollbackDeps(): Promise<RollbackDeps> {
-  const [{ listSessions }, { getConnectedDaemonConnection }] = await Promise.all([store(), import('../../../providers/daemon-connection.js')])
+  const [{ listSessions }, { getConnectedDaemonConnection }, { judgeOf }] = await Promise.all([store(), import('../../../providers/daemon-connection.js'), import('../../sessions/judge-of.js')])
   return {
     list: listSessions,
     save,
     reenable: async (sid, stopRequestId) => {
+      if (judgeOf(sid) === 'host') throw new Error('a host judges this session, so this machine\'s runtime does not supervise it')
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) throw new Error('this machine\'s session runtime is not connected')
       const reply = await conn.send('cron.supervision', { sid, enabled: true, stopFence: stopRequestId }, 5_000)
