@@ -613,13 +613,14 @@ test('on a phone, Phones & Cloud opens the tab in use; tabs switch in place and 
   expect(tab.x).toBeGreaterThanOrEqual(0)
   expect(tab.x + tab.width).toBeLessThanOrEqual(390)
   // Tags and dots come with the data and widen the tabs: the open one is brought into view
-  // again then, and an edge with more tabs past it fades (data-more says which).
+  // again then, and an edge with more tabs past it fades (data-strip-more says which; the shared
+  // strip hook's mark, renamed from data-more in 51bdac3bc6, utils/strip-edges.ts).
   await expect.poll(async () => {
     const barBox = (await page.getByTestId('pc-tabs').boundingBox())!
     const open = (await page.getByTestId('pc-tab-devices-phones').boundingBox())!
     return open.x >= barBox.x - 1 && open.x + open.width <= barBox.x + barBox.width + 1
   }).toBe(true)
-  const edges = await page.getByTestId('pc-tabs').evaluate((el) => ({ more: el.getAttribute('data-more') ?? '', left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 }))
+  const edges = await page.getByTestId('pc-tabs').evaluate((el) => ({ more: el.getAttribute('data-strip-more') ?? '', left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 }))
   expect(edges.more).toBe([edges.left ? 'left' : '', edges.right ? 'right' : ''].filter(Boolean).join(' '))
   await shot(page, 'phone-tab-devices', page.locator('body'))
   await topbar.getByRole('button', { name: 'Back' }).click()
