@@ -29,6 +29,7 @@ import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { getTask, listTasks } from '../../src/core/task-manager.js'
 import { handleLaunchRelayRequest } from '../../src/core/sessions/mobile-launch.js'
 import { rememberAskWalnutLaunch } from '../../src/core/sessions/ask-walnut-launch.js'
+import { spawnedCliModel } from '../helpers/spawned-cli-model.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -73,17 +74,6 @@ async function launchMemory(): Promise<{ model?: string }> {
   const res = await fetch(apiUrl('/api/sessions/ask-walnut-launch'))
   expect(res.status).toBe(200)
   return res.json() as Promise<{ model?: string }>
-}
-
-/** The spawn persists cliModel asynchronously: poll until the record says it spawned. */
-async function spawnedCliModel(sessionId: string): Promise<string | undefined> {
-  let seen: string | undefined
-  await vi.waitFor(async () => {
-    const record = await getSessionByClaudeId(sessionId)
-    expect(record?.pid).toBeTruthy()
-    seen = record!.cliModel
-  }, { timeout: 10_000 })
-  return seen
 }
 
 /**
@@ -228,18 +218,18 @@ describe('POST /api/v1/sessions { walnutAgent }: the Ask model memory', () => {
     await webAsk({ message: 'pick sonnet on the Mac', model: 'sonnet' })
     await vi.waitFor(async () => expect((await launchMemory()).model).toBe('sonnet'))
     const phone = await phoneAsk({ message: 'no model named on the phone' })
-    expect(await spawnedCliModel(phone.sessionId)).toBe('sonnet')
+    expect(await spawnedCliModel(daemon, phone.sessionId)).toBe('sonnet')
     // Naming none never erases it.
     expect((await launchMemory()).model).toBe('sonnet')
   })
 
   it("a phone pick moves the memory, and 'default' (Auto) clears it", async () => {
     const picked = await phoneAsk({ message: 'pick haiku on the phone', model: 'haiku' })
-    expect(await spawnedCliModel(picked.sessionId)).toBe('haiku')
+    expect(await spawnedCliModel(daemon, picked.sessionId)).toBe('haiku')
     await vi.waitFor(async () => expect((await launchMemory()).model).toBe('haiku'))
 
     const auto = await phoneAsk({ message: 'back to auto', model: 'default' })
-    expect(await spawnedCliModel(auto.sessionId)).toBeUndefined()
+    expect(await spawnedCliModel(daemon, auto.sessionId)).toBeUndefined()
     await vi.waitFor(async () => expect((await launchMemory()).model).toBeUndefined())
   })
 

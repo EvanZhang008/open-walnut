@@ -29,7 +29,7 @@ import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { waitForWsEvent } from '../helpers/ws-event-wait.js'
+import { recordWsEvents, waitForWsEvent } from '../helpers/ws-event-wait.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -259,6 +259,9 @@ describe('Plan mode session lifecycle', () => {
 
   it('REST execute endpoint starts the execution in a new task beside the plan\'s', async () => {
     const ws = await connectWs()
+    // The execution's task is known only from the answer, and its turn can end while the
+    // route still writes after the spawn: listen from before the call (ws-event-wait.ts).
+    const results = recordWsEvents(ws, 'session:result')
 
     // Call the execute endpoint (provide working_directory since mock sessions don't have cwd stored).
     // No task_id: a clean context is a new conversation, so it gets a new task.
@@ -278,7 +281,8 @@ describe('Plan mode session lifecycle', () => {
     expect(execBody.taskId).not.toBe('plan-task-001')
 
     // Wait for the execution session's result
-    const resultEvent = await waitForWsEvent(ws, 'session:result', { taskId: execBody.taskId })
+    const resultEvent = await results.next({ taskId: execBody.taskId })
+    results.stop()
     const rd = resultEvent.data as {
       result: string
       taskId: string

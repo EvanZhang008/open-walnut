@@ -28,6 +28,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { modelSupportsMaxEffort } from '../../src/core/types.js'
+import { spawnedCliModel } from '../helpers/spawned-cli-model.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -309,20 +310,6 @@ describe('quick-start walnutAgent — launch memory (model + effort follow the l
     const { rememberAskWalnutLaunch } = await import('../../src/core/sessions/ask-walnut-launch.js')
     await rememberAskWalnutLaunch(pick)
   }
-  /** The spawn persists cliModel asynchronously (its own createSessionRecord
-   *  updates the pre-seeded row) — poll rather than read once. */
-  async function spawnedCliModel(sessionId: string): Promise<string | undefined> {
-    let seen: string | undefined
-    await vi.waitFor(async () => {
-      const record = await getSessionByClaudeId(sessionId)
-      expect(record).toBeTruthy()
-      // pid arrives with the same persist as cliModel — it is the "spawned" signal.
-      expect(record!.pid).toBeTruthy()
-      seen = record!.cliModel
-    }, { timeout: 10_000 })
-    return seen
-  }
-
   // Every test states its own precondition; none may lean on a sibling's leftovers.
   beforeEach(async () => { await remember({ model: undefined, effort: undefined }) })
 
@@ -330,7 +317,7 @@ describe('quick-start walnutAgent — launch memory (model + effort follow the l
     const res = await quickStart({ walnutAgent: true, message: 'what is on my plate?' })
     expect(res.status).toBe(200)
     expect((await getSessionByClaudeId(res.sessionId!))!.effort).toBe('medium')
-    expect(await spawnedCliModel(res.sessionId!)).toBeUndefined()
+    expect(await spawnedCliModel(daemon, res.sessionId!)).toBeUndefined()
     expect(await launchMemory()).toEqual({})
   })
 
@@ -349,14 +336,14 @@ describe('quick-start walnutAgent — launch memory (model + effort follow the l
   it('a model picked on the draft at launch is remembered, and a launch naming no model spawns on it', async () => {
     const picked = await quickStart({ walnutAgent: true, message: 'summarize today', model: 'sonnet' })
     expect(picked.status).toBe(200)
-    expect(await spawnedCliModel(picked.sessionId!)).toBe('sonnet')
+    expect(await spawnedCliModel(daemon, picked.sessionId!)).toBe('sonnet')
     await vi.waitFor(async () => expect((await launchMemory()).model).toBe('sonnet'))
 
     // No `model` key at all: the client never saw the memory (a retry, a draft
     // opened before the pick). The server applies it — and does NOT clear it.
     const silent = await quickStart({ walnutAgent: true, message: 'summarize today again' })
     expect(silent.status).toBe(200)
-    expect(await spawnedCliModel(silent.sessionId!)).toBe('sonnet')
+    expect(await spawnedCliModel(daemon, silent.sessionId!)).toBe('sonnet')
     expect((await launchMemory()).model).toBe('sonnet')
   })
 
@@ -364,7 +351,7 @@ describe('quick-start walnutAgent — launch memory (model + effort follow the l
     await remember({ model: 'sonnet', effort: 'high' })
     const auto = await quickStart({ walnutAgent: true, message: 'back to auto', model: 'default' })
     expect(auto.status).toBe(200)
-    expect(await spawnedCliModel(auto.sessionId!)).toBeUndefined()
+    expect(await spawnedCliModel(daemon, auto.sessionId!)).toBeUndefined()
     await vi.waitFor(async () => expect((await launchMemory()).model).toBeUndefined())
     expect((await launchMemory()).effort).toBe('high')
   })

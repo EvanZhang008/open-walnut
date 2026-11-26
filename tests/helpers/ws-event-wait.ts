@@ -124,3 +124,54 @@ export function newSessionMatcher(): (base?: { taskId?: string }) => (data: Reco
     return true
   }
 }
+
+/** Frames of one event kept from the moment `recordWsEvents` was called. */
+export interface WsEventRecorder {
+  /** The first kept or coming frame that belongs to what `match` names; a frame is taken once. */
+  next(match: WsEventMatch, timeoutMs?: number): Promise<WsEventFrame>
+  /** Stop keeping frames. */
+  stop(): void
+}
+
+/**
+ * Keep every frame of `eventName` from now on, for a wait whose session or task is known
+ * only from the answer of the call that starts it (a new task's id, a new session's id).
+ * A wait set up after that answer may come too late: the session can end while the call's
+ * own handler still runs, and its frame went by before anyone listened (session-plan-mode's
+ * execute test, 2026-11-26). Record before the call, then take the frame with `next`.
+ * tests/core/ws-event-filter-guard.test.ts fails on a wait that listens only after its start.
+ */
+export function recordWsEvents(ws: WebSocket, eventName: string): WsEventRecorder {
+  const kept: WsEventFrame[] = []
+  const waiters = new Set<(frame: WsEventFrame) => boolean>()
+  const handler = (raw: WebSocket.RawData) => {
+    const frame = parseFrame(raw)
+    if (!frame || frame.type !== 'event' || frame.name !== eventName) return
+    for (const take of waiters) if (take(frame)) return
+    kept.push(frame)
+  }
+  ws.on('message', handler)
+  return {
+    next(match, timeoutMs = 15000) {
+      const at = kept.findIndex((f) => wsEventMatches(f.data, match))
+      if (at >= 0) return Promise.resolve(kept.splice(at, 1)[0])
+      return new Promise((resolve, reject) => {
+        const take = (frame: WsEventFrame): boolean => {
+          if (!wsEventMatches(frame.data, match)) return false
+          clearTimeout(timer)
+          waiters.delete(take)
+          resolve(frame)
+          return true
+        }
+        const timer = setTimeout(() => {
+          waiters.delete(take)
+          const others = kept.map((f) => `taskId=${String(f.data?.taskId)} sessionId=${String(f.data?.sessionId)}`)
+          reject(new Error(`Timed out waiting for ${eventName} (${describeMatch(match)}) since recording; `
+            + `kept ${kept.length} for others${others.length ? `: ${others.slice(-5).join(', ')}` : ''}`))
+        }, timeoutMs)
+        waiters.add(take)
+      })
+    },
+    stop() { ws.off('message', handler) },
+  }
+}

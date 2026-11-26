@@ -155,6 +155,60 @@ export function unfilteredWaits(text: string, events: ReadonlySet<string>): Arra
   return out
 }
 
+/** The identifiers a wait's match takes its session or task from (`body.taskId`, `{ sessionId }`). */
+function matchRoots(match: string): string[] {
+  const roots = new Set<string>()
+  for (const m of match.matchAll(/\b([A-Za-z_$][\w$]*)\s*!?\s*\.\s*(?:taskId|sessionId)\b/g)) roots.add(m[1])
+  for (const m of match.matchAll(/[{,]\s*(taskId|sessionId)\s*(?=[,}])/g)) roots.add(m[1])
+  return [...roots]
+}
+
+/** The text of the statement starting at `at`: up to the first newline outside brackets. */
+function statementAt(text: string, at: number): string {
+  let depth = 0
+  for (let i = at; i < text.length; i++) {
+    const c = text[i]
+    if ('([{'.includes(c)) depth++
+    else if (')]}'.includes(c)) depth--
+    else if (c === '\n' && depth <= 0) return text.slice(at, i)
+  }
+  return text.slice(at)
+}
+
+/**
+ * Waits that start listening only after the call that started their session answered:
+ * the match names a value declared from an awaited answer (`(await res.json()).taskId`),
+ * and nothing is awaited between that declaration and the wait. The session can end
+ * before the wait listens, and the frame is gone (session-plan-mode's execute test,
+ * 2026-11-26: the mock turn ended inside the route's own post-spawn writes). Such a wait
+ * listens from before the call: `recordWsEvents(ws, ...)` keeps the frames, `.next(match)`
+ * finds one that came early.
+ */
+export function waitsAfterTheirStart(text: string, events: ReadonlySet<string>): Array<{ line: number; call: string }> {
+  const out: Array<{ line: number; call: string }> = []
+  for (const m of text.matchAll(/\b(wait\w*)\s*\(/gi)) {
+    const before = text.slice(Math.max(0, m.index - 9), m.index)
+    if (/function\s+$/.test(before)) continue
+    const args = splitArgs(callArgs(text, m.index + m[0].length - 1))
+    const eventAt = args.findIndex((a) => /^'[^']*'$/.test(a) && events.has(a.slice(1, -1)))
+    if (eventAt < 0 || eventAt > 1) continue
+    const match = args.slice(eventAt + 1).join(',')
+    const head = text.slice(0, m.index)
+    const testStart = Math.max(head.lastIndexOf('\n  it('), head.lastIndexOf('\n  test('), head.lastIndexOf('\nit('), head.lastIndexOf('\ntest('))
+    for (const root of matchRoots(match)) {
+      const decl = [...head.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+(?:\{[^}=]*\b${root}\b[^}=]*\}|${root}\b)`, 'g'))].pop()
+      if (!decl || decl.index < testStart) continue
+      const stmt = statementAt(text, decl.index)
+      if (!/\bawait\b/.test(stmt)) continue
+      // Up to the wait's own line: its own `await` is not one between.
+      if (/\bawait\b/.test(text.slice(decl.index + stmt.length, head.lastIndexOf('\n')))) continue
+      out.push({ line: head.split('\n').length, call: `${m[1]}(${args.join(', ')})` })
+      break
+    }
+  }
+  return out
+}
+
 function e2eTestFiles(): string[] {
   const out: string[] = []
   const walk = (dir: string): void => {
@@ -209,5 +263,40 @@ describe('e2e waits on per-session broadcasts', () => {
     }
     expect(offenders, 'the server broadcasts these events for every session: pass { taskId }, { sessionId }, '
       + 'newSession(...) or a predicate (tests/helpers/ws-event-wait.ts)').toEqual([])
+  })
+
+  it('finds a wait that starts listening only after its session started', () => {
+    const ev = new Set(['session:result'])
+    const sites = (t: string) => waitsAfterTheirStart(t, ev).map((s) => s.line)
+    const late = [
+      "  it('x', async () => {",
+      "    const res = await fetch(url, { method: 'POST' })",
+      '    const body = (await res.json()) as { taskId: string }',
+      '    expect(body.taskId).toBeTruthy()',
+      "    const result = await waitForWsEvent(ws, 'session:result', { taskId: body.taskId })",
+    ].join('\n')
+    expect(sites(late)).toEqual([5])
+    expect(sites(late.replace('{ taskId: body.taskId }', '{ taskId: body!.taskId }'))).toEqual([5])
+    const shorthand = [
+      "  it('y', async () => {",
+      '    const { sessionId } = await start()',
+      "    const result = await waitForWsEvent(ws, 'session:result', { sessionId }, 20000)",
+    ].join('\n')
+    expect(sites(shorthand)).toEqual([3])
+    // Listening before the call, a constant id, or another await between (the wait is for a later frame).
+    expect(sites(late.replace("waitForWsEvent(ws, 'session:result', { taskId: body.taskId })", 'recorded.next({ taskId: body.taskId })'))).toEqual([])
+    expect(sites("  it('z', async () => {\n    const p = waitForWsEvent(ws, 'session:result', { taskId: 'plan-task-001' })")).toEqual([])
+    expect(sites(shorthand.replace('    const result', '    await send(sessionId)\n    const result'))).toEqual([])
+  })
+
+  it('no e2e wait starts listening only after the call that started its session answered', () => {
+    const offenders: string[] = []
+    for (const file of e2eTestFiles()) {
+      for (const site of waitsAfterTheirStart(fs.readFileSync(path.join(REPO, file), 'utf8'), events)) {
+        offenders.push(`${file}:${site.line}  ${site.call}`)
+      }
+    }
+    expect(offenders, 'the session can end before such a wait listens: start recordWsEvents(ws, ...) before '
+      + 'the call and take the frame with .next(match) (tests/helpers/ws-event-wait.ts)').toEqual([])
   })
 })
