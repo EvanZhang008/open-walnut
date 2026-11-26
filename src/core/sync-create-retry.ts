@@ -227,9 +227,12 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
       })
       // ONE card per streak: the attempt that reaches the threshold publishes, the
       // ones after it stay in the log. `attempts` only ever grows by one per failure
-      // and a success resets it to zero, so the equality is the whole guard: no
-      // second bookkeeping map that would have to be pruned.
-      if (attempts === CREATE_ATTEMPTS_BEFORE_NOTICE) {
+      // and a success resets it to zero. The schedule is per process, so a restart
+      // starts the streak again: a task whose card is still open (`carded`, seeded from
+      // the notification store at boot) is not reported again, or every deploy logs the
+      // same refusal anew (2026-11-26: 44 errors for one task over 9 hours of deploys).
+      if (attempts === CREATE_ATTEMPTS_BEFORE_NOTICE && !carded?.has(task.id)) {
+        carded?.add(task.id)
         log.error(CREATE_REFUSED_MESSAGE, {
           pluginId,
           taskId: task.id,

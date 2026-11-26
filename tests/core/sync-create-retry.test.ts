@@ -327,6 +327,8 @@ describe('the error a refused create raises, as the notification centre sees it'
 // A restart empties the schedule, and both retirements used to read its streak: three
 // cards (2026-10-17 to 10-23) stayed red over tasks the tracker had long since created.
 describe('a refused-create card from an earlier process', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0) })
+  afterEach(() => { vi.useRealTimers() })
   const run = (unsynced: TestTask[], carded: Set<string>, createTask: (t: TestTask) => Promise<Record<string, unknown> | null>) => {
     const publishRecovery = vi.fn()
     return retryUnsyncedCreates<TestTask>({
@@ -357,6 +359,35 @@ describe('a refused-create card from an earlier process', () => {
     expect(r.succeeded).toBe(1)
     expect(publishRecovery).toHaveBeenCalledWith([createRecoveryKey(PLUGIN, 't')])
     expect(carded.size).toBe(0)
+  })
+
+  it('is not reported again when the streak after a restart reaches the threshold', async () => {
+    // A restart empties the schedule; its card is still open, so the same refusal is no new error
+    // (2026-11-26: every deploy re-logged one refused create, 44 errors in 9 hours).
+    const carded = new Set(['t'])
+    const schedule = new SyncRetrySchedule()
+    const log = makeLog()
+    const refuse = async () => { throw new Error(REFUSAL) }
+    for (let i = 0; i < CREATE_ATTEMPTS_BEFORE_NOTICE + 2; i++) {
+      await retryUnsyncedCreates<TestTask>({ pluginId: PLUGIN, unsynced: [task('t')], schedule, createTask: refuse, log, carded })
+      vi.advanceTimersByTime(24 * 60 * MIN)
+    }
+    expect(schedule.attemptsOf('t')).toBeGreaterThanOrEqual(CREATE_ATTEMPTS_BEFORE_NOTICE)
+    expect(log.error).not.toHaveBeenCalled()
+    expect(carded.has('t')).toBe(true)
+  })
+
+  it('a card first published in this process is remembered as open', async () => {
+    const carded = new Set<string>()
+    const schedule = new SyncRetrySchedule()
+    const log = makeLog()
+    const refuse = async () => { throw new Error(REFUSAL) }
+    for (let i = 0; i < CREATE_ATTEMPTS_BEFORE_NOTICE; i++) {
+      await retryUnsyncedCreates<TestTask>({ pluginId: PLUGIN, unsynced: [task('t')], schedule, createTask: refuse, log, carded })
+      vi.advanceTimersByTime(24 * 60 * MIN)
+    }
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(carded.has('t')).toBe(true)
   })
 
   it('stays while the create is still refused', async () => {

@@ -22,7 +22,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
+import { TASK_TEXT_FIELDS, type Task, type TaskTextField } from '../types.js';
 import { compilePrivateWords, ruleMatches } from './private-words.js';
 import { judgeTaskPrivacy, type PrivacyVerdict } from './privacy-judge.js';
 
@@ -34,8 +34,8 @@ export interface PushText {
   summary?: string;
 }
 
-type TextField = 'title' | 'description' | 'note' | 'summary';
-const TEXT_FIELDS: readonly TextField[] = ['title', 'description', 'note', 'summary'];
+type TextField = TaskTextField;
+const TEXT_FIELDS = TASK_TEXT_FIELDS;
 
 interface Approval {
   /** Per field, the hash of the last text that may go out: judged work, sent by the user, or

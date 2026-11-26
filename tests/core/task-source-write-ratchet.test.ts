@@ -31,9 +31,12 @@ interface Site { count: number; why: string; mustContain: RegExp }
 const TASK_SITES: Record<string, Site> = {
   'src/core/task-manager.ts': {
     count: 2,
-    why: 'releaseSyncHold: the user chose Sync, or the privacy gate judged the task work; '
+    why: 'releaseSyncHold: the user chose Sync, or the privacy gate judged the task work, and only '
+      + 'text the service\'s content rule passes goes (2026-11-26: a held task\'s Chinese description '
+      + 'was released and its create refused on every sync tick); '
       + '_setSourceForTesting: a synced fixture for tests, called by no source file',
-    mustContain: /export async function releaseSyncHold\([\s\S]*export async function _setSourceForTesting\(|export async function _setSourceForTesting\([\s\S]*export async function releaseSyncHold\(/,
+    // Either order of the two functions; inside releaseSyncHold the content check comes before the flip.
+    mustContain: /^(?=[\s\S]*export async function _setSourceForTesting\()(?=[\s\S]*export async function releaseSyncHold\([\s\S]*?pluginContentRefusal\(target, task\)[\s\S]*?task\.source = target;)/,
   },
   'src/core/task-db-migration.ts': {
     count: 2,

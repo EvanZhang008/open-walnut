@@ -4897,6 +4897,13 @@ apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction
   // host_reconnecting), never a 500 card (middleware/link-failure-answer.ts).
   if (handsToAppErrorHandler(err) && !res.headersSent) { _next(err); return }
   const message = err instanceof Error ? err.message : String(err)
+  // A sync plugin's content rule refused the text (task-manager.ts ContentValidationError): the
+  // caller's input, answered 422 with the plugin's reason so the writer can fix it, never a 500
+  // that reads as a server fault (2026-11-26: a refused description came back "internal").
+  if (err instanceof Error && err.name === 'ContentValidationError' && !res.headersSent) {
+    sendError(res, 422, 'content_rejected', message)
+    return
+  }
   logRouteError(err, 'api-v1 unhandled error', res)
   if (res.headersSent) { res.end(); return }
   sendError(res, 500, 'internal', message)

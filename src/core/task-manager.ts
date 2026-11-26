@@ -17,7 +17,7 @@ import { dependsOnThrough } from '../lib/dependency-loop.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, keepPluginRunMarker, withPluginRunMarker, PLUGIN_RUN_TAG, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold, type TaskRawPatch } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, keepPluginRunMarker, withPluginRunMarker, PLUGIN_RUN_TAG, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold, type TaskRawPatch, TASK_TEXT_FIELDS } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES, withCompletion } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
 import { applyDirector, directorRefusal, type DirectorInput } from './task-director.js';
@@ -100,8 +100,42 @@ export class ContentValidationError extends Error {
 /** The plugin's stated content rule for a field — what an AI generator should
  *  know BEFORE generating (vs validatePluginContent, which judges a candidate
  *  after). Returns null when the task's plugin has no rule for the field. */
-export function pluginContentRequirement(task: { source: string }, field: string): string | null {
-  return registry.get(task.source)?.sync.contentRequirement?.(field) ?? null;
+export function pluginContentRequirement(task: ContentRuleTask, field: string): string | null {
+  return registry.get(contentRuleSource(task))?.sync.contentRequirement?.(field) ?? null;
+}
+
+/** What the content rules read of a task: its source and, while held, its hold. */
+type ContentRuleTask = { source: string; id?: string; sync_hold?: Pick<SyncHold, 'state' | 'target'> | null };
+
+/**
+ * The service whose content rule a task's text must meet: its own source, or, while the
+ * private-task gate still judges a task born local in a synced project (hold `checking`), the
+ * service the gate releases it to. Judging such a task by `local` let text the service refuses
+ * in at create and on every edit; the release then pushed it and the tracker refused the create
+ * on every sync tick (2026-11-26: a Chinese description, 44 background errors in 9 hours). A
+ * task kept local on purpose (private, chosen, unjudged) goes nowhere until a person sends it,
+ * and releaseSyncHold checks it then.
+ */
+export function contentRuleSource(task: ContentRuleTask): string {
+  const hold = task.sync_hold;
+  if (task.source === 'local' && hold?.state === 'checking' && hold.target && hold.target !== 'local') return hold.target;
+  return task.source;
+}
+
+/** The first field of `task` the plugin of `source` refuses, with its reason; null when all pass. */
+export function pluginContentRefusal(
+  source: string,
+  task: Pick<Task, 'title' | 'description' | 'note' | 'summary'> & { id?: string },
+): { field: string; error: string } | null {
+  // The whole task, as every write path hands it, with the service it goes to as its source.
+  const asSent = { ...task, source };
+  for (const field of TASK_TEXT_FIELDS) {
+    const value = task[field];
+    if (!value) continue;
+    const error = validatePluginContent(asSent, field, value);
+    if (error) return { field, error };
+  }
+  return null;
 }
 
 /** Non-throwing plugin content check — returns the plugin's human-readable
@@ -109,15 +143,16 @@ export function pluginContentRequirement(task: { source: string }, field: string
  *  no validator). Exported so AI writers (session-auto-title) can check a
  *  candidate value BEFORE writing and regenerate, instead of learning about
  *  the rule from a thrown write. */
-export function validatePluginContent(task: { source: string; id?: string }, field: string, value: string): string | null {
-  const plugin = registry.get(task.source);
+export function validatePluginContent(task: ContentRuleTask, field: string, value: string): string | null {
+  const source = contentRuleSource(task);
+  const plugin = registry.get(source);
   if (!plugin) {
     // Loophole detector: plugin failed to load → silent-pass means content guards
     // are fully bypassed. Surface CJK content explicitly so we can trace any new
     // Chinese-into-external-system regression back to a concrete write site.
     const hasCJK = typeof value === 'string' && CJK_DETECT_REGEX.test(value);
     log.task.warn('content validation skipped: plugin not loaded', {
-      source: task.source,
+      source,
       field,
       taskId: (task as Task).id,
       hasCJK,
@@ -131,7 +166,7 @@ export function validatePluginContent(task: { source: string; id?: string }, fie
 }
 
 /** Ask the task's plugin to validate content before writing. Throws on rejection. */
-export function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
+export function runPluginContentValidation(task: ContentRuleTask, field: string, value: string): void {
   const error = validatePluginContent(task, field, value);
   if (error) {
     log.task.info('content validation rejected', { source: task.source, field, taskId: (task as Task).id, error });
@@ -9662,7 +9697,7 @@ export async function releaseSyncHold(
   /** The text the model judged (a work verdict covers that text only; an edit made while it
    *  judged is judged again by the push check). Default: the task as released. */
   approvedText?: Pick<Task, 'title' | 'description' | 'note' | 'summary'>,
-): Promise<{ task: Task | null; released: boolean; reason?: string; syncResult?: SyncResult }> {
+): Promise<{ task: Task | null; released: boolean; reason?: string; detail?: string; syncResult?: SyncResult }> {
   const out = await withWriteLock(async () => {
     const store = await readStore();
     const task = store.tasks.find((t) => t.id === id);
@@ -9690,6 +9725,19 @@ export async function releaseSyncHold(
     }
     const validation = validateProjectSource(task.project ?? '', target, await getConfig(), store.projects);
     if (!validation.ok) return { task, released: false, reason: 'project_conflict' };
+    // Its text must meet the service's content rule before it goes: pushed anyway, the service
+    // refuses the create on every sync tick and the task never arrives. A hold still `checking`
+    // (text written before writes were judged by its target) stops being judged again at every
+    // boot: it waits, saying why, until a person edits it and chooses Sync.
+    const refusal = pluginContentRefusal(target, task);
+    if (refusal) {
+      if (task.sync_hold?.state === 'checking') {
+        task.sync_hold = { ...task.sync_hold, state: 'unjudged', reason: `Its ${refusal.field} breaks the rule of its project's service: ${refusal.error}`, at: new Date().toISOString() };
+        await writeStore(store);
+        return { task, released: false, reason: 'content_rejected', detail: refusal.error, wrote: true };
+      }
+      return { task, released: false, reason: 'content_rejected', detail: refusal.error };
+    }
     // A task turned local whose outside copy is still known links to that copy again (no second
     // item there); its remote id goes back to owned in the ledger.
     const outside = task.sync_hold?.outside;
@@ -9713,7 +9761,11 @@ export async function releaseSyncHold(
   if (out.released || ('wrote' in out && out.wrote)) {
     bus.emit(EventNames.TASK_UPDATED, { task: out.task, fields: ['source', 'sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
   }
-  if (!out.released) return { task: out.task, released: false, reason: out.reason };
+  if (!out.released) {
+    const detail = 'detail' in out ? out.detail : undefined;
+    if (detail) log.task.warn('private tasks: not released, its text breaks the service\'s rule', { taskId: out.task.id, error: detail });
+    return { task: out.task, released: false, reason: out.reason, ...(detail ? { detail } : {}) };
+  }
   log.task.info('private tasks: task released to its project\'s service', { taskId: out.task.id, source: out.task.source, approvedBy });
   if (approvedBy) {
     const { approveTaskText } = await import('./private-tasks/push-check.js');

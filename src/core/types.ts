@@ -1476,6 +1476,11 @@ export interface ReplicaCopiesConfig {
 export const SYNC_HOLD_STATES = ['checking', 'private', 'unjudged', 'chosen'] as const;
 export type SyncHoldState = typeof SYNC_HOLD_STATES[number];
 
+/** A task's free-text fields: what an outside service receives of it, and what its content
+ *  rules and the private-task checks read (push-check.ts, task-manager.ts pluginContentRefusal). */
+export type TaskTextField = 'title' | 'description' | 'note' | 'summary';
+export const TASK_TEXT_FIELDS: readonly TaskTextField[] = ['title', 'description', 'note', 'summary'];
+
 /** See Task.sync_hold. */
 export interface SyncHold {
   /** The outside service the task would sync to (its project's source). */
