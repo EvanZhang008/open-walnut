@@ -335,11 +335,11 @@ const UPDATE_INPUT = {
   // `true` reads as "all" (2026-11-23: a node sent known: true and was refused bad_request).
   known: z.union([z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/), z.literal(true)]).optional().describe('He reacted to your answers through this message (tm-...), or "all" (true reads as "all"): they leave the card. Refused before he reacted'),
   close: z.enum(['acked', 'dropped']).optional().describe('acked (he reacted to it as finished) or dropped (no longer wanted). Refused before he reacted, unless user_words quotes him'),
-  user_words: z.string().max(500).optional().describe('With close: his words asking for it, quoted exactly from his latest message in this thread, which counts only when it came after everything said in the thread (merge the thread holding them in first). With merge_into: his words asking to combine the threads, from any message of his to you'),
+  user_words: z.string().max(500).optional().describe('His exact words. With close: asking for it, from his latest message in this thread, after everything else said in it (merge in the thread holding them first). With merge_into: asking to combine the threads, from any message of his'),
   reopen: z.boolean().optional().describe('Open a closed thread again'),
   place: z.enum(ACK_PLACES).optional().describe('After his Acknowledge, when his card asks where it goes: closed (it is over), waiting (on something outside) or working (its work still runs). Only with place_why'),
   place_why: z.string().max(PLACE_WHY_MAX).optional().describe('With place: one line his card shows (what it waits on, or why it is over)'),
-  snooze: z.string().max(40).optional().describe('When he asked to come back to it later: it leaves his view for the Snoozed section until an ISO time, a date or a duration ("4h", "3d"), at most a year, and returns sooner when he writes in it, you answer it or it moves to needs or answered; "" ends it'),
+  snooze: z.string().max(40).optional().describe('He asked to come back to it later: hidden (Snoozed) until an ISO time, a date or a duration ("4h", "3d"), at most a year; back sooner when he writes in it, you answer it or it moves to needs or answered; "" ends it'),
   watch: z.boolean().optional().describe('true adds it to his Watching group (it stays in its own group too); false removes it. You cannot unwatch or close his'),
   watch_at: z.string().max(40).optional().describe('Its place in Watching (ISO time, oldest first)'),
   merge_into: THREAD_ID.optional().describe('Put this thread under that open thread (same subject); alone in its call'),
