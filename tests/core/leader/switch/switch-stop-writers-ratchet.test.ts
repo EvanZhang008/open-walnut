@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { clockFiles, clocksIn, codeOf, rearmingFiles, rearmingIn, sourcesUnder } from './clock-scan.js'
 import { CLOCKS, REARMING, STARTERS, type Clock } from './clock-table.js'
+import { gitArgvWrites } from '../../../../src/lib/leader-home-gate.js'
 
 const ROOT = path.resolve(__dirname, '../../../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -208,7 +209,7 @@ describe('the switch stop\'s writers, from stopServer', () => {
 /** Files with their exact count of git children spawned outside git-sync.ts, and where those run. */
 const GIT_CHILDREN: Record<string, [number, string]> = {
   'src/providers/session-changes-core.ts': [1, 'reads a session\'s work dir (git diff), never the home'],
-  'src/providers/turn-snapshot-core.ts': [1, 'snapshots a session\'s work dir into its own refs, never the home'],
+  'src/providers/turn-snapshot-core.ts': [1, 'snapshots a session\'s repo into its own refs; the main agent\'s session works in the home, so it asks the leader home gate (see below)'],
   'src/web/routes/git-http.ts': [1, 'the companion\'s hub repo, never a leader\'s home'],
   'src/web/routes/git-bundle-push.ts': [2, 'the companion\'s hub repo, never a leader\'s home'],
   'src/core/self-repair/walnut-source.ts': [2, '`git --version`, and Walnut\'s own source checkout (self-repair), never the home'],
@@ -475,5 +476,83 @@ describe('the leader\'s clocks, from the source', () => {
     expect(writers.indexOf('stopLeaderClocks()')).toBeLessThan(writers.indexOf('quietGitWriters('))
     const start = functionBody(server, 'export async function startServer(')
     expect(start.indexOf('resumeLeaderClocks()')).toBeGreaterThan(start.indexOf('endGitQuiet(WALNUT_HOME)'))
+  })
+})
+
+/**
+ * No git writes into a data home that a leader switch is taking away or took away (src/lib/leader-home-gate.ts).
+ * The 2026-11-26 red: the daemon's turn snapshot of the main agent's session (whose cwd is the home) wrote the empty
+ * tree object into a handed-over home, which must stay byte for byte as it was. Every git argv literal of src/ that
+ * writes is found here; its file is a daemon twin core whose runner asks deps.gitWriteRefused (and whose daemon
+ * module hands it daemonGitWriteRefusal), or runs its git through git-sync.ts's spawners (refuseGitInQuiet with the
+ * argv), or names why it never runs in a home. A new writing git anywhere fails here until it is one of those.
+ */
+describe('git writes into a data home under a leader switch', () => {
+  /** Daemon twin cores: their runner asks the gate; the factory each daemon module builds them with. */
+  const TWIN_GATED: Record<string, string> = {
+    'src/providers/turn-snapshot-core.ts': 'createTurnSnapshots',
+    'src/providers/git-commit-core.ts': 'createGitCommitCore',
+    'src/providers/transfer-pack-core.ts': 'createTransferPack',
+    'src/providers/workspace-core.ts': 'createWorkspaceCore',
+  }
+  /** Writers outside the twins: through git-sync.ts's gated spawners, or never in a home. */
+  const OTHER_WRITERS: Record<string, ['git-sync' | 'never-a-home', string]> = {
+    'src/integrations/git-sync.ts': ['git-sync', 'the data repo\'s own git: its spawners (checked below)'],
+    'src/integrations/git-sync-large-files.ts': ['git-sync', 'the large-file lane runs the GitRunner git-sync.ts hands it (gitArgvRunnerAt)'],
+    'src/core/plugins/linked-checkout.ts': ['git-sync', 'a linked plugin checkout, through execGitArgsGroup'],
+    'src/core/host-server/host-file-build.ts': ['never-a-home', 'a host server build in its own folder'],
+    'src/core/self-repair/walnut-source.ts': ['never-a-home', 'Walnut\'s own source checkout'],
+    'src/web/routes/git-bundle-push.ts': ['never-a-home', 'the companion\'s hub repo'],
+  }
+
+  /** Every git argv literal of a file's code: `['git', 'x', ...]`, `git(['x', ...])`, `git(cwd, ['x', ...])`, `run('git', ['x', ...])`. */
+  function gitArgvLiterals(src: string): string[][] {
+    const out: string[][] = []
+    const re = /(?:\[\s*(['"])git\1\s*,|\bgit\(\s*(?:[\w.]+\s*,\s*)?\[|\(\s*(['"])git\2\s*,\s*\[)([^\]]*)\]/g
+    for (const m of src.matchAll(re)) {
+      const argv = [...m[3]!.matchAll(/'([^']*)'|"([^"]*)"|([^,\s][^,]*)/g)].map((t) => t[1] ?? t[2] ?? '?').filter((t) => t !== '')
+      if (argv.length) out.push(argv)
+    }
+    return out
+  }
+
+  it('finds the shapes', () => {
+    expect(gitArgvLiterals("run(['git', 'write-tree'], o); git(['mktree'], {}); git(root, ['commit-tree', t]); run('git', ['add', '-A'])"))
+      .toEqual([['write-tree'], ['mktree'], ['commit-tree', '?'], ['add', '-A']])
+  })
+
+  it('every file with a writing git argv is gated or pinned', () => {
+    const found: Record<string, string[]> = {}
+    for (const file of sources(path.join(ROOT, 'src'))) {
+      const rel = path.relative(ROOT, file)
+      if (rel === path.join('src', 'lib', 'leader-home-gate.ts')) continue
+      const writes = gitArgvLiterals(code(file)).filter((a) => gitArgvWrites(a)).map((a) => a[0]!)
+      if (writes.length) found[rel] = [...new Set(writes)].sort()
+    }
+    expect(Object.keys(found).sort()).toEqual([...Object.keys(TWIN_GATED), ...Object.keys(OTHER_WRITERS)].sort())
+  })
+
+  it('each twin core\'s git runner asks the gate, and each daemon module builds it with daemonGitWriteRefusal', () => {
+    const modules = sources(path.join(ROOT, 'src', 'providers')).filter((f) => path.basename(f).startsWith('daemon-')).map((f) => code(f))
+    for (const [file, factory] of Object.entries(TWIN_GATED)) {
+      expect(code(path.join(ROOT, file)), file).toMatch(/deps\.gitWriteRefused\(/)
+      const builds = modules.flatMap((m) => [...m.matchAll(new RegExp(`\\b${factory}\\(\\{`, 'g'))].map((x) => m.slice(x.index!, x.index! + 1500)))
+      expect(builds.length, factory).toBeGreaterThan(0)
+      for (const b of builds) expect(b.slice(0, b.indexOf('\n  })') + 1 || undefined), factory).toContain('gitWriteRefused: daemonGitWriteRefusal')
+    }
+  })
+
+  it('git-sync.ts\'s spawners and the bundle client hand the argv to refuseGitInQuiet; the others run through git-sync', () => {
+    const sync = read('src/integrations/git-sync.ts')
+    expect(functionBody(sync, 'export function git(')).toContain('refuseGitInQuiet(options?.cwd ?? WALNUT_HOME, args)')
+    expect(functionBody(sync, 'export async function execGitGroup(')).toContain('refuseGitInQuiet(opts.cwd, command)')
+    expect(functionBody(sync, 'export async function execGitArgsRaw(')).toContain('refuseGitInQuiet(opts.cwd, args)')
+    expect(functionBody(read('src/integrations/git-bundle-client.ts'), 'function runGit(')).toContain('refuseGitInQuiet(repoDir, args)')
+    for (const [file, [how]] of Object.entries(OTHER_WRITERS)) {
+      if (how !== 'git-sync' || file === 'src/integrations/git-sync.ts') continue
+      const c = code(path.join(ROOT, file))
+      expect(c, file).not.toMatch(/\b(?:spawn|spawnSync|execFile|execFileSync|execSync|exec)\(\s*['"`]git[ '"`]/)
+      expect(c, file).toMatch(/from '[./]+(?:integrations\/)?git-sync\.js'|\bgit: GitRunner\b/)
+    }
   })
 })

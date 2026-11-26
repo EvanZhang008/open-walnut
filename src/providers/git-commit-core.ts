@@ -28,6 +28,8 @@
 import type { createGitAttribution, CommitHunk, AttrOp, ChosenHunk, FileOwner } from './git-attribution-core.js'
 
 export interface GitCommitDeps {
+  /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
+  gitWriteRefused?: (argv: string[], cwd: string) => string | null
   /** child_process.spawn */
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) => {
     pid?: number
@@ -165,6 +167,8 @@ export function createGitCommitCore(deps: GitCommitDeps) {
   }): Promise<RunResult> {
     return new Promise(function (resolve) {
       var child: ReturnType<GitCommitDeps['spawn']>
+      var refused = argv[0] === 'git' && deps.gitWriteRefused ? deps.gitWriteRefused(argv, o.cwd) : null
+      if (refused) { resolve({ code: 128, stdout: '', stdoutBuf: Buffer.alloc(0), stderr: refused, timedOut: false }); return }
       try {
         child = deps.spawn(argv[0], argv.slice(1), { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], detached: !!o.group })
       } catch (err) {

@@ -28,6 +28,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { OpEntry, PermitRecord } from '../permit/types.js'
+import { LEADER_SWITCH_MARKER_REL } from '../../../lib/leader-home-gate.js'
 
 export function switchDir(home: string): string {
   return path.join(home, 'local', 'leader-switch')
@@ -72,7 +73,8 @@ export interface HandedOverMarker {
 }
 
 export function markerFile(home: string): string {
-  return path.join(switchDir(home), 'handed-over.json')
+  // The same path every git writer asks for (lib/leader-home-gate.ts): a marked home takes no git write.
+  return path.join(home, LEADER_SWITCH_MARKER_REL)
 }
 
 export function readMarker(home: string): HandedOverMarker | null {

@@ -205,7 +205,7 @@ export function bundleEndpointFromRemote(remoteUrl: string): { base: string; aut
 /** Run git (list-args, no shell) in repoDir; resolve stdout or reject. A leader switch's stop ends it (git-children.ts). */
 function runGit(repoDir: string, args: string[], timeoutMs: number, stdin?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    refuseGitInQuiet(repoDir)
+    refuseGitInQuiet(repoDir, args)
     const child = spawn('git', args, { cwd: repoDir, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true, env: gitChildEnv() })
     if (stdin !== undefined) {
       child.stdin?.on('error', () => { /* git exited early: its exit code tells */ })

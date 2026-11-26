@@ -49,6 +49,8 @@
 export interface WorktreeEntry { path: string; branch?: string }
 
 export interface WorkspaceCoreDeps {
+  /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
+  gitWriteRefused?: (argv: string[], cwd: string) => string | null
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) => WorkspaceChild
   fs: {
     promises: {
@@ -394,6 +396,8 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       var overflow = false
       var cap = opts.stdoutCap ?? STDOUT_CAP
       var child: WorkspaceChild
+      var refused = cmd === 'git' && deps.gitWriteRefused ? deps.gitWriteRefused([cmd].concat(args), opts.cwd || '.') : null
+      if (refused) { resolve({ code: 128, signal: null, stdout: '', stderr: refused, timedOut: false, overflow: false }); return }
       var killTimer: ReturnType<typeof setTimeout> | null = null
       var settleTimer: ReturnType<typeof setTimeout> | null = null
       var exitTimer: ReturnType<typeof setTimeout> | null = null

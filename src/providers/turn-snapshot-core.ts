@@ -19,7 +19,9 @@
  *
  * Skipped, and the reason recorded: not a git repo, `index.lock` present, a
  * merge / rebase / cherry-pick / revert in progress, the time budget spent
- * (that repo then rests for a while), git failing.
+ * (that repo then rests for a while), git failing, a Walnut data home that a
+ * leader switch is taking away or took away (`leader-home`: deps.gitWriteRefused;
+ * such a home must stay byte for byte as it was).
  *
  * Every git child gets an env with no inherited GIT_DIR / GIT_WORK_TREE /
  * GIT_INDEX_FILE (and the other repo redirects, see src/lib/git-env.ts for
@@ -112,6 +114,12 @@ export interface TurnSnapshotDeps {
   turnActive?: (sid: string) => boolean
   /** A repository root the snapshots may write to (tests pin a temp root). */
   allowRepo?: (repoRoot: string) => boolean
+  /**
+   * Why a writing git may not run there now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data
+   * home a leader switch is taking away or took away; the main agent's session works in the home). Asked before a
+   * snapshot or a restore, and by every git this core starts.
+   */
+  gitWriteRefused?: (argv: string[], cwd: string) => string | null
   /** Off from the start (WALNUT_TURN_SNAPSHOTS=0); a configure cannot turn it on. */
   forceDisabled?: boolean
   /** Budget for ONE snapshot (default 10s). */
@@ -360,6 +368,8 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
     return new Promise((resolve, reject) => {
       var exec = deps.execFile
       if (!exec) return reject(err('no-git', 'turn snapshots: no execFile'))
+      var refused = deps.gitWriteRefused ? deps.gitWriteRefused(['git'].concat(args), opts.cwd) : null
+      if (refused) return reject(err('leader-home', refused))
       var left = opts.deadline - now()
       if (left <= 0) return reject(err('timeout', 'time budget spent'))
       var child = exec('git', args, {
@@ -630,9 +640,21 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
     }
   }
 
+  /** Why nothing may be written in this repository now (a data home under a leader switch), or null. */
+  function homeRefusal(root: string): string | null {
+    return deps.gitWriteRefused ? deps.gitWriteRefused(['git', 'write-tree'], root) : null
+  }
+
+  /**
+   * HEAD's commit, or null for an unborn repo (exit 1, nothing printed). Any other failure throws: a HEAD that
+   * could not be read is no unborn repo, and a snapshot from an empty base would write the empty tree (mktree)
+   * into a repository that has commits.
+   */
   async function headCommit(root: string, deadline: number): Promise<string | null> {
     var r = await git(['rev-parse', '-q', '--verify', 'HEAD^{commit}'], { cwd: root, deadline: deadline })
-    return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null
+    if (r.code === 0 && r.stdout.trim()) return r.stdout.trim()
+    if (r.code === 1 && !r.stdout.trim()) return null
+    throw err('git-failed', 'rev-parse HEAD: ' + (firstLine(r.stderr) || 'exit ' + r.code))
   }
 
   async function listRefs(root: string, sid: string, deadline: number): Promise<TurnSnapshotEntry[]> {
@@ -976,6 +998,8 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
       var r = repo
       repoRoot = r.root
       if (deps.allowRepo && !deps.allowRepo(r.root)) return { status: 'skipped', reason: 'not-allowed' }
+      var refusedHere = homeRefusal(r.root)
+      if (refusedHere) { recordSkip(sid, 'leader-home', refusedHere); return { status: 'skipped', reason: 'leader-home' } }
       var rest = repoBackoffUntil.get(r.root)
       if (rest && rest > now()) { recordSkip(sid, 'resting', 'a recent snapshot of this repository ran out of time'); return { status: 'skipped', reason: 'resting' } }
       var outcome = await inRepo(r.root, async () => {
@@ -1167,6 +1191,8 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
     if (!repo) throw err('not-a-repo', 'not a git repository')
     var r = repo
     if (deps.allowRepo && !deps.allowRepo(r.root)) throw err('not-allowed', 'snapshots are not allowed in this repository')
+    var refusedHere = homeRefusal(r.root)
+    if (refusedHere) throw err('leader-home', refusedHere)
     return inRepo(r.root, async () => {
       var blocked = await blockedReason(r)
       if (blocked) throw err(blocked, 'git is busy in this repository (' + blocked + ')')

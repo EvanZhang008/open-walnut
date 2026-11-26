@@ -115,3 +115,42 @@ describe('the switch stop ends this server\'s git in the home', () => {
     expect(objects()).toBe(before)
   })
 })
+
+describe('a handed-over home takes no git write from git sync (lib/leader-home-gate.ts), whichever process asks', () => {
+  const markHome = (state: string) => {
+    fs.mkdirSync(path.join(WALNUT_HOME, 'local', 'leader-switch'), { recursive: true })
+    fs.writeFileSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'), JSON.stringify({ switchId: 's', to: 'machine-b', state, at: new Date().toISOString() }))
+  }
+  const store = () => {
+    const out: string[] = []
+    const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push(p) } }
+    walk(path.join(WALNUT_HOME, '.git', 'objects'))
+    walk(path.join(WALNUT_HOME, '.git', 'refs'))
+    return out.sort()
+  }
+
+  it('handed over: every spawner refuses a writing git (a commit of nothing writes the empty tree too) and lets a read run', async () => {
+    markHome('handed-over')
+    fs.writeFileSync(path.join(WALNUT_HOME, 'new.txt'), 'after the handover\n')
+    const before = store()
+    expect(() => git('add -A')).toThrow(GitQuiet)
+    expect(() => git('commit -q --allow-empty -m x')).toThrow(/handed over/)
+    await expect(execGitGroup('git -c core.x=1 commit -q -m x', { cwd: WALNUT_HOME, timeout: 10_000 })).rejects.toThrow(GitQuiet)
+    await expect(execGitArgsRaw(['mktree'], { cwd: WALNUT_HOME, timeout: 10_000, input: '' })).rejects.toThrow(GitQuiet)
+    await expect(execGitArgsRaw(['hash-object', '-w', 'new.txt'], { cwd: WALNUT_HOME, timeout: 10_000 })).rejects.toThrow(GitQuiet)
+    // Reads run (a standby answers what its home holds).
+    expect(git('rev-parse --abbrev-ref HEAD')).toBeTruthy()
+    expect((await execGitArgsRaw(['hash-object', 'new.txt'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
+    // The auto-commit's own pass is refused at its first writing git (as in a switch stop's quiet).
+    await expect(commitIfDirty()).rejects.toThrow(GitQuiet)
+    expect(store()).toEqual(before)
+  })
+
+  it('switching: the leader\'s git sync still commits until its stop (the stop\'s quiet refuses from then on)', async () => {
+    markHome('switching')
+    fs.writeFileSync(path.join(WALNUT_HOME, 'new.txt'), 'during the switch\n')
+    git('add -A')
+    git('commit -q -m during')
+    expect(git('log -1 --format=%s')).toBe('during')
+  })
+})

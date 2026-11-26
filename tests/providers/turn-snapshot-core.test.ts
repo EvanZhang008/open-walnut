@@ -17,6 +17,7 @@ import {
   TURN_SNAPSHOT_REDIRECT_VARS, type TurnSnapshotDeps, type TurnSnapshotExecFile, type TurnSnapshotFs,
 } from '../../src/providers/turn-snapshot-core.js'
 import { GIT_REPO_REDIRECT_VARS } from '../../src/lib/git-env.js'
+import { daemonGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
 
 let ROOT = ''
 
@@ -353,6 +354,82 @@ describe('turn snapshots: skip rules', () => {
     expect(await core.snapshot('s1', repo, 'turn')).toMatchObject({ status: 'skipped', reason: 'resting' })
     t += 16 * 60_000
     expect(await core.snapshot('s1', repo, 'turn')).toMatchObject({ status: 'skipped', reason: 'timeout' })
+  })
+})
+
+/** Every file under the repo's .git/objects and .git/refs (what a write would add). */
+function gitStore(repo: string): string[] {
+  const out: string[] = []
+  const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out.push(path.relative(repo, p)) } }
+  walk(path.join(repo, '.git', 'objects'))
+  walk(path.join(repo, '.git', 'refs'))
+  return out.sort()
+}
+
+/** A repo that is a Walnut data home a leader switch is taking away ('switching') or took away ('handed-over'). */
+function markHome(repo: string, state: 'switching' | 'handed-over' | 'torn'): void {
+  const dir = path.join(repo, 'local', 'leader-switch')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'handed-over.json'), state === 'torn' ? '{"swit' : JSON.stringify({ switchId: 's', to: 'machine-b', state, at: new Date().toISOString() }))
+}
+
+describe('turn snapshots: a data home under a leader switch takes none (the 2026-11-26 empty tree red)', () => {
+  // The main agent's session works in the data home: its turn snapshots wrote into the home's .git, and after a
+  // switch the empty tree object into the handed-over home, which must stay byte for byte as it was.
+  for (const state of ['handed-over', 'switching', 'torn'] as const) {
+    it(`a home marked ${state}: the snapshot is skipped and nothing is written to .git`, async () => {
+      const repo = makeRepo()
+      const core = makeCore({ gitWriteRefused: daemonGitWriteRefusal })
+      write(repo, 'a.txt', 'edited by the main agent\n')
+      markHome(repo, state)
+      const before = gitStore(repo)
+      expect(await core.snapshot('s1', repo, 'start')).toMatchObject({ status: 'skipped', reason: 'leader-home' })
+      expect(await core.snapshot('s1', repo, 'turn')).toMatchObject({ status: 'skipped', reason: 'leader-home' })
+      expect(gitStore(repo)).toEqual(before)
+      expect((await core.list('s1', repo)).skipped.map((x) => x.reason)).toContain('leader-home')
+    })
+  }
+
+  it('a home marked after its snapshots began: a restore is refused and writes nothing', async () => {
+    const repo = makeRepo()
+    const core = makeCore({ gitWriteRefused: daemonGitWriteRefusal })
+    await core.snapshot('s1', repo, 'start')
+    write(repo, 'a.txt', 'turn one\n')
+    await core.snapshot('s1', repo, 'turn')
+    markHome(repo, 'handed-over')
+    const before = gitStore(repo)
+    await expect(core.restore({ sid: 's1', cwd: repo, n: 0 })).rejects.toMatchObject({ code: 'leader-home' })
+    expect(read(repo, 'a.txt')).toBe('turn one\n')
+    expect(gitStore(repo)).toEqual(before)
+  })
+
+  it('a repo nested in a marked home (plugins/<x>) is the home\'s too; an unmarked repo snapshots as before', async () => {
+    const home = makeRepo()
+    markHome(home, 'handed-over')
+    const nested = path.join(home, 'plugins', 'p')
+    fs.mkdirSync(nested, { recursive: true })
+    git(nested, 'init', '-q', '-b', 'main')
+    write(nested, 'x.txt', 'x\n')
+    const core = makeCore({ gitWriteRefused: daemonGitWriteRefusal })
+    expect(await core.snapshot('s1', nested, 'turn')).toMatchObject({ status: 'skipped', reason: 'leader-home' })
+    expect(await core.snapshot('s2', makeRepo(), 'turn')).toMatchObject({ status: 'created' })
+  })
+
+  it('a HEAD that cannot be read is not an unborn repo: no snapshot from an empty base (no mktree into a repo with commits)', async () => {
+    const repo = makeRepo()
+    write(repo, 'a.txt', 'changed\n')
+    const flaky = ((file: string, args: string[], opts: unknown, cb: (e: unknown, out: string, err: string) => void) => {
+      if (args[0] === 'rev-parse' && args.includes('HEAD^{commit}')) {
+        setImmediate(() => cb(Object.assign(new Error('fatal: unable to read HEAD'), { code: 128 }), '', 'fatal: unable to read HEAD'))
+        return { stdin: null }
+      }
+      return (execFile as unknown as (...a: unknown[]) => unknown)(file, args, opts, cb)
+    }) as unknown as TurnSnapshotExecFile
+    const core = makeCore({ execFile: flaky })
+    const out = await core.snapshot('s1', repo, 'turn')
+    expect(out.status).not.toBe('created')
+    expect(fs.existsSync(path.join(repo, '.git/objects/4b/825dc642cb6eb9a060e54bf8d69288fbee4904'))).toBe(false)
+    expect(refs(repo, 's1')).toEqual([])
   })
 })
 

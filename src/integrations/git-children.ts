@@ -4,12 +4,13 @@
  * runs (git-sync.ts execGitGroup, execGitArgsRaw and git; git-bundle-client.ts runGit); the source ratchet
  * tests/core/leader/switch/switch-stop-writers-ratchet.test.ts pins every other git child of src/.
  *
- * Leaf module: node's, the process-group kill and the deadline helper only.
+ * Leaf module: node's, the process-group kill, the deadline helper and the leader home gate only.
  */
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
 import { withDeadline } from '../lib/with-deadline.js';
+import { serverGitWriteRefusal } from '../lib/leader-home-gate.js';
 
 /** How long a TERM'd git group gets before its KILL. */
 const KILL_GRACE_MS = 3_000;
@@ -65,17 +66,22 @@ function insideQuiet(cwd: string): string | null {
   return null;
 }
 
-/** A git asked for in a folder of a switch stop: refused before it starts. */
+/** A git asked for in a folder of a switch stop, or a writing one in a handed-over home: refused before it starts. */
 export class GitQuiet extends Error {
-  constructor(root: string) {
-    super(`no git starts in ${root} any more: this server is in its leader switch stop`);
+  constructor(root: string, why?: string) {
+    super(why ?? `no git starts in ${root} any more: this server is in its leader switch stop`);
     this.name = 'GitQuiet';
   }
 }
 
-export function refuseGitInQuiet(cwd: string): void {
+export function refuseGitInQuiet(cwd: string, argv?: readonly string[] | string): void {
   const root = insideQuiet(cwd);
   if (root) throw new GitQuiet(root);
+  // A writing git in a handed-over home (lib/leader-home-gate.ts): that home stays as it was, whichever process asks.
+  if (argv !== undefined) {
+    const why = serverGitWriteRefusal(typeof argv === 'string' ? argv.trim().split(/\s+/) : argv, cwd);
+    if (why) throw new GitQuiet(cwd, why);
+  }
 }
 
 /** Whether git is stopped in `dir` (it is under a folder quietGitWriters stopped). */

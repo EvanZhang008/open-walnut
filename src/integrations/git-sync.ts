@@ -269,7 +269,7 @@ export async function credentialGuardArgsAsync(cwd?: string): Promise<string[]> 
 }
 
 export function git(args: string, options?: { cwd?: string; timeout?: number; env?: Record<string, string> }): string {
-  refuseGitInQuiet(options?.cwd ?? WALNUT_HOME);
+  refuseGitInQuiet(options?.cwd ?? WALNUT_HOME, args);
   const guard = NETWORK_GIT_RE.test(args) ? credentialGuardArgs(options?.cwd).join(' ') : '';
   return execSync(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
@@ -327,7 +327,7 @@ export async function execGitGroup(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    refuseGitInQuiet(opts.cwd);
+    refuseGitInQuiet(opts.cwd, command);
     // Backups, gc and repacks are background work: in the utility band when the
     // server was raised above it (background-qos.ts). The clamp execs, so the
     // group leader is still the child and the group kill below still reaps it.
@@ -418,7 +418,7 @@ export async function execGitArgsRaw(
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string; stdoutFd?: number; holdsNoLock?: boolean },
 ): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
-    refuseGitInQuiet(opts.cwd);
+    refuseGitInQuiet(opts.cwd, args);
     const childEnv = gitChildEnv(opts.env);
     const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
     const child = spawn(cmd, cmdArgs, {

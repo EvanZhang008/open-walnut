@@ -36,6 +36,8 @@ export interface PackChild {
 }
 
 export interface TransferPackDeps {
+  /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
+  gitWriteRefused?: (argv: string[], cwd: string) => string | null
   fs: typeof fsType
   path: typeof pathType
   crypto: typeof cryptoType
@@ -209,6 +211,8 @@ export function createTransferPack(deps: TransferPackDeps) {
         if (sink) sink.end(done)
         else done()
       }
+      var refused = argv[0] === 'git' && deps.gitWriteRefused ? deps.gitWriteRefused(argv, o.cwd) : null
+      if (refused) { errText = refused; resolve({ code: 128, stdout: Buffer.alloc(0), stderr: refused, timedOut: false, outBytes: 0, overLimit: false }); return }
       var stop = function () { try { child.kill('SIGKILL') } catch (_e) { /* gone */ } }
       var timer = setTimeout(function () { timedOut = true; stop(); finish(-1) }, o.timeoutMs || GIT_MS)
       if (sink) sink.on('error', function (e: Error) { errText = errText || String(e.message || e); stop() })
