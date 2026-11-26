@@ -19,6 +19,9 @@ export interface FastModelCall {
   directMs: number;
   /** Room for the model's own thinking before its answer (a 5-token cap answered nothing). */
   maxTokens?: number;
+  /** A hard cap on every channel, a CLI or a local model included: a check a write waits on
+   *  (same-ask-meaning.ts) gives up rather than hold the write for a minute. */
+  capMs?: number;
 }
 
 export async function callFastModel(c: FastModelCall): Promise<{ text: string; ms: number }> {
@@ -27,7 +30,7 @@ export async function callFastModel(c: FastModelCall): Promise<{ text: string; m
   const [{ sendMessage }, { getConfig }] = await Promise.all([import('../model/model.js'), import('./config-manager.js')]);
   const config = await getConfig();
   const model = fastModelFor(config);
-  const budget = fastCallBudgetMs(config, c.directMs);
+  const budget = Math.min(fastCallBudgetMs(config, c.directMs), c.capMs ?? Infinity);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   const started = Date.now();

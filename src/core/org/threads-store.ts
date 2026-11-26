@@ -286,11 +286,13 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
  * them (same-ask.ts): 409 `same_ask` with that task named, unless same_ask_reason says why. The user's
  * own writes are never asked. Checked before the write: a race only lets one through.
  */
-async function refuseSameAskThread(taskId: string, text: string | undefined, by: ThreadWriter, input: { same_ask_reason?: unknown }): Promise<void> {
+async function refuseSameAskThread(taskId: string, text: string | undefined, by: ThreadWriter, input: { same_ask_reason?: unknown }, card: ReadonlyArray<unknown> = []): Promise<void> {
   if (by === 'human') return;
   const { refuseSameAsk } = await import('../same-ask-tree.js');
   const { SameAskError } = await import('../same-ask.js');
-  await refuseSameAsk(taskId, text, 'thread', input).catch((err) => {
+  // The meaning check reads the whole card: its title, its question and its summary (same-ask-meaning.ts).
+  const words = [...new Set(card.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()))].join('\n');
+  await refuseSameAsk(taskId, text, 'thread', input, [], null, words || undefined).catch((err) => {
     throw err instanceof SameAskError ? new ThreadError('same_ask', 409, err.message) : err;
   });
 }
@@ -324,7 +326,7 @@ export async function openNodeThreadChecks(taskId: string, input: OpenThreadInpu
   // The needs_options check below reads the switch as it is now (one-card.ts).
   await oneCardOn();
   const needs = !input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs';
-  if (needs) await refuseSameAskThread(taskId, input.title, by, input);
+  if (needs) await refuseSameAskThread(taskId, input.title, by, input, [input.title, input.ask, input.reply, input.text]);
   // The task's other asks: named as replaced, or said to be other decisions (thread-supersede.ts).
   const { refuseOtherOpenAsks, namedElsewhere, namedRefusal } = await import('./thread-supersede.js');
   // The thread's own refusals come first (a missing kind, an unclear card): a dry run on the file as it is.
@@ -391,7 +393,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
     const cur = (await readThreads(taskId)).threads.find((t) => t.id === id);
     const hands = !!cur && patchHandsToUser(cur, rest);
     if (cur && hands) {
-      await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest);
+      await refuseSameAskThread(taskId, rest.ask?.trim() || cur.ask || rest.title?.trim() || cur.title, by, rest, [rest.title ?? cur.title, rest.ask ?? cur.ask, rest.reply ?? cur.reply]);
       // A task around already asks him this subject on a thread of its own: one decision, one card.
       await (await import('./thread-same-subject.js')).refuseSameSubjectAsk(taskId, rest.title?.trim() || cur.title, [...(cur.tasks ?? []), ...(rest.add_tasks ?? [])], by, rest);
       // Its own refusals first (a missing kind, a return with no word on his message): a dry run.

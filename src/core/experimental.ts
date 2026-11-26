@@ -433,6 +433,13 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A Lock button in a note\'s header offers Hide from AI and Encrypt. Hide from AI keeps the text plain on disk, but no agent tool reads or changes it, and the Notes page shows it after Show, with no password. Encrypt locks it with your Passwords master password: agents, search and sync see only that it is locked, and its text shows after Show and the master password. A note already hidden or locked always opens covered with Show, and stays protected, with this switch on or off. Off: no Lock button.',
     default: false,
   },
+  {
+    id: 'asks_same_by_meaning',
+    name: 'One decision once, in any words',
+    summary: 'Before an agent puts a decision before you, a fast model checks whether its team already asks you the same.',
+    description: 'Before an agent puts a decision in front of you (a status ask, a card on its Threads, a decision letter, a Board choice), and no open ask of its team uses the same words, Walnut asks the fast model once whether one of those open asks is the same decision in other words. When it is, the agent is told which one asks it already and leaves it to that one, so you see the decision once. The model can be wrong either way: then you see a decision twice, as before, or the agent says why its decision is another one and asks it anyway. Off: only the same words count, as before.',
+    default: false,
+  },
 ] as const;
 
 /**

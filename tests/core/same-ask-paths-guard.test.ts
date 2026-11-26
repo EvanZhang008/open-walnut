@@ -115,6 +115,32 @@ describe('every write that asks the user is checked', () => {
   })
 })
 
+describe('one decision in other words (experiment asks_same_by_meaning)', () => {
+  it('the word test runs only in refuseSameAsk, and the meaning check right after it, through one function', () => {
+    // A new path that ran the word test itself would skip the meaning check: it calls refuseSameAsk instead.
+    expect(filesWith(/\bfindSameAsk\(/).filter((f) => f !== 'src/core/same-ask.ts')).toEqual(['src/core/same-ask-tree.ts'])
+    const tree = code('src/core/same-ask-tree.ts')
+    expect(tree.match(/\bfindSameAsk\(/g)).toHaveLength(1)
+    expect(tree).toMatch(/export async function refuseSameAsk[\s\S]*?hit = findSameAsk\([\s\S]*?if \(!hit && !reason && !restatesStanding\([^\n]*\n\s*hit = await sameDecisionByMeaning\([\s\S]*?if \(reason\)/)
+    // One caller of the model check and of the cards it reads beside the tree's asks.
+    expect(filesWith(/\bsameAskByMeaning\(/).filter((f) => f !== 'src/core/same-ask-meaning.ts')).toEqual(['src/core/same-ask-tree.ts'])
+    expect(tree).toMatch(/async function sameDecisionByMeaning[\s\S]*?treeAsksOf\(taskId, everything, letters, false\)[\s\S]*?treeThreadAsksOf\([\s\S]*?sameAskByMeaning\(/)
+    // The turn-end status question lists the same cards, so the session judges them too (no model call there).
+    expect(tree).toMatch(/export async function sameAskQuestionFor[\s\S]*?treeThreadAsksOf\(/)
+    expect(filesWith(/\btreeThreadAsksOf\(/).filter((f) => f !== 'src/core/same-ask-meaning.ts')).toEqual(['src/core/same-ask-tree.ts'])
+  })
+
+  it('the roll-up stays deterministic: no model call reads or folds the shown status', () => {
+    for (const f of ['src/core/user-status-sync.ts', 'src/core/same-ask.ts', 'src/core/user-status.ts']) expect(code(f), f).not.toMatch(/same-ask-meaning|fast-model-call/)
+  })
+
+  it('the call is bounded: one source, a hard cap, the fast model helper', () => {
+    const m = code('src/core/same-ask-meaning.ts')
+    expect(m).toMatch(/callFastModel\(\{[\s\S]*?source: 'same-ask-meaning'[\s\S]*?capMs: MEANING_CAP_MS/)
+    expect(code('src/core/fast-model-call.ts')).toMatch(/Math\.min\(fastCallBudgetMs\(config, c\.directMs\), c\.capMs \?\? Infinity\)/)
+  })
+})
+
 describe('an ask answered above it', () => {
   it('only ask-answer.ts records an answer, and only through task_send answers_ask', () => {
     expect(filesWith(/[{,]\s*ask_answered\s*:/), 'a new writer of Task.ask_answered: go through sessions/ask-answer.ts (it checks the sender stands above the task and tells it once), or take one back through sessions/ask-withdraw.ts')

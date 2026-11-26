@@ -20,7 +20,9 @@
  *
  * Sameness is deterministic and cheap, and strict: the same content words in the same order (at
  * least three; askWords). A session's own word (FOR_USER_ASK_SAME: <id> | different) wins over the
- * text test and covers the same decision in other words; there is no model call. Only a session's
+ * text test and covers the same decision in other words; the shown status reads no model. A write
+ * the words let through is judged once more by meaning while the experiment asks_same_by_meaning
+ * is on (same-ask-meaning.ts): it only refuses, never folds or hides. Only a session's
  * own question and a Board choice fold; the fold outlives the deeper ask only while that task still
  * holds it, or on evidence the user answered it there (a person's message to it after the fold).
  * Pure functions here; the tree reads are in same-ask-tree.ts.
@@ -683,9 +685,17 @@ export interface TreeAsk {
   taskId: string;
   title: string;
   ask: string;
-  /** Where it lives: the task's status (its own question, a Board choice), or an open decision letter. */
-  where: 'status' | 'letter';
+  /** Where it lives: the task's status (its own question, a Board choice), an open decision letter,
+   *  or a card of an Org node's Threads waiting on him (read by the meaning check only, same-ask-meaning.ts). */
+  where: 'status' | 'letter' | 'thread';
   letterId?: string;
+  /** where 'thread': the card's id and title. */
+  threadId?: string;
+  threadTitle?: string;
+  /** When it was asked or last written (ISO), where known: the meaning check lists the newest first. */
+  at?: string;
+  /** The meaning check found it (same-ask-meaning.ts), not the words: the refusal says so. */
+  byMeaning?: boolean;
   /** Where that task stands to the writer's task. */
   relation: 'ancestor' | 'descendant' | 'team' | 'elsewhere';
   /** Another team's ask about the same matter (ask-matter.ts): the ticket or issue both name. One
@@ -727,19 +737,24 @@ export function outletVerb(what: AskOutlet): string {
 
 /** The refusal's words: which ask, where, and what to do instead. */
 export function sameAskMessage(hit: TreeAsk, what: AskOutlet): string {
-  const where = hit.where === 'letter' ? `in its open decision letter ${hit.letterId}` : 'in its status (Needs you)';
+  const where = hit.where === 'letter' ? `in its open decision letter ${hit.letterId}`
+    : hit.where === 'thread' ? `on its card "${(hit.threadTitle ?? '').replace(/\s+/g, ' ').slice(0, 100)}" (thread ${hit.threadId}) of its Threads`
+    : 'in its status (Needs you)';
   const verb = outletVerb(what);
   if (hit.matter) {
     return `${verb}: "${hit.title.replace(/\s+/g, ' ').slice(0, 100)}" (${hit.taskId}), in another team, already asks the user about ${matterWords(hit.matter)} ${where}: "${hit.ask.replace(/\s+/g, ' ').slice(0, 200)}". `
       + 'One matter is asked of the user in one place. Do not ask it again: tell that task what you know or want (task_send), and its ask carries it; the user\'s answer reaches you through it. '
       + `If yours is a separate decision the user must also make, pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why.`;
   }
-  const instead = what === 'thread'
-    ? 'Keep this thread working or pending and name that task in it (tasks); its answer reaches you through that task.'
+  const instead = hit.where === 'thread' && what !== 'thread'
+    ? `Do not ask it again: the user answers it on that card, and ${hit.taskId} carries the answer (task_send it what you need or know, and report waiting on it).`
+    : what === 'thread'
+    ? 'Keep this thread working or pending and name that task in it (tasks, or ask_owner when it asks him in its status); its answer reaches you through that task.'
     : what === 'choice'
       ? 'Leave the choice off the Board and name that task there instead (<walnut-task>); its answer reaches you through that task.'
     : 'Do not ask it again: the user answers it there, and that task carries the answer (task_send it if you need the answer too).';
-  return `${verb}: ${RELATION_WORDS[hit.relation]}, "${hit.title.replace(/\s+/g, ' ').slice(0, 100)}" (${hit.taskId}), already asks the user this ${where}: "${hit.ask.replace(/\s+/g, ' ').slice(0, 200)}". `
+  const judged = hit.byMeaning ? ' (in other words: a model judged it the same decision, and can be wrong)' : '';
+  return `${verb}: ${RELATION_WORDS[hit.relation]}, "${hit.title.replace(/\s+/g, ' ').slice(0, 100)}" (${hit.taskId}), already asks the user this ${where}${judged}: "${hit.ask.replace(/\s+/g, ' ').slice(0, 200)}". `
     + `The user sees one decision once. ${instead} If it really is a different decision, write it so, or pass same_ask_reason: one line (at least ${SAME_ASK_REASON_MIN} characters) saying why it is not the same.`;
 }
 
