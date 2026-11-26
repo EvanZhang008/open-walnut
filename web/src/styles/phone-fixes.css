@@ -102,7 +102,7 @@
 }
 
 /* N12: a disabled row in the phone's session menu says why. */
-.phone-session-row-why {
+.phone-session-row .task-kebab-row-why {
   margin-left: auto;
   padding-left: 12px;
   color: var(--fg-muted);

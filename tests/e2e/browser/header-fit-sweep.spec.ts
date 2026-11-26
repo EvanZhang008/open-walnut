@@ -195,6 +195,11 @@ test('the task panel at its narrowest: New task and Board go into More, which wo
   const menu = page.locator('.header-fit-more-menu')
   await expect(menu.getByRole('menuitem', { name: 'New task' })).toBeVisible()
   await expect(menu.getByRole('menuitem', { name: /board/i })).toBeVisible()
+  // Each row shows its button's own icon and its words (2026-11-26: the rows drew only words).
+  const iconless = await menu.getByRole('menuitem').evaluateAll((rows) => rows
+    .filter((r) => !r.querySelector('.wn-context-menu-icon svg')).map((r) => (r.textContent ?? '').trim()))
+  expect(iconless, 'More rows without their icon').toEqual([])
+  await page.screenshot({ path: test.info().outputPath('task-panel-more.png') })
   // One Escape closes the menu only, and focus is back on More.
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)

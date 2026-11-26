@@ -355,9 +355,9 @@
   color: var(--fg-muted);
 }
 .tp-p-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.tp-p-dot.p0 { background: var(--tp-p0); }
-.tp-p-dot.p1 { background: var(--tp-p1); }
-.tp-p-dot.p2 { background: var(--tp-p2); }
+.tp-p-dot.p0 { background: var(--tp-p0, var(--error)); }
+.tp-p-dot.p1 { background: var(--tp-p1, var(--warning)); }
+.tp-p-dot.p2 { background: var(--tp-p2, var(--fg-muted)); }
 .tp-cell-pri.lp0 { color: var(--tp-p0); }
 .tp-cell-pri.lp1 { color: var(--tp-p1); }
 

@@ -266,6 +266,8 @@ async function checkFoldedRows(page: Page, panel: Locator, ready: boolean) {
   await expect(menu).toBeVisible()
   for (const id of folded) {
     const row = menu.getByTestId(`session-header-more-item-${id}`)
+    // The row shows the chip's own icon and its words (2026-11-26: these rows drew only words).
+    await expect(row.locator(':scope > .task-kebab-icon svg'), `${id}: its icon`).toHaveCount(1)
     if (!(id in WAITING)) { await expect(row, `${id} needs nothing from the record`).toBeEnabled(); continue }
     if (ready) { await expect(row).toBeEnabled(); continue }
     await expect(row).toBeDisabled()

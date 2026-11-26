@@ -156,6 +156,8 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   expect(header.vis).toBe('hidden')
   // Every header action is in the bar's kebab.
   const kebab = topbar(page).getByRole('button', { name: 'More actions' })
+  // It is drawn into the bar once the session has loaded, a moment after the title.
+  await expect(kebab).toBeVisible()
   const kb = (await kebab.boundingBox())!
   expect(kb.width).toBeGreaterThanOrEqual(44)
   expect(kb.height).toBeGreaterThanOrEqual(44)
@@ -165,6 +167,13 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   for (const id of ['changed', 'files', 'board', 'close']) {
     await expect(menu.getByTestId(`phone-row-${id}`)).toBeVisible()
   }
+  // Every row is one drawn icon and its words, the session's rows as the task's below them
+  // (2026-11-26: the phone's session rows drew their words with no icon; standard.md, Big menus).
+  const iconless = await menu.evaluate((el) => Array.from(el.querySelectorAll<HTMLElement>('.task-kebab-item'))
+    .filter((r) => r.getClientRects().length > 0 && !r.matches('.task-kebab-info, .wn-pick-row, [role="option"], [role="menuitemradio"]'))
+    .filter((r) => !r.querySelector(':scope > .task-kebab-icon svg, :scope > .task-pin-label svg') && !r.querySelector('.toggle-switch'))
+    .map((r) => (r.innerText || '').trim().split('\n')[0]))
+  expect(iconless, 'phone session menu rows without a drawn icon').toEqual([])
   // N12: the short phone list. No desktop-only rows, and it fits the screen. No Scripts row
   // (2026-11-19: the session's one-click scripts are gone).
   for (const id of ['locate', 'popout', 'scripts']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)

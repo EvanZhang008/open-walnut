@@ -407,7 +407,12 @@ menu, a long right-click menu) has one shape (`web/src/utils/menu-shape.ts`):
    hover). **Every row is one drawn icon and one line of words** (the user, 2026-11-23, on the +
    menu's boxed @, / and ···: one icon, one text, no box): the icon slot holds an icon from
    `Icons.tsx` ("Menu row icons"), never a typed character (@, /, arrows, quote marks, #) and never
-   an outlined cap. The Display panel (Filter, Layout) uses the same heading and chevron.
+   an outlined cap. No action row goes without its icon either (2026-11-26: the phone's session
+   rows, a narrow header's "..." rows, the sync rows and the board card menu drew only words): the
+   phone and desktop session menus share one row (`SessionMenuRow`), and a row that stands in for a
+   header button (a header's More menu, the session header's "...") shows that button's own icon
+   (`MirroredIcon`). Only an info line, a pick list's option, a row led by its switch and a group of
+   chips draw none. The Display panel (Filter, Layout) uses the same heading and chevron.
 
 ContextMenu has 2 and 4 by construction (`normalizeContextMenuItems`). `tests/web/menu-shape.test.ts`
 checks the rules, finds every menu surface from the source (a new one must be classified), and the

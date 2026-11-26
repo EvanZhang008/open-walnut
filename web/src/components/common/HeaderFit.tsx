@@ -24,6 +24,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { attachFold } from '@/hooks/useToolbarFit';
 import { ContextMenu } from './ContextMenu';
 import { ICON_MORE } from './Icons';
+import { MirroredIcon } from './MirroredIcon';
 import '@/styles/toolbar-fit.css';
 import '@/styles/header-fit.css';
 
@@ -190,6 +191,8 @@ export function HeaderFitMore({ testId }: { testId?: string }) {
           items={opened.items.map((it, i) => ({
             key: `${i}-${it.name}`,
             label: it.name,
+            // The button's own icon: each row is one drawn icon and its words.
+            icon: <MirroredIcon from={it.el} />,
             disabled: it.disabled,
             ...(it.pressed !== undefined ? { checked: it.pressed, toggle: true } : {}),
             // Focus goes back to More first, so a dialog the action opens returns focus there.

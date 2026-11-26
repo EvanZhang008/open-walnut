@@ -36,3 +36,8 @@
 [data-fit-more], .btn[data-fit-more] { display: none; }
 [data-fit-overflow='true'] [data-fit-more], [data-fit-overflow='true'] .btn[data-fit-more] { display: inline-flex; }
 [data-fit-overflow='true'] [data-fit-button]:not([data-fit-keep]) { display: none; }
+
+/* A menu row's copy of a real button's icon (MirroredIcon.tsx): the icon sits in the row's own
+   icon slot at the slot's size, whatever size the button draws it. */
+.mirrored-icon { display: contents; }
+:is(.wn-context-menu-icon, .task-kebab-icon) > .mirrored-icon > svg { width: 14px; height: 14px; }

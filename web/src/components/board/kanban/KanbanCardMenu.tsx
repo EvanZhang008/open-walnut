@@ -9,15 +9,26 @@
  * move, Enter picks, Right opens the flyout, Left or Escape goes back, and
  * Escape on the menu closes it and gives focus back to the trigger.
  */
-import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { DisclosureChevron } from '@/components/controls';
+import { ICON_ARROW_RIGHT, ICON_CHECK, ICON_HISTORY, ICON_PENCIL, ICON_PHASE_WAITING, ICON_REFRESH } from '@/components/common/Icons';
 import '@/styles/pick-and-nav.css';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { READ_ONLY_TITLE, type KanbanWriteApi } from './kanban-contract';
 import type { KanbanCardVM } from './kanban-card-model';
+
+/** Each card action's drawn icon: a row is one icon and its words (standard.md, Big menus). */
+const ITEM_ICONS: Record<string, ReactNode> = {
+  move: ICON_ARROW_RIGHT,
+  summary: ICON_PENCIL,
+  waiting: ICON_PHASE_WAITING,
+  auto: ICON_REFRESH,
+  reopen: ICON_HISTORY,
+  complete: ICON_CHECK,
+};
 
 /** `from`: what gets focus back on close (N10). */
 export type CardMenuAnchor = { kind: 'button'; from?: 'card' | 'kebab' } | { kind: 'point'; x: number; y: number };
@@ -143,6 +154,7 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
                   if (it.run) pick(it.run, it.key !== 'summary' && it.key !== 'waiting');
                 }}
               >
+                <span className="task-kebab-icon" aria-hidden="true">{ITEM_ICONS[it.key]}</span>
                 <span>{it.label}</span>
                 {it.sub && <DisclosureChevron className="kanban-menu-chevron" />}
               </button>

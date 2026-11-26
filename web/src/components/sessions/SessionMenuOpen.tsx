@@ -15,12 +15,13 @@
  * rows instead: Watch, Locate, Minimize and the Tags list, each doing what its key does.
  * `headerPills`: a narrow host of that kind gets the header's state pills above them too.
  */
-import type { MouseEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_LOCATE, ICON_MINIMIZE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
 import { WatchMenuItem } from '../tasks/WatchToggle';
 import { TAG_ICON } from './SessionHeaderLabels';
 import { KebabGroup } from './KebabGroup';
+import { BOARD_ICON, PLAN_ICON, SessionMenuRow as Row, THREADS_ICON } from './SessionMenuRow';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
 import { PanelCountRow, SessionViewItems, ViewsBadge, type SessionViewItemsProps } from './SessionKebabSection';
@@ -39,24 +40,9 @@ const WINDOW_ICON = (
     <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M3 9h18" />
   </svg>
 );
-const BOARD_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16M15 4v16" />
-  </svg>
-);
-const THREADS_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M4 5h16v10H9l-5 4z" /><path d="M8 9h8M8 12h5" />
-  </svg>
-);
 const APPS_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" />
-  </svg>
-);
-const PLAN_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />
   </svg>
 );
 
@@ -103,27 +89,6 @@ export interface SessionHeaderKeyRows {
   tags?: { count: number; onOpen: (fromKeyboard: boolean) => void };
 }
 
-function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: {
-  icon: ReactNode; label: string; active?: boolean; disabled?: boolean; why?: string;
-  onClick: (e: MouseEvent) => void; testId?: string; trailing?: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className={`task-kebab-item${active ? ' task-kebab-item-active' : ''}`}
-      aria-pressed={active || undefined}
-      disabled={disabled}
-      title={disabled ? why : undefined}
-      data-testid={testId}
-      onClick={(e) => { e.stopPropagation(); onClick(e); }}
-    >
-      <span className="task-kebab-icon">{icon}</span>
-      <span>{label}</span>
-      {disabled && why && <span className="task-kebab-row-why">{why}</span>}
-      {trailing}
-    </button>
-  );
-}
 
 export function SessionMenuOpen(p: SessionMenuOpenProps) {
   const { views, close } = p;

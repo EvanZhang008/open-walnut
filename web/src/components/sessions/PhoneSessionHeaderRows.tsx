@@ -13,6 +13,9 @@ import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { serversSummary, serversUnavailableNote } from './session-server-label';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
+import type { ReactNode } from 'react';
+import { ICON_CLOSE, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_TERMINAL } from '../common/Icons';
+import { BACKGROUND_TASKS_ICON, BOARD_ICON, PLAN_ICON, SessionMenuRow, THREADS_ICON, WEB_ICON } from './SessionMenuRow';
 
 export interface PhoneSessionHeaderRowsProps {
   sessionId: string;
@@ -28,27 +31,11 @@ export interface PhoneSessionHeaderRowsProps {
   onCloseSession?: () => void;
   /** Off where the menu has its own Background tasks row (the desktop menu's Views). */
   background?: boolean;
-  /** Rows of the hidden header's window controls (a host that draws the header, SessionPanel headerSlot). */
-  extra?: ReadonlyArray<{ label: string; onClick: () => void; testId: string }>;
 }
 
-function Row({ label, active, disabled, why, onClick, testId }: {
-  label: string; active?: boolean; disabled?: boolean; why?: string; onClick: () => void; testId?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      className={`task-kebab-item phone-session-row${active ? ' is-active' : ''}`}
-      disabled={disabled}
-      aria-pressed={active || undefined}
-      data-testid={testId}
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-    >
-      <span>{label}</span>
-      {disabled && why && <span className="phone-session-row-why">{why}</span>}
-    </button>
-  );
+/** The shared session menu row (SessionMenuRow), as the phone's 44 px row. */
+function Row(p: { icon: ReactNode; label: string; active?: boolean; disabled?: boolean; why?: string; onClick: () => void; testId?: string }) {
+  return <SessionMenuRow {...p} role="menuitem" className="phone-session-row" />;
 }
 
 export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
@@ -61,31 +48,30 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
   const summary = serversSummary(servers.servers) ?? serversUnavailableNote(servers.state);
   return (
     <div className="phone-session-rows" data-testid="phone-session-rows">
-      <Row label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />
-      <Row label="Files" active={p.activeView === 'files'} onClick={view('files')} testId="phone-row-files" />
+      <Row icon={ICON_FILE} label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />
+      <Row icon={ICON_FOLDER_OUTLINE} label="Files" active={p.activeView === 'files'} onClick={view('files')} testId="phone-row-files" />
       {p.terminal && (
-        <Row label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
+        <Row icon={ICON_TERMINAL} label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
       )}
       {summary && (
-        <Row label={`Web preview \u00B7 ${summary}`} active={p.activeView === 'web'} onClick={view('web')} testId="phone-row-web" />
+        <Row icon={WEB_ICON} label={`Web preview \u00B7 ${summary}`} active={p.activeView === 'web'} onClick={view('web')} testId="phone-row-web" />
       )}
       {/* A lead's row only (useBoardTab), after the rows every session has, as on the header. */}
       {p.board !== 'none' && (
-        <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
+        <Row icon={BOARD_ICON} label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
           why={p.board === 'waiting' ? 'Not written yet' : undefined} />
       )}
       {p.threads && (
-        <Row label={p.threads.on ? 'Threads' : 'Turn on Threads'} active={p.activeView === 'threads'}
+        <Row icon={THREADS_ICON} label={p.threads.on ? 'Threads' : 'Turn on Threads'} active={p.activeView === 'threads'}
           onClick={() => { p.close(); p.threads!.onOpen(); }} testId="phone-row-threads" />
       )}
-      {p.threads?.on && <Row label="Turn off Threads" onClick={() => { p.close(); p.threads!.onTurnOff(); }} testId="phone-row-threads-off" />}
+      {p.threads?.on && <Row icon={THREADS_ICON} label="Turn off Threads" onClick={() => { p.close(); p.threads!.onTurnOff(); }} testId="phone-row-threads-off" />}
       {p.background !== false && background.length > 0 && (
-        <Row label={running > 0 ? `Background tasks (${running} running)` : 'Background tasks'}
+        <Row icon={BACKGROUND_TASKS_ICON} label={running > 0 ? `Background tasks (${running} running)` : 'Background tasks'}
           onClick={() => { p.close(); openBackgroundPanel(p.sessionId); }} testId="phone-row-background" />
       )}
-      {p.plan && <Row label="Plan" onClick={() => { p.close(); p.onPlan(); }} testId="phone-row-plan" />}
-      {p.extra?.map((r) => <Row key={r.testId} label={r.label} onClick={() => { p.close(); r.onClick(); }} testId={r.testId} />)}
-      {p.onCloseSession && <Row label="Close session" onClick={() => { p.close(); p.onCloseSession?.(); }} testId="phone-row-close" />}
+      {p.plan && <Row icon={PLAN_ICON} label="Plan" onClick={() => { p.close(); p.onPlan(); }} testId="phone-row-plan" />}
+      {p.onCloseSession && <Row icon={ICON_CLOSE} label="Close session" onClick={() => { p.close(); p.onCloseSession?.(); }} testId="phone-row-close" />}
       <div className="task-kebab-divider" />
     </div>
   );

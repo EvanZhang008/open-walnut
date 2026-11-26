@@ -49,7 +49,8 @@ const isTyped = (content: string) => {
 describe('menu rows: one drawn icon and one line of words', () => {
   it('every menu row icon slot holds a drawn icon, never a typed character', () => {
     // The icon slot, and a row's caret (a typed \u25BE where the shared MenuCaret goes).
-    const SLOT = /className=["'`][^"'`]*?\b([\w-]*(?:kebab|menu)[\w-]*-(?:icon|key|caret))\b[^"'`]*["'`][^>]*>([\s\S]*?)<\/span>/g;
+    // A header button's icon slot too: put away, it becomes a row of the header's More menu.
+    const SLOT = /className=["'`][^"'`]*?\b([\w-]*(?:kebab|menu)[\w-]*-(?:icon|key|caret)|header-fit-icon|tp-chip-icon)\b[^"'`]*["'`][^>]*>([\s\S]*?)<\/span>/g;
     const typed: string[] = [];
     let slots = 0;
     for (const { rel, src } of files) {
@@ -87,6 +88,51 @@ describe('menu rows: one drawn icon and one line of words', () => {
       for (const m of src.matchAll(/\bicon:\s*(['"`])[^'"`]*\1/g)) found.push(`${rel}:${lineOf(src, m.index!)} ${m[0]}`);
     }
     expect(found).toEqual([]);
+  });
+
+  // 2026-11-26: the phone's session rows, a narrow header's "..." rows, the sync rows and the board
+  // card menu drew their words with no icon at all, beside rows that had one. Every action row of a
+  // menu (a task-kebab-item or chat-plus-menu-item element) holds a drawn icon. Not action rows: an
+  // info line, a pick list's option (its check mark is its sign), a row led by its switch, a group.
+  const NOT_ACTION_ROW = /\btask-kebab-info\b|\bwn-pick-row\b|role="(?:option|menuitemradio|group)"|<ToggleSwitch\b/;
+  const DRAWS_ICON = /task-kebab-icon|chat-plus-menu-key|wn-context-menu-icon|<svg\b|<Icon\b|\bICON_\w+|\b[A-Z][A-Z_]*_ICON\b|\w+Icon\b|\.icon\b|data-fit-icon/;
+
+  it('every menu action row draws an icon', () => {
+    const ROW = /<(button|a|div|label|Link)\b[^>]*?className=\{?["'`][^"'`]*\b(?:task-kebab-item|chat-plus-menu-item)\b[^"'`]*["'`]/g;
+    const iconless: string[] = [];
+    let rows = 0;
+    for (const { rel, src } of files) {
+      if (!rel.endsWith('.tsx')) continue;
+      for (const m of src.matchAll(ROW)) {
+        const close = src.indexOf(`</${m[1]}>`, m.index!);
+        const el = src.slice(m.index!, close > 0 ? close : m.index! + 800);
+        rows++;
+        if (NOT_ACTION_ROW.test(el) || DRAWS_ICON.test(el)) continue;
+        iconless.push(`${rel}:${lineOf(src, m.index!)}`);
+      }
+    }
+    expect(rows, 'the scan finds the menu rows it guards').toBeGreaterThan(40);
+    expect(iconless, 'A menu row draws one icon and its words (standard.md, Big menus)').toEqual([]);
+  });
+
+  it('a menu row that stands in for a header button shows that button\'s icon', () => {
+    // HeaderFitMore (a header's put-away buttons) and SessionHeaderMore (a narrow session header's
+    // chips) copy the real button's icon into their rows.
+    const fit = files.find((f) => f.rel === 'components/common/HeaderFit.tsx')!.src;
+    expect(fit).toMatch(/icon:\s*<MirroredIcon from=\{it\.el\}/);
+    const more = files.find((f) => f.rel === 'components/sessions/SessionHeaderMore.tsx')!.src;
+    expect(more.match(/<MirroredIcon\b/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    // So every button a header can put away draws one: FitButton takes an icon, and a hand-made
+    // one (data-fit-button) holds its own.
+    const bare: string[] = [];
+    for (const { rel, src } of files) {
+      if (!rel.endsWith('.tsx') || rel === 'components/common/HeaderFit.tsx') continue;
+      for (const m of src.matchAll(/data-fit-button[=:]/g)) {
+        const near = src.slice(Math.max(0, m.index! - 600), m.index! + 600);
+        if (!/data-fit-keep/.test(src.slice(m.index!, m.index! + 200)) && !DRAWS_ICON.test(near)) bare.push(`${rel}:${lineOf(src, m.index!)}`);
+      }
+    }
+    expect(bare).toEqual([]);
   });
 
   it('the check catches what it guards', () => {

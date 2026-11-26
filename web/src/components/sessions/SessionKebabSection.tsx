@@ -9,6 +9,7 @@
  * Usage, Background). Presentational only: the session panel owns the handlers.
  */
 import { useState, useRef, useEffect } from 'react';
+import { BACKGROUND_TASKS_ICON, WEB_ICON } from './SessionMenuRow';
 import { copyTextRobust } from '@/utils/clipboard';
 import { ICON_CHAT, ICON_COPY, ICON_INFO, ICON_NOTE, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
@@ -291,13 +292,7 @@ export function SessionViewItems({
         onClick={(e) => { e.stopPropagation(); onToggleView('web'); onAfterAction?.(); }}
         title="Open a localhost or host:port service this session started, next to the chat"
       >
-        <span className="task-kebab-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M3 12h18" />
-            <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
-          </svg>
-        </span>
+        <span className="task-kebab-icon">{WEB_ICON}</span>
         <span>Web preview<WebServersCount sessionId={sessionId} /></span>
       </button>
 
@@ -336,12 +331,7 @@ export function SessionViewItems({
           data-testid="session-kebab-background"
           onClick={(e) => { e.stopPropagation(); onAfterAction?.(); openBackgroundPanel(sessionId); }}
         >
-          <span className="task-kebab-icon" aria-hidden="true">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="16" rx="2.5" />
-              <path d="M7 9l3 3-3 3M12.5 15H17" />
-            </svg>
-          </span>
+          <span className="task-kebab-icon" aria-hidden="true">{BACKGROUND_TASKS_ICON}</span>
           <span>Background tasks</span>
           {bgRunning.total > 0 && <span className="badge badge-count session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
         </button>

@@ -30,7 +30,7 @@ import {
 import { TaskFilterChips } from '@/components/tasks/TaskFilterChips';
 import { useAskMainAbout } from '@/components/org/main-quick-menus';
 import { foldQueryStatus } from '@/components/tasks/filter-bar-model';
-import { ICON_COLLAPSE, ICON_EXPAND, ICON_PHASE_COMPLETE, ICON_PHASE_TODO } from '@/components/common/Icons';
+import { ICON_COLLAPSE, ICON_EXPAND, ICON_FOLDER_OUTLINE, ICON_PHASE_COMPLETE, ICON_PLUS, ICON_PHASE_TODO } from '@/components/common/Icons';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import {
   buildTaskQueryContext,
@@ -423,7 +423,7 @@ export function DashboardPage() {
                 pressed={query.priorities.includes('immediate')}
                 data-fit-button="3"
                 title="P0 tasks"
-                leading={<span className="tp-p-dot p0" />}
+                leading={<span className="tp-p-dot p0" data-fit-icon="" aria-hidden="true" />}
                 onClick={() => togglePriorityChip('immediate')}
               >
                 P0
@@ -433,7 +433,7 @@ export function DashboardPage() {
                 pressed={query.priorities.includes('important')}
                 data-fit-button="3"
                 title="P1 tasks"
-                leading={<span className="tp-p-dot p1" />}
+                leading={<span className="tp-p-dot p1" data-fit-icon="" aria-hidden="true" />}
                 onClick={() => togglePriorityChip('important')}
               >
                 P1
@@ -457,7 +457,7 @@ export function DashboardPage() {
                 data-fit-button="1"
                 aria-label="Group"
                 title={grouped ? 'Grouped by project: click for a flat list' : 'Flat list: click to group by project'}
-                leading={<span className="tp-chip-icon" aria-hidden="true">⊟</span>}
+                leading={<span className="tp-chip-icon" aria-hidden="true">{ICON_FOLDER_OUTLINE}</span>}
                 onClick={handleGroupedToggle}
               >
                 <span data-fit-label="">Group</span>
@@ -484,7 +484,7 @@ export function DashboardPage() {
             onClear={() => setSearch('')}
           />
           <button type="button" className="btn btn-sm btn-primary tp-newtask-btn" data-fit-button="2" data-fit-keep="" aria-label="New task" title="New task" onClick={() => setShowForm(true)}>
-            <span className="header-fit-icon" aria-hidden="true">＋</span><span data-fit-label="">Task</span>
+            <span className="header-fit-icon" aria-hidden="true">{ICON_PLUS}</span><span data-fit-label="">Task</span>
           </button>
         </div>
 

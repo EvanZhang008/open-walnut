@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import type { SyncHold, Task } from '@open-walnut/core';
 import { DisclosureChevron } from '@/components/controls';
+import { ICON_EYE_OFF, ICON_FOLDER, ICON_LOCK, ICON_REFRESH, ICON_UNLOCK } from '../common/Icons';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { changeOutsideCopy, makeTaskLocal, syncTaskToProject, type OutsideCopyAction } from '@/api/private-tasks';
@@ -24,12 +25,6 @@ import { useOptionalNotifications } from '@/contexts/notifications/notification-
 import { keptLine, syncStanding } from './private-task-model';
 import '@/styles/subtask-pill.css';
 
-const ICON_LOCK = (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
-    <rect x="3.5" y="7" width="9" height="6.5" rx="1.3" />
-    <path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" />
-  </svg>
-);
 
 type TaskLike = Pick<Task, 'id' | 'source' | 'project'> & { sync_hold?: SyncHold };
 
@@ -89,16 +84,19 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
                 <button type="button" className="task-kebab-item" data-testid="kebab-make-local-keep"
                   title={`Stop syncing; its copy in ${service} stays as it is and is no longer updated`}
                   onClick={(e) => { e.stopPropagation(); makeLocal('keep'); }}>
+                  <span className="task-kebab-icon" aria-hidden="true">{ICON_UNLOCK}</span>
                   <span>Make local, keep its copy in {service}</span>
                 </button>
                 <button type="button" className="task-kebab-item" data-testid="kebab-make-local-archive"
                   title={`Stop syncing and close its copy in ${service}`}
                   onClick={(e) => { e.stopPropagation(); makeLocal('archive'); }}>
+                  <span className="task-kebab-icon" aria-hidden="true">{ICON_FOLDER}</span>
                   <span>Make local, archive it in {service}</span>
                 </button>
                 <button type="button" className="task-kebab-item" data-testid="kebab-make-local-neutralize"
                   title={`Stop syncing, replace its title and text in ${service} with nothing of the task, then close it`}
                   onClick={(e) => { e.stopPropagation(); makeLocal('neutralize'); }}>
+                  <span className="task-kebab-icon" aria-hidden="true">{ICON_EYE_OFF}</span>
                   <span>Make local, neutralize it in {service}</span>
                 </button>
               </>
@@ -108,6 +106,7 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
               <button type="button" className="task-kebab-item" data-testid="kebab-sync-to-project"
                 title={`Send this task to ${service} now`}
                 onClick={(e) => { e.stopPropagation(); run('sync to project', () => syncTaskToProject(task.id)); }}>
+                <span className="task-kebab-icon" aria-hidden="true">{ICON_REFRESH}</span>
                 <span>Sync to {service}</span>
               </button>
             )}
@@ -116,11 +115,13 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
                 <button type="button" className="task-kebab-item" data-testid="kebab-outside-archive"
                   title={`Close the copy it left in ${service}`}
                   onClick={(e) => { e.stopPropagation(); run('archive outside copy', () => changeOutsideCopy(task.id, 'archive')); }}>
+                  <span className="task-kebab-icon" aria-hidden="true">{ICON_FOLDER}</span>
                   <span>Archive its copy in {service}</span>
                 </button>
                 <button type="button" className="task-kebab-item" data-testid="kebab-outside-neutralize"
                   title={`Replace the title and text of the copy it left in ${service}, then close it`}
                   onClick={(e) => { e.stopPropagation(); run('neutralize outside copy', () => changeOutsideCopy(task.id, 'neutralize')); }}>
+                  <span className="task-kebab-icon" aria-hidden="true">{ICON_EYE_OFF}</span>
                   <span>Neutralize its copy in {service}</span>
                 </button>
               </>
@@ -129,6 +130,7 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
               <button type="button" className="task-kebab-item" data-testid="kebab-keep-local"
                 title="Mark it Local by choice: Walnut never offers it to the service"
                 onClick={(e) => { e.stopPropagation(); makeLocal('keep'); }}>
+                <span className="task-kebab-icon" aria-hidden="true">{ICON_LOCK}</span>
                 <span>Keep it local</span>
               </button>
             )}

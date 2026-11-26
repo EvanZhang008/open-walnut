@@ -19,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ICON_MINIMIZE } from '../common/Icons';
+import { MirroredIcon } from '../common/MirroredIcon';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { HEADER_TOOL_CLASS, TASK_SLOT_SPACER } from './header-record-gate';
 
@@ -216,6 +217,7 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}
     >
+      <span className="task-kebab-icon" aria-hidden="true"><MirroredIcon from={itemOf(rowRef.current, id)} /></span>
       <span className="session-header-more-name">{name}</span>
       {value && <span className="session-header-more-value">{value}</span>}
     </button>
@@ -237,7 +239,7 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}
     >
-      <span className="task-kebab-icon" aria-hidden="true">{WINDOW_ICONS[id] ?? null}</span>
+      <span className="task-kebab-icon" aria-hidden="true">{WINDOW_ICONS[id] ?? <MirroredIcon from={itemOf(rowRef.current, id)} />}</span>
       <span className="session-header-more-name">{label}</span>
     </button>
   );
