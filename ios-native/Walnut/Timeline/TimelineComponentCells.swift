@@ -28,7 +28,7 @@ enum TimelineHostedCell {
     /// The tap target HIG asks for. A chip row is ~27pt tall on a ~37pt pitch, so
     /// the last few points can only come from the gap BETWEEN rows — see
     /// `TimelineHostedRowCell`.
-    static let minimumTapHeight: CGFloat = 44
+    static let minimumTapHeight: CGFloat = WalnutTouchTarget.minimum
 
     /// Build the hosted SwiftUI content for a row. Only component kinds land
     /// here — text-heavy kinds have dedicated TextKit cells.
@@ -40,7 +40,7 @@ enum TimelineHostedCell {
         // the chip under it).
         (cell as? TimelineHostedRowCell)?.verticalHitOutset =
             row.content.isTappableChip
-                ? max(0, (minimumTapHeight - row.height) / 2)
+                ? WalnutTouchTarget.reach(for: CGSize(width: minimumTapHeight, height: row.height)).top
                 : 0
         cell.contentConfiguration = UIHostingConfiguration {
             content(for: row, delegate: delegate)
@@ -1321,7 +1321,8 @@ struct TimelineSentToSection: View {
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                        .contentShape(Rectangle())
+                        // One link under another, the label gap apart.
+                        .walnutTouchTarget(.gaps(vertical: TimelineMetrics.expandLabelGap))
                 }
                 .accessibilityIdentifier("activity.sentTo.\(row.id)")
             }

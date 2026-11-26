@@ -136,6 +136,11 @@ struct PillChip: View {
     /// The session the sheet's menu configures: its cost, speed and context show
     /// under the choices. nil (the new-session draft) shows none.
     var sheetSessionID: String? = nil
+    /// This pill's own touch room; nil takes the row's (`walnutTouchRoom(_:)`).
+    var touchRoom: WalnutTouchRoom? = nil
+    @Environment(\.walnutTouchRoom) private var rowRoom
+    /// The capsule as drawn: the UIKit button over it grows past it to a 44 pt touch.
+    @State private var drawn = CGSize.zero
     @State private var pressed = false
     @State private var sheetShown = false
     @State private var sheetFocus = PillSheetFocus()
@@ -167,7 +172,8 @@ struct PillChip: View {
         .foregroundStyle(Color(uiColor: ComposerPillInk.ink(for: state)))
         // The family's picker key: a capsule beside the round +, mic and send, the long key's
         // corner once its words wrap (the stacked accessibility layout).
-        .walnutPickerKey(wraps: wraps)
+        .walnutPickerKey(wraps: wraps, room: touchRoom)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { drawn = $0 }
         // The pressed look a SwiftUI Button gives, which the transparent UIKit
         // button on top can't draw itself.
         .opacity(pressed ? 0.5 : 1)
@@ -175,6 +181,10 @@ struct PillChip: View {
         // identifier, the label and the menu.
         .accessibilityHidden(true)
         .overlay {
+            // The UIKit button takes the touch (SwiftUI's hit shape cannot widen a UIView), so its
+            // frame is the 44 pt touch around the drawn capsule (`WalnutTouchUIButton`).
+            // Nothing measured yet: no outset, never a 44 pt reach around a zero size.
+            let outset = drawn == .zero ? EdgeInsets() : WalnutTouchTarget.reach(for: drawn, room: touchRoom ?? rowRoom)
             if let sheetTitle {
                 PillSheetButton(
                     accessibilityID: accessibilityID,
@@ -182,13 +192,17 @@ struct PillChip: View {
                     accessibilityValue: accessibilityValue,
                     focus: sheetFocus,
                     onTap: { openSheet() },
-                    onHighlightChange: { pressed = $0 }
+                    onHighlightChange: { pressed = $0 },
+                    touchOutset: outset
                 )
+                .walnutTouchOutset(outset)
                 .disabled(!state.takesTaps)
                 .sheet(isPresented: $sheetShown, onDismiss: sheetClosed) {
                     PillMenuSheet(title: sheetTitle, menu: menu, sessionID: sheetSessionID, onSelect: onSelect)
                         .presentationDetents([.large])
                         .presentationDragIndicator(.visible)
+                        // The row's touch room is the row's, not the sheet's.
+                        .walnutTouchRoom(.open)
                 }
             } else {
                 PillMenuButton(
@@ -200,8 +214,10 @@ struct PillChip: View {
                     menuClearance: menuClearance,
                     onSelect: onSelect,
                     onPresentedChange: onPresentedChange,
-                    onHighlightChange: { pressed = $0 }
+                    onHighlightChange: { pressed = $0 },
+                    touchOutset: outset
                 )
+                .walnutTouchOutset(outset)
                 // SwiftUI writes this onto the UIButton's `isEnabled` after every
                 // update, so it is the ONLY way to disable it (see PillMenuButton).
                 .disabled(!state.takesTaps)

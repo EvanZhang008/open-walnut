@@ -410,7 +410,8 @@ struct RoutineEditorSheet: View {
                     Text("Change task")
                         .foregroundStyle(Theme.tint)
                         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                        .contentShape(Rectangle())
+                        // Its own form row: the row's 44 pt bounds it.
+                        .walnutTouchTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("routines.editor.changeTask")
@@ -441,7 +442,7 @@ struct RoutineEditorSheet: View {
                                 .foregroundStyle(Theme.secondaryOnCard)
                         }
                         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .walnutTouchTarget()
                     }
                     .buttonStyle(.plain)
                     .accessibilityElement(children: .combine)

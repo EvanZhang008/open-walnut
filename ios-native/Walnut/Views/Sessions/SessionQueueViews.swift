@@ -87,7 +87,8 @@ struct SessionQueueStrip: View {
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                                .contentShape(Rectangle())
+                                // Centred in its 44 pt line (the Send key beside it sets it).
+                                .walnutTouchTarget()
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(first.shownText)
@@ -131,7 +132,7 @@ struct SessionQueueStrip: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(palette.tint)
                 .frame(minHeight: 36)
-                .contentShape(Rectangle())
+                .walnutTouchTarget()
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("session.queue.showAll")
@@ -197,9 +198,7 @@ struct SessionQueueStrip: View {
                     .padding(.horizontal, 10)
                     .frame(minHeight: 32)
                     .background(palette.tintSoft, in: Capsule())
-                    .padding(6)
-                    .contentShape(Rectangle())
-                    .padding(-6)
+                    .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("session.queue.sendAll")
@@ -384,7 +383,7 @@ struct QueueUndoLine: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(palette.tint)
                     .frame(minWidth: 44, minHeight: 36)
-                    .contentShape(Rectangle())
+                    .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier(identifier)

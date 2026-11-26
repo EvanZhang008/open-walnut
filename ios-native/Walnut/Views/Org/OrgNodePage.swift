@@ -421,7 +421,8 @@ struct OrgNodeBar: View {
                     .frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)
                     // One of three keys sharing a line: a small key, so round.
                     .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous)) // ui-standard-ok: one of three keys on a line
-                    .contentShape(Rectangle())
+                    // 36 pt in a bar with 6 pt above and below: 4 pt each way, inside the bar.
+                    .walnutTouchTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t == .threads ? "Threads, \(counts?.shown ?? 0)" : (t == .brief && briefNew ? "Brief, new" : t.label))

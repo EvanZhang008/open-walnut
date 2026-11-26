@@ -321,7 +321,8 @@ struct FilePreviewDockBar: View {
                     .font(Theme.Glyph.sm.font(.bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
+                    // 10 pt right of the reopen key (which keeps to its frame), inside the bar's 6 pt.
+                    .walnutTouchTarget(WalnutTouchRoom(top: 6, leading: 10, bottom: 6))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("file.dock.close")

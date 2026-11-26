@@ -137,7 +137,9 @@ struct CalendarFilterButton: View {
             .font(.body.weight(.semibold))
             .foregroundStyle(activeCount > 0 ? Theme.tint : .secondary)
             .frame(height: 32)
-            .contentShape(Rectangle())
+            // About 20 pt wide: 6 pt of reach toward the add key 12 pt to its right (half the gap),
+            // the rest on its left, where only the title is.
+            .walnutTouchTarget(WalnutTouchRoom(trailing: CalendarTabView.headerKeyGap / 2))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("calendar.filterButton")

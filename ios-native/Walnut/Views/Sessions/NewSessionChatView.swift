@@ -426,19 +426,29 @@ struct NewSessionChatView: View {
                             // The row's one key look; the lit chip's accent hairline is the
                             // helper's (without it the tinted fill sat 1.04:1 from the bar in
                             // dark mode and the chosen folder was the FAINTEST chip in the row).
-                            .walnutPickerKey(active: isCurrent(dir))
+                            .walnutPickerKey(active: isCurrent(dir), room: Self.quickChipRoom)
                         }
                         .accessibilityIdentifier("newSessionChat.quickDir")
                         .accessibilityAddTraits(isCurrent(dir) ? .isSelected : [])
                     }
                 }
                 .padding(.horizontal, 12)
+                // The scroll view hit-tests only inside its own frame, so it is grown by the
+                // chips' touch room and given it back outside: nothing moves, the touch reaches.
+                .padding(.top, Self.quickChipRoom.top)
+                .padding(.bottom, Self.quickChipRoom.bottom)
             }
+            .padding(.top, -Self.quickChipRoom.top)
+            .padding(.bottom, -Self.quickChipRoom.bottom)
         }
         .padding(.top, 8)
         .padding(.bottom, 6)
         .accessibilityIdentifier("newSessionChat.quickFolders")
     }
+
+    /// A quick folder chip (26 pt) reaches 9 pt up (the caption above takes no tap) and 9 pt down,
+    /// to 3 pt short of the pills under the divider, whose own touch reaches 3 pt up: 44 pt.
+    static let quickChipRoom = WalnutTouchRoom(top: 9, bottom: 9)
 
     /// The folder key, then the project and sync keys, then (when they ride here) mode and
     /// model. The keys WRAP onto a second line rather than scroll: a sideways scroll left "Default
@@ -498,6 +508,8 @@ struct NewSessionChatView: View {
                 launchModelPill
             }
         }
+        // The keys wrap onto lines 6 pt apart: each touch reaches half the gap toward the next line.
+        .walnutTouchRoom(.gaps(horizontal: ComposerBar.pillSpacing, vertical: ComposerBar.pillSpacing))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

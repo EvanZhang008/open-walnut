@@ -187,7 +187,8 @@ struct CalendarAllDayChip: View {
         Group {
             switch row.source {
             case .task(let item):
-                Button { onTapTask(item.task) } label: { content }
+                // The band's chips are 2 pt apart: each reaches half of it.
+                Button { onTapTask(item.task) } label: { content.walnutTouchTarget(.gaps(vertical: 2)) }
                     .buttonStyle(.plain)
             case .event:
                 content

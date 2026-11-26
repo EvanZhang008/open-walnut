@@ -294,7 +294,7 @@ struct RoutinesView: View {
                 Text(failing).fontWeight(.semibold).foregroundStyle(Theme.dangerText)
                     .fixedSize()
                     .frame(minHeight: 32)
-                    .contentShape(Rectangle())
+                    .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityHint("Shows the first failing routine")
@@ -782,7 +782,8 @@ struct RoutinesView: View {
                         .rotationEffect(.degrees(isOpen ? 90 : 0))
                 }
                 .frame(minHeight: 32)
-                .contentShape(Rectangle())
+                // Folds follow one another: half of the 6 pt toward the next one.
+                .walnutTouchTarget(.gaps(vertical: 6))
             }
             .buttonStyle(.plain)
             .accessibilityValue(isOpen ? "Expanded" : "Collapsed")

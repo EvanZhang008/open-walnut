@@ -854,7 +854,7 @@ struct OrgThreadCard: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 36, height: 28)
-                    .contentShape(Rectangle())
+                    .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Fold this thread")
@@ -877,6 +877,8 @@ struct OrgThreadCard: View {
         return RelativeTime.short(date: d, relativeTo: now)
     }
 
+    static let chipGap: CGFloat = 6
+
     @ViewBuilder
     private var chips: some View {
         let named = OrgThreadModel.namedTasks(in: t.reply)
@@ -887,7 +889,7 @@ struct OrgThreadCard: View {
                     AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole)
                 } ?? id
             }
-            OrgChipFlow(spacing: 6) {
+            OrgChipFlow(spacing: Self.chipGap) {
                 ForEach(ids, id: \.self) { id in
                     let task = tasks.tasks.first { $0.id == id }
                     let title = task.map { AskProjectName.displayTitle($0.title, project: $0.project, orgRole: $0.orgRole) } ?? id
@@ -905,11 +907,14 @@ struct OrgThreadCard: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                        .walnutTouchTarget()
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("org.thread.task")
                 }
             }
+            // The chips wrap 6 pt apart: each touch reaches half the gap toward its neighbour.
+            .walnutTouchRoom(.gaps(horizontal: Self.chipGap, vertical: Self.chipGap))
         }
     }
 
@@ -929,7 +934,8 @@ struct OrgThreadCard: View {
                 .font(.footnote)
                 .foregroundStyle(Theme.tint)
                 .frame(minHeight: 32)
-                .contentShape(Rectangle())
+                // 10 pt from the card's other lines, which keep to their frames (the chips reach 3).
+                .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier(atEnd ? "org.thread.conversation.end" : "org.thread.conversation")
@@ -1011,6 +1017,8 @@ struct OrgThreadCard: View {
                 .foregroundStyle(watched ? Theme.tint : Theme.secondaryOnCard)
         }
         .buttonStyle(.walnut(.tool, size: .small))
+        // 4 pt right of Snooze, which is wide and keeps to its frame: the rest of 44 pt on the right.
+        .walnutTouchRoom(WalnutTouchRoom(leading: 4))
         .accessibilityLabel(watched ? "Stop watching" : "Watch")
         .accessibilityIdentifier("org.thread.watch")
     }
@@ -1328,7 +1336,8 @@ struct FoldToggle: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(Theme.tint)
             .frame(minHeight: 32)
-            .contentShape(Rectangle())
+            // 4 pt under the text it folds, whose links keep to their frames.
+            .walnutTouchTarget(WalnutTouchRoom(top: 4))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("\(id).expand")

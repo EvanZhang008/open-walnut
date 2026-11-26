@@ -179,8 +179,13 @@ struct CalendarTabView: View {
 
     // MARK: - Header
 
+    /// The header's keys are 12 pt apart: each 32 pt key's touch reaches 6 pt toward the next one,
+    /// so the three meet in the gaps and none overlaps; the narrow funnel takes the rest of its 44 pt
+    /// on its left, where only the title is.
+    static let headerKeyGap: CGFloat = 12
+
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Self.headerKeyGap) {
             Text(titleText)
                 .font(.title3.weight(.semibold))
                 .accessibilityIdentifier("calendar.title")
@@ -204,7 +209,7 @@ struct CalendarTabView: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Theme.tint)
                 .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
+                .walnutTouchTarget(.gaps(horizontal: Self.headerKeyGap))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("calendar.add")
@@ -229,7 +234,7 @@ struct CalendarTabView: View {
             .font(.body.weight(.semibold))
             .foregroundStyle(Theme.tint)
             .frame(height: 32)
-            .contentShape(Rectangle())
+            .walnutTouchTarget(.gaps(horizontal: Self.headerKeyGap))
         }
         .accessibilityIdentifier("calendar.viewMenu")
     }
@@ -325,7 +330,7 @@ struct CalendarTabView: View {
                 .frame(minHeight: Theme.Control.smallHeight)
                 .background(.regularMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
-                .contentShape(Rectangle().inset(by: -(Theme.Control.target - Theme.Control.smallHeight) / 2))
+                .walnutTouchTarget()
         }
         .buttonStyle(.plain)
         .padding(.leading, 16)

@@ -72,7 +72,9 @@ struct CalendarWeekStrip: View {
                     .frame(width: 4, height: 4)
             }
             .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+            // 36 pt tall: 4 pt up (the weekday letters take no tap) and 4 pt down, half the 8 pt to
+            // the all-day band's first key.
+            .walnutTouchTarget(.gaps(vertical: 8))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("calendar.strip.\(day.dayKey)")

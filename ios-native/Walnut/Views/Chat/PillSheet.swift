@@ -161,6 +161,8 @@ struct PillSheetButton: UIViewRepresentable {
     var focus: PillSheetFocus
     var onTap: () -> Void
     var onHighlightChange: (Bool) -> Void
+    /// How far SwiftUI grew this button past the pill it covers (`walnutTouchOutset`).
+    var touchOutset = EdgeInsets()
 
     func makeUIView(context: Context) -> PillSheetUIButton {
         let button = PillSheetUIButton(frame: .zero)
@@ -179,10 +181,11 @@ struct PillSheetButton: UIViewRepresentable {
         button.focus = focus
         button.onTap = onTap
         button.onHighlightChange = onHighlightChange
+        button.touchOutset = WalnutTouchUIButton.outset(touchOutset)
     }
 }
 
-final class PillSheetUIButton: UIButton {
+final class PillSheetUIButton: WalnutTouchUIButton {
     var onTap: (() -> Void)?
     var onHighlightChange: ((Bool) -> Void)?
     var focus: PillSheetFocus?

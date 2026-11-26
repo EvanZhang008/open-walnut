@@ -43,7 +43,8 @@ struct TaskTagPills: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .frame(minHeight: 30)
-                        .contentShape(Rectangle())
+                        // Among the pills, 6 pt apart on a line and between lines.
+                        .walnutTouchTarget(.gaps(horizontal: 6, vertical: 6))
                         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 }
                 .buttonStyle(.plain)

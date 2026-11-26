@@ -74,6 +74,9 @@ struct PillMenuButton: UIViewRepresentable {
     var onSelect: (PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void
     var onPresentedChange: (String, Bool) -> Void
     var onHighlightChange: (Bool) -> Void
+    /// How far SwiftUI grew this button past the pill it covers (`walnutTouchOutset`): the
+    /// button takes a 44 pt touch, the menu's source stays the pill.
+    var touchOutset = EdgeInsets()
 
     func makeUIView(context: Context) -> PillMenuUIButton {
         let button = PillMenuUIButton(frame: .zero)
@@ -94,6 +97,7 @@ struct PillMenuButton: UIViewRepresentable {
         button.accessibilityIdentifier = accessibilityID
         button.accessibilityLabel = accessibilityLabel
         button.accessibilityValue = accessibilityValue
+        button.touchOutset = WalnutTouchUIButton.outset(touchOutset)
         button.show(menu)
     }
 
@@ -104,7 +108,7 @@ struct PillMenuButton: UIViewRepresentable {
     }
 }
 
-final class PillMenuUIButton: UIButton {
+final class PillMenuUIButton: WalnutTouchUIButton {
     var menuID = ""
     var onSelect: ((PillMenu.Choice, ComposerControlsModel.MenuToken) -> Void)?
     var onPresentedChange: ((String, Bool) -> Void)?
@@ -241,13 +245,15 @@ final class PillMenuUIButton: UIButton {
     /// `super` call raised `doesNotRecognizeSelector` and killed the app).
     func previewAbovePill() -> UITargetedPreview? {
         guard window != nil else { return nil }
-        let size = CGSize(width: max(bounds.width, 1), height: max(bounds.height, 1))
+        // The pill as drawn, not the button's larger touch frame (`touchOutset`).
+        let pill = drawnBounds
+        let size = CGSize(width: max(pill.width, 1), height: max(pill.height, 1))
         let shape = UIView(frame: CGRect(origin: .zero, size: size))
         shape.backgroundColor = .clear
         let parameters = UIPreviewParameters()
         parameters.backgroundColor = .clear
         parameters.visiblePath = UIBezierPath(roundedRect: shape.bounds, cornerRadius: size.height / 2)
-        let center = CGPoint(x: bounds.midX, y: -(size.height / 2 + Self.menuGap + max(menuClearance, 0)))
+        let center = CGPoint(x: pill.midX, y: pill.minY - (size.height / 2 + Self.menuGap + max(menuClearance, 0)))
         return UITargetedPreview(view: shape, parameters: parameters, target: UIPreviewTarget(container: self, center: center))
     }
 

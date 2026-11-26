@@ -664,7 +664,7 @@ or button shape.
 | Empty state | `EmptyState` | `WalnutEmptyState` (`pane`, `section`, `row`), never `ContentUnavailableView` |
 | Toast | `NoticeCard` stack, toast rule | the shared notice center only, under the toast rule above; no view draws a toast of its own |
 
-Sizes: controls are 44 pt (a finger), a small one draws 32 pt and keeps a 44 pt touch, a tool 28 pt.
+Sizes: controls are 44 pt (a finger), a small one draws 32 pt and keeps a 44 pt touch, a tool 28 pt. The one way to keep that touch is `.walnutTouchTarget(room)` on the drawn label (`WalnutTouchTarget.swift`; the family's styles and `walnutPickerKey` apply it, a UIKit pill grows its button with `walnutTouchOutset`): it grows the hit shape, never the drawing, and on a tight row (`.walnutTouchRoom(...)`) it reaches half the gap toward a neighbouring key, so the closer key wins. No `contentShape(Rectangle().inset(...))` or padding trick of a view's own (2026-11-26: 39 pressable elements drew under 44 pt; `tests/web/ios-ui-standard-ratchet.test.ts` lists each small control that keeps its own touch, with why).
 Corners of surfaces `Theme.Radius.xs/sm/md/lg/card/notice` = 4 / 8 / 12 / 16 / 16 / 14 (a list row 8, a single-line field 12, a card 16). Text sizes are iOS text styles at the
 web's scale (`Theme.TextSize.xs...xxl` = caption2 11, caption 12, footnote 13, subheadline 15, body 17,
 title3 20), so they grow with Dynamic Type; a glyph of fixed size is `Theme.Glyph`. Spacing is the web's

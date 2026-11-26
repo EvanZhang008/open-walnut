@@ -154,7 +154,7 @@ struct CalendarListView: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(Theme.tint)
                     .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .walnutTouchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("calendar.list.add.\(key)")

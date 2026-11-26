@@ -140,7 +140,9 @@ struct CalendarTimelineView: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 2)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                            // Short (17 pt) in a band of chips 2 pt apart, over the hour grid: it
+                            // reaches what the gaps allow, never a neighbour's tap.
+                            .walnutTouchTarget(WalnutTouchRoom(top: 1, bottom: 2))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("calendar.allDayAdd.\(day.dayKey)")

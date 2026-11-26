@@ -340,8 +340,13 @@ struct TasksNoSessionPage: View {
                 .buttonStyle(.walnut(.primary))
                 .tint(Theme.accent)
                 .accessibilityIdentifier("tasks.empty.openBoard")
-            Button("New Session", action: newSession)
-                .accessibilityIdentifier("tasks.empty.newSession")
+            Button(action: newSession) {
+                // Drawn as the words alone (18 pt): a 44 pt touch, reaching at most 4 pt up toward
+                // Open Pins above it and the rest down, where nothing is.
+                Text("New Session")
+                    .walnutTouchTarget(WalnutTouchRoom(top: 4))
+            }
+            .accessibilityIdentifier("tasks.empty.newSession")
         }
         .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)

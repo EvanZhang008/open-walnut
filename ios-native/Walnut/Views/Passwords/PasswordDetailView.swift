@@ -145,6 +145,8 @@ struct PasswordDetailView: View {
         } label: {
             Image(systemName: "doc.on.doc").font(.body).foregroundStyle(Theme.tint)
                 .frame(width: 36, height: 36)
+                // 4 pt right of the eye key: half of it toward that key.
+                .walnutTouchTarget(WalnutTouchRoom(leading: 2))
         }
         .buttonStyle(.borderless)
         .accessibilityLabel("Copy \(label)")
@@ -197,6 +199,8 @@ struct PasswordDetailView: View {
                 } label: {
                     Image(systemName: shown ? "eye.slash" : "eye").font(.body).foregroundStyle(Theme.tint)
                         .frame(width: 36, height: 36)
+                        // Between the row (4 pt, keeps to its frame) and the copy key (half of 4 pt).
+                        .walnutTouchTarget(WalnutTouchRoom(leading: 4, trailing: 2))
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(shown ? "Hide \(label)" : "Show \(label)")

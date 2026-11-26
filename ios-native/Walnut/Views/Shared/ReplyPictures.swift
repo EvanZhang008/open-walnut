@@ -51,7 +51,8 @@ struct ReplyPictureButton: View {
                 .accessibilityLabel(images.isEmpty ? "Add a picture" : "Add a picture, \(images.count) attached")
                 .font(Theme.Glyph.lg.font())
                 .frame(width: 40, height: 44)
-                .contentShape(Rectangle())
+                // Beside a field (2 to 4 pt away, it keeps to its frame): 2 pt each side, 44 pt wide.
+                .walnutTouchTarget(WalnutTouchRoom(leading: 2, trailing: 2))
         }
         .disabled(disabled || full)
         .accessibilityLabel(images.isEmpty ? "Add a picture" : "Add a picture, \(images.count) attached")

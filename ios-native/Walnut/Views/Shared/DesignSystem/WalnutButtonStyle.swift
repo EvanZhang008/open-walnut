@@ -56,8 +56,6 @@ struct WalnutButtonStyle: ButtonStyle {
         let height = role == .tool
             ? (size == .small ? Theme.Control.toolHeight : Theme.Control.smallHeight)
             : (size == .small ? Theme.Control.smallHeight : Theme.Control.height)
-        // The touch reaches 44 pt whatever is drawn.
-        let reach = max(0, (Theme.Control.target - height) / 2)
         configuration.label
             // An option label's second words read on the row's fill (`WalnutOptionLabel`).
             .environment(\.walnutOnSolid, isSolid)
@@ -82,7 +80,8 @@ struct WalnutButtonStyle: ButtonStyle {
             // A disabled main action turns grey with light grey words (a faded accent under faded
             // white read as a pale main action); a disabled quiet control fades.
             .opacity(enabled || isSolid ? (configuration.isPressed && isSolid ? 0.8 : 1) : 0.5)
-            .contentShape(Rectangle().inset(by: -reach))
+            // The touch reaches 44 pt whatever is drawn, within the row's room.
+            .walnutTouchTarget()
     }
 
     private var isOption: Bool { if case .option = role { true } else { false } }
@@ -219,6 +218,8 @@ extension EnvironmentValues {
 struct WalnutPickerKey: ViewModifier {
     var active = false
     var wraps = false
+    /// This key's own touch room; nil takes the row's (`walnutTouchRoom(_:)`).
+    var room: WalnutTouchRoom? = nil
 
     @Environment(\.walnutPalette) private var palette
 
@@ -232,7 +233,8 @@ struct WalnutPickerKey: ViewModifier {
             .overlay {
                 if active { shape.strokeBorder(palette.tint, lineWidth: 1) }
             }
-            .contentShape(shape)
+            // Drawn 26 pt (34 with a chevron key's words), a 44 pt touch within its room.
+            .walnutTouchTarget(room)
     }
 }
 
@@ -255,8 +257,8 @@ struct WalnutPickerKeyShape: InsettableShape {
 
 extension View {
     /// Draw this label as a small picker key (`WalnutPickerKey`).
-    func walnutPickerKey(active: Bool = false, wraps: Bool = false) -> some View {
-        modifier(WalnutPickerKey(active: active, wraps: wraps))
+    func walnutPickerKey(active: Bool = false, wraps: Bool = false, room: WalnutTouchRoom? = nil) -> some View {
+        modifier(WalnutPickerKey(active: active, wraps: wraps, room: room))
     }
 }
 
@@ -285,7 +287,7 @@ struct WalnutChipStyle: ButtonStyle {
                 if selected { shape.strokeBorder(palette.tint, lineWidth: 1) }
             }
             .opacity(enabled ? 1 : 0.5)
-            .contentShape(Rectangle().inset(by: -(Theme.Control.target - Theme.Control.smallHeight) / 2))
+            .walnutTouchTarget()
     }
 }
 

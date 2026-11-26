@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { countIos, countFile, codeLines, blockAt, appSwiftFiles, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
+import { countIos, countFile, codeLines, blockAt, appSwiftFiles, touchMembers, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
 
 const BASELINE = path.join(import.meta.dirname, 'ios-ui-standard-baseline.json')
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md'
@@ -297,7 +297,7 @@ describe('iOS UI standard: one look per kind of control', () => {
       expect(users.filter((rel) => !TOOL_ROW_FILES.includes(rel))).toEqual([])
       const buttons = read('Walnut/Views/Shared/DesignSystem/WalnutButtonStyle.swift')
       expect(buttons).toMatch(/wraps \? WalnutButtonStyle\.optionShape\.path\(in: inner\) : Capsule\(style: \.continuous\)\.path\(in: inner\)/)
-      expect(buttons).toMatch(/func walnutPickerKey\(active: Bool = false, wraps: Bool = false\)/)
+      expect(buttons).toMatch(/func walnutPickerKey\(active: Bool = false, wraps: Bool = false, room: WalnutTouchRoom\? = nil\)/)
     })
 
     it('finds a key that draws its own shape', () => {
@@ -479,6 +479,95 @@ describe('iOS UI standard: one look per kind of control', () => {
       expect(writers('Walnut/Views/X.swift', 'parts.append("-\\(age)s \\(label)")')).toHaveLength(0)
       expect(writers('Walnut/Views/X.swift', 'Text("+\\(n) more")')).toHaveLength(0)
       expect(writers('Walnut/Views/X.swift', ['enum DiffCount {', '    static let a = "+\\(x)"', '    static let b = "\\u{2212}\\(y)"', '}'].join('\n'))).toHaveLength(0)
+    })
+  })
+
+  describe('a control drawn under 44 pt keeps a 44 pt touch, through one helper', () => {
+    // 2026-11-26: 39 pressable elements on the phone's screens drew under 44 pt (the screen tour's
+    // accessibility trees), and three hand-rolled ways grew a touch (an inset content shape in two
+    // styles, a padding trick in the queue). `.walnutTouchTarget()` (WalnutTouchTarget.swift) is the
+    // one way; the family's styles apply it (standard.md "Sizes", iOS column).
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    const HELPER = 'Walnut/Views/Shared/DesignSystem/WalnutTouchTarget.swift'
+    /** Controls drawn small that keep their own touch, each with why; `match` is a text in its code. */
+    const KEEPS_ITS_OWN: { rel: string; match: string; why: string }[] = [
+      { rel: 'Shared/VaultUI/VaultUnlockView.swift', match: 'passwords.unlockBiometrics', why: 'the system .borderedProminent style pads its 30 pt label to a 44 pt key' },
+      { rel: 'Shared/VaultUI/VaultUnlockView.swift', match: 'passwords.unlockPassword', why: 'the system .borderedProminent style pads its 30 pt label to a 44 pt key' },
+      { rel: 'WalnutAutoFill/AutoFillRootView.swift', match: 'autofill.configuredDone', why: 'the system .borderedProminent style pads its 30 pt label to a 44 pt key' },
+      { rel: 'WalnutAutoFill/AutoFillRootView.swift', match: 'Choose Another Place', why: 'the system .borderedProminent style pads its 30 pt label to a 44 pt key' },
+      { rel: 'WalnutWidgets/TalkLiveActivityWidget.swift', match: 'TalkCancelIntent', why: 'a Live Activity button: the system draws and hit-tests it outside the app' },
+      { rel: 'WalnutWidgets/TalkLiveActivityWidget.swift', match: 'TalkSendNowIntent', why: 'a Live Activity button: the system draws and hit-tests it outside the app' },
+      { rel: 'Walnut/Views/Tasks/FocusSpaceViews.swift', match: 'tasks.focus', why: 'a toolbar menu: the navigation bar gives its items their own touch' },
+      { rel: 'Walnut/Views/Tasks/TaskBoardRow.swift', match: 'ringTargetWidth', why: 'the ring draws 21 pt; its frame is the 44 pt wide, full-height target (ringTargetWidth)' },
+      { rel: 'Walnut/Views/Calendar/CalendarMonthView.swift', match: 'calendar.day.', why: 'a month grid cell: the 32 pt number, its dots and padding make a 45 pt cell a seventh of the width' },
+      { rel: 'Walnut/Views/Chat/ChatDrawerDirectors.swift', match: 'chat.drawer.directors.fold.', why: 'SHORT (36 pt): drawer rows abut, so any reach takes the next row\'s taps; 44 pt needs a taller row, a layout change' },
+      { rel: 'Walnut/Views/Chat/ChatDrawerDirectors.swift', match: 'chat.drawer.directors.new.', why: 'SHORT (36 pt): drawer rows abut, so any reach takes the next row\'s taps; 44 pt needs a taller row, a layout change' },
+    ]
+    const members = appSwiftFiles().flatMap((rel) => touchMembers(rel, read(rel)))
+    const kept = (m: { rel: string; text: string }) => KEEPS_ITS_OWN.find((k) => k.rel === m.rel && m.text.includes(k.match))
+
+    it('every control drawn under 44 pt goes through walnutTouchTarget or a style that applies it', () => {
+      // The members include the composer's keys, the calendar header and the family's small keys.
+      expect(members.length, members.map((m) => m.at).join('\n')).toBeGreaterThanOrEqual(60)
+      for (const id of ['"chat.plus"', '"chat.mic"', '"chat.send"', '"calendar.add"', '"calendar.filterButton"', '"org.thread.snooze"']) {
+        expect(members.some((m) => m.text.includes(id)), id).toBe(true)
+      }
+      const offenders = members.filter((m) => !m.through && !kept(m)).map((m) => `${m.at} [${m.small}] ${m.id}`)
+      expect(offenders, `Keep a 44 pt touch with .walnutTouchTarget(room) on the drawn label (${HELPER}), or list the control in KEEPS_ITS_OWN with why:\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it('every control that keeps its own touch is still there and still drawn small', () => {
+      const stale = KEEPS_ITS_OWN.filter((k) => !members.some((m) => m.rel === k.rel && m.text.includes(k.match) && !m.through))
+      expect(stale.map((k) => `${k.rel}: ${k.match}`), 'gone or fixed: drop it from KEEPS_ITS_OWN').toEqual([])
+    })
+
+    it('the helper is the one way a touch grows past a drawing', () => {
+      const src = read(HELPER)
+      expect(src).toMatch(/func walnutTouchTarget\(_ room: WalnutTouchRoom\? = nil\) -> some View/)
+      expect(src).toMatch(/static let minimum: CGFloat = Theme\.Control\.target/)
+      expect(src).toMatch(/class WalnutTouchUIButton: UIButton/)
+      expect(DESIGN_SYSTEM_FILES).toContain(HELPER)
+      // The family's styles apply it.
+      const buttons = read('Walnut/Views/Shared/DesignSystem/WalnutButtonStyle.swift')
+      expect(buttons.match(/\.walnutTouchTarget\(/g)?.length).toBe(3)
+      // The composer's pills: a UIKit button over the capsule, grown to the touch.
+      const pill = read('Walnut/Views/Chat/ComposerControls.swift')
+      expect(pill.match(/\.walnutTouchOutset\(outset\)/g)?.length).toBe(2)
+      expect(read('Walnut/Views/Chat/PillMenuButton.swift')).toMatch(/final class PillMenuUIButton: WalnutTouchUIButton/)
+      expect(read('Walnut/Views/Chat/PillSheet.swift')).toMatch(/final class PillSheetUIButton: WalnutTouchUIButton/)
+      // No hand-rolled reach anywhere else: an inset content shape, or padding around a content shape
+      // given back with a negative padding.
+      const own: string[] = []
+      for (const rel of appSwiftFiles()) {
+        if (DESIGN_SYSTEM_FILES.includes(rel)) continue
+        const lines = codeLines(read(rel))
+        lines.forEach((l, i) => {
+          if (/\.contentShape\([^)]*\.inset\(by:\s*-/.test(l)) own.push(`ios-native/${rel}:${i + 1}: ${l.trim()}`)
+          if (/\.contentShape\(/.test(l) && /\.padding\([^)]*\d/.test(lines[i - 1] ?? '') && /\.padding\([^)]*-\s*\d/.test(lines[i + 1] ?? '')) own.push(`ios-native/${rel}:${i + 1}: ${l.trim()}`)
+        })
+      }
+      expect(own, `Grow a touch with .walnutTouchTarget(room) (${HELPER}):\n${own.join('\n')}`).toEqual([])
+    })
+
+    it('finds a control drawn small without the helper', () => {
+      const one = (src: string) => touchMembers('Walnut/Views/X.swift', src)
+      const bad = (src: string) => one(src).filter((m) => !m.through).length
+      // A made-up offender: a 32 pt key with a bare content shape.
+      expect(bad(['Button { go() } label: {', '    Image(systemName: "plus")', '        .frame(width: 32, height: 32)', '        .contentShape(Rectangle())', '}', '.accessibilityIdentifier("x.add")'].join('\n'))).toBe(1)
+      expect(bad(['Menu {', '    Button("A") { }', '} label: {', '    Text("Group")', '        .frame(minHeight: 32)', '}'].join('\n'))).toBe(1)
+      expect(bad(['Button(action: go) {', '    Image(systemName: "mic")', '        .frame(width: MessageBox.keySize, height: MessageBox.keySize)', '}'].join('\n'))).toBe(1)
+      expect(bad(['Button { } label: {', '    Text("Row").frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)', '}'].join('\n'))).toBe(1)
+      // Through the helper, or a family style: fine.
+      expect(bad(['Button { go() } label: {', '    Image(systemName: "plus")', '        .frame(width: 32, height: 32)', '        .walnutTouchTarget(.gaps(horizontal: 12))', '}'].join('\n'))).toBe(0)
+      expect(one(['Button("Snooze") { }', '    .buttonStyle(.walnut(.tool, size: .small))'].join('\n'))).toHaveLength(1)
+      expect(bad(['Button("Snooze") { }', '    .buttonStyle(.walnut(.tool, size: .small))'].join('\n'))).toBe(0)
+      // Not drawn small: 44 pt by its own frame, a row with a spacer, a status dot inside a big key.
+      expect(one(['Button { } label: {', '    Text("Stop").frame(minHeight: 34)', '        .background(Theme.dangerSoft, in: Capsule())', '        .frame(minHeight: 44)', '}'].join('\n'))).toHaveLength(0)
+      expect(one(['Button { } label: {', '    HStack {', '        Image(systemName: "a").frame(width: 14)', '        Spacer()', '    }', '    .frame(minHeight: 44)', '}'].join('\n'))).toHaveLength(0)
+      expect(one(['Button { } label: {', '    HStack { Circle().fill(.red).frame(width: 7, height: 7); Text("Brief") }', '        .frame(maxWidth: .infinity, minHeight: 44)', '}'].join('\n'))).toHaveLength(0)
+      expect(one(['Button { } label: {', '    Text("t").frame(width: inner * 0.8)', '}'].join('\n'))).toHaveLength(0)
+      // A comment between the label and its identifier does not hide the identifier.
+      expect(one(['Button { } label: {', '    Image(systemName: "plus").frame(width: 32, height: 32)', '}', '// why', '.accessibilityIdentifier("chat.plus")'].join('\n'))[0]?.id).toBe('"chat.plus"')
     })
   })
 

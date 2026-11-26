@@ -60,7 +60,7 @@ struct OrgNodeTasksView: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.tint)
                         .frame(minHeight: 32)
-                        .contentShape(Rectangle())
+                        .walnutTouchTarget()
                     }
                     .accessibilityLabel("Group by \(mode.label)")
                     .accessibilityIdentifier("org.tasks.mode")

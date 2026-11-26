@@ -81,7 +81,8 @@ struct CalendarMonthView: View {
                 Image(systemName: "chevron.left")
                     .font(.body.weight(.semibold))
                     .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
+                    // 12 pt from the next chevron: 6 pt each toward the other.
+                    .walnutTouchTarget(.gaps(horizontal: 12))
             }
             .accessibilityIdentifier("calendar.prevMonth")
             Button {
@@ -90,7 +91,7 @@ struct CalendarMonthView: View {
                 Image(systemName: "chevron.right")
                     .font(.body.weight(.semibold))
                     .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
+                    .walnutTouchTarget(.gaps(horizontal: 12))
             }
             .accessibilityIdentifier("calendar.nextMonth")
         }
@@ -235,7 +236,8 @@ struct CalendarMonthView: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Theme.tint)
                         .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
+                        // 6 pt right of the day's title key, which keeps to its own frame.
+                        .walnutTouchTarget(WalnutTouchRoom(leading: 6))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("calendar.agendaAdd")

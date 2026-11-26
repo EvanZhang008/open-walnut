@@ -929,7 +929,9 @@ struct ComposerBar: View {
         let layout = stacked
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: pillSpacing))
             : AnyLayout(HStackLayout(spacing: pillSpacing))
+        // Stacked, two pills sit 6 pt apart: each touch reaches half the gap toward the other.
         return layout { content() }
+            .walnutTouchRoom(stacked ? .gaps(vertical: pillSpacing) : .gaps(horizontal: pillSpacing))
     }
 
     static let pillSpacing: CGFloat = 6
@@ -1179,8 +1181,15 @@ struct ComposerBar: View {
     /// flow asks for. The row's existence is already observable through
     /// `chat.mic`, which is always on it. Leaving the wrapper bare keeps this
     /// restructure provably a no-op for the accessibility tree.
+    /// The bottom row's keys are 8 pt apart. Each 32 pt key's touch reaches half that gap toward
+    /// a neighbouring key (the closer key wins), and the rest of 44 pt toward the card's edge:
+    /// `+` (and the mic, whose left is the row's spacer) open on the left, the last seat on the right.
+    static let keyGap: CGFloat = 8
+    static let firstKeyRoom = WalnutTouchRoom(trailing: keyGap / 2)
+    static let lastKeyRoom = WalnutTouchRoom(leading: keyGap / 2)
+
     private var bottomControlRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Self.keyGap) {
             plusButton
             // The pills are the only flexible thing on this row: the three buttons
             // carry fixed 32pt frames, so an absurdly long model name truncates
@@ -1285,6 +1294,7 @@ struct ComposerBar: View {
     /// A quick-action take swaps the label copy ("Send to Walnut") so the user
     /// knows stopping SENDS rather than dropping text into a field to review.
     private var recordingRow: some View {
+        // 12 pt apart: two 32 pt keys' 6 pt reaches meet in the gap, none overlaps.
         HStack(spacing: 12) {
             Button {
                 // Cancel is the user's explicit "never mind" — it deletes the
@@ -1298,6 +1308,7 @@ struct ComposerBar: View {
                     .foregroundStyle(.secondary)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
                     .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                    .walnutTouchTarget()
             }
             .accessibilityLabel("Cancel recording")
             .accessibilityIdentifier("chat.voiceCancel")
@@ -1335,6 +1346,7 @@ struct ComposerBar: View {
                     .foregroundStyle(palette.onTint)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
                     .background(palette.accent, in: MessageBox.keyShape)
+                    .walnutTouchTarget()
             }
             .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
@@ -1351,6 +1363,7 @@ struct ComposerBar: View {
                         .foregroundStyle(live ? palette.onTint : Color(.tertiaryLabel))
                         .frame(width: MessageBox.keySize, height: MessageBox.keySize)
                         .background(live ? palette.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                        .walnutTouchTarget()
                 }
                 .disabled(!live)
                 .accessibilityLabel("Stop and send")
@@ -1408,6 +1421,7 @@ struct ComposerBar: View {
                 .foregroundStyle(.secondary)
                 .frame(width: MessageBox.keySize, height: MessageBox.keySize)
                 .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                .walnutTouchTarget(Self.firstKeyRoom)
         }
         // No bottom nudge any more: the old `.padding(.bottom, 3)` on all three
         // buttons optically aligned 32pt keys against a field that grew to six
@@ -1556,17 +1570,20 @@ struct ComposerBar: View {
             seatTaps.record()
             Task { _ = await voice.start() }
         } label: {
-            if voice.state == .transcribing {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-            } else {
-                Image(systemName: Symbol.mic)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
+            Group {
+                if voice.state == .transcribing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                } else {
+                    Image(systemName: Symbol.mic)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                        .background(Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                }
             }
+            .walnutTouchTarget(Self.firstKeyRoom)
         }
         .disabled(voice.state != .idle)
         .accessibilityIdentifier("chat.mic")
@@ -1584,6 +1601,7 @@ struct ComposerBar: View {
                 .frame(width: MessageBox.keySize, height: MessageBox.keySize)
                 .background(palette.accent, in: MessageBox.keyShape)
                 .opacity(seatSettling ? 0.4 : 1)
+                .walnutTouchTarget(Self.lastKeyRoom)
         }
         .disabled(disabled)
         .accessibilityLabel("Voice mode")
@@ -1623,6 +1641,7 @@ struct ComposerBar: View {
             // 4.6:1 light, 3.3:1 dark for the glyph).
             .background(Theme.Chat.soft, in: MessageBox.keyShape)
             .opacity(seatSettling ? 0.4 : 1)
+            .walnutTouchTarget(Self.lastKeyRoom)
         }
         .disabled(stopping)
         .accessibilityIdentifier("chat.stop")
@@ -1712,31 +1731,34 @@ struct ComposerBar: View {
 
     private var sendButton: some View {
         Button(action: gatedSend) {
-            if sendGate.isWaiting {
-                // Waiting for the words: a spinner in the send key, and a tap
-                // cancels the wait (the words still land in the box).
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(palette.onTint)
-                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(palette.accent, in: MessageBox.keyShape)
-            } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
-                // Its whole name: this send puts the words in the queue, the others act now.
-                Text("Queue")
-                    .font(.footnote.weight(.semibold))
-                    .lineLimit(1)
-                .foregroundStyle(canSend ? palette.onTint : Color(.tertiaryLabel))
-                .padding(.horizontal, 10)
-                .frame(height: MessageBox.keySize)
-                // Words on the key: the fill that keeps them at 4.5:1 in dark.
-                .background(canSend ? palette.keyFill : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
-            } else {
-                Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
-                    .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
+            Group {
+                if sendGate.isWaiting {
+                    // Waiting for the words: a spinner in the send key, and a tap
+                    // cancels the wait (the words still land in the box).
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(palette.onTint)
+                        .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                        .background(palette.accent, in: MessageBox.keyShape)
+                } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
+                    // Its whole name: this send puts the words in the queue, the others act now.
+                    Text("Queue")
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
                     .foregroundStyle(canSend ? palette.onTint : Color(.tertiaryLabel))
-                    .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(canSend ? palette.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                    .padding(.horizontal, 10)
+                    .frame(height: MessageBox.keySize)
+                    // Words on the key: the fill that keeps them at 4.5:1 in dark.
+                    .background(canSend ? palette.keyFill : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
+                } else {
+                    Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
+                        .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
+                        .foregroundStyle(canSend ? palette.onTint : Color(.tertiaryLabel))
+                        .frame(width: MessageBox.keySize, height: MessageBox.keySize)
+                        .background(canSend ? palette.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                }
             }
+            .walnutTouchTarget(Self.lastKeyRoom)
         }
         .disabled(!canSend && !sendGate.isWaiting)
         // VoiceOver read the arrow's symbol name, "Up".
@@ -1804,7 +1826,8 @@ struct ComposerBar: View {
         .padding(.horizontal, text == nil ? 0 : 10)
         .frame(minWidth: 32, minHeight: 32)
         .background(palette.tintSoft, in: Capsule())
-        .contentShape(Capsule())
+        // Between the mic and the send key, 8 pt from each.
+        .walnutTouchTarget(.gaps(horizontal: Self.keyGap))
     }
 
     private func performSecondary(_ action: ComposerSecondaryAction) {
