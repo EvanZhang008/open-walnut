@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { linkRegistryForOlderReleases, ownSharedDir, servesOlderReleases } from '../../src/providers/daemon-older-release-door.js'
-import { acquireDaemonInstanceLock, readDaemonInstanceOwner } from '../../src/providers/daemon-instance-lock.js'
+import net from 'node:net'
+import { acquireDaemonInstanceLock, daemonLockPort, DAEMON_LOCK_HOST, DAEMON_LOCK_MAGIC, readDaemonInstanceOwner } from '../../src/providers/daemon-instance-lock.js'
 import { DAEMON_STATE_MARKERS, chooseLocalDaemonDir, realDaemonDirDeps, SHARED_DAEMON_DIR } from '../../src/lib/daemon-dir.js'
 import { serverImagesDir } from '../../src/providers/daemon-fs-write.js'
 
@@ -137,22 +138,66 @@ describe('linkRegistryForOlderReleases', () => {
 
 describe('the shared dir\'s instance lock, held by the home daemon', () => {
   it('a daemon that starts in the shared dir finds an owner there and is handed its port', async () => {
-    const held = await acquireDaemonInstanceLock({ runtimeDir: shared, uid, pid: process.pid, instanceId: 'd-home-1' })
+    const homeDir = path.dirname(registry)
+    const held = await acquireDaemonInstanceLock({ runtimeDir: shared, uid, pid: process.pid, instanceId: 'd-home-1', daemonDir: homeDir })
     expect(held.kind).toBe('owner')
     if (held.kind !== 'owner') return
     try {
       held.publish(41234)
       // What every published daemon does first in its dir: it would print this port and exit.
       const second = await acquireDaemonInstanceLock({ runtimeDir: shared, uid, pid: process.pid, instanceId: 'd-older-2' })
-      expect(second).toMatchObject({ kind: 'existing', owner: { instanceId: 'd-home-1', wsPort: 41234, pid: process.pid } })
-      expect(await readDaemonInstanceOwner({ runtimeDir: shared, uid })).toMatchObject({ instanceId: 'd-home-1' })
+      expect(second).toMatchObject({ kind: 'existing', owner: { instanceId: 'd-home-1', wsPort: 41234, pid: process.pid, daemonDir: homeDir } })
+      // A release that does not know `daemonDir` reads a plain owner of the dir: the banner's other fields are as ever.
+      const raw = await new Promise<string>((resolve, reject) => {
+        const socket = net.createConnection({ host: DAEMON_LOCK_HOST, port: daemonLockPort(uid, fs.realpathSync(shared)) })
+        let text = ''
+        socket.on('data', (d) => { text += String(d) })
+        socket.on('end', () => resolve(text))
+        socket.on('error', reject)
+      })
+      expect(JSON.parse(raw)).toMatchObject({ magic: DAEMON_LOCK_MAGIC, uid, dir: fs.realpathSync(shared), pid: process.pid, instanceId: 'd-home-1', wsPort: 41234 })
+      // 2026-11-26 review: this build's own tools read the lock to find the dir's daemon (to stop it, to
+      // write its door files back, to hand a service over). A holder whose own dir is another one is none.
+      expect(await readDaemonInstanceOwner({ runtimeDir: shared, uid })).toBeNull()
     } finally {
       await held.release()
+    }
+    // A plain owner of the dir is still found.
+    const plain = await acquireDaemonInstanceLock({ runtimeDir: shared, uid, pid: process.pid, instanceId: 'd-plain-3' })
+    expect(plain.kind).toBe('owner')
+    if (plain.kind === 'owner') {
+      expect(await readDaemonInstanceOwner({ runtimeDir: shared, uid })).toMatchObject({ instanceId: 'd-plain-3' })
+      await plain.release()
     }
     // After the home daemon stopped the dir is free: the older daemon starts, and reads the link.
     const after = await acquireDaemonInstanceLock({ runtimeDir: shared, uid, pid: process.pid, instanceId: 'd-older-2' })
     expect(after.kind).toBe('owner')
     if (after.kind === 'owner') await after.release()
+  })
+})
+
+// The class of the 2026-11-26 review finding: code of this build that meets the shared dir's lock
+// held by the home daemon and takes it for that dir's own daemon (it wrote the home daemon's door
+// files into the shared dir, and `--stop` there stopped the home daemon).
+describe('this build never takes a holder from another dir for the dir\'s daemon', () => {
+  const SRC = path.resolve(__dirname, '../../src')
+  const files = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(d, e.name)) : e.name.endsWith('.ts') ? [path.join(d, e.name)] : []))
+  const sources = files(SRC).map((f) => ({ rel: path.relative(SRC, f), text: fs.readFileSync(f, 'utf8') })).filter((f) => f.rel !== 'providers/daemon-instance-lock.ts')
+
+  it('only the daemon takes the lock, and it checks whose daemon holds it before anything else', () => {
+    expect(sources.filter((f) => f.text.includes('acquireDaemonInstanceLock(')).map((f) => f.rel)).toEqual(['providers/daemon-standalone.ts'])
+    const daemon = sources.find((f) => f.rel === 'providers/daemon-standalone.ts')!.text
+    const existing = daemon.indexOf("if (lock.kind === 'existing') {")
+    expect(existing).toBeGreaterThan(0)
+    const refusal = daemon.indexOf('if (lock.owner.daemonDir) throw', existing)
+    expect(refusal).toBeGreaterThan(existing)
+    for (const later of ['writeBackDoorFiles({', "return { kind: 'existing'"]) expect(daemon.indexOf(later, existing), later).toBeGreaterThan(refusal)
+  })
+
+  it('everything else finds a dir\'s daemon through readDaemonInstanceOwner, which names no such holder', () => {
+    // A new way to read the lock (the banner, the port) outside the lock module would see the holder raw.
+    const raw = sources.filter((f) => /parseDaemonLockBanner\(|daemonLockPort\(|probeExistingOwner\(/.test(f.text)).map((f) => f.rel)
+    expect(raw).toEqual([])
   })
 })
 

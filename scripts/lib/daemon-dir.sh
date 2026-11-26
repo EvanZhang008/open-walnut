@@ -53,7 +53,7 @@ _wd_other_account_pins() {
 _wd_service_pins() {
   _wd_unit="${_WD_ETC:-/etc/systemd/system}/open-walnut-daemon.service"
   _wd_plist="$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist"
-  { [ -r "$_wd_plist" ] && sed -e ':a' -e 'N' -e '$!ba' -e 's/>[[:space:]]*</></g' "$_wd_plist" 2>/dev/null \
+  { [ -r "$_wd_plist" ] && tr '\n' ' ' < "$_wd_plist" 2>/dev/null | sed 's/>[[:space:]]*</></g' \
       | grep -qF "<key>WALNUT_DAEMON_DIR</key><string>$1</string>"; } \
     || grep -qsxF "Environment=\"WALNUT_DAEMON_DIR=$1\"" "$HOME/.config/systemd/user/open-walnut-daemon.service" \
     || grep -qsxF "export WALNUT_DAEMON_DIR='$1'" "$HOME/.local/share/open-walnut/daemon/daemon-boot.sh" \

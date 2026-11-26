@@ -27,6 +27,14 @@ export interface DaemonLockBanner {
   service?: true
   /** With inProcess: that server's data dir, so a second server's refusal can say which one runs (an older banner has none). */
   home?: string
+  /**
+   * The holder's own runtime dir, when it is not `dir`: a daemon in the home dir also holds the
+   * shared dir's lock, so that a release from before its files moved gives way there
+   * (daemon-older-release-door.ts). Such a holder keeps a second daemon out of `dir` but is no
+   * daemon OF it: nothing of it is in `dir`, and nothing that manages `dir`'s daemon may take it
+   * for one (readDaemonInstanceOwner). A release that does not know the field sees a plain owner.
+   */
+  daemonDir?: string
 }
 
 export interface DaemonLockOwnerInfo {
@@ -38,6 +46,8 @@ export interface DaemonLockOwnerInfo {
   inProcess?: true
   service?: true
   home?: string
+  /** Set when the holder's own runtime dir is another one (DaemonLockBanner.daemonDir). */
+  daemonDir?: string
 }
 
 export type DaemonLockConflictReason = 'foreign' | 'timeout' | 'malformed' | 'oversize' | 'unreachable' | 'listen'
@@ -106,6 +116,8 @@ export interface AcquireDaemonInstanceLockOptions {
   service?: boolean
   /** And that server's data dir (DaemonLockBanner.home). */
   home?: string
+  /** The holder's own runtime dir, when it holds this lock for another dir's sake (DaemonLockBanner.daemonDir). */
+  daemonDir?: string
 }
 
 export interface DaemonInstanceLockOwner {
@@ -163,6 +175,7 @@ export function buildDaemonLockBanner(info: DaemonLockOwnerInfo): DaemonLockBann
     ...(info.inProcess ? { inProcess: true as const } : {}),
     ...(info.inProcess && info.service ? { service: true as const } : {}),
     ...(info.inProcess && bannerHome(info.home) ? { home: info.home } : {}),
+    ...(bannerHome(info.daemonDir) && info.daemonDir !== info.dir ? { daemonDir: info.daemonDir } : {}),
   }
 }
 
@@ -193,6 +206,7 @@ export function parseDaemonLockBanner(line: string): DaemonLockBanner | null {
     ...(candidate.inProcess === true ? { inProcess: true as const } : {}),
     ...(candidate.inProcess === true && candidate.service === true ? { service: true as const } : {}),
     ...(candidate.inProcess === true && bannerHome(candidate.home) ? { home: candidate.home } : {}),
+    ...(bannerHome(candidate.daemonDir) && candidate.daemonDir !== candidate.dir ? { daemonDir: candidate.daemonDir } : {}),
   }
 }
 
@@ -258,13 +272,17 @@ async function probeExistingOwner(
     ...(banner.inProcess ? { inProcess: true as const } : {}),
     ...(banner.service ? { service: true as const } : {}),
     ...(banner.home ? { home: banner.home } : {}),
+    ...(banner.daemonDir ? { daemonDir: banner.daemonDir } : {}),
   }
 }
 
 /**
  * Read only: the daemon holding `runtimeDir`'s instance lock (its pid, ws port
  * and instance id), or null when none holds it, or the holder is no daemon of
- * this uid and dir. Never takes the lock, so it cannot make a starting daemon yield.
+ * this uid and dir: another user's, or one whose own dir is another one and that
+ * only keeps this dir (DaemonLockBanner.daemonDir; stopping it, writing its door
+ * files here or handing this dir's service over to it would act on the wrong
+ * daemon). Never takes the lock, so it cannot make a starting daemon yield.
  */
 export async function readDaemonInstanceOwner(options: {
   runtimeDir: string
@@ -277,7 +295,8 @@ export async function readDaemonInstanceOwner(options: {
   try { dir = lockDirFor(options.runtimeDir, options.fs ?? nodeFs) } catch { return null }
   const netApi = options.net ?? (nodeNet as unknown as LockNetLike)
   try {
-    return await probeExistingOwner(netApi, daemonLockPort(options.uid, dir), options.uid, dir, options.deadlineMs ?? DAEMON_LOCK_DEADLINE_MS)
+    const owner = await probeExistingOwner(netApi, daemonLockPort(options.uid, dir), options.uid, dir, options.deadlineMs ?? DAEMON_LOCK_DEADLINE_MS)
+    return owner.daemonDir ? null : owner
   } catch {
     return null
   }
@@ -306,7 +325,7 @@ export async function acquireDaemonInstanceLock(
     const clear = () => clearTimeout(timer)
     socket.on('error', clear)
     socket.on('close', clear)
-    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined, service: options.service ? true : undefined, home: options.home })
+    const banner = buildDaemonLockBanner({ uid: options.uid, dir, pid: options.pid, instanceId: options.instanceId, wsPort, inProcess: options.inProcess ? true : undefined, service: options.service ? true : undefined, home: options.home, daemonDir: options.daemonDir })
     try { socket.end(JSON.stringify(banner) + '\n') } catch { clear() }
   })
 

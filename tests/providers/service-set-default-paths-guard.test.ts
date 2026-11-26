@@ -50,7 +50,8 @@ const PLACES: Array<['binary' | 'daemon', string, Verdict]> = [
   ['binary', "path.join(os.homedir(), '.open-walnut')", 'set: WALNUT_RUNTIME_DIR (serviceSetEnv) decides alone'],
   ['binary', '`open-walnut-runtime-${', 'set: WALNUT_RUNTIME_DIR (serviceSetEnv) decides alone'],
   // The daemon's own places.
-  ['daemon', "PROD_DAEMON_DIR = '/tmp/open-walnut'", 'set: WALNUT_DAEMON_DIR is the set\'s runtime dir (R/rt or /tmp/open-walnut-set-<uid>-<id>); the gateway only compares and dials it'],
+  ['daemon', "PROD_DAEMON_DIR = '/tmp/open-walnut'", 'set: WALNUT_DAEMON_DIR is the set\'s runtime dir (R/rt or /tmp/open-walnut-set-<uid>-<id>); the gateway only compares and dials it, and the lock and link left there for older releases are the default production daemon\'s only (servesOlderReleases: never in service mode, which a set always is)'],
+  ['daemon', "io.resolve(io.accountHome, '.cache', 'open-walnut')", 'compared only (servesOlderReleases): a set runs in service mode, which is never true there'],
   ['daemon', "PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams')", 'prod dir only: a set\'s STREAMS_DIR is its install root\'s (SET_ID)'],
   ['daemon', "LEGACY_STREAMS_DIR = ", 'prod dir only: migrated only when STREAMS_DIR is PROD_STREAMS_DIR'],
   ['daemon', "'.open-walnut', 'local', 'spawn-journal.jsonl')", 'shared by the spec: the spawn journal and cli-owners beside it'],

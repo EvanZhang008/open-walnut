@@ -1365,6 +1365,8 @@ async function withSharedDirLock(own: DaemonInstanceLockOwner): Promise<DaemonIn
     const shared = await acquireDaemonInstanceLock({
       runtimeDir: PROD_DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID, inProcess: !LISTEN,
       ...(!LISTEN && options.serverHome ? { home: options.serverHome } : {}),
+      // Says whose daemon holds it: this build's own tools never take it for the shared dir's daemon.
+      daemonDir: fs.realpathSync(DAEMON_DIR),
     })
     if (shared.kind !== 'owner') {
       logMsg('warn', 'a daemon holds the instance lock of the shared dir; older releases are not kept out of it', { dir: PROD_DAEMON_DIR, pid: shared.owner.pid })
@@ -6431,6 +6433,9 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     }
   }
   if (lock.kind === 'existing') {
+    // Held by this account's daemon in another dir, for older releases' sake (daemon-older-release-door.ts):
+    // nothing of it is in this dir, so nothing is written back here and no port of it is handed on.
+    if (lock.owner.daemonDir) throw new Error(`This account's session daemon runs from ${lock.owner.daemonDir} (pid ${lock.owner.pid}) and keeps ${DAEMON_DIR} for older releases; nothing starts here. Name its dir in WALNUT_DAEMON_DIR to reach it.`)
     if (SERVICE_MODE || lock.owner.wsPort === null) throw new Error('An existing daemon owns this runtime directory; service handover is required')
     // The live owner's door files are gone (a temp cleaner): every starter that waits for them
     // (a server's spawn, the remote start's poll) would wait forever, so they are written back
