@@ -5687,7 +5687,7 @@ const { cmdAttach, cmdLineFate, cmdSend, sendSessionMessage, cmdSendRaw, cmdAppe
 const sessionStop = createDaemonSessionStop({ SERVICE_MODE, SESSION_IDLE_WARNING_MS: () => SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS: () => SESSION_IDLE_KILL_MS,
   sessions, cliArgvFiles, cronRuntime: () => cronRuntime, daemonBootId: () => daemonBootId, sessionStartGate, sessionStopVersions, journaledHome, journaledIds,
   walnutOfHome, servedStopRefusal, isProcessGroupAlive, killProcessGroup, readStartTime, commandLineOf, reapSession, persistRegistry, persistRegistryDurable,
-  acpRuntimeOwner, acp: { holds: (sid) => acp.holds(sid), acpStop: (sid, opts) => acp.acpStop(sid, opts) },
+  acpRuntimeOwner, acp: { heldBy: (sid) => acp.heldBy(sid), acpStop: (sid, opts) => acp.acpStop(sid, opts) },
   deriveSessionProtection: (session, sid, now) => deriveSessionProtection(session, sid, now),
   hasRecentSchedulerFiring: (sid, withinMs) => hasRecentSchedulerFiring(sid, withinMs),
   cancelTurnRetry: (sid, reason) => cancelTurnRetry(sid, reason),

@@ -56,6 +56,11 @@ process.stdin.on('data', () => {})
 setTimeout(() => process.exit(0), 60000).unref()
 setInterval(() => {}, 1000)
 `)
+// Prints its init line and exits at once: a supervised session whose CLI is no longer running.
+fs.writeFileSync(path.join(lib, 'brief-cli.cjs'), `
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake' }) + '\\n')
+process.exit(0)
+`)
 // Ignores SIGINT and SIGTERM; ends only when its release file exists (or after 60 s).
 fs.writeFileSync(path.join(lib, 'stubborn-cli.cjs'), `
 const fs = require('fs')
@@ -169,16 +174,30 @@ const open = (extra?: Record<string, string>) => (shape === 'program' ? openProg
 
 const sid = (n: number) => `5e5e5e5e-0000-4000-8000-${String(n).padStart(12, '0')}`
 const fence = (n: number) => `fe0ce000-0000-4000-8000-${String(n).padStart(12, '0')}`
-function start(c: Client, s: string, cwd: string, opts: { script?: string; lead?: string[]; resume?: boolean; stopFence?: string } = {}) {
+/** `unrecorded`: a start whose argv names no session and whose origin names no Walnut: the spawn journal has no owner for it. */
+function start(c: Client, s: string, cwd: string, opts: { script?: string; lead?: string[]; resume?: boolean; stopFence?: string; unrecorded?: boolean } = {}) {
   const sh = `exec ${[process.execPath, path.join(lib, opts.script ?? 'cli.cjs'), ...(opts.lead ?? [])].map((a) => JSON.stringify(a)).join(' ')} "$@"`
   return c.rpc('start', {
-    sid: s, cwd, message: '', resume: !!opts.resume, mode: 'default', args: ['/bin/sh', '-c', sh, 'sh', '--session-id', s],
-    origin: { home: data }, ...(opts.stopFence ? { stopFence: opts.stopFence } : {}),
+    sid: s, cwd, message: '', resume: !!opts.resume, mode: 'default', args: ['/bin/sh', '-c', sh, 'sh', ...(opts.unrecorded ? [] : ['--session-id', s])],
+    ...(opts.unrecorded ? {} : { origin: { home: data } }), ...(opts.stopFence ? { stopFence: opts.stopFence } : {}),
   })
 }
-const acpStart = (c: Client, s: string, cwd: string, agentEnv: Record<string, string> = {}) => c.rpc('acpStart', {
-  sid: s, cwd, workerCmd: [process.execPath, WORKER], adapterCmd: [process.execPath, MOCK_AGENT], env: agentEnv, survive: true, ownerHome: data,
+/** `unrecorded`: no ownerHome, so no record of whose worker it is (as a start before owner records, or one whose record write failed). */
+const acpStart = (c: Client, s: string, cwd: string, agentEnv: Record<string, string> = {}, opts: { unrecorded?: boolean } = {}) => c.rpc('acpStart', {
+  sid: s, cwd, workerCmd: [process.execPath, WORKER], adapterCmd: [process.execPath, MOCK_AGENT], env: agentEnv, survive: true, ...(opts.unrecorded ? {} : { ownerHome: data }),
 })
+const lsStop = (c: Client, s: string, n: number, home = data) => c.rpc('stop', { sid: s, reason: 'leader_switch', stopRequestId: fence(n), home })
+/** A cron supervision record on disk before the runtime starts (daemon-cron-store.ts): a session supervision watches. */
+function seedSupervised(s: string) {
+  const dir = path.join(stateDir, 'supervision')
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  fs.chmodSync(dir, 0o700)
+  const record = {
+    sid: s, generation: 1, enabled: true, state: 'checking', process: null, attempts: [], retryAt: null, reason: null, updatedAt: Date.now(),
+    launch: { cwd: data, args: ['/bin/sh', '-c', 'exit 0'], mode: 'default', cliVersion: '2.1.258', hooksHash: null },
+  }
+  fs.writeFileSync(path.join(dir, `${s}.json`), JSON.stringify({ version: 1, record }), { mode: 0o600 })
+}
 /** The members of process group `pgid` (pid and command line), read with ps. */
 function groupMembers(pgid: number): Array<{ pid: number; args: string }> {
   const rows = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,pgid=,args='], { encoding: 'utf8' }).stdout ?? ''
@@ -196,6 +215,10 @@ const refusal = (f: DaemonFrame) => pick(f, 'ok', 'errorKind', 'code', 'reason',
 const acpRows = () => { try { return Object.keys(JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf8'))) } catch { return [] } }
 
 const out: Record<string, unknown> = { shape }
+const sup1 = sid(20)
+const sup2 = sid(21)
+seedSupervised(sup1)
+seedSupervised(sup2)
 let c = await open()
 try {
   const hello = await c.rpc('hello')
@@ -209,22 +232,77 @@ try {
   recorded.push(pid1)
   out.noFence = pick(await c.rpc('stop', { sid: s1, reason: 'leader_switch', home: data }), 'ok', 'error')
   out.noHome = pick(await c.rpc('stop', { sid: s1, reason: 'leader_switch', stopRequestId: fence(1) }), 'ok', 'error')
-  out.otherWalnut = pick(await c.rpc('stop', { sid: s1, reason: 'leader_switch', stopRequestId: fence(1), home: otherWalnut }), 'ok', 'stopped', 'reason', 'detail')
+  out.otherWalnut = pick(await c.rpc('stop', { sid: s1, reason: 'leader_switch', stopRequestId: fence(1), home: otherWalnut }), 'ok', 'stopped', 'held', 'reason', 'detail', 'kind')
   out.aliveAfterRefusals = alive(pid1)
-  const stopped = await c.rpc('stop', { sid: s1, reason: 'leader_switch', stopRequestId: fence(1), home: data })
-  out.stopped = pick(stopped, 'ok', 'stopped', 'error')
+  const stopped = await lsStop(c, s1, 1)
+  out.stopped = pick(stopped, 'ok', 'stopped', 'kind', 'supervision', 'error')
   // Read at once: the answer came after the group was gone.
   out.goneAtAnswer = !alive(pid1) && !groupAlive(pid1)
-  out.supervision = (await c.rpc('cron.supervision', { sid: s1 })).cronSupervision
-  // Supervision is off under the switch's fence: a start without it is refused, the rollback's own passes.
-  out.startNoFence = pick(await start(c, s1, data, { resume: true }), 'ok', 'reason')
-  out.startOtherFence = pick(await start(c, s1, data, { resume: true, stopFence: fence(9) }), 'ok', 'reason')
-  out.reenableOtherFence = pick(await c.rpc('cron.supervision', { sid: s1, enabled: true, stopFence: fence(9) }), 'ok', 'error')
-  const resumed = await start(c, s1, data, { resume: true, stopFence: fence(1) })
-  out.startWithFence = pick(resumed, 'ok')
+  // Not supervised: the stop left no record and no fence, so the rollback's resume (no fence: never user-stopped) starts.
+  out.supervision = (await c.rpc('cron.supervision', { sid: s1 })).cronSupervision ?? null
+  const resumed = await start(c, s1, data, { resume: true })
+  out.startNoFence = pick(resumed, 'ok', 'reason')
   if (typeof resumed.pid === 'number') recorded.push(resumed.pid)
-  out.stopAgain = pick(await c.rpc('stop', { sid: s1, reason: 'leader_switch', stopRequestId: fence(2), home: data }), 'ok', 'stopped')
+  out.stopAgain = pick(await lsStop(c, s1, 2), 'ok', 'stopped', 'supervision')
   out.goneAgain = typeof resumed.pid === 'number' && !alive(resumed.pid)
+
+  // ── 1b. A supervised session: supervision off with no fence; the rollback turns it on with none, no fence is left ──
+  const supStarted = await start(c, sup1, data)
+  if (typeof supStarted.pid === 'number') recorded.push(supStarted.pid)
+  out.supOn = (await c.rpc('cron.supervision', { sid: sup1 })).cronSupervision
+  out.supStopped = pick(await lsStop(c, sup1, 20), 'ok', 'stopped', 'kind', 'supervision')
+  out.supOff = (await c.rpc('cron.supervision', { sid: sup1 })).cronSupervision
+  out.supReenable = pick(await c.rpc('cron.supervision', { sid: sup1, enabled: true }), 'ok', 'error')
+  out.supAfterReenable = (await c.rpc('cron.supervision', { sid: sup1 })).cronSupervision
+  const supResumed = await start(c, sup1, data, { resume: true })
+  out.supResume = pick(supResumed, 'ok', 'reason')
+  if (typeof supResumed.pid === 'number') recorded.push(supResumed.pid)
+  out.supStopAgain = pick(await lsStop(c, sup1, 22), 'ok', 'stopped', 'supervision')
+  // Supervised, its CLI no longer running: the stop answers noop and turns supervision off.
+  const brief = await start(c, sup2, data, { script: 'brief-cli.cjs' })
+  if (typeof brief.pid === 'number') { recorded.push(brief.pid); await waitFor(() => !alive(brief.pid as number)) }
+  out.briefStopped = pick(await lsStop(c, sup2, 21), 'ok', 'stopped', 'noop', 'kind', 'supervision')
+  out.briefOff = (await c.rpc('cron.supervision', { sid: sup2 })).cronSupervision
+
+  // ── 1c. A user stop keeps its fence; a later leader switch stop leaves it as it was ──
+  const s9 = sid(9)
+  const userStarted = await start(c, s9, data)
+  if (typeof userStarted.pid === 'number') recorded.push(userStarted.pid)
+  out.userStop = pick(await c.rpc('stop', { sid: s9, reason: 'user', stopRequestId: fence(90), home: data }), 'ok', 'stopped')
+  out.userStartNoFence = pick(await start(c, s9, data, { resume: true }), 'ok', 'reason')
+  out.userStartOtherFence = pick(await start(c, s9, data, { resume: true, stopFence: fence(91) }), 'ok', 'reason')
+  out.userReenableOtherFence = pick(await c.rpc('cron.supervision', { sid: s9, enabled: true, stopFence: fence(91) }), 'ok', 'error')
+  const userResumed = await start(c, s9, data, { resume: true, stopFence: fence(90) })
+  out.userStartWithFence = pick(userResumed, 'ok')
+  if (typeof userResumed.pid === 'number') recorded.push(userResumed.pid)
+  out.userThenSwitch = pick(await lsStop(c, s9, 92), 'ok', 'stopped', 'supervision')
+  out.userFenceKeptNoFence = pick(await start(c, s9, data, { resume: true }), 'ok', 'reason')
+  const userAgain = await start(c, s9, data, { resume: true, stopFence: fence(90) })
+  out.userFenceKeptOldFence = pick(userAgain, 'ok')
+  if (typeof userAgain.pid === 'number') recorded.push(userAgain.pid)
+  out.userFinalStop = pick(await lsStop(c, s9, 93), 'ok', 'stopped')
+
+  // ── 1d. A refusal says whether the daemon holds something: no owner record for a live CLI or worker is a failure ──
+  out.nothingHeld = pick(await lsStop(c, sid(99), 99), 'ok', 'stopped', 'held', 'reason', 'detail', 'kind')
+  const anon = sid(30)
+  const anonStarted = await start(c, anon, data, { unrecorded: true })
+  const anonPid = anonStarted.pid as number
+  recorded.push(anonPid)
+  const anonRefused = await lsStop(c, anon, 30)
+  out.claudeHeldNoOwner = pick(anonRefused, 'ok', 'stopped', 'held', 'reason', 'detail', 'kind')
+  out.claudeHeldPid = anonRefused.pid === anonPid
+  out.claudeHeldStillRuns = alive(anonPid)
+  out.claudeHeldUserStop = pick(await c.rpc('stop', { sid: anon, reason: 'user', initiator: 'human' }), 'ok', 'stopped')
+  const anonAcp = sid(31)
+  out.acpUnrecordedStart = pick(await acpStart(c, anonAcp, data, {}, { unrecorded: true }), 'ok', 'error')
+  const anonAcpPid = (JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf8')) as Record<string, { pid: number }>)[anonAcp]?.pid ?? 0
+  if (anonAcpPid) recorded.push(anonAcpPid)
+  const acpRefused = await lsStop(c, anonAcp, 31)
+  out.acpHeldNoOwner = pick(acpRefused, 'ok', 'stopped', 'held', 'reason', 'detail', 'kind')
+  out.acpHeldPid = acpRefused.pid === anonAcpPid
+  out.acpHeldStillRuns = groupAlive(anonAcpPid)
+  await c.rpc('acpStop', { sid: anonAcp })
+  out.acpHeldEndsOnPlainStop = await waitFor(() => !groupAlive(anonAcpPid), 15_000)
 
   // ── 2. A CLI that outlives SIGTERM: an error, and it still runs (no force kill) ──
   const s2 = sid(2)
@@ -247,7 +325,7 @@ try {
   const acpPid = (JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf8')) as Record<string, { pid: number; survive?: boolean }>)[r1]
   out.acpSurvive = acpPid?.survive === true
   if (acpPid) recorded.push(acpPid.pid)
-  out.acpOtherWalnut = pick(await c.rpc('stop', { sid: r1, reason: 'leader_switch', stopRequestId: fence(11), home: otherWalnut }), 'ok', 'stopped', 'reason', 'detail')
+  out.acpOtherWalnut = pick(await c.rpc('stop', { sid: r1, reason: 'leader_switch', stopRequestId: fence(11), home: otherWalnut }), 'ok', 'stopped', 'held', 'reason', 'detail', 'kind')
   out.acpAliveAfterRefusal = !!acpPid && groupAlive(acpPid.pid)
   out.acpStopped = pick(await c.rpc('stop', { sid: r1, reason: 'leader_switch', stopRequestId: fence(11), home: data }), 'ok', 'stopped', 'kind', 'error')
   out.acpGoneAtAnswer = !!acpPid && !groupAlive(acpPid.pid)
@@ -322,7 +400,7 @@ try {
   out.acpRowsAfterRestart = acpRows().sort()
   // A tick of supervision after the restart starts nothing (the stopped session's record stays off).
   await sleep(500)
-  out.supervisionAfterRestart = (await c.rpc('cron.supervision', { sid: s1 })).cronSupervision
+  out.supervisionAfterRestart = (await c.rpc('cron.supervision', { sid: s1 })).cronSupervision ?? null
   // The kept ones end through the same stop.
   out.keepStop = pick(await c.rpc('stop', { sid: keep, reason: 'leader_switch', stopRequestId: fence(7), home: data }), 'ok', 'stopped')
   out.keepAcpStop = pick(await c.rpc('stop', { sid: keepAcp, reason: 'leader_switch', stopRequestId: fence(14), home: data }), 'ok', 'stopped', 'kind')

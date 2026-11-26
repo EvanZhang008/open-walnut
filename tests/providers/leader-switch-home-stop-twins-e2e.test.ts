@@ -7,9 +7,11 @@
  * that prints one JSON line, asserted here.
  *
  * Pinned (a leader switch's stop of the machine handing the leader over, docs/reference/leader-switch.md):
- *   - stop {reason: 'leader_switch', stopRequestId, home}: needs its fence and its Walnut, refuses
- *     another Walnut, answers once the process group is gone, turns supervision off under the fence
- *     (a start without it or with another one is refused, with it passes: the rollback's resume);
+ *   - stop {reason: 'leader_switch', stopRequestId, home}: needs its id and its Walnut, refuses
+ *     another Walnut, answers once the process group is gone, turns supervision off with no fence
+ *     (supervised and not, a supervised one with no live CLI too; the rollback's re-enable and resume
+ *     need none) and leaves an earlier user stop's fence as it was; a refusal says whether the daemon
+ *     holds something (no owner record for a live CLI or ACP worker is `held`, not "not_journaled");
  *   - a CLI that outlives SIGTERM: an error and it still runs (no force kill);
  *   - an ACP worker that outlives its daemon: the same stop ends it (gone at the answer, its pid row
  *     and pipe gone), a retried stop answers stopped; a tool its graceful shutdown leaves running gets
@@ -66,19 +68,50 @@ describe.skipIf(!BUN)('a leader switch stop of the sessions in a data home, on b
       expect(out.unmarkedStart).toEqual({ ok: true })
       expect(out.noFence).toEqual({ ok: false, error: 'stop: leader_switch needs a stopRequestId' })
       expect(out.noHome).toEqual({ ok: false, error: 'stop: leader_switch needs the asking Walnut (home)' })
-      expect(out.otherWalnut).toEqual({ ok: true, stopped: false, reason: 'not_owned', detail: 'other_walnut' })
+      expect(out.otherWalnut).toEqual({ ok: true, stopped: false, held: true, reason: 'not_owned', detail: 'other_walnut', kind: 'claude' })
       expect(out.aliveAfterRefusals).toBe(true)
-      expect(out.stopped).toEqual({ ok: true, stopped: true })
+      expect(out.stopped).toEqual({ ok: true, stopped: true, kind: 'claude', supervision: 'none' })
       expect(out.goneAtAnswer).toBe(true)
-      // Supervision off (not 'maintenance', which keeps it): no cron tick relaunches the CLI in the old home.
-      expect(out.supervision).toMatchObject({ enabled: false, state: 'disabled' })
-      expect(out.startNoFence).toEqual({ ok: false, reason: 'session_stopped' })
-      expect(out.startOtherFence).toEqual({ ok: false, reason: 'session_stopped' })
-      expect(out.reenableOtherFence).toEqual({ ok: false, error: 'cron.supervision: request superseded by a stop' })
-      // The rollback's resume carries the stop's fence and starts.
-      expect(out.startWithFence).toEqual({ ok: true })
-      expect(out.stopAgain).toEqual({ ok: true, stopped: true })
+      // Not supervised: no record and no fence left, so the rollback's resume with no fence starts.
+      expect(out.supervision).toBeNull()
+      expect(out.startNoFence).toEqual({ ok: true })
+      expect(out.stopAgain).toEqual({ ok: true, stopped: true, supervision: 'none' })
       expect(out.goneAgain).toBe(true)
+
+      // 1b. Supervised: off with no fence (not 'maintenance', which keeps it on); the rollback turns it on with none.
+      expect(out.supOn).toMatchObject({ enabled: true })
+      expect(out.supStopped).toEqual({ ok: true, stopped: true, kind: 'claude', supervision: 'off' })
+      expect(out.supOff).toMatchObject({ enabled: false, state: 'disabled' })
+      expect(out.supReenable).toEqual({ ok: true })
+      expect(out.supAfterReenable).toMatchObject({ enabled: true })
+      expect(out.supResume).toEqual({ ok: true })
+      expect(out.supStopAgain).toEqual({ ok: true, stopped: true, supervision: 'off' })
+      // Supervised with no live CLI: noop, and supervision off.
+      expect(out.briefStopped).toMatchObject({ ok: true, stopped: true, noop: true, kind: 'claude', supervision: 'off' })
+      expect(out.briefOff).toMatchObject({ enabled: false, state: 'disabled' })
+
+      // 1c. A user stop's fence: kept by a later leader switch stop, and the starts that carry it pass.
+      expect(out.userStop).toEqual({ ok: true, stopped: true })
+      expect(out.userStartNoFence).toEqual({ ok: false, reason: 'session_stopped' })
+      expect(out.userStartOtherFence).toEqual({ ok: false, reason: 'session_stopped' })
+      expect(out.userReenableOtherFence).toEqual({ ok: false, error: 'cron.supervision: request superseded by a stop' })
+      expect(out.userStartWithFence).toEqual({ ok: true })
+      expect(out.userThenSwitch).toEqual({ ok: true, stopped: true, supervision: 'none' })
+      expect(out.userFenceKeptNoFence).toEqual({ ok: false, reason: 'session_stopped' })
+      expect(out.userFenceKeptOldFence).toEqual({ ok: true })
+      expect(out.userFinalStop).toEqual({ ok: true, stopped: true })
+
+      // 1d. "not_journaled" only when nothing is held; a live CLI or worker with no owner record is held.
+      expect(out.nothingHeld).toEqual({ ok: true, stopped: false, held: false, reason: 'not_owned', detail: 'not_journaled', kind: 'claude' })
+      expect(out.claudeHeldNoOwner).toEqual({ ok: true, stopped: false, held: true, reason: 'not_owned', detail: 'no_owner_record', kind: 'claude' })
+      expect(out.claudeHeldPid).toBe(true)
+      expect(out.claudeHeldStillRuns).toBe(true)
+      expect(out.claudeHeldUserStop).toEqual({ ok: true, stopped: true })
+      expect(out.acpUnrecordedStart).toEqual({ ok: true })
+      expect(out.acpHeldNoOwner).toEqual({ ok: true, stopped: false, held: true, reason: 'not_owned', detail: 'no_owner_record', kind: 'acp' })
+      expect(out.acpHeldPid).toBe(true)
+      expect(out.acpHeldStillRuns).toBe(true)
+      expect(out.acpHeldEndsOnPlainStop).toBe(true)
 
       // 2. No force kill: a CLI that outlives SIGTERM is an error and still runs.
       expect(out.stubbornReady).toBe(true)
@@ -90,7 +123,7 @@ describe.skipIf(!BUN)('a leader switch stop of the sessions in a data home, on b
       // 3. A surviving ACP worker: the same stop, its strict stop, nothing left for a next daemon.
       expect(out.acpStart).toEqual({ ok: true })
       expect(out.acpSurvive).toBe(true)
-      expect(out.acpOtherWalnut).toEqual({ ok: true, stopped: false, reason: 'not_owned', detail: 'other_walnut' })
+      expect(out.acpOtherWalnut).toEqual({ ok: true, stopped: false, held: true, reason: 'not_owned', detail: 'other_walnut', kind: 'acp' })
       expect(out.acpAliveAfterRefusal).toBe(true)
       expect(out.acpStopped).toEqual({ ok: true, stopped: true, kind: 'acp' })
       expect(out.acpGoneAtAnswer).toBe(true)
@@ -127,7 +160,7 @@ describe.skipIf(!BUN)('a leader switch stop of the sessions in a data home, on b
       expect(out.acpKeptState).toEqual({ ok: true })
       expect(out.acpStoppedState).toEqual({ ok: false, errorKind: 'no_worker' })
       expect(out.acpRowsAfterRestart).toEqual(['5e5e5e5e-0000-4000-8000-000000000014'])
-      expect(out.supervisionAfterRestart).toMatchObject({ enabled: false, state: 'disabled' })
+      expect(out.supervisionAfterRestart).toBeNull()
       expect(out.keepStop).toEqual({ ok: true, stopped: true })
       expect(out.keepAcpStop).toEqual({ ok: true, stopped: true, kind: 'acp' })
       expect(out.keptGone).toBe(true)

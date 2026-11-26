@@ -1239,9 +1239,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it. Optional: without it the leader keeps such a host as it is (a daemon, its gate shown).
   'copyless-service-v1',
   // 'leader-switch-home-stop-v1' (daemon-session-stop.ts, lib/leader-home-gate.ts handedOverHomeAt): `stop` takes
-  // reason 'leader_switch' (with `stopRequestId` and `home`): like 'user' it turns cron supervision off under that
-  // fence, and answers only once the process group is gone; for an ACP worker this daemon holds it is the
-  // worker's strict stop (no force kill, a worker still being adopted is adopted first). And no session starts
+  // reason 'leader_switch' (with `stopRequestId` and `home`): it turns cron supervision off with no fence (a switch
+  // is not a user stop, so a rollback's `cron.supervision {sid, enabled:true}` with no stopFence turns it back on),
+  // and answers only once the process group is gone: `{ ok, stopped: true, kind: 'claude'|'acp', supervision:
+  // 'off'|'none' }`; for an ACP worker this daemon holds it is the worker's strict stop (process groups only, no
+  // force kill, a worker still being adopted is adopted first). A session it holds with no owner record answers
+  // `{ ok, stopped: false, held: true, reason: 'not_owned', detail: 'no_owner_record', kind, pid? }` (a failure
+  // for the switch); `detail: 'not_journaled'` with `held: false` only when it holds nothing. And no session starts
   // in a handed-over data home: `start` and `acpStart` with a working folder in a home whose
   // local/leader-switch/handed-over.json exists (either state; unreadable counts) answer
   // `{ ok: false, errorKind: 'home_handed_over', code: 'HOME_HANDED_OVER', home, state, to? }`. Optional:

@@ -145,14 +145,13 @@ describe('daemon cron runtime with real transcript and durable state', () => {
     expect(second.runtime.deliveryAllowed(sid, null)).toBe(false)
   })
 
-  it('a leader switch stop (disable under its stopRequestId) relaunches nothing, across a restart; the rollback re-enables with that fence', async () => {
+  it('a leader switch stop (disable with no fence) relaunches nothing, across a restart; the rollback re-enables with no fence and leaves none', async () => {
     const { session } = await seed()
     const first = await lab([session])
     await first.runtime.tick()
     expect(first.runtime.get(sid)).toMatchObject({ enabled: true })
-    // daemon-session-stop.ts cmdStop, reason 'leader_switch': supervision off under the switch's fence, then the CLI ends.
-    const stopId = '0c0c0c0c-1111-4222-8333-444444444444'
-    await first.runtime.disable(sid, stopId)
+    // daemon-session-stop.ts stopForLeaderSwitch: supervision off with no fence (a switch is not a user stop), then the CLI ends.
+    await first.runtime.disable(sid)
     live.delete(200)
     for (let i = 0; i < 4; i++) { now += 60_000; await Promise.all(Array.from({ length: 5 }, () => first.runtime.tick())) }
     expect(first.start).not.toHaveBeenCalled()
@@ -161,14 +160,16 @@ describe('daemon cron runtime with real transcript and durable state', () => {
     const second = await lab([session])
     for (let i = 0; i < 4; i++) { now += 60_000; await second.runtime.tick() }
     expect(second.start).not.toHaveBeenCalled()
-    expect(second.runtime.get(sid)).toMatchObject({ enabled: false, state: 'disabled', stopRequestId: stopId })
-    // A start or re-enable without the fence (or with another one) is refused; the rollback's own fence passes.
-    expect(second.runtime.deliveryAllowed(sid, undefined)).toBe(false)
-    expect(second.runtime.deliveryAllowed(sid, 'ffffffff-1111-4222-8333-444444444444')).toBe(false)
-    await expect(second.runtime.enable(sid, 'ffffffff-1111-4222-8333-444444444444')).rejects.toThrow('superseded by a stop')
-    expect(second.runtime.deliveryAllowed(sid, stopId)).toBe(true)
-    await second.runtime.enable(sid, stopId)
-    expect(second.runtime.get(sid)).toMatchObject({ enabled: true })
+    const off = second.runtime.get(sid)
+    expect(off).toMatchObject({ enabled: false, state: 'disabled' })
+    expect(off?.stopRequestId).toBeUndefined()
+    // No fence: a start carrying none (a session the user never stopped) is let through, and the rollback's
+    // fenceless re-enable succeeds and leaves no fence behind.
+    expect(second.runtime.deliveryAllowed(sid, undefined)).toBe(true)
+    await second.runtime.enable(sid)
+    const on = second.runtime.get(sid)
+    expect(on).toMatchObject({ enabled: true })
+    expect(on?.stopRequestId).toBeUndefined()
     // Supervision is back: the dead CLI is relaunched with its saved launch.
     await second.runtime.tick()
     now += 5000

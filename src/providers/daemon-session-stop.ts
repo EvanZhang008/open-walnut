@@ -33,8 +33,8 @@ export interface DaemonSessionStopDeps<W extends object> extends DaemonReplies<W
   walnutOfHome: (home: string) => string
   /** The Walnut that started the ACP worker `runtimeId` here (daemon-spawn-journal.ts acpRuntimeOwner), if recorded. */
   acpRuntimeOwner: (runtimeId: string) => string | undefined
-  /** The runtime's ACP workers (acp-daemon.ts): whether it holds `sid`, and its strict stop. */
-  acp: { holds: (sid: string) => boolean; acpStop: (sid: string, opts: { strict: true }) => Promise<void> }
+  /** The runtime's ACP workers (acp-daemon.ts): what it holds for `sid`, and its strict stop. */
+  acp: { heldBy: (sid: string) => { pid: number | null } | null; acpStop: (sid: string, opts: { strict: true }) => Promise<void> }
   servedStopRefusal: (sid: string, home: string) => { reason: string; detail?: string } | null
   isProcessGroupAlive: (pgid: number) => boolean
   killProcessGroup: (pid: number, signal: NodeJS.Signals) => unknown
@@ -69,18 +69,7 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
     if (cmd.reason !== undefined && !['user', 'maintenance', 'idle', 'orphan', 'leader_switch'].includes(cmd.reason as string)) {
       return sendError(ws, id, 'stop: invalid reason')
     }
-    // 'leader_switch' (leader-switch-home-stop-v1): the switch stop of the machine handing the leader over ends
-    // every session working in its data home before the final batch. Like 'user' (supervision off under the
-    // stop's fence, so no cron tick or turn retry starts the CLI again in the old home; a rollback re-enables it
-    // with `cron.supervision {enabled: true, stopFence: stopRequestId}`), and it names its fence and its Walnut.
-    // The answer comes only once the process group is gone; a CLI that outlives SIGTERM is an error, never a
-    // force kill. An ACP worker of this daemon is ended through its own strict stop (it would outlive the daemon).
-    if (cmd.reason === 'leader_switch') {
-      if (cmd.stopRequestId === undefined) return sendError(ws, id, 'stop: leader_switch needs a stopRequestId')
-      if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'stop: leader_switch needs the asking Walnut (home)')
-      // An ACP runtime this daemon holds, or one it started and already ended (a retried stop): the worker's stop.
-      if (acp.holds(sid) || (!sessions.has(sid) && acpRuntimeOwner(sid) !== undefined)) return stopAcpForLeaderSwitch(ws, id, sid, cmd.home)
-    }
+    if (cmd.reason === 'leader_switch') return stopForLeaderSwitch(ws, id, sid, cmd)
     // owner-home-v1: a stop the server decided on names the asking Walnut, and a
     // session the spawn journal records for another Walnut is refused
     // (stopOwnerRefusal). Checked before anything changes, so a refused stop
@@ -168,23 +157,64 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
   }
 
   /**
-   * A leader switch's stop of an ACP worker this daemon holds: only the Walnut that started it (its start's
-   * recorded home, acpRuntimeOwner) may, a worker with no record is refused (fail closed: the switch reports it);
-   * then the worker's strict stop under the session's gate (a start of the same runtime waits for it).
+   * 'leader_switch' (leader-switch-home-stop-v1): the switch stop of the machine handing the leader over ends every
+   * session working in its data home before the final batch. It names the stop (`stopRequestId`, the same on a
+   * retry) and the asking Walnut (`home`, the owner-home-v1 rule); the answer comes only once the process group is
+   * gone, and a CLI that outlives SIGTERM is an error, never a force kill. Cron supervision goes off WITHOUT a fence
+   * (`supervision: 'off'`; 'none' when it was not on): the handed-over marker and the spawn guard refuse every start in
+   * the home, the stop version supersedes a start racing the stop, and a rollback turns it on again with
+   * `cron.supervision {sid, enabled: true}` while a fence an earlier user stop left stays as it was. An ACP worker
+   * this daemon holds (or started and already ended: a retried stop) is ended through its strict stop (it would
+   * outlive the daemon). A refusal says whether this daemon holds something for the sid (leaderSwitchRefusal).
    */
-  async function stopAcpForLeaderSwitch(ws: W, id: number, sid: string, home: string) {
-    const owner = acpRuntimeOwner(sid)
-    const refusal = !owner ? { reason: 'not_owned', detail: 'not_journaled' }
-      : owner !== walnutOfHome(home) ? { reason: 'not_owned', detail: 'other_walnut' } : null
-    if (refusal) {
-      logMsg('info', 'cmdStop: leader switch stop refused for an ACP worker another Walnut started', { sid, ...refusal })
-      return sendOk(ws, id, { stopped: false, ...refusal })
+  async function stopForLeaderSwitch(ws: W, id: number, sid: string, cmd: Record<string, unknown>) {
+    if (cmd.stopRequestId === undefined) return sendError(ws, id, 'stop: leader_switch needs a stopRequestId')
+    const home = cmd.home
+    if (typeof home !== 'string' || !home) return sendError(ws, id, 'stop: leader_switch needs the asking Walnut (home)')
+    if (acp.heldBy(sid) || (!sessions.has(sid) && acpRuntimeOwner(sid) !== undefined)) {
+      const owner = acpRuntimeOwner(sid)
+      const refusal = !owner ? { reason: 'not_owned', detail: 'not_journaled' }
+        : owner !== walnutOfHome(home) ? { reason: 'not_owned', detail: 'other_walnut' } : null
+      if (refusal) return leaderSwitchRefusal(ws, id, sid, refusal, 'acp')
+      logMsg('info', 'cmdStop: ending an ACP worker for a leader switch', { sid })
+      return sessionStartGate.run(sid, () => acp.acpStop(sid, { strict: true })).then(
+        () => sendOk(ws, id, { stopped: true, kind: 'acp', supervision: 'none' }),
+        (error) => sendError(ws, id, `stop: ${(error as Error).message}`, { kind: 'acp' }),
+      )
     }
-    logMsg('info', 'cmdStop: ending an ACP worker for a leader switch', { sid })
-    return sessionStartGate.run(sid, () => acp.acpStop(sid, { strict: true })).then(
-      () => sendOk(ws, id, { stopped: true, kind: 'acp' }),
-      (error) => sendError(ws, id, `stop: ${(error as Error).message}`),
-    )
+    const refusal = stopOwnerRefusal(sid, cmd)
+    if (refusal) return leaderSwitchRefusal(ws, id, sid, refusal, 'claude')
+    sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
+    const runtime = cronRuntime()
+    const supervised = !!runtime?.get(sid)?.enabled
+    if (supervised) await runtime!.disable(sid)
+    return sessionStartGate.run(sid, () => stopSessionProcess(ws, id, sid, { kind: 'claude', supervision: supervised ? 'off' : 'none' }))
+  }
+
+  /**
+   * A refused leader switch stop, answered under the session's gate (a start in flight lands first) with whether
+   * this daemon holds something for the sid: a registry entry whose process lives, an enabled cron record, an ACP
+   * worker or its group. "not_journaled" means it holds nothing; held with no owner record is
+   * `{ held: true, reason: 'not_owned', detail: 'no_owner_record', kind, pid? }`, which the switch counts as a failure.
+   */
+  function leaderSwitchRefusal(ws: W, id: number, sid: string, refusal: { reason: string; detail?: string }, kind: 'claude' | 'acp') {
+    return sessionStartGate.run(sid, async () => {
+      const held = claudeHeldBy(sid) ?? acp.heldBy(sid)
+      const noRecord = refusal.detail === 'not_journaled' || refusal.detail === 'no_journaled_walnut'
+      const answer = held && noRecord ? { reason: 'not_owned', detail: 'no_owner_record' } : refusal
+      logMsg('info', 'cmdStop: leader switch stop refused', { sid, kind, held: !!held, ...answer })
+      return sendOk(ws, id, { stopped: false, held: !!held, ...answer, kind, ...(held?.pid ? { pid: held.pid } : {}) })
+    })
+  }
+
+  /** What the session registry and the cron supervision hold for `sid`: a live process, or supervision on. */
+  function claudeHeldBy(sid: string): { pid: number | null } | null {
+    const session = sessions.get(sid)
+    const pid = session?.pid
+    if (pid && Number.isSafeInteger(pid) && pid > 1 && (session.state === 'running' || isProcessGroupAlive(pid))) return { pid }
+    const record = cronRuntime()?.get(sid)
+    if (record?.enabled) return { pid: record.process?.pid ?? null }
+    return null
   }
 
   /**
@@ -294,36 +324,37 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
     }
   }
 
-  function stopSessionProcess(ws: W, id: number, sid: string) {
+  /** `extra`: fields every answer of this stop carries (a leader switch stop's kind and supervision). */
+  function stopSessionProcess(ws: W, id: number, sid: string, extra: Record<string, unknown> = {}) {
     const session = sessions.get(sid)
     if (!session || !session.pid) {
       const saved = cronRuntime()?.get(sid)?.process
       if (saved && saved.bootId === daemonBootId()) {
         try {
           process.kill(saved.pid, 0)
-          return sendError(ws, id, 'stop: saved process is still alive but not adopted; stop confirmation is pending')
+          return sendError(ws, id, 'stop: saved process is still alive but not adopted; stop confirmation is pending', extra)
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: saved process liveness is unknown')
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: saved process liveness is unknown', extra)
         }
       }
       logMsg('info', 'cmdStop: session not in registry (nothing to kill)', {
         sid, hasSession: !!session, hasPid: !!session?.pid,
       })
-      return sendOk(ws, id, { stopped: true, noop: true, reason: 'not_in_registry' })
+      return sendOk(ws, id, { ...extra, stopped: true, noop: true, reason: 'not_in_registry' })
     }
 
     const pid = session.pid
-    if (!Number.isSafeInteger(pid) || pid <= 1) return sendError(ws, id, 'stop: invalid process identity')
+    if (!Number.isSafeInteger(pid) || pid <= 1) return sendError(ws, id, 'stop: invalid process identity', extra)
     if (SERVICE_MODE && session.bootId && session.bootId !== daemonBootId()) {
-      return sendOk(ws, id, { stopped: true, noop: true, reason: 'previous_boot' })
+      return sendOk(ws, id, { ...extra, stopped: true, noop: true, reason: 'previous_boot' })
     }
     try { process.kill(pid, 0) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: process liveness is unknown; refusing to signal')
-      if (isProcessGroupAlive(pid)) return sendError(ws, id, 'stop: process group still exists without its original leader; stop confirmation is pending')
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: process liveness is unknown; refusing to signal', extra)
+      if (isProcessGroupAlive(pid)) return sendError(ws, id, 'stop: process group still exists without its original leader; stop confirmation is pending', extra)
       reapSession(sid, 0, 'stop-confirmed', true)
       return persistRegistryDurable().then(
-        () => sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' }),
-        (failure) => sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`),
+        () => sendOk(ws, id, { ...extra, stopped: true, noop: true, reason: 'already_exited' }),
+        (failure) => sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`, extra),
       )
     }
     if (!session.startTime) recordMissingStartTime(sid, session)
@@ -339,15 +370,15 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
         sid, pid, recordedStartTime: originalStartTime ?? null, state: session.state,
       })
       return persistRegistryDurable().then(
-        () => sendOk(ws, id, { stopped: true, noop: true, reason: 'pid_reused' }),
-        (failure) => sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`),
+        () => sendOk(ws, id, { ...extra, stopped: true, noop: true, reason: 'pid_reused' }),
+        (failure) => sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`, extra),
       )
     }
     if (!sameProcess()) {
       logMsg('warn', 'cmdStop: process identity is unknown; refusing to signal', {
         sid, pid, wsId: wsId(ws), recordedStartTime: originalStartTime ?? null,
       })
-      return sendError(ws, id, 'stop: process identity is unknown; refusing to signal')
+      return sendError(ws, id, 'stop: process identity is unknown; refusing to signal', extra)
     }
     logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid })
 
@@ -370,8 +401,8 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
 
     return new Promise<void>((resolve) => {
       const reply = (error?: string) => {
-        if (error) sendError(ws, id, error)
-        else sendOk(ws, id, { stopped: true })
+        if (error) sendError(ws, id, error, extra)
+        else sendOk(ws, id, { ...extra, stopped: true })
         resolve()
       }
       try { killProcessGroup(pid, 'SIGINT') } catch (error) {
