@@ -140,13 +140,16 @@ enum TalkReason {
     /// The failures the next try fixes by itself: the server, the Mac or the CEO's computer
     /// was away, or Walnut was ended before the send finished.
     static func goesOutLater(_ reason: String) -> Bool {
-        reason == serverUnavailable || reason == uploadCut || reason == closedMidSend || waitsForComputer(reason)
+        reason == serverUnavailable || reason == uploadCut || reason == closedMidSend || reason == macAway || reason == hostAway
     }
 
-    /// Away until a computer comes back, which may take a night: these keep going out by
-    /// themselves however many tries that takes (`TalkSession.waits`), never handed to the person.
-    static func waitsForComputer(_ reason: String) -> Bool {
-        reason == macAway || reason == hostAway
+    /// The Mac is away, which may take a night: these keep going out by themselves however many
+    /// tries that takes (`TalkSession.waits`). The server says so by code, and only while the Mac
+    /// is not connected. A 503 `bridge_offline` (`hostAway`) is tried as often as an unreachable
+    /// server, then is the person's: the companion answers it for refusals that never clear too
+    /// (a host whose access was taken back, an error on the Mac).
+    static func waitsForTheMac(_ reason: String) -> Bool {
+        reason == macAway
     }
 
     /// A sent take the server holds for a Mac that is away (`TalkDelivery.held`).

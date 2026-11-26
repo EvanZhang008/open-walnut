@@ -319,16 +319,56 @@ describe('direct fallback (old daemon / primary down)', () => {
           throw new Error('unexpected command: ' + cmd)
       }
     })
+    // Its own id per case: the case before may still be writing what it knows of its send
+    // (a sweep it started), and an outcome of the same id would steer this one.
+    const messageId = `qm-mobile-ceo${Math.random().toString(36).slice(2, 12)}`
     const res = await request(createApp())
       .post(`/api/v1/sessions/${SID}/messages`)
-      .send({ text: 'note for the CEO', messageId: 'qm-mobile-ceo000000001' })
+      .send({ text: 'note for the CEO', messageId })
     expect(res.status).toBe(202)
-    expect(res.body).toMatchObject({ messageId: 'qm-mobile-ceo000000001', queued: true, waitingFor: '' })
+    expect(res.body).toMatchObject({ messageId, queued: true, waitingFor: '' })
     expect(callsByCmd()).not.toContain('appendUserMarker')
     const { listBankedSends } = await import('../../../src/core/send-queue.js')
-    const rows = (await listBankedSends()).filter((op) => op.messageId === 'qm-mobile-ceo000000001')
+    const rows = (await listBankedSends()).filter((op) => op.messageId === messageId)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ provablyUnsent: true, macLinkDown: true, message: 'note for the CEO' })
+  })
+
+  it('a held send another Walnut\'s session keeps out never holds the host\'s other sessions, and goes to the Mac once it is back', async () => {
+    // The CEO's note (SID, another Walnut's on this host) is held; a send to another session on
+    // the same host, banked behind it, still goes by the direct path while the Mac is away.
+    let macBack = false
+    const relayed: string[] = []
+    bridgeRequestMock.mockImplementation(async (_host: string, cmd: string, params: Record<string, unknown> = {}) => {
+      switch (cmd) {
+        case 'session.message':
+          if (!macBack) return { ok: false, error: 'session.message: no primary server connected' }
+          relayed.push(String(params.messageId))
+          return { ok: true, result: { messageId: params.messageId } }
+        case 'session.control': return { ok: false, error: 'session.control: no primary server connected' }
+        case 'status':
+          return params.sid === SID
+            ? { ok: false, errorKind: 'not_owner', error: 'status: a session of another Walnut' }
+            : { exists: true, alive: true, sendMarkers: true }
+        case 'send': return { ok: true }
+        default: throw new Error('unexpected command: ' + cmd)
+      }
+    })
+    const held = await request(createApp()).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'note for the CEO', messageId: 'qm-mobile-ceo000000002' })
+    expect(held.status).toBe(202)
+    const queue = await import('../../../src/core/send-queue.js')
+    await queue.enqueueSessionSend('other-sid-on-devbox', 'devbox', 'fix the build', 'qm-mobile-other0000001', null, { provablyUnsent: true })
+    const { flushSendQueue } = await import('../../../src/core/send-queue.js')
+    await flushSendQueue('devbox')
+    const sends = bridgeRequestMock.mock.calls.filter((c) => c[1] === 'send')
+    expect(sends.map((c) => c[2].sid)).toEqual(['other-sid-on-devbox'])
+    expect((await queue.listBankedSends()).map((op) => op.messageId)).toEqual(['qm-mobile-ceo000000002'])
+    // The Mac back: the held note goes through its queue, once, and never by the direct path.
+    macBack = true
+    await flushSendQueue('devbox')
+    expect(relayed).toEqual(['qm-mobile-ceo000000002'])
+    expect(await queue.listBankedSends()).toEqual([])
+    expect(bridgeRequestMock.mock.calls.filter((c) => c[1] === 'send' && c[2].sid === SID)).toEqual([])
   })
 
   it('failed resume on the fallback path writes NO marker and is 409', async () => {

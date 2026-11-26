@@ -1322,9 +1322,11 @@ final class ChatStore {
 
     /// `position`: where its bubble goes (a file send's words take the place of
     /// its bubble, above what was banked while its files went up); nil appends.
+    /// `keep`: the words go on disk until accepted (`PendingFileSends`); a file send's words
+    /// pass false, as its own kept copy holds them until they go (`deliverFiles`).
     private func performSend(
         _ text: String, images: [SelectedImage], drain: DrainContext? = nil,
-        messageId: String? = nil, insertAt position: Int? = nil
+        messageId: String? = nil, insertAt position: Int? = nil, keep: Bool = true
     ) async -> SendAttempt {
         sending = true
         errorMessage = nil
@@ -1372,8 +1374,10 @@ final class ChatStore {
             if let target { localRowConversation[optimistic.id] = target }
             // On disk until the server has it, like a file send (`PendingFileSends`): a failed
             // bubble lived only in memory, so an app that ended lost the words (2026-11-25).
-            PendingFileSends.save(outboxEntry(for: optimistic, key: PendingFileSends.chatKey(conversationID: target, agentID: agentID)),
-                                  images: jpegDatas)
+            if keep {
+                PendingFileSends.save(outboxEntry(for: optimistic, key: PendingFileSends.chatKey(conversationID: target, agentID: agentID)),
+                                      images: jpegDatas)
+            }
             wordSendsInFlight.insert(optimistic.id)
         }
         defer { if drain == nil { wordSendsInFlight.remove(optimistic.id) } }
@@ -1783,6 +1787,9 @@ final class ChatStore {
                 // Words alone (`performSend`), back as they were left and never sent again by
                 // themselves: still going, it shows going; any other is the person's to retry
                 // (under the same id, which the server answers once) or delete.
+                // Every new chat of an agent shares one key, so words still going from a new
+                // chat are drawn in no other: once they fail, the next one opened shows them.
+                if wordSendsInFlight.contains(entry.bubbleID), key == PendingFileSends.chatKey(conversationID: nil, agentID: activeAgentID) { continue }
                 let jpegs = PendingFileSends.images(of: entry)
                 if !jpegs.isEmpty { bubble.localImages = jpegs }
                 bubble.pending = wordSendsInFlight.contains(entry.bubbleID)
@@ -1922,6 +1929,11 @@ final class ChatStore {
             messages.removeAll { $0.id == bubbleID }
             localRowConversation[bubbleID] = nil
             PendingFileSends.remove(session: keptKey, bubble: bubbleID)
+            // Words that failed go on disk in its place, like any send's (`performSend`).
+            if let words = messages.first(where: { $0.failed == true && $0.localFiles == nil
+                && $0.clientMessageId != nil && $0.clientMessageId == bubble.clientMessageId }) {
+                PendingFileSends.save(outboxEntry(for: words, key: keptKey), images: words.localImages ?? [])
+            }
             for file in files { forgetUpload(file) }
             forgetFileSend(bubbleID)
             scheduleQueueDrain()
@@ -1997,7 +2009,7 @@ final class ChatStore {
         let task = Task { @MainActor [weak self] in
             guard let self else { return SendAttempt.failed(provenNeverArrived: true, refused: false) }
             // Where the file send's bubble was, above what was banked meanwhile.
-            return await self.performSend(text, images: images, messageId: messageId, insertAt: position)
+            return await self.performSend(text, images: images, messageId: messageId, insertAt: position, keep: false)
         }
         trackedSends[id] = task
         let attempt = await task.value

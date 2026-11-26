@@ -473,6 +473,8 @@ final class OrgThreadsStore {
                 AppLog.warn("org", "thread follow-up not announced", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             }
             let payloads = await SelectedImage.buildPayloads(images.map(\.jpegData))
+            // Held for the Mac and then let go unsent, the words come back to this thread's box.
+            HeldSessionSends.expect(messageId: messageId, origin: .thread(draftKey: OrgThreadFollowUpDraft.key(nodeId: taskId, threadId: threadId)))
             receipt = try await WalnutAPI().sendThreadFollowUp(
                 sessionId: sessionId, threadId: threadId, text: words, images: payloads,
                 messageId: messageId)

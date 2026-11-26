@@ -31,7 +31,7 @@ extension WalnutAPI {
             // Same rule as the plain send: an id makes the POST idempotent.
             retrySafe: validID != nil
         )
-        return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)
+        return sessionSendReceipt(session: id, text: text, pictures: !images.isEmpty, messageId: accepted.messageId, queued: accepted.queued)
     }
 
     /// Launch a Walnut ask with a spoken first message (`POST /sessions

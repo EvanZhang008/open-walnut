@@ -85,7 +85,7 @@ struct TalkMainSender: TalkSending {
         case APIError.unauthorized:
             return "Your Walnut server did not accept this iPhone. Open Walnut to check its connection."
         // The server answered, but the CEO's chat needs a computer it cannot reach now: the words
-        // wait and go out by themselves when it is back (`TalkReason.waitsForComputer`).
+        // go out again by themselves (`TalkReason.goesOutLater`; the Mac's absence with no limit).
         case let away as APIError where away.isBridgeOffline:
             return TalkReason.hostAway
         case let away as APIError where away.isLeaderUnreachable:

@@ -330,8 +330,8 @@ final class TalkSessionTests: XCTestCase {
 
     /// 2026-11-25: with the Mac asleep, the cloud companion refused the CEO chat (501), the take
     /// read as the server's refusal, and nothing sent it again: the words sat unseen in Settings.
-    /// A take the Mac (or the CEO's computer) being away stopped waits calmly and goes out by
-    /// itself, however many tries that takes, and goes once the Mac answers.
+    /// A take the Mac being away stopped waits calmly and goes out by itself, however many tries
+    /// that takes, and goes once the Mac answers.
     func testATakeTheMacBeingAwayStoppedWaitsAndGoesOutWhenItIsBack() async throws {
         let away = APIError.server(status: 501, code: "not_supported_cloud", message: "The main agent is made on the primary box", serverHash: nil, serverContent: nil)
         sender.failures = [away]
@@ -354,6 +354,22 @@ final class TalkSessionTests: XCTestCase {
         await talk.resendKept(source: "app-active")
         XCTAssertEqual(sender.sent.map(\.messageId), [entry.messageId])
         XCTAssertTrue(outbox.entries.isEmpty)
+    }
+
+    /// The CEO's computer off the server's bridge (503 `bridge_offline`) is tried again by itself as
+    /// often as an unreachable server is, then is the person's: the companion answers that code for
+    /// refusals that never clear too (review 2026-11-25). Only the Mac's absence waits with no limit.
+    func testAHostAwayTakeIsTriedAsOftenAsAnyThenWaitsForThePerson() async throws {
+        sender.failures = [APIError.server(status: 503, code: "bridge_offline", message: "Can't reach clouddev right now.", serverHash: nil, serverContent: nil)]
+        let talk = session()
+        try await pressTwice(talk)
+        XCTAssertEqual(talk.phase, .notSent(TalkReason.hostAway, kept: true))
+        let entry = try XCTUnwrap(outbox.unsent.first)
+        XCTAssertTrue(TalkSession.waits(entry), "it goes out again by itself at first")
+        outbox.update(entry.id) { $0.attempts = TalkSession.autoResendLimit }
+        XCTAssertFalse(TalkSession.waits(try XCTUnwrap(outbox.entry(entry.id))), "past the limit it is the person's, kept to send again")
+        outbox.update(entry.id) { $0.reason = TalkReason.macAway }
+        XCTAssertTrue(TalkSession.waits(try XCTUnwrap(outbox.entry(entry.id))), "the Mac's absence still waits")
     }
 
     /// The server took the words and holds them for a Mac that is away: sent, and it says when
@@ -574,7 +590,8 @@ final class TalkSessionTests: XCTestCase {
     }
 
     func testAResendThatFailsAgainStaysWithTheNewReason() async throws {
-        sender.failures = [APIError.unauthorized, APIError.server(status: 501, code: "primary_only", message: "", serverHash: nil, serverContent: nil)]
+        // A 501 that is not the Mac being away (that one waits: testATakeTheMacBeingAwayStopped...).
+        sender.failures = [APIError.unauthorized, APIError.server(status: 501, code: "x", message: "", serverHash: nil, serverContent: nil)]
         let talk = session()
         try await pressTwice(talk)
         let id = try XCTUnwrap(outbox.unsent.first?.id)

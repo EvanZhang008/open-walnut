@@ -48,14 +48,16 @@ enum PendingFileSends {
         var failed: Bool
         /// The file whose upload ended that attempt, so its card comes back drawn failed.
         var failedFile: String?
+        /// What the page says of it when it is back: why it was not sent (`HeldSessionSends`).
+        var note: String?
 
         init(bubbleID: String, messageID: String?, sessionID: String, text: String, createdAt: String,
              voice: Bool, files: [FileRef], held: [String: Int64], imageCount: Int, savedAt: Date,
-             failed: Bool = false, failedFile: String? = nil) {
+             failed: Bool = false, failedFile: String? = nil, note: String? = nil) {
             self.bubbleID = bubbleID; self.messageID = messageID; self.sessionID = sessionID
             self.text = text; self.createdAt = createdAt; self.voice = voice; self.files = files
             self.held = held; self.imageCount = imageCount; self.savedAt = savedAt; self.failed = failed
-            self.failedFile = failedFile
+            self.failedFile = failedFile; self.note = note
         }
 
         /// Only what a send cannot go without is required; a record from another
@@ -74,6 +76,7 @@ enum PendingFileSends {
             savedAt = try c.decodeIfPresent(Date.self, forKey: .savedAt) ?? Date()
             failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
             failedFile = try c.decodeIfPresent(String.self, forKey: .failedFile)
+            note = try c.decodeIfPresent(String.self, forKey: .note)
         }
     }
 

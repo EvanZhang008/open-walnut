@@ -287,6 +287,6 @@ extension WalnutAPI {
             timeout: images.isEmpty ? nil : 180,
             retrySafe: true
         )
-        return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)
+        return sessionSendReceipt(session: sessionId, text: text, pictures: !images.isEmpty, messageId: accepted.messageId, queued: accepted.queued)
     }
 }

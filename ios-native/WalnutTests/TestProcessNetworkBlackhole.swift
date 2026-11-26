@@ -66,9 +66,10 @@ final class WalnutTestsPrincipal: NSObject, XCTestObservation {
 
     /// Every test starts with no kept sends: a session page keeps each send on disk until it is
     /// accepted (`PendingFileSends`, words alone too), and one a test left failed or waiting would
-    /// come back on the next test's page of the same session id.
+    /// come back on the next test's page of the same session id; nor with a held one to follow up.
     func testCaseWillStart(_ testCase: XCTestCase) {
         PendingFileSends.eraseAll()
+        HeldSessionSends.eraseAll()
     }
 }
 

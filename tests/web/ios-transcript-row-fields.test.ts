@@ -48,7 +48,7 @@ describe('a transcript field reaches the timeline row', () => {
   // every field the row type has.
   const chatFields = storedProps(block(MODELS, 'struct ChatMessage: Codable, Identifiable, Equatable {', ''), '    ')
   const copies: [string, string[]][] = [
-    ['private static func row(from m: SessionTranscript.Message', carried],
+    ['static func row(from m: SessionTranscript.Message', carried],
     ['private static func assignStableIDs(', carried.filter((f) => chatFields.includes(f))],
   ]
   for (const [fn, need] of copies) {

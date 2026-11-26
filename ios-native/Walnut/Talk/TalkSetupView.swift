@@ -609,7 +609,7 @@ struct TalkUnsentSheetModifier: ViewModifier {
                     // A page the last process left open opens again (`reopenUnseenPage`).
                     if TalkSession.shared.isReviewing { TalkPanel.shared.show() }
                     TalkNetworkWatch.shared.start()
-                    Task { await TalkSession.shared.resendKept(source: "app-active") }
+                    Task { await TalkSession.shared.resendKept(source: "app-active"); await followHeldSends() }
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -625,13 +625,19 @@ struct TalkUnsentSheetModifier: ViewModifier {
                 // Offered at once; what can go out now goes while the sheet shows,
                 // its rows saying so, and leaves the list by itself.
                 offerIfNew()
-                Task { await talk.resendKept(source: "app-active") }
+                Task { await talk.resendKept(source: "app-active"); await followHeldSends() }
             }
             .sheet(isPresented: $showing, onDismiss: markOffered) { TalkUnsentList(talk: talk) }
     }
 }
 
 private extension TalkUnsentSheetModifier {
+    /// What the server held: one it never delivered comes back where it was typed
+    /// (`HeldSessionSends`), and a take back in this list is offered at once.
+    func followHeldSends() async {
+        if await HeldSessionSends.follow() { offerIfNew() }
+    }
+
     var offered: Set<String> { Set(offeredRaw.split(separator: ",").map(String.init)) }
 
     /// Only takes that need the person interrupt: one Walnut sends by itself

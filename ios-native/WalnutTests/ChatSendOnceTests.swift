@@ -320,6 +320,9 @@ final class ChatSendOnceTests: XCTestCase {
             chat.closeStream()
             DurableStore.removeAllForTesting()
             DiskCache.remove(key: "messages-\(conv)")
+            // The failed send is kept on disk for its chat (`PendingFileSends`): the next
+            // error's chat would put it back beside its own.
+            PendingFileSends.eraseAll()
         }
     }
 

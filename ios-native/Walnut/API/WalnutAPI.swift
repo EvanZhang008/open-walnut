@@ -477,7 +477,7 @@ struct WalnutAPI {
             // attempt would double-deliver, so the flag follows the id.
             retrySafe: messageId.map(SendRetryPolicy.isValidMessageId) ?? false
         )
-        return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)
+        return sessionSendReceipt(session: id, text: text, pictures: !images.isEmpty, messageId: accepted.messageId, queued: accepted.queued)
     }
 
     /// Voice input: upload recorded audio, get the recognized text back.

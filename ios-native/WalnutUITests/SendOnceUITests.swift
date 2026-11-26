@@ -66,6 +66,77 @@ final class SendOnceUITests: XCTestCase {
         t0 = Date()
     }
 
+    // MARK: - Session: words kept across the app's end
+
+    /// 2026-11-25, the user: "when mac is unavilable, the action button send to COE thing jsut
+    /// fail and the request won't be save I can't retyr etc it jsut lost". Every attempt is
+    /// refused the way the companion refused the CEO's chat while the Mac slept (503
+    /// bridge_offline), and the app is ended while the message waits for its retry. A send
+    /// that lived only in memory was gone with it; now it is on disk: the page opened again
+    /// shows it, it goes by itself once the server takes it, under its first id, once.
+    /// `WALNUT_UITEST_VIDEO_MARKS` (a URL) hears each step, for the proof video's captions.
+    func testASendTheMacCannotTakeIsKeptWhenTheAppEndsAndGoesOnceItIsTaken() throws {
+        guard let entry = config.sessions["b"] else { return XCTFail("the harness seeded no session b") }
+        runName = "kept-across-end"
+        // The harness's session outlives one run: the words name this run.
+        let marker = "nightly build \(runTag)"
+        let reply = "Checked the nightly build \(runTag): it failed at the lint step."
+        let words = "snapshot-clean-turn:" + reply
+        reset()
+        // The send and its first retries before the app ends, then two more after it opens again.
+        arm(marker, Array(repeating: "refuse503", count: 5))
+        var app = launch()
+        guard openSession(app, entry) else { return XCTFail("the seeded session did not open") }
+        videoMark("begin")
+        send(app, words)
+        guard waitPosts(marker, count: 2, timeout: 45) else {
+            step(app, "k01-no-retry", words)
+            return XCTFail("the automatic retry never went out: \(posts(marker))")
+        }
+        videoMark("waiting")
+        step(app, "k01-waiting", words)
+        sleep(3)
+        let beforeEnd = posts(marker).count
+        log("ending the app after \(beforeEnd) refused attempts")
+        videoMark("app-ended")
+        app.terminate()
+        sleep(3)
+        app = launch()
+        guard openSession(app, entry) else { return XCTFail("the session did not open after the relaunch") }
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline, copies(app, words) == 0 { usleep(250_000) }
+        step(app, "k02-back", words)
+        XCTAssertGreaterThanOrEqual(copies(app, words), 1, "the message the app was ended with is gone")
+        videoMark("kept-shown")
+        XCTAssertTrue(waitLabel(app, reply, timeout: 90), "the kept message's turn never ran")
+        videoMark("answered")
+        sleep(4)
+        step(app, "k03-answered", words)
+
+        let sent = posts(marker)
+        log("POSTS \(sent)")
+        XCTAssertGreaterThan(sent.count, beforeEnd, "nothing went out after the app opened again")
+        XCTAssertEqual(sent.filter { $0.status == 202 }.count, 1, "taken a number of times other than once: \(sent)")
+        assertOneId(sent)
+        XCTAssertEqual(serverRows("session", entry.sessionId, words)?.user, 1, "the session got the message a number of times other than once")
+        XCTAssertEqual(serverRows("session", entry.sessionId, reply)?.assistant, 1, "the turn ran a number of times other than once")
+        XCTAssertEqual(copies(app, words), 1, "the page shows the message a number of times other than once")
+        XCTAssertEqual(notices(app), [], "a Not sent stayed after the message was taken")
+        videoMark("done")
+    }
+
+    /// A step for the proof video's captions (no-op without `WALNUT_UITEST_VIDEO_MARKS`).
+    private func videoMark(_ event: String) {
+        guard let base = ProcessInfo.processInfo.environment["WALNUT_UITEST_VIDEO_MARKS"], !base.isEmpty,
+              let url = URL(string: base + "/mark?event=" + event) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 35
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 40)
+    }
+
     // MARK: - Session: a retry the background cut short
 
     /// The first POST is refused (the host's bridge is down), so the bubble waits for

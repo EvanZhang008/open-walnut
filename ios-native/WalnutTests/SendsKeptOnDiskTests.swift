@@ -70,6 +70,37 @@ final class SendsKeptOnDiskTests: XCTestCase {
         page2.close()
     }
 
+    /// A put-back send reaches the server before one typed right after the page opened again,
+    /// though it first reads the transcript to be sure it was not taken (review 2026-11-25).
+    func testAPutBackSendGoesBeforeOneTypedAfterThePageOpened() async throws {
+        let session = "kept-order-" + UUID().uuidString.lowercased()
+        let first = MockSessionSendTransport()
+        first.failuresRemaining = 1_000
+        let page1 = store(session, first)
+        await page1.open()
+        _ = await page1.sendFromComposer("sent while the Mac slept")
+        await waitUntil { page1.messages.contains { $0.retryNotice != nil } }
+        page1.close()
+
+        let pause = SessionConversationStore.restoredCheckPause
+        SessionConversationStore.restoredCheckPause = 0.6
+        defer { SessionConversationStore.restoredCheckPause = pause }
+        let second = MockSessionSendTransport()
+        // The look-up read fails once, so the put-back send is still waiting when the person types.
+        second.pageError = APIError.network(underlying: URLError(.timedOut))
+        let page2 = store(session, second)
+        let opening = Task { await page2.open() }
+        await waitUntil { second.pageReads.contains { $0.since != nil } }
+        let typed = Task { await page2.sendFromComposer("typed after opening") }
+        try await Task.sleep(for: .milliseconds(300))
+        second.pageError = nil
+        _ = await typed.value
+        _ = await opening.value
+        await waitUntil(5) { second.sendCalls.count >= 2 }
+        XCTAssertEqual(second.sendCalls.map(\.text), ["sent while the Mac slept", "typed after opening"])
+        page2.close()
+    }
+
     func testAnAcceptedWordsOnlySendIsNotKept() async throws {
         let session = "kept-accepted-" + UUID().uuidString.lowercased()
         let transport = MockSessionSendTransport()

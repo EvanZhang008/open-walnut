@@ -1633,8 +1633,9 @@ enum APIError: Error, LocalizedError {
 
     /// Any refusal because the work needs the Mac and this server cannot reach it: the
     /// codes above, plus an older companion's `not_supported_cloud` and
-    /// `images_not_supported_cloud` (501s: the route never runs on that box, so they are
-    /// explained, never retried).
+    /// `images_not_supported_cloud` (501s: the route never runs on that box, so the send
+    /// ladder explains them and never retries them; a take kept by the Action Button waits for
+    /// the Mac, `TalkReason.macAway`, as that box hands the route to the Mac once it is back).
     var isLeaderUnreachable: Bool {
         isLeaderUnreachableForNow || code == "not_supported_cloud" || code == "images_not_supported_cloud"
     }

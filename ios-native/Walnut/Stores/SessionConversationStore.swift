@@ -134,6 +134,9 @@ final class SessionConversationStore {
     /// Kept file sends put back on the page that still wait to go out: they are
     /// sent once the transcript has been read (`sendRestoredFileSends`).
     @ObservationIgnored private var restoredWaiting: [String] = []
+    /// Put-back sends whose first attempt runs now: what is sent after them waits for it
+    /// (`earlierFileSendInFlight`), words alone too, so it reaches the server first.
+    @ObservationIgnored private var restoredGoing: Set<String> = []
     @ObservationIgnored private var confirmingRestored = false
     @ObservationIgnored private var lastDeliveryToken = 0
     /// Where each bubble is drawn relative to the turn that was running when it
@@ -503,6 +506,8 @@ final class SessionConversationStore {
                 bubble.failed = true
                 bubble.uploadFailedID = entry.failedFile
                 pendingUser.append(bubble)
+                // Why it came back not sent (one the server held, then let go: `HeldSessionSends`).
+                if let note = entry.note { errorMessage = note }
                 continue
             }
             bubble.pending = true
@@ -555,9 +560,11 @@ final class SessionConversationStore {
                 settleFailed(bubble.id)
                 continue
             }
+            restoredGoing.insert(current.id)
             Task { [weak self] in
                 await self?.deliver(bubbleID: current.id, messageId: current.clientMessageId, text: current.text,
                                     jpegDatas: current.localImages ?? [], attempt: 0, firstFailureAt: nil)
+                self?.restoredGoing.remove(current.id)
             }
         }
     }
@@ -567,7 +574,7 @@ final class SessionConversationStore {
     /// Between tries of the look-up read. Internal for tests.
     static var restoredCheckPause: Double = 3
 
-    private static func isoDate(_ s: String) -> Date? {
+    static func isoDate(_ s: String) -> Date? {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
@@ -1250,7 +1257,7 @@ final class SessionConversationStore {
 
     /// One transcript row as a timeline message. Ids are assigned after a merge
     /// (`assignStableIDs`), because they must be unique across it.
-    private static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
+    static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
         if m.role == "user", isInterruptMarker(text ?? m.text) {
             // The CLI writes this line into the conversation when a turn is stopped
             // (the phone's Stop, an interrupting send, or the person at the terminal).
@@ -1812,11 +1819,13 @@ final class SessionConversationStore {
     }
 
     /// The first bubble before `bubbleID` with files still on its way, or one
-    /// waiting behind such a bubble whose attempt has not ended (`attemptsBehind`), or nil.
+    /// waiting behind such a bubble whose attempt has not ended (`attemptsBehind`), or a
+    /// put-back send not yet tried (`restoredWaiting`, `restoredGoing`: words alone too), or nil.
     func earlierFileSendInFlight(_ bubbleID: String) -> String? {
         guard let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) else { return nil }
         return pendingUser[..<idx].first { earlier in
             attemptsBehind.contains(earlier.id)
+                || (earlier.pending == true && (restoredWaiting.contains(earlier.id) || restoredGoing.contains(earlier.id)))
                 || (earlier.localFiles?.isEmpty == false
                     && (earlier.pending == true || (earlier.failed == true && earlier.retryNotice != nil)))
         }?.id

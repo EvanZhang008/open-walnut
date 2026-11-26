@@ -155,11 +155,11 @@ final class TalkSession {
     /// tries left): it waits, calmly. Anything else needs the person.
     /// A dictation never waits: it goes only where the person sends or copies it, and
     /// copied later by itself it would replace whatever they copied since.
-    /// One that waits for the Mac (or the CEO's computer) to come back waits with no limit.
+    /// One that waits for the Mac to come back waits with no limit (`TalkReason.waitsForTheMac`).
     static func waits(_ entry: TalkOutbox.Entry) -> Bool {
         let reason = entry.reason ?? ""
         return entry.copy != true && TalkReason.goesOutLater(reason)
-            && (entry.attempts < autoResendLimit || TalkReason.waitsForComputer(reason))
+            && (entry.attempts < autoResendLimit || TalkReason.waitsForTheMac(reason))
     }
     @ObservationIgnored private var resendingKept = false
     /// Send or Cancel tapped on the Live Activity while the microphone still opens:
@@ -697,6 +697,8 @@ final class TalkSession {
         }
         do {
             let outbox = self.outbox
+            // Held for the Mac and then let go unsent, it comes back to this list (`HeldSessionSends`).
+            HeldSessionSends.expect(messageId: entry.messageId, origin: .talk)
             let delivery = try await sender.send(text: text, messageId: entry.messageId) { @MainActor in
                 outbox.update(entry.id) { $0.startingChat = true }
             }

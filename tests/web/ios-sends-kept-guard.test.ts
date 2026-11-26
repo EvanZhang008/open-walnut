@@ -13,6 +13,11 @@
  * call (a new file, or another call in a listed file) fails here until it is listed with how it
  * keeps its words; a call that went lowers its count. The server half is
  * tests/web/routes/cloud-send-503-ratchet.test.ts.
+ *
+ * Words the server HOLDS (a 202 `queued`) are the server's only until it lets them go after a
+ * day unsent (`send_expired`); the phone follows each up and puts it back where it was typed
+ * (`HeldSessionSends`), and every session send's receipt is built in one place that notes it. A
+ * sender with a box of its own names it before it sends (`HeldSessionSends.expect`).
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
@@ -37,7 +42,7 @@ const KEPT: Record<string, Kept> = {
     count: 1, how: 'every send on disk until accepted (PendingFileSends, words alone too), put back when the page opens, retried on the ladder, then "Not sent - tap to retry"',
   },
   'talkSend Walnut/Talk/TalkMainSender.swift': {
-    count: 1, how: 'the Action Button take is on disk first (TalkOutbox); a Mac or computer away waits and goes out by itself with no try limit (TalkReason.waitsForComputer)',
+    count: 1, how: 'the Action Button take is on disk first (TalkOutbox); the Mac away waits and goes out by itself with no try limit (TalkReason.waitsForTheMac); one the server held comes back to the list if it is never delivered (HeldSessionSends, origin .talk)',
   },
   'talkLaunch Walnut/Talk/TalkMainSender.swift': { count: 1, how: 'the same take on disk (TalkOutbox); a start whose answer was lost says it may have arrived' },
   'sendMessage Walnut/Stores/ChatStore.swift': {
@@ -57,7 +62,7 @@ const KEPT: Record<string, Kept> = {
   'sendSessionMessage Walnut/Views/Tasks/ActionNeededView.swift': { count: 3, how: 'words: the reply box keeps them (failureNote); an option: the item reopens with "Not sent. Try again."' },
   'respondSessionPermission Walnut/Views/Tasks/ActionNeededView.swift': { count: 3, how: 'the reply box keeps its words, or the item reopens' },
   'respondSessionPermission Walnut/Stores/SessionLifecycleController.swift': { count: 1, how: 'the prompt card comes back (pendingPermissions restored, the answer returns false) to answer again' },
-  'sendThreadFollowUp Walnut/Views/Org/OrgThreadsStore.swift': { count: 1, how: 'the follow-up box keeps its draft on a failure ("Not sent. Your words and pictures are still here."); a choice stays on its card' },
+  'sendThreadFollowUp Walnut/Views/Org/OrgThreadsStore.swift': { count: 1, how: 'the follow-up box keeps its draft on a failure ("Not sent. Your words and pictures are still here."); a choice stays on its card; one the server held comes back to the box if it is never delivered (HeldSessionSends, origin .thread)' },
   'askSideQuestion Walnut/Views/Sessions/SessionExtrasSheets.swift': { count: 1, how: 'the question stays in its field until answered' },
   'contentCeo Walnut/Views/Inbox/ContentActionButtons.swift': { count: 1, how: 'the note and pictures stay in their draft (ComposerDrafts) until they reached the CEO' },
 }
@@ -112,6 +117,22 @@ describe('every phone send keeps the words until a server has them', () => {
     const send = src.slice(src.indexOf('func send(_ text: String, images:'), src.indexOf('private func closeRun('))
     expect(send).toContain('PendingFileSends.save(')
     expect(send, 'the save must not hang on the send having files').not.toMatch(/if !files\.isEmpty \{[^}]*PendingFileSends\.save/)
+  })
+
+  it('every session send receipt is built where a held one is noted (HeldSessionSends)', () => {
+    const builders: string[] = []
+    for (const file of walk(path.join(APP, 'Walnut'))) {
+      const n = code(fs.readFileSync(file, 'utf8')).split('SessionSendReceipt(messageId').length - 1
+      if (n > 0) builders.push(`${path.relative(APP, file)} (${n})`)
+    }
+    expect(builders, 'build it with WalnutAPI.sessionSendReceipt, so a held send is followed up').toEqual(['Walnut/Stores/HeldSessionSends.swift (1)'])
+    const held = fs.readFileSync(path.join(APP, 'Walnut/Stores/HeldSessionSends.swift'), 'utf8')
+    expect(held).toMatch(/if receipt\.queued \{ HeldSessionSends\.note\(/)
+    // The boxes of their own: named before the send, so an app ended right after still knows.
+    const talk = code(fs.readFileSync(path.join(APP, 'Walnut/Talk/TalkSession.swift'), 'utf8'))
+    expect(talk).toMatch(/HeldSessionSends\.expect\(messageId: entry\.messageId, origin: \.talk\)[\s\S]{0,200}sender\.send\(/)
+    const threads = code(fs.readFileSync(path.join(APP, 'Walnut/Views/Org/OrgThreadsStore.swift'), 'utf8'))
+    expect(threads).toMatch(/HeldSessionSends\.expect\(messageId: messageId, origin: \.thread\([\s\S]{0,200}sendThreadFollowUp\(/)
   })
 
   it('the Action Button reads a Mac that is away as waiting, never as a refusal', () => {

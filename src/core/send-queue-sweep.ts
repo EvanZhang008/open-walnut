@@ -467,6 +467,9 @@ async function deliverBankedDirect(
     });
     return 'dropped';
   }
+  // What kept it out is this session's (another Walnut's session, a prompt): the host's
+  // other sessions go on (2026-11-25: a CEO note held for the Mac held the whole dev box).
+  if (outcome.sessionOnly) return 'hold-session';
   return 'hold-host';
 }
 

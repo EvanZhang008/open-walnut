@@ -246,7 +246,7 @@ if [ -n "$ALLOW_SPRINGBOARD" ] || [ -n "$ROW_ID" ] || [ -n "$ROW_QUERY" ] \
   || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ] \
   || [ "${WALNUT_UITEST_REAL_SERVER:-}" = 1 ] \
   || [ "${WALNUT_UITEST_MAY_ERASE_APP_DATA:-}" = 1 ] \
-  || [ -n "${WALNUT_UITEST_LETTER_VIDEO:-}" ] \
+  || [ -n "${WALNUT_UITEST_LETTER_VIDEO:-}" ] || [ -n "${WALNUT_UITEST_VIDEO_MARKS:-}" ] \
   || ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
   say "injecting runner environment into the .xctestrun directly"
   # A python whose plistlib loads. A Homebrew python can be built against a newer
@@ -270,7 +270,7 @@ def inject(target):
         # The private tasks walk: its opt-in and the fixture's three task ids. Talk against a
         # real paired server (TalkRealServerUITests): its opt-in.
         for name in ('WALNUT_UITEST_PRIVATE_TASKS', 'WALNUT_UITEST_SYNCED_TASK', 'WALNUT_UITEST_KEPT_TASK', 'WALNUT_UITEST_HELD_TASK',
-                     'WALNUT_UITEST_REAL_SERVER', 'WALNUT_UITEST_LETTER_VIDEO',
+                     'WALNUT_UITEST_REAL_SERVER', 'WALNUT_UITEST_LETTER_VIDEO', 'WALNUT_UITEST_VIDEO_MARKS',
                      'WALNUT_UITEST_MAY_ERASE_APP_DATA'):
             if os.environ.get(name):
                 env[name] = os.environ[name]

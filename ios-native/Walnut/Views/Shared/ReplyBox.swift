@@ -119,6 +119,13 @@ struct ReplyBox: View {
                     .foregroundStyle(Theme.needsText)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("\(idPrefix).failed")
+            } else if let returned = drafts.returnNote(draftKey) {
+                // Words a held send gave back (`HeldSessionSends`), in the failure line's look.
+                Text(returned)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.needsText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("\(idPrefix).returned")
             } else if let sentNote {
                 Text(sentNote)
                     .font(.footnote)
@@ -213,6 +220,7 @@ struct ReplyBox: View {
                 failed = true
                 return
             }
+            drafts.setReturnNote(nil, key: draftKey)
             let after = Self.afterReceipt(
                 sent: shown, sentPictures: images.map(\.id),
                 draft: drafts.draft(draftKey), draftPictures: drafts.images(draftKey).map(\.id))

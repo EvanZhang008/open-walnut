@@ -49,7 +49,7 @@ extension WalnutAPI {
             // The id makes the POST idempotent, the interrupt included (see above).
             retrySafe: validID != nil
         )
-        return SessionSendReceipt(messageId: accepted.messageId, queued: accepted.queued == true)
+        return sessionSendReceipt(session: id, text: text, pictures: !images.isEmpty, messageId: accepted.messageId, queued: accepted.queued)
     }
 
     /// Send a queued message now (`POST /messages/:id/send-now`). `interrupt: true` stops

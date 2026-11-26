@@ -76,9 +76,16 @@ final class ComposerDrafts {
 
     func setDraft(_ value: String, key: String) {
         guard text[key] != value else { return }
-        if value.isEmpty { text[key] = nil } else { text[key] = value }
+        if value.isEmpty { text[key] = nil; returnNotes[key] = nil } else { text[key] = value }
         schedulePersist()
     }
+
+    /// Why words came back into a box (`HeldSessionSends`: held for the Mac, never delivered),
+    /// said under it until the box is sent or emptied. In memory: the put-back runs on each
+    /// return to the app, so the box it fills is read in the same run.
+    private(set) var returnNotes: [String: String] = [:]
+    func returnNote(_ key: String) -> String? { returnNotes[key] }
+    func setReturnNote(_ note: String?, key: String) { returnNotes[key] = note }
 
     /// Keeps at most `max` text drafts under `prefix` besides `keeping`, which always stays: a
     /// family of per-item drafts (one note per email) must not crowd the store's 40 out. Sorted
@@ -137,6 +144,7 @@ final class ComposerDrafts {
         text[key] = nil
         images[key] = nil
         files[key] = nil
+        returnNotes[key] = nil
         persistNow()
     }
 
