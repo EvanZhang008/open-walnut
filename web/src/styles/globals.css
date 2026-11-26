@@ -10942,6 +10942,12 @@ body.walnut-dragging {
      Ratchet: tests/web/editor-paint-containment.test.ts */
   contain: paint;
 }
+/* A phone's reading column is the screen: the desktop's 54 px prose gutter left Memory's open
+   file a 225 px column in 390 (2026-11-26 audit). Right after the base rule, so each surface's own
+   gutter below (sidebar, popup, Files) still wins. Guard: tests/e2e/browser/phone-no-squeezed-pane.spec.ts */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .notes-editor .tiptap { padding-left: 16px; padding-right: 16px; }
+}
 
 .notes-editor .tiptap > *:first-child { margin-top: 0; }
 .notes-editor .tiptap > *:last-child { margin-bottom: 0; }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { isPhoneLayout } from '@/hooks/usePhoneLayout';
+import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { timeAgo } from '@/utils/time';
 import type { Editor } from '@tiptap/core';
 import { NOTES_PLACEHOLDER, NotesEditor } from './NotesEditor';
@@ -238,6 +238,10 @@ export function MarkdownEditorPanel({
 
   // ── Feature 1: editor width control (global, persisted) ──
   const [width, setWidth] = useState<EditorWidth>(readEditorWidth);
+  // A phone's column is the whole screen, so Normal and Full look the same there: no width
+  // button, and no header row kept only for it (2026-11-26: Memory showed a row with one icon).
+  const phone = usePhoneLayout();
+  const widthToggle = showWidthToggle && !phone;
   useEffect(() => {
     try { localStorage.setItem(LS_WIDTH_KEY, width); } catch { /* ignore */ }
   }, [width]);
@@ -480,7 +484,7 @@ export function MarkdownEditorPanel({
     ? breadcrumbPath.replace(/\.md$/, '').split('/')
     : null;
 
-  const hasToolbar = !!headerActions || showWidthToggle || showRawToggle || showBookmark || showLocate || saveStatus !== 'idle' || !!updatedAt;
+  const hasToolbar = !!headerActions || widthToggle || showRawToggle || showBookmark || showLocate || saveStatus !== 'idle' || !!updatedAt;
   // Breadcrumb segments are clickable only when a navigate handler is wired
   // (the /notes page owns the tree; pop-outs have no tree → plain text).
   const breadcrumbClickable = !!onBreadcrumbNavigate;
@@ -531,7 +535,7 @@ export function MarkdownEditorPanel({
                 <LocateIcon />
               </button>
             )}
-            {showWidthToggle && <WidthToggleButton width={width} onChange={setWidth} />}
+            {widthToggle && <WidthToggleButton width={width} onChange={setWidth} />}
             {showRawToggle && (
               <button
                 className="btn btn-icon notes-raw-toggle-btn"

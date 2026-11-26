@@ -39,6 +39,13 @@
   padding-left: 30px;
   padding-right: 30px;
 }
+/* A phone has one stop, the screen, and the phone gutter (globals.css, after .notes-editor .tiptap). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .notes-width-full .notes-editor-content .tiptap {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
 
 /* ── Raw markdown source view (Feature 2) ──
  * CodeMirror 6 mount point. As a direct child of .notes-editor-content it picks
