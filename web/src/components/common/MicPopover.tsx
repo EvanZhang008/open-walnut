@@ -34,7 +34,9 @@ export function MicPopover({ anchor, owner, className, role, aboveField, onClose
     passOutsideClick: role !== undefined,
     trapFocus: false,
   });
-  const placement = useMenuPlacement(true, anchor, popup, { preferSide: 'up', gap: 6, minHeight: 40, verticalAnchorRef: field });
+  // Only a bubble above its field names an anchor of its own; the retry list opens like any menu
+  // from the composer, above the whole composer (menu-vertical-anchor.ts).
+  const placement = useMenuPlacement(true, anchor, popup, { preferSide: 'up', gap: 6, minHeight: 40, verticalAnchorRef: aboveField ? field : undefined });
   return createPortal(<div
     ref={popup}
     className={`${className} mic-popover wn-overlay`}

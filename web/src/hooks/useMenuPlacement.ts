@@ -40,6 +40,7 @@
 
 import { isPhoneLayout } from './usePhoneLayout';
 import { besidePlacement, sameArrow, verticalArrow, type PlacementArrow } from './menu-placement-beside';
+import { verticalAnchorOf } from './menu-vertical-anchor';
 import { useState, useRef, useLayoutEffect, type CSSProperties, type RefObject } from 'react';
 
 export interface MenuPlacement {
@@ -395,17 +396,8 @@ export function useMenuPlacement(
       // the trigger button's box.
       const trigger = triggerRef.current;
       const triggerRect = trigger?.getBoundingClientRect();
-      // A menu opened from inside a composer clears the whole composer, not just its pill: on the
-      // phone (spec 4.4: popovers open above it, under the top bar), and on the desktop for a menu
-      // that opens upward (2026-11-22 audit: the permission-mode menu and the send menu covered the
-      // first line of the draft).
-      const vertical = verticalAnchorRef?.current
-        ?? (bounds === 'visual'
-          ? trigger?.closest<HTMLElement>('.session-panel-input') ?? trigger?.closest<HTMLElement>('.chat-input-container') ?? null
-          // Not a submenu: a trigger inside another menu (the "+" menu's More) opens beside its row.
-          : preferSide === 'up' && !beside && !trigger?.closest('.wn-menu, [role="menu"]')
-            ? trigger?.closest<HTMLElement>('.chat-input-container') ?? null
-            : null);
+      // The caller's own vertical anchor, else the whole composer a menu opens from (menu-vertical-anchor.ts).
+      const vertical = verticalAnchorOf<HTMLElement>({ given: verticalAnchorRef, trigger, bounds, preferSide, beside })
       // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
         ? (anchorPoint.right !== undefined
