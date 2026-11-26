@@ -1,8 +1,9 @@
 /**
  * The session store cache is WRITE-THROUGH: a locked section that wrote rows by
- * id patches exactly those rows into the cached snapshot; a section that wrote a
- * SET of rows it never enumerated, a section that threw, or a commit from another
- * connection drops the snapshot so the next reader rescans.
+ * id patches exactly those rows into the cached snapshot, a section that threw too
+ * (2026-11-25: its drop cost the next reader a full scan for a write that changed
+ * nothing); a section that wrote a SET of rows it never enumerated, or a commit
+ * from another connection, drops the snapshot so the next reader rescans.
  *
  * Why: dropping on every write made the next reader rebuild the snapshot with a
  * full `SELECT *` + rowToSession over ~5.6k rows (12% of main-thread CPU on the
@@ -123,6 +124,22 @@ describe('session store write-through', () => {
     expect(byId['u-3']?.taskId).toBe('task-other');
     expect(byId['u-3']?.statusRevision).toBe(1);
     expect(scans()).toBe(before);
+  });
+
+  it('a section that threw patches the rows it named instead of dropping the snapshot', async () => {
+    await createSessionRecord('x-1', 'task-x', 'proj', '/tmp', { title: 'kept' });
+    await listSessions();
+    const before = scans();
+    await expect(updateSessionRecord('x-missing', { title: 'nope' })).rejects.toThrow(/Session not found/);
+    // A refused task link throws inside the transaction, after the row was read.
+    await createSessionRecord('x-2', 'task-y', 'proj', '/tmp');
+    await expect(updateSessionRecord('x-2', { taskId: 'task-x' })).rejects.toThrow();
+    const cached = (await listSessions()).map((s) => [s.claudeSessionId, s.taskId, s.title]).sort();
+    expect(scans()).toBe(before);
+    _dropSessionStoreCacheForTesting();
+    const fresh = (await listSessions()).map((s) => [s.claudeSessionId, s.taskId, s.title]).sort();
+    expect(cached).toEqual(fresh);
+    expect(fresh).toEqual([['x-1', 'task-x', 'kept'], ['x-2', 'task-y', undefined]]);
   });
 
   it('a commit from another connection forces a rescan', async () => {

@@ -20,7 +20,7 @@
  */
 
 import type { Statement } from '../sqlite.js';
-import { docHeadHint, type SearchDb } from './db.js';
+import { docHeadHint, docVecHints, ZERO_VEC_SQL, type SearchDb } from './db.js';
 import { buildFtsColumns } from './writer.js';
 import type { DocChangeListener } from './writer.js';
 
@@ -58,8 +58,20 @@ export interface ReplicaTagRow {
   tag: string;
 }
 
-const vecStateSql = `(SELECT CASE WHEN v.vec = zeroblob(length(v.vec)) THEN 'z' ELSE 'v' END
-  FROM doc_vec v WHERE v.doc_id = d.id AND v.seq = 0)`;
+/**
+ * The seq-0 state of doc `d`: 'z', 'v', or NULL (none yet). Once the doc_vec partial indexes
+ * exist it reads only them (two index probes); the probe of the row itself reads its 1 KB
+ * vector off an overflow page to test for the zero marker (a 500-doc slice: 2,769 page reads
+ * against 27).
+ */
+function vecStateSql(db: SearchDb): string {
+  const hints = docVecHints(db);
+  if (!hints) {
+    return `(SELECT CASE WHEN ${ZERO_VEC_SQL} THEN 'z' ELSE 'v' END FROM doc_vec v WHERE v.doc_id = d.id AND v.seq = 0)`;
+  }
+  return `CASE WHEN EXISTS (SELECT 1 FROM doc_vec v${hints.zero} WHERE v.doc_id = d.id AND v.seq = 0 AND ${ZERO_VEC_SQL})
+    THEN 'z' WHEN EXISTS (SELECT 1 FROM doc_vec v${hints.seq0} WHERE v.doc_id = d.id AND v.seq = 0) THEN 'v' END`;
+}
 
 /**
  * One slice of the source's doc states in id order, after `afterId`. Each row
@@ -69,7 +81,7 @@ const vecStateSql = `(SELECT CASE WHEN v.vec = zeroblob(length(v.vec)) THEN 'z' 
  */
 export function replicaStates(db: SearchDb, afterId: number, limit: number): ReplicaStateRow[] {
   const rows = db.prepare(
-    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d${docHeadHint(db)}
+    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql(db)} AS vec FROM doc d${docHeadHint(db)}
      WHERE d.id > ? ORDER BY d.id LIMIT ?`,
   ).all(afterId, limit) as Array<Omit<ReplicaStateRow, 'vec'> & { vec: 'z' | 'v' | null }>;
   return rows.map((r) => ({ ...r, vec: r.vec ?? 'n' }));
@@ -79,7 +91,7 @@ export function replicaStates(db: SearchDb, afterId: number, limit: number): Rep
 export function replicaStatesOf(db: SearchDb, ids: number[]): ReplicaStateRow[] {
   if (ids.length === 0) return [];
   const rows = db.prepare(
-    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql} AS vec FROM doc d${docHeadHint(db)}
+    `SELECT d.id, d.kind, d.ref, d.hash, ${vecStateSql(db)} AS vec FROM doc d${docHeadHint(db)}
      WHERE d.id IN (${ids.map(() => '?').join(',')})`,
   ).all(...ids) as Array<Omit<ReplicaStateRow, 'vec'> & { vec: 'z' | 'v' | null }>;
   return rows.map((r) => ({ ...r, vec: r.vec ?? 'n' }));

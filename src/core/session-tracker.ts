@@ -200,11 +200,17 @@ export function withHeavyFields(record: SessionRecord): SessionRecord {
 }
 
 /** Store-shape counters for tests and the daily loop check. */
-const sessionStoreStats = { fullScans: 0, externalScans: 0, scanMs: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0 };
+const sessionStoreStats = {
+  fullScans: 0, externalScans: 0, scanMs: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0,
+  // Why a current snapshot was dropped (each drop costs the next reader a full scan): a section
+  // changed rows it did not name, a section ended inside an open transaction, or another
+  // connection committed (seen by a write's patch; a read's rescan counts as externalScans).
+  dropUnnamed: 0, dropOpenTx: 0, dropForeign: 0,
+};
 // What the store's reads cost, on every `memory sample` and `memory burst` line: a full scan reads
 // and parses every row (about 7.4k), and the CPU profiles of the 22 GB climb on 2026-11-23 had
 // loadStoreRows at 9 s of a 30 s window. externalScans: another connection committed (a hook).
-registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows}`);
+registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign}`);
 registerBurstContext('sessionStore', () => ({ ...sessionStoreStats, scanMs: Math.round(sessionStoreStats.scanMs) }));
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
@@ -218,6 +224,7 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
   }
   if (ids.size === 0) return;
   if (storeVersion(db) !== sessionStoreCacheDataVersion) {
+    sessionStoreStats.dropForeign += 1;
     invalidateSessionStoreCache();
     return;
   }
@@ -572,6 +579,12 @@ function cloneSession(s: SessionRecord): SessionRecord {
   return { ...s };
 }
 
+/** The cached snapshot when it describes the database now (no scan), else null. */
+function currentStoreSnapshot(db: NonNullable<ReturnType<typeof getDb>>): readonly SessionRecord[] | null {
+  if (!STORE_CACHE_ENABLED || sessionStoreCache === null) return null;
+  return storeVersion(db) === sessionStoreCacheDataVersion ? sessionStoreCache : null;
+}
+
 /** The cached snapshot while it is current, else a fresh scan that re-seeds it. */
 async function loadStoreRows(): Promise<SessionRecord[]> {
   await ensureSessionInit();
@@ -625,6 +638,29 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
 // and a free lock keeps the order of events callers had with a plain transaction.
 let writeLock: Promise<void> = Promise.resolve();
 
+/**
+ * After a locked section: patch the rows it named into the snapshot, or drop the snapshot when
+ * that cannot be trusted. Returns how many rows of any table the section's connection changed.
+ */
+function settleSnapshot(touched: Set<string> | null, changesBefore: number, rowChangesBefore: number): number {
+  const db = sessionWriteHandle();
+  const total = db ? totalChanges(db) : 0;
+  // Session rows only: the section's other tables (a channel position, turn ends) are no row
+  // of this snapshot, and counting them dropped it at every host batch (2026-11-23).
+  const rowsChanged = db ? sessionRowChanges(db, total) - rowChangesBefore : 0;
+  if (db?.inTransaction) {
+    // Uncommitted rows would read as stored: never patch from inside a transaction.
+    if (sessionStoreCache !== null) sessionStoreStats.dropOpenTx += 1;
+    invalidateSessionStoreCache();
+  } else if (touched === null || rowsChanged > touched.size) {
+    if (sessionStoreCache !== null) sessionStoreStats.dropUnnamed += 1;
+    invalidateSessionStoreCache();
+  } else {
+    patchSessionCacheRows(touched);
+  }
+  return total - changesBefore;
+}
+
 function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = writeLock;
   let resolve: () => void;
@@ -634,12 +670,12 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   // funnels through this lock and through writeSessionRowSqlite /
   // deleteSessionRowSqlite, so the lock knows which rows the section touched
   // and patches exactly those (see the write-through note at the cache decl).
-  // A section that threw takes the old drop instead. Either happens BEFORE the
-  // lock releases so the next reader sees the committed rows.
-  // SQLite's change counter is the check on the notes: a section that changed
-  // more rows than it named (a set-based `UPDATE ... WHERE task_id IN (...)`, a
-  // writer that never called noteSessionRowTouched) gets the drop, so a missing
-  // note can only cost a rescan, never a stale row.
+  // A section that threw is brought up to date the same way: what it rolled back was never
+  // patched in (patching happens only here), so re-reading the rows it named gives the stored
+  // state either way. It used to drop the snapshot, which cost the next reader a full scan of
+  // every row (7.7k, 76 MB of payload; 100 to 500 ms on the Mac's loop) for a write that
+  // changed nothing. Either happens BEFORE the lock releases so the next reader sees the
+  // committed rows.
   let touched: Set<string> | null = null;
   let changesBefore = 0;
   let rowChangesBefore = 0;
@@ -655,19 +691,16 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
     })
     .then(
       (value) => {
-        const db = sessionWriteHandle();
-        const total = db ? totalChanges(db) : 0;
-        const changed = total - changesBefore;
-        // Session rows only: the section's other tables (a channel position, turn ends) are no row
-        // of this snapshot, and counting them dropped it at every host batch (2026-11-23).
-        const rowsChanged = db ? sessionRowChanges(db, total) - rowChangesBefore : 0;
-        if (touched === null || rowsChanged > touched.size) invalidateSessionStoreCache();
-        else patchSessionCacheRows(touched);
+        const changed = settleSnapshot(touched, changesBefore, rowChangesBefore);
         if (changed > 0) noteSessionStoreWrite();
         if (touched !== null && touched.size > 0) announceWrittenRows(touched);
         return value;
       },
-      (err) => { invalidateSessionStoreCache(); throw err; },
+      (err) => {
+        // The section's own error is the one to report: a failing settle only drops the snapshot.
+        try { settleSnapshot(touched, changesBefore, rowChangesBefore); } catch { invalidateSessionStoreCache(); }
+        throw err;
+      },
     )
     .finally(() => {
       touchedSessionIds = null;
@@ -1670,11 +1703,35 @@ export async function countOpenSessionsByHost(): Promise<Record<string, number>>
   return out;
 }
 
+/**
+ * The health tick's active set. Served from the whole-store snapshot while it is current (the
+ * same rows, filtered in memory, no SQLite): the SELECT below reads every live row's payload
+ * (about 250 rows, 8 MB on the Mac with the live sessions' prompts) every 30 s, 100 to 580 ms
+ * cold on the loop (2026-11-25). A snapshot that is not current, or one a running locked
+ * section has not patched yet, is not used (and not rebuilt here: a full scan costs more than
+ * this read): the SELECT answers then.
+ */
 export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
   await ensureSessionInit();
   const db = getDb();
   if (!db) return [];
   const cutoff = new Date(Date.now() - HEALTH_SCAN_RECENT_MS).toISOString();
+  // Not while a locked section runs: its own commits leave data_version alone and reach the
+  // snapshot only when the lock releases, so a section that committed one transaction and now
+  // waits for its next would show this tick the rows (pid, status) from before it.
+  const snapshot = touchedSessionIds === null ? currentStoreSnapshot(db) : null;
+  if (snapshot) {
+    const out: SessionRecord[] = [];
+    for (const s of snapshot) {
+      // The SELECT's predicate, row for row: archived IS NOT 1, and a TEXT compare of the time.
+      if (s.archived === true) continue;
+      const status = s.process_status;
+      const active = status === 'running' || status === 'idle'
+        || ((status === 'stopped' || status === 'error') && typeof s.last_status_change === 'string' && s.last_status_change >= cutoff);
+      if (active) out.push(cloneSession(s));
+    }
+    return out;
+  }
   // archived IS NOT 1 (not `= 0`): rows created before the archived column
   // default — or via sessionToRow, which skips undefined fields — hold NULL.
   const rows = db.prepare(`

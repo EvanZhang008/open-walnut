@@ -85,6 +85,7 @@ import {
   sweepPlaceholderTitles, __resetTitleReconcilerForTesting,
 } from '../../src/core/session-title-reconciler.js';
 import { defaultSessionTaskTitle } from '../../src/core/sessions/quick-start.js';
+import { getDb as getTaskDb } from '../../src/core/task-db.js';
 import type { Task } from '../../src/core/types.js';
 
 const CWD = '/tmp/demo-project';
@@ -259,6 +260,30 @@ describe('sweepPlaceholderTitles', () => {
     expect(stats).toEqual(ZERO);
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+  });
+
+  it('reads only the age window from the task store, never the whole table', async () => {
+    // 2026-11-25: every 5-minute pass read all ~8.3k task rows (150 to 500 ms of
+    // blocked event loop on the Mac) to keep the last 48 hours' placeholders.
+    const sid = nextSid();
+    const task = await makeTaskAndSession(sid);
+    const old = await makeTaskAndSession(nextSid());
+    const db = getTaskDb()!;
+    db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?').run(new Date(Date.now() - 72 * 3600_000).toISOString(), old.id);
+    historyTailMock.mockResolvedValue(userHistory(IMAGE_PREFIXED));
+    const seen: string[] = [];
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => { seen.push(sql); return prepare(sql); }) as typeof db.prepare);
+    try {
+      expect(await sweepPlaceholderTitles()).toEqual({ candidates: 1, attempted: 1, retitled: 1, errors: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+    const listReads = seen.filter((sql) => /^SELECT id, title, .* FROM tasks/s.test(sql));
+    expect(listReads.length).toBeGreaterThan(0);
+    for (const sql of listReads) expect(sql).toMatch(/WHERE created_at >= @createdSince/);
+    expect((await getTask(task.id)).title).toBe('Docx preview support');
+    expect((await getTask(old.id)).title).toBe(PLACEHOLDER);
   });
 
   it('skips done tasks (a stale title on finished work is not worth a model call)', async () => {

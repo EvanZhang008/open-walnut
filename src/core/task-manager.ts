@@ -3532,6 +3532,12 @@ export interface ListTasksSlimFilter extends ListTasksFilter {
    * the whole table (~6.5k on a real board, 110-390ms of blocked event loop).
    */
   askCandidates?: boolean;
+  /**
+   * Only rows created at or after this ISO time (the tasks_created_at_id index range). For a
+   * caller that judges recent tasks alone: the placeholder-title sweep read every row (~8.3k,
+   * 150 to 500 ms of blocked event loop on the Mac, 2026-11-25) to keep the last 48 hours'.
+   */
+  createdSince?: string;
 }
 
 /**
@@ -3617,6 +3623,7 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
     }
   }
   if (filter.source) { where.push('source = @source'); params.source = filter.source; }
+  if (filter.createdSince !== undefined) { where.push('created_at >= @createdSince'); params.createdSince = filter.createdSince; }
   if (filter.askCandidates) {
     // A SUPERSET of isAskOf, row by row, for every row taskToRow writes and for
     // the foreign shapes rowToTask still reads:

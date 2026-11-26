@@ -33,6 +33,7 @@ import {
 import { closeNotesIndexDb, getNotesIndexDb, listNotes, listNoteSyncMeta, upsertNote } from '../../src/core/notes-index.js'
 import { createSearchIndex, docStampsOfKind, type SearchIndex } from '../../src/lib/hybrid-search/index.js'
 import { docCards } from '../../src/lib/hybrid-search/db.js'
+import { createWriter } from '../../src/lib/hybrid-search/writer.js'
 import { replicaStates, replicaStatesOf } from '../../src/lib/hybrid-search/replica.js'
 import { UsageTracker } from '../../src/core/usage/tracker.js'
 import { buildLateIndexesNow } from '../../src/lib/sqlite-late-index.js'
@@ -159,6 +160,67 @@ describe('search index: the reads of short columns never walk a body', () => {
   })
 })
 
+describe('search index: the vector state reads never read a vector', () => {
+  // A doc_vec row is a 1 KB blob, past what a 4 KB page keeps in place, so reading one row's
+  // vector (the zero-marker test) or even its key through the primary key costs an overflow page:
+  // the backfill probe of 128 docs read 262 pages, a 500-doc replica state slice 2,769 (2026-11-25).
+  let index: SearchIndex | null = null
+  afterEach(() => { index?.close(); index = null })
+
+  /** Four docs: complete vectors, the zero marker only, a partial set (no seq 0), none. */
+  function seed(target: SearchIndex): Record<string, number> {
+    const writer = createWriter(target.db)
+    const ids: Record<string, number> = {}
+    for (const [i, ref] of ['full', 'zero', 'partial', 'none'].entries()) {
+      ids[ref] = target.upsert({ kind: 'note', ref, title: ref, note: 'body', updatedAt: 1_700_000_000_000 + i }).docId
+    }
+    writer.writeVectors(ids.full, [new Int8Array([1, 2, 3, 4]), new Int8Array([5, 6, 7, 8])])
+    writer.writeVectors(ids.zero, [new Int8Array(4)])
+    writer.writeVectorsResumable(ids.partial, new Map([[1, new Int8Array([1, 1, 1, 1])]]), 3)
+    return ids
+  }
+
+  /** The reads under test; the writer is made before plansOf so its own statements are not counted. */
+  function read(db: DatabaseType, ids: Record<string, number>, writer: ReturnType<typeof createWriter>): void {
+    const refs = (page: { docs: Array<{ ref: string; zeroMarker?: boolean }> }) => page.docs.map((d) => `${d.ref}${d.zeroMarker ? ':zero' : ''}`).sort()
+    expect(refs(writer.listDocsMissingVectors(10, null))).toEqual(['none', 'partial'])
+    expect(refs(writer.listDocsMissingVectors(10, null, undefined, { retryZero: () => true }))).toEqual(['none', 'partial', 'zero:zero'])
+    const states = Object.fromEntries(replicaStates(db, 0, 64).map((r) => [r.ref, r.vec]))
+    expect(states).toEqual({ full: 'v', zero: 'z', partial: 'n', none: 'n' })
+    expect(replicaStatesOf(db, [ids.zero, ids.full]).map((r) => r.vec).sort()).toEqual(['v', 'z'])
+  }
+
+  it('answers the backfill probe and replica states from the doc_vec partial indexes', async () => {
+    index = createSearchIndex({ dbPath: ':memory:' })
+    const ids = seed(index)
+    const writer = createWriter(index.db)
+    const plans = await plansOf(index.db, () => read(index!.db, ids, writer))
+    const vecReads = plans.filter((p) => p.sql.includes('doc_vec'))
+    expect(vecReads.length).toBeGreaterThanOrEqual(4)
+    for (const p of vecReads) {
+      // Presence from doc_vec_seq0 alone (covering), markers from doc_vec_zero (it holds only them):
+      // any other way in reads a 1 KB row per doc.
+      expect(p.plan, p.sql).toMatch(/USING COVERING INDEX doc_vec_seq0|USING INDEX doc_vec_zero/)
+      expect(p.plan, p.sql).not.toMatch(/USING PRIMARY KEY|USING INDEX doc_vec_seq0/)
+    }
+  })
+
+  it('reads the same on a file without them (INDEXED BY waits), then through them', async () => {
+    const file = path.join(WALNUT_HOME, 'search.sqlite')
+    const first = createSearchIndex({ dbPath: file })
+    const ids = seed(first)
+    first.db.exec('DROP INDEX doc_vec_seq0; DROP INDEX doc_vec_zero')
+    first.close()
+    index = createSearchIndex({ dbPath: file })
+    const writer = createWriter(index.db)
+    const before = await plansOf(index.db, () => read(index!.db, ids, writer))
+    for (const p of before) expect(p.sql).not.toMatch(/INDEXED BY doc_vec/)
+    expect(await buildLateIndexesNow()).toEqual(['doc_vec_seq0', 'doc_vec_zero'])
+    const after = await plansOf(index.db, () => read(index!.db, ids, writer))
+    for (const p of after.filter((x) => x.sql.includes('doc_vec'))) expect(p.plan, p.sql).toMatch(/INDEX doc_vec_(seq0|zero)/)
+  })
+})
+
 describe('usage ledger: the turn-time reads use a covering index', () => {
   it('sums the same turns without reading the table', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-cover-'))
@@ -235,7 +297,7 @@ describe('a file an older build wrote', () => {
         expect(replicaStatesOf(db, [ids[4]]).map((r) => r.ref)).toEqual(['r4'])
       }
       const before = await plansOf(db, read)
-      for (const p of before) expect(p.sql).not.toMatch(/INDEXED BY/)
+      for (const p of before) expect(p.sql).not.toMatch(/INDEXED BY doc_head/)
       expect(await buildLateIndexesNow()).toEqual(['doc_head', 'doc_kind_ref_updated'])
       const after = await plansOf(db, read)
       for (const p of after.filter((x) => x.sql.includes('FROM doc'))) expect(p.plan, p.sql).toMatch(/USING COVERING INDEX doc_head/)

@@ -64,14 +64,39 @@ export const DOC_HEAD = 'doc_head';
  * doc_kind_ref_updated the file sweep's (ref, updated_at) of one kind. Built after the open
  * (sqlite-late-index.ts): on the Mac's index each build reads 305 MB, 22 s on a cold disk.
  */
+/**
+ * Which docs have vectors, and which of those hold only the zero marker, without reading a
+ * vector (added 2026-11-25). A doc_vec row is a 1 KB blob in a WITHOUT ROWID table, over the
+ * ~1000 bytes a 4 KB page keeps in place, so every row spills to an overflow page and a seq-0
+ * probe costs two random page reads, the zero test a third. The backfill's probe of 128 docs
+ * read 262 pages and a replica state slice of 500 docs 2,769 (production: 100 to 280 ms a call,
+ * cold); through these two partial indexes 7 and 27. doc_vec_seq0 holds every vectored doc's
+ * key (about 40 pages for 21k docs); doc_vec_zero only the zero markers (a handful).
+ * The planner prefers the primary key for `doc_id = ? AND seq = 0`, so a read names them
+ * (docVecHints), and only once both exist.
+ */
+export const DOC_VEC_SEQ0 = 'doc_vec_seq0';
+export const DOC_VEC_ZERO = 'doc_vec_zero';
+/** The zero marker test, written the same in the index and in every read that uses it. */
+export const ZERO_VEC_SQL = 'vec = zeroblob(length(vec))';
+
 const DOC_LATE_INDEXES: LateIndex[] = [
   { name: DOC_HEAD, table: 'doc', sql: `CREATE INDEX IF NOT EXISTS ${DOC_HEAD} ON doc(id, kind, ref, hash, updated_at, title, (summary <> ''))`, warm: 'SELECT max(length(hash)) FROM doc' },
   { name: 'doc_kind_ref_updated', table: 'doc', sql: 'CREATE INDEX IF NOT EXISTS doc_kind_ref_updated ON doc(kind, ref, updated_at)', warm: 'SELECT max(updated_at) FROM doc' },
+  { name: DOC_VEC_SEQ0, table: 'doc_vec', sql: `CREATE INDEX IF NOT EXISTS ${DOC_VEC_SEQ0} ON doc_vec(doc_id) WHERE seq = 0`, warm: 'SELECT count(*) FROM doc_vec WHERE seq = 0' },
+  { name: DOC_VEC_ZERO, table: 'doc_vec', sql: `CREATE INDEX IF NOT EXISTS ${DOC_VEC_ZERO} ON doc_vec(doc_id) WHERE seq = 0 AND ${ZERO_VEC_SQL}`, warm: `SELECT count(*) FROM doc_vec WHERE seq = 0 AND ${ZERO_VEC_SQL}` },
 ];
 
 /** ` INDEXED BY doc_head` once the index is there, else nothing (the read works either way). */
 export function docHeadHint(db: SearchDb): string {
   return hasIndex(db, DOC_HEAD) ? ` INDEXED BY ${DOC_HEAD}` : '';
+}
+
+/** The INDEXED BY clauses for a seq-0 presence read and a zero-marker read, or null until both indexes exist. */
+export function docVecHints(db: SearchDb): { seq0: string; zero: string } | null {
+  return hasIndex(db, DOC_VEC_SEQ0) && hasIndex(db, DOC_VEC_ZERO)
+    ? { seq0: ` INDEXED BY ${DOC_VEC_SEQ0}`, zero: ` INDEXED BY ${DOC_VEC_ZERO}` }
+    : null;
 }
 
 const DDL = `

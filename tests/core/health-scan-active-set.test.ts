@@ -26,7 +26,10 @@ import {
   listSessionsForHealthScan,
   listSessionsForTaskHandback,
   listOrphanCandidates,
+  listSessions,
 } from '../../src/core/session-tracker.js';
+import Database from '../../src/lib/sqlite.js';
+import { SESSION_DB_PATH } from '../../src/core/session-db.js';
 import { runPeriodic } from '../../src/core/periodic-task.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -79,6 +82,95 @@ describe('listSessionsForHealthScan (active set)', () => {
     first[0].process_status = 'stopped' as any;
     const second = await listSessionsForHealthScan();
     expect(second[0].process_status).toBe('running');
+  });
+});
+
+describe('listSessionsForHealthScan reads the current snapshot, not SQLite', () => {
+  // 2026-11-25: the tick's SELECT read ~250 live rows' payloads (8 MB) every 30 s, 100 to 580 ms
+  // cold on the Mac's loop, while the whole-store snapshot already held the same rows.
+  function scanSelects(fn: () => Promise<unknown>): Promise<string[]> {
+    const db = getDb()!;
+    const seen: string[] = [];
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => { seen.push(sql); return prepare(sql); }) as typeof db.prepare);
+    return fn().then(() => seen.filter((sql) => /FROM sessions\s+WHERE archived IS NOT 1/.test(sql))).finally(() => spy.mockRestore());
+  }
+
+  async function seedMix(): Promise<void> {
+    await seed('running-old', 'running', 30 * DAY);
+    await seed('idle-old', 'idle', 10 * DAY);
+    await seed('stopped-recent', 'stopped', 1 * HOUR);
+    await seed('error-recent', 'error', 2 * HOUR);
+    await seed('stopped-stale', 'stopped', 3 * DAY);
+    await seed('stopped-archived', 'stopped', 1 * HOUR, { archived: true });
+  }
+
+  it('answers from a current snapshot with the same rows as the SELECT', async () => {
+    await seedMix();
+    let viaSql: string[] = [];
+    expect(await scanSelects(async () => { viaSql = (await listSessionsForHealthScan()).map(s => s.claudeSessionId).sort(); })).toHaveLength(1);
+    await listSessions(); // the snapshot is now current
+    let viaSnapshot: string[] = [];
+    expect(await scanSelects(async () => { viaSnapshot = (await listSessionsForHealthScan()).map(s => s.claudeSessionId).sort(); })).toEqual([]);
+    expect(viaSnapshot).toEqual(viaSql);
+    expect(viaSnapshot).toEqual(['error-recent', 'idle-old', 'running-old', 'stopped-recent']);
+    // A write through the store patches the snapshot, and the next tick sees it.
+    await updateSessionRecord('stopped-stale', { process_status: 'running' } as any);
+    expect(await scanSelects(async () => {
+      expect((await listSessionsForHealthScan()).map(s => s.claudeSessionId)).toContain('stopped-stale');
+    })).toEqual([]);
+  });
+
+  it('isolates the rows it hands out from the snapshot', async () => {
+    await seed('running-1', 'running', 0);
+    await listSessions();
+    const first = await listSessionsForHealthScan();
+    first[0].process_status = 'stopped' as any;
+    expect((await listSessionsForHealthScan())[0].process_status).toBe('running');
+  });
+
+  it('reads SQLite while a locked section runs (its own commits are not in the snapshot yet)', async () => {
+    await seed('running-1', 'running', 0);
+    await createSessionRecord('target', 'task-target', 'proj', '/tmp');
+    await listSessions();
+    // What a section that committed one transaction leaves before its next: the row is stored
+    // through the shared connection (data_version stays), and the snapshot is patched only when
+    // the lock releases.
+    getDb()!.prepare('UPDATE sessions SET process_status = ?, pid = ? WHERE claude_session_id = ?').run('running', 4242, 'running-1');
+    // A second connection holds the write lock, so the next section opens and waits for it.
+    const other = new Database(SESSION_DB_PATH);
+    other.exec('BEGIN IMMEDIATE');
+    const pending = updateSessionRecord('target', { title: 'waited' });
+    let done: unknown;
+    try {
+      // One turn of the loop: the section opens and finds the lock taken.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      let rows: Array<{ id: string; pid?: number }> = [];
+      expect(await scanSelects(async () => {
+        rows = (await listSessionsForHealthScan()).map(s => ({ id: s.claudeSessionId, pid: s.pid }));
+      })).toHaveLength(1);
+      expect(rows.find(r => r.id === 'running-1')?.pid).toBe(4242);
+    } finally {
+      other.exec('ROLLBACK');
+      other.close();
+      done = await pending.catch((err: unknown) => err);
+    }
+    expect((done as { title?: string }).title).toBe('waited');
+  });
+
+  it('falls back to the SELECT when another connection committed since the snapshot', async () => {
+    await seed('running-1', 'running', 0);
+    await seed('stopped-1', 'stopped', 3 * DAY);
+    await listSessions();
+    const other = new Database(SESSION_DB_PATH);
+    try {
+      other.prepare('UPDATE sessions SET process_status = ? WHERE claude_session_id = ?').run('idle', 'stopped-1');
+    } finally {
+      other.close();
+    }
+    let ids: string[] = [];
+    expect(await scanSelects(async () => { ids = (await listSessionsForHealthScan()).map(s => s.claudeSessionId).sort(); })).toHaveLength(1);
+    expect(ids).toEqual(['running-1', 'stopped-1']);
   });
 });
 

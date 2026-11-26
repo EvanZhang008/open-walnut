@@ -111,7 +111,10 @@ export async function sweepPlaceholderTitles(now = Date.now()): Promise<{
     // projection: the full listTasks() drags note/description/ext for every
     // row through the event loop (the session-health-monitor learned this at
     // 3493 rows/tick); the sweep needs only id/title/status/created_at/cwd.
-    const suspects = (await listTasksSlim({ minimal: true })).filter((t) =>
+    // createdSince: only the age window's rows leave SQLite (an index range),
+    // never the whole table (8.3k rows, 150 to 500 ms a pass on the Mac).
+    const createdSince = new Date(now - MAX_TASK_AGE_MS).toISOString();
+    const suspects = (await listTasksSlim({ minimal: true, createdSince })).filter((t) =>
       t.status !== 'done'
       // "Ask …" on a walnut_agent task covers every agent's placeholder ("Ask
       // Mentor"); matchPlaceholderTitle below does the exact check. Gated on the

@@ -7,7 +7,7 @@
  */
 
 import type { Statement } from '../sqlite.js';
-import type { SearchDb } from './db.js';
+import { docVecHints, ZERO_VEC_SQL, type SearchDb } from './db.js';
 
 /** Keyset position in the missing-vectors walk (updated_at DESC, id DESC). */
 export interface MissingVecCursor {
@@ -118,19 +118,37 @@ export function createMissingVecWalk(db: SearchDb): (
    *  padded to a fixed width with 0 (a value no rowid can take) so the statement
    *  shape (and with it the prepared plan) never churns. */
   const vecProbeStmts = new Map<string, Stmt>();
-  /** `zero` adds whether seq 0 is the zero marker: the vector is on the leaf
-   *  page the PK seek already reads, so the compare costs no extra I/O. */
-  function vecProbeFor(width: number, zero: boolean): Stmt {
-    const key = `${width}:${zero}`;
+  function probeStmt(key: string, sql: string): Stmt {
     let stmt = vecProbeStmts.get(key);
     if (!stmt) {
-      stmt = db.prepare(
-        `SELECT doc_id${zero ? ', vec = zeroblob(length(vec)) AS zero' : ''} FROM doc_vec WHERE seq = 0
-         AND doc_id IN (${Array.from({ length: width }, () => '?').join(',')})`,
-      );
+      stmt = db.prepare(sql);
       vecProbeStmts.set(key, stmt);
     }
     return stmt;
+  }
+  /**
+   * Which of `ids` have vectors, and with `zero`, whether seq 0 is the zero marker. Once the
+   * doc_vec partial indexes exist (db.ts docVecHints) it reads only them: presence from
+   * doc_vec_seq0, the markers from doc_vec_zero. Before, the one probe reads each seq-0 row and,
+   * for the marker test, its vector: a row is a 1 KB blob on an overflow page, so 128 docs cost
+   * about 260 random page reads (production: 100 to 280 ms a call, cold).
+   */
+  function probeVectored(ids: number[], zero: boolean): Array<{ doc_id: number; zero?: number }> {
+    const width = ids.length;
+    const list = Array.from({ length: width }, () => '?').join(',');
+    const hints = docVecHints(db);
+    if (!hints) {
+      return probeStmt(`${width}:${zero}:table`,
+        `SELECT doc_id${zero ? `, ${ZERO_VEC_SQL} AS zero` : ''} FROM doc_vec WHERE seq = 0
+         AND doc_id IN (${list})`).all(...ids) as Array<{ doc_id: number; zero?: number }>;
+    }
+    const present = probeStmt(`${width}:seq0`,
+      `SELECT doc_id FROM doc_vec${hints.seq0} WHERE seq = 0 AND doc_id IN (${list})`).all(...ids) as Array<{ doc_id: number }>;
+    if (!zero) return present;
+    const zeros = new Set((probeStmt(`${width}:zero`,
+      `SELECT doc_id FROM doc_vec${hints.zero} WHERE seq = 0 AND ${ZERO_VEC_SQL} AND doc_id IN (${list})`)
+      .all(...ids) as Array<{ doc_id: number }>).map((r) => r.doc_id));
+    return present.map((r) => ({ doc_id: r.doc_id, zero: zeros.has(r.doc_id) ? 1 : 0 }));
   }
   const missingBodyStmts = new Map<number, Stmt>();
   function missingBodiesFor(count: number): Stmt {
@@ -164,7 +182,7 @@ export function createMissingVecWalk(db: SearchDb): (
     const retryZero = options?.retryZero;
     const vectored = new Set<number>();
     const zeroRetry = new Set<number>();
-    for (const r of vecProbeFor(scanLimit, Boolean(retryZero)).all(...probeIds) as Array<{ doc_id: number; zero?: number }>) {
+    for (const r of probeVectored(probeIds, Boolean(retryZero))) {
       if (r.zero && retryZero?.(r.doc_id)) zeroRetry.add(r.doc_id);
       else vectored.add(r.doc_id);
     }
