@@ -179,5 +179,6 @@ export function buildImportGraph(root) {
     return best
   }
 
-  return { testsWithin, importerCount: (rel) => (importers.get(path.join(root, rel)) || new Set()).size }
+  const importersOf = (rel) => [...(importers.get(path.join(root, rel)) || [])].map((f) => path.relative(root, f))
+  return { testsWithin, importersOf, importerCount: (rel) => importersOf(rel).length }
 }

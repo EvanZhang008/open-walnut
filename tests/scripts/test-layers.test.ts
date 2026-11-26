@@ -10,6 +10,7 @@ import path from 'node:path'
 import * as layers from '../../scripts/test-layers.mjs'
 // @ts-expect-error plain .mjs without types
 import { buildImportGraph } from '../../scripts/lib/import-graph.mjs'
+import { READS_CHANGED_OP, READS_EVERY_OP } from '../../scripts/lib/op-registry-reach.mjs'
 import { QUARANTINED_TEST_FILES } from '../setup/quarantine.js'
 import { SLOW_TEST_FILES } from '../setup/slow-tests.js'
 
@@ -33,6 +34,40 @@ describe('the local layer', () => {
     const opts = { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({ 'src/m.ts': ['tests/x.test.ts', 'tests/mid.test.ts'] }) }
     expect(layers.localLayer(['src/m.ts'], opts).files).toEqual(['tests/x.test.ts', 'tests/z-ratchet.test.ts'])
     expect(layers.landLayer(['src/m.ts'], opts).files).toEqual(['tests/mid.test.ts', 'tests/x.test.ts', 'tests/z-ratchet.test.ts'])
+  })
+})
+
+describe('the readers of a changed op through the op registry', () => {
+  // 2026-11-25: src/ops/host-exec.ts broke tests/mcp/answer-shapes.test.ts (slow tier) and
+  // src/ops/org-threads.ts two quick tests that read the op through src/ops/index, which no layer
+  // ran (scripts/lib/op-registry-reach.mjs; the guard over the real tree:
+  // tests/scripts/op-registry-selection-guard.test.ts).
+  const universe = ['tests/names-op.test.ts', 'tests/every-op.test.ts', 'tests/costly-reader.test.ts']
+  const slow = ['tests/mcp/names-op.test.ts', 'tests/mcp/every-op.test.ts']
+  const durations = { 'tests/costly-reader.test.ts': layers.LOCAL_MAX_MS + 1 }
+  const reach = new Map([
+    ['tests/names-op.test.ts', READS_CHANGED_OP], ['tests/every-op.test.ts', READS_EVERY_OP], ['tests/costly-reader.test.ts', READS_CHANGED_OP],
+    ['tests/mcp/names-op.test.ts', READS_CHANGED_OP], ['tests/mcp/every-op.test.ts', READS_EVERY_OP],
+  ])
+  const opts = { universe, slow, durations, namedBy: () => new Set<string>(), read: () => '', graph: fakeGraph({}), opReaders: () => reach, exists: () => true, limits: { maxReached: 0 } }
+
+  it('the land layer runs every one, of both tiers', () => {
+    const plan = layers.landLayer(['src/ops/x.ts'], opts)
+    expect(plan.files).toEqual(['tests/costly-reader.test.ts', 'tests/every-op.test.ts', 'tests/names-op.test.ts'])
+    expect(plan.slowFiles).toEqual(['tests/mcp/every-op.test.ts', 'tests/mcp/names-op.test.ts'])
+    expect(plan.why.get('tests/mcp/names-op.test.ts')).toBe(`${READS_CHANGED_OP} (slow tier)`)
+  })
+
+  it('the local layer runs the fast quick ones past its count cap, and of the slow tier the ones naming the op', () => {
+    const plan = layers.localLayer(['src/ops/x.ts'], opts)
+    expect(plan.files).toEqual(['tests/every-op.test.ts', 'tests/names-op.test.ts'])
+    expect(plan.leftToGate).toEqual(['tests/costly-reader.test.ts'])
+    expect(plan.slowFiles).toEqual(['tests/mcp/names-op.test.ts'])
+  })
+
+  it('a reader that is also a scan test keeps that reason: land-guards picks the land layer\'s scan tests by it', () => {
+    const scanOpts = { ...opts, universe: [...universe, 'tests/op-ratchet.test.ts'], read: () => '', opReaders: () => new Map([['tests/op-ratchet.test.ts', READS_EVERY_OP]]) }
+    expect(layers.landLayer(['src/ops/x.ts'], scanOpts).why.get('tests/op-ratchet.test.ts')).toBe('scan test')
   })
 })
 

@@ -36,6 +36,7 @@ import path from 'node:path'
 import { vitestCommand } from './bun-vitest.mjs'
 import { judgeRun, offenderText, record as recordFlaky, standingText } from './flaky-log.mjs'
 import { buildImportGraph, isTestFile } from './lib/import-graph.mjs'
+import { opRegistryReach, READS_EVERY_OP } from './lib/op-registry-reach.mjs'
 import { fileIndex, listCode, namedPaths } from './test-changed-refs.mjs'
 import { SLOW_TEST_DIRS, SLOW_TEST_FILES } from '../tests/setup/slow-tests.ts'
 import { QUARANTINE, QUARANTINED_TEST_FILES } from '../tests/setup/quarantine.ts'
@@ -216,8 +217,8 @@ export const HUB_IMPORTERS = 60
  * editing: the same, with only fast reached files.
  */
 export const LIMITS = {
-  local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1, broadScanMs: LOCAL_BROAD_SCAN_MS },
-  land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: Infinity, hubAt: HUB_IMPORTERS },
+  local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1, broadScanMs: LOCAL_BROAD_SCAN_MS, slowEveryOpReaders: false },
+  land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: Infinity, hubAt: HUB_IMPORTERS, slowEveryOpReaders: true },
 }
 
 /**
@@ -227,19 +228,26 @@ export const LIMITS = {
  *   the tests importing a changed file (the local layer: directly, within its cost per file and
  *     count, cheapest first, the rest left to the land; the land layer: by any import chain that
  *     does not pass through a shared module, HUB_IMPORTERS) and the tests naming one by path,
+ *   for a change to an op module (or a helper of a few: opModulesOf), the tests reading its ops
+ *     through the op registry (scripts/lib/op-registry-reach.mjs: they reach it only through src/ops/index, two steps
+ *     away, and three reds reached main that way in one night): those of the quick tier with no
+ *     count cap (the local layer: within its cost per file), and those of the slow tier (tests/mcp)
+ *     with the change's own slow-tier files: in the land layer all of them, in the local layer
+ *     the ones naming a changed op (a slow reader of every op runs a minute: left to the land),
  *   every fast scan test (ratchets, guards: they caught most real problems, in milliseconds),
  *   and for a change to the test setup, the tests of the setup itself.
  */
-export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {}, exists = (f) => fs.existsSync(path.join(ROOT, f)) } = {}) {
-  const { fileMaxMs, maxReached, scanMaxMs, depth, hubAt, broadScanMs } = { ...LIMITS[layer], ...limits }
+export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, opReaders, read, limits = {}, exists = (f) => fs.existsSync(path.join(ROOT, f)) } = {}) {
+  const { fileMaxMs, maxReached, scanMaxMs, depth, hubAt, broadScanMs, slowEveryOpReaders } = { ...LIMITS[layer], ...limits }
   const inTier = new Set(universe)
   const why = new Map()
   const add = (f, r) => { if (inTier.has(f) && !why.has(f)) why.set(f, r) }
   for (const f of changed) if (isTestFile(f)) add(f, 'changed')
   const g = graph ?? buildImportGraph(ROOT)
+  const viaRegistry = (opReaders ?? ((c) => opRegistryReach(c, { root: ROOT, graph: g, files: () => listCode(ROOT) })))(changed)
+  const leftToGate = []
   const direct = new Set(g.testsWithin(changed.filter((f) => !isTestFile(f)), depth, { hubAt }).keys())
   const reached = [...new Set([...direct, ...namedBy(changed)])].filter((f) => inTier.has(f) && !why.has(f))
-  const leftToGate = []
   const affordable = reached.filter((f) => (cost(durations, f) <= fileMaxMs ? true : (leftToGate.push(f), false)))
   affordable.sort((a, b) => cost(durations, a) - cost(durations, b) || a.localeCompare(b))
   for (const f of affordable.slice(0, maxReached)) add(f, direct.has(f) ? 'imports a changed file' : 'names a changed file')
@@ -265,6 +273,9 @@ export function scopedLayer(layer, changed, { universe = quickUniverse(), slow =
     let spent = 0
     for (const f of broad) { if (spent + scanCost(f) > broadScanMs) break; spent += scanCost(f); add(f, 'scan test over the whole tree') }
   }
+  // After the scan tests: a reader that is a scan test keeps that reason (land-guards picks the
+  // land layer's scan tests by it). No count cap: they reach the change only through the registry.
+  for (const [f, r] of viaRegistry) if (inTier.has(f)) { if (cost(durations, f) <= fileMaxMs) add(f, r); else if (!why.has(f)) leftToGate.push(f) }
   if (changed.some((f) => SETUP_PATH.test(f))) for (const f of universe) if (f.startsWith('tests/setup/')) add(f, 'the change touches the test setup')
   const files = [...why.keys()].sort()
   const slowSet = new Set(slow)
@@ -272,7 +283,13 @@ export function scopedLayer(layer, changed, { universe = quickUniverse(), slow =
   // A test file the change deleted is no test to run (vitest: "No test files found").
   const slowFiles = [...new Set(changed)].filter((f) => isTestFile(f) && (slowSet.has(f) || own(f)) && exists(f)).sort()
   for (const f of slowFiles) why.set(f, `changed (${configOf(f) === 'vitest.slow.config.ts' ? 'slow tier' : configOf(f)})`)
-  return { files, slowFiles, why, leftToGate: leftToGate.sort(), predictedMs: files.reduce((s, f) => s + cost(durations, f), 0) }
+  // An op's reader of the slow tier (tests/mcp) runs with the change's own slow-tier files.
+  for (const [f, r] of viaRegistry) {
+    if (!slowSet.has(f) || why.has(f) || !exists(f) || (r === READS_EVERY_OP && !slowEveryOpReaders)) continue
+    slowFiles.push(f); why.set(f, `${r} (slow tier)`)
+  }
+  slowFiles.sort()
+  return { files, slowFiles, why, leftToGate: [...new Set(leftToGate)].sort(), predictedMs: files.reduce((s, f) => s + cost(durations, f), 0) }
 }
 
 /** The land layer (L1) for a change. */
