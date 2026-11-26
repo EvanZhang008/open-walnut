@@ -24,7 +24,7 @@ import { useFallbackModels } from '@/components/settings/sections/FallbackEngine
 import { engineName } from '@/components/settings/sections/DefaultEngineRow';
 import { launchSourceWords, useGlobalClaudeLaunchDefaults, useGlobalDefaultEngine } from '@/utils/launch-source';
 import { EFFORT_CHOICES, effortName } from '@/components/settings/sections/claude-launch-defaults-select';
-import { engineEntry } from '@/utils/engines';
+import { engineEntry, offeredEngines } from '@/utils/engines';
 import { LaunchSourceTag } from '@/components/sessions/LaunchSourceNote';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { useExperimental } from '@/hooks/useExperimental';
@@ -116,7 +116,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
           onChange={(e) => { void save({ default_engine: e.target.value || null }); }}
         >
           <option value="">Global: {nameOf(globalEngine)}</option>
-          {catalog.map((c) => (
+          {offeredEngines(catalog, catalog, [engine]).map((c) => (
             <option key={c.id} value={c.id}>{engineName(c.displayName)}{c.availability.installed ? '' : ' (not installed)'}</option>
           ))}
         </select>

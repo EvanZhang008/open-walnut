@@ -17,6 +17,8 @@ import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { TransferOptions } from '@/api/transfer';
+import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { offeredEngines } from '@/utils/engines';
 import {
   blockedReason, effectiveDir, hostKindLabel, hostLabel, sourceLine, submitBlocker, withEngine,
   type DirChoice, type TransferForm,
@@ -56,6 +58,8 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
   const messageBox = useRef<HTMLTextAreaElement | null>(null);
   const messageMic = useRef<BoxMicHandle | null>(null);
   const source = options?.source ?? null;
+  // The harnesses Settings, Sessions shows in the model picker, and the one the task runs on or picked.
+  const engineCatalog = useEngineCatalog();
   const dir: DirChoice | null = form && source ? effectiveDir(form, source) : null;
   useEffect(() => { if (form?.dir === 'custom') customRef.current?.focus(); }, [form?.dir]);
 
@@ -101,7 +105,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
     body = (
       <fieldset className="xfer-fields" disabled={busy}>
         <Group label="Harness">
-          {options.engines.map((e) => {
+          {offeredEngines(options.engines, engineCatalog, [source.engine, form.engine]).map((e) => {
             const reason = blockedReason(options, e.id, form.host);
             return (
               <TransferChoice

@@ -170,10 +170,30 @@ export function shownInPicker(entry: Pick<EngineCatalogEntry, 'id' | 'inPicker'>
   return entry.inPicker ?? DEFAULT_PICKER_ENGINES.includes(entry.id);
 }
 
+/**
+ * The engines a choice of engine offers, in the list's own order: the ones Settings, Sessions
+ * shows in the model picker, and every one already chosen (`keep`: the engine in use, the saved
+ * value), so a pick turned off in Settings keeps showing where it is set. Every place a person
+ * picks an engine outside Settings lists through this (tests/web/engine-choice-surfaces.test.ts).
+ * An id the catalog has no record of follows the default list.
+ */
+export function offeredEngines<T extends { id: string }>(
+  list: readonly T[],
+  catalog: EngineCatalog,
+  keep: ReadonlyArray<string | null | undefined> = [],
+): T[] {
+  const kept = new Set(keep.filter((id): id is string => !!id));
+  const shown = (id: string) => {
+    const entry = catalog.find((e) => e.id === id);
+    return entry ? shownInPicker(entry) : (DEFAULT_PICKER_ENGINES as readonly string[]).includes(id);
+  };
+  return list.filter((item) => kept.has(item.id) || shown(item.id));
+}
+
 /** The rail's engines, in catalog order: the ones shown in the picker, and the active one
  *  wherever it is (an engine turned off in Settings keeps working for the session on it). */
 export function pickerRailEngines(catalog: EngineCatalog, active: SessionEngine): EngineCatalogEntry[] {
-  return catalog.filter((entry) => entry.id === active || shownInPicker(entry));
+  return offeredEngines(catalog, catalog, [active]);
 }
 
 export function engineDisplayName(catalog: EngineCatalog, engine: unknown): string {

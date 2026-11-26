@@ -1116,6 +1116,21 @@ export async function draftEngineButton(page: Page, panel: Locator, engineId: st
   return button
 }
 
+/**
+ * Show `ids` (or every engine) on the model picker's rail for this page only, the way Settings,
+ * Sessions turns engines on: GET /api/engines answers with those marked `inPicker`. The fixture
+ * keeps the default list, as a person who installed Walnut sees it (test-server.ts), so a spec
+ * that picks another engine on the rail calls this before the page loads the catalog.
+ */
+export async function showEnginesInPicker(page: Page, ids: readonly string[] | 'all'): Promise<void> {
+  await page.route('**/api/engines', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { engines?: Array<Record<string, unknown>> }
+    for (const e of body.engines ?? []) e.inPicker = ids === 'all' || ids.includes(String(e.id))
+    await route.fulfill({ response: res, json: body })
+  })
+}
+
 /** The picker's ACP pane has its list (no "Loading <engine> models…"), so the picker is not
  *  about to be re-placed under the pointer. */
 async function waitForModelPickerSettled(picker: Locator): Promise<void> {

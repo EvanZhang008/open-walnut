@@ -1,8 +1,8 @@
 /**
  * The model picker's engine rail, as a person uses it (ModelPicker.tsx ProviderRail):
- *   - It offers the engines Settings, Sessions turns on: by default Claude Code, Codex,
- *     OpenCode and Pi. The fixture turns every engine on for the engine specs, so the
- *     default list is driven here by answering GET /api/engines with those four marked.
+ *   - It offers the engines Settings, Sessions turns on: by default the few common ones
+ *     (DEFAULT_PICKER_ENGINES). The fixture keeps that default, as a person who just installed
+ *     Walnut sees it, so this spec reads the rail as is.
  *   - Hovering the rail widens it over the models at once and shows each engine's name
  *     beside its icon; the pointer leaving narrows it again. Keyboard focus widens it too.
  *   - "More engines" opens Settings, Sessions, where an engine is turned on or off; Custom
@@ -10,25 +10,16 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { draftEngineButton, draftModelPicker, openDraft } from './draft-helpers'
+import { draftEngineButton, draftModelPicker, openDraft, showEnginesInPicker } from './draft-helpers'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
 
 const DEFAULT_FOUR = ['claude', 'codex', 'opencode', 'pi']
-const ALL = ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']
+/** Engines only Settings turns on (Evan, 2026-11-20: only the common engines in the picker, the rest in Settings). */
+const SETTINGS_ONLY = ['gemini', 'goose', 'dsh', 'custom']
 
 test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
-
-/** The real catalog, with the default four marked for the picker (a config naming none). */
-async function answerDefaultFour(page: Page): Promise<void> {
-  await page.route('**/api/engines', async (route) => {
-    const res = await route.fetch()
-    const body = await res.json() as { engines: Array<Record<string, unknown>> }
-    for (const e of body.engines) e.inPicker = DEFAULT_FOUR.includes(String(e.id))
-    await route.fulfill({ response: res, json: body })
-  })
-}
 
 async function openHome(page: Page): Promise<void> {
   await page.goto('/')
@@ -52,7 +43,7 @@ async function settledLeft(el: Locator): Promise<number> {
 }
 
 test('the rail shows the default four engines and widens with their names on hover', async ({ page }) => {
-  await answerDefaultFour(page)
+  await showEnginesInPicker(page, DEFAULT_FOUR)
   await openHome(page)
   const panel = await openDraft(page)
   await draftEngineButton(page, panel, 'claude')
@@ -99,47 +90,57 @@ test('the rail shows the default four engines and widens with their names on hov
   await expect.poll(() => railWidth(rail)).toBeGreaterThan(160)
 })
 
+type ConfigBody = { config?: { session?: { picker_engines?: string[] } } }
+
+test('the rail as installed shows only the picker engines, never the ones Settings turns on', async ({ page, request }) => {
+  const catalog = await (await request.get('/api/engines')).json() as { engines: Array<{ id: string; inPicker?: boolean }> }
+  const shown = catalog.engines.filter((e) => e.inPicker || e.id === 'claude').map((e) => e.id)
+  for (const id of SETTINGS_ONLY) expect(shown, `${id} is turned on only in Settings`).not.toContain(id)
+  await openHome(page)
+  const panel = await openDraft(page)
+  await draftEngineButton(page, panel, 'claude')
+  const rail = draftModelPicker(page).getByTestId('provider-rail')
+  expect(await rail.locator('.provider-rail-item[data-provider]').evaluateAll((els) => els.map((e) => e.getAttribute('data-provider')))).toEqual(shown)
+})
+
 test('More engines opens Settings, and an engine turned on there joins the rail', async ({ page, request }) => {
   try {
     await openHome(page)
     let panel = await openDraft(page)
     await draftEngineButton(page, panel, 'claude')
     const picker = draftModelPicker(page)
-    // The fixture shows every engine: Custom (ACP) is on the rail, locked until its command is set.
-    await expect(picker.locator('[data-provider="custom"]')).toHaveCount(1)
+    // As installed, Custom (ACP) is not on the rail: Settings turns it on.
+    await expect(picker.locator('[data-provider="custom"]')).toHaveCount(0)
     await picker.getByTestId('provider-rail-more').click()
     await expect(page).toHaveURL(/\/settings#sessions$/)
     await expect(picker).toHaveCount(0)
     const group = page.getByTestId('picker-engines-group')
     await expect(group).toBeVisible()
     const box = group.getByTestId('picker-engine-custom')
-    await expect(box).toBeChecked()
-    await box.uncheck()
-    await expect.poll(async () => {
-      const body = await (await request.get('/api/config')).json() as { config?: { session?: { picker_engines?: string[] } } }
-      return body.config?.session?.picker_engines
-    }).toEqual(ALL.filter((id) => id !== 'custom'))
+    await expect(box).not.toBeChecked()
     await expect(group.getByTestId('picker-engine-pi')).toBeChecked()
+    await box.check()
+    await expect.poll(async () => ((await (await request.get('/api/config')).json()) as ConfigBody).config?.session?.picker_engines ?? [])
+      .toContain('custom')
 
-    // Home again (the sidebar link): the rail no longer offers it.
+    // Home again (the sidebar link): the rail offers it, and still not the others Settings keeps.
+    await page.locator('.sidebar-nav a[href="/"]').first().click()
+    panel = await openDraft(page)
+    await draftEngineButton(page, panel, 'custom')
+    await expect(draftModelPicker(page).locator('[data-provider="gemini"]')).toHaveCount(0)
+
+    // Off again in Settings (reached the same way, from the rail): gone from the rail.
+    await draftModelPicker(page).getByTestId('provider-rail-more').click()
+    await expect(page).toHaveURL(/\/settings#sessions$/)
+    await page.getByTestId('picker-engines-group').getByTestId('picker-engine-custom').uncheck()
+    await expect.poll(async () => ((await (await request.get('/api/config')).json()) as ConfigBody).config?.session?.picker_engines ?? [])
+      .not.toContain('custom')
     await page.locator('.sidebar-nav a[href="/"]').first().click()
     panel = await openDraft(page)
     await draftEngineButton(page, panel, 'claude')
     await expect(draftModelPicker(page).locator('[data-provider="custom"]')).toHaveCount(0)
-    await expect(draftModelPicker(page).locator('[data-provider="gemini"]')).toHaveCount(1)
-
-    // On again in Settings (reached the same way, from the rail): back on the rail.
-    await draftModelPicker(page).getByTestId('provider-rail-more').click()
-    await expect(page).toHaveURL(/\/settings#sessions$/)
-    await page.getByTestId('picker-engines-group').getByTestId('picker-engine-custom').check()
-    await expect.poll(async () => {
-      const body = await (await request.get('/api/config')).json() as { config?: { session?: { picker_engines?: string[] } } }
-      return body.config?.session?.picker_engines
-    }).toEqual(ALL)
-    await page.locator('.sidebar-nav a[href="/"]').first().click()
-    panel = await openDraft(page)
-    await draftEngineButton(page, panel, 'custom')
   } finally {
-    await request.put('/api/config', { data: { session: { picker_engines: ALL } } })
+    // Back to the installed default: no list saved.
+    await request.put('/api/config', { data: { session: { picker_engines: null } } })
   }
 })

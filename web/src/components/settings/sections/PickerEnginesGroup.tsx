@@ -1,7 +1,7 @@
 /**
  * Settings, Sessions: which engines the model picker offers (`session.picker_engines`), and the
  * command of the custom ACP engine (`engines.custom.adapter_cmd`). The picker shows Claude Code,
- * Codex, Antigravity, OpenCode and Pi unless the list says otherwise; a session on an engine turned off here
+ * Codex, OpenCode and Pi unless the list says otherwise; a session on an engine turned off here
  * keeps it, and its picker still shows it.
  */
 import type { Config, SessionEngine } from '@open-walnut/core';

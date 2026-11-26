@@ -25,7 +25,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import {
   REAL_PANEL, basenameOf, closeModelPicker, draftCwdPill, draftEngineButton, draftModelPill, openDraft,
-  serverHome, shownHomePath,
+  serverHome, shownHomePath, showEnginesInPicker,
 } from './draft-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -35,6 +35,9 @@ let walnutHome = ''
 test.beforeAll(async () => {
   ;({ fixtureRoot, walnutHome } = await discoverBrowserFixture(TEST_PORT))
 })
+
+// Every engine on the rail: these specs pick each one there (the fixture shows the default ones).
+test.beforeEach(async ({ page }) => { await showEnginesInPicker(page, 'all') })
 
 interface EngineCase {
   /** Wire id, as it must appear in the quick-start body. */

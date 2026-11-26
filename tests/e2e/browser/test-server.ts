@@ -219,8 +219,10 @@ await fs.writeFile(
   path.join(tmpBase, 'config.yaml'),
   JSON.stringify({
     version: 1,
-    // Every engine on the model picker's rail (the default shows four): the engine specs pick each one there.
-    session: { history_remote: remoteHistorySetting(fixtureS3), picker_engines: ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] },
+    // No list of picker engines: the model picker's rail shows the default engines, as a person who just
+    // installed Walnut sees it, so every proof video shows what they would. A spec that picks
+    // another engine on the rail turns it on for its own page (showEnginesInPicker, draft-helpers.ts).
+    session: { history_remote: remoteHistorySetting(fixtureS3) },
     defaults: { priority: 'none', platform: 'local' },
     hosts: {
       'fixture-remote': {

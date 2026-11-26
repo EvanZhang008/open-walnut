@@ -63,6 +63,9 @@ test('the project details set its launch defaults, say where each comes from, an
   const workspace = block.getByTestId('project-isolated-workspace')
   // Nothing set: every row is the global default, named, and the model waits for an engine.
   await expect(engine.locator('option:checked')).toHaveText(/^Global: /)
+  // The engines offered are the model picker's (Settings, Sessions turns the others on), never every engine.
+  const offered = await engine.locator('option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value).filter(Boolean))
+  expect(offered).toEqual(['claude', 'codex', 'opencode', 'pi'])
   // The global mode is Claude Code's own default for the project's folder (its settings, else Auto).
   const launchMode = (await (await page.request.get(`/api/engines/claude/launch-mode?cwd=${encodeURIComponent(cwd)}`)).json() as { mode: string }).mode
   await expect(mode.locator('option:checked')).toHaveText(`Global: ${await mode.locator(`option[value="${launchMode}"]`).innerText()}`)

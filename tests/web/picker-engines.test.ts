@@ -1,6 +1,6 @@
 /**
  * The model picker's engine rail (ModelPicker.tsx ProviderRail) and its Settings group
- * (PickerEnginesGroup): the rail shows Claude Code, Codex, Antigravity, OpenCode and Pi unless
+ * (PickerEnginesGroup): the rail shows Claude Code, Codex, OpenCode and Pi unless
  * `session.picker_engines` names others, the engine a session runs on always shows, and the
  * Settings saves keep every sibling key of `session` and `engines`.
  */
@@ -20,11 +20,11 @@ function entry(id: SessionEngine, inPicker?: boolean): EngineCatalogEntry {
 const ids = (rows: EngineCatalog) => rows.map((e) => e.id)
 
 describe('the engines the picker shows', () => {
-  it('defaults to Claude Code, Codex, Antigravity, OpenCode and Pi, also in an older server\'s catalog', () => {
-    expect([...DEFAULT_PICKER_ENGINES]).toEqual(['claude', 'codex', 'antigravity', 'opencode', 'pi'])
-    // No inPicker (an older server): the client falls back to the same five.
+  it('defaults to Claude Code, Codex, OpenCode and Pi, also in an older server\'s catalog', () => {
+    expect([...DEFAULT_PICKER_ENGINES]).toEqual(['claude', 'codex', 'opencode', 'pi'])
+    // No inPicker (an older server): the client falls back to the same four.
     const old = SESSION_ENGINE_IDS.map((id) => entry(id))
-    expect(ids(old.filter(shownInPicker))).toEqual(['claude', 'codex', 'antigravity', 'opencode', 'pi'])
+    expect(ids(old.filter(shownInPicker))).toEqual(['claude', 'codex', 'opencode', 'pi'])
   })
 
   it('follows the server\'s inPicker, and always keeps the engine in use', () => {
@@ -39,7 +39,7 @@ describe('Settings saves', () => {
   const catalog = SESSION_ENGINE_IDS.map((id) => entry(id))
 
   it('checks the saved list, else the defaults', () => {
-    expect(pickerChecked({}, catalog)).toEqual(['claude', 'codex', 'antigravity', 'opencode', 'pi'])
+    expect(pickerChecked({}, catalog)).toEqual(['claude', 'codex', 'opencode', 'pi'])
     expect(pickerChecked({ session: { picker_engines: ['pi', 'dsh'] } } as Config, catalog)).toEqual(['pi', 'dsh'])
     expect(pickerChecked({ session: { picker_engines: [] } } as Config, catalog)).toEqual([])
   })
