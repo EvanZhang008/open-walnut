@@ -1399,9 +1399,10 @@ async function homeSessions(x: Ctx): Promise<void> {
   const idle = await sessionTurn(w, L, { taskId: tIdle, message: 'ROUND home idle on A', cwd: L.home })
   const idleOk = idle.ok && await waitFor('the idle home session to answer', async () => ((await answersOn(w, L, idle.sid)).get('echo: ROUND home idle on A') ?? 0) > 0, 120_000).then(() => true).catch(() => false)
   if (!c.add(`${label}: a session in ${L.id}'s data home answers there`, idleOk, idle.why ?? idle.sid)) return
-  const heldTurn = async (m: Machine, sid: string | undefined, taskId: string) => {
+  // A held turn; `writing`: it appends to that file in its folder while held (a tool at work in the data home).
+  const heldTurn = async (m: Machine, sid: string | undefined, taskId: string, writing?: string) => {
     const gate = path.join(m.dir, `gate-${randomBytes(3).toString('hex')}`)
-    const t = await sessionTurn(w, m, { taskId, ...(sid ? { sid } : { cwd: m.home }), message: `please hold until ${gate}` })
+    const t = await sessionTurn(w, m, { taskId, ...(sid ? { sid } : { cwd: m.home }), message: `please hold until ${gate}${writing ? ` writing ${writing}` : ''}` })
     const running = t.ok && await waitFor('the held turn to run', async () => (await sessionOn(w, m, t.sid))?.process_status === 'running', 90_000, 500).then(() => true).catch(() => false)
     return { sid: t.sid, running, why: t.why ?? '', gate }
   }
@@ -1436,7 +1437,7 @@ async function homeSessions(x: Ctx): Promise<void> {
   }
 
   // ---- 2. the switch, started by a command a session in the home runs ----
-  const again = await heldTurn(L, turn.sid, tTurn)
+  const again = await heldTurn(L, turn.sid, tTurn, 'notes/rehearsal-turn-writes.md')
   c.add(`${label}: the second session is mid-turn again`, again.running, again.why)
   await writeAndBatch(x, 'home-sessions-2')
   const before = await switchState(L.home)
@@ -1448,11 +1449,26 @@ async function homeSessions(x: Ctx): Promise<void> {
   const gate = path.join(L.dir, `gate-cmd-${randomBytes(3).toString('hex')}`)
   await write(gate, 'go')
   const t0 = Date.now()
+  // The old home as it stands at the final mark (the mark's file appearing in the new machine's standby folder): from
+  // then on nothing may change in it, whatever runs after (a CLI the stop did not end would go on writing there).
+  const markDir = path.join(O.standbyDir, 'switch')
+  const marksBefore = new Set((await w.io(O).op('ls', markDir)) ?? [])
+  let atMark: HomeSnapshot | null = null
+  let watching = true
+  const watcher = (async () => {
+    while (watching && !atMark) {
+      const now = (await w.io(O).op('ls', markDir).catch(() => null)) ?? []
+      if (now.some((n) => n.endsWith('.final.json') && !marksBefore.has(n))) { atMark = await snapshot(L.home); break }
+      await sleep(100)
+    }
+  })()
   const cmd = await sessionTurn(w, L, { taskId: tCmd, cwd: L.home, message: `please hold until ${gate} then exec ${script} into ${outFile}` })
   const st = await waitFor('the switch started from a session in the home to end', async () => {
     const s2 = await switchState(L.home)
     return s2 && s2.id !== before?.id && (s2.step === 'done' || s2.step === 'rolled-back') ? s2 : null
   }, 900_000, 2_000).catch(() => null)
+  watching = false
+  await watcher
   const tgt = st ? await targetDone(st) : null
   const done = st?.step === 'done' && tgt?.step === 'done'
   if (done) { roles.leader = O; roles.other = L }
@@ -1468,12 +1484,17 @@ async function homeSessions(x: Ctx): Promise<void> {
   const left = await w.io(L).op('processesIn', [L.home])
   c.add(`${label}: no process works in ${L.id}'s old home after the switch (not even the switch's own job, which the session's command started there)`, left.length === 0 && (lines.stop?.others ?? []).length === 0,
     `now ${JSON.stringify(left.slice(0, 5))}; at the stop ${JSON.stringify(lines.stop?.others ?? null)}`)
-  const kept0 = await snapshot(L.home)
+  c.add(`${label}: the old home was read at the final mark (the mark reached ${O.id})`, atMark !== null)
+  const kept0 = atMark ?? await snapshot(L.home)
   // The turn the stop interrupted goes on as after a restart (its line once more, or a restart note): its gate, on
   // that machine, opens now, so a line sent again ends there instead of holding the session.
   await w.io(O).op('write', again.gate, 'go')
   const resentB = await waitFor(`the interrupted turn's line on ${O.id}`, async () => (await echoesWith(w, O, turn.sid, `released ${again.gate}`)).length > 0, 60_000).then(() => true).catch(() => false)
   x.times[`${label}: the turn the switch stop interrupted, on ${O.id}`] = resentB ? 'its line went out once more and ended' : 'its line did not go out again (a restart note rides the next message)'
+  await sleep(3_000)
+  const ranB = (await echoesWith(w, O, turn.sid, `released ${again.gate}`)).length
+  const ranA = (await echoesWith(w, L, turn.sid, `released ${again.gate}`)).length
+  c.add(`${label}: the turn the switch stop interrupted ran at most once after it, on ${O.id} only`, ranB <= 1 && ranA === 0, `${ranB} time(s) on ${O.id}, ${ranA} on ${L.id}`)
   for (const [sid, taskId, name, said] of [[idle.sid, tIdle, 'idle', 'ROUND home idle on A'], [turn.sid, tTurn, 'turn', 'ROUND home after rollback turn'], [cmd.sid, tCmd, 'cmd', 'please hold until']] as const) {
     const row = await waitFor(`the ${name} session on ${O.id}`, async () => {
       const r = await sessionOn(w, O, sid)

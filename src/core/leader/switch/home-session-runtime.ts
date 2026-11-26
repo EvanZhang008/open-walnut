@@ -5,7 +5,11 @@
  *
  * The stop goes only through the owning runtime (the `stop` command of this machine's own daemon, reason
  * leader_switch, with this home and the stop's id): the server never signals a pid itself. The daemon answers once
- * the session's process group is gone (an ACP worker by its own strict stop), with supervision off under that id.
+ * the session's process group is gone (an ACP worker by its own strict stop), with its cron supervision off.
+ *
+ * What a switch left to do here (place the records after the commit, settle the sessions after a rollback) is tried
+ * until it is done, on a slow timer, never given up while the server runs: until then those sessions stay held (no
+ * message reaches them), and the switch's notes say why (`walnut leader switch --status`).
  */
 import type { SessionRecord } from '../../types.js'
 import type { HomeStopDeps, RollbackDeps } from './home-sessions.js'
@@ -16,6 +20,9 @@ export const HOME_STOP_CAPABILITY = 'leader-switch-home-stop-v1'
 
 /** The answer of the stop's own time bound when the daemon has not answered. */
 export const STOP_ANSWER_MS = 30_000
+
+/** The slowest retry of what a switch left to do here. */
+const RETRY_MAX_MS = 5 * 60_000
 
 async function store() {
   return import('../../session-tracker.js')
@@ -31,19 +38,41 @@ async function save(sid: string, patch: Partial<SessionRecord>): Promise<void> {
  * CLI runs (nothing could stop it).
  */
 export async function homeStopRuntimeRefusal(live: number): Promise<string | null> {
-  const { getConnectedDaemonConnection } = await import('../../../providers/daemon-connection.js')
+  const [{ getConnectedDaemonConnection }, { needCapability }] = await Promise.all([import('../../../providers/daemon-connection.js'), import('../../../providers/daemon-capability-need.js')])
   const conn = getConnectedDaemonConnection('__local__')
   if (!conn?.connected) return live ? `this machine's session runtime (its own daemon) is not connected, so the ${live} session(s) running in the data home could not be stopped for the switch` : null
   if (!conn.capabilitiesKnown) return 'this machine\'s session runtime has not said what it can do yet'
-  if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return `this machine's session runtime lacks ${HOME_STOP_CAPABILITY} (update Walnut here): it cannot stop the sessions in the data home for a switch, nor refuse new ones there`
+  if (!needCapability(conn, HOME_STOP_CAPABILITY)) return `this machine's session runtime lacks ${HOME_STOP_CAPABILITY} (update Walnut here): it cannot stop the sessions in the data home for a switch, nor refuse new ones there`
   return null
 }
 
+/** The id the runtime knows a session by: an ACP worker's runtime id, else the session's own id. */
+export function stopTargetOf(rec: Pick<SessionRecord, 'claudeSessionId' | 'acpRuntimeId'>): string {
+  return rec.acpRuntimeId || rec.claudeSessionId
+}
+
+/**
+ * A runtime's answer to the leader_switch stop, in the stop's terms: done, or why not. Done is a process gone, or
+ * nothing of the session held there at all (`not_journaled`, which the runtime answers only then). A runtime that
+ * holds the session but would not stop it (`held`: no record of who started it) fails the stop, named: its process
+ * could go on writing the old home.
+ */
+export function stopAnswer(reply: Record<string, unknown>, describe: (r: Record<string, unknown>) => string): { ok: true } | { ok: false; why: string } {
+  if (reply.ok === true && (reply.stopped === true || reply.noop === true)) return { ok: true }
+  if (reply.ok === true && reply.held !== true && reply.reason === 'not_owned' && reply.detail === 'not_journaled') return { ok: true }
+  if (reply.ok === true && reply.held === true) {
+    return { ok: false, why: `this machine's session runtime holds it (${String(reply.kind ?? 'a process')}${typeof reply.pid === 'number' ? ` ${reply.pid}` : ''}) with no record of who started it, so it would not stop it: end it by hand, then run the switch again` }
+  }
+  return { ok: false, why: reply.ok === false ? String(reply.error ?? 'refused') : describe(reply) }
+}
+
 export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
-  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }, { judgeOf }] = await Promise.all([
+  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }, { judgeOf }, { needCapability }, fs, path, { localEngineDir }] = await Promise.all([
     store(), import('../../../providers/daemon-connection.js'), import('../../sessions/session-supervision.js'),
     import('../../sessions/stop-provenance.js'), import('../../../lib/home-processes.js'), import('../../sessions/judge-of.js'),
+    import('../../../providers/daemon-capability-need.js'), import('node:fs'), import('node:path'), import('./session-carry.js'),
   ])
+  const engineDir = await localEngineDir().catch(() => null)
   return {
     list: listSessions,
     save,
@@ -53,24 +82,15 @@ export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
       if (judgeOf(rec.claudeSessionId) === 'host') return { ok: false, why: 'a host judges this session, so this machine\'s runtime may not stop it' }
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) return { ok: false, why: 'this machine\'s session runtime is not connected' }
-      if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return { ok: false, why: `this machine's session runtime lacks ${HOME_STOP_CAPABILITY}` }
+      if (!needCapability(conn, HOME_STOP_CAPABILITY)) return { ok: false, why: `this machine's session runtime lacks ${HOME_STOP_CAPABILITY}` }
       // An ACP session's worker is named by its runtime id (the daemon routes it to the worker's strict stop).
       const reply = await conn.send('stop', { sid: stopTargetOf(rec), reason: 'leader_switch', stopRequestId, home, initiator: 'automatic' }, STOP_ANSWER_MS)
-      if (reply.ok === true && (reply.stopped === true || reply.noop === true)) return { ok: true }
-      // The runtime holds no start of it by this Walnut (a start still on its way here, the record ahead of its
-      // spawn): nothing of it runs to stop, and its spawn now meets the marker. The scan after the stops still fails
-      // the stop on a process of it in the home.
-      if (reply.ok === true && reply.reason === 'not_owned' && reply.detail === 'not_journaled') return { ok: true }
-      return { ok: false, why: reply.ok === false ? String(reply.error ?? 'refused') : describeStopRefusal(reply) }
+      return stopAnswer(reply as Record<string, unknown>, describeStopRefusal as (r: Record<string, unknown>) => string)
     },
     processesInHome: (spellings) => processesInFolders(spellings),
+    transcriptExists: async (folder, sid) => !!engineDir && fs.existsSync(path.join(engineDir, 'projects', folder, `${sid}.jsonl`)),
     now: Date.now,
   }
-}
-
-/** The id the runtime knows a session by: an ACP worker's runtime id, else the session's own id. */
-export function stopTargetOf(rec: Pick<SessionRecord, 'claudeSessionId' | 'acpRuntimeId'>): string {
-  return rec.acpRuntimeId || rec.claudeSessionId
 }
 
 export async function rollbackDeps(): Promise<RollbackDeps> {
@@ -78,11 +98,12 @@ export async function rollbackDeps(): Promise<RollbackDeps> {
   return {
     list: listSessions,
     save,
-    reenable: async (sid, stopRequestId) => {
+    reenable: async (sid) => {
       if (judgeOf(sid) === 'host') throw new Error('a host judges this session, so this machine\'s runtime does not supervise it')
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) throw new Error('this machine\'s session runtime is not connected')
-      const reply = await conn.send('cron.supervision', { sid, enabled: true, stopFence: stopRequestId }, 5_000)
+      // The switch's stop turned supervision off with no fence (the handed-over home refused starts): none to name.
+      const reply = await conn.send('cron.supervision', { sid, enabled: true }, 5_000)
       if (reply.ok !== true) throw new Error(String(reply.error ?? 'supervision not re-enabled'))
     },
     resume: async () => {
@@ -116,66 +137,136 @@ export async function placeDeps(): Promise<PlaceDeps> {
   }
 }
 
+/** A note of this machine in `switchId` (switch-notes.ts): what it still holds and why, read by `--status`. */
+async function sessionsNote(home: string, switchId: string, machine: string, step: 'sessions-held' | 'sessions-settled', why?: string): Promise<void> {
+  try {
+    const { notesAccessOf, writeSwitchNote } = await import('./switch-notes.js')
+    const access = await notesAccessOf(home, process.env)
+    if (access) await writeSwitchNote(access, { switchId, machine, step, ...(why ? { why } : {}) })
+  } catch { /* a note is only what --status prints */ }
+}
+
+/** Runs `attempt` until it says done, waiting longer each time (at most RETRY_MAX_MS), never giving up. */
+export async function untilDone(attempt: () => Promise<{ done: true } | { done: false; why: string }>, o: { firstMs?: number; maxMs?: number; onWait?: (why: string, n: number) => Promise<void> | void; sleep?: (ms: number) => Promise<void> } = {}): Promise<void> {
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
+  let every = o.firstMs ?? 1_000
+  for (let n = 1; ; n++) {
+    let r: { done: true } | { done: false; why: string }
+    try { r = await attempt() } catch (err) { r = { done: false, why: err instanceof Error ? err.message : String(err) } }
+    if (r.done) return
+    await o.onWait?.(r.why, n)
+    await sleep(every)
+    every = Math.min(o.maxMs ?? RETRY_MAX_MS, Math.round(every * 1.5))
+  }
+}
+
+/** One settle of a home's rolled-back sessions per process at a time (a second ask joins it). */
+const settling = new Map<string, Promise<void>>()
+
+/**
+ * The sessions a rolled-back switch stopped go on here, once no open switch holds them (`isOpenSwitch`): settled,
+ * and tried again until each is (a re-enable that failed keeps its session held, named in the switch's notes).
+ */
+export function settleAfterRollback(home: string, isOpenSwitch: (switchId: string) => boolean): Promise<void> {
+  const had = settling.get(home)
+  if (had) return had
+  const run = (async () => {
+    const [{ settleHomeSessionsAfterRollback, homeSessionRows }, { log }, { heldBySwitch }, { deliverSessionHere }] = await Promise.all([
+      import('./home-sessions.js'), import('../../../logging/index.js'), import('../../sessions/switch-hold.js'), import('../../../providers/host-handover.js'),
+    ])
+    // Messages held while the marker stood, for sessions the stop never marked (the switch ended before it): out now.
+    for (const { rec } of homeSessionRows(await (await store()).listSessions(), home)) {
+      if (!rec.archived && !heldBySwitch(rec)) deliverSessionHere(rec.claudeSessionId)
+    }
+    const held = new Map<string, string>()
+    await untilDone(async () => {
+      const r = await settleHomeSessionsAfterRollback({ home, isOpenSwitch, deps: await rollbackDeps() })
+      if (r.settled) log.session.info('leader switch: the sessions a rolled-back switch stopped go on here', { sessions: r.settled })
+      for (const [switchId, machine] of held) if (!r.failed.length) await sessionsNote(home, switchId, machine, 'sessions-settled')
+      if (!r.failed.length) return { done: true }
+      // The switch of each held row, for its note.
+      const rows = (await (await store()).listSessions()).filter((x) => r.failed.some((f) => f.sid === x.claudeSessionId))
+      for (const x of rows) if (x.leaderSwitch) held.set(x.leaderSwitch.switchId, x.leaderSwitch.from.machine)
+      return { done: false, why: r.failed.map((f) => `${f.title ?? f.sid}: ${f.why}`).join('; ') }
+    }, {
+      onWait: async (why, n) => {
+        if (n === 1 || n % 10 === 0) log.session.warn('leader switch: sessions a rolled-back switch stopped are still held here; trying again', { why })
+        if (n === 1) for (const [switchId, machine] of held) await sessionsNote(home, switchId, machine, 'sessions-held', `sessions stay held after the rollback, tried again until they settle: ${why}`)
+      },
+    })
+  })().finally(() => settling.delete(home))
+  settling.set(home, run)
+  return run
+}
+
 /**
  * A server's lead, before its sessions are reconciled and resumed (web/server.ts): the sessions a leader switch left
  * here go on. On the new leader, their records go from the standby folder into this machine's engine dir
  * (session-carry.ts placeCarriedRecords); on an old leader a switch did not commit (its marker gone), they settle in
  * place (home-sessions.ts settleHomeSessionsAfterRollback). Rows no switch marked cost one pass over the store.
+ * Neither is waited for: each runs until done (placeAfterCommit, settleAfterRollback).
  */
-export async function settleHomeSessionsAtLead(home: string): Promise<void> {
-  const { listSessions } = await store()
+export async function settleHomeSessionsAtLead(home: string, o: { place?: typeof placeAfterCommit; settle?: typeof settleAfterRollback; list?: () => Promise<SessionRecord[]> } = {}): Promise<void> {
+  const list = o.list ?? (await store()).listSessions
   const { heldBySwitch } = await import('../../sessions/switch-hold.js')
-  const held = (await listSessions()).filter(heldBySwitch)
+  const held = (await list()).filter(heldBySwitch)
   if (!held.length) return
-  const { log } = await import('../../../logging/index.js')
-  const placing = new Map<string, { standbyDir: string; homeFolder: string }>()
+  const placing = new Map<string, { machine: string; carry: { standbyDir: string; homeFolder: string } }>()
   for (const r of held) {
     const m = r.leaderSwitch!.moved
-    if (m?.records === 'pending' && m.carry) placing.set(r.leaderSwitch!.switchId, m.carry)
+    if (m?.records === 'pending' && m.carry) placing.set(r.leaderSwitch!.switchId, { machine: m.machine, carry: m.carry })
   }
   // Placed only once the switch committed (this server may be its commit start): until then this machine writes
   // nothing outside its standby folder, and the rows stay held (no resume, no message goes to them).
-  for (const [switchId, c] of placing) void placeAfterCommit(home, switchId, c)
+  for (const [switchId, p] of placing) void (o.place ?? placeAfterCommit)(home, switchId, p.carry, p.machine)
   if (held.some((r) => !r.leaderSwitch!.moved)) {
-    const [{ settleHomeSessionsAfterRollback }, { readMarker }] = await Promise.all([import('./home-sessions.js'), import('./records.js')])
-    const n = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: (id) => readMarker(home)?.switchId === id, deps: await rollbackDeps() })
-    if (n) log.session.info('leader switch: the sessions a rolled-back switch stopped go on here', { sessions: n })
+    const { readMarker } = await import('./records.js')
+    void (o.settle ?? settleAfterRollback)(home, (id) => readMarker(home)?.switchId === id)
   }
 }
 
 /** Whether `switchId` committed for this home: its record says so, or this process leads above its handover. */
-export async function committedHere(home: string, switchId: string): Promise<boolean | 'wait'> {
+export async function committedHere(home: string, switchId: string, o: { permit?: () => ReturnType<typeof import('./boot.js')['currentLeaderPermit']> } = {}): Promise<boolean | 'wait'> {
   const [{ readPromoted, readHistory }, { currentLeaderPermit }] = await Promise.all([import('./records.js'), import('./boot.js')])
   if (readHistory(home).some((h) => h.switchId === switchId)) return true
   const p = readPromoted(home)
   if (p?.switchId === switchId && p.state === 'led') return true
-  const permit = currentLeaderPermit()
+  const permit = (o.permit ?? currentLeaderPermit)()
   if (!permit || permit.trial) return false
   const st = permit.runtime.status()
   if (p?.switchId === switchId && st.state === 'leading' && st.record?.holder === permit.machine && typeof p.handover === 'number' && st.record.number > p.handover) return true
   return st.state === 'stopped' ? false : 'wait'
 }
 
-/** Waits (at most 15 min) for the commit of `switchId`, then places its sessions' records and resumes them. */
-async function placeAfterCommit(home: string, switchId: string, c: { standbyDir: string; homeFolder: string }): Promise<void> {
+/**
+ * Waits for the commit of `switchId` here, then places its sessions' records and resumes them. Tried until done,
+ * never given up while this server runs (a process that does not lead yet may lead later): until then the sessions
+ * stay held, and after the first wait the switch's notes say why.
+ */
+export async function placeAfterCommit(home: string, switchId: string, c: { standbyDir: string; homeFolder: string }, machine: string, o: { committed?: typeof committedHere; place?: () => Promise<void>; sleep?: (ms: number) => Promise<void> } = {}): Promise<void> {
   const { log } = await import('../../../logging/index.js')
-  try {
-    let every = 250
-    for (const until = Date.now() + 15 * 60_000; ;) {
-      const v = await committedHere(home, switchId)
-      if (v === true) break
-      if (v === false || Date.now() > until) {
-        log.session.warn('leader switch: the switch did not commit here, so its sessions\' records are not put in place', { switchId, why: v === false ? 'no permit leads in this process' : 'no commit within 15 min' })
-        return
-      }
-      await new Promise((r) => setTimeout(r, every))
-      every = Math.min(5_000, Math.round(every * 1.5))
-    }
+  const place = o.place ?? (async () => {
     const [{ placeCarriedRecords, localEngineDir }, deps] = await Promise.all([import('./session-carry.js'), placeDeps()])
     await placeCarriedRecords({ switchId, home, standbyDir: c.standbyDir, homeFolderFrom: c.homeFolder, engineDir: await localEngineDir(), deps })
     const { getSessionAutoRecover } = await import('../../session-auto-recover.js')
     await getSessionAutoRecover()?.resumeUnfinished()
-  } catch (err) {
-    log.session.warn('leader switch: the sessions\' records could not be put in place; they stay held', { switchId, error: err instanceof Error ? err.message : String(err) })
-  }
+  })
+  let noted = false
+  await untilDone(async () => {
+    const v = await (o.committed ?? committedHere)(home, switchId)
+    if (v !== true) return { done: false, why: v === false ? 'no permit leads in this process above the handover yet' : 'the commit is not known here yet' }
+    await place()
+    if (noted) await sessionsNote(home, switchId, machine, 'sessions-settled')
+    return { done: true }
+  }, {
+    firstMs: 250,
+    ...(o.sleep ? { sleep: o.sleep } : {}),
+    onWait: async (why, n) => {
+      // The first waits are the commit's own few seconds: said after a minute or so.
+      if (n === 12 || (n > 12 && n % 10 === 0)) {
+        log.session.warn('leader switch: the sessions\' records are not in place yet; they stay held and this is tried again', { switchId, why })
+        if (!noted) { noted = true; await sessionsNote(home, switchId, machine, 'sessions-held', `the moved sessions stay held until their records are in place: ${why}`) }
+      }
+    },
+  })
 }

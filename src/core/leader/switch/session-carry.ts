@@ -56,7 +56,7 @@ export function carrySelection(records: readonly SessionRecord[], home: string):
   const own = homeEngineFolder(home)
   if (own) folders.add(own)
   for (const { rec, rel } of homeSessionRows(records, home)) {
-    if (engineOf(rec) !== 'claude' || moveRefusal(rec, rel)) continue
+    if (engineOf(rec) !== 'claude' || moveRefusal(rec, rel, home)) continue
     const f = engineFolderName(rec.cwd!)
     if (!f) continue
     folders.add(f)
@@ -133,18 +133,22 @@ export interface PlacedFolder { from: string; to: string; files: number; bytes: 
 
 export interface PlaceResult {
   folders: PlacedFolder[]
-  /** Sessions whose transcript met another one at the new place (neither is overwritten): they end there. */
+  /** Sessions whose records could not be put in place (neither copy is overwritten): they end there. */
   conflicts: Array<{ sid: string; why: string }>
-  /** Files kept at the new place instead of the carried ones (a memory note, a task) and why. */
-  kept: string[]
+  /** Files already at the new place that a carried one replaced, set aside as `<name>.before-<switch>`. */
+  setAside: string[]
   bytes: number
 }
 
 /**
- * Move the carried records of one folder pair from the carry's copy into the engine dir. Never overwrites: a transcript
- * already there that is a byte prefix of the carried one (what a switch back left there) is set aside as
- * `<name>.before-<switch>`; any other one is a conflict (the session ends with why). A memory note or task file
- * already there is kept, and named. Files get the owner's read-write mode (the copy's are read-only).
+ * Move the carried records of one folder pair from the carry's copy into the engine dir: the transcripts and sidecars
+ * of `sids` only (another session's file in that folder stays in the carry), and the folder's memory. Never
+ * overwrites:
+ *   - a transcript already there that is a byte prefix of the carried one (what a switch back left there) is set aside
+ *     as `<name>.before-<switch>`; any other one is a conflict (the session ends with why, both copies kept);
+ *   - any other file already there with other bytes (a memory note, a sidecar, a task: the older copy a round trip
+ *     left) is set aside the same way, and the carried one, the newer, takes its place.
+ * Files get the owner's read-write mode (the copy's are read-only).
  */
 export function placeFolder(o: { carryCopy: string; engineDir: string; from: string; to: string; switchId: string; sids: ReadonlySet<string> }, out: PlaceResult): void {
   const src = path.join(o.carryCopy, 'projects', o.from)
@@ -157,33 +161,39 @@ export function placeFolder(o: { carryCopy: string; engineDir: string; from: str
     const d = path.join(dst, e.name)
     if (e.isFile() && UUID_JSONL.test(e.name)) {
       const sid = e.name.slice(0, -'.jsonl'.length)
-      const why = moveFile(s, d, o.switchId, placed, true)
+      if (!o.sids.has(sid)) continue
+      const why = moveFile(s, d, o.switchId, placed, 'transcript', out.setAside)
       if (why) out.conflicts.push({ sid, why })
-    } else if (e.isDirectory() && (UUID.test(e.name) || e.name === 'memory')) {
-      mergeDir(s, d, o.switchId, placed, out.kept, e.name !== 'memory')
+    } else if (e.isDirectory() && (e.name === 'memory' || (UUID.test(e.name) && o.sids.has(e.name)))) {
+      mergeDir(s, d, o.switchId, placed, out.setAside)
     }
   }
   out.folders.push(placed)
   out.bytes += placed.bytes
 }
 
-/** One session's task list into the engine dir (kept where one is there already). */
+/** One session's task list into the engine dir (the carried copy is the newer: one there already is set aside). */
 export function placeTasks(o: { carryCopy: string; engineDir: string; sid: string; switchId: string }, out: PlaceResult): void {
   const src = path.join(o.carryCopy, 'tasks', o.sid)
   if (!fs.existsSync(src)) return
   const placed: PlacedFolder = { from: `tasks/${o.sid}`, to: `tasks/${o.sid}`, files: 0, bytes: 0 }
-  mergeDir(src, path.join(o.engineDir, 'tasks', o.sid), o.switchId, placed, out.kept, false)
+  mergeDir(src, path.join(o.engineDir, 'tasks', o.sid), o.switchId, placed, out.setAside)
   out.folders.push(placed)
   out.bytes += placed.bytes
 }
 
-/** Move `s` to `d`. Null when placed (or already there); else why it was not. `log`: a transcript, prefix rule. */
-function moveFile(s: string, d: string, switchId: string, placed: PlacedFolder, log: boolean): string | null {
+/**
+ * Move `s` to `d`. Null when placed (or the same bytes were there); else why not. A file at `d` with other bytes:
+ * `transcript`, set aside only when it is a byte prefix of `s` (else a conflict); `newer`, always set aside.
+ */
+function moveFile(s: string, d: string, switchId: string, placed: PlacedFolder, rule: 'transcript' | 'newer', setAside: string[]): string | null {
   const size = fs.statSync(s).size
   if (fs.existsSync(d)) {
     if (sameBytes(s, d)) { fs.rmSync(s, { force: true }); return null }
-    if (!log || !isPrefixOf(d, s)) return `${d} is there already with other content (neither is overwritten)`
-    fs.renameSync(d, `${d}.before-${switchId}`)
+    if (rule === 'transcript' && !isPrefixOf(d, s)) return `${d} is there already with other content (neither is overwritten)`
+    const aside = freeName(`${d}.before-${switchId}`)
+    fs.renameSync(d, aside)
+    setAside.push(aside)
   }
   fs.mkdirSync(path.dirname(d), { recursive: true, mode: 0o700 })
   try {
@@ -199,17 +209,20 @@ function moveFile(s: string, d: string, switchId: string, placed: PlacedFolder, 
   return null
 }
 
-function mergeDir(s: string, d: string, switchId: string, placed: PlacedFolder, kept: string[], logs: boolean): void {
+/** `p`, or `p.1`, `p.2`... the first that is not there. */
+function freeName(p: string): string {
+  if (!fs.existsSync(p)) return p
+  for (let i = 1; ; i++) if (!fs.existsSync(`${p}.${i}`)) return `${p}.${i}`
+}
+
+function mergeDir(s: string, d: string, switchId: string, placed: PlacedFolder, setAside: string[]): void {
   fs.mkdirSync(d, { recursive: true, mode: 0o700 })
   fs.chmodSync(d, 0o700)
   for (const e of fs.readdirSync(s, { withFileTypes: true })) {
     const sp = path.join(s, e.name)
     const dp = path.join(d, e.name)
-    if (e.isDirectory()) mergeDir(sp, dp, switchId, placed, kept, logs)
-    else if (e.isFile()) {
-      const why = moveFile(sp, dp, switchId, placed, logs && e.name.endsWith('.jsonl'))
-      if (why) kept.push(why)
-    }
+    if (e.isDirectory()) mergeDir(sp, dp, switchId, placed, setAside)
+    else if (e.isFile()) moveFile(sp, dp, switchId, placed, 'newer', setAside)
   }
 }
 
@@ -267,11 +280,14 @@ export interface PlaceDeps {
 /**
  * The new leader, once committed (its first lead: web/server.ts, before the sessions are reconciled and resumed): the
  * records of every session the promotion moved here go from the carry's copy into this machine's engine dir under the
- * new folder name, then the carry is removed. `homeFolderFrom`: the old home's engine folder, as the final mark names
- * it. Idempotent: a session whose records are placed is not touched again.
+ * new folder name, then the carry is removed. Each session's records come from the folder the old leader named in its
+ * stamp (`engineFolder`, of its real cwd there); `homeFolderFrom`, the old home's engine folder as the final mark names
+ * it, is the source of the home's own memory and of a row the old leader did not stamp. A session whose transcript the
+ * old machine kept but is not at its new place afterwards is ended with why, and the carry stays (nothing of it is
+ * lost). Idempotent: a session whose records are placed is not touched again.
  */
-export async function placeCarriedRecords(o: { switchId: string; home: string; standbyDir: string; homeFolderFrom: string; engineDir: string; deps: PlaceDeps }): Promise<PlaceResult & { sessions: number }> {
-  const out: PlaceResult & { sessions: number } = { folders: [], conflicts: [], kept: [], bytes: 0, sessions: 0 }
+export async function placeCarriedRecords(o: { switchId: string; home: string; standbyDir: string; homeFolderFrom: string; engineDir: string; deps: PlaceDeps }): Promise<PlaceResult & { sessions: number; missing: string[] }> {
+  const out: PlaceResult & { sessions: number; missing: string[] } = { folders: [], conflicts: [], setAside: [], bytes: 0, sessions: 0, missing: [] }
   const rows = (await o.deps.list()).filter((r) => r.leaderSwitch?.switchId === o.switchId && r.leaderSwitch.moved?.records === 'pending')
   if (!rows.length) return out
   const carryCopy = path.join(carryTargetDir(o.standbyDir), 'copy')
@@ -279,20 +295,38 @@ export async function placeCarriedRecords(o: { switchId: string; home: string; s
   if (fs.existsSync(carryCopy)) ownerWritable(carryCopy)
   const toFolderOfHome = engineFolderName(o.home)
   if (!toFolderOfHome) throw new Error(`the new home's path ${o.home} is longer than Claude Code names a folder of records by`)
-  const pairs = new Map<string, string>([[o.homeFolderFrom, toFolderOfHome]])
+  // Folder pairs, each with the sessions it moves (the home's own folder moves its memory even with none).
+  const pairs = new Map<string, { to: string; sids: Set<string> }>([[o.homeFolderFrom, { to: toFolderOfHome, sids: new Set() }]])
+  const toOf = new Map<string, string>()
   for (const r of rows) {
-    const rel = r.leaderSwitch!.rel
-    pairs.set(engineFolderUnder(o.homeFolderFrom, rel), engineFolderName(path.join(realPath(o.home), rel)) ?? engineFolderUnder(toFolderOfHome, rel))
+    const st = r.leaderSwitch!
+    const from = st.engineFolder ?? engineFolderUnder(o.homeFolderFrom, st.rel)
+    const to = engineFolderName(path.join(realPath(o.home), ...st.rel.split('/').filter(Boolean))) ?? engineFolderUnder(toFolderOfHome, st.rel)
+    const pair = pairs.get(from) ?? { to, sids: new Set<string>() }
+    pair.sids.add(r.claudeSessionId)
+    pairs.set(from, pair)
+    toOf.set(r.claudeSessionId, pair.to)
   }
-  const sids = new Set(rows.map((r) => r.claudeSessionId))
-  for (const [from, to] of pairs) placeFolder({ carryCopy, engineDir: o.engineDir, from, to, switchId: o.switchId, sids }, out)
-  for (const sid of sids) placeTasks({ carryCopy, engineDir: o.engineDir, sid, switchId: o.switchId }, out)
+  for (const [from, p] of pairs) placeFolder({ carryCopy, engineDir: o.engineDir, from, to: p.to, switchId: o.switchId, sids: p.sids }, out)
+  for (const r of rows) placeTasks({ carryCopy, engineDir: o.engineDir, sid: r.claudeSessionId, switchId: o.switchId }, out)
   const conflicted = new Map(out.conflicts.map((c) => [c.sid, c.why]))
+  let keepCarry = out.conflicts.length > 0
   for (const r of rows) {
     const st = r.leaderSwitch!
     const sid = r.claudeSessionId
-    const why = conflicted.get(sid)
+    let why = conflicted.get(sid)
+    const there = fs.existsSync(path.join(o.engineDir, 'projects', toOf.get(sid)!, `${sid}.jsonl`))
+    if (!why && !there && st.transcript !== false) {
+      why = `its transcript was not among the records carried from ${st.from.machine} (folder ${st.engineFolder ?? st.rel}), so its history is not on this machine`
+      out.missing.push(sid)
+      if (r.archived) {
+        // An archived session with no transcript left: nothing to resume; named, and the carry need not stay for it.
+        await o.deps.save(sid, { leaderSwitch: { ...st, moved: { ...st.moved!, records: 'missing' }, why } })
+        continue
+      }
+    }
     if (why) {
+      keepCarry = true
       await o.deps.end(sid, `Ended by the leader switch ${o.switchId}: its history could not be put in place on this machine (${why}).`)
       await o.deps.save(sid, { leaderSwitch: { ...st, plan: 'end', why, moved: { ...st.moved!, records: 'missing' } } })
       continue
@@ -303,10 +337,10 @@ export async function placeCarriedRecords(o: { switchId: string; home: string; s
     await o.deps.release(sid)
     if (st.supervised && st.stopped === 'idle') await o.deps.startIdle(sid).catch((err: unknown) => o.deps.log('warn', 'leader switch: a supervised session did not start idle after the move', { sid, error: String(err) }))
   }
-  if (!out.conflicts.length) {
+  if (!keepCarry) {
     if (fs.existsSync(carryTargetDir(o.standbyDir))) ownerWritable(carryTargetDir(o.standbyDir))
     fs.rmSync(carryTargetDir(o.standbyDir), { recursive: true, force: true })
   }
-  o.deps.log(out.conflicts.length ? 'warn' : 'info', 'leader switch: the sessions\' records are in place on this machine', { switchId: o.switchId, sessions: out.sessions, bytes: out.bytes, folders: out.folders, conflicts: out.conflicts, kept: out.kept })
+  o.deps.log(keepCarry ? 'warn' : 'info', 'leader switch: the sessions\' records are in place on this machine', { switchId: o.switchId, sessions: out.sessions, bytes: out.bytes, folders: out.folders, conflicts: out.conflicts, missing: out.missing, setAside: out.setAside, carryKept: keepCarry })
   return out
 }

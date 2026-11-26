@@ -3032,8 +3032,12 @@ export interface LeaderSwitchSessionStamp {
   stopped: 'turn' | 'idle' | 'none';
   /** Its daemon supervised a session cron of it (daemon-cron-runtime.ts): the new leader starts it even when idle. */
   supervised?: boolean;
-  /** The stop's id at the daemon (a rollback re-enables its cron supervision with it). */
+  /** The stop's own id at the daemon (the same for a stop asked again); no fence: the handed-over home refuses starts. */
   stopRequestId?: string;
+  /** The engine's folder of its records on the old machine (Claude Code: projects/<name>/, of its real cwd): where the new leader takes them from. */
+  engineFolder?: string;
+  /** Whether the old machine's engine kept a transcript of it at the stop (the new leader then checks it placed one). */
+  transcript?: boolean;
   at: string;
   /** The new leader's side, set at its promotion and once the records are in place. */
   moved?: { machine: string; home: string; cwd: string; at: string; records?: 'pending' | 'placed' | 'missing'; carry?: { standbyDir: string; homeFolder: string } };

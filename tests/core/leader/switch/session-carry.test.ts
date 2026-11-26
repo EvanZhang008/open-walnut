@@ -93,6 +93,18 @@ describe('a carry batch', () => {
     expect(place.appendOnly(`tasks/${sid(1)}/1.json`)).toBe(false)
   })
 
+  it('a folder under the home that links out of it is not selected: another project\'s records are never carried', async () => {
+    const root = dir()
+    const home = path.join(root, 'home')
+    const outside = path.join(root, 'work', 'x')
+    fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(outside, { recursive: true })
+    fs.symlinkSync(outside, path.join(home, 'x'))
+    const sel = carrySelection([rec(1, home), rec(2, path.join(home, 'x'))], home)
+    expect([...sel.folders]).toEqual([homeEngineFolder(home)])
+    expect([...sel.sids]).toEqual([sid(1)])
+  })
+
   it('with no place given a batch walks the home exactly as before (HOME_PLACE is the default)', async () => {
     const root = dir()
     const home = path.join(root, 'home')
@@ -241,6 +253,65 @@ describe('after the commit: the records into the new folder', () => {
     expect(fs.existsSync(carryTargetDir(t.standby))).toBe(false)
     // Done once: a second pass finds nothing pending.
     expect((await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })).sessions).toBe(0)
+  })
+
+  it('takes each session\'s records from the folder the old leader named, and only the moving sessions\' files', async () => {
+    const t = setup()
+    const toF = homeEngineFolder(t.newHome)!
+    // The old leader ran row 2 under another spelling of its folder (its real path): the stamp names that folder.
+    const named = '-real-old-home-notes'
+    t.rows.set(sid(2), { ...t.rows.get(sid(2))!, leaderSwitch: { ...t.rows.get(sid(2))!.leaderSwitch!, engineFolder: named } })
+    const copy = path.join(carryTargetDir(t.standby), 'copy')
+    fs.chmodSync(copy, 0o700); fs.chmodSync(path.join(copy, 'projects'), 0o700)
+    write(path.join(copy, 'projects', named, `${sid(2)}.jsonl`), '{"named":1}\n')
+    // A transcript of a session that does not move, in the home's folder: it stays in the carry.
+    fs.chmodSync(path.join(copy, 'projects', t.fromF), 0o700)
+    write(path.join(copy, 'projects', t.fromF, `${sid(7)}.jsonl`), '{"other":1}\n')
+    const r = await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })
+    expect(r.conflicts).toEqual([])
+    expect(fs.readFileSync(path.join(t.eng, 'projects', engineFolderUnder(toF, 'notes'), `${sid(2)}.jsonl`), 'utf8')).toBe('{"named":1}\n')
+    expect(fs.existsSync(path.join(t.eng, 'projects', toF, `${sid(7)}.jsonl`))).toBe(false)
+  })
+
+  it('a transcript the old machine kept but that is not at its new place: the session ends with why, the carry stays', async () => {
+    const t = setup()
+    const copy = path.join(carryTargetDir(t.standby), 'copy')
+    fs.chmodSync(copy, 0o700); fs.chmodSync(path.join(copy, 'projects'), 0o700)
+    const notesF = path.join(copy, 'projects', engineFolderUnder(t.fromF, 'notes'))
+    fs.chmodSync(notesF, 0o700)
+    fs.rmSync(path.join(notesF, `${sid(2)}.jsonl`))
+    const r = await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })
+    expect(r.missing).toEqual([sid(2)])
+    expect(t.rows.get(sid(2))!.leaderSwitch).toMatchObject({ plan: 'end', moved: { records: 'missing' }, why: expect.stringMatching(/transcript was not among the records carried/) })
+    expect(t.calls.some((c) => c.startsWith(`end ${sid(2)}`))).toBe(true)
+    expect(t.rows.get(sid(1))!.leaderSwitch!.moved!.records).toBe('placed')
+    expect(fs.existsSync(carryTargetDir(t.standby))).toBe(true)
+  })
+
+  it('a session the old machine kept no transcript of is placed with none (nothing to look for)', async () => {
+    const t = setup()
+    t.rows.set(sid(2), { ...t.rows.get(sid(2))!, leaderSwitch: { ...t.rows.get(sid(2))!.leaderSwitch!, transcript: false } })
+    const copy = path.join(carryTargetDir(t.standby), 'copy')
+    fs.chmodSync(copy, 0o700); fs.chmodSync(path.join(copy, 'projects'), 0o700)
+    const notesF = path.join(copy, 'projects', engineFolderUnder(t.fromF, 'notes'))
+    fs.chmodSync(notesF, 0o700)
+    fs.rmSync(path.join(notesF, `${sid(2)}.jsonl`))
+    const r = await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })
+    expect(r.missing).toEqual([])
+    expect(t.rows.get(sid(2))!.leaderSwitch!.moved!.records).toBe('placed')
+  })
+
+  it('after a round trip the carried memory and task list are the newer: the copy there is set aside, not kept', async () => {
+    const t = setup()
+    const toF = homeEngineFolder(t.newHome)!
+    write(path.join(t.eng, 'projects', toF, 'memory', 'MEMORY.md'), '# older, from before the first switch\n')
+    write(path.join(t.eng, 'tasks', sid(1), '1.json'), '{"old":1}')
+    const r = await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })
+    expect(fs.readFileSync(path.join(t.eng, 'projects', toF, 'memory', 'MEMORY.md'), 'utf8')).toBe('# carried\n')
+    expect(fs.readFileSync(path.join(t.eng, 'projects', toF, 'memory', 'MEMORY.md.before-S1'), 'utf8')).toBe('# older, from before the first switch\n')
+    expect(fs.readFileSync(path.join(t.eng, 'tasks', sid(1), '1.json'), 'utf8')).toBe('{}')
+    expect(fs.readFileSync(path.join(t.eng, 'tasks', sid(1), '1.json.before-S1'), 'utf8')).toBe('{"old":1}')
+    expect(r.setAside).toHaveLength(2)
   })
 
   it('never overwrites: a prefix left by an earlier switch is set aside, any other transcript there ends the session', async () => {

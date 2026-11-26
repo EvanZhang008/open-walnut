@@ -32,7 +32,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { projectOrInbox } from '../core/inbox-project.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
-import { heldBySwitch } from '../core/sessions/switch-hold.js'
+import { heldByHomeMarker, heldBySwitch } from '../core/sessions/switch-hold.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { controlsReportedWithin } from './remote-judged-session.js'
@@ -54,7 +54,7 @@ import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPA
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
 import { isProcessAliveAsync } from '../utils/process.js'
-import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
+import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
 import { callThrough, sessionPort, type SessionQueuePort } from '../core/sessions/session-port.js'
 
@@ -17296,6 +17296,11 @@ export class SessionRunner {
     // switch delivers them once it settles (core/leader/switch/home-session-runtime.ts).
     if (heldBySwitch(stopRecord)) {
       log.session.info('processNext: held by a leader switch until its records are in place', { sessionId, switchId: stopRecord?.leaderSwitch?.switchId })
+      return
+    }
+    // Its home is being handed over (the marker is written, the switch stop has not marked the row yet): held too.
+    if (heldByHomeMarker(stopRecord, WALNUT_HOME)) {
+      log.session.info('processNext: held while a leader switch hands its data home over', { sessionId })
       return
     }
     const stopFence = stopRecord?.stopRequest?.id ?? null

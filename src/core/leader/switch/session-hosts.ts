@@ -170,9 +170,11 @@ function moveHomeRows(db: InstanceType<typeof Database>, switchId: string, h: No
   let moved = 0
   let ended = 0
   for (const r of rows) {
-    const rel = relInHome(r.cwd, [...spellings])
-    if (rel === null) continue
     const own = stamps.get(r.claude_session_id)
+    // The old leader's own stamp says where in its home the row ran (its spelling of the home may be one this
+    // machine cannot see: its real path); a row it did not stamp (an archived one) is found by the home's spellings.
+    const rel = own ? own.rel : relInHome(r.cwd, [...spellings])
+    if (rel === null) continue
     const stamp: LeaderSwitchSessionStamp = own ?? { switchId, plan: 'move', from: { machine: h.fromMachine, home: h.from, cwd: r.cwd! }, rel, stopped: 'none', at }
     const archived = !!r.archived
     const why = own ? (own.plan === 'end' ? own.why ?? 'it could not move with the leader' : null)

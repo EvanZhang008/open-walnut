@@ -212,23 +212,21 @@ async function stopSessionsInHome(home: string, sw: import('../../core/leader/sw
 
 /**
  * Once this home carries no marker of `switchId` any more (its source job removed it after a take-back), the
- * sessions its stop ended go on here (home-sessions.ts settleHomeSessionsAfterRollback). Waits at most 15 min;
- * a server that stops meanwhile settles them at its next lead (web/server.ts).
+ * sessions its stop ended go on here (home-session-runtime.ts settleAfterRollback, tried until done). Waits as long
+ * as the switch is open, checking less often as it goes on; a server that stops meanwhile settles them at its next
+ * lead (web/server.ts).
  */
 async function settleWhenSwitchGone(home: string, switchId: string): Promise<void> {
-  const [{ readMarker }, { settleHomeSessionsAfterRollback }, { rollbackDeps }, stop] = await Promise.all([
-    import('../../core/leader/switch/records.js'), import('../../core/leader/switch/home-sessions.js'),
-    import('../../core/leader/switch/home-session-runtime.js'), import('../../core/leader/switch/final-stop.js'),
+  const [{ readMarker }, { settleAfterRollback }, stop] = await Promise.all([
+    import('../../core/leader/switch/records.js'), import('../../core/leader/switch/home-session-runtime.js'), import('../../core/leader/switch/final-stop.js'),
   ])
   const open = (id: string) => readMarker(home)?.switchId === id || stop.handedOverSwitch()?.switchId === id
-  for (const until = Date.now() + 15 * 60_000; open(switchId); await new Promise((r) => setTimeout(r, 1_000))) {
-    if (Date.now() > until) return
+  for (let every = 1_000; open(switchId); every = Math.min(60_000, Math.round(every * 1.2))) {
+    await new Promise<void>((r) => { const t = setTimeout(r, every); t.unref?.() })
   }
-  const n = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: open, deps: await rollbackDeps() }).catch((err: unknown) => {
+  await settleAfterRollback(home, open).catch((err: unknown) => {
     log.web.warn('leader switch: the sessions its stop ended could not be settled after the rollback', { switchId, error: err instanceof Error ? err.message : String(err) })
-    return 0
   })
-  if (n) log.web.info('leader switch: the sessions its stop ended go on here (the switch rolled back)', { switchId, sessions: n })
 }
 
 /**

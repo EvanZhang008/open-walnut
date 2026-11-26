@@ -93,5 +93,7 @@ describe('the sessions in the data home: found by folder at one place', () => {
     const at = runner.indexOf('private async processNextNow(')
     expect(at).toBeGreaterThan(0)
     expect(runner.slice(at, at + 2_500)).toMatch(/if \(heldBySwitch\(stopRecord\)\)/)
+    // And from the marker on, before the stop marked the row (a cold start would meet the daemon's refusal).
+    expect(runner.slice(at, at + 3_000)).toMatch(/if \(heldByHomeMarker\(stopRecord, WALNUT_HOME\)\)/)
   })
 })

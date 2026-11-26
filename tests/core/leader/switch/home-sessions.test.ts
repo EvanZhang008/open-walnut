@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from '../../../../src/lib/sqlite.js'
 import {
-  homeSessionRows, moveRefusal, planHomeSessions, planLine, relInHome, settleHomeSessionsAfterRollback, stopHomeSessions, stopRequestIdFor,
+  engineFolderName, homeSessionRows, moveRefusal, planHomeSessions, planLine, relInHome, settleHomeSessionsAfterRollback, stopHomeSessions, stopRequestIdFor,
   type HomeStopDeps,
 } from '../../../../src/core/leader/switch/home-sessions.js'
 import { moveSessionHosts } from '../../../../src/core/leader/switch/session-hosts.js'
@@ -75,18 +75,28 @@ function fakeStore(records: SessionRecord[]) {
 }
 
 describe('the old leader\'s stop', () => {
-  it('stamps every row, marks a running turn as a pending restart loss, and stops each live CLI through the runtime', async () => {
+  it('stamps every row, marks a running turn as a pending restart loss, and stops every one not archived through the runtime, whatever its record says', async () => {
     const home = path.join(root, 'home')
-    const s = fakeStore([rec(1, home, { process_status: 'running', pid: 101 }), rec(2, home, { process_status: 'idle', pid: 102 }), rec(3, home), rec(4, home, { archived: true }), rec(5, '/elsewhere', { process_status: 'running' })])
+    // Row 3's record says stopped, row 6's says error (a start whose answer never came): their runtime may still run them.
+    const s = fakeStore([rec(1, home, { process_status: 'running', pid: 101 }), rec(2, home, { process_status: 'idle', pid: 102 }), rec(3, home), rec(4, home, { archived: true }), rec(5, '/elsewhere', { process_status: 'running' }),
+      rec(6, home, { process_status: 'error', status_reason: 'spawn_outcome_unknown' } as never)])
     const stopped: Array<[string, string]> = []
     const deps: HomeStopDeps = {
-      ...s, supervised: async (id) => id === sid(2), now: Date.now,
+      ...s, supervised: async (id) => id === sid(2) || id === sid(3), now: Date.now,
       stop: async (r, id) => { stopped.push([r.claudeSessionId, id]); s.byId.set(r.claudeSessionId, { ...s.byId.get(r.claudeSessionId)!, process_status: 'stopped' }); return { ok: true } },
-      processesInHome: async () => [{ pid: 999, name: 'zsh' }],
+      processesInHome: async () => [{ pid: 999, name: 'zsh', args: '-zsh' }],
+      transcriptExists: async (_f, id) => id !== sid(6),
     }
     const r = await stopHomeSessions({ switchId: 'S1', home, machine: 'machine-a', budgetMs: 5_000, deps })
-    expect(r).toMatchObject({ ok: true, rows: 4, moves: 3, stopped: { turn: 1, idle: 1 }, others: [{ pid: 999, name: 'zsh' }] })
-    expect(stopped.sort()).toEqual([[sid(1), stopRequestIdFor('S1', sid(1))], [sid(2), stopRequestIdFor('S1', sid(2))]])
+    expect(r).toMatchObject({ ok: true, rows: 5, moves: 4, stopped: { turn: 1, idle: 1 }, others: [{ pid: 999, name: 'zsh' }] })
+    expect(stopped.sort()).toEqual([1, 2, 3, 6].map((n) => [sid(n), stopRequestIdFor('S1', sid(n))]))
+    // A supervised session that was not running is stopped too: its supervision goes off with the stop (no relaunch in the old home).
+    expect(s.byId.get(sid(3))!.leaderSwitch).toMatchObject({ stopped: 'none', supervised: true, stopRequestId: stopRequestIdFor('S1', sid(3)) })
+    // Where the old machine keeps each one's records, and whether it had a transcript.
+    expect(s.byId.get(sid(1))!.leaderSwitch).toMatchObject({ engineFolder: engineFolderName(home), transcript: true })
+    expect(s.byId.get(sid(6))!.leaderSwitch).toMatchObject({ transcript: false })
+    // No stop fence is written on the row: a later start carries the fence it carried before.
+    expect(s.byId.get(sid(1))!.stopRequest).toBeUndefined()
     expect(s.byId.get(sid(1))!.leaderSwitch).toMatchObject({ switchId: 'S1', plan: 'move', stopped: 'turn', supervised: false, from: { machine: 'machine-a', home } })
     expect(s.byId.get(sid(1))!.restartLoss).toMatchObject({ cause: 'leader_switch', state: 'pending', before: { status: 'running' } })
     expect(s.byId.get(sid(2))!.leaderSwitch).toMatchObject({ stopped: 'idle', supervised: true })
@@ -122,7 +132,41 @@ describe('the old leader\'s stop', () => {
     const r = await stopHomeSessions({ switchId: 'S1', home, machine: 'machine-a', budgetMs: 5_000, deps })
     expect(r.ok).toBe(false)
     expect(r.why).toMatch(/Main \(.*\): the process group did not end/)
-    expect(r.why).toMatch(/its process 102 still runs in the data home/)
+    expect(r.why).toMatch(/its process 102 \(claude\) still runs in the data home/)
+  })
+
+  it('a process of the class in the home fails the stop whatever its row says: its pid on any row, or its command line naming a session; a scan that cannot read fails it too', async () => {
+    const home = path.join(root, 'home')
+    const rows = () => [rec(1, home, { pid: 201 }), rec(2, home, { acpRuntimeId: 'acp-rt-2' } as never), rec(3, home)]
+    const run = async (procs: Array<{ pid: number; name: string; args?: string }> | Error) => stopHomeSessions({
+      switchId: 'S1', home, machine: 'machine-a', budgetMs: 5_000,
+      deps: { ...fakeStore(rows()), supervised: async () => false, now: Date.now, stop: async () => ({ ok: true }), processesInHome: async () => { if (procs instanceof Error) throw procs; return procs } },
+    })
+    // Row 1's record says stopped, yet its pid is there.
+    expect((await run([{ pid: 201, name: 'claude' }])).why).toMatch(/its process 201/)
+    // A CLI whose row lost its pid, found by the session it names; an ACP worker by its runtime id.
+    expect((await run([{ pid: 301, name: 'node', args: `claude --resume ${sid(3)} -p` }])).why).toMatch(new RegExp(`${sid(3)}.*its process 301`))
+    expect((await run([{ pid: 302, name: 'node', args: 'acp-adapter --runtime acp-rt-2' }])).why).toMatch(/its process 302/)
+    // A person's shell is only named.
+    const shell = await run([{ pid: 303, name: 'zsh', args: '-zsh' }])
+    expect(shell).toMatchObject({ ok: true, others: [{ pid: 303, name: 'zsh' }] })
+    // Fail closed: no list, no pass.
+    expect((await run(new Error('lsof timed out'))).why).toMatch(/processes in the data home could not be read \(lsof timed out\)/)
+  })
+
+  it('a row whose folder leads out of the home (a link) ends instead of moving, so its records are never carried', async () => {
+    const home = path.join(root, 'home')
+    const outside = path.join(root, 'work', 'x')
+    fs.mkdirSync(home, { recursive: true })
+    fs.mkdirSync(outside, { recursive: true })
+    fs.symlinkSync(outside, path.join(home, 'x'))
+    expect(moveRefusal(rec(1, path.join(home, 'x')), 'x', home)).toMatch(/leads out of the data home/)
+    expect(moveRefusal(rec(1, path.join(home, 'x')), 'x')).toBeNull()
+    const s = fakeStore([rec(1, path.join(home, 'x'))])
+    const r = await stopHomeSessions({ switchId: 'S1', home, machine: 'machine-a', budgetMs: 5_000, deps: { ...s, supervised: async () => false, now: Date.now, stop: async () => ({ ok: true }), processesInHome: async () => [] } })
+    expect(r.ends.map((e) => e.sid)).toEqual([sid(1)])
+    expect(s.byId.get(sid(1))!.leaderSwitch).toMatchObject({ plan: 'end' })
+    expect(s.byId.get(sid(1))!.leaderSwitch!.engineFolder).toBeUndefined()
   })
 
   it('a stop that never answers fails within its budget', async () => {
@@ -138,27 +182,44 @@ describe('the old leader\'s stop', () => {
 })
 
 describe('a rollback', () => {
-  it('settles only rows of a switch no marker holds open: supervision on again under the stop\'s id, held messages out, then resume', async () => {
+  it('settles only rows of a switch no marker holds open: supervision on again (no fence), held messages out, then resume', async () => {
     const home = path.join(root, 'home')
     const stamp = (id: string, extra: object = {}) => ({ switchId: id, plan: 'move', from: { machine: 'a', home, cwd: home }, rel: '', stopped: 'idle', at: '', ...extra }) as never
     const s = fakeStore([
       rec(1, home, { leaderSwitch: stamp('S1', { supervised: true, stopRequestId: stopRequestIdFor('S1', sid(1)) }) }),
       rec(2, home, { leaderSwitch: stamp('S2') }),
       rec(3, home, { leaderSwitch: stamp('S1', { moved: { machine: 'b', home: '/b', cwd: '/b', at: '' } }) }),
+      rec(4, home, { leaderSwitch: stamp('S1', { stopped: 'none' }) }),
     ])
     const calls: string[] = []
-    const n = await settleHomeSessionsAfterRollback({
+    const r = await settleHomeSessionsAfterRollback({
       home, isOpenSwitch: (id) => id === 'S2',
-      deps: { ...s, reenable: async (id, f) => { calls.push(`reenable ${id} ${f}`) }, release: async (id) => { calls.push(`release ${id}`) }, resume: async () => { calls.push('resume') } },
+      deps: { ...s, reenable: async (id) => { calls.push(`reenable ${id}`) }, release: async (id) => { calls.push(`release ${id}`) }, resume: async () => { calls.push('resume') } },
     })
-    expect(n).toBe(1)
-    expect(calls).toEqual([`reenable ${sid(1)} ${stopRequestIdFor('S1', sid(1))}`, `release ${sid(1)}`, 'resume'])
+    expect(r).toEqual({ settled: 2, failed: [] })
+    // Supervision only where it was on; an unsupervised session is released all the same.
+    expect(calls).toEqual([`reenable ${sid(1)}`, `release ${sid(1)}`, `release ${sid(4)}`, 'resume'])
     expect(s.byId.get(sid(1))!.leaderSwitch!.rolledBack).toBeTruthy()
     expect(heldBySwitch(s.byId.get(sid(1)))).toBe(false)
     // The open switch's row stays held; settled once (a second pass does nothing).
     expect(heldBySwitch(s.byId.get(sid(2)))).toBe(true)
-    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async () => {}, release: async () => {}, resume: async () => { calls.push('resume2') } } })).toBe(1)
+    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async () => {}, release: async () => {}, resume: async () => { calls.push('resume2') } } })).toEqual({ settled: 1, failed: [] })
     expect(calls).toContain('resume2')
+  })
+
+  it('a re-enable that fails leaves the session held and named (not marked rolled back), and the next pass settles it', async () => {
+    const home = path.join(root, 'home')
+    const s = fakeStore([rec(1, home, { title: 'Main', leaderSwitch: { switchId: 'S1', plan: 'move', from: { machine: 'a', home, cwd: home }, rel: '', stopped: 'idle', at: '', supervised: true } as never })])
+    const released: string[] = []
+    const deps = (fail: boolean) => ({ ...s, reenable: async () => { if (fail) throw new Error('this machine\'s session runtime is not connected') }, release: async (id: string) => { released.push(id) }, resume: async () => {} })
+    const first = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: deps(true) })
+    expect(first.settled).toBe(0)
+    expect(first.failed).toEqual([{ sid: sid(1), title: 'Main', why: expect.stringMatching(/cron supervision could not be turned on again: .*not connected/) }])
+    expect(s.byId.get(sid(1))!.leaderSwitch!.rolledBack).toBeUndefined()
+    expect(heldBySwitch(s.byId.get(sid(1)))).toBe(true)
+    expect(released).toEqual([])
+    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: deps(false) })).toEqual({ settled: 1, failed: [] })
+    expect(released).toEqual([sid(1)])
   })
 
   it('holds a moved row only until its records are placed', () => {
@@ -234,6 +295,14 @@ describe('the promotion (moveSessionHosts with the home)', () => {
     expect(r).toMatchObject({ homeMoved: 1, homeEnded: 0, toOldMachine: 0 })
     expect(rowsOf(home)[sid(1)]).toMatchObject({ host: null, cwd: home })
     expect(rowsOf(home)[sid(2)]).toMatchObject({ host: null, cwd: '/elsewhere' })
+  })
+
+  it('a row the old leader recorded under its home\'s real path (a spelling this machine cannot see) moves by its stamp\'s place', () => {
+    const home = path.join(root, 'home')
+    sessionsDb(home, [{ sid: sid(1), cwd: '/private/old/home/notes', payload: { leaderSwitch: { switchId: 'S1', plan: 'move', from: { machine: 'machine-a', home: '/old/home', cwd: '/private/old/home/notes' }, rel: 'notes', stopped: 'idle', at: 'x' } } }])
+    expect(moveSessionHosts(home, 'S1', { oldMachine: 'machine-a', newMachine: 'machine-b', homes: homes(home) })).toMatchObject({ homeMoved: 1 })
+    expect(rowsOf(home)[sid(1)]).toMatchObject({ host: null, cwd: path.join(home, 'notes') })
+    expect(rowsOf(home)[sid(1)].payload.leaderSwitch.moved).toMatchObject({ records: 'pending' })
   })
 
   it('an end the old leader planned stands', () => {

@@ -101,9 +101,13 @@ export function engineFolderName(cwd: string): string | null {
  * Why a row of the class cannot move with the leader, in plain words, or null when it can. The checks that need the
  * new leader's machine (its engine's version, a record already in the place) are its own (session-carry.ts).
  */
-export function moveRefusal(rec: Pick<SessionRecord, 'engine' | 'provider' | 'cwd'>, rel: string): string | null {
+export function moveRefusal(rec: Pick<SessionRecord, 'engine' | 'provider' | 'cwd'>, rel: string, home?: string): string | null {
   const engine = engineOf(rec)
   if (engine !== 'claude') return `its engine (${engine}) keeps its history on this machine, which a leader switch does not carry: only Claude Code sessions move with the leader`
+  // On the old leader: a folder under the home that is a link out of it runs (and keeps its history) outside the home.
+  if (home && rec.cwd && relInHome(realPath(rec.cwd), [realPath(home)]) === null) {
+    return `its folder ${rec.cwd} leads out of the data home (to ${realPath(rec.cwd)}), so its history is not the home's to carry`
+  }
   if (rel) {
     if (isMachineRuntimePath(rel)) return `its folder ${rel} in the data home is this machine's runtime place, which the standby copy does not carry`
     const cls = homePathClass(rel)
@@ -143,7 +147,7 @@ export function planHomeSessions(records: readonly SessionRecord[], home: string
   const rows = homeSessionRows(records, home)
   const out: HomeSessionsPlan = { rows: rows.length, moves: 0, live: { turn: 0, idle: 0 }, ends: [] }
   for (const { rec, rel } of rows) {
-    const why = moveRefusal(rec, rel)
+    const why = moveRefusal(rec, rel, home)
     if (why) out.ends.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why })
     else out.moves++
     const live = liveState(rec)
@@ -167,8 +171,10 @@ export interface HomeStopDeps {
   supervised(sid: string): Promise<boolean>
   /** Stop `sid` through this machine's own session runtime, reason leader_switch: resolves once its process is gone. */
   stop(rec: SessionRecord, stopRequestId: string): Promise<{ ok: true } | { ok: false; why: string }>
-  /** The processes of this machine whose cwd is in the home: pid and program name (home-processes.ts). */
-  processesInHome(spellings: readonly string[]): Promise<Array<{ pid: number; name: string }>>
+  /** The processes of this machine whose cwd is in the home (home-processes.ts); throws when it cannot read them. */
+  processesInHome(spellings: readonly string[]): Promise<Array<{ pid: number; name: string; args?: string }>>
+  /** Whether this machine's engine keeps a transcript of `sid` in its folder `folder` (projects/<folder>/<sid>.jsonl). */
+  transcriptExists?(folder: string, sid: string): Promise<boolean>
   now(): number
 }
 
@@ -188,29 +194,34 @@ export interface HomeStopResult {
 
 /**
  * The switch stop's first step on the old leader: plan, mark and stop every session of the class, within `budgetMs`.
- * Not ok when a CLI of the class did not end (named): the switch stop then does not go on (no CLI is ever killed by
- * force; the switch waits for its stop again or rolls back, and the session resumes here).
+ * Every row that is not archived gets the stop, whatever its record says (a record can be behind its runtime: a start
+ * whose answer never came, a CLI a timeout left running); one that runs nothing answers at once, and each one's cron
+ * supervision goes off with it. Not ok when a CLI of the class did not end, the runtime holds one it would not stop,
+ * or a process of the class is still in the home (named): the switch stop then does not go on (no CLI is ever killed
+ * by force; the switch waits for its stop again or rolls back, and the session resumes here).
  */
 export async function stopHomeSessions(o: { switchId: string; home: string; machine: string; budgetMs: number; deps: HomeStopDeps }): Promise<HomeStopResult> {
   const t0 = o.deps.now()
   const at = new Date(t0).toISOString()
   const rows = homeSessionRows(await o.deps.list(), o.home)
   const out: HomeStopResult = { ok: true, rows: rows.length, stopped: { turn: 0, idle: 0 }, moves: 0, ends: [], others: [], ms: 0 }
-  const live = rows.filter(({ rec }) => liveState(rec) !== 'none')
+  const targets = rows.filter(({ rec }) => !rec.archived)
   // Every row of the class that is not archived gets its plan (an archived one follows by its folder at the promotion).
   const stamps = new Map<string, LeaderSwitchSessionStamp>()
-  for (const { rec, rel } of rows) {
-    if (rec.archived) continue
-    const why = moveRefusal(rec, rel)
+  for (const { rec, rel } of targets) {
+    const why = moveRefusal(rec, rel, o.home)
     // A stop asked again (the source job resumed): what the first one found stands (a turn it ended stays a turn).
     const prev = rec.leaderSwitch?.switchId === o.switchId && !rec.leaderSwitch.rolledBack ? rec.leaderSwitch : undefined
     const now = liveState(rec)
     const stopped = prev && prev.stopped !== 'none' ? prev.stopped : now
+    const folder = why ? null : engineFolderName(rec.cwd!)
     const stamp: LeaderSwitchSessionStamp = {
       switchId: o.switchId, plan: why ? 'end' : 'move', ...(why ? { why } : {}),
       from: { machine: o.machine, home: o.home, cwd: rec.cwd! }, rel, stopped, at: prev?.at ?? at,
-      ...(stopped !== 'none' ? { stopRequestId: stopRequestIdFor(o.switchId, rec.claudeSessionId) } : {}),
+      stopRequestId: stopRequestIdFor(o.switchId, rec.claudeSessionId),
+      ...(folder ? { engineFolder: folder } : {}),
       ...(prev?.supervised !== undefined ? { supervised: prev.supervised } : {}),
+      ...(prev?.transcript !== undefined ? { transcript: prev.transcript } : {}),
     }
     stamps.set(rec.claudeSessionId, stamp)
     if (why) out.ends.push({ sid: rec.claudeSessionId, why })
@@ -218,34 +229,56 @@ export async function stopHomeSessions(o: { switchId: string; home: string; mach
   }
   // The rows first, then the stops: a stop's death edge finds the plan, and a turn that dies is a restart loss
   // (state pending: the next lead of the session, there or here, resumes it).
-  await Promise.all(live.map(async ({ rec }) => {
+  await Promise.all(targets.map(async ({ rec }) => {
     const stamp = stamps.get(rec.claudeSessionId)!
     if (stamp.supervised === undefined) stamp.supervised = await o.deps.supervised(rec.claudeSessionId).catch(() => false)
+    // Whether the engine keeps its history here (the new leader then checks it found it): read before the stop.
+    if (stamp.transcript === undefined && stamp.engineFolder && o.deps.transcriptExists) {
+      stamp.transcript = await o.deps.transcriptExists(stamp.engineFolder, rec.claudeSessionId).catch(() => true)
+    }
   }))
-  for (const { rec } of rows) {
-    const stamp = stamps.get(rec.claudeSessionId)
-    if (!stamp) continue
+  for (const { rec } of targets) {
+    const stamp = stamps.get(rec.claudeSessionId)!
     const patch: Partial<SessionRecord> = { leaderSwitch: stamp }
     if (stamp.stopped === 'turn' && !(rec.restartLoss?.cause === 'leader_switch' && rec.restartLoss.state === 'pending')) patch.restartLoss = turnLoss(rec, at)
     await o.deps.save(rec.claudeSessionId, patch)
   }
   const deadline = t0 + o.budgetMs
   const failed: string[] = []
-  await Promise.all(live.map(async ({ rec }) => {
+  const name = (rec: SessionRecord) => `${rec.title ?? rec.claudeSessionId} (${rec.claudeSessionId})`
+  await Promise.all(targets.map(async ({ rec }) => {
     const stamp = stamps.get(rec.claudeSessionId)!
     const left = Math.max(1, deadline - o.deps.now())
     const r = await withDeadline(o.deps.stop(rec, stamp.stopRequestId!), left, () => ({ ok: false as const, why: `it did not end within ${Math.round(o.budgetMs / 1000)} s` }))
       .catch((err: unknown) => ({ ok: false as const, why: err instanceof Error ? err.message : String(err) }))
-    if (r.ok) out.stopped[stamp.stopped === 'turn' ? 'turn' : 'idle']++
-    else failed.push(`${rec.title ?? rec.claudeSessionId} (${rec.claudeSessionId}): ${r.why}`)
+    if (!r.ok) failed.push(`${name(rec)}: ${r.why}`)
+    else if (stamp.stopped !== 'none') out.stopped[stamp.stopped]++
   }))
-  // What is still in the home: a session CLI the runtime did not end fails the stop; anything else is named.
-  const known = new Map(rows.filter(({ rec }) => typeof rec.pid === 'number').map(({ rec }) => [rec.pid as number, rec]))
-  const left = await o.deps.processesInHome(homeSpellings(o.home)).catch(() => [])
+  // What is still in the home. A process of the class fails the stop: its pid is a row's, or its command line names a
+  // session of the class (a CLI whose row lost its pid, an ACP worker, which records none). Anything else is named.
+  // A scan that could not read the processes fails it too: the stop must not pass on a list it never saw.
+  const pids = new Map<number, SessionRecord>()
+  for (const { rec } of targets) if (typeof rec.pid === 'number' && rec.pid > 0) pids.set(rec.pid, rec)
+  const ids = new Map<string, SessionRecord>()
+  for (const { rec } of targets) {
+    ids.set(rec.claudeSessionId, rec)
+    if (rec.acpRuntimeId) ids.set(rec.acpRuntimeId, rec)
+  }
+  const named = (args: string | undefined): SessionRecord | undefined => {
+    if (!args) return undefined
+    for (const [id, rec] of ids) if (args.includes(id)) return rec
+    return undefined
+  }
+  let left: Awaited<ReturnType<HomeStopDeps['processesInHome']>> = []
+  try {
+    left = await o.deps.processesInHome(homeSpellings(o.home))
+  } catch (err) {
+    failed.push(`the processes in the data home could not be read (${err instanceof Error ? err.message : String(err)}), so no session can be shown to have ended`)
+  }
   for (const p of left) {
-    const rec = known.get(p.pid)
-    if (rec && liveState(rec) !== 'none') failed.push(`${rec.title ?? rec.claudeSessionId} (${rec.claudeSessionId}): its process ${p.pid} still runs in the data home`)
-    else out.others.push(p)
+    const rec = pids.get(p.pid) ?? named(p.args)
+    if (rec) failed.push(`${name(rec)}: its process ${p.pid} (${p.name}) still runs in the data home`)
+    else out.others.push({ pid: p.pid, name: p.name })
   }
   out.ms = o.deps.now() - t0
   if (failed.length) {
@@ -277,31 +310,47 @@ function withDeadline<T>(p: Promise<T>, ms: number, onTimeout: () => T): Promise
 export interface RollbackDeps {
   list(): Promise<SessionRecord[]>
   save(sid: string, patch: Partial<SessionRecord>): Promise<void>
-  /** Cron supervision of `sid` on again, fenced by the stop's id (daemon cron.supervision). */
-  reenable(sid: string, stopRequestId: string): Promise<void>
+  /** Cron supervision of `sid` on again (daemon cron.supervision; the switch's stop left no fence). */
+  reenable(sid: string): Promise<void>
   /** Restart recovery's pass over pending losses (session-auto-recover.ts resumeUnfinished). */
   resume(): Promise<void>
   /** Release the messages held for the move (engine-switch-io.ts releaseMoveHeldRows). */
   release(sid: string): Promise<void>
 }
 
+export interface RollbackSettle {
+  /** Sessions settled now. */
+  settled: number
+  /** Sessions not settled yet (still held), with why: the caller tries again. */
+  failed: Array<{ sid: string; title?: string; why: string }>
+}
+
 /**
  * A switch that did not commit: the sessions its stop ended go on here, in place (their records never moved). Called
- * only once the home carries no marker of that switch (the marker goes first: else the spawn guard refuses them). Each
- * row keeps its stamp, marked rolled back, so this runs once. Returns how many were settled.
+ * only once the home carries no marker of that switch (the marker goes first: else the spawn guard refuses them). A
+ * row is marked rolled back only once its cron supervision is on again (when it had one), so a re-enable that failed
+ * (the runtime not connected yet) leaves it held and named in `failed`, for the caller to try again. A settled row
+ * keeps its stamp, marked rolled back, so it is settled once.
  */
-export async function settleHomeSessionsAfterRollback(o: { home: string; isOpenSwitch: (switchId: string) => boolean; deps: RollbackDeps; now?: () => number }): Promise<number> {
+export async function settleHomeSessionsAfterRollback(o: { home: string; isOpenSwitch: (switchId: string) => boolean; deps: RollbackDeps; now?: () => number }): Promise<RollbackSettle> {
   const at = new Date((o.now ?? Date.now)()).toISOString()
-  let n = 0
+  const out: RollbackSettle = { settled: 0, failed: [] }
   for (const { rec } of homeSessionRows(await o.deps.list(), o.home)) {
     const st = rec.leaderSwitch
     if (!st || st.rolledBack || st.moved || o.isOpenSwitch(st.switchId)) continue
-    if (st.supervised && st.stopRequestId) await o.deps.reenable(rec.claudeSessionId, st.stopRequestId).catch(() => {})
+    if (st.supervised) {
+      try {
+        await o.deps.reenable(rec.claudeSessionId)
+      } catch (err) {
+        out.failed.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: `its cron supervision could not be turned on again: ${err instanceof Error ? err.message : String(err)}` })
+        continue
+      }
+    }
     // Settled first, so the delivery the release starts finds the session free.
     await o.deps.save(rec.claudeSessionId, { leaderSwitch: { ...st, rolledBack: at } })
     await o.deps.release(rec.claudeSessionId).catch(() => {})
-    n++
+    out.settled++
   }
-  if (n) await o.deps.resume().catch(() => {})
-  return n
+  if (out.settled) await o.deps.resume().catch(() => {})
+  return out
 }

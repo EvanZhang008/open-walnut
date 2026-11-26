@@ -522,31 +522,41 @@ machine once the leader moves: the old home must not change after the final mark
 holds `/a/b/c`, never `/a/b-c`). A VP or lead runs in its own task folder and is not in it.
 
 - **Stop, first step of the switch stop** (before the server goes down, the marker already says `switching`): each row
-  gets its plan (`leaderSwitch`: move, or end with why); a running turn is stamped as a restart loss (cause
-  `leader_switch`); each live CLI is stopped through this machine's own runtime, `stop {reason: 'leader_switch',
-  stopRequestId, home}`, which turns its cron supervision off under that id and answers once the process group is gone
-  (an ACP worker by its own strict stop). Nothing is force killed: a CLI that does not end within its budget (at most
-  30 s) fails the stop, named. A scan of this account's processes whose folder is in the home (server side: `/proc`, or
-  `lsof` on macOS) fails the stop on a session CLI still there and names anything else. This is the one exception to
+  gets its plan (`leaderSwitch`: move, or end with why, and the engine folder its records are in); a running turn is
+  stamped as a restart loss (cause `leader_switch`). Every row of the class that is not archived is stopped through
+  this machine's own runtime, whatever its record says, `stop {reason: 'leader_switch', stopRequestId, home}`: the
+  runtime turns its cron supervision off (no fence: the marker refuses starts) and answers once the process group is
+  gone (an ACP worker by its own strict stop), or at once when it runs nothing. Nothing is force killed: a CLI that does
+  not end within its budget (at most 30 s) fails the stop, named, and so does one the runtime holds with no record of
+  who started it. A scan of this account's processes whose folder is in the home (server side: `/proc`, or `lsof` and
+  `ps` on macOS) fails the stop on any process whose pid is a row's or whose command line names a session of the
+  class, and names anything else; a scan that cannot read the processes fails it too. This is the one exception to
   "a switch stop keeps CLIs like a deploy stop".
-- **Starts refused** from then on: the daemon twins' `start` and `acpStart` refuse a folder in a marked home
-  (`HOME_HANDED_OVER`, naming the machine the lead went to); routine placement does not pick the old leader's
-  handed-over home on that machine (`moved-home.ts handedOverHomeOnHost`). Restart recovery and the message queue
-  leave a session the switch holds (`sessions/switch-hold.ts`).
+- **Held, starts refused**: from the marker on, a message for a session in the home is held, not started; the daemon
+  twins' `start` and `acpStart` refuse a folder in a marked home (`HOME_HANDED_OVER`, naming the machine the lead went
+  to); routine placement does not pick the old leader's handed-over home on that machine (`moved-home.ts
+  handedOverHomeOnHost`). Restart recovery and the message queue leave a session the switch holds
+  (`sessions/switch-hold.ts`).
 - **Records** (the engine's own: transcripts, subagent transcripts, large tool results, the folder's memory, the task
   list) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
   into the new machine's engine dir before the commit. The final batch sends them until unchanged after the home's,
-  and the final mark names that batch; the new leader refuses to promote without it.
-- **Promotion** moves each row (archived ones too) to the same place in the new home on the new leader's own daemon,
-  or ends it on the old machine with why (another engine, a machine runtime folder, a folder name longer than Claude
-  Code names a folder by).
-- **After the commit** the new leader places the records under the new folder name (never overwriting: a byte prefix
-  left by an earlier switch is set aside as `.before-<switch>`, another transcript ends that session), releases the
-  held messages, starts a supervised idle session idle (its CLI rebuilds its session crons) and resumes the
-  interrupted turns. The session's next message carries one notice: its folder moved from the old machine's X to
-  the new one's Y.
-- **Rollback:** the marker goes first, then the old leader turns supervision on again under the same id, releases the
-  held messages and resumes the turns in place (at its boot, or in the running server after its take-back).
+  and the final mark names that batch; the new leader refuses to promote without it. A folder under the home that is a
+  link out of it is not the home's: its session ends instead of moving, and its records are never carried.
+- **Promotion** moves each row (archived ones too) to the same place in the new home on the new leader's own daemon
+  (the place the old leader's stamp names), or ends it on the old machine with why (another engine, a machine runtime
+  folder, a folder name longer than Claude Code names a folder by, a folder that leads out of the home).
+- **After the commit** the new leader places each session's records, from the folder the old leader named, under the
+  new folder name. It never overwrites: a transcript that is a byte prefix of the carried one (left by an earlier
+  switch) is set aside as `.before-<switch>`, another transcript ends that session; an older memory note, sidecar or
+  task file there is set aside the same way and the carried one, the newer, takes its place. A session whose
+  transcript the old machine kept but that is not in place afterwards ends with why, and the carry stays. Then the
+  held messages go out, a supervised idle session starts idle (its CLI rebuilds its session crons) and the interrupted
+  turns resume. The session's next message carries one notice: its folder moved from the old machine's X to the new
+  one's Y. The placement waits for the commit and is tried until done; while it is not, the sessions stay held and
+  the switch's notes say why (`sessions-held`).
+- **Rollback:** the marker goes first, then the old leader turns supervision on again where it was on, releases the
+  held messages and resumes the turns in place (at its boot, or in the running server after its take-back). A
+  re-enable that fails keeps its session held and is tried again until it stands, named in the switch's notes.
 - **Preflight** says how many move and which end, with why, in the switch's step log.
 
 Not carried: `file-history/<sid>/` (checkpoints keyed by the old machine's absolute paths: rewinding an edit made before
