@@ -93,7 +93,7 @@ describe('the read env', () => {
   it('optional locks off everywhere; in a marked home also no diff index refresh, appended to the config already given', () => {
     const free = home('env-free')
     const over = home('env-over', JSON.stringify({ state: 'handed-over' }))
-    expect(readOnlyGitEnv({ PATH: '/bin' }, free)).toEqual({ PATH: '/bin', GIT_OPTIONAL_LOCKS: '0' })
+    expect(readOnlyGitEnv({ LANG: 'C' }, free)).toEqual({ LANG: 'C', GIT_OPTIONAL_LOCKS: '0' })
     expect(readOnlyGitEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y' }, path.join(over, 'plugins', 'p'))).toEqual({
       GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y', GIT_CONFIG_KEY_1: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_1: 'false', GIT_OPTIONAL_LOCKS: '0',
     })

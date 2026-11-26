@@ -77,9 +77,9 @@ describe('a module of the daemon runtime starts its children the way its caller 
     expect(calls.map((c) => c.file)).toEqual(['/bin/ps', 'ps'])
   })
 
-  it('git-env gitChildEnv: built from the given env, redirects dropped', () => {
-    expect(gitChildEnv(undefined, ENV)).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt' })
-    expect(gitChildEnv({ GIT_DIR: '/mine' }, ENV)).toEqual({ ...ENV, GIT_DIR: '/mine' })
+  it('git-env gitChildEnv: built from the given env, redirects dropped, optional locks off (a read writes nothing)', () => {
+    expect(gitChildEnv(undefined, ENV)).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt', GIT_OPTIONAL_LOCKS: '0' })
+    expect(gitChildEnv({ GIT_DIR: '/mine' }, ENV)).toEqual({ ...ENV, GIT_DIR: '/mine', GIT_OPTIONAL_LOCKS: '0' })
   })
 
   it('vscode-server-core createCodeServer: its git runs through the given execFile, from the given env', async () => {
@@ -88,7 +88,7 @@ describe('a module of the daemon runtime starts its children the way its caller 
     const server = createCodeServer({ execFile: fn, env: { ...ENV, HOME: home } })
     expect(await server.resolveOpenTarget('~')).toEqual({ kind: 'folder', path: home })
     expect(calls.map((c) => c.file)).toEqual(['git'])
-    expect(calls[0]!.opts.env).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt', HOME: home })
+    expect(calls[0]!.opts.env).toEqual({ PATH: ENV.PATH, RUNTIME_MARK: 'rt', HOME: home, GIT_OPTIONAL_LOCKS: '0' })
     expect(await server.codeServerStatus()).toEqual({ running: false })
   })
 
