@@ -66,7 +66,7 @@ import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, typ
 import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon, type InProcessVerdict, type OtherService } from './in-process-daemon.js'
 import { cliHostOf } from '../core/sessions/session-row-owner.js'
 import { busyRetryLeftMs, noteBusyRefusal } from './daemon-busy-retry.js'
-import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
+import { readDaemonInstanceHolder } from './daemon-instance-lock.js'
 import { recoverLostDaemonFiles } from './daemon-lost-files.js'
 
 /** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
@@ -1487,8 +1487,9 @@ export class LocalDaemon {
   private async lockHolderNote(): Promise<string> {
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     if (uid === null) return ''
-    const owner = await readDaemonInstanceOwner({ runtimeDir: this.daemonDir, uid }).catch(() => null)
+    const owner = await readDaemonInstanceHolder({ runtimeDir: this.daemonDir, uid }).catch(() => null)
     if (!owner) return ''
+    if (owner.daemonDir) return ` This account's session daemon (pid ${owner.pid}) runs from ${owner.daemonDir} and keeps this dir for older releases, so no daemon can start here.`
     if (owner.inProcess) return ` A Walnut server (pid ${owner.pid}) runs this dir's daemon in its own process, so no daemon program can start here.`
     return ` A daemon (pid ${owner.pid}${owner.wsPort ? `, port ${owner.wsPort}` : ''}) holds this dir's instance lock, so the new one`
       + ' exited: the next start adopts it once it answers there; if it never does, stop that pid (SIGTERM) and a new one can start.'

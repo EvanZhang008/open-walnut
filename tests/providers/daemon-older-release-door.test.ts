@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { linkRegistryForOlderReleases, ownSharedDir, servesOlderReleases } from '../../src/providers/daemon-older-release-door.js'
 import net from 'node:net'
-import { acquireDaemonInstanceLock, daemonLockPort, DAEMON_LOCK_HOST, DAEMON_LOCK_MAGIC, readDaemonInstanceOwner } from '../../src/providers/daemon-instance-lock.js'
+import { acquireDaemonInstanceLock, daemonLockPort, DAEMON_LOCK_HOST, DAEMON_LOCK_MAGIC, readDaemonInstanceHolder, readDaemonInstanceOwner } from '../../src/providers/daemon-instance-lock.js'
 import { DAEMON_STATE_MARKERS, chooseLocalDaemonDir, realDaemonDirDeps, SHARED_DAEMON_DIR } from '../../src/lib/daemon-dir.js'
 import { serverImagesDir } from '../../src/providers/daemon-fs-write.js'
 
@@ -159,6 +159,8 @@ describe('the shared dir\'s instance lock, held by the home daemon', () => {
       // 2026-11-26 review: this build's own tools read the lock to find the dir's daemon (to stop it, to
       // write its door files back, to hand a service over). A holder whose own dir is another one is none.
       expect(await readDaemonInstanceOwner({ runtimeDir: shared, uid })).toBeNull()
+      // ... while the two that only refuse a start there still see who holds it.
+      expect(await readDaemonInstanceHolder({ runtimeDir: shared, uid })).toMatchObject({ instanceId: 'd-home-1', daemonDir: homeDir })
     } finally {
       await held.release()
     }
@@ -198,6 +200,10 @@ describe('this build never takes a holder from another dir for the dir\'s daemon
     // A new way to read the lock (the banner, the port) outside the lock module would see the holder raw.
     const raw = sources.filter((f) => /parseDaemonLockBanner\(|daemonLockPort\(|probeExistingOwner\(/.test(f.text)).map((f) => f.rel)
     expect(raw).toEqual([])
+    // readDaemonInstanceHolder does name it: only for the two that refuse a start or say why none came.
+    const holders = sources.filter((f) => f.text.includes('readDaemonInstanceHolder(')).map((f) => f.rel).sort()
+    expect(holders).toEqual(['binary/service-entry.ts', 'providers/local-daemon.ts'])
+    for (const rel of holders) expect(sources.find((f) => f.rel === rel)!.text, rel).toMatch(/owner\.daemonDir \?|if \(owner\.daemonDir\)/)
   })
 })
 

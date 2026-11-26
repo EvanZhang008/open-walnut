@@ -203,16 +203,20 @@ async function enterService(d: ServeDecision | LeadDecision, runtimeRoot: string
   if (Number.isFinite(lifetime) && lifetime > 0) setTimeout(endServicePlanned, lifetime * 1000).unref()
   // Imports no module that reads the runtime fact at import (local-daemon.ts DEFAULT_DAEMON_DIR
   // reads serviceRuntime()): holdServiceRuntime has not run yet.
-  const { readDaemonInstanceOwner } = await import('../providers/daemon-instance-lock.js')
+  const { readDaemonInstanceHolder } = await import('../providers/daemon-instance-lock.js')
   // A daemon that still holds the runtime dir makes the runtime refuse this service ("service
   // handover is required"): leave what it keeps alone and end as the runtime would, never stop it
   // first (review A3b S34-L2: each launcher restart stopped its follower, and its daemon started it
   // again). A stand-in (daemon.standin names it) is waited out by the runtime: go on.
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1
-  const owner = uid >= 0 ? await readDaemonInstanceOwner({ runtimeDir: d.runtimeDir, uid }) : null
+  // Whoever holds it: this account's daemon in another dir, which keeps this one for older releases
+  // (daemon-older-release-door.ts), makes the runtime refuse just the same.
+  const owner = uid >= 0 ? await readDaemonInstanceHolder({ runtimeDir: d.runtimeDir, uid }) : null
   if (owner && owner.pid !== process.pid && !standInIs(d.runtimeDir, owner.pid)) {
     // The words in-process-daemon.ts says for a second service, so both refusals read alike.
-    const who = owner.service ? `Another Walnut service (pid ${owner.pid}) runs the session daemon of ${d.runtimeDir}: one service per machine and data dir` : `daemon ${owner.pid} still holds ${d.runtimeDir}`
+    const who = owner.service ? `Another Walnut service (pid ${owner.pid}) runs the session daemon of ${d.runtimeDir}: one service per machine and data dir`
+      : owner.daemonDir ? `this account's session daemon (pid ${owner.pid}) runs from ${owner.daemonDir} and keeps ${d.runtimeDir} for older releases`
+        : `daemon ${owner.pid} still holds ${d.runtimeDir}`
     process.stderr.write(`walnut --service: ${who}${d.kind === 'serve' ? '; its follower is left running' : ''}\n`)
     process.exitCode = 1
     return false

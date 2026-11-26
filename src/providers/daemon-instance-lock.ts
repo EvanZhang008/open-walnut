@@ -284,19 +284,30 @@ async function probeExistingOwner(
  * files here or handing this dir's service over to it would act on the wrong
  * daemon). Never takes the lock, so it cannot make a starting daemon yield.
  */
-export async function readDaemonInstanceOwner(options: {
+export async function readDaemonInstanceOwner(options: ReadDaemonLockOptions): Promise<DaemonLockOwnerInfo | null> {
+  const holder = await readDaemonInstanceHolder(options)
+  return holder && !holder.daemonDir ? holder : null
+}
+
+interface ReadDaemonLockOptions {
   runtimeDir: string
   uid: number
   deadlineMs?: number
   net?: LockNetLike
   fs?: LockFsLike
-}): Promise<DaemonLockOwnerInfo | null> {
+}
+
+/**
+ * Read only: whoever holds `runtimeDir`'s instance lock, a daemon whose own dir is another one
+ * included (`daemonDir` set). Only for a caller that asks whether the dir is held, to refuse or to
+ * say why nothing starts there; whatever acts on the dir's daemon reads readDaemonInstanceOwner.
+ */
+export async function readDaemonInstanceHolder(options: ReadDaemonLockOptions): Promise<DaemonLockOwnerInfo | null> {
   let dir: string
   try { dir = lockDirFor(options.runtimeDir, options.fs ?? nodeFs) } catch { return null }
   const netApi = options.net ?? (nodeNet as unknown as LockNetLike)
   try {
-    const owner = await probeExistingOwner(netApi, daemonLockPort(options.uid, dir), options.uid, dir, options.deadlineMs ?? DAEMON_LOCK_DEADLINE_MS)
-    return owner.daemonDir ? null : owner
+    return await probeExistingOwner(netApi, daemonLockPort(options.uid, dir), options.uid, dir, options.deadlineMs ?? DAEMON_LOCK_DEADLINE_MS)
   } catch {
     return null
   }
