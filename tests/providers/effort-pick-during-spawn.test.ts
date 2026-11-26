@@ -11,7 +11,13 @@
  *
  * What's real: ClaudeCodeSession.send(), applySessionEffortChange, SQLite
  * persistence. What's mocked: the transport (the test controls when the spawn
- * lands and captures what is written to the CLI) and the cwd pre-flight.
+ * lands and captures what is written to the CLI), the cwd pre-flight and the
+ * launch-mode read (it reads this machine's Claude settings through the daemon).
+ *
+ * The spawn's arrival is awaited as the event it is (spawnStarted), never on a
+ * clock: the pre-spawn steps import modules cold, and on a loaded runner they
+ * outlast vi.waitFor's 1 s default (2026-11-25: 5.5 s here, the mode read alone
+ * timing out at its own 4 s, so both tests failed on clean main).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -20,12 +26,17 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-effort-spawn
 
 const writes: string[] = []
 let releaseStart: (() => void) | null = null
-let started = false
+/** Resolved by the transport's start: the spawn reached the CLI's door. */
+let spawnStarted: Promise<void>
+let markStarted: () => void
+function armStart(): void {
+  spawnStarted = new Promise<void>((resolve) => { markStarted = resolve })
+}
 
 vi.mock('../../src/providers/session-manager.js', () => ({
   createSessionManager: () => ({
     start: async () => {
-      started = true
+      markStarted()
       await new Promise<void>((resolve) => { releaseStart = resolve })
       return { pid: 4343, outputFile: '/tmp/effort-spawn.jsonl', fileSize: 0 }
     },
@@ -53,9 +64,19 @@ vi.mock('../../src/utils/cwd-check.js', () => ({
   checkCwdExists: async () => ({ ok: true }),
 }))
 
+vi.mock('../../src/providers/claude-launch-mode.js', () => ({
+  resolveClaudeLaunchMode: async () => ({ mode: 'default', source: 'engine' }),
+}))
+
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
 import { applySessionEffortChange } from '../../src/core/sessions/session-controls.js'
 import * as tracker from '../../src/core/session-tracker.js'
+// What the spawn's scope step imports lazily (applySpawnClaudeScope), loaded with the test file:
+// imported cold inside the first spawn they took 6.5 s of a 15 s test on a loaded runner.
+import '../../src/core/task-manager.js'
+import '../../src/core/config-manager.js'
+import '../../src/core/sessions/claude-plugins-off.js'
+import '../../src/providers/claude-scope-settings.js'
 
 /** The effort levels this CLI was told over the control channel. */
 function flagEfforts(): unknown[] {
@@ -76,14 +97,14 @@ async function launch(sid: string, effort: 'medium' | 'low'): Promise<ClaudeCode
     undefined, undefined, undefined, false, undefined, undefined, effort,
     undefined, { preassignedSessionId: sid },
   )
-  await vi.waitFor(() => expect(started).toBe(true))
+  await spawnStarted
   return session
 }
 
 beforeEach(() => {
   writes.length = 0
   releaseStart = null
-  started = false
+  armStart()
 })
 
 describe('an effort picked while the CLI is spawning', () => {
@@ -114,7 +135,7 @@ describe('an effort picked while the CLI is spawning', () => {
     expect((await tracker.getSessionByClaudeId(quiet))?.effort).toBe('medium')
     session.detach()
 
-    started = false
+    armStart()
     const same = '41111111-2222-4333-8444-555555555555'
     session = await launch(same, 'low')
     await applySessionEffortChange(same, 'low')
