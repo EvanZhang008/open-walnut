@@ -1325,7 +1325,7 @@ export interface AddTaskInput {
 /** addTask with an explicitId that another task already has. */
 export class TaskIdTakenError extends Error {
   public readonly status = 409;
-  public readonly code = 'id_taken';
+  public readonly code = 'conflict';
   constructor(readonly id: string, readonly createdByOp: string | undefined) {
     super(`A task with id ${id} already exists`);
   }
@@ -2306,7 +2306,7 @@ export async function removeTestRunProject(name: string): Promise<boolean> {
  */
 export class ProjectRemoteDeleteUnsupportedError extends Error {
   public readonly status = 409;
-  public readonly code = 'remote_delete_unsupported';
+  public readonly code = 'conflict';
   public readonly project: string;
   public readonly source: string;
   constructor(project: string, source: string) {
@@ -5809,7 +5809,7 @@ export function validateProjectSource(
  */
 export class ActiveSessionError extends Error {
   public readonly status = 409;
-  public readonly code = 'active_session';
+  public readonly code = 'conflict';
   public readonly activeSessionIds: string[];
   constructor(taskId: string, activeSessionIds: string[]) {
     super(
@@ -5845,7 +5845,7 @@ export class DependencyValidationError extends Error {
  */
 export class CircularDependencyError extends Error {
   public readonly status = 409;
-  public readonly code = 'circular_dependency';
+  public readonly code = 'conflict';
   public readonly taskId: string;
   public readonly depId: string;
   constructor(taskId: string, depId: string, taskTitle?: string, depTitle?: string) {

@@ -18,6 +18,9 @@
 /** A code as Walnut writes them: lower case words joined by underscores (never ENOENT or ERR_BAD_REQUEST). */
 const CODE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 
+/** What an HTTP client's error carries of the answer it got. */
+const OTHER_SERVICE = ['headers', 'response', 'request'] as const
+
 export interface CodedRefusal {
   status: number
   code: string
@@ -27,6 +30,9 @@ export interface CodedRefusal {
 /** What `err` says it is when it is a refusal with its own status and code, else null. */
 export function codedRefusalOf(err: unknown): CodedRefusal | null {
   if (!(err instanceof Error)) return null
+  // Another service's answer passed along (an HTTP client's error keeps the response it got) is
+  // that service refusing Walnut, never Walnut refusing its caller.
+  if (OTHER_SERVICE.some((key) => key in err)) return null
   const { status, code } = err as { status?: unknown; code?: unknown }
   if (typeof status !== 'number' || !Number.isInteger(status) || ((status < 400 || status > 499) && status !== 501)) return null
   if (typeof code !== 'string' || code.length > 60 || !CODE.test(code)) return null

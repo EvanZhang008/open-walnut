@@ -43,6 +43,18 @@ describe('an error class is a coded refusal or a listed fault', () => {
     expect(own.length).toBeGreaterThanOrEqual(10)
     expect(own.filter((c) => !c.coded).map((c) => c.name)).toEqual([])
   })
+
+  it('under a code the frozen v1 error table names, the one its routes already answer', () => {
+    // A class answered `conflict` by the route that names it and something else everywhere else
+    // would be two codes for one refusal.
+    const table = fs.readFileSync(path.join(ROOT, 'docs/reference/api-v1.md'), 'utf8')
+    const documented = new Set([...table.matchAll(/^\| `([a-z_]+)`/gm)].map((m) => m[1]))
+    const src = fs.readFileSync(path.join(ROOT, 'src/core/task-manager.ts'), 'utf8')
+    const codes = [...new Set([...src.matchAll(/^  public readonly code = '([a-z_]+)'/gm)].map((m) => m[1]))]
+    expect(codes.length).toBeGreaterThanOrEqual(4)
+    // area_merge_refused is the merge op's own code, written before this table's rule and read by its callers.
+    expect(codes.filter((code) => !documented.has(code) && code !== 'area_merge_refused')).toEqual([])
+  })
 })
 
 describe('what counts as a coded refusal', () => {
@@ -59,6 +71,7 @@ describe('what counts as a coded refusal', () => {
     ['a system call\'s code', Object.assign(new Error('gone'), { status: 404, code: 'ENOENT' })],
     ['an HTTP client\'s code', Object.assign(new Error('bad'), { status: 400, code: 'ERR_BAD_REQUEST' })],
     ['a code alone', Object.assign(new Error('x'), { code: 'conflict' })],
+    ['another service\'s answer passed along', Object.assign(new Error('Incorrect API key'), { status: 401, code: 'invalid_api_key', headers: {} })],
     ['what is no error', { status: 400, code: 'bad_input', message: 'x' }],
   ])('%s is not one', (_name, err) => {
     expect(codedRefusalOf(err)).toBeNull()

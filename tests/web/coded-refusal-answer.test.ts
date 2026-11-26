@@ -94,7 +94,7 @@ describe('a coded refusal is answered by its own status and code', () => {
 })
 
 describe('ratchet: a route file throws no bare Error for something the caller can fix', () => {
-  // A bare `throw new Error` that reaches a funnel is a 500. What a route refuses is answered
+  // A bare `throw new Error` (or one passed to next or reject) that reaches a funnel is a 500. What a route refuses is answered
   // there (res.status) or thrown with its status and code. The ones left, by file, with why each
   // never reaches a funnel as a refusal: a new one fails this test until it is coded or listed.
   const BARE: Record<string, [number, string]> = {
@@ -103,12 +103,17 @@ describe('ratchet: a route file throws no bare Error for something the caller ca
     'browser-logs.ts': [1, 'socket RPC: its reply carries words only'],
     'chat.ts': [1, 'a turn that failed, inside the turn\'s own stream'],
     'config.ts': [2, 'a model list that did not load: caught there, answered as an empty list'],
+    'cloud-setup.ts': [1, 'a detection that ran out of time: a fault'],
     'engines.ts': [1, 'caught three lines below and answered 409'],
+    'file-content-bridge-media.ts': [1, 'a relay that ran out of time: a fault'],
+    'git-bundle-push.ts': [2, 'a git child process that failed or ran out of time: a fault'],
     'leader-switch.ts': [2, 'a deadline that ran out: a fault of the copy link'],
     'plugin-jobs-routes.ts': [1, 'caught in its route and answered by statusOf'],
     'plugin-runtime.ts': [3, 'caught in its route and answered by the plugin runtime\'s own status map'],
+    'secrets-v1.ts': [1, 'a secret that could not be saved: a fault, in plain words'],
     'session-chat.ts': [26, 'socket RPC: its reply carries words only'],
     'session-transcript-relay.ts': [2, 'the bridge\'s relay handler: answered to the companion in words'],
+    'sessions.ts': [2, 'an execution session that did not start: a fault'],
     'slash-commands.ts': [1, 'a host the config does not name: caught by its route'],
   }
 
@@ -116,7 +121,7 @@ describe('ratchet: a route file throws no bare Error for something the caller ca
     const dir = path.join(ROOT, 'src/web/routes')
     const found: Record<string, number> = {}
     for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
-      const n = [...fs.readFileSync(path.join(dir, name), 'utf8').matchAll(/throw (?:new )?Error\(/g)].length
+      const n = [...fs.readFileSync(path.join(dir, name), 'utf8').matchAll(/(?:throw |next\(|reject\()(?:new )?Error\(/g)].length
       if (n) found[name] = n
     }
     expect(found).toEqual(Object.fromEntries(Object.entries(BARE).map(([file, [n]]) => [file, n])))
