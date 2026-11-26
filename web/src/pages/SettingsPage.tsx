@@ -75,6 +75,12 @@ const SKELETON_DELAY_MS = 150
 const HOLD_MIN_MS = 2000
 const HOLD_QUIET_MS = 1000
 const HOLD_MAX_MS = 5000
+/**
+ * How long a hold looks for a target that is not drawn yet. A row inside a section that
+ * waits on a server answer (the Cloud companion's rows wait on the device list) can come
+ * seconds late on a busy machine: giving up after 2s left a Find a setting hit unscrolled.
+ */
+const HOLD_FIND_MS = 10_000
 
 // Dev-only: make one core section throw (the Playwright fixture runs Vite dev).
 // The fake plugin panel and App hooks live in plugins/dev-test-hooks.
@@ -133,7 +139,7 @@ interface AnchorRequest {
 
 /**
  * Scroll `id` into place inside `scroller` and keep it there while the content
- * above it is still growing: retry every 100ms (20x) until the element exists,
+ * above it is still growing: look every 100ms (for HOLD_FIND_MS) until the element exists,
  * re-scroll whenever it drifts > 2px (checked every frame), stop once the
  * content above it has been still for a second (see HOLD_*), and let go at
  * once when the person scrolls or types.
@@ -143,7 +149,7 @@ function holdAnchor(scroller: HTMLElement, req: AnchorRequest): () => void {
   announceSettingsAnchor(req.id)
   let stopped = false
   let el: HTMLElement | null = null
-  let tries = 0
+  const startedAt = performance.now()
   let foundAt = 0
   let lastMoveAt = 0
   let stable = 0
@@ -174,7 +180,7 @@ function holdAnchor(scroller: HTMLElement, req: AnchorRequest): () => void {
       el = document.getElementById(req.id)
       if (!el || !scroller.contains(el)) {
         el = null
-        if (++tries >= 20) stop()
+        if (now - startedAt >= HOLD_FIND_MS) stop()
         return
       }
       foundAt = now

@@ -741,3 +741,18 @@ test('Find a setting reaches a row on a tab: the tab opens with the row shown', 
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#devices-backup-leader')).toBeInViewport({ timeout: 10_000 })
 })
+
+test('Find a setting reaches a row that renders late: a slow list still ends with the row shown', async ({ page }) => {
+  await mockDevices(page)
+  await openDevices(page)
+  // A busy server: the list the Cloud companion tab waits on before it draws the row answers 4 s late.
+  await page.route((url) => url.pathname === '/api/devices', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await new Promise((r) => setTimeout(r, 4_000))
+    return route.fallback()
+  })
+  await page.getByTestId('settings-filter').fill('take over')
+  await page.locator('.settings-nav').getByText('Cloud companion takes over').first().click()
+  await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
+  await expect(page.locator('#devices-backup-leader')).toBeInViewport({ timeout: 15_000 })
+})
