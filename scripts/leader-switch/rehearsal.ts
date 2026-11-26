@@ -12,7 +12,9 @@ import Database from '../../src/lib/sqlite.js'
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { makeWorld, REPO, type Machine, type World } from './world.js'
 import { consoleDirOfAccount } from '../../src/core/handed-over-console.js'
-import { standbyStatus } from '../../src/core/standby/index.js'
+import { batchUnderWay, standbyStatus } from '../../src/core/standby/index.js'
+import { catchUpBudgetMs } from '../../src/core/leader/switch/catch-up.js'
+import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
 import { readSwitchOutcome as readSwitchState } from '../../src/core/leader/switch/flow.js'
@@ -53,11 +55,94 @@ export async function waitForBatch(dir: string, since: number, timeoutMs = 120_0
   }, timeoutMs, 500)
 }
 
+/**
+ * How long a rehearsal waits for a standby to catch up before it starts a switch: a small home's batches take
+ * seconds; a home of `gb` GB of filler sends the whole home in its first batch, and the first batch the other
+ * way after a switch is the whole home again (20 GB: 13 to 18 min unslowed).
+ */
+export function catchUpBoundMs(gb = 0): number {
+  return gb > 0 ? Math.max(1_800_000, gb * 180_000) : 180_000
+}
+
+/** The standby was not caught up when a switch was to start: the switch was not tried, so this is no failed switch. */
+export class StandbyNotCaughtUp extends Error {}
+
+export type CaughtUp =
+  | { ok: true; batch: number; batchMs: number; waitedMs: number }
+  | { ok: false; why: string; waitedMs: number }
+
+/** The batches the leader's standby runner made current ("standby: batch committed" in its server's log): start, end, time. */
+function committedBatches(m: Machine): Array<{ start: number; end: number; batch: number; ms: number; sentBytes: number }> {
+  const out: Array<{ start: number; end: number; batch: number; ms: number; sentBytes: number }> = []
+  for (const f of serverLogFiles(m)) {
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+      if (!line.includes('"standby: batch committed"')) continue
+      try {
+        const l = JSON.parse(line) as { time: string; batch?: number; totalMs?: number; sentBytes?: number }
+        const end = Date.parse(l.time)
+        const ms = Number(l.totalMs)
+        if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') out.push({ start: end - ms, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
+      } catch { /* a torn last line */ }
+    }
+  }
+  return out
+}
+
+/** The commit window the leader's switch would run in (its config's leader_switch), in ms. */
+function commitWindowOf(m: Machine): number {
+  try {
+    const cfg = YAML.parse(fs.readFileSync(path.join(m.home, 'config.yaml'), 'utf8')) as { leader_switch?: unknown }
+    return parseSwitchSettings(cfg.leader_switch).settings?.commitWindowMs ?? 300_000
+  } catch { return 300_000 }
+}
+
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`
+
+/**
+ * Wait, at most `boundMs`, until the standby a switch would rely on has really caught up: a batch of `leader`'s
+ * runner that began after `since` (default now: after the writes the switch must carry) took at most the budget
+ * the switch's own catch-up asks of one (catch-up.ts catchUpBudgetMs, from the leader's commit window), and landed
+ * at `standbyDir`. That is the test the switch's preflight runs, so a switch started on it is not refused as "not
+ * caught up", and a switch that fails after it failed for another reason. Never throws: the bound's end is
+ * `{ok: false}` with what the standby did meanwhile (its last batches, a batch under way at the target).
+ */
+export async function untilCaughtUp(leader: Machine, standbyDir: string, o: { since?: number; boundMs: number }): Promise<CaughtUp> {
+  const since = o.since ?? Date.now()
+  const budgetMs = catchUpBudgetMs(commitWindowOf(leader))
+  const t0 = Date.now()
+  for (;;) {
+    const st = await standbyStatus(standbyDir).catch(() => null)
+    const batches = committedBatches(leader).filter((b) => b.start >= since)
+    const fit = batches.find((b) => b.ms <= budgetMs && st?.batch != null && st.batch >= b.batch)
+    if (fit) return { ok: true, batch: fit.batch, batchMs: fit.ms, waitedMs: Date.now() - t0 }
+    if (Date.now() - t0 >= o.boundMs) {
+      const under = st ? await batchUnderWay(standbyDir, st.committedAt ?? st.takenAt).catch(() => null) : null
+      const lastOnes = batches.slice(-3).map((b) => `batch ${b.batch} ${secs(b.ms)}/${(b.sentBytes / 1_048_576).toFixed(1)} MB`).join(', ') || 'none'
+      const there = under
+        ? `a batch under way there since ${under.since} (${under.chunks} chunk(s), ${(under.bytes / 1_048_576).toFixed(1)} MB, the last ${secs(Date.now() - Date.parse(under.lastAt))} ago)`
+        : 'nothing under way there'
+      return { ok: false, waitedMs: Date.now() - t0, why: `standby not caught up: within ${secs(o.boundMs)} no batch of ${leader.id} begun after ${new Date(since).toISOString()} took at most ${secs(budgetMs)} (the budget the switch's catch-up asks of one) and landed at ${standbyDir}; its batches since: ${lastOnes}; the copy holds ${st?.batch != null ? `batch ${st.batch}, landed ${st.committedAt}` : 'no batch'}; ${there}` }
+    }
+    await sleep(2_000)
+  }
+}
+
+/** untilCaughtUp, as one check: a FAIL named for the standby, never for the switch, when the bound ran out. */
+export async function caughtUpBeforeSwitch(c: Checks, label: string, leader: Machine, standbyDir: string, o: { since?: number; boundMs?: number } = {}): Promise<boolean> {
+  const r = await untilCaughtUp(leader, standbyDir, { since: o.since, boundMs: o.boundMs ?? catchUpBoundMs() })
+  if (r.ok) return true
+  return c.add(`${label}: the standby caught up before the switch (no switch was tried)`, false, r.why)
+}
+
 /** A machine's server log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log), parsed. */
 export function serverLog(m: Machine): Array<{ time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }> {
-  const dir = path.join(m.dir, 'daemon')
-  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort() : []
-  return files.flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
+  return serverLogFiles(m).flatMap((f) => fs.readFileSync(f, 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
+}
+
+/** A machine's server log files, oldest first: its daemon dir (WALNUT_DAEMON_DIR of its env, else <dir>/daemon) is its log dir. */
+function serverLogFiles(m: Machine): string[] {
+  const dir = m.env?.WALNUT_DAEMON_DIR ?? path.join(m.dir, 'daemon')
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort().map((n) => path.join(dir, n)) : []
 }
 
 export async function status(w: World, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
@@ -252,13 +337,12 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     const s = await seed(w, w.a, 10)
     c.add('seed: tasks, notes, a plugin file and a routine on A', s.tasks.length === 10 && s.notes.length >= 3 && !!s.cronId, `${s.tasks.length} tasks, ${s.notes.length} notes, routine ${s.cronId}`)
     const t0 = Date.now()
-    await waitForBatch(w.b.standbyDir, t0, (opts.fillerGb ?? 0) > 1 ? 7_200_000 : 120_000)
+    await waitForBatch(w.b.standbyDir, t0, catchUpBoundMs(opts.fillerGb)).catch(() => 0)
     log(`first standby batch at B after ${((Date.now() - t0) / 1000).toFixed(1)} s`)
-    // The first batch of a large home is old by the time it is complete (its moment is its
-    // start): the switch's preflight wants a recent one, as a running standby keeps.
+    // The first batch of a large home takes minutes; caught up is a later one within the switch's budget.
     const t1 = Date.now()
-    await waitForBatch(w.b.standbyDir, t1, 1_800_000)
-    log(`a current standby batch at B after another ${((Date.now() - t1) / 1000).toFixed(1)} s`)
+    if (!await caughtUpBeforeSwitch(c, 'switch A -> B', w.a, w.b.standbyDir, { since: t0, boundMs: catchUpBoundMs(opts.fillerGb) })) return { checks: c }
+    log(`the standby at B caught up after another ${((Date.now() - t1) / 1000).toFixed(1)} s`)
     // A second plugin write while A runs (outside the gate): the final batch must carry it.
     const late = { rel: 'plugins/rehearsal-plugin/data/late.json', content: JSON.stringify({ late: randomBytes(4).toString('hex') }) }
     fs.writeFileSync(path.join(w.a.home, late.rel), late.content)
@@ -337,7 +421,8 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     }
     const noteB = { rel: 'rehearsal/written-on-b.md', content: '# written on B\n' }
     await w.api(w.b, 'PUT', `/api/notes-v2/content/${noteB.rel}`, { content: noteB.content })
-    await waitForBatch(w.a.standbyDir, Date.now(), (opts.fillerGb ?? 0) > 1 ? 7_200_000 : 120_000)
+    // The copy the other way: its first batch is the whole home.
+    if (!await caughtUpBeforeSwitch(c, 'switch back B -> A', w.b, w.a.standbyDir, { boundMs: catchUpBoundMs(opts.fillerGb) })) return { checks: c, downtimeMs: st?.downtimeMs }
     const back = await w.cli(w.b.home, ['leader', 'switch', '--back'])
     log(back.out)
     const sb = readSwitchState(w.b.home)
@@ -368,7 +453,7 @@ export async function rehearseLedgerControl(root: string, print: (c: Check) => v
   try {
     if (!c.add('ledger control: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 5)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'ledger control', w.a, w.b.standbyDir)) return c
     const sw = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE: '1' })
     if (!c.add('ledger control: switch without the rewrite completes', sw.code === 0)) return c
     let applied = 0
@@ -395,7 +480,7 @@ export async function rehearseKill(root: string, point: typeof KILL_POINTS[numbe
   try {
     if (!c.add(`kill ${point}: A starts`, (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 5)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, `kill ${point}`, w.a, w.b.standbyDir)) return c
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: point })
     c.add(`kill ${point}: a switch job died there and the command said so`, first.code === 4 && /died|stopped at/.test(first.out), `exit ${first.code}; step ${readSwitchState(w.a.home)?.step}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const resumed = await w.cli(w.a.home, ['leader', 'switch', '--resume'])
@@ -427,7 +512,7 @@ export async function rehearseCancelAfterCommit(root: string, print: (c: Check) 
   try {
     if (!c.add('cancel after commit: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'cancel after commit', w.a, w.b.standbyDir)) return c
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-commit-majority' })
     c.add('cancel after commit: the new leader\'s job died after the commit stood', first.code === 4, `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const cancel = await w.cli(w.a.home, ['leader', 'switch', '--cancel'])
@@ -456,7 +541,7 @@ export async function rehearseCancel(root: string, print: (c: Check) => void, po
   try {
     if (!c.add('cancel: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'cancel', w.a, w.b.standbyDir)) return c
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-handover' })
     c.add('cancel: the source job died after the handover record, A still running', first.code === 4 && !!a.runningServer(), `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     const lost = await waitFor('A to see the handover', async () => (await status(w, w.a))?.mayAct === false, 40_000).catch(() => false)
@@ -486,7 +571,7 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
   try {
     if (!c.add(`trial ${kind}: A starts`, (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 5)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, `trial ${kind}`, w.a, w.b.standbyDir)) return c
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-promote' })
     c.add(`trial ${kind}: stopped after the copy became B's home`, first.code === 4 && fs.existsSync(w.b.home), `exit ${first.code}; ${first.out.trim().split('\n').slice(-1).join('')}`)
     if (kind === 'corrupt-database') {
@@ -547,7 +632,7 @@ export async function rehearseHomePrefix(root: string, print: (c: Check) => void
     const inHome = await w.api(w.a, 'POST', '/api/tasks', { title: 'works in the home', project: 'Rehearsal', cwd: w.a.home })
     const inRepo = await w.api(w.a, 'POST', '/api/tasks', { title: 'works in a repo', project: 'Rehearsal', cwd: `${A}/code/proj` })
     if (!c.add('home prefix: two tasks with folders on A', inHome.status < 300 && inRepo.status < 300, `${inHome.status} ${inRepo.status}`)) return c
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'home prefix', w.a, w.b.standbyDir)) return c
     const sw = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id])
     const st = readSwitchState(w.a.home)
     if (!c.add('home prefix: switch A -> B completes (the trial\'s scan passed)', sw.code === 0 && st?.step === 'done', `exit ${sw.code}; ${sw.out.trim().split('\n').slice(-3).join(' | ')}`)) return c

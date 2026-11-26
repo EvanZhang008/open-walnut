@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { makeWorld, type Machine, type World } from './world.js'
-import { Checks, checkCarried, seed, serverLog, status, waitFor, waitForBatch, type Check } from './rehearsal.js'
+import { Checks, caughtUpBeforeSwitch, checkCarried, seed, serverLog, status, waitFor, waitForBatch, type Check } from './rehearsal.js'
 import { readSwitchOutcome as readSwitchState, readTargetState } from '../../src/core/leader/switch/flow.js'
 import { readFinalStopResult, readMarker } from '../../src/core/leader/switch/records.js'
 import { finalMarkName, readSwitchFile, type FinalMark } from '../../src/core/leader/switch/ticket.js'
@@ -53,7 +53,7 @@ export async function rehearseLateWriter(root: string, print: (c: Check) => void
   try {
     if (!c.add('late writer: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'late writer', w.a, w.b.standbyDir)) return c
     const { run, batch, id } = await switchUntilFirstFinalBatch(w, { WALNUT_LEADER_SWITCH_PAUSE_AFTER_FIRST_BATCH_MS: '6000' })
     const rel = 'plugins/rehearsal-plugin/data/late.json'
     const content = JSON.stringify({ late: randomBytes(6).toString('hex'), at: Date.now() })
@@ -122,7 +122,7 @@ export async function rehearseSignalInFinalBatch(root: string, print: (c: Check)
   try {
     if (!c.add('signal in the final batch: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'signal in the final batch', w.a, w.b.standbyDir)) return c
     const pid = serverPid(w.a.home)
     const { run, id } = await switchUntilFirstFinalBatch(w, { WALNUT_LEADER_SWITCH_PAUSE_AFTER_FIRST_BATCH_MS: '30000' })
     const t0 = Date.now()
@@ -153,7 +153,7 @@ export async function rehearseServerKilledInFinalBatch(root: string, print: (c: 
   try {
     if (!c.add('server killed in the final batch: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'server killed in the final batch', w.a, w.b.standbyDir)) return c
     const r = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'server-during-final-batch' })
     const st = readSwitchState(w.a.home)
     c.add('server killed in the final batch: the switch rolls back, saying the old leader died before its final batch ended', r.code === 3 && st?.step === 'rolled-back' && /died before its final batch/.test(st?.rollbackWhy ?? ''), `exit ${r.code}; ${st?.rollbackWhy}`)
@@ -178,7 +178,7 @@ export async function rehearseStopWait(root: string, print: (c: Check) => void, 
   try {
     if (!c.add('stop wait: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'stop wait', w.a, w.b.standbyDir)) return c
     const first = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id], { WALNUT_LEADER_SWITCH_KILL_AT: 'after-handover' })
     const id = readSwitchState(w.a.home)?.id ?? '?'
     c.add('stop wait: the source job died after the handover', first.code === 4, `exit ${first.code}`)
@@ -242,13 +242,13 @@ export async function rehearseLauncherRace(root: string, print: (c: Check) => vo
   try {
     if (!c.add('launcher race: A starts', (await a.startServer('leader', 300_000)).ok)) return c
     const s = await seed(w, w.a, 3)
-    await waitForBatch(w.b.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'launcher race', w.a, w.b.standbyDir)) return c
     const there = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id])
     if (!c.add('launcher race: switch A -> B completes', there.code === 0, `exit ${there.code}; ${there.out.trim().split('\n').slice(-1).join('')}`)) return c
     launcher = fakeLauncher(w.a, path.join(w.a.dir, 'launcher.log'))
     const up = await waitFor('A\'s launcher start as the standby', async () => { const r = await w.api(w.a, 'GET', '/api/leader/status').catch(() => null); return r?.json?.standby === true ? r.json : null }, 120_000).catch(() => null)
     c.add('launcher race: A\'s launcher keeps its handed-over home up as the standby', !!up, JSON.stringify(up?.leader ?? null))
-    await waitForBatch(w.a.standbyDir, Date.now())
+    if (!await caughtUpBeforeSwitch(c, 'launcher race: switch back', w.b, w.a.standbyDir)) return c
     const t0 = Date.now()
     const back = await w.cli(w.b.home, ['leader', 'switch', '--back'])
     const st = readSwitchState(w.b.home)

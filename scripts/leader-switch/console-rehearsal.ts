@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { Checks, consoleLeft, seed, waitForBatch, type Check } from './rehearsal.js'
+import { Checks, caughtUpBeforeSwitch, consoleLeft, seed, waitForBatch, type Check } from './rehearsal.js'
 import { makeConsoleWorld, HOST_KEY_A, type ConsoleWorld } from './console-world.js'
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { MacAppReplay } from './mac-app-replay.js'
@@ -103,7 +103,7 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
     const s = await seed(cw, cw.a, 5)
     const t0 = Date.now()
     await waitForBatch(cw.b.standbyDir, t0, 600_000)
-    await waitForBatch(cw.b.standbyDir, Date.now(), 600_000)
+    if (!await caughtUpBeforeSwitch(c, 'console: switch A -> B', cw.a, cw.b.standbyDir, { boundMs: 600_000 })) return c
     const sw = await cw.cli(cw.a.home, ['leader', 'switch', '--to', cw.b.id])
     log(sw.out)
     const st = readSwitchState(cw.a.home)
@@ -205,7 +205,7 @@ export async function rehearseConsole(root: string, print: (c: Check) => void, o
       kept.ok, describeKept(kept))
     await replay.stop()
     // Switch back: A leads again at its address, the console door closes first.
-    await waitForBatch(cw.a.standbyDir, Date.now(), 600_000)
+    if (!await caughtUpBeforeSwitch(c, 'console: switch back B -> A', cw.b, cw.a.standbyDir, { boundMs: 600_000 })) return c
     const back = await cw.cli(cw.b.home, ['leader', 'switch', '--back'])
     log(back.out)
     const sb = readSwitchState(cw.b.home)
