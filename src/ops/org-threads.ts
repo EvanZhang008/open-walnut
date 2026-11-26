@@ -14,7 +14,7 @@ import { CONTENT_MAX_CHARS } from './answer.js'
 import type { OpCall } from './core.js'
 import { WORD_TO_USER_RULE, THREADS_OPTIONS_RULE, THREADS_MOVE_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
-import { THREAD_STATES, THREAD_TITLE_MAX } from '../core/org/threads-model.js'
+import { READ_REFUSAL, THREAD_STATES, THREAD_TITLE_MAX } from '../core/org/threads-model.js'
 import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
 import { USER_KINDS, USER_KIND_WHY_MIN } from '../core/org/user-kind.js'
 
@@ -133,7 +133,8 @@ function withCorrectedCall(op: string, args: Record<string, unknown>, keys: read
   if (code === 'user_kind' && /with user_kind \(one of/.test(msg)) fix = `${op} ${callArgs(given, KIND_FIX)}`
   else if (code === 'needs_options' || (code === 'user_kind' && /Pass options|as options/.test(msg))) fix = `${op} ${callArgs(given, OPTIONS_FIX)}`
   else if (code === 'user_kind' && /has no summary/.test(msg)) fix = `${op} ${callArgs(given, { reply: '<first what he decides and what you recommend, then the key points>' })}`
-  else if (code === 'not_reacted' && given.close) fix = `${op} ${callArgs(given, { user_words: '<his words asking to close it, quoted from his latest message>' })}`
+  // A claim his words were read against offers no retry with user_words: the refusal says what closes it.
+  else if (code === 'not_reacted' && given.close && !msg.includes(READ_REFUSAL)) fix = `${op} ${callArgs(given, { user_words: '<his words asking to close it, quoted from his latest message>' })}`
   else if (code === 'same_ask') fix = `${op} ${callArgs(given, { same_ask_reason: '<one line: why this is a different decision>' })}, or leave the ask to that task and keep this thread working`
   else if (code === 'last_message' && typeof given.merge_into === 'string') fix = `thread_update {"id":"${String(given.id)}","merge_into":"${given.merge_into}"} (its only message moves with the whole thread)`
   else if (code === 'watched_by_user') fix = `${op} ${callArgs(Object.fromEntries(Object.entries(given).filter(([k]) => !['watch', 'watch_at', 'close'].includes(k))))}`

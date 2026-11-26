@@ -63,11 +63,13 @@ describe('a node\'s claim that he reacted is read against his words, wherever it
     const body = (name: string) => { const i = model.indexOf(`function ${name}(`); return model.slice(i, model.indexOf('\n}\n', i)) }
     expect(body('knownThrough')).toMatch(/unseen\?\.has\(t\.id\)\) throw notReacted\(/)
     expect(body('checkClose')).toMatch(/const read = !!unseen\?\.has\(t\.id\)/)
+    // His quoted words rescue a close from a refused claim only when they were read as asking for it.
+    expect(body('checkClose')).toMatch(/if \(closeAskOf\(t, words\) && \(!unseen\?\.has\(t\.id\) \|\| closeAsked === true\)\) return;/)
     // The last answer's time counts only when his words were not read as about something else.
     expect(body('checkClose')).toMatch(/reactedSince\(file, last\.answer\) && !read\b/)
     expect(body('checkClose')).toMatch(/isAcknowledgement\(last\.text\) && \(!read \|\| readsAsReaction\(last\)\)/)
     expect(model).toMatch(/knownThrough\(file, cur, upTo, by, opts\.unseen\)/)
-    expect(model).toMatch(/checkClose\(file, cur, by, patch\.user_words, opts\.unseen\)/)
+    expect(model).toMatch(/checkClose\(file, cur, by, patch\.user_words, opts\.unseen, opts\.closeAsked\)/)
   })
 
   it('both ways a node claims it ask the judge before their write', () => {
@@ -78,7 +80,12 @@ describe('a node\'s claim that he reacted is read against his words, wherever it
     // Asked before the lock, for a known mark or a close that quotes no words of his.
     expect(patch.indexOf('unseenClaims(')).toBeGreaterThan(0)
     expect(patch.indexOf('unseenClaims(')).toBeLessThan(patch.indexOf('mutateThreads('))
-    expect(patch).toMatch(/rest\.known !== undefined \|\| \(rest\.close && !rest\.user_words\)/)
+    // Every known mark and every close of a node, one that quotes his words too.
+    expect(patch).toMatch(/by !== 'human' && !placing && \(rest\.known !== undefined \|\| rest\.close\) \? await import\('\.\/thread-seen-check\.js'\)/)
+    expect(patch).not.toMatch(/!rest\.user_words/)
+    // On a refused claim his quoted words move under the thread, and close it, only when they ask for a close.
+    expect(patch).toMatch(/unseen\?\.has\(id\) && rest\.close && rest\.user_words \? \(await seenCheck\.closeAsked\(taskId, rest\.user_words\)\) === true/)
+    expect(patch).toMatch(/if \(carryLang && closeAsked !== false\) cur = carryHisWords\(/)
     const lines = fs.readFileSync(path.join(SRC, 'core/sessions/status-threads.ts'), 'utf8')
     const apply = lines.slice(lines.indexOf('export async function applyThreadLines('))
     expect(apply.indexOf('unseenClaims(')).toBeLessThan(apply.indexOf('writeOwnThreads(taskId'))

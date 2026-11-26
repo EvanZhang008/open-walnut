@@ -431,18 +431,21 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   // A node's close that quotes him: the language a thread left behind is titled in (carryHisWords).
   const carryLang = rest.close && rest.user_words && by !== 'human' ? await letterLang() : null;
   // A node's known mark or close rests on his reaction: his words since are read, not only their
-  // time (thread-seen-check.ts). A close that quotes him, or one his Acknowledge placed, is no such claim.
-  const unseen = by !== 'human' && !placing && (rest.known !== undefined || (rest.close && !rest.user_words))
-    ? await (await import('./thread-seen-check.js')).unseenClaims(taskId, [id]) : undefined;
+  // time (thread-seen-check.ts). A close his Acknowledge placed is no such claim. One that quotes
+  // him is: where the claim is refused, the quote closes the thread only when those words ask for a
+  // close, and only then do they move under it (a thanks about another answer, quoted, did both).
+  const seenCheck = by !== 'human' && !placing && (rest.known !== undefined || rest.close) ? await import('./thread-seen-check.js') : null;
+  const unseen = seenCheck ? await seenCheck.unseenClaims(taskId, [id]) : undefined;
+  const closeAsked = seenCheck && unseen?.has(id) && rest.close && rest.user_words ? (await seenCheck.closeAsked(taskId, rest.user_words)) === true : undefined;
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
     // He knows where it stands: it goes to Acknowledged and the node decides where it goes (thread-known.ts).
     // Acknowledged already by now (a double click, or the node just placed it): his ack closes it.
     if (ack && ackOpen && before && !before.closed && !ack.isKnown(before)) held.reading = ack.ackOutcome(before, ackOpen);
     // His words that close it, filed on another thread, go under it first (carryHisWords): no card of their own stays behind.
-    if (carryLang) cur = carryHisWords(cur, id, rest.user_words, by, at, carryLang, (t) => !!closeAskOf(t, rest.user_words));
+    if (carryLang && closeAsked !== false) cur = carryHisWords(cur, id, rest.user_words, by, at, carryLang, (t) => !!closeAskOf(t, rest.user_words));
     const r = held.reading ? ack!.ackKnown(cur, id, at)
-      : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source, unseen?.size ? { unseen } : undefined) : { file: cur, thread: before };
+      : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source, unseen?.size ? { unseen, ...(closeAsked !== undefined ? { closeAsked } : {}) } : undefined) : { file: cur, thread: before };
     let next = r.thread;
     if (ackMod) next = ackMod.nodePlaced(before, next, placing, at);
     if (owner) next = { ...next, askOwner: owner };

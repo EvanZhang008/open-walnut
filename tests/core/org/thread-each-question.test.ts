@@ -18,7 +18,7 @@ import {
   emptyThreads, fileMessage, mergeThreads, SAME_CONVERSATION_MS, setAnswers, splitMessageInto, ThreadError, updateThread,
   type OrgThread, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
-import { asksQuestion, isPlainReaction, ownQuestionOf, setEachQuestion } from '../../../src/core/org/thread-question.js'
+import { asksQuestion, isPlainReaction, isReactionOnly, ownQuestionOf, setEachQuestion } from '../../../src/core/org/thread-question.js'
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 import { holdRepeatTitles, heldTitleOf, MERGE_UNTITLED_LINE, mergeQuestionPart, nearThreads, settleHeldTitles } from '../../../src/core/sessions/status-thread-title.js'
 import { threadQuestionOf } from '../../../src/core/sessions/status-thread-question.js'
@@ -104,6 +104,12 @@ describe('asksQuestion: a question of its own, by form', () => {
       expect(isPlainReaction(r), r).toBe(true)
       expect(asksQuestion(r), r).toBe(false)
     }
+  })
+
+  it('a message of nothing but reaction words, however many, reacts only', () => {
+    for (const r of ['ok', 'OK!', 'ok got it, thanks', 'done. thanks!', 'cool thanks', '\u597d\u7684 \u8c22\u8c22']) expect(isReactionOnly(r), r).toBe(true)
+    // A word that names something, a question, or a word that only starts like one of them.
+    for (const r of ['ok got it, thanks, the lathe one makes sense', 'thanks, all three make sense', 'ok?', 'okra', 'good grief', '-', '']) expect(isReactionOnly(r), r).toBe(false)
   })
 })
 

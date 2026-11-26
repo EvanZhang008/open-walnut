@@ -51,10 +51,10 @@ beforeAll(async () => {
   taskId = flow.taskId
   await setTag(true, { threads_reminder: true, threads_seen_check: true })
   expect(await seenCheckOn()).toBe(true)
-  // The judge, asked once per claim: YES only for the hedge answer, and it keeps what it was asked.
+  // The judge, asked once per claim: SAME only for the hedge answer, and it keeps what it was asked.
   setSeenJudgeOverride(async (input) => {
     asked.push(input)
-    return input.includes('his question (thread "North hedge")') ? '"Hornbeam it is, thanks" => YES' : 'none => NO'
+    return input.includes('his question (thread "North hedge")') ? '"Hornbeam it is, thanks" => SAME' : '"-" => OTHER'
   })
 }, 40_000)
 
@@ -78,13 +78,13 @@ describe('a seen claim is read against his words', () => {
     const endedAt = await turnEnds(rows, `Forty slabs.\n\n<walnut-card thread="${pond}" state="done" seen="yes"/>\n<walnut-card thread="${hedge}" state="done" seen="yes"/>\n<walnut-card thread="${slabs}" state="answered" title="Paving slabs"/>`)
     const q = await questionAfter(endedAt)
 
-    // One call per claim: its question, its answer, and his newest message; the hedge answer was the last he got.
+    // One call per claim: its question, its answer, and his newest message.
     expect(asked).toHaveLength(2)
     const pondAsk = asked.find((x) => x.includes('his question (thread "Pond depth")'))!
     const hedgeAsk = asked.find((x) => x.includes('his question (thread "North hedge")'))!
-    expect(hedgeAsk).toContain('the assistant\'s answer (the last answer he got before he wrote what follows)\nHornbeam: it keeps its leaves in winter.')
+    expect(hedgeAsk).toContain('the assistant\'s answer\nHornbeam: it keeps its leaves in winter.')
     expect(pondAsk).toContain('the assistant\'s answer\nSixty centimetres at the middle.')
-    for (const x of [pondAsk, hedgeAsk]) expect(x).toContain('what he wrote afterwards, oldest first\n- Hornbeam it is, thanks. Next: how many paving slabs for the path?\n')
+    for (const x of [pondAsk, hedgeAsk]) expect(x).toContain('what he wrote most recently, oldest first\n- Hornbeam it is, thanks. Next: how many paving slabs for the path?\n')
     // The hedge question was answered in its own turn: it is not read again as a reaction to the pond answer.
     expect(pondAsk).not.toContain('- Which hedge for the north side?')
 

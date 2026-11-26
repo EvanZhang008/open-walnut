@@ -314,6 +314,17 @@ describe('a thread refusal says the call that goes through', () => {
     await expect(r).rejects.toThrow('thread_update {"id":"th-a0a0a0","merge_into":"th-c0c0c0"}')
   })
 
+  it('a close he has not reacted to: the call with his words; one his words were read against offers no such retry', async () => {
+    const byTime = Object.assign(new Error('Not closed: the user has not written to you since your last word in it (2026-11-14T06:02:00.000Z).'), { status: 409, code: 'not_reacted' })
+    const r = run('thread_update', { id: 'th-a0a0a0', close: 'acked' }, { 'PATCH /tasks/vp-1/threads/': () => { throw byTime } })
+    await expect(r).rejects.toThrow(/The call that goes through: thread_update \{"id":"th-a0a0a0","close":"acked","user_words":"<his words asking to close it/)
+    // His words since were read and are about something else (thread-seen-check.ts): quoting a thanks would close it all the same.
+    const read = Object.assign(new Error(`Not closed: the user wrote to you since your last word in it, but ${model.READ_REFUSAL} (they are about something else, or name no subject).`), { status: 409, code: 'not_reacted' })
+    const again = run('thread_update', { id: 'th-a0a0a0', close: 'acked' }, { 'PATCH /tasks/vp-1/threads/': () => { throw read } })
+    await expect(again).rejects.toThrow(model.READ_REFUSAL)
+    await expect(again).rejects.not.toThrow(/The call that goes through/)
+  })
+
   it('any other bad input lists the keys the op takes', async () => {
     const refusal = Object.assign(new Error('snooze: not a time.'), { status: 400, code: 'bad_input' })
     const r = run('thread_update', { id: 'th-a0a0a0', snooze: 'later' }, { 'PATCH /tasks/vp-1/threads/': () => { throw refusal } })

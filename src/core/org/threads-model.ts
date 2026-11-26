@@ -1053,9 +1053,11 @@ export function isAcknowledgement(text: string): boolean {
  * whose answer his words since were read as not being about (thread-seen-check.ts): for these the
  * time of his message is no reaction.
  */
-function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: string, unseen?: ReadonlySet<string>): void {
+function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter, words?: string, unseen?: ReadonlySet<string>, closeAsked?: boolean): void {
   if (by === 'human') return;
-  if (closeAskOf(t, words)) return;
+  // His quoted words close it, unless his words since were read as not being about this thread:
+  // then only words that ask for a close do (thread-seen-check.ts closeAsked), never a thanks for another answer.
+  if (closeAskOf(t, words) && (!unseen?.has(t.id) || closeAsked === true)) return;
   const lastIdx = t.messages.length - 1;
   const last = t.messages[lastIdx];
   // His Acknowledge kept it pending while its work ran (thread-ack.ts): his reaction to all said before it, until either wrote again.
@@ -1161,15 +1163,24 @@ function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadW
   throw notReacted('marked known', nodeWordAt(t, upTo));
 }
 
+/** In a refusal of a claim his words were read against (thread-seen-check.ts): the op's hint offers no user_words retry for it (ops/org-threads.ts). */
+export const READ_REFUSAL = 'Walnut read those words and they do not react to it';
+
 function notReacted(what: string, at: string, words?: string, read = false): ThreadError {
-  return new ThreadError('not_reacted', 409,
-    `Not ${what}: ${read ? `the user wrote to you since your last word in it${at ? ` (${at})` : ''}, but Walnut read those words and they do not react to it (they are about something else, or name no subject)`
-      : at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
-    + 'An answer he has not reacted to is not known: the thread stays open (answered, your answer in full) until he replies, says ok or '
-    + 'thanks, follows up, or acknowledges it. '
-    + (words?.trim()
-      ? 'The user_words you quoted are not in a message of his in this thread written after everything said in it: quote his words exactly, from his latest message (merge it into this thread first when it was filed elsewhere).'
-      : 'If he asked you in his own words to close it, or said it is done or no longer wanted, close it with user_words quoting them.'));
+  const quoted = !!words?.trim();
+  // His words since were read and are about something else (read), or he has not written since (the time rule).
+  const why = read
+    ? `the user wrote to you since your last word in it${at ? ` (${at})` : ''}, but ${READ_REFUSAL} (they are about something else, or name no subject). `
+      + 'An answer he has not reacted to is not known: leave the thread answered, with your answer in full, until he replies about it, says ok or thanks about it, follows up on it, or acknowledges it. '
+      + (quoted ? 'The user_words you quoted do not close it. Do not retry with other words of his: ' : 'Do not retry with user_words quoting a thanks or an ok: ')
+      + 'only words of his that ask to close or drop this very thread, or say it is done or no longer wanted, close it.'
+    : `${at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
+      + 'An answer he has not reacted to is not known: the thread stays open (answered, your answer in full) until he replies, says ok or '
+      + 'thanks, follows up, or acknowledges it. '
+      + (quoted
+        ? 'The user_words you quoted are not in a message of his in this thread written after everything said in it: quote his words exactly, from his latest message (merge it into this thread first when it was filed elsewhere).'
+        : 'If he asked you in his own words to close it, or said it is done or no longer wanted, close it with user_words quoting them.');
+  return new ThreadError('not_reacted', 409, `Not ${what}: ${why}`);
 }
 
 /** He watches it: a node's write may not end his watch (an unwatch, or a close that takes it out of Watching). */
@@ -1198,7 +1209,7 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  * `source`: the writer's own session as Walnut verified it (ThreadTextSource); absent for the user
  * and for a caller Walnut could not place, whose summary then reads as written by an unknown session.
  */
-export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean; unseen?: ReadonlySet<string> } = {}): { file: ThreadsFile; thread: OrgThread } {
+export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean; unseen?: ReadonlySet<string>; closeAsked?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts),
   // a closed card too, for its week in Done (a close needs no summary, but words given with one are his card's).
@@ -1334,7 +1345,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     // Acknowledge was his reaction (thread-known.ts ackHoldsResult; 2026-11-23, a node refused
     // not_reacted three times on cards he had acknowledged).
     const ackCovers = ackHoldsResult(cur);
-    if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words, opts.unseen);
+    if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words, opts.unseen, opts.closeAsked);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;
   }

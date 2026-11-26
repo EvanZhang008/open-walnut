@@ -252,8 +252,10 @@ describe('Walnut enforces it', () => {
     const calls = [...src.matchAll(/throw notReacted\(([^;]*)\);/g)].map((m) => m[1])
     const closes = calls.filter((c) => c.startsWith("'closed'"))
     expect(closes.length).toBeGreaterThanOrEqual(2)
-    for (const c of closes) expect(c, c).toMatch(/,\s*words\)?$/)
-    expect(src).toMatch(/function checkClose\([^)]*words[^)]*\)[^{]*\{\s*if \(by === 'human'\) return;\s*if \(closeAskOf\(t, words\)\) return;/)
+    // The quote, then at most whether his words since were read as about something else (thread-seen-check.ts).
+    for (const c of closes) expect(c, c).toMatch(/,\s*words(?:,\s*read)?\)?$/)
+    // The quote is weighed first: it closes the thread, except one whose claim was just refused, where only words read as a close ask do.
+    expect(src).toMatch(/function checkClose\([^)]*words[^)]*\)[^{]*\{\s*if \(by === 'human'\) return;\s*(?:\/\/[^\n]*\s*)*if \(closeAskOf\(t, words\) && \(!unseen\?\.has\(t\.id\) \|\| closeAsked === true\)\) return;/)
     expect(src.match(/new ThreadError\('not_reacted'/g)).toHaveLength(1)
     expect(THREADS_KNOWN_RULE).toContain('with user_words quoting him')
     expect(Object.keys(getOp('thread_update')!.input)).toContain('user_words')

@@ -32,10 +32,18 @@ export const eachQuestionOn = flag.on;
 /** Words compared as he wrote them, case and spacing aside. */
 export const wordsKey = (s: string): string => s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 
+/** The words of a plain reaction: a thanks, an ok, a done. */
+const REACTION_WORDS = String.raw`done|ok|okay|k|thanks|thank you|thx|got it|great|nice|good|cool|perfect|sounds good|lgtm|\u597d|\u597d\u7684|\u884c|\u53ef\u4ee5|\u6536\u5230|\u8c22\u8c22|\u77e5\u9053\u4e86|\u660e\u767d|\u6ca1\u95ee\u9898|\u5b8c\u6210|\u641e\u5b9a|\ud83d\udc4d`;
 /** A whole message that only reacts: a word or two of thanks, ok or done, no question (filing only; isAcknowledgement is the looser close check). */
-const PLAIN_REACTION = /^(?:done|ok|okay|k|thanks|thank you|thx|got it|great|nice|good|cool|perfect|sounds good|lgtm|\u597d|\u597d\u7684|\u884c|\u53ef\u4ee5|\u6536\u5230|\u8c22\u8c22|\u77e5\u9053\u4e86|\u660e\u767d|\u6ca1\u95ee\u9898|\u5b8c\u6210|\u641e\u5b9a|\ud83d\udc4d)(?:[\s,.!\uff0c\u3002\uff01~]*(?:thanks|thank you|\u8c22\u8c22|\ud83d\udc4d))?[\s.!\uff01\u3002~]*$/i;
+const PLAIN_REACTION = new RegExp(String.raw`^(?:${REACTION_WORDS})(?:[\s,.!\uff0c\u3002\uff01~]*(?:thanks|thank you|\u8c22\u8c22|\ud83d\udc4d))?[\s.!\uff01\u3002~]*$`, 'i');
 export function isPlainReaction(text: string): boolean {
   return PLAIN_REACTION.test(text.trim());
+}
+
+/** Nothing but such words, however many ("ok got it, thanks"): each a whole word, with spaces or stops between. */
+const REACTIONS_ONLY = new RegExp(String.raw`^(?:(?:${REACTION_WORDS})(?:$|[\s,.!\uff0c\u3002\uff01~]+))+$`, 'i');
+export function isReactionOnly(text: string): boolean {
+  return REACTIONS_ONLY.test(text.trim());
 }
 
 const CJK = /[\u3400-\u9fff\uf900-\ufaff]/g;
