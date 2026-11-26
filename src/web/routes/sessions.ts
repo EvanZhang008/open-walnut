@@ -43,6 +43,7 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
 import { getAskWalnutLaunchPrefs } from '../../core/sessions/ask-walnut-launch.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
+import { withoutPrompts } from '../../core/session-prompts.js'
 import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog, migrateFocusTier } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
@@ -1045,19 +1046,10 @@ const SEARCH_CANDIDATE_LIMIT = 2000
 // GET /api/sessions?q=<filter>
 /** Multi-KB spawn-time bookkeeping never belongs on a LIST payload — it is
  *  read back record-by-record where needed (side-thread fork, cold resume).
- *  A lane's persona (`profile.systemPrompt`, ~70 KB) neither: the store cache
- *  already leaves it out of stopped sessions, so a list answers the same shape
- *  for every row. */
-function stripHeavyRecordFields<T extends { appliedAppendSystemPrompt?: string; profile?: { systemPrompt?: string } }>(sessions: T[]): T[] {
-  return sessions.map((s) => {
-    if (s.appliedAppendSystemPrompt === undefined && s.profile?.systemPrompt === undefined) return s
-    const { appliedAppendSystemPrompt: _dropped, ...rest } = s
-    if (rest.profile?.systemPrompt !== undefined) {
-      const { systemPrompt: _persona, ...profile } = rest.profile
-      return { ...rest, profile } as T
-    }
-    return rest as T
-  })
+ *  A lane's persona (`profile.systemPrompt`, ~70 KB) neither, nor either one's
+ *  stub (session-prompts.ts): a list answers the same shape for every row. */
+function stripHeavyRecordFields<T extends Partial<SessionRecord>>(sessions: T[]): T[] {
+  return sessions.map((s) => withoutPrompts(s))
 }
 
 sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {

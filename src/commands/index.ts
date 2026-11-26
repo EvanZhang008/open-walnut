@@ -60,6 +60,24 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('store-formats')
+    .description('Say which data store shapes this build reads (asked by the rollback check before an older build opens newer data)')
+    .action(async (_options: Record<string, unknown>, cmd: Command) => {
+      const { runStoreFormats } = await import('./session-prompts.js');
+      runStoreFormats(cmd.optsWithGlobals());
+    });
+
+  program
+    .command('sessions-prompts')
+    .description('Session prompt storage: `unsplit` puts every prompt back into its session row, for a downgrade to a build before the split (run with the server stopped)')
+    .argument('<action>', 'unsplit')
+    .action(async (action: string, _options: Record<string, unknown>, cmd: Command) => {
+      if (action !== 'unsplit') { console.error(`error: unknown action '${action}' (expected: unsplit)`); process.exitCode = 1; return; }
+      const { runSessionsPromptsUnsplit } = await import('./session-prompts.js');
+      await runSessionsPromptsUnsplit(cmd.optsWithGlobals());
+    });
+
+  program
     .command('trigger-check <template> [params]')
     .description('Run a plugin trigger template once (the check command a template trigger stores; reads the trigger input on stdin)')
     .action(async (template: string, params: string | undefined) => {

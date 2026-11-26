@@ -15,7 +15,8 @@ import path from 'node:path';
 import { SESSIONS_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { readJsonFile } from '../utils/fs.js';
-import { getDb, sessionToRow, SESSION_COLUMNS, transaction } from './session-db.js';
+import { getDb, putSessionRow, transaction } from './session-db.js';
+import { promptChangesSetting, promptsOf } from './session-prompts.js';
 import type { SessionRecord } from './types.js';
 
 /**
@@ -145,16 +146,7 @@ async function migrateSessionStore(): Promise<SessionMigrationResult> {
   const rawSessions: SessionRecord[] = store.sessions;
   const sessions: SessionRecord[] = rawSessions.map(applyLegacyFixups);
 
-  // Build the prepared INSERT from SESSION_COLUMNS so the column list here and
-  // the one in session-db.ts can never drift. `payload` is appended explicitly
-  // because it's the spillover column (not in SESSION_COLUMNS).
-  const insertCols = [...SESSION_COLUMNS, 'payload'];
-  const insertSql =
-    'INSERT INTO sessions (' + insertCols.join(', ') + ') ' +
-    'VALUES (' + insertCols.map((c) => '@' + c).join(', ') + ')';
-
   transaction((h) => {
-    const stmt = h.prepare(insertSql);
     for (const session of sessions) {
       if (!session || typeof session !== 'object' || typeof session.claudeSessionId !== 'string') {
         log.session.warn('session-db migration: skipping malformed session', {
@@ -162,13 +154,10 @@ async function migrateSessionStore(): Promise<SessionMigrationResult> {
         });
         continue;
       }
-      const partial = sessionToRow(session);
-      const bound: Record<string, unknown> = {};
-      for (const col of insertCols) {
-        bound[col] = partial[col] === undefined ? null : partial[col];
-      }
       try {
-        stmt.run(bound);
+        // The store's one writer (a plain INSERT: a repeated id is skipped below), the record's prompts with it.
+        // A savepoint per row: a refused row leaves no prompt row behind.
+        h.transaction(() => putSessionRow(h, session, promptChangesSetting(promptsOf(session)), { insert: true }))();
       } catch (err) {
         // One bad row shouldn't abort the whole migration. The pristine
         // sessions.json plus the backup below are still available for manual

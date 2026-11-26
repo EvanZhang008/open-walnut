@@ -24,6 +24,7 @@ import { performance } from 'node:perf_hooks'
 import YAML from 'yaml'
 import Database, { type Database as DatabaseType } from '../../../lib/sqlite.js'
 import { homePathClass, isUnnamedHomePath, originalOfCopy } from '../../home-manifest/index.js'
+import { refreshPromptStubsIn } from '../../session-db.js'
 
 export type RootKind = 'home' | 'account'
 
@@ -656,6 +657,7 @@ function yamlAt(ancestors: unknown[], node: unknown): string | null {
 function rewriteDb(abs: string, rootsAt: RootsAt): number {
   const db = new Database(abs)
   let n = 0
+  const moved = new Set<string>()
   try {
     const { columns } = textColumns(db)
     db.exec('BEGIN IMMEDIATE')
@@ -676,9 +678,14 @@ function rewriteDb(abs: string, rootsAt: RootsAt): number {
         if (j) next = j.text
         else if (colRoots.length) next = replaceRoots(v, rootsAt.all, colRoots)
         if (next === v) continue
-        n += Number(set.run(next, c.rowid ? r : v).changes ?? 0)
+        const changed = Number(set.run(next, c.rowid ? r : v).changes ?? 0)
+        n += changed
+        if (changed) moved.add(c.table)
       }
     }
+    // A moved path in a session prompt changes its text: its hash, its stubs' sizes and the row's
+    // prompt_text_refs follow (session-db.ts, which knows the session tables), in the same transaction.
+    if (moved.size) n += refreshPromptStubsIn(db, moved)
     db.exec('COMMIT')
     return n
   } catch (err) {

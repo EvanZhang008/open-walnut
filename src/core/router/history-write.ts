@@ -5,9 +5,10 @@
  */
 import type { Database } from '../../lib/sqlite.js';
 import { OrgError } from '../org/org-store.js';
-import { getDb as getSessionDb, rowToSession } from '../session-db.js';
+import { getDb as getSessionDb, rowToSessionIn } from '../session-db.js';
 import { getDb as getTaskDb, rowToTask } from '../task-db.js';
 import { isRouterAreaSession, type RouterAreaRole } from './session-policy.js';
+import { isBlankText } from '../session-prompts.js';
 import type { RouterArea } from './areas.js';
 import type { SessionRecord, Task } from '../types.js';
 
@@ -33,6 +34,17 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * A profile compared with its persona as the area rule reads it (isRouterAreaSession asks only
+ * whether there is one, and whether it is blank): the stored row carries a stub, a writer's
+ * record a stub, a caller's patch the text, and all three compare alike.
+ */
+const profileKey = (p: SessionRecord['profile']) => {
+  if (!p) return stable(p);
+  const { systemPrompt: text, systemPromptRef: ref, ...rest } = p;
+  const persona = typeof text === 'string' ? (isBlankText(text) ? 'blank' : 'set') : ref ? (ref.blank ? 'blank' : 'set') : undefined;
+  return stable({ ...rest, ...(persona ? { persona } : {}) });
+};
 const hostOf = (r: SessionHistoryFields) => r.host || LOCAL_HOST;
 const engineOf = (r: SessionHistoryFields) => r.engine || 'claude';
 const originOf = (r: SessionHistoryFields | undefined) => (r ? ORIGIN_KEYS.map((k) => stable(r[k])).join('|') : ORIGIN_KEYS.map(() => '').join('|'));
@@ -125,7 +137,7 @@ function namedSessionIds(task: Partial<HistoryTask>): string[] {
 export function sessionHistoryWriteNeedsCheck(before: SessionHistoryFields | undefined, after: SessionHistoryFields): boolean {
   if (!before) return !!after.taskId || hasAreaProfile(after) || hasOrigin(after);
   return (before.taskId || '') !== (after.taskId || '') || hostOf(before) !== hostOf(after) || engineOf(before) !== engineOf(after)
-    || stable(before.profile) !== stable(after.profile) || originOf(before) !== originOf(after);
+    || profileKey(before.profile) !== profileKey(after.profile) || originOf(before) !== originOf(after);
 }
 
 /** 409 unless the record fits its task's area exactly; `before` undefined = a record with no history. */
@@ -189,7 +201,7 @@ function readTaskHistory(sessionDb: Database, task: HistoryTask): { records: Ses
     const linked = sessionDb.prepare('SELECT * FROM sessions WHERE task_id = ?').all(task.id) as Record<string, any>[];
     for (const row of linked) {
       assertReadablePayload(row.payload);
-      byId.set(String(row.claude_session_id), rowToSession(row));
+      byId.set(String(row.claude_session_id), rowToSessionIn(sessionDb, row));
     }
     const one = sessionDb.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
     const missing: string[] = [];
@@ -198,7 +210,7 @@ function readTaskHistory(sessionDb: Database, task: HistoryTask): { records: Ses
       const row = one.get(id) as Record<string, any> | undefined;
       if (row) {
         assertReadablePayload(row.payload);
-        byId.set(id, rowToSession(row));
+        byId.set(id, rowToSessionIn(sessionDb, row));
       } else missing.push(id);
     }
     return { records: [...byId.values()], missing };

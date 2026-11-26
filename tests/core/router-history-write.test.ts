@@ -424,7 +424,11 @@ describe('the synchronous task and session history write boundary', () => {
   it('keeps ordinary and scoped status writes working without changing the history boundary', async () => {
     const { sid, owner, record } = await scoped();
     const updated = await updateSessionRecord(sid, { process_status: 'idle', title: 'Updated fixture' });
-    expect(updated).toMatchObject({ taskId: owner.id, process_status: 'idle', title: 'Updated fixture', profile: record.profile });
+    // A writer hands back its row as it read it, the persona as its stub (session-prompts.ts); the row keeps the text.
+    const { systemPrompt: persona, ...rest } = record.profile!;
+    expect(updated).toMatchObject({ taskId: owner.id, process_status: 'idle', title: 'Updated fixture', profile: { ...rest, systemPromptRef: { bytes: Buffer.byteLength(persona!), blank: false } } });
+    expect(updated.profile?.systemPrompt).toBeUndefined();
+    expect((await getSessionByClaudeId(sid))?.profile).toEqual(record.profile);
     await updateTask(owner.id, { title: 'Updated area fixture' });
     await updateTaskRaw(owner.id, { note: 'Fixture findings' });
     expect(await getTask(owner.id)).toMatchObject({ router_area_id: 'desk', title: 'Updated area fixture', note: 'Fixture findings' });

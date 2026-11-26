@@ -3575,11 +3575,33 @@ export interface SessionMcpServer {
  *   allowedTools                  → `--allowedTools` (comma-joined)
  *   tools                         → `--tools` (comma-joined)
  */
+/**
+ * A stub of one session prompt text (session-prompts.ts): its UTF-8 size and hash, and for a persona
+ * whether it is blank. `sha256` is absent on a stub the cache scan made of an older row (SQLite
+ * cannot hash): a reader that needs to compare texts reads the record whole.
+ */
+export interface SessionPromptRef {
+  sha256?: string;
+  bytes: number;
+  blank?: boolean;
+  /**
+   * Written beside its text in the payload (release A). Found without its text, the text was
+   * removed by a build that does not know stubs: the prompt is cleared, the table's copy is stale.
+   */
+  inline?: true;
+}
+
 export interface SessionProfile {
   areaId?: string;
   areaRole?: 'router' | 'work';
   areaPolicyVersion?: number;
   systemPrompt?: string;
+  /**
+   * The persona's stub (session-prompts.ts): present on a record read without its prompt texts (the
+   * session store cache, a writer's own read), where `systemPrompt` is absent. A full read
+   * (getSessionByClaudeId) carries `systemPrompt` instead and never this.
+   */
+  systemPromptRef?: SessionPromptRef;
   /** How `systemPrompt` is applied. Undefined = 'append' (the safe default). */
   systemPromptMode?: 'replace' | 'append';
   mcpServers?: Record<string, SessionMcpServer>;
@@ -3996,6 +4018,8 @@ export interface SessionRecord {
    * cache_read collapsed to the 15K shared base, 217K re-written).
    */
   appliedAppendSystemPrompt?: string;
+  /** The spawn prompt's stub, on a record read without its texts (see SessionProfile.systemPromptRef). */
+  appliedAppendSystemPromptRef?: SessionPromptRef;
   /**
    * The place (project, folder, leader) Walnut last told this session in a
    * place notice, and the hash of the prompt it ran on then

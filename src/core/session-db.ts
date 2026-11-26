@@ -27,7 +27,11 @@ import { prepared } from '../lib/sqlite-prepared.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import { ensureLateIndexes, type LateIndex } from '../lib/sqlite-late-index.js';
 import { lateIndexReport } from './late-index-report.js';
-import type { SessionRecord } from './types.js';
+import type { SessionPromptRef, SessionRecord } from './types.js';
+import {
+  BLANK_CHARS_SQL, HAS_PROMPT_TEXT, PROMPT_KEYS, SPLIT_PROMPT_ROW, promptChangesOf, promptRefOf, promptSha256, promptsOf, standingRef, textRefsColumnOf,
+  textRefsOf, withPromptStubs, withPromptTexts, type PromptChanges, type PromptKey, type SessionPrompts,
+} from './session-prompts.js';
 import { lookForHolders } from './blocking-calls.js';
 
 /** SQLite file path. Sits next to the legacy sessions.json in WALNUT_HOME. */
@@ -464,8 +468,6 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
   const shared = getDb();
   if (!shared) throw new Error('session-db: applySessionCopy() called before database was successfully opened');
   const handle = isHostReplica() ? (applyHandle ??= openCopyApplyConnection()) : shared;
-  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
-  const ins = handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`);
   const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
   const get = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
   // This host's own rows (judged here, sessions/session-row-owner.ts): never removed by the copy,
@@ -476,7 +478,7 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
     if (!own) return null;
     const raw = get.get(id) as Record<string, any> | undefined;
     if (!raw) return null;
-    const rec = rowToSession(raw);
+    const rec = decodeSessionRow(raw);
     return rowOwnedHere(rec, own) ? rec : null;
   };
   let keptOwn = 0;
@@ -485,6 +487,7 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
   handle.transaction(() => {
     for (const id of change.removeIds ?? []) {
       if (ownRow(id)) { keptOwn++; continue; }
+      deleteSessionPrompts(handle, id);
       del.run(id);
       forgetLeaderDisown(handle, id);
     }
@@ -503,10 +506,8 @@ export function applySessionCopy(change: { rows?: readonly SessionRecord[]; remo
       // own: a copy that names the row this host's before either (a hand-over whose answer is still
       // out, the host never got it) stays the leader's copy here, so no send is taken for it and no
       // CLI of it resumed without the claim's checks.
-      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : claimed ? claimedCopy(r, own) : own && rowOwnedHere(r, own) ? { ...r, judge: undefined } : r);
-      const bound: Record<string, unknown> = {};
-      for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
-      ins.run(bound);
+      // A copy never carries a prompt (replication drops them): an own row keeps the ones it has.
+      putSessionRow(handle, mine ? mergeLeaderCopy(mine, r) : claimed ? claimedCopy(r, own) : own && rowOwnedHere(r, own) ? { ...r, judge: undefined } : r);
       // The row is this host's here while the leader's version says it is not: kept, so the host
       // can give the row back to it once no session of this host holds it (stranded-own-rows.ts).
       if ((mine || claimed) && !rowOwnedHere(r, own)) { noteLeaderDisown(handle, r); disowned++; }
@@ -568,7 +569,7 @@ export function ownRowsTheLeaderDisowns(): Array<{ row: SessionRecord; leader: S
   const stale: string[] = [];
   for (const k of kept) {
     const raw = get.get(k.sid) as Record<string, any> | undefined;
-    const row = raw ? rowToSession(raw) : null;
+    const row = raw ? decodeSessionRow(raw) : null;
     let leader: SessionRecord | null = null;
     try { leader = JSON.parse(k.row) as SessionRecord; } catch { /* unreadable: dropped below */ }
     if (!row || !leader || !rowOwnedHere(row, hostKey) || rowOwnedHere(leader, hostKey)) { stale.push(k.sid); continue; }
@@ -592,18 +593,12 @@ export function handOwnRowBack(sid: string, key: string): boolean {
     const now = handle.prepare('SELECT row FROM session_leader_disowns WHERE claude_session_id = ?').pluck().get(sid) as string | undefined;
     if (now !== key) return false;
     const raw = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined;
-    if (!raw || !rowOwnedHere(rowToSession(raw), hostKey)) return false;
-    writeCopyRow(handle, sessionToRow(JSON.parse(key) as SessionRecord));
+    if (!raw || !rowOwnedHere(decodeSessionRow(raw), hostKey)) return false;
+    // The leader's version: no prompt (a copy never holds one), so the row's own go with it.
+    putSessionRow(handle, JSON.parse(key) as SessionRecord, { appliedAppendSystemPrompt: null, systemPrompt: null });
     forgetLeaderDisown(handle, sid);
     return true;
   }).immediate();
-}
-
-function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void {
-  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
-  const bound: Record<string, unknown> = {};
-  for (const c of cols) bound[c] = raw[c] === undefined ? null : raw[c];
-  handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`).run(bound);
 }
 
 /**
@@ -627,11 +622,11 @@ export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
     // handed it over: newer than any copy here (a copy round may not have brought its last stop yet,
     // and the runtime fences the resume with that stop's id).
     // A row this host owns already keeps every field of its own; only the leader's fields follow.
-    const here = raw ? rowToSession(raw) : null;
+    const here = raw ? decodeSessionRow(raw) : null;
     const given = leaderRow?.claudeSessionId === sid ? { ...leaderRow, judge: undefined } : null;
     if (here && rowOwnedHere(here, key)) {
       claimStart(sid);
-      if (given) writeCopyRow(handle, sessionToRow(mergeLeaderCopy(here, given)));
+      if (given) putSessionRow(handle, mergeLeaderCopy(here, given));
       return;
     }
     const rec = given ?? here;
@@ -641,7 +636,8 @@ export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
     }
     claimStart(sid);
     if (!rec || rowOwnedHere(rec, key)) return;
-    writeCopyRow(handle, sessionToRow(claimedCopy(rec, key)));
+    // The leader's row a resume gives is whole (host-resume.ts): its prompts come down with it.
+    putSessionRow(handle, claimedCopy(rec, key), rec === given ? promptChangesOf(given, { whole: true }) : {});
     // The leader's version as the leader holds it: a resume's row it marked this host's is no
     // disown (the stranded sweep must not hand it back); a copy from before its mark is one.
     if (leaderRow && given && rowOwnedHere(leaderRow, key)) forgetLeaderDisown(handle, sid);
@@ -724,7 +720,7 @@ async function loadCopyRows(dbPath: string): Promise<Map<string, SessionRecord>>
     .all(cutoff) as Array<Record<string, unknown>>;
   const rows = new Map<string, SessionRecord>();
   for (let i = 0; i < raw.length; i++) {
-    const r = rowToSession(raw[i]!);
+    const r = decodeSessionRow(raw[i]!);
     rows.set(r.claudeSessionId, r);
     if (i % 50 === 49) await new Promise((done) => setImmediate(done));
   }
@@ -738,17 +734,10 @@ async function loadCopyRows(dbPath: string): Promise<Map<string, SessionRecord>>
 /** The companion's sessions copy's one write: rows in as they came, removed ids out, one transaction. */
 export function applyCompanionSessionCopy(dbPath: string, change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[] }): void {
   const handle = companionCopyHandle(dbPath);
-  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
-  const ins = handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`);
   const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
   handle.transaction(() => {
-    for (const id of change.removeIds ?? []) del.run(id);
-    for (const r of change.rows ?? []) {
-      const row = sessionToRow(r);
-      const bound: Record<string, unknown> = {};
-      for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
-      ins.run(bound);
-    }
+    for (const id of change.removeIds ?? []) { deleteSessionPrompts(handle, id); del.run(id); }
+    for (const r of change.rows ?? []) putSessionRow(handle, r);
   })();
   // The parsed rows follow the file only once it is written.
   if (copyRows && copyRows.path === dbPath) applyToCopyRows(copyRows.rows, change);
@@ -914,6 +903,14 @@ function ownRowWriter(): DatabaseType | null {
     CREATE TEMP TRIGGER IF NOT EXISTS own_rows_update BEFORE UPDATE ON main.sessions WHEN NOT (${own('OLD')} AND ${own('NEW')}) BEGIN ${refuse} END;
     CREATE TEMP TRIGGER IF NOT EXISTS own_rows_delete BEFORE DELETE ON main.sessions WHEN NOT ${own('OLD')} BEGIN ${refuse} END;
   `);
+  // A prompt row is its session's: only an own row's (putSessionRow writes the row first, and a
+  // delete takes the prompts before the row).
+  const ownPrompt = (r: string) => `EXISTS (SELECT 1 FROM sessions s WHERE s.claude_session_id = ${r}.claude_session_id AND ${own('s')})`;
+  h.exec(`
+    CREATE TEMP TRIGGER IF NOT EXISTS own_prompts_insert BEFORE INSERT ON main.session_prompts WHEN NOT ${ownPrompt('NEW')} BEGIN ${refuse} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS own_prompts_update BEFORE UPDATE ON main.session_prompts WHEN NOT (${ownPrompt('OLD')} AND ${ownPrompt('NEW')}) BEGIN ${refuse} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS own_prompts_delete BEFORE DELETE ON main.session_prompts WHEN NOT ${ownPrompt('OLD')} BEGIN ${refuse} END;
+  `);
   ownRows.handle = h;
   return h;
 }
@@ -1003,6 +1000,11 @@ export function ensureSessionStatusColumns(
     if (!names.has('status_updated_at')) {
       handle.exec('ALTER TABLE sessions ADD COLUMN status_updated_at TEXT');
     }
+    // The stubs of the prompt texts the payload holds (session-prompts.ts textRefsColumnOf). A build
+    // before the split never names it, so its write leaves it NULL: "measure the payload".
+    if (!names.has(PROMPT_TEXT_REFS_COLUMN)) {
+      handle.exec(`ALTER TABLE sessions ADD COLUMN ${PROMPT_TEXT_REFS_COLUMN} TEXT`);
+    }
     if (opts.backfill === false) return;
     handle.prepare(`
       UPDATE sessions
@@ -1025,156 +1027,578 @@ export function ensureSessionStatusColumns(
 }
 
 // ── (De)serialization ──────────────────────────────────────────────────────
+//
+// A row is one record in two places: its columns and `payload` here, and its two prompt texts in
+// `session_prompts` (session-prompts.ts says why). A payload comes in two shapes, told row by row:
+// an old shape holds a text (every build before the split wrote it so, and release A still does),
+// a new shape holds only the text's stub. While a payload holds a text it is the newest one (a build
+// before the split may have written it after the table's), so every reader prefers it.
 
-/**
- * Convert a SQLite row back to a `SessionRecord`. JSON `payload` is parsed
- * first so explicit columns can override any leftover keys; boolean columns
- * coerce 0/1 → false/true; snake_case columns map back to camelCase fields.
- *
- * Null/undefined columns are stripped so the returned object matches the
- * "JSON-loaded" shape the rest of the code expects. Callers (session-tracker)
- * do further normalization (type inference from title, status_history
- * trimming, etc.).
- */
-export function rowToSession(row: Record<string, any>): SessionRecord {
-  // Start from payload so explicit columns can override any leftover keys.
-  let record: Record<string, any> = {};
-  if (row.payload != null && row.payload !== '') {
-    try {
-      const parsed = JSON.parse(row.payload);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        record = { ...parsed };
-      }
-    } catch (err) {
-      log.session.warn('rowToSession: payload JSON parse failed', {
-        claudeSessionId: row.claude_session_id,
-        err: String(err),
-      });
-    }
+/** The payload JSON of a row as an object, or {} (an unreadable one is logged and read as empty). */
+function payloadOf(row: Record<string, any>): Record<string, any> {
+  if (row.payload == null || row.payload === '') return {};
+  try {
+    const parsed = JSON.parse(row.payload);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ...parsed };
+  } catch (err) {
+    log.session.warn('rowToSession: payload JSON parse failed', { claudeSessionId: row.claude_session_id, err: String(err) });
   }
+  return {};
+}
 
-  // Explicit columns → camelCase fields.
+/** The record of a row's columns over its parsed payload (columns win), with the required fallbacks. */
+function recordOf(row: Record<string, any>, payload: Record<string, any>): SessionRecord {
+  const record: Record<string, any> = payload;
   for (const col of EXPLICIT_SESSION_COLUMNS) {
     const val = row[col];
     if (val === undefined || val === null) continue;
     const field = COLUMN_TO_FIELD[col];
     if (!field) continue; // defensive — should never hit
-    if (BOOLEAN_COLUMNS.has(col)) {
-      record[field] = val === 1 || val === true;
-    } else {
-      record[field] = val;
-    }
+    record[field] = BOOLEAN_COLUMNS.has(col) ? val === 1 || val === true : val;
   }
-
-  // Required-field fallbacks — the DB may have NULL where SessionRecord
-  // expects a value (pre-migration or partially written rows). Match the
-  // JSON-load defaults the tracker code has always relied on.
+  // Required-field fallbacks — the DB may have NULL where SessionRecord expects a value
+  // (pre-migration or partially written rows). Match the JSON-load defaults.
   if (typeof record.messageCount !== 'number') record.messageCount = 0;
-  if (typeof record.startedAt !== 'string' || !record.startedAt) {
-    record.startedAt = record.lastActiveAt ?? new Date().toISOString();
-  }
-  if (typeof record.lastActiveAt !== 'string' || !record.lastActiveAt) {
-    record.lastActiveAt = record.startedAt;
-  }
-
+  if (typeof record.startedAt !== 'string' || !record.startedAt) record.startedAt = record.lastActiveAt ?? new Date().toISOString();
+  if (typeof record.lastActiveAt !== 'string' || !record.lastActiveAt) record.lastActiveAt = record.startedAt;
   return record as SessionRecord;
 }
 
 /**
- * Convert a `SessionRecord` (or a partial patch) to a row suitable for
- * prepared INSERT / UPDATE statements. Explicit fields are mapped to their
- * snake_case columns; anything else (not a runtime-only key) is
- * JSON-stringified into the `payload` column so fields without a dedicated
- * column aren't silently dropped.
- *
- * Returns a `Record<string, any>` keyed by column name. Bind these by name
- * with `@col` placeholders (`stmt.run(row)`).
+ * The stubs of the texts the cache scan took out of a row's payload (sessionCacheRowsSql), else
+ * none: from the row's `prompt_text_refs` column, or for a row a build before the split wrote, from
+ * the sizes the scan measured.
  */
-export function sessionToRow(session: Partial<SessionRecord>): Record<string, any> {
-  const row: Record<string, any> = {};
+function scanStubsOf(row: Record<string, any>, inPayload: SessionPrompts): { appliedAppendSystemPrompt?: SessionPromptRef; systemPrompt?: SessionPromptRef } {
+  if (row.cache_scan !== 1) return {};
+  const column = row[PROMPT_TEXT_REFS_COLUMN];
+  if (typeof column === 'string') {
+    // The column names the texts the payload held; those the scan took out are not in it now.
+    if (column === '{}' || (inPayload.appliedAppendSystemPrompt !== undefined && inPayload.systemPrompt !== undefined)) return {};
+    const refs = textRefsOf(column);
+    return {
+      ...(inPayload.appliedAppendSystemPrompt === undefined && refs.appliedAppendSystemPrompt ? { appliedAppendSystemPrompt: refs.appliedAppendSystemPrompt } : {}),
+      ...(inPayload.systemPrompt === undefined && refs.systemPrompt ? { systemPrompt: refs.systemPrompt } : {}),
+    };
+  }
+  const out: { appliedAppendSystemPrompt?: SessionPromptRef; systemPrompt?: SessionPromptRef } = {};
+  if (typeof row.aasp_bytes === 'number') out.appliedAppendSystemPrompt = { bytes: row.aasp_bytes };
+  if (typeof row.persona_bytes === 'number') out.systemPrompt = { bytes: row.persona_bytes, blank: row.persona_blank === 1 };
+  return out;
+}
 
-  // Explicit fields → columns.
+/**
+ * The stub record of a row (the session store cache, a writer's read in its transaction): no text,
+ * a stub of each text present. Reads nothing else: an old-shape payload's text makes its stub here
+ * (a stub an older build kept beside a text it changed is stale; no hash, the text is beside it),
+ * and the cache scan's row, whose texts SQLite took out, gets its stubs from the scan. A payload
+ * stub stands for a text only when it was not written beside it (standingRef).
+ */
+export function decodeSessionRow(row: Record<string, any>, out?: { stored?: StoredPromptState }): SessionRecord {
+  const payload = payloadOf(row);
+  const prompts = promptsOf(payload);
+  const scanned = scanStubsOf(row, prompts);
+  const refs = {
+    appliedAppendSystemPrompt: scanned.appliedAppendSystemPrompt ?? (prompts.appliedAppendSystemPrompt === undefined ? standingRef(payload.appliedAppendSystemPromptRef) : undefined),
+    systemPrompt: scanned.systemPrompt ?? (prompts.systemPrompt === undefined ? standingRef(payload.profile?.systemPromptRef) : undefined),
+  };
+  // A writer that read this whole row in its transaction hands this on to putSessionRow, which
+  // then reads nothing again (a status write's second read of both texts, 0.1 to 0.3 ms).
+  if (out && row.cache_scan !== 1) out.stored = storedStateOf(prompts, payload);
+  // A text still in the payload: its stub (no hash, see promptRefOf). A stub alone: as stored.
+  return recordOf(row, withPromptStubs(payload, prompts, refs, false));
+}
+
+/**
+ * The whole record of a row, as every build read it: both texts and no stub. A new-shape row's
+ * texts come from `session_prompts` on `handle` (two primary-key reads); an old-shape row's from its
+ * payload. A stub whose text is missing from the table stays, so a writer that builds on this record
+ * keeps the stored text (promptChangesOf) instead of clearing it.
+ */
+export function rowToSession(row: Record<string, any>): SessionRecord {
+  return wholeRecordOf(row, null);
+}
+
+/** rowToSession, its prompt table read on `handle` (a transaction's, another file's). */
+export function rowToSessionIn(handle: DatabaseType, row: Record<string, any>): SessionRecord {
+  return wholeRecordOf(row, handle);
+}
+
+function wholeRecordOf(row: Record<string, any>, handle: DatabaseType | null): SessionRecord {
+  const payload = payloadOf(row);
+  const inPayload = promptsOf(payload);
+  // A stub written beside its text and found without it: cleared by a build before the split, so
+  // the table's copy is stale and is not read back (standingRef).
+  const wantAasp = inPayload.appliedAppendSystemPrompt === undefined && !!standingRef(payload.appliedAppendSystemPromptRef);
+  const wantPersona = inPayload.systemPrompt === undefined && !!standingRef(payload.profile?.systemPromptRef);
+  if (!wantAasp && !wantPersona) return recordOf(row, withPromptTexts(payload, inPayload));
+  const db = handle ?? getDb();
+  const table = db && typeof row.claude_session_id === 'string' ? tablePrompts(db, row.claude_session_id) : {};
+  const prompts = { ...inPayload };
+  if (wantAasp && table.appliedAppendSystemPrompt !== undefined) prompts.appliedAppendSystemPrompt = table.appliedAppendSystemPrompt;
+  if (wantPersona && table.systemPrompt !== undefined) prompts.systemPrompt = table.systemPrompt;
+  const whole = withPromptTexts(payload, prompts);
+  // A stub the table has no text for: kept (see above).
+  if (wantAasp && prompts.appliedAppendSystemPrompt === undefined) whole.appliedAppendSystemPromptRef = payload.appliedAppendSystemPromptRef;
+  if (wantPersona && prompts.systemPrompt === undefined && whole.profile) whole.profile = { ...whole.profile, systemPromptRef: payload.profile.systemPromptRef };
+  return recordOf(row, whole);
+}
+
+/**
+ * The row of a record: its columns and a payload with the stubs of `prompts`, and with their texts
+ * too while PROMPTS_IN_PAYLOAD holds (release A: a build before the split reads them there). The
+ * record's own texts and stubs are ignored: the caller says what the stored prompts are. `shape`
+ * 'texts' is the shape before the split (texts, no stub): the down migration's.
+ */
+function encodeSessionRow(
+  session: Partial<SessionRecord>, prompts: SessionPrompts, refs: StoredPromptState['refs'] = {},
+  shape: 'stubs' | 'both' | 'texts' = PROMPTS_IN_PAYLOAD ? 'both' : 'stubs',
+): Record<string, any> {
+  const row: Record<string, any> = {};
   for (const [field, col] of Object.entries(FIELD_TO_COLUMN)) {
     if (!(field in session)) continue;
     const val = (session as Record<string, any>)[field];
     if (val === undefined) continue;
-    if (BOOLEAN_COLUMNS.has(col)) {
-      row[col] = val ? 1 : 0;
-    } else {
-      row[col] = val;
-    }
+    row[col] = BOOLEAN_COLUMNS.has(col) ? (val ? 1 : 0) : val;
   }
-
-  // Everything left that isn't a runtime-only key goes to payload. That
-  // includes objects (pendingPermission), arrays (status_history), and any
-  // future SessionRecord field we haven't given a column yet.
+  // A stub beside its text needs no hash and says it sits there ('both': `inline`, see standingRef);
+  // a stub alone ('stubs') is what a comparison reads, with its hash.
+  const shaped = shape === 'texts' ? withPromptTexts(session, prompts) : withPromptStubs(session, prompts, refs, shape === 'stubs', shape === 'both');
+  if (shape === 'texts') {
+    // A stub whose text the table lacks stays: the row still reads as split, and the checks say so.
+    if (prompts.appliedAppendSystemPrompt === undefined && session.appliedAppendSystemPromptRef) shaped.appliedAppendSystemPromptRef = session.appliedAppendSystemPromptRef;
+    if (prompts.systemPrompt === undefined && session.profile?.systemPromptRef && shaped.profile) shaped.profile = { ...shaped.profile, systemPromptRef: session.profile.systemPromptRef };
+  }
+  if (shape === 'both') {
+    if (prompts.appliedAppendSystemPrompt !== undefined) (shaped as Partial<SessionRecord>).appliedAppendSystemPrompt = prompts.appliedAppendSystemPrompt;
+    if (prompts.systemPrompt !== undefined && shaped.profile) shaped.profile = { ...shaped.profile, systemPrompt: prompts.systemPrompt };
+  }
   const payload: Record<string, any> = {};
   let hasPayload = false;
-  for (const key of Object.keys(session)) {
-    if (EXPLICIT_SESSION_KEYS.has(key)) continue;
-    if (NON_PERSISTED_KEYS.has(key)) continue;
-    const val = (session as Record<string, any>)[key];
+  for (const key of Object.keys(shaped)) {
+    if (EXPLICIT_SESSION_KEYS.has(key) || NON_PERSISTED_KEYS.has(key)) continue;
+    const val = (shaped as Record<string, any>)[key];
     if (val === undefined) continue;
     payload[key] = val;
     hasPayload = true;
   }
-  if (hasPayload) {
-    row.payload = JSON.stringify(payload);
-  } else if ('payload' in session) {
-    // Explicit clear request.
-    row.payload = null;
-  }
-
-  // Full legacy records may reach bulk INSERT helpers without the versioned
-  // fields. Bind safe initial values instead of NULL (status_revision is
-  // NOT NULL); partial UPDATE patches do not carry claudeSessionId and are
-  // intentionally left untouched.
+  if (hasPayload) row.payload = JSON.stringify(payload);
+  else if ('payload' in session) row.payload = null; // explicit clear request
+  // The stubs of the texts this payload holds, for the cache scan (none in release B's shape).
+  row[PROMPT_TEXT_REFS_COLUMN] = shape === 'stubs' ? '{}' : textRefsColumnOf(prompts, !!shaped.profile);
+  // Full legacy records may reach the writer without the versioned fields: safe initial values
+  // instead of NULL (status_revision is NOT NULL).
   if (typeof session.claudeSessionId === 'string') {
     if (row.status_revision === undefined) row.status_revision = 1;
     if (row.status_updated_at === undefined) {
-      row.status_updated_at = session.last_status_change
-        ?? session.lastActiveAt
-        ?? session.startedAt
-        ?? new Date().toISOString();
+      row.status_updated_at = session.last_status_change ?? session.lastActiveAt ?? session.startedAt ?? new Date().toISOString();
     }
   }
-
   return row;
+}
+
+/**
+ * The row of a whole record, its own texts as its prompts (a fixture's or a script's raw row: the
+ * store's own writes go through putSessionRow, which also writes `session_prompts`).
+ */
+export function sessionToRow(session: Partial<SessionRecord>): Record<string, any> {
+  return encodeSessionRow(session, promptsOf(session));
 }
 
 // Re-export the column list so callers can build prepared statements without
 // duplicating the ordering.
 export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
 
-/**
- * The statuses whose cached row leaves out the two heavy prompt fields below (session-tracker.ts
- * slimForCache): a session that is not live reads them from its own row when it needs them.
- */
-export const SLIM_SESSION_STATUSES: readonly string[] = ['stopped', 'error'];
-/** The heavy prompt fields a slim cached row leaves out, as JSON paths into `payload`. */
-const SLIM_PAYLOAD_PATHS = ['$.appliedAppendSystemPrompt', '$.profile.systemPrompt'];
+// ── The prompt table ───────────────────────────────────────────────────────
 
 /**
- * The store cache's read of session rows (session-tracker.ts: the full scan and the write-through
- * patch): the columns rowToSession reads, and for a stopped or errored row a payload SQLite already
- * took the heavy prompt fields out of, so their text never reaches JS. On the Mac (2026-11-25, 7.7k
- * rows) the payloads came to 75 MB, 56 MB of it those two fields of stopped sessions, and one
- * `SELECT *` scan made about 380 MB of row text and records against about 150 MB this way; a start
- * ran 5 to 17 scans in its first minutes, the burst the memory lines showed. Only a valid JSON
- * payload is rewritten (any other comes back as it is, as rowToSession reads it), and the
- * `instr` test skips the parse for a row without either field. The rows are the same records
- * slimForCache makes of a `SELECT *` row (tests/core/session-store-scan-bytes.test.ts).
+ * Release A writes each prompt into the payload as well as `session_prompts`, so the build before
+ * it (a deploy rollback, a downgrade) still reads every prompt. Release B sets this false: the
+ * writer leaves only the stubs in the payload.
  */
-export function sessionCacheRowsSql(where = ''): string {
-  // Spliced into the SQL as literals: only plain names and JSON paths, never a quote.
-  for (const v of [...SLIM_SESSION_STATUSES, ...SLIM_PAYLOAD_PATHS]) {
-    if (!/^[$a-zA-Z_.]+$/.test(v)) throw new Error(`sessionCacheRowsSql: unsafe literal ${v}`);
+export const PROMPTS_IN_PAYLOAD = true;
+
+/** The column with the stubs of the texts a row's payload holds (session-prompts.ts textRefsColumnOf). */
+export const PROMPT_TEXT_REFS_COLUMN = 'prompt_text_refs';
+const textRefsColumnOn = new WeakMap<DatabaseType, boolean>();
+/** Does this handle's sessions table have it? (a fixture's own table may not; the store's always does) */
+function hasTextRefsColumn(handle: DatabaseType): boolean {
+  let has = textRefsColumnOn.get(handle);
+  if (has === undefined) {
+    has = (handle.pragma('table_info(sessions)') as Array<{ name: string }>).some((c) => c.name === PROMPT_TEXT_REFS_COLUMN);
+    textRefsColumnOn.set(handle, has);
   }
-  const slim = SLIM_SESSION_STATUSES.map((s) => `'${s}'`).join(', ');
-  const payload = `CASE WHEN process_status IN (${slim}) AND instr(payload, 'ystemPrompt') > 0 AND json_valid(payload)`
-    + ` THEN json_remove(payload, ${SLIM_PAYLOAD_PATHS.map((p) => `'${p}'`).join(', ')}) ELSE payload END AS payload`;
-  return `SELECT ${EXPLICIT_SESSION_COLUMNS.join(', ')}, ${payload} FROM sessions${where ? ` WHERE ${where}` : ''}`;
+  return has;
 }
+
+/** The table's field names of the two texts. */
+const FIELD_OF: Record<PromptKey, string> = { appliedAppendSystemPrompt: 'appliedAppendSystemPrompt', systemPrompt: 'profile.systemPrompt' };
+const KEY_OF: Record<string, PromptKey> = { appliedAppendSystemPrompt: 'appliedAppendSystemPrompt', 'profile.systemPrompt': 'systemPrompt' };
+
+/** Each text the table keeps for `sid`. */
+function tablePrompts(handle: DatabaseType, sid: string): SessionPrompts {
+  const rows = prepared(handle, 'SELECT field, body FROM session_prompts WHERE claude_session_id = ?').all(sid) as Array<{ field: string; body: string }>;
+  const out: SessionPrompts = {};
+  for (const r of rows) {
+    const k = KEY_OF[r.field];
+    if (k && typeof r.body === 'string') out[k] = r.body;
+  }
+  return out;
+}
+
+
+/** What a row holds of its prompts now: each text its payload holds, the stub of each it does not, and whether it has a profile. */
+export interface StoredPromptState {
+  texts: SessionPrompts;
+  refs: { appliedAppendSystemPrompt?: SessionPromptRef; systemPrompt?: SessionPromptRef };
+  /** A stub written beside its text, found without it: cleared by a build before the split (its table row is stale). */
+  cleared: PromptKey[];
+  row: boolean;
+}
+
+/** A row's stored prompt state from its parsed payload (its texts, the stubs that stand for one, the cleared ones). */
+function storedStateOf(texts: SessionPrompts, payload: Record<string, any>): StoredPromptState {
+  const out: StoredPromptState = { texts: { ...texts }, refs: {}, cleared: [], row: true };
+  const take = (k: PromptKey, ref: unknown) => {
+    if (texts[k] !== undefined) return;
+    const standing = standingRef(ref);
+    if (standing) out.refs[k] = standing;
+    else if (ref && typeof ref === 'object') out.cleared.push(k);
+  };
+  take('appliedAppendSystemPrompt', payload.appliedAppendSystemPromptRef);
+  take('systemPrompt', payload.profile?.systemPromptRef);
+  return out;
+}
+
+function storedPromptState(handle: DatabaseType, sid: string): StoredPromptState {
+  // One parse in SQLite and one in JS: the four values as one JSON array (a writer reads this on
+  // every write, so not one json_valid and json_extract per value).
+  const r = prepared(handle, `SELECT 1 AS here, CASE WHEN instr(payload, 'ystemPrompt') > 0 AND json_valid(payload)
+      THEN json_extract(payload, '$.appliedAppendSystemPrompt', '$.profile.systemPrompt', '$.appliedAppendSystemPromptRef', '$.profile.systemPromptRef') END AS v
+    FROM sessions WHERE claude_session_id = ?`).get(sid) as { here: number; v: string | null } | undefined;
+  const out: StoredPromptState = { texts: {}, refs: {}, cleared: [], row: !!r };
+  if (!r?.v) return out;
+  let a: unknown, p: unknown, ar: unknown, pr: unknown;
+  try { [a, p, ar, pr] = JSON.parse(r.v) as unknown[]; } catch { return out; }
+  const take = (k: PromptKey, text: unknown, ref: unknown) => {
+    if (typeof text === 'string') { out.texts[k] = text; return; }
+    const standing = standingRef(ref);
+    if (standing) out.refs[k] = standing;
+    else if (ref && typeof ref === 'object') out.cleared.push(k);
+  };
+  take('appliedAppendSystemPrompt', a, ar);
+  take('systemPrompt', p, pr);
+  return out;
+}
+
+/**
+ * Both prompts of `sid` as stored, inside or outside a transaction on `handle`: a payload's text
+ * where it holds one (it is the newer, see above), else the table's.
+ */
+export function readSessionPrompts(handle: DatabaseType, sid: string): SessionPrompts {
+  const state = storedPromptState(handle, sid);
+  if (!state.row) return {};
+  const out: SessionPrompts = { ...state.texts };
+  // The table only for a stub that stands for its text (never one a build before the split cleared).
+  if (PROMPT_KEYS.some((k) => out[k] === undefined && state.refs[k])) {
+    const table = tablePrompts(handle, sid);
+    for (const k of PROMPT_KEYS) if (out[k] === undefined && state.refs[k] && table[k] !== undefined) out[k] = table[k];
+  }
+  return out;
+}
+
+/** What the writes of this process cost since it started (the `memory sample` line's sessionStore note). */
+const writeStats = { writes: 0, writeMs: 0, writeMaxMs: 0, payloadBytesWritten: 0, promptRowsWritten: 0, shadowMismatches: 0 };
+export function sessionRowWriteStats(): Readonly<typeof writeStats> { return { ...writeStats }; }
+export function _resetSessionRowWriteStatsForTesting(): void { for (const k of Object.keys(writeStats) as (keyof typeof writeStats)[]) writeStats[k] = 0; }
+
+/**
+ * The one writer of a session row (every INSERT OR REPLACE of `sessions` is this one), and of its
+ * prompt rows, in the caller's transaction on `handle`. `changes` names the prompts the caller sets
+ * or clears; every other prompt stays as stored (`from`: the row to read it from, a rename's or a
+ * copy's old id). A prompt row is written only when its text differs from the stored one. A
+ * persona needs a profile: a record without one has none.
+ */
+export function putSessionRow(
+  handle: DatabaseType, session: SessionRecord, changes: PromptChanges = {},
+  opts: { from?: string; insert?: boolean; stored?: StoredPromptState } = {},
+): void {
+  const t0 = performance.now();
+  const sid = session.claudeSessionId;
+  const source = opts.from ?? sid;
+  // `stored`: the writer's own read of this row in this transaction (decodeSessionRow's `out`).
+  const stored = (!opts.from && opts.stored) || storedPromptState(handle, source);
+  // Each prompt after this write (`after`: its text; `refs`: a stub whose text this write does not
+  // read), and the table writes it takes.
+  const after: SessionPrompts = {};
+  const refs: StoredPromptState['refs'] = {};
+  const sets: SessionPrompts = {};
+  const clears: PromptKey[] = [];
+  let table: SessionPrompts | null = null;
+  const fromTable = (k: PromptKey): string | undefined => (table ??= tablePrompts(handle, source))[k];
+  for (const k of PROMPT_KEYS) {
+    const c = changes[k];
+    if (k === 'systemPrompt' && !session.profile) {
+      // A persona lives in its profile: a record without one has none.
+      if (c != null || stored.texts.systemPrompt !== undefined || stored.refs.systemPrompt) clears.push(k);
+      continue;
+    }
+    if (c === null) { clears.push(k); continue; }
+    if (typeof c === 'string') { after[k] = c; sets[k] = c; continue; }
+    // Cleared by a build before the split: its stale table row goes too.
+    if (stored.cleared.includes(k)) { clears.push(k); continue; }
+    const text = stored.texts[k];
+    if (text !== undefined) {
+      after[k] = text;
+      // A text only an old-shape payload holds moves into the table when the payload stops holding
+      // it (release B), and goes with the row to its new id.
+      if (!PROMPTS_IN_PAYLOAD || opts.from) sets[k] = text;
+      continue;
+    }
+    if (!stored.refs[k]) continue;
+    // A new-shape row: release A carries the table's text into the payload; a move takes it along.
+    const t = PROMPTS_IN_PAYLOAD || opts.from ? fromTable(k) : undefined;
+    if (t === undefined) { refs[k] = stored.refs[k]; continue; }
+    if (PROMPTS_IN_PAYLOAD) after[k] = t;
+    else refs[k] = stored.refs[k];
+    if (opts.from) sets[k] = t;
+  }
+  const row = encodeSessionRow(session, after, refs);
+  const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload', ...(hasTextRefsColumn(handle) ? [PROMPT_TEXT_REFS_COLUMN] : [])];
+  const bound: Record<string, unknown> = {};
+  for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
+  const names = cols.join(', ');
+  const values = cols.map((c) => '@' + c).join(', ');
+  handle.prepare(opts.insert ? `INSERT INTO sessions (${names}) VALUES (${values})` : `INSERT OR REPLACE INTO sessions (${names}) VALUES (${values})`).run(bound);
+  // After the row: a host's own-row triggers on the prompt table ask that the row is its own.
+  for (const k of clears) {
+    writeStats.promptRowsWritten += Number(prepared(handle, 'DELETE FROM session_prompts WHERE claude_session_id = ? AND field = ?').run(sid, FIELD_OF[k]).changes ?? 0);
+  }
+  for (const k of PROMPT_KEYS) {
+    const text = sets[k];
+    if (text === undefined) continue;
+    if (!writePromptRow(handle, sid, k, text)) continue;
+    writeStats.promptRowsWritten += 1;
+    if (PROMPTS_IN_PAYLOAD) shadowCheck(handle, sid, k);
+  }
+  const ms = performance.now() - t0;
+  writeStats.writes += 1;
+  writeStats.writeMs += ms;
+  if (ms > writeStats.writeMaxMs) writeStats.writeMaxMs = ms;
+  writeStats.payloadBytesWritten += typeof row.payload === 'string' ? Buffer.byteLength(row.payload, 'utf8') : 0;
+}
+
+/** Keep `text` as `sid`'s prompt `k`, unless the table holds it already (its hash). True: written. */
+function writePromptRow(handle: DatabaseType, sid: string, k: PromptKey, text: string): boolean {
+  const sha = promptSha256(text);
+  if (prepared(handle, 'SELECT sha256 FROM session_prompts WHERE claude_session_id = ? AND field = ?', 'pluck').get(sid, FIELD_OF[k]) === sha) return false;
+  prepared(handle, 'INSERT OR REPLACE INTO session_prompts (claude_session_id, field, body, sha256, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(sid, FIELD_OF[k], text, sha, new Date().toISOString());
+  return true;
+}
+
+/** Release A's check after a prompt write: the table's text is the payload's. A mismatch is logged (zero over A's day gates B). */
+function shadowCheck(handle: DatabaseType, sid: string, k: PromptKey): void {
+  const path = k === 'appliedAppendSystemPrompt' ? '$.appliedAppendSystemPrompt' : '$.profile.systemPrompt';
+  const r = prepared(handle, `SELECT (SELECT body FROM session_prompts WHERE claude_session_id = ?1 AND field = ?2) AS body,
+      (SELECT CASE WHEN json_valid(payload) THEN json_extract(payload, ?3) END FROM sessions WHERE claude_session_id = ?1) AS text`)
+    .get(sid, FIELD_OF[k], path) as { body: unknown; text: unknown } | undefined;
+  if (r && r.body === r.text) return;
+  writeStats.shadowMismatches += 1;
+  log.session.warn('session prompts: the table and the payload differ after a prompt write', {
+    sessionId: sid, field: FIELD_OF[k],
+    tableBytes: typeof r?.body === 'string' ? Buffer.byteLength(r.body) : null, payloadBytes: typeof r?.text === 'string' ? Buffer.byteLength(r.text) : null,
+  });
+}
+
+/** Delete `sid`'s prompt rows (with its row, in the same transaction, before the row goes: a host's triggers ask for its row). */
+export function deleteSessionPrompts(handle: DatabaseType, sid: string): void {
+  prepared(handle, 'DELETE FROM session_prompts WHERE claude_session_id = ?').run(sid);
+}
+
+/** Prompt rows whose session row is gone: nothing can read them. Returns how many went. */
+export function sweepOrphanSessionPrompts(handle: DatabaseType): number {
+  return Number(handle.prepare('DELETE FROM session_prompts WHERE claude_session_id NOT IN (SELECT claude_session_id FROM sessions)').run().changes ?? 0);
+}
+
+/** The marker a finished strip pass leaves (diagnostics and the rollback check; no reader gates on it). */
+export const PROMPT_SPLIT_MARKER = 'prompt-split-v1';
+
+/** Release B's strip job: off in release A (the rehearsal runs it by hand). */
+export const PROMPT_STRIP_ENABLED = false;
+
+/** One batch of a strip pass: what it did and where the next one starts. */
+export interface PromptBatch { ids: string[]; lastRowid: number; done: boolean; rows: number; bytesMoved: number }
+
+/**
+ * One strip batch, in the caller's transaction on `handle`: the next rows after `afterRowid` whose
+ * payload still holds a text, each written as the new shape (its texts in the table, the stubs in its
+ * payload), until `maxRows` or `budgetMs`. A row whose text-like match was not a prompt is passed by.
+ */
+export function stripPromptBatch(handle: DatabaseType, afterRowid: number, maxRows = 25, budgetMs = 15): PromptBatch {
+  return promptBatch(handle, afterRowid, maxRows, budgetMs, 'strip');
+}
+
+/**
+ * One batch of the down migration (`walnut sessions-prompts unsplit`): the next rows whose payload
+ * has a stub without its text get the table's text back in their payload, the old shape any build
+ * reads. The table is kept.
+ */
+export function unsplitPromptBatch(handle: DatabaseType, afterRowid: number, maxRows = 25, budgetMs = 15): PromptBatch {
+  return promptBatch(handle, afterRowid, maxRows, budgetMs, 'unsplit');
+}
+
+function promptBatch(handle: DatabaseType, afterRowid: number, maxRows: number, budgetMs: number, kind: 'strip' | 'unsplit'): PromptBatch {
+  const t0 = performance.now();
+  const where = kind === 'strip' ? HAS_PROMPT_TEXT : SPLIT_PROMPT_ROW;
+  const rows = prepared(handle, `SELECT rowid AS rid, * FROM sessions WHERE rowid > ? AND (${where}) ORDER BY rowid LIMIT ?`).all(afterRowid, maxRows) as Array<Record<string, any>>;
+  const out: PromptBatch = { ids: [], lastRowid: afterRowid, done: rows.length < maxRows, rows: 0, bytesMoved: 0 };
+  for (const raw of rows) {
+    out.lastRowid = Number(raw.rid);
+    const sid = String(raw.claude_session_id);
+    const before = typeof raw.payload === 'string' ? raw.payload : '';
+    const prompts = kind === 'strip' ? promptsOf(payloadOf(raw)) : readSessionPrompts(handle, sid);
+    // Matched on a text-like string that is no prompt: nothing to move, the cursor passes it.
+    if (kind === 'strip' && prompts.appliedAppendSystemPrompt === undefined && prompts.systemPrompt === undefined) continue;
+    const record = decodeSessionRow(raw);
+    const row = encodeSessionRow(record, prompts, {}, kind === 'unsplit' ? 'texts' : 'stubs');
+    if (hasTextRefsColumn(handle)) {
+      prepared(handle, `UPDATE sessions SET payload = ?, ${PROMPT_TEXT_REFS_COLUMN} = ? WHERE claude_session_id = ?`).run(row.payload ?? null, row[PROMPT_TEXT_REFS_COLUMN], sid);
+    } else prepared(handle, 'UPDATE sessions SET payload = ? WHERE claude_session_id = ?').run(row.payload ?? null, sid);
+    if (kind === 'strip') for (const k of PROMPT_KEYS) if (prompts[k] !== undefined) writePromptRow(handle, sid, k, prompts[k]!);
+    out.ids.push(sid);
+    out.rows += 1;
+    out.bytesMoved += Math.abs(Buffer.byteLength(before, 'utf8') - Buffer.byteLength(String(row.payload ?? ''), 'utf8'));
+    if (performance.now() - t0 >= budgetMs) { out.done = false; break; }
+  }
+  if (rows.length === 0) out.done = true;
+  return out;
+}
+
+/**
+ * One batch of the column fill: the next rows whose `prompt_text_refs` is NULL (every row before
+ * release A's first pass, and a row a build before the split wrote since) get the stubs of the texts
+ * their payload holds, measured by SQLite (no text reaches JS). Only that column changes.
+ */
+export function fillTextRefsBatch(handle: DatabaseType, afterRowid: number, maxRows = 25, budgetMs = 15): PromptBatch {
+  const t0 = performance.now();
+  const out: PromptBatch = { ids: [], lastRowid: afterRowid, done: true, rows: 0, bytesMoved: 0 };
+  if (!hasTextRefsColumn(handle)) return out;
+  const rows = prepared(handle, `SELECT rid, claude_session_id, has_profile, ${TEXT_SIZE_COLUMNS} FROM (
+      SELECT rowid AS rid, claude_session_id, payload, coalesce(${HAS_PROMPT_TEXT} AND json_valid(payload), 0) AS g,
+        coalesce(json_valid(payload) AND json_type(payload, '$.profile') = 'object', 0) AS has_profile
+      FROM sessions WHERE rowid > ? AND ${PROMPT_TEXT_REFS_COLUMN} IS NULL ORDER BY rowid LIMIT ? OFFSET 0)`)
+    .all(afterRowid, maxRows) as Array<Record<string, any>>;
+  out.done = rows.length < maxRows;
+  const set = prepared(handle, `UPDATE sessions SET ${PROMPT_TEXT_REFS_COLUMN} = ? WHERE claude_session_id = ? AND ${PROMPT_TEXT_REFS_COLUMN} IS NULL`);
+  for (const r of rows) {
+    out.lastRowid = Number(r.rid);
+    const refs: Record<string, SessionPromptRef> = {};
+    if (typeof r.aasp_bytes === 'number') refs.appliedAppendSystemPrompt = { bytes: r.aasp_bytes };
+    if (typeof r.persona_bytes === 'number' && r.has_profile === 1) refs.systemPrompt = { bytes: r.persona_bytes, blank: r.persona_blank === 1 };
+    set.run(JSON.stringify(refs), String(r.claude_session_id));
+    out.ids.push(String(r.claude_session_id));
+    out.rows += 1;
+    if (performance.now() - t0 >= budgetMs) { out.done = false; break; }
+  }
+  return out;
+}
+
+/**
+ * After something rewrote prompt texts in place (the leader switch's path rewrite,
+ * leader/switch/home-paths.ts): each prompt row's hash, each payload stub's size and hash, and
+ * each row's `prompt_text_refs` made to match the texts again. Only what differs changes, so a
+ * second run changes nothing. It reads every prompt and every row with one: for an offline home
+ * (no server on it), run only when a text changed. Returns the rows changed.
+ */
+export function refreshPromptStubsIn(handle: DatabaseType, changedTables?: ReadonlySet<string>): number {
+  // `changedTables`: the tables the caller changed; nothing to do unless one holds a prompt text.
+  if (changedTables && !changedTables.has('sessions') && !changedTables.has('session_prompts')) return 0;
+  const has = (t: string) => !!handle.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  if (!has('sessions')) return 0;
+  let n = 0;
+  const table = new Map<string, SessionPrompts>();
+  if (has('session_prompts')) {
+    const setSha = handle.prepare('UPDATE session_prompts SET sha256 = ? WHERE claude_session_id = ? AND field = ?');
+    for (const r of handle.prepare('SELECT claude_session_id AS sid, field, body, sha256 FROM session_prompts').all() as Array<{ sid: string; field: string; body: unknown; sha256: unknown }>) {
+      const k = KEY_OF[r.field];
+      if (!k || typeof r.body !== 'string') continue;
+      const sha = promptSha256(r.body);
+      if (sha !== r.sha256) n += Number(setSha.run(sha, r.sid, r.field).changes ?? 0);
+      if (!table.has(r.sid)) table.set(r.sid, {});
+      table.get(r.sid)![k] = r.body;
+    }
+  }
+  const column = hasTextRefsColumn(handle);
+  const rows = handle.prepare(`SELECT claude_session_id AS sid, payload${column ? `, ${PROMPT_TEXT_REFS_COLUMN} AS refs` : ''}
+    FROM sessions WHERE instr(payload, 'ystemPrompt') > 0 AND json_valid(payload)`).all() as Array<{ sid: string; payload: string; refs?: unknown }>;
+  // json_set changes the stub only (a payload's other values keep their text, big numbers included).
+  const setRef = handle.prepare('UPDATE sessions SET payload = json_set(payload, ?, json(?)) WHERE claude_session_id = ?');
+  const setColumn = column ? handle.prepare(`UPDATE sessions SET ${PROMPT_TEXT_REFS_COLUMN} = ? WHERE claude_session_id = ?`) : null;
+  for (const r of rows) {
+    let p: Record<string, any>;
+    try { p = JSON.parse(r.payload); } catch { continue; }
+    const texts = promptsOf(p as SessionRecord);
+    let changed = false;
+    for (const k of PROMPT_KEYS) {
+      const persona = k === 'systemPrompt';
+      const ref = persona ? p.profile?.systemPromptRef : p.appliedAppendSystemPromptRef;
+      if (!ref || typeof ref !== 'object') continue;
+      // A stub beside its text (inline) follows that text; a stub that stands for the table's, the table's.
+      const text = ref.inline ? texts[k] : texts[k] === undefined && standingRef(ref) ? table.get(r.sid)?.[k] : undefined;
+      if (text === undefined) continue;
+      const want = { ...ref, ...promptRefOf(text, persona, typeof ref.sha256 === 'string') };
+      if (JSON.stringify(want) === JSON.stringify(ref)) continue;
+      setRef.run(persona ? '$.profile.systemPromptRef' : '$.appliedAppendSystemPromptRef', JSON.stringify(want), r.sid);
+      changed = true;
+    }
+    if (setColumn && typeof r.refs === 'string' && r.refs !== '{}') {
+      const want = textRefsColumnOf(texts, !!p.profile && typeof p.profile === 'object');
+      if (want !== r.refs) { setColumn.run(want, r.sid); changed = true; }
+    }
+    if (changed) n += 1;
+  }
+  return n;
+}
+
+/** Set or remove the strip marker (end of a strip pass; unsplit removes it). */
+export function setPromptSplitMarker(handle: DatabaseType, on: boolean): void {
+  handle.exec('CREATE TABLE IF NOT EXISTS session_migrations (id TEXT PRIMARY KEY)');
+  if (on) prepared(handle, 'INSERT OR IGNORE INTO session_migrations (id) VALUES (?)').run(PROMPT_SPLIT_MARKER);
+  else prepared(handle, 'DELETE FROM session_migrations WHERE id = ?').run(PROMPT_SPLIT_MARKER);
+}
+
+/**
+ * The store cache's full scan of session rows (session-tracker.ts loadStoreRows): the columns, and a
+ * payload SQLite already took both prompt texts out of, with their stubs from the row's
+ * `prompt_text_refs` column (or, for a row a build before the split wrote, each text's size and a
+ * persona's blankness measured here), so no text ever reaches JS through the scan. On the Mac
+ * (2026-11-25, 7.7k rows) the payloads came to 75 MB, 59 MB of it these two texts.
+ */
+export function sessionCacheRowsSql(): string {
+  // A row release A or later wrote says in its own column whether its payload holds a text, so it
+  // costs no instr, and its stubs come from the column. Only a NULL column (a build before the split
+  // wrote the row, and the fill pass has not reached it) is tested and measured: one instr, then the
+  // parses. On the Mac's rows (2026-11-26, 7.7k) the measuring cost 50 ms a scan, the column none.
+  const known = `${PROMPT_TEXT_REFS_COLUMN} IS NOT NULL`;
+  const remove = `json_remove(payload, '$.appliedAppendSystemPrompt', '$.profile.systemPrompt')`;
+  const sizes = TEXT_SIZE_COLUMNS.replaceAll('WHEN g ', () => `WHEN ${PROMPT_TEXT_REFS_COLUMN} IS NULL AND ${HAS_PROMPT_TEXT} AND json_valid(payload) `);
+  return `SELECT ${EXPLICIT_SESSION_COLUMNS.join(', ')},
+      CASE WHEN ${known} THEN CASE WHEN ${PROMPT_TEXT_REFS_COLUMN} <> '{}' AND json_valid(payload) THEN ${remove} ELSE payload END
+        WHEN ${HAS_PROMPT_TEXT} AND json_valid(payload) THEN ${remove} ELSE payload END AS payload,
+      1 AS cache_scan, ${PROMPT_TEXT_REFS_COLUMN}, ${sizes}
+    FROM sessions`;
+}
+
+/**
+ * Each text's UTF-8 size and the persona's blankness (the same characters as isBlankText), for a
+ * select whose rows have `payload` and the guard `g`.
+ */
+const TEXT_SIZE_COLUMNS = [
+  `CASE WHEN g AND json_type(payload, '$.appliedAppendSystemPrompt') = 'text' THEN length(CAST(json_extract(payload, '$.appliedAppendSystemPrompt') AS BLOB)) END AS aasp_bytes`,
+  `CASE WHEN g AND json_type(payload, '$.profile.systemPrompt') = 'text' THEN length(CAST(json_extract(payload, '$.profile.systemPrompt') AS BLOB)) END AS persona_bytes`,
+  `CASE WHEN g AND json_type(payload, '$.profile.systemPrompt') = 'text' THEN trim(json_extract(payload, '$.profile.systemPrompt'), ${BLANK_CHARS_SQL}) = '' END AS persona_blank`,
+].join(', ');
 
 /**
  * The payload fields a query filters sessions by, each with its own partial
@@ -1252,6 +1676,16 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS sessions_process_status ON sessions(process_status);
   CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions(last_active_at);
   CREATE INDEX IF NOT EXISTS sessions_last_status_change ON sessions(last_status_change);
+  -- A session's two prompt texts, one row each (session-prompts.ts): its row keeps only their stubs.
+  -- No foreign key: a REPLACE of the session row would delete them through a cascade.
+  CREATE TABLE IF NOT EXISTS session_prompts (
+    claude_session_id TEXT NOT NULL,
+    field TEXT NOT NULL CHECK (field IN ('appliedAppendSystemPrompt', 'profile.systemPrompt')),
+    body TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (claude_session_id, field)
+  );
   CREATE TABLE IF NOT EXISTS session_channel_cursor (
     host_id TEXT,
     log_id TEXT NOT NULL,

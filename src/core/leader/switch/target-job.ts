@@ -36,6 +36,7 @@ import { applyServiceRole, serviceLeadRefusalHere, writeSwitchPointer, type SetS
 import { instanceIdAt } from '../../device-store.js'
 import { clause } from '../../../utils/format.js'
 import { serviceInstallRoot } from '../../server-role.js'
+import { SESSION_STORE_FORMATS } from '../../session-prompts.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -123,7 +124,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
   const problems: string[] = []
   const copy = path.join(o.standbyDir, 'copy')
   const me = permitHolderId(env)
-  const report: CheckReport = { switchId: o.switchId, machine: me, ok: false, problems, version: env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(), at: '' }
+  const report: CheckReport = { switchId: o.switchId, machine: me, ok: false, problems, version: env.WALNUT_LEADER_SWITCH_FAKE_VERSION || getVersion(), storeFormats: { ...SESSION_STORE_FORMATS }, at: '' }
   try {
     const cfg = await readCopySwitchConfig(copy)
     if (!cfg.flag || !cfg.settings) throw new Error('the standby copy\'s config.yaml does not have the experiment and leader_switch set: the new leader would not hold the permission')

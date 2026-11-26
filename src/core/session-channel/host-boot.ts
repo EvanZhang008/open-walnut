@@ -117,8 +117,10 @@ export interface StartHostSessionsOptions {
 }
 
 async function ownRows(hostKey: string): Promise<SessionRecord[]> {
-  const { listSessions } = await import('../session-tracker.js')
-  return (await listSessions()).filter((r) => rowOwnedHere(r, hostKey))
+  const { listSessions, withPromptFields } = await import('../session-tracker.js')
+  // Whole, prompts included, as the row hook announces them: the emitter's whole rows and its diffs
+  // must never read a prompt as removed (a listed row holds only its stubs).
+  return (await listSessions()).filter((r) => rowOwnedHere(r, hostKey)).map(withPromptFields)
 }
 
 /** Does the leader that answers now say it speaks the channel (old-leader-watch.ts LEADER_CHANNEL_CAP)? */

@@ -196,22 +196,20 @@ const IN_LOCK = 'runs inside withWriteLock on the store write connection: SQLite
 const SNAPSHOT_SEES: Record<string, Record<string, string>> = {
   'src/core/session-tracker.ts': {
     scrubInheritedSessionPids: IN_LOCK,
-    writeSessionRowSqlite: IN_LOCK,
     deleteSessionRowSqlite: IN_LOCK,
-    batchUpdateSessionRecords: IN_LOCK,
-    renameSessionId: IN_LOCK,
     retaskSessionRows: IN_LOCK,
-    completeTaskSessions: IN_LOCK,
     deleteSessionRecords: IN_LOCK,
   },
   'src/core/session-db.ts': {
+    // The one row writer (the prompt split). Its callers: the tracker's writers (writeSessionRowSqlite,
+    // in the lock), the copies below (their own connections), and the legacy JSON import at first open.
+    putSessionRow: `${IN_LOCK}; its other callers are the copies below and the one-time JSON import at first open, before any snapshot exists`,
+    promptBatch: `the strip and unsplit batches, through runLockedSessionRowJob: ${IN_LOCK}`,
+    fillTextRefsBatch: `the prompt_text_refs fill, through runLockedSessionRowJob: ${IN_LOCK}`,
+    refreshPromptStubsIn: 'the leader switch path rewrite (leader/switch/home-paths.ts), on a connection of its own to a file no server has open',
     applySessionCopy: "a replica's copy of the leader's rows: on a host through its own apply connection (a foreign commit: data_version drops the snapshot); the leader never runs it",
-    writeCopyRow: "a host's claim or give-back of a copied row, on the copy's apply connection (a foreign commit)",
     applyCompanionSessionCopy: "the companion's own file of the Mac's sessions, never this store",
     ensureSessionStatusColumns: 'the schema backfill at open, before any snapshot exists',
-  },
-  'src/core/session-db-migration.ts': {
-    '(any)': 'the one-time import of the legacy JSON store at first open, before any snapshot exists',
   },
   'src/core/leader/switch/session-hosts.ts': {
     moveSessionHosts: 'a leader switch, on a connection of its own to a file no server has open yet',

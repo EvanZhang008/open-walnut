@@ -3984,6 +3984,13 @@ export class ClaudeCodeSession {
     // values instead of clearing them (createSessionRecord only overwrites on
     // a truthy `extra` value, but keeping the instance honest avoids surprises).
     if (record.profile) session._profile = record.profile
+    // A listed record (the startup reconcile's) has a stub profile: the cache holds no persona. The
+    // instance keeps the whole one, so a record it writes again (a lost row, a new id) keeps it.
+    if (record.profile?.systemPromptRef && record.profile.systemPrompt === undefined) {
+      const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
+      const whole = await getSessionByClaudeId(record.claudeSessionId).catch(() => null)
+      if (whole?.profile) session._profile = whole.profile
+    }
     if (record.lane) session._lane = record.lane
     // Seed the consumed-offset watermark from the persisted record (sanitized:
     // non-negative finite integer only — a corrupt/sentinel value must never

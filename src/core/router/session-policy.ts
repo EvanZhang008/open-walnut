@@ -3,6 +3,7 @@ import type { RouterArea } from './areas.js';
 import { hostWalnutMcpServer } from '../sessions/walnut-mcp-mount.js';
 import { DEFAULT_ENGINE, engineCaps, isKnownEngine } from '../agents/engine-registry.js';
 import { ROUTER_DECISION_RULES, ROUTER_LOOKUP_OPS } from './decision-rules.js';
+import { hasPersona } from '../session-prompts.js';
 
 /** Only a router runs isolated: the tasks it hands items to are ordinary work (2026-11-14). */
 export type RouterAreaRole = 'router';
@@ -42,14 +43,14 @@ export function runsAreaProfile(engine: unknown): boolean {
     : isKnownEngine(engine) && engineCaps(engine).areaProfile === true;
 }
 
-/** A router's own isolated session in this area. */
+/** A router's own isolated session in this area (its persona read from the text, or the stub a cached row carries). */
 export function isRouterAreaSession(record: Pick<SessionRecord, 'profile' | 'host' | 'engine'>, area: RouterArea): boolean {
   const profile = record.profile;
   if (profile?.areaRole !== 'router') return false;
   const expected = routerAreaProfile(area.id);
   return runsAreaProfile(record.engine) && (record.host || '__local__') === area.host
     && profile?.areaId === area.id && profile.areaPolicyVersion === 1 && profile.slim === true && profile.systemPromptMode === 'replace'
-    && typeof profile.systemPrompt === 'string' && !!profile.systemPrompt.trim() && JSON.stringify(profile.tools) === JSON.stringify(expected.tools)
+    && hasPersona(profile) && JSON.stringify(profile.tools) === JSON.stringify(expected.tools)
     && JSON.stringify(profile.allowedTools) === JSON.stringify(expected.allowedTools)
     && JSON.stringify(profile.mcpServers) === JSON.stringify(expected.mcpServers);
 }

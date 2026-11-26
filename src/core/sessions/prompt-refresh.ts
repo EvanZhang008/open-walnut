@@ -23,6 +23,7 @@
  */
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
+import { hasSpawnPrompt } from '../session-prompts.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions } from './session-context.js';
 import { LEGACY_TAGS_AFTER_REFRESH, dueChanges, parseInstructions, renderDue } from './instruction-diff.js';
 import { currentUserProfile } from './user-profile-context.js';
@@ -36,7 +37,7 @@ export const TASK_CONTEXT_JOIN = TASK_CONTEXT_SEPARATOR;
 /** The spawn argv's prompt cap (claude-code-session.ts): a larger prompt is never stored, so never replayed. */
 const PROMPT_MAX_BYTES = 65_536;
 
-export type RefreshRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine'> & Partial<Pick<SessionRecord, 'taskId' | 'lane' | 'promptCache'>>;
+export type RefreshRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine'> & Partial<Pick<SessionRecord, 'appliedAppendSystemPromptRef'>> & Partial<Pick<SessionRecord, 'taskId' | 'lane' | 'promptCache'>>;
 /** The longest prompt cache lifetime there is: no entry of the last request outlives it. */
 const MAX_CACHE_TTL_MS = 3_600_000;
 
@@ -202,10 +203,12 @@ export type MissingPromptRecord = RefreshRecord & Partial<Pick<SessionRecord, 'c
 export function promptOwedOnResume(record: MissingPromptRecord): boolean {
   // '' is a prompt-less spawn's read-back (spawn-prefix.ts): owed for a task session too. A side
   // thread, which must copy its parent's prompt byte for byte, has no task and stays as it is.
-  if (record.appliedAppendSystemPrompt) return false;
+  // From the text, or the stub a record read without its texts carries (session-prompts.ts).
+  if (hasSpawnPrompt(record)) return false;
   if (!record.taskId || record.lane || isAcpEngine(resolveEngine(record.engine))) return false;
   const profile = record.profile;
-  return !profile?.slim && !profile?.systemPrompt && !profile?.areaRole;
+  const persona = !!profile?.systemPrompt || (profile?.systemPrompt === undefined && (profile?.systemPromptRef?.bytes ?? 0) > 0);
+  return !profile?.slim && !persona && !profile?.areaRole;
 }
 
 /** The session context a resume of such a session runs on (promptOwedOnResume), or null. */

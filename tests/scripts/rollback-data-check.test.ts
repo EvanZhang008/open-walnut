@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkRollbackData, ROLLBACK_CHECK_TIMEOUT_MS } from '../../scripts/lib/rollback-data-check.mjs';
+import { checkRollbackData, ROLLBACK_CHECK_TIMEOUT_MS, SESSIONS_SPLIT_REFUSAL } from '../../scripts/lib/rollback-data-check.mjs';
 
 const roots: string[] = [];
 async function fixture(version?: number) {
@@ -129,5 +129,54 @@ describe('rollback checks the old build on an isolated database copy', () => {
     expect(guard).toBeLessThan(body.indexOf('stage_lkg_for_rollback'));
     expect(guard).toBeLessThan(body.indexOf('launch_server'));
     expect(body.slice(guard, body.indexOf('stage_lkg_for_rollback'))).toContain('return 0');
+  });
+});
+
+/** A session store with one row in `shape`: the old one (text in the payload) or the split one (only its stub). */
+async function sessionsFixture(home: string, shape: 'old' | 'split'): Promise<string> {
+  const file = path.join(home, 'sessions.sqlite');
+  const db = new Database(file);
+  db.exec('CREATE TABLE sessions (claude_session_id TEXT PRIMARY KEY, payload TEXT)');
+  const payload = shape === 'old'
+    ? { appliedAppendSystemPrompt: 'spawn', profile: { systemPrompt: 'persona' } }
+    : { appliedAppendSystemPromptRef: { sha256: 'x', bytes: 5 }, profile: { systemPromptRef: { sha256: 'y', bytes: 7, blank: false } } };
+  db.query('INSERT INTO sessions VALUES (?, ?)').run('s1', JSON.stringify(payload));
+  db.close();
+  return file;
+}
+
+describe('rollback checks that the old build reads the session store\'s prompt split', () => {
+  it('refuses a build without the store-format probe when prompts live only in session_prompts', async () => {
+    const f = await fixture(13);
+    await sessionsFixture(f.home, 'split');
+    const run = vi.fn(async (_file, args) => {
+      if (args[1] === 'store-formats') throw Object.assign(new Error('exit 1'), { stderr: "error: unknown command 'store-formats'" });
+      return { stdout: '[]', stderr: '' };
+    });
+    await expect(checkRollbackData({ file: '/fixture/walnut', home: f.home, tmpDir: f.root, run })).rejects.toThrow(SESSIONS_SPLIT_REFUSAL);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(f.root)).toEqual(['live']);
+  });
+
+  it('passes a build that answers the probe, in an isolated home', async () => {
+    const f = await fixture(13);
+    await sessionsFixture(f.home, 'split');
+    const run = vi.fn(async (_file, args, options) => {
+      expect(options.env.OPEN_WALNUT_HOME).not.toBe(f.home);
+      expect(options.env).toMatchObject({ WALNUT_CLI_DIRECT: '1' });
+      return { stdout: args[1] === 'store-formats' ? '{"sessionsPromptSplit":1}' : '[]', stderr: '' };
+    });
+    expect(await checkRollbackData({ file: '/fixture/walnut', home: f.home, tmpDir: f.root, run }))
+      .toEqual({ checked: true, version: 13, sessions: { splitRows: 1, sessionsPromptSplit: 1 } });
+    expect(run.mock.calls.map((c) => c[1][1])).toEqual(['store-formats', 'tasks']);
+  });
+
+  it('asks nothing of any build on unsplit data (release A\'s, or an older build\'s)', async () => {
+    const f = await fixture(13);
+    await sessionsFixture(f.home, 'old');
+    const run = vi.fn(async () => ({ stdout: '[]', stderr: '' }));
+    expect(await checkRollbackData({ file: '/fixture/walnut', home: f.home, tmpDir: f.root, run }))
+      .toEqual({ checked: true, version: 13, sessions: { splitRows: 0 } });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

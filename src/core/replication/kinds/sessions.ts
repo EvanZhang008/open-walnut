@@ -44,7 +44,8 @@ export const SESSIONS_REMOVAL_FLOOR = 200
 export const PROCESS_FIELDS: readonly string[] = [
   'pid', 'outputFile', 'pgid', 'costWatermark', 'costWatermarkPid', 'lineLifecyclePid', 'lineQueuedPid',
   'consumedOffset', 'streamEpoch', 'acpRuntimeId', 'acpJournalPath', 'pendingResumeSessionAt',
-  'appliedAppendSystemPrompt', 'autoRecover', 'mcpMountStatus', 'hostname',
+  // The spawn prompt and its stub (session-prompts.ts): a copy holds no prompt, so no stub of one either.
+  'appliedAppendSystemPrompt', 'appliedAppendSystemPromptRef', 'autoRecover', 'mcpMountStatus', 'hostname',
   // The spawn bundle (system prompt, MCP servers with their env): it only feeds
   // the Mac's argv builder, and an MCP server's env may hold a credential.
   'profile',

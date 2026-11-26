@@ -17,8 +17,14 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionCacheRowsSql, SLIM_SESSION_STATUSES, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, takeChangedSessionRows, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
+import {
+  PROMPT_TEXT_REFS_COLUMN, type StoredPromptState, dbGeneration, getDb, rowToSession, rowToSessionIn, decodeSessionRow, putSessionRow, deleteSessionPrompts, sessionCacheRowsSql, sessionWriteHandle,
+  ownRowHostKey, transactionWhenFree, readChannelCursor, writeChannelCursor, takeChangedSessionRows, sessionRowWriteStats,
+  PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE,
+} from './session-db.js';
+import { BLANK_CHARS_SQL, promptChangesOf, promptChangesSetting, promptRefOf, promptsOf, promptStubOf, standingRef, type PromptChanges, type SessionPrompts } from './session-prompts.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
+import { armPromptJob, disarmPromptJob } from './session-prompt-jobs.js';
 import { isFollower, isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
@@ -76,6 +82,8 @@ async function ensureSessionInit(): Promise<void> {
   // A host replica's session store is a copy (replica/copy-guard.ts): no migration writes it.
   if (!isHostReplica()) await runSessionMigrationIfNeeded();
   sessionInitialized = true;
+  // The prompt split's pass, past the boot burst (session-prompt-jobs.ts): the leader's only.
+  armPromptJob();
 }
 
 // ── Whole-store read cache ────────────────────────────────────────────────
@@ -152,45 +160,24 @@ function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
   return prepared(db, 'SELECT total_changes() AS n', 'pluck').get() as number;
 }
 
-// ── Heavy prompt fields stay in SQLite for sessions that are not live ─────
+// ── The prompt texts stay in SQLite ────────────────────────────────────────
 //
-// Two fields are most of the cache: the system prompt a CLI was spawned with
-// (`appliedAppendSystemPrompt`, ~22 KB) and a lane's persona (`profile.systemPrompt`,
-// ~70 KB). On the maintainer's board (2026-11-20) 7,116 of 7,203 rows were stopped and
-// those two fields of theirs were about 90 MB of the server's heap. Everything that needs
-// them for a session reads its row straight from SQLite (resume, respawn, prompt refresh,
-// notices, lanes, forks: getSessionByClaudeId), every writer re-reads its row inside the
-// write transaction, and replication strips both fields anyway. A cached row of a stopped
-// or errored session therefore leaves them out; the one list reader that needs them
-// (host-slice's notice) takes the row through withHeavyFields. A row that comes back to
-// life is re-read by the write-through patch and carries them again.
-// A scan never reads them into JS at all (session-db.ts sessionCacheRowsSql).
-// Ratchets: tests/core/session-store-heavy-fields.test.ts, tests/core/session-store-scan-bytes.test.ts.
-const SLIM_STATUSES = new Set(SLIM_SESSION_STATUSES);
-
-/** The cached copy of a row: without the heavy prompt fields when the session is not live. */
-function slimForCache(record: SessionRecord): SessionRecord {
-  if (!SLIM_STATUSES.has(record.process_status ?? '')) return record;
-  const hasPrompt = record.appliedAppendSystemPrompt !== undefined;
-  const hasPersona = record.profile?.systemPrompt !== undefined;
-  if (!hasPrompt && !hasPersona) return record;
-  const slim: SessionRecord = { ...record };
-  if (hasPrompt) delete slim.appliedAppendSystemPrompt;
-  if (hasPersona) {
-    const { systemPrompt: _persona, ...rest } = record.profile!;
-    slim.profile = rest as SessionRecord['profile'];
-  }
-  return slim;
-}
+// Two texts are most of a row: the spawn prompt (`appliedAppendSystemPrompt`, ~22 KB) and a lane's
+// persona (`profile.systemPrompt`, up to 57 KB); 59 of the Mac's 76 MB of payload (2026-11-25). No
+// cached record holds either, whatever its status: a cached row carries their stubs
+// (session-prompts.ts), which answer "has one", "is it blank" and "did it change". Everything that
+// needs a text reads its row whole (getSessionByClaudeId and the other single-row reads), and a list
+// reader that needs one takes its record through withPromptFields. Writers read their row in their
+// own transaction as a stub and name the prompts they change (promptChangesOf).
+// Ratchets: tests/core/session-store-prompt-readers.test.ts.
 
 /**
- * The record with its heavy prompt fields: itself when it has them, else its row from
- * SQLite. For a reader that got the record from a list (listSessions and the like) and
- * needs `appliedAppendSystemPrompt` or `profile.systemPrompt`.
+ * The record with its prompt texts: itself when it holds no stub (no prompt, or already whole),
+ * else its row read whole. For a reader that took the record from a list (listSessions and the
+ * like) and needs `appliedAppendSystemPrompt` or `profile.systemPrompt`.
  */
-export function withHeavyFields(record: SessionRecord): SessionRecord {
-  if (!SLIM_STATUSES.has(record.process_status ?? '')) return record;
-  if (record.appliedAppendSystemPrompt !== undefined && (record.profile === undefined || record.profile.systemPrompt !== undefined)) return record;
+export function withPromptFields(record: SessionRecord): SessionRecord {
+  if (!record.appliedAppendSystemPromptRef && !record.profile?.systemPromptRef) return record;
   return getSessionByClaudeIdSync(record.claudeSessionId) ?? record;
 }
 
@@ -208,7 +195,12 @@ const sessionStoreStats = {
 // What the store's reads cost, on every `memory sample` and `memory burst` line: a full scan reads
 // and parses every row (about 7.4k), and the CPU profiles of the 22 GB climb on 2026-11-23 had
 // loadStoreRows at 9 s of a 30 s window. externalScans: another connection committed (a hook).
-registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign} unlocked=${sessionStoreStats.unlockedWrites}`);
+// The row writes' own cost (session-db.ts putSessionRow): the prompt split's numbers, its release A day the baseline.
+registerSampleNote('sessionStore', () => {
+  const w = sessionRowWriteStats();
+  return  `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign} unlocked=${sessionStoreStats.unlockedWrites}`
+    + ` writes=${w.writes} writeMs=${Math.round(w.writeMs)} writeMaxMs=${Math.round(w.writeMaxMs)} payloadBytesWritten=${w.payloadBytesWritten} promptRowsWritten=${w.promptRowsWritten} promptShadowMismatches=${w.shadowMismatches}`;
+});
 registerBurstContext('sessionStore', () => ({ ...sessionStoreStats, scanMs: Math.round(sessionStoreStats.scanMs) }));
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
@@ -231,14 +223,18 @@ function patchSessionCacheRows(ids: ReadonlySet<string>): void {
   const removed = new Set<string>();
   for (let i = 0; i < wanted.length; i += 500) {
     const chunk = wanted.slice(i, i + 500);
+    // The rows this process just wrote, read whole: their writer read each into JS in its own
+    // transaction already, and one JSON.parse costs less than SQLite's parse and rewrite of a live
+    // row's payload (the scan SQL made each status write 0.2 ms slower on the Mac's copy).
+    // decodeSessionRow drops the texts, so the cached record is the scan's.
     const rows = db
-      .prepare(sessionCacheRowsSql(`claude_session_id IN (${chunk.map(() => '?').join(',')})`))
+      .prepare(`SELECT * FROM sessions WHERE claude_session_id IN (${chunk.map(() => '?').join(',')})`)
       .all(...chunk) as Record<string, any>[];
     const present = new Map(rows.map((r) => [r.claude_session_id as string, r]));
     for (const id of chunk) {
       const row = present.get(id);
       if (!row) { removed.add(id); continue; }
-      const record = slimForCache(rowToSession(row));
+      const record = decodeSessionRow(row);
       const index = at.get(id);
       if (index === undefined) {
         at.set(id, sessionStoreCache.length);
@@ -269,6 +265,8 @@ function announceWrittenRows(ids: ReadonlySet<string>): void {
     const rows = db
       .prepare(`SELECT * FROM sessions WHERE claude_session_id IN (${chunk.map(() => '?').join(',')})`)
       .all(...chunk) as Record<string, any>[];
+    // Whole, prompts included: the host's emitter diffs whole rows, and a prompt it never saw would
+    // read as removed and be cleared on the leader (the channel's rows stay as they always were).
     for (const row of rows) noteSessionRowWritten(rowToSession(row));
   }
 }
@@ -276,6 +274,7 @@ function announceWrittenRows(ids: ReadonlySet<string>): void {
 /** Reset module-level state for test isolation. */
 export function _resetSessionTrackerForTesting(): void {
   sessionInitialized = false;
+  disarmPromptJob();
   sessionStoreCache = null;
   sessionStoreCacheDataVersion = null;
   sessionStoreGen += 1;
@@ -607,9 +606,9 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
       throw new Error('readStore: SQLite handle is null');
     }
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
-    // Uncached, every read is a new snapshot.
+    // Uncached, every read is a new snapshot, of the same stub records the cache holds.
     sessionStoreGen += 1;
-    return rows.map(rowToSession);
+    return rows.map((r) => decodeSessionRow(r));
   }
   const db = getDb();
   if (!db) {
@@ -633,7 +632,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
       rows = prepared(db, sessionCacheRowsSql()).all() as Record<string, any>[];
       after = dataVersion();
     } while (before !== after);
-    sessionStoreCache = rows.map((row) => slimForCache(rowToSession(row)));
+    sessionStoreCache = rows.map((r) => decodeSessionRow(r));
     sessionStoreCacheDataVersion = after;
     sessionStoreGen += 1;
     sessionStoreStats.fullScans += 1;
@@ -743,12 +742,25 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
  * this to zero churn on the happy path.
  */
 function isNoOpUpdate(
-  session: SessionRecord,
+  record: SessionRecord,
   updates: Partial<Omit<SessionRecord, 'claudeSessionId'>>,
+  // The texts of the row the writer read (decodeSessionRow's `out`): a set of the text it holds is
+  // no change (release A's stubs beside a text carry no hash to compare with).
+  stored?: SessionPrompts,
 ): boolean {
+  const session = stored && ('appliedAppendSystemPrompt' in updates || 'profile' in updates) ? withStoredTexts(record, stored) : record;
   for (const key of Object.keys(updates) as (keyof typeof updates)[]) {
     const next = updates[key];
     const curr = (session as unknown as Record<string, unknown>)[key as string];
+    // A writer's own record is a stub (no prompt text): a text compares with its stub.
+    if (key === 'appliedAppendSystemPrompt') {
+      if (!sameSpawnPrompt(next as string | undefined, session)) return false;
+      continue;
+    }
+    if (key === 'profile') {
+      if (JSON.stringify(promptStubOf({ profile: next as SessionRecord['profile'] }).profile) !== JSON.stringify(promptStubOf({ profile: session.profile }).profile)) return false;
+      continue;
+    }
     if (next === curr) continue;
     if (next == null && curr == null) continue;
     if (typeof next === 'object' || typeof curr === 'object') {
@@ -758,6 +770,29 @@ function isNoOpUpdate(
     return false;
   }
   return true;
+}
+
+/** `record` with the texts its row holds in place of their stubs (for comparing only). */
+function withStoredTexts(record: SessionRecord, stored: SessionPrompts): SessionRecord {
+  const out: SessionRecord = { ...record };
+  if (stored.appliedAppendSystemPrompt !== undefined) {
+    out.appliedAppendSystemPrompt = stored.appliedAppendSystemPrompt;
+    delete out.appliedAppendSystemPromptRef;
+  }
+  if (stored.systemPrompt !== undefined && record.profile) {
+    const { systemPromptRef: _ref, ...rest } = record.profile;
+    out.profile = { ...rest, systemPrompt: stored.systemPrompt };
+  }
+  return out;
+}
+
+/** Is `next` (a patch's spawn prompt; undefined clears it) the one `session` holds, as text or stub? */
+function sameSpawnPrompt(next: string | null | undefined, session: SessionRecord): boolean {
+  const text = session.appliedAppendSystemPrompt;
+  const ref = session.appliedAppendSystemPromptRef;
+  if (next == null) return text === undefined && !ref;
+  if (text !== undefined) return text === next;
+  return !!ref?.sha256 && ref.sha256 === promptRefOf(next, false).sha256;
 }
 
 // --- Store writes, for the leader's sessions copy (replication/kinds/sessions.ts) ---
@@ -1764,7 +1799,8 @@ export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
       OR (process_status IN ('stopped', 'error') AND last_status_change >= ?)
     )
   `).all(cutoff) as Record<string, any>[];
-  return rows.map(rowToSession);
+  // The same stub records the snapshot path above hands out.
+  return rows.map((r) => decodeSessionRow(r));
 }
 
 /**
@@ -1979,7 +2015,7 @@ export async function createSessionRecord(
         | undefined;
 
       if (row) {
-        const existing = rowToSession(row);
+        const existing = decodeSessionRow(row);
         initializeStatusVersion(existing);
         const beforeStatus = canonicalStatusProjection(existing);
         // Detect whether anything material would actually change. Remote daemon replays
@@ -2060,10 +2096,12 @@ export async function createSessionRecord(
         if (extra?.effort) existing.effort = extra.effort;
         // Write-once (see materialChange above): never clobber a record profile
         // with the runner's stale in-memory copy.
-        if (extra?.profile && existing.profile === undefined) existing.profile = extra.profile;
+        const profileFilled = !!extra?.profile && existing.profile === undefined;
+        if (profileFilled) existing.profile = extra.profile;
 
         commitStatusVersion(existing, beforeStatus, now);
-        writeSessionRowSqlite(handle, existing);
+        // The spawn prompt is a new record's only; the persona comes only with a profile filled here.
+        writeSessionRowSqlite(handle, existing, profileFilled ? promptChangesOf({ profile: existing.profile }) : {});
         return existing;
       }
 
@@ -2116,7 +2154,7 @@ export async function createSessionRecord(
         statusUpdatedAt: now,
       };
 
-      writeSessionRowSqlite(handle, record);
+      writeSessionRowSqlite(handle, record, newRecordPrompts(record));
       log.session.info('session record created', { sessionId: claudeSessionId, taskId, project, mode: extra?.mode, host: extra?.host });
       return record;
     });
@@ -2145,7 +2183,7 @@ export async function acceptAcpPrompt(
       const row = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?')
         .get(claudeSessionId) as Record<string, any> | undefined;
       if (!row) throw new Error(`Session not found: ${claudeSessionId}`);
-      const record = rowToSession(row);
+      const record = decodeSessionRow(row);
       if (record.lastAcceptedAcpCommandId === commandId) {
         return { accepted: false, record };
       }
@@ -2165,7 +2203,7 @@ export async function acceptAcpPrompt(
               errorMessage: undefined,
             }),
       }, 'ACP prompt acceptance');
-      writeSessionRowSqlite(handle, record);
+      writeSessionRowSqlite(handle, record, {});
       log.session.info('ACP prompt accepted', {
         sessionId: claudeSessionId,
         commandId,
@@ -2177,37 +2215,50 @@ export async function acceptAcpPrompt(
 }
 
 /**
- * Single-row INSERT OR REPLACE for a SessionRecord. Used by the SQLite fast
- * paths — mapping via sessionToRow, spill-field preservation, one transaction.
+ * The tracker's write of one row (session-db.ts putSessionRow, the store's one writer), after the
+ * area history rule. `changes`: the prompts this write sets or clears (promptChangesOf of the
+ * caller's patch); any other prompt stays as stored.
  */
 function writeSessionRowSqlite(
   db: import('../lib/sqlite.js').Database,
   session: SessionRecord,
-  // A writer moving an existing record to a new id names the old one, so its history is never read as fresh.
-  opts?: { before: SessionHistoryFields },
+  changes: PromptChanges,
+  // A writer moving an existing record to a new id names the old one (`before`, its history, so it
+  // is never read as fresh; `from`, its row, whose prompts the new id takes).
+  // `stored`: the prompt state of the row this writer decoded in this transaction (decodeSessionRow's
+  // `out`), so the write does not read both texts again.
+  opts?: { before?: SessionHistoryFields | undefined; from?: string; stored?: StoredPromptState },
 ): void {
-  const before = opts ? opts.before : storedHistoryFields(db, session.claudeSessionId);
+  const before = opts && 'before' in opts ? opts.before : storedHistoryFields(db, session.claudeSessionId);
   if (sessionHistoryWriteNeedsCheck(before, session)) assertSessionHistoryWrite(before, session, taskDbHandle());
-  const insertCols = [...SESSION_COLUMNS, 'payload'];
-  const insertSql =
-    'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
-    insertCols.map((c) => '@' + c).join(', ') + ')';
-  const partial = sessionToRow(session);
-  const bound: Record<string, unknown> = {};
-  for (const col of insertCols) {
-    bound[col] = partial[col] === undefined ? null : partial[col];
-  }
-  db.prepare(insertSql).run(bound);
+  putSessionRow(db, session, changes, opts?.from ? { from: opts.from } : { stored: opts?.stored });
   noteSessionRowTouched(session.claudeSessionId);
+}
+
+/** A new record's prompts: the texts it is born with, and no other (a leftover prompt row of its id goes). */
+function newRecordPrompts(record: SessionRecord): PromptChanges {
+  // A profile with a stub and no text was copied from a stub record: its persona cannot come along.
+  if (record.profile?.systemPromptRef && record.profile.systemPrompt === undefined) {
+    log.session.warn('session record created from a stub profile: its persona is not carried', { sessionId: record.claudeSessionId });
+  }
+  return promptChangesSetting(promptsOf(record));
 }
 
 /** The stored row's area history fields only (router/history-write.ts), without decoding the whole payload. */
 function storedHistoryFields(db: import('../lib/sqlite.js').Database, claudeSessionId: string): SessionHistoryFields | undefined {
-  const field = (key: string) => `CASE WHEN json_valid(payload) THEN json_extract(payload, '$.${key}') END AS ${key}`;
+  // The profile without its persona text (the stub says whether it changed): a status write never
+  // reads the text out of SQLite for this.
+  const field = (key: string) => key === 'profile'
+    ? `CASE WHEN json_valid(payload) THEN json_remove(json_extract(payload, '$.profile'), '$.systemPrompt') END AS profile`
+    : `CASE WHEN json_valid(payload) THEN json_extract(payload, '$.${key}') END AS ${key}`;
   const keys = ['profile', 'engine', 'legacyTaskId', 'fromPlanSessionId', 'forkedFromSessionId', 'rewoundAtMessageUuid', 'engineSwitch', 'resumedBySwitch'];
+  // The persona as the area rule reads it (there or not, blank or not): from the row's own column
+  // when release A or later wrote it, measured once when a build before the split did.
+  const persona = `CASE WHEN json_valid(payload) AND json_type(payload, '$.profile.systemPrompt') = 'text' THEN
+      coalesce(json_extract(${PROMPT_TEXT_REFS_COLUMN}, '$.systemPrompt.blank'), trim(json_extract(payload, '$.profile.systemPrompt'), ${BLANK_CHARS_SQL}) = '') END AS persona_blank`;
   const row = db.prepare(`SELECT task_id, host, from_plan_session_id, forked_from_session_id,
     CASE WHEN payload IS NULL OR payload = '' THEN 1 WHEN json_valid(payload) THEN json_type(payload) = 'object' ELSE 0 END AS readable,
-    ${keys.map(field).join(', ')} FROM sessions WHERE claude_session_id = ?`)
+    ${persona}, ${keys.map(field).join(', ')} FROM sessions WHERE claude_session_id = ?`)
     .get(claudeSessionId) as Record<string, any> | undefined;
   if (!row) return undefined;
   if (!row.readable) throw new OrgError('router_history_unreadable', 503, `Session ${claudeSessionId}'s policy payload cannot be read. Nothing was written; retry after repairing the store.`);
@@ -2215,9 +2266,17 @@ function storedHistoryFields(db: import('../lib/sqlite.js').Database, claudeSess
     if (typeof v !== 'string') return v ?? undefined;
     try { return JSON.parse(v); } catch { return v; }
   };
+  // The persona's stub: the text's (persona_blank), else the payload's own stub when it stands for a
+  // text in the table, else none (one written beside a text a build before the split cleared).
+  let profile = json(row.profile) as SessionHistoryFields['profile'];
+  if (profile && typeof profile === 'object') {
+    const { systemPromptRef: stored, ...rest } = profile;
+    const ref = typeof row.persona_blank === 'number' ? { bytes: 1, blank: row.persona_blank === 1 } : standingRef(stored);
+    profile = { ...rest, ...(ref ? { systemPromptRef: ref } : {}) };
+  }
   return {
     claudeSessionId, taskId: row.task_id ?? undefined, host: row.host ?? undefined, engine: row.engine ?? undefined,
-    profile: json(row.profile), legacyTaskId: row.legacyTaskId ?? undefined,
+    profile, legacyTaskId: row.legacyTaskId ?? undefined,
     fromPlanSessionId: row.from_plan_session_id ?? row.fromPlanSessionId ?? undefined,
     forkedFromSessionId: row.forked_from_session_id ?? row.forkedFromSessionId ?? undefined,
     rewoundAtMessageUuid: row.rewoundAtMessageUuid ?? undefined,
@@ -2225,8 +2284,9 @@ function storedHistoryFields(db: import('../lib/sqlite.js').Database, claudeSess
   } as SessionHistoryFields;
 }
 
-/** The one DELETE for a session row: the lock patches the cache from what it notes. */
+/** The one DELETE for a session row, its prompts first: the lock patches the cache from what it notes. */
 function deleteSessionRowSqlite(db: import('../lib/sqlite.js').Database, claudeSessionId: string): void {
+  deleteSessionPrompts(db, claudeSessionId);
   db.prepare('DELETE FROM sessions WHERE claude_session_id = ?').run(claudeSessionId);
   noteSessionRowTouched(claudeSessionId);
 }
@@ -2329,7 +2389,7 @@ export async function importSessionRecord(opts: {
       if (opts.taskId) assertTaskSessionFree(handle, opts.taskId, opts.claudeSessionId);
       // Outside history never joins an area, whatever profile it names.
       assertOutsideHistoryImport(record, taskDbHandle());
-      writeSessionRowSqlite(handle, record);
+      writeSessionRowSqlite(handle, record, newRecordPrompts(record));
 
       log.session.info('imported external session', {
         sessionId: opts.claudeSessionId,
@@ -2453,6 +2513,10 @@ function applyUpdateToSession(
   session: SessionRecord,
   updates: SessionRecordUpdates,
   logLabel: string,
+  // `stored`: the row's prompt state as the writer read it (decodeSessionRow's `out`).
+  // `applied.patch`: the patch as applied, after the fields another server owns and the gated
+  // status fields left it; the prompt changes of the write come from it, never from `updates`.
+  opts: { stored?: StoredPromptState; applied?: { patch?: SessionRecordUpdates } } = {},
 ): boolean {
   updates = withoutStatusVersionOverrides(updates);
   // A host's row is written by its host (sessions/session-row-owner.ts): the leader writes only
@@ -2607,7 +2671,8 @@ function applyUpdateToSession(
     }
   }
 
-  if (isNoOpUpdate(session, updates)) return false;
+  if (isNoOpUpdate(session, updates, opts.stored?.texts)) return false;
+  if (opts.applied) opts.applied.patch = updates;
 
   // When the session's first turn ran, kept once (usage/engine-compare.ts dates and times the work from
   // it, so a CLI that died before its first reply and was resumed later is told from work done then).
@@ -2623,6 +2688,8 @@ function applyUpdateToSession(
   const prevPid = session.pid;
   const now = new Date().toISOString();
   Object.assign(session, updates);
+  // A spawn prompt this patch sets or clears: the stub of the one before is stale.
+  if ('appliedAppendSystemPrompt' in updates) delete session.appliedAppendSystemPromptRef;
   if (firstTurnAt) session.firstTurnAt = firstTurnAt;
   if (speedTotals) session.speedTotals = speedTotals;
 
@@ -2735,7 +2802,8 @@ export async function updateSessionRecord(
       if (!row) {
         throw new Error(`Session not found: ${claudeSessionId}`);
       }
-      const session = rowToSession(row);
+      const read: { stored?: StoredPromptState } = {};
+      const session = decodeSessionRow(row, read);
       if (updates.taskId && updates.taskId !== session.taskId) {
         assertTaskSessionFree(handle, updates.taskId, claudeSessionId);
       }
@@ -2744,11 +2812,12 @@ export async function updateSessionRecord(
 
       // No-op guard BEFORE any UPDATE SQL — critical to avoid write-lock storms
       // when the daemon replays identical init/model/pid updates.
-      if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition')) {
+      const applied: { patch?: SessionRecordUpdates } = {};
+      if (!applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition', { stored: read.stored, applied })) {
         return session;
       }
 
-      writeSessionRowSqlite(handle, session);
+      writeSessionRowSqlite(handle, session, promptChangesOf(applied.patch!), { stored: read.stored });
       permissionChanged = permissionBefore !== canonicalStatusProjection(session).pendingPermissionTool;
       searchContentChanged =
         searchContentBefore !== searchContentProjection(session);
@@ -2778,8 +2847,8 @@ export async function updateSessionRecord(
  * starvation source) into a single transaction.
  *
  * Per-row work reuses the exact same helpers as updateSessionRecord
- * (rowToSession → applyUpdateToSession no-op guard + status_history ring buffer
- * → sessionToRow), so behaviour is identical; only the lock/transaction
+ * (decodeSessionRow → applyUpdateToSession no-op guard + status_history ring buffer
+ * → writeSessionRowSqlite), so behaviour is identical; only the lock/transaction
  * batching differs. Per-row errors and no-ops are caught and skipped INSIDE the
  * loop so one bad/missing row never rolls back the rest of the batch.
  *
@@ -2797,33 +2866,25 @@ export async function batchUpdateSessionRecords(
     if (!db) {
       throw new Error('batchUpdateSessionRecords: SQLite handle is null');
     }
-    const insertCols = [...SESSION_COLUMNS, 'payload'];
-    const insertSql =
-      'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
-      insertCols.map((c) => '@' + c).join(', ') + ')';
-
     const written: string[] = [];
     // Single transaction for the whole batch — one BEGIN/COMMIT instead of N.
     const lockWait = transactionWhenFree((handle) => {
       const selectStmt = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
-      const insertStmt = handle.prepare(insertSql);
       for (const id of claudeSessionIds) {
         try {
           const row = selectStmt.get(id) as Record<string, any> | undefined;
           if (!row) continue; // missing row — skip, don't abort the batch
-          const session = rowToSession(row);
+          const read: { stored?: StoredPromptState } = {};
+          const session = decodeSessionRow(row, read);
           const before = storedHistoryFields(handle, id)!;
           // Reuse the shared no-op guard + status_history + terminal PID clear.
-          if (!applyUpdateToSession(session, updates, 'clearing stale PID on batch terminal transition')) {
+          const applied: { patch?: SessionRecordUpdates } = {};
+          if (!applyUpdateToSession(session, updates, 'clearing stale PID on batch terminal transition', { stored: read.stored, applied })) {
             continue; // no material change — skip write
           }
-          // A refusal skips this row like any other row error.
-          if (sessionHistoryWriteNeedsCheck(before, session)) assertSessionHistoryWrite(before, session, taskDbHandle());
-          const partial = sessionToRow(session);
-          const bound: Record<string, unknown> = {};
-          for (const col of insertCols) bound[col] = partial[col] === undefined ? null : partial[col];
-          insertStmt.run(bound);
-          noteSessionRowTouched(id);
+          // A refusal skips this row like any other row error. The prompt changes are this row's:
+          // a host-judged row keeps the prompts its host owns.
+          writeSessionRowSqlite(handle, session, promptChangesOf(applied.patch!), { before, stored: read.stored });
           written.push(id);
         } catch (err) {
           // One poisoned row must not roll back the other ~292.
@@ -2869,20 +2930,23 @@ export async function updateSessionRecordConditionally(
         | Record<string, any>
         | undefined;
       if (!row) return null;
-      const session = rowToSession(row);
-
-      if (!shouldUpdate(session)) return null;
+      // The predicate reads the row whole (a notice's prompt hash, hint-send's prompt): the write
+      // itself goes from its stub.
+      if (!shouldUpdate(rowToSessionIn(handle, row))) return null;
+      const read: { stored?: StoredPromptState } = {};
+      const session = decodeSessionRow(row, read);
       const lastActiveAt = session.lastActiveAt;
       const contentBefore = searchContentProjection(session);
       const permissionBefore = canonicalStatusProjection(session).pendingPermissionTool;
 
-      const applied = applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)');
+      const appliedPatch: { patch?: SessionRecordUpdates } = {};
+      const applied = applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)', { stored: read.stored, applied: appliedPatch });
       // An explicit activity time is a change of its own, even with no field patch.
       if (!applied && !options?.setLastActiveAt) return session;
       if (options?.preserveLastActiveAt) session.lastActiveAt = lastActiveAt;
       if (options?.setLastActiveAt) session.lastActiveAt = options.setLastActiveAt;
       searchContentChanged = contentBefore !== searchContentProjection(session);
-      writeSessionRowSqlite(handle, session);
+      writeSessionRowSqlite(handle, session, promptChangesOf(appliedPatch.patch ?? {}), { stored: read.stored });
       permissionChanged = permissionBefore !== canonicalStatusProjection(session).pendingPermissionTool;
       log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
@@ -2926,7 +2990,7 @@ export async function renameSessionId(
         return null;
       }
 
-      const session = rowToSession(oldRow);
+      const session = decodeSessionRow(oldRow);
       const historyBefore = storedHistoryFields(handle, oldClaudeSessionId)!;
       initializeStatusVersion(session);
       const beforeStatus = canonicalStatusProjection(session);
@@ -2947,21 +3011,10 @@ export async function renameSessionId(
       commitStatusVersion(session, beforeStatus, now);
       if (sessionHistoryWriteNeedsCheck(historyBefore, session)) assertSessionHistoryWrite(historyBefore, session, taskDbHandle());
 
-      // Delete old PK + insert under new PK in one transaction so a crash mid-rename
-      // can't leave both rows orphaned. INSERT OR REPLACE with the new PK won't
-      // clean up the old row on its own.
+      // Insert under the new PK (its prompts taken from the old row) + delete the old PK and its
+      // prompts, in one transaction so a crash mid-rename can't leave both rows orphaned.
+      writeSessionRowSqlite(handle, session, promptChangesOf(updates ?? {}), { before: historyBefore, from: oldClaudeSessionId });
       deleteSessionRowSqlite(handle, oldClaudeSessionId);
-      const insertCols = [...SESSION_COLUMNS, 'payload'];
-      const insertSql =
-        'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
-        insertCols.map((c) => '@' + c).join(', ') + ')';
-      const partial = sessionToRow(session);
-      const bound: Record<string, unknown> = {};
-      for (const col of insertCols) {
-        bound[col] = partial[col] === undefined ? null : partial[col];
-      }
-      handle.prepare(insertSql).run(bound);
-      noteSessionRowTouched(newClaudeSessionId);
       log.session.info('session ID renamed', { oldId: oldClaudeSessionId, newId: newClaudeSessionId });
       // Durable audit (inc-2026-08-10): the old ID stops resolving from this
       // moment — any deep link / queued message still holding it will 404.
@@ -3020,7 +3073,7 @@ export async function stageAcpSessionIdMigration(
         .get(newClaudeSessionId);
       if (conflict) return null;
 
-      const oldRecord = rowToSession(oldRow);
+      const oldRecord = decodeSessionRow(oldRow);
       const historyBefore = storedHistoryFields(handle, oldClaudeSessionId)!;
       initializeStatusVersion(oldRecord);
       const now = new Date().toISOString();
@@ -3050,8 +3103,9 @@ export async function stageAcpSessionIdMigration(
       replacement.statusRevision = normalizedStatusRevision(redirect) + 1;
       replacement.statusUpdatedAt = now;
 
-      writeSessionRowSqlite(handle, redirect);
-      writeSessionRowSqlite(handle, replacement, { before: historyBefore });
+      writeSessionRowSqlite(handle, redirect, {});
+      // The replacement takes the old row's prompts (a copy: the redirect keeps its own).
+      writeSessionRowSqlite(handle, replacement, promptChangesOf(updates ?? {}), { before: historyBefore, from: oldClaudeSessionId });
       log.session.info('ACP session ID migration staged', {
         oldSessionId: oldClaudeSessionId,
         newSessionId: newClaudeSessionId,
@@ -3078,8 +3132,8 @@ export async function rollbackAcpSessionIdMigration(
         .get(newClaudeSessionId) as Record<string, any> | undefined;
       if (!oldRow || !newRow) return false;
 
-      const oldRecord = rowToSession(oldRow);
-      const replacement = rowToSession(newRow);
+      const oldRecord = decodeSessionRow(oldRow);
+      const replacement = decodeSessionRow(newRow);
       if (getAcpIdentityReplacementTarget(oldRecord) !== newClaudeSessionId
         || !isAcpEngine(oldRecord.engine)
         || !isAcpEngine(replacement.engine)
@@ -3096,7 +3150,7 @@ export async function rollbackAcpSessionIdMigration(
       oldRecord.lastActiveAt = now;
       commitStatusVersion(oldRecord, beforeStatus, now);
       deleteSessionRowSqlite(handle, newClaudeSessionId);
-      writeSessionRowSqlite(handle, oldRecord);
+      writeSessionRowSqlite(handle, oldRecord, {});
       log.session.info('ACP session ID migration rolled back', {
         oldSessionId: oldClaudeSessionId,
         newSessionId: newClaudeSessionId,
@@ -3146,6 +3200,21 @@ export function _setRetaskClockForTesting(clock: (() => number) | null): void {
   retaskClock = clock ?? (() => performance.now());
 }
 /** Test knob: run `fn` under the session write lock, as a writer that holds it across an await. */
+/**
+ * One locked section of a maintenance job over session rows (session-prompt-jobs.ts): `fn` runs in
+ * one write transaction under the session write lock, and the rows it names in `ids` are patched
+ * into the cached snapshot as any writer's are (a worker's commits would drop it).
+ */
+export async function runLockedSessionRowJob<T extends { ids: readonly string[] }>(fn: (handle: import('../lib/sqlite.js').Database) => T): Promise<T> {
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const wait = transactionWhenFree(fn);
+    const out = wait instanceof Promise ? await wait : wait;
+    for (const id of out.ids) noteSessionRowTouched(id);
+    return out;
+  });
+}
+
 export function _withSessionWriteLockForTesting<T>(fn: () => Promise<T>): Promise<T> {
   return withWriteLock(fn);
 }
@@ -3230,7 +3299,7 @@ async function retaskSessionRows(
           for (const id of chunk) {
             const row = read.get(id) as Record<string, any> | undefined;
             if (!row || !from.has(row.task_id)) continue;
-            const session = rowToSession(row);
+            const session = decodeSessionRow(row);
             const before = canonicalStatusProjection(session);
             const historyBefore = storedHistoryFields(handle, id)!;
             // A survivor that already has its session takes no second one: the
@@ -3405,23 +3474,15 @@ export async function completeTaskSessions(
     const hostStops: HostCompletionStop[] = [];
     const hereKey = thisHostKey();
 
-    const insertCols = [...SESSION_COLUMNS, 'payload'];
-    const insertSql =
-      'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
-      insertCols.map((c) => '@' + c).join(', ') + ')';
-
     // A worker this server holds live is stopped here, whatever its host's link says.
     const ownerUnreachable = (session: SessionRecord) => unreachable.has(cliHostOf(session))
       && !(session.pid == null && liveAcp.has(session.claudeSessionId));
 
     const lockWait = transactionWhenFree((handle) => {
       const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
-      const ins = handle.prepare(insertSql);
+      // A stop and its marker: no prompt changes, and no area history check (as before).
       const writeRow = (session: SessionRecord) => {
-        const partial = sessionToRow(session);
-        const bound: Record<string, unknown> = {};
-        for (const col of insertCols) bound[col] = partial[col] === undefined ? null : partial[col];
-        ins.run(bound);
+        putSessionRow(handle, session);
         noteSessionRowTouched(session.claudeSessionId);
       };
       // A row whose only change is its taskCompleteStop marker: no status moved.
@@ -3432,7 +3493,7 @@ export async function completeTaskSessions(
       for (const sid of sessionIds) {
         const row = sel.get(sid) as Record<string, any> | undefined;
         if (!row) continue;
-        const session = rowToSession(row);
+        const session = decodeSessionRow(row);
         if (judgedByHost(session) && !rowOwnedHere(session, hereKey)) {
           if (isTerminalSession(session) || (session.process_status === 'stopped' && session.pid == null)) continue;
           // This pass decided nothing new, and an ask is on its way, or its host, which takes the stop
@@ -3633,13 +3694,14 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
       const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
       for (const id of ids) {
         const row = sel.get(id) as Record<string, any> | undefined;
+        deleteSessionPrompts(handle, id);
         const res = del.run(id);
         noteSessionRowTouched(id);
         removed += res.changes;
         if (res.changes > 0) {
           removedIds.push(id);
           if (row) {
-            const rec = rowToSession(row);
+            const rec = decodeSessionRow(row);
             // A host's own row (it runs and judges the session): the host drops its row too (leader-drops.ts).
             if (judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey())) noteLeaderDrop(handle, id, rec.host!);
             removedSnapshots.push({
@@ -3784,9 +3846,9 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
     if (!db) throw new Error('applyHostChannelBatch: SQLite handle is null');
     const lockWait = transactionWhenFree((handle) => writingAsHost(() => {
       const sel = prepared(handle, 'SELECT * FROM sessions WHERE claude_session_id = ?');
-      const read = (id: string): SessionRecord | null => {
+      const read = (id: string, out?: { stored?: StoredPromptState }): SessionRecord | null => {
         const raw = sel.get(id) as Record<string, any> | undefined;
-        return raw ? rowToSession(raw) : null;
+        return raw ? decodeSessionRow(raw, out) : null;
       };
       // Exactly once across links: the position is read in the transaction that moves it, so a
       // record an earlier link of this host applied (its apply still waited for the lock when the
@@ -3814,15 +3876,17 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
           const into = read(to);
           if (into ? !hostOwns(into.host, hostId) || !judgedByHost(into) : !mayRenameInto(handle, hostId, to)) { refused.push(to); continue; }
           const historyBefore = storedHistoryFields(handle, from);
+          // The new id takes the old row's prompts, before the old row and its prompts go.
+          if (!into) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, {}, { before: historyBefore!, from });
           deleteSessionRowSqlite(handle, from);
-          if (!into) writeSessionRowSqlite(handle, { ...old, claudeSessionId: to }, { before: historyBefore! });
           written.push(to);
           renamed.push({ from, to });
           continue;
         }
         const change = step.row!;
         if (gone.has(change.sid)) continue;
-        const before = read(change.sid);
+        const readBefore: { stored?: StoredPromptState } = {};
+        const before = read(change.sid, readBefore);
         // A row of this host's machine under another of its names is its own too (handed-sessions.ts hostOwns).
         if (before && (!hostOwns(before.host, hostId) || !judgedByHost(before))) { skipped.push(change.sid); continue; }
         // A patch of a row the leader lacks: its whole row is asked for only when it was handed this
@@ -3839,7 +3903,8 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         const hand = before ? null : handForNewSession(handle, hostId, change.sid, { echo: change.hand, taskId: next.taskId ?? '' });
         if (hand && 'refused' in hand) { refused.push(change.sid); continue; }
         try {
-          writeSessionRowSqlite(handle, next);
+          // The prompts the host's change names (set, or cleared: null, or left out of a whole row).
+          writeSessionRowSqlite(handle, next, promptChangesOf(change.patch, { whole: change.born === true, keep: change.keep }), { stored: readBefore.stored });
         } catch (err) {
           // One row the store refuses (its history guard) never wedges the channel behind it.
           log.session.warn('host channel: a row change was refused', { hostId, sessionId: change.sid, error: err instanceof Error ? err.message : String(err) });
@@ -3849,7 +3914,10 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         }
         written.push(change.sid);
         // A field an older host's log cut (session-channel/fact-log.ts), the spawn prompt above all: its whole row is asked for once.
-        if ((change.keep?.length || next.appliedAppendSystemPrompt?.length === FACT_INLINE_CAP) && !cutPromptResynced.has(change.sid)) {
+        // The spawn prompt after this change: the patch's, else the row's as stored (`next` is a stub
+        // record unless the patch names the text).
+        const spawnPrompt = 'appliedAppendSystemPrompt' in change.patch || change.born ? next.appliedAppendSystemPrompt : readBefore.stored?.texts.appliedAppendSystemPrompt;
+        if ((change.keep?.length || spawnPrompt?.length === FACT_INLINE_CAP) && !cutPromptResynced.has(change.sid)) {
           cutPromptResynced.add(change.sid);
           resync.add(change.sid);
         }
@@ -3882,7 +3950,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         for (const id of plan.orphan) {
           const before = read(id)!;
           const next = orphanedRow(before, at);
-          writeSessionRowSqlite(handle, next);
+          writeSessionRowSqlite(handle, next, {});
           orphaned.push(id);
           announce.push({ record: next, status: true, content: false });
         }

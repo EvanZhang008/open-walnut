@@ -94,6 +94,8 @@ export interface CheckReport {
   problems: string[]
   version: string
   at: string
+  /** The data store shapes the candidate's build reads (session-prompts.ts SESSION_STORE_FORMATS); absent: a build before the probe. */
+  storeFormats?: Record<string, number>
   /** Each witness as the candidate reached it (witness-reach.ts): by which way, and what it holds (a summary). */
   reach?: Array<{ id: string; answered: boolean; way?: string; held: { holder?: string; kind?: string; number?: number } | null; why?: string }>
 }

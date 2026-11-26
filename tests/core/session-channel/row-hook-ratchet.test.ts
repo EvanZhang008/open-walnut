@@ -22,7 +22,10 @@ const NOTE_WITHIN_LINES = 40
 const NO_ROW_FACT: Record<string, Record<string, string>> = {
   'src/core/session-db.ts': {
     applySessionCopy: "the leader's sessions copy on a host: an own row takes only its leader fields, which the leader already holds",
-    writeCopyRow: "a start's claim of a copied row (claimStartingRow), or an own row given back to the leader (handOwnRowBack): the leader's copy, marked this host's or as the leader has it; the runner's first own write after a claim is the session's born record (a resume's claim announces its row at once, host-boot.ts taken), and a row given back is the leader's own",
+    putSessionRow: "the store's one row writer: each tracker write notes the row it hands it (writeSessionRowSqlite, completeTaskSessions' writeRow); the copy writers that call it need none (applySessionCopy, applyCompanionSessionCopy above; a start's claim of a copied row, claimStartingRow, whose runner's first own write is the session's born record, a resume's claim announcing its row at once, host-boot.ts taken; an own row given back to the leader, handOwnRowBack, which is the leader's own)",
+    promptBatch: "a strip or unsplit batch of the prompt split (session-prompt-jobs.ts): runLockedSessionRowJob notes every row it names",
+    fillTextRefsBatch: "a fill batch of the prompt_text_refs column (session-prompt-jobs.ts): runLockedSessionRowJob notes every row it names",
+    refreshPromptStubsIn: "the leader switch's path rewrite of an offline home (leader/switch/home-paths.ts): no server runs on the file, so no row hook listens",
     applyCompanionSessionCopy: "the companion's file of the Mac's sessions, never a host's own rows",
     ensureSessionStatusColumns: 'the schema migration at open, before any listener is installed',
   },

@@ -109,4 +109,41 @@ describe('the own-row writer of a host replica', () => {
     expect(await tracker.getSessionByClaudeId('seeded')).toMatchObject({ host: KEY })
     expect((await tracker.getSessionByClaudeId('seeded'))?.judge).toBeUndefined()
   })
+
+  it('the prompt split: a prompt row of another host\'s session is refused; an own row keeps its prompts through the copy', async () => {
+    sessionDb.allowOwnRowWrites(KEY)
+    const h = sessionDb.sessionWriteHandle()!
+    expect(() => h.prepare("INSERT INTO session_prompts (claude_session_id, field, body, sha256, updated_at) VALUES ('leader-row', 'appliedAppendSystemPrompt', 'x', 'y', 'z')").run()).toThrow(sessionDb.NOT_OWN_ROW)
+    await tracker.createSessionRecord('p-own', '', 'p', '/tmp', { ...own('p-own'), appliedAppendSystemPrompt: 'own spawn', profile: { systemPrompt: 'own persona' } } as never)
+    const base = { taskId: '', project: 'p', process_status: 'idle', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 }
+    // The leader's copy of an own row holds no prompt (replication drops them): the host's stay.
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [{ claudeSessionId: 'p-own', host: KEY, judge: 'host', human_note: 'leader note', ...base } as never] })
+    tracker._resetSessionTrackerForTesting()
+    expect(await tracker.getSessionByClaudeId('p-own')).toMatchObject({ human_note: 'leader note', appliedAppendSystemPrompt: 'own spawn', profile: { systemPrompt: 'own persona' } })
+    expect(await tracker.deleteSessionRecords(new Set(['p-own']), 'test')).toBe(1)
+    expect(h.prepare("SELECT count(*) FROM session_prompts WHERE claude_session_id = 'p-own'").pluck().get()).toBe(0)
+  })
+
+  it('the prompt split: the row hook announces an own row whole, so a status write sends the leader no prompt removal', async () => {
+    sessionDb.allowOwnRowWrites(KEY)
+    const { setOwnRowListener } = await import('../../../src/core/session-channel/row-hook.js')
+    const { rowPatch } = await import('../../../src/core/session-channel/host-emitter.js')
+    const seen: Array<Record<string, unknown>> = []
+    setOwnRowListener((row) => { seen.push(row as never) })
+    try {
+      await tracker.createSessionRecord('p-hook', '', 'p', '/tmp', { ...own('p-hook'), appliedAppendSystemPrompt: 'hook spawn', profile: { systemPrompt: 'hook persona', allowedTools: ['Read'] } } as never)
+      await tracker.updateSessionRecord('p-hook', { process_status: 'idle' })
+      const rows = seen.filter((r) => r.claudeSessionId === 'p-hook')
+      expect(rows.length).toBe(2)
+      for (const r of rows) {
+        expect(r).toMatchObject({ appliedAppendSystemPrompt: 'hook spawn', profile: { systemPrompt: 'hook persona', allowedTools: ['Read'] } })
+        expect(r.appliedAppendSystemPromptRef).toBeUndefined()
+        expect((r.profile as Record<string, unknown>).systemPromptRef).toBeUndefined()
+      }
+      const patch = rowPatch(rows[0] as never, rows[1] as never)
+      expect(patch).toMatchObject({ process_status: 'idle' })
+      expect(patch).not.toHaveProperty('appliedAppendSystemPrompt')
+      expect(patch).not.toHaveProperty('profile')
+    } finally { setOwnRowListener(null) }
+  })
 })

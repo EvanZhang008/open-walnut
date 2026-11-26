@@ -196,7 +196,7 @@ export function inHostCopy(s: SessionRecord, now: number): boolean {
 export async function buildHostSlice(hostKey: string | readonly string[], now = Date.now()): Promise<HostSlice> {
   const list = (typeof hostKey === 'string' ? [hostKey] : hostKey).map(normalizeHostKey);
   const keys = new Set(list);
-  const [{ sessionRowsForReplica, isListableSession, withHeavyFields }, { taskStoreSnapshot }, { tasksByIdOf, tasksByParentOf }, requests] = await Promise.all([
+  const [{ sessionRowsForReplica, isListableSession, withPromptFields }, { taskStoreSnapshot }, { tasksByIdOf, tasksByParentOf }, requests] = await Promise.all([
     import('./session-tracker.js'),
     import('./task-manager.js'),
     import('./same-ask-tree.js'),
@@ -327,9 +327,9 @@ export async function buildHostSlice(hostKey: string | readonly string[], now = 
         // Only while due: the host adds it once and journals it as told.
         const sid = s.claudeSessionId;
         const busy = noticeDelivering(sid) || noticeInFlight(queues[sid] ?? []);
-        // The notice reads the spawn prompt, which the list leaves out of a stopped session.
+        // The notice reads the spawn prompt, which no listed row holds (withPromptFields reads it).
         // Its spawn prompt is a SQLite read and parse: only for a session that may take the notice.
-        const routing = task && !busy && hostNoticeActive(s, now) ? instructionNoticeForHost(heavyOf(s, withHeavyFields), task, now) : null;
+        const routing = task && !busy && hostNoticeActive(s, now) ? instructionNoticeForHost(heavyOf(s, withPromptFields), task, now) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {

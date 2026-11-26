@@ -7,6 +7,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getVersion } from '../../version.js'
+import Database from '../../../lib/sqlite.js'
+import { SPLIT_PROMPT_ROWS_SQL } from '../../session-prompts.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { readFinalStopResult, readHistory, readMarker, removeMarker, summarize, takeSwitchLock, writeDurableJson, writeMarker } from './records.js'
 import { olderVersion } from './self-check.js'
@@ -404,6 +406,33 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
   }
 }
 
+/**
+ * Rows of the home's session store whose prompts only the prompt table holds (0: none, or no store).
+ * Read only. A store it cannot read counts as having some: the candidate must read them to pass.
+ */
+export function splitPromptRowsIn(home: string): number {
+  const file = path.join(home, 'sessions.sqlite')
+  if (!fs.existsSync(file)) return 0
+  try {
+    const db = new Database(file, { readonly: true, fileMustExist: true })
+    try {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").get()) return 0
+      return Number((db.prepare(SPLIT_PROMPT_ROWS_SQL).get() as { n: number }).n) || 0
+    } finally { db.close() }
+  } catch {
+    return 1
+  }
+}
+
+/**
+ * Sessions whose prompts live only in the prompt table (session-prompts.ts): a new leader whose
+ * build cannot read them would resume them without. Its check reports the store formats it reads.
+ */
+export function promptSplitProblem(home: string, report: Pick<CheckReport, 'storeFormats'>): string | null {
+  if (Number(report.storeFormats?.sessionsPromptSplit) >= 1 || splitPromptRowsIn(home) === 0) return null
+  return "the new leader's build cannot read the session prompts kept outside their rows (sessions.sqlite): update it, or run `walnut sessions-prompts unsplit` here first"
+}
+
 async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: SwitchSide, read: () => Promise<WitnessReading>): Promise<void> {
   const problems: string[] = []
   const running = src.runningServer()
@@ -449,6 +478,8 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
       const holding = (report.reach ?? []).filter((w) => w.answered && w.held && w.held.holder === st.from && w.held.kind !== 'handover' && w.held.kind !== 'release').length
       if (report.ok && holding < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`the witnesses the new leader reaches do not name ${st.from} as the holder (${JSON.stringify(report.reach)})`)
       if (olderVersion(report.version, st.sourceVersion)) problems.push(`the new leader runs ${report.version}, older than ${st.sourceVersion} that wrote the data`)
+      const split = promptSplitProblem(st.sourceHome, report)
+      if (split) problems.push(split)
     }
   }
   // Last, closest to the handover: the standby caught up while the old leader still serves (catch-up.ts), so the final

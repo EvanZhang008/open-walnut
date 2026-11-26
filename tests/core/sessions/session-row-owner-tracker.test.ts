@@ -132,6 +132,21 @@ describe('on the leader, a host\'s row', () => {
     expect((await tracker.getSessionByClaudeId('sid-host-1'))?.appliedAppendSystemPrompt).toBe(full)
   })
 
+  it('the prompt split: a host fact that names no prompt keeps the leader\'s prompt rows; one that names a prompt sets or clears it', async () => {
+    await writingAsHost(() => tracker.updateSessionRecord('sid-host-1', { appliedAppendSystemPrompt: 'host spawn', profile: { systemPrompt: 'host persona', allowedTools: ['Read'] } }))
+    const table = () => Object.fromEntries((sessionDb.getDb()!.prepare("SELECT field, body FROM session_prompts WHERE claude_session_id = 'sid-host-1'").all() as Array<{ field: string; body: string }>).map((r) => [r.field, r.body]))
+    expect(table()).toEqual({ appliedAppendSystemPrompt: 'host spawn', 'profile.systemPrompt': 'host persona' })
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { messageCount: 8 } }], renames: [], cursor: { logId: 'L-p', seq: 1 } })
+    expect(table()).toEqual({ appliedAppendSystemPrompt: 'host spawn', 'profile.systemPrompt': 'host persona' })
+    expect(await tracker.getSessionByClaudeId('sid-host-1')).toMatchObject({ messageCount: 8, appliedAppendSystemPrompt: 'host spawn', profile: { systemPrompt: 'host persona' } })
+    // Named: a new text is set, a null (JSON has no undefined) clears.
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { appliedAppendSystemPrompt: 'host spawn 2' } }], renames: [], cursor: { logId: 'L-p', seq: 2 } })
+    expect(table().appliedAppendSystemPrompt).toBe('host spawn 2')
+    await tracker.applyHostChannelBatch({ hostId: 'devbox', rows: [{ sid: 'sid-host-1', patch: { appliedAppendSystemPrompt: null } }], renames: [], cursor: { logId: 'L-p', seq: 3 } })
+    expect(table().appliedAppendSystemPrompt).toBeUndefined()
+    expect((await tracker.getSessionByClaudeId('sid-host-1'))?.profile?.systemPrompt).toBe('host persona')
+  })
+
   it('2026-11-24: a boundary the host read makes the leader\'s rich-output instruction due again, unless the hook restated it', async () => {
     await tracker.updateSessionRecord('sid-host-1', { output_mode_injected: 'rich' })
     const prevAt = new Date(Date.now() - 3_600_000).toISOString()

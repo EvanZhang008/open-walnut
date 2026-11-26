@@ -9,9 +9,8 @@ const GUARDED: Record<string, string> = {
   'core/task-manager.ts#updateTaskRaw': 'assertTaskHistoryWrite',
   'core/task-manager.ts#updateTasksBulk': 'assertTaskHistoryWrite',
   'core/task-manager.ts#addTasksBulk': 'assertTaskHistoryWrite',
+  // The tracker's every row write (create, update, batch, rename, ACP staging, host channel) goes through it.
   'core/session-tracker.ts#writeSessionRowSqlite': 'assertSessionHistoryWrite',
-  'core/session-tracker.ts#batchUpdateSessionRecords': 'assertSessionHistoryWrite',
-  'core/session-tracker.ts#renameSessionId': 'assertSessionHistoryWrite',
   'core/session-tracker.ts#retaskSessionRows': 'assertSessionHistoryWrite',
 };
 const FIXED: Record<string, string> = {
@@ -20,7 +19,12 @@ const FIXED: Record<string, string> = {
   'core/session-tracker.ts#completeTaskSessions': 'Status and pid only; preserves the original policy and task identity.',
   'core/task-manager.ts#applyTaskReplicaRows': 'The authenticated primary projection applied to the follower copy, not a new conversation.',
   'core/session-db.ts#applySessionCopy': 'The authenticated primary projection applied to the follower copy, not a new conversation.',
-  'core/session-db.ts#writeCopyRow': 'A host\'s copied row written back as the leader has it, or marked this host\'s for a start the leader handed it (claimStartingRow, handOwnRowBack): the leader\'s projection, not a new conversation.',
+  'core/session-db.ts#claimStartingRow': 'A host\'s copied row marked this host\'s for a start the leader handed it: the leader\'s projection, not a new conversation.',
+  'core/session-db.ts#handOwnRowBack': 'A host\'s copied row written back as the leader has it: the leader\'s projection, not a new conversation.',
+  'core/session-db.ts#putSessionRow': 'The store\'s one row writer (session-db.ts): each caller is declared here or guarded (writeSessionRowSqlite).',
+  'core/session-db.ts#fillTextRefsBatch': 'Fills a row\'s prompt_text_refs column (the stubs of the texts its payload holds): no payload, task, profile field or identity changes.',
+  'core/session-db.ts#refreshPromptStubsIn': 'Brings the prompt stubs (sizes, hashes) and prompt_text_refs back in line with texts the leader switch\'s path rewrite changed: only stub fields change, no task, identity or other profile field.',
+  'core/session-db.ts#promptBatch': 'Moves the prompt texts between a row\'s payload and the prompt table (the strip, unsplit): no task, profile field or identity changes.',
   'core/session-db.ts#applyCompanionSessionCopy': 'The authenticated primary projection stored in the separate companion copy.',
   'core/session-db-migration.ts#migrateSessionStore': 'Legacy JSON startup conversion completes before classification; start gates judge preserved rows.',
   'core/task-db-migration.ts#runMigrationIfNeeded': 'Legacy JSON startup conversion preserves historical rows; start gates judge them.',
@@ -70,7 +74,9 @@ describe('every task and session SQL writer has a declared history boundary', ()
       const source = ts.createSourceFile(full, fs.readFileSync(full, 'utf8'), ts.ScriptTarget.Latest, true);
       const walk = (node: ts.Node): void => {
         const sql = sqlText(node);
-        if (sql && /\b(?:UPDATE\s+(?:tasks|sessions)\s+SET|INSERT(?:\s+OR\s+\w+)?\s+INTO\s+(?:tasks|sessions)\b)/i.test(sql)) {
+        // A call of the session store's one row writer is a write of its caller's.
+        const put = ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'putSessionRow';
+        if (put || (sql && /\b(?:UPDATE\s+(?:tasks|sessions)\s+SET|INSERT(?:\s+OR\s+\w+)?\s+INTO\s+(?:tasks|sessions)\b)/i.test(sql))) {
           const fn = owner(node);
           const key = `${relative}#${fn?.name?.text ?? '<unowned>'}`;
           found.add(key);

@@ -33,7 +33,7 @@ export const SESSION_FIELD_OWNER = {
   type: H, activity: H, last_status_change: H, startedAt: H, lastActiveAt: H, messageCount: H, cwd: H, host: H,
   hostname: H, host_label: H, description: H, pid: H, outputFile: H, planFile: H, planCompleted: H,
   fromPlanSessionId: H, forkedFromSessionId: H, startedIdle: H, rewoundAtMessageUuid: H, inPlaceRewinds: H, pendingResumeSessionAt: H,
-  appliedAppendSystemPrompt: H, placeNoted: H, taskRoutingNoted: H, lastCompactUuid: H, lastCompactAt: H,
+  appliedAppendSystemPrompt: H, appliedAppendSystemPromptRef: H, placeNoted: H, taskRoutingNoted: H, lastCompactUuid: H, lastCompactAt: H,
   asksSent: H, commitShas: H, mcpMountStatus: H, outputModeHookAt: H,
   model: H, cliModel: H, effort: H, effectiveEffort: H, modelMaxWindow: H, modelMaxWindowSource: H,
   modelMaxWindowModel: H, autoCompactAt: H, contextTokens: H, promptCache: H, idleCompaction: H,

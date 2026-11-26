@@ -9,6 +9,8 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from '../../../../src/lib/sqlite.js'
 import { findRoots, judgePathHits, pathRoots, replaceRoots, rewriteHomePaths, scanHomePaths, spliceJson, type PathRoot, type PathRule } from '../../../../src/core/leader/switch/home-paths.js'
+import { promptSha256, textRefsColumnOf } from '../../../../src/core/session-prompts.js'
+import { refreshPromptStubsIn } from '../../../../src/core/session-db.js'
 
 let root = ''
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-home-paths-')) })
@@ -178,6 +180,94 @@ describe('rewriteHomePaths', () => {
     const before = ['a.json', 'c.yaml', 'acc.json', 's.sqlite'].map(bytes)
     expect(rewriteHomePaths(home, rules, ctx)).toEqual([])
     expect(['a.json', 'c.yaml', 'acc.json', 's.sqlite'].map(bytes)).toEqual(before)
+  })
+})
+
+describe('a moved path in a session prompt (the prompt split)', () => {
+  it('the prompt rows\' hashes, the payload stubs and the row\'s prompt_text_refs follow the new text; a second run changes nothing', () => {
+    const home = path.join(root, 'h')
+    fs.mkdirSync(home, { recursive: true })
+    const was = 'Work in /home/a/code/x, please.'
+    const now = 'Work in /Users/b/code/x, please.'
+    const bytes = (t: string) => Buffer.byteLength(t)
+    const db = new Database(path.join(home, 'sessions.sqlite'))
+    db.exec(`CREATE TABLE sessions (claude_session_id TEXT PRIMARY KEY, payload TEXT, prompt_text_refs TEXT);
+      CREATE TABLE session_prompts (claude_session_id TEXT NOT NULL, field TEXT NOT NULL, body TEXT NOT NULL, sha256 TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (claude_session_id, field))`)
+    const row = db.prepare('INSERT INTO sessions VALUES (?, ?, ?)')
+    const prompt = db.prepare("INSERT INTO session_prompts VALUES (?, ?, ?, ?, 'x')")
+    // Release A's row: the texts in the payload, stubs beside them, and their table copies.
+    row.run('a', `{"big":12345678901234567890,"appliedAppendSystemPrompt":${JSON.stringify(was)},"appliedAppendSystemPromptRef":{"bytes":${bytes(was)},"inline":true},"profile":{"systemPrompt":${JSON.stringify(was)},"systemPromptRef":{"bytes":${bytes(was)},"blank":false,"inline":true}}}`,
+      textRefsColumnOf({ appliedAppendSystemPrompt: was, systemPrompt: was }, true))
+    prompt.run('a', 'appliedAppendSystemPrompt', was, promptSha256(was))
+    prompt.run('a', 'profile.systemPrompt', was, promptSha256(was))
+    // A stripped row: the stub stands for the table's text.
+    row.run('b', JSON.stringify({ appliedAppendSystemPromptRef: { sha256: promptSha256(was), bytes: bytes(was) } }), '{}')
+    prompt.run('b', 'appliedAppendSystemPrompt', was, promptSha256(was))
+    db.close()
+    const rules: PathRule[] = [{ id: 's', stores: [], file: 'sessions.sqlite', rule: 'rewrite', why: 't' }]
+    expect(rewriteHomePaths(home, rules, { roots: ROOTS, reverseStandbyDir: '/x' }).map((d) => d.file)).toEqual(['sessions.sqlite'])
+    const rdb = new Database(path.join(home, 'sessions.sqlite'), { readonly: true })
+    const prompts = rdb.prepare('SELECT claude_session_id AS sid, field, body, sha256 FROM session_prompts ORDER BY 1, 2').all()
+    const rows = Object.fromEntries((rdb.prepare('SELECT claude_session_id AS sid, payload, prompt_text_refs AS refs FROM sessions').all() as Array<{ sid: string; payload: string; refs: string }>).map((r) => [r.sid, r]))
+    rdb.close()
+    expect(prompts).toEqual([
+      { sid: 'a', field: 'appliedAppendSystemPrompt', body: now, sha256: promptSha256(now) },
+      { sid: 'a', field: 'profile.systemPrompt', body: now, sha256: promptSha256(now) },
+      { sid: 'b', field: 'appliedAppendSystemPrompt', body: now, sha256: promptSha256(now) },
+    ])
+    const a = JSON.parse(rows.a!.payload)
+    expect([a.appliedAppendSystemPrompt, a.appliedAppendSystemPromptRef, a.profile.systemPrompt, a.profile.systemPromptRef])
+      .toEqual([now, { bytes: bytes(now), inline: true }, now, { bytes: bytes(now), blank: false, inline: true }])
+    expect(rows.a!.refs).toBe(textRefsColumnOf({ appliedAppendSystemPrompt: now, systemPrompt: now }, true))
+    // Only the stub changed: a number past double precision keeps its digits.
+    expect(rows.a!.payload).toContain('12345678901234567890')
+    expect(JSON.parse(rows.b!.payload).appliedAppendSystemPromptRef).toEqual({ sha256: promptSha256(now), bytes: bytes(now) })
+    expect(rows.b!.refs).toBe('{}')
+    const file = () => fs.readFileSync(path.join(home, 'sessions.sqlite'))
+    const once = file()
+    expect(rewriteHomePaths(home, rules, { roots: ROOTS, reverseStandbyDir: '/x' })).toEqual([])
+    expect(file()).toEqual(once)
+  })
+})
+
+describe('refreshPromptStubsIn on one connection', () => {
+  it('the first call fixes every stale hash, stub and column; a second call changes nothing', () => {
+    const was = 'Work in /home/a/code/x, please.'
+    const now = 'Work in /Users/b/code/x, please.'
+    const bytes = (t: string) => Buffer.byteLength(t)
+    const db = new Database(path.join(root, 'sessions.sqlite'))
+    try {
+      db.exec(`CREATE TABLE sessions (claude_session_id TEXT PRIMARY KEY, payload TEXT, prompt_text_refs TEXT);
+        CREATE TABLE session_prompts (claude_session_id TEXT NOT NULL, field TEXT NOT NULL, body TEXT NOT NULL, sha256 TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (claude_session_id, field))`)
+      const row = db.prepare('INSERT INTO sessions VALUES (?, ?, ?)')
+      const prompt = db.prepare("INSERT INTO session_prompts VALUES (?, ?, ?, ?, 'x')")
+      // The texts are already the new ones; their hashes, stubs and column still say the old ones.
+      row.run('a', JSON.stringify({ appliedAppendSystemPrompt: now, appliedAppendSystemPromptRef: { bytes: bytes(was), inline: true } }),
+        textRefsColumnOf({ appliedAppendSystemPrompt: was }, false))
+      prompt.run('a', 'appliedAppendSystemPrompt', now, promptSha256(was))
+      row.run('b', JSON.stringify({ profile: { systemPromptRef: { sha256: promptSha256(was), bytes: bytes(was), blank: false } } }), '{}')
+      prompt.run('b', 'profile.systemPrompt', now, promptSha256(was))
+      // Untouched: a row whose stubs are right already, and a row with no prompt.
+      row.run('c', JSON.stringify({ appliedAppendSystemPrompt: now, appliedAppendSystemPromptRef: { bytes: bytes(now), inline: true } }),
+        textRefsColumnOf({ appliedAppendSystemPrompt: now }, false))
+      prompt.run('c', 'appliedAppendSystemPrompt', now, promptSha256(now))
+      row.run('d', JSON.stringify({ title: 'none' }), '{}')
+      const dump = () => JSON.stringify([db.prepare('SELECT * FROM sessions ORDER BY 1').all(), db.prepare('SELECT * FROM session_prompts ORDER BY 1, 2').all()])
+      // Two prompt rows' hashes, and rows a and b.
+      expect(refreshPromptStubsIn(db)).toBe(4)
+      const once = dump()
+      expect(JSON.parse(db.prepare("SELECT payload FROM sessions WHERE claude_session_id = 'a'").pluck().get() as string).appliedAppendSystemPromptRef).toEqual({ bytes: bytes(now), inline: true })
+      expect(db.prepare("SELECT prompt_text_refs FROM sessions WHERE claude_session_id = 'a'").pluck().get()).toBe(textRefsColumnOf({ appliedAppendSystemPrompt: now }, false))
+      expect(JSON.parse(db.prepare("SELECT payload FROM sessions WHERE claude_session_id = 'b'").pluck().get() as string).profile.systemPromptRef)
+        .toEqual({ sha256: promptSha256(now), bytes: bytes(now), blank: false })
+      expect(db.prepare('SELECT sha256 FROM session_prompts ORDER BY 1').pluck().all()).toEqual([promptSha256(now), promptSha256(now), promptSha256(now)])
+      expect(refreshPromptStubsIn(db)).toBe(0)
+      expect(dump()).toBe(once)
+      // A caller that changed no table with a text: nothing read, nothing changed.
+      expect(refreshPromptStubsIn(db, new Set(['tasks']))).toBe(0)
+    } finally {
+      db.close()
+    }
   })
 })
 

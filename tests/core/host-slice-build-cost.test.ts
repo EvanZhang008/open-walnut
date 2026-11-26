@@ -5,7 +5,7 @@
  * loop CPU. A second build over unchanged rows must not:
  *  - hash an active session's spawn prompt again (sha256 of a 15 to 60 KB text, about six times
  *    per session per build: 39% of a build in a production-sized home);
- *  - read an active session's whole row from SQLite again (withHeavyFields);
+ *  - read an active session's whole row from SQLite again (withPromptFields);
  * and the push sends the JSON text the hash already wrote, never a second JSON.stringify.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,7 +31,7 @@ vi.mock('node:crypto', async (importOriginal) => {
 });
 vi.mock('../../src/core/session-tracker.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/core/session-tracker.js')>();
-  return { ...real, withHeavyFields: (r: Parameters<typeof real.withHeavyFields>[0]) => { counts.heavy++; return real.withHeavyFields(r); } };
+  return { ...real, withPromptFields: (r: Parameters<typeof real.withPromptFields>[0]) => { counts.heavy++; return real.withPromptFields(r); } };
 });
 
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -50,7 +50,8 @@ describe('a host copy build over unchanged rows', () => {
       const prompt = (await buildSessionContext(task.id)).systemPrompt;
       expect(prompt.length).toBeGreaterThan(2_048);
       const sid = randomUUID();
-      await createSessionRecord(sid, task.id, task.project, WALNUT_HOME);
+      // A live pid: a dead one gets its row repaired (fixStaleRecords) between the two builds.
+      await createSessionRecord(sid, task.id, task.project, WALNUT_HOME, { pid: process.pid });
       // One line short of the current instructions: a notice is due, so the build diffs the prompt.
       await updateSessionRecord(sid, { appliedAppendSystemPrompt: prompt.split('\n').slice(0, -3).join('\n') });
       sids.push(sid);

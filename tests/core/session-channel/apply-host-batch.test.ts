@@ -19,6 +19,7 @@ import { leaderDropHosts, leaderDropsOf } from '../../../src/core/session-channe
 import { handOverMarkStands, writeHandOverMark } from '../../../src/core/session-channel/handover-marks.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
+import { FACT_INLINE_CAP } from '../../../src/core/session-channel/fact-log.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
 const HOST = 'devbox'
@@ -189,6 +190,21 @@ describe('applyHostChannelBatch across links and repairs', () => {
     expect(old).toMatchObject({ after: 4, written: [] })
     expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 4 })
     expect((await getSessionByClaudeId('s1'))!.messageCount).toBe(2)
+  })
+
+  it('a row whose stored spawn prompt an older host log cut asks for its whole row at its first plain patch', async () => {
+    // The writer reads a stub record: the cut is told from the stored text, not the patch.
+    await createSessionRecord('cut-1', '', 'p', '/w', { host: HOST, judge: 'host', appliedAppendSystemPrompt: 'r'.repeat(FACT_INLINE_CAP) } as never)
+    await createSessionRecord('whole-1', '', 'p', '/w', { host: HOST, judge: 'host', appliedAppendSystemPrompt: 'r'.repeat(FACT_INLINE_CAP - 1) } as never)
+    const r = await applyHanded({
+      hostId: HOST, rows: [{ sid: 'cut-1', patch: { messageCount: 3 }, seq: 1 }, { sid: 'whole-1', patch: { messageCount: 3 }, seq: 2 }],
+      renames: [], cursor: { logId: 'L1', seq: 2 },
+    })
+    expect(r.written.sort()).toEqual(['cut-1', 'whole-1'])
+    expect(r.resync).toEqual(['cut-1'])
+    // Asked once: the next patch does not ask again.
+    const again = await applyHanded({ hostId: HOST, rows: [{ sid: 'cut-1', patch: { messageCount: 4 }, seq: 3 }], renames: [], cursor: { logId: 'L1', seq: 3 } })
+    expect(again.resync).toEqual([])
   })
 
   it('names the rows worth the host\'s whole row: a patch with no base row, a rename whose old row is missing', async () => {
