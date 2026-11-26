@@ -177,7 +177,7 @@ export function readSeenVerdict(answer: string): SeenVerdict | null {
 }
 
 /** The words of his the judge rests its verdict on (judge-line.ts quotedEvidence). */
-export const seenEvidence = quotedEvidence;
+export const seenEvidence = (answer: string): string[] => quotedEvidence(answer);
 
 /**
  * Whether a claim stands on the judge's word: his words are about it, or they are a bare ok and

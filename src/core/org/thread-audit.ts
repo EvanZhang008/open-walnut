@@ -201,13 +201,17 @@ export async function auditNode(taskId: string, opts: { now?: number; tasks?: re
     let calls = 0;
     let callMs = 0;
     let asked = 0;
+    let read = 0;
     while (calls < PASS_CALLS && asked < fresh.length) {
+      // Each further list asks first: a leader switch's stop or the switch turned off ends the pass where it is.
+      if (asked > 0 && (homeWritesStopped() || !(await threadAuditOn()))) break;
       const ask = fresh.slice(asked, asked + MAX_PAIRS);
       const answer = await judgePairs(ask, taskId);
       asked += ask.length;
       callMs += answer.ms;
       if (answer.called) calls++;
       if (!answer.verdicts) break;
+      read += ask.length;
       ask.forEach((c, i) => { const v = answer.verdicts?.[i]; if (v) judged[c.key] = { verdict: v.verdict, sig: sigOf(c), at, ...(v.reason ? { reason: v.reason } : {}) }; });
     }
     const repeats: AuditFinding[] = [];
@@ -239,7 +243,7 @@ export async function auditNode(taskId: string, opts: { now?: number; tasks?: re
     const reported = told.filter((f) => !unread.has(f.key));
     await updateAudit((cur) => recordPass(cur, taskId, settled.node, { found, reported, fixed: settled.fixed, calls, callMs }, now));
     const result: AuditResult = { taskId, ran: true, found: countKinds(found), told, fixed: settled.fixed, delivery, pairs: candidates.length, calls, callMs };
-    log.task.info('thread audit: pass', { taskId, found: result.found, told: told.length, fixed: settled.fixed, pairs: candidates.length, judged: asked, calls, callMs, delivery });
+    log.task.info('thread audit: pass', { taskId, found: result.found, told: told.length, fixed: settled.fixed, pairs: candidates.length, judged: read, calls, callMs, delivery });
     return result;
   } catch (err) {
     log.task.warn('thread audit: pass failed for a node', { taskId, error: err instanceof Error ? err.message : String(err) });
@@ -285,7 +289,7 @@ export async function runThreadAuditPass(now = Date.now()): Promise<string[]> {
     const nodes = all.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE' && !t.plugin_only && !quieted.has(t.id)).map((t) => t.id);
     for (const id of dueNodes(nodes, last, triedAt, now)) {
       if (done.length >= NODES_PER_TICK) break;
-      // A leader switch's stop: a pass in flight (one model call a node) writes no more audit state or notes (lib/leader-clocks.ts).
+      // A leader switch's stop: a pass in flight (up to PASS_CALLS model calls a node, each further one asking first) writes no more audit state or notes (lib/leader-clocks.ts).
       if (homeWritesStopped()) break;
       // Read at every node: turning it off stops the pass where it is.
       const r = await auditNode(id, { now, tasks: all });

@@ -9,7 +9,7 @@
  * seam. Real: the check itself and the threads model.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { emptyThreads, fileMessage, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
+import { emptyThreads, fileMessage, setAnswers, updateThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import type { AnswerRow } from '../../../src/core/org/thread-answers.js'
 
 const NODE = 'bakery-gate-node'
@@ -18,14 +18,19 @@ const state: { file: ThreadsFile; rows: AnswerRow[]; rowReads: number } = { file
 vi.mock('../../../src/core/server-role.js', async (orig) => ({ ...(await orig<object>()), isFollower: () => false }))
 vi.mock('../../../src/core/org/thread-question.js', async (orig) => ({ ...(await orig<object>()), eachQuestionOn: async () => true }))
 vi.mock('../../../src/core/task-manager.js', async (orig) => ({ ...(await orig<object>()), getTask: async () => ({ id: NODE, org_role: 'lead' }) }))
-vi.mock('../../../src/core/org/threads-store.js', async (orig) => ({ ...(await orig<object>()), readThreads: async () => state.file }))
+vi.mock('../../../src/core/org/threads-store.js', async (orig) => ({
+  ...(await orig<object>()),
+  readThreads: async () => state.file,
+  // The locked write, on the file in memory.
+  writeThreadsFor: async (_id: string, fn: (cur: ThreadsFile) => { file: ThreadsFile; out: unknown }) => { const r = fn(state.file); state.file = r.file; return r.out },
+}))
 vi.mock('../../../src/core/org/thread-answers.js', async (orig) => ({
   ...(await orig<object>()),
   rowsSince: async () => { state.rowReads++; return state.rows },
   transcriptSource: async () => ({}),
 }))
 
-const { checkTurnAnswers, markAnswered, setAnsweredJudgeOverride, __resetAnsweredCheck, JUDGED_REOPEN_MS } = await import('../../../src/core/org/thread-answered-check.js')
+const { checkTurnAnswers, markAnswered, setAnsweredJudgeOverride, __resetAnsweredCheck, CONFIRM_MAX, JUDGED_REOPEN_MS } = await import('../../../src/core/org/thread-answered-check.js')
 
 const REPLY = 'The bakery by the coast station opens at six on weekdays and at seven on Saturday mornings.'
 
@@ -64,3 +69,58 @@ describe('the gate before the transcript read and the model call', () => {
     expect(calls).toBe(1)
   })
 })
+
+/** His questions, each worked on with an interim reply under it, asked a few minutes ago. Their thread ids, oldest first. */
+function waiting(questions: string[]): string[] {
+  const now = Date.now()
+  let f = emptyThreads(NODE)
+  const ids: string[] = []
+  questions.forEach((text, i) => {
+    // Far enough apart that each is its own thread, never a follow-up of the one before.
+    const at = (ms: number) => new Date(now - 3_600_000 + i * 420_000 + ms).toISOString()
+    const a = fileMessage(f, { text, via: 'chat', at: at(0) })
+    f = setAnswers(a.file, new Map([[a.message.id, { text: 'I am looking into it and will come back with the answer.', at: at(1000) }]])).file
+    f = updateThread(f, a.thread.id, { state: 'working' }, `task:${NODE}`, at(2000), undefined, { line: true }).file
+    ids.push(a.thread.id)
+  })
+  state.file = f
+  expect(new Set(ids).size).toBe(questions.length)
+  return ids
+}
+const stateOf = (id: string) => state.file.threads.find((t) => t.id === id)
+
+describe('the second read decides what is written (review 2026-11-26)', () => {
+  it('two questions named, one confirmed: that one is answered alone, the other stays as it was', async () => {
+    const [bakery, ferry] = waiting(['When does the bakery by the coast station open?', 'When does the last ferry to the island leave?'])
+    const seconds: string[] = []
+    setAnsweredJudgeOverride(async () => 'ANSWERED: 1, 2', async (input) => {
+      seconds.push(input)
+      return input.includes('When does the bakery by the coast station open?') ? '"The bakery by the coast station opens at six on weekdays" => YES' : '"-" => NO'
+    })
+    expect(await checkTurnAnswers(NODE, 'sid-gate-3', Date.now())).toBe(1)
+    expect(seconds).toHaveLength(2)
+    expect(stateOf(bakery)).toMatchObject({ state: 'answered' })
+    expect(stateOf(bakery)?.messages[0].answer).toMatchObject({ text: REPLY, judged: true })
+    // Not merged into the other, not marked, its interim reply kept.
+    expect(state.file.threads.filter((t) => !t.closed)).toHaveLength(2)
+    expect(stateOf(ferry)).toMatchObject({ state: 'working' })
+    expect(stateOf(ferry)?.messages[0].answer?.text).toContain('I am looking into it')
+  })
+
+  it('more questions named than the second read takes: only the first CONFIRM_MAX are read, and one not read is never written', async () => {
+    const ids = waiting(['When does the bakery open?', 'When does the ferry leave?', 'When does the mill close?', 'When does the market start?', 'When does the tram stop?', 'When does the library open?'].slice(0, CONFIRM_MAX + 1))
+    let seconds = 0
+    setAnsweredJudgeOverride(async () => `ANSWERED: ${ids.map((_, i) => i + 1).join(', ')}`, async () => { seconds++; return '"-" => NO' })
+    expect(await checkTurnAnswers(NODE, 'sid-gate-4', Date.now())).toBe(0)
+    expect(seconds).toBe(CONFIRM_MAX)
+    for (const id of ids) expect(stateOf(id)).toMatchObject({ state: 'working' })
+  })
+
+  it('a list stand-in with no second one confirms nothing', async () => {
+    const [bakery] = waiting(['When does the bakery by the coast station open?'])
+    setAnsweredJudgeOverride(async () => 'ANSWERED: 1')
+    expect(await checkTurnAnswers(NODE, 'sid-gate-5', Date.now())).toBe(0)
+    expect(stateOf(bakery)).toMatchObject({ state: 'working' })
+  })
+})
+

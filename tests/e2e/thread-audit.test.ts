@@ -188,16 +188,17 @@ describe('the thread check', () => {
     expect(third).not.toContain(gate)
   })
 
-  it('a lead with more pairs than one list holds: one pass reads up to three lists, the next pass the rest (2026-11-26)', async () => {
-    // Cards that name each other by id: every two of them are a pair worth asking about, whatever their words.
-    const naming = async (lead: Lead, subjects: string[]): Promise<void> => {
-      const ids: string[] = []
-      for (const [i, subject] of subjects.entries()) {
-        const id = (await fileThreadMessage(lead.id, { text: `please look at the ${subject}`, via: 'chat', at: ago(200 - i) })).thread.id
-        await setThread(lead.id, id, { title: `The ${subject}`, titled: true, state: 'answered', reply: `The ${subject} is looked at and written up.${ids.length ? ` See also ${ids.join(', ')}.` : ''}` })
-        ids.push(id)
-      }
+  /** Cards that name each other by id: every two of them are a pair worth asking about, whatever their words. */
+  const naming = async (to: Lead, subjects: string[]): Promise<void> => {
+    const ids: string[] = []
+    for (const [i, subject] of subjects.entries()) {
+      const id = (await fileThreadMessage(to.id, { text: `please look at the ${subject}`, via: 'chat', at: ago(200 - i) })).thread.id
+      await setThread(to.id, id, { title: `The ${subject}`, titled: true, state: 'answered', reply: `The ${subject} is looked at and written up.${ids.length ? ` See also ${ids.join(', ')}.` : ''}` })
+      ids.push(id)
     }
+  }
+
+  it('a lead with more pairs than one list holds: one pass reads up to three lists, the next pass the rest (2026-11-26)', async () => {
     const busy = await newLead()
     await naming(busy, ['north fence posts', 'pear press belt', 'well pump fuse', 'barn roof gutter', 'seed drill chain', 'cider cellar vent', 'goat shed latch', 'orchard ladder rung', 'herb bed netting'])
     const lists: number[] = []
@@ -248,6 +249,27 @@ describe('the thread check', () => {
     expect(await runThreadAuditPass()).toEqual([])
     await setSwitch(false)
     expect((await api('POST', '/api/v1/thread-audit/run', { task: lead.id })).json).toMatchObject({ ran: false, why: 'off' })
+  })
+
+  it('the switch turned off while a list is read: no further list is asked', async () => {
+    await setSwitch(true)
+    const stopped = await newLead()
+    await naming(stopped, ['hay loft ladder', 'duck pond pump', 'grape arbor wire', 'root cellar door', 'chicken run gate', 'compost bin lid'])
+    let read = 0
+    setAuditJudgeOverride(async (input) => {
+      read++
+      await setSwitch(false)
+      return Array.from({ length: (input.match(/^\d+\. A: /gm) ?? []).length }, (_, i) => `${i + 1} DIFFERENT: another thing`).join('\n')
+    })
+    try {
+      const off = await api('POST', '/api/v1/thread-audit/run', { task: stopped.id })
+      expect(off.json).toMatchObject({ ran: true, calls: 1 })
+      expect(off.json.pairs).toBeGreaterThan(10)
+      expect(read).toBe(1)
+    } finally {
+      setAuditJudgeOverride(async (input) => { judged.push(input); return '1 SAME: one irrigation timer, told twice' })
+      await setSwitch(true)
+    }
   })
 })
 

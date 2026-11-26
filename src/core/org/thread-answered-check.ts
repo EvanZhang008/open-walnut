@@ -26,8 +26,8 @@
  * card under a reply about a sign-in letter; replayed on that list, the same model called directly
  * named a question the reply was not about in 9 of 20 runs). The list call finds the candidate
  * among up to LIST_MAX questions; the second call has one question to hold the reply against, and
- * its quote is checked in the reply's own text. A NO, no answer or a quote that is not in the reply
- * leaves the thread as it was.
+ * its quote is checked in the reply's own text. A NO, no answer, a quote that is not in the reply
+ * or a second read that runs out of the check's time leaves the thread as it was.
  *
  * Bounds: one call per reply (a reply judged once per node), at most LIST_MAX questions in its list
  * (the questions still waiting first, newest first, then the answers this check wrote that a later
@@ -97,8 +97,9 @@ const ROWS_DEADLINE_MS = 15_000;
 const JUDGE_DIRECT_MS = 20_000;
 /** At most this many questions one reply's list call named get the second read; one past it stays as it was. */
 export const CONFIRM_MAX = 4;
-/** A quote shorter than this (letters and digits) proves nothing about the reply. */
-const QUOTE_MIN = 4;
+/** What a quote must weigh to prove anything about the reply (quoteWeight), all its pieces together and each piece. */
+const QUOTE_MIN = 12;
+const PIECE_MIN = 4;
 
 /** The reply as the model reads it: the prose only, or null when it says nothing worth judging (an agent acknowledgement, empty, short). Pure. */
 export function replyProse(text: string): string | null {
@@ -232,21 +233,32 @@ export function confirmJudgeInput(c: AnswerCandidate, prose: string, marker: str
 
 /** Letters and digits only, one case and one width: a quote is found whatever marks, stops and spaces sit around its words. */
 const bare = (s: string): string => s.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+/** A letter or digit weighs one, a CJK character three (one says about what a short word does). */
+const quoteWeight = (s: string): number => Array.from(s).reduce((n, ch) => n + (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(ch) ? 3 : 1), 0);
 
 /**
- * The second read's word: true only for a YES that rests on words the reply holds (each piece of
- * what it quotes, an elision apart, is in the reply, QUOTE_MIN letters or more in all: a quote of his
- * question or a paraphrase is no evidence); false for a NO, two verdicts or a YES with no such quote;
- * null when it gave no verdict. Pure.
+ * The second read's word: true only for a YES whose verdict line quotes the reply (each piece of
+ * the quote, an elision apart, weighs PIECE_MIN or more and is in the reply in the order quoted,
+ * QUOTE_MIN in all: a paraphrase, a word or two, or scattered letters are no evidence); false for a
+ * NO, two verdicts or a YES with no such quote; null when it gave no verdict. The quote shows the
+ * model read the reply, not that the reply is about his question: that is the second read's own
+ * word, on one question instead of a list (review 2026-11-26). Pure.
  */
 export function readConfirm(answer: string, prose: string): boolean | null {
   const word = verdictWord(answer, /\b(YES|NO)\b/g, 'NO');
   if (word === null) return null;
   if (word !== 'YES') return false;
   const text = bare(prose);
-  return quotedEvidence(answer).some((quote) => {
+  return quotedEvidence(answer, true).some((quote) => {
     const parts = quote.split(/\.{3,}|\u2026/).map(bare).filter(Boolean);
-    return parts.length > 0 && parts.every((part) => text.includes(part)) && parts.reduce((n, part) => n + Array.from(part).length, 0) >= QUOTE_MIN;
+    if (!parts.length || parts.some((part) => quoteWeight(part) < PIECE_MIN) || parts.reduce((n, part) => n + quoteWeight(part), 0) < QUOTE_MIN) return false;
+    let from = 0;
+    for (const part of parts) {
+      const at = text.indexOf(part, from);
+      if (at < 0) return false;
+      from = at + part.length;
+    }
+    return true;
   });
 }
 
@@ -402,9 +414,10 @@ async function judge(cands: readonly AnswerCandidate[], prose: string, taskId: s
  * The second read of the questions the list call named, each alone beside the reply, side by side
  * (at most CONFIRM_MAX): the ones the model says YES to, quoting the reply. Never throws.
  */
-async function confirmNamed(cands: readonly AnswerCandidate[], prose: string, taskId: string): Promise<{ yes: AnswerCandidate[]; ms: number }> {
+async function confirmNamed(cands: readonly AnswerCandidate[], prose: string, taskId: string): Promise<{ yes: AnswerCandidate[]; read: AnswerCandidate[]; ms: number }> {
   const started = Date.now();
-  const verdicts = await Promise.all(cands.slice(0, CONFIRM_MAX).map(async (c) => {
+  const read = cands.slice(0, CONFIRM_MAX);
+  const verdicts = await Promise.all(read.map(async (c) => {
     const input = confirmJudgeInput(c, prose, `<<${crypto.randomBytes(8).toString('hex')}>>`);
     try {
       // A test's list stand-in with no second one confirms nothing (a real model is never reached from a test).
@@ -417,7 +430,7 @@ async function confirmNamed(cands: readonly AnswerCandidate[], prose: string, ta
       return false;
     }
   }));
-  return { yes: cands.filter((_, i) => verdicts[i]), ms: Date.now() - started };
+  return { yes: read.filter((_, i) => verdicts[i]), read, ms: Date.now() - started };
 }
 
 function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -457,10 +470,12 @@ async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number,
   const { named, ms } = await judge(listed, prose, taskId);
   // Each question the list call named is read once more, alone beside the reply: only a confirmed one is written.
   const asked = named.map((n) => listed[n - 1]);
-  const sure = asked.length && Date.now() <= deadline ? await confirmNamed(asked, prose, taskId) : { yes: [] as AnswerCandidate[], ms: 0 };
+  // Within what is left of the check's time: past it nothing is confirmed and nothing written.
+  const left = deadline - Date.now();
+  const sure = asked.length && left > 0 ? await within<Awaited<ReturnType<typeof confirmNamed>> | null>(confirmNamed(asked, prose, taskId), left, null) : null;
   const answer: ThreadAnswer = { ...answerOfRow(row), ...(await transcriptSource(sessionId)) };
   // One locked write for the reply: the questions it answers become one thread, marked answered.
-  const ids = sure.yes.map((c) => c.thread.id);
+  const ids = (sure?.yes ?? []).map((c) => c.thread.id);
   const now = new Date().toISOString();
   // A summary the node wrote after its status answer was stored (its next turn's thread_update) stays.
   const done = ids.length && Date.now() <= deadline ? await store.writeThreadsFor(taskId, (cur) => {
@@ -468,9 +483,13 @@ async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number,
     const kind = r.out.merged.length ? 'merged' as const : 'updated' as const;
     return { file: r.file, out: r.out, ...(r.out.marked ? { changed: { kind, threadId: r.out.marked } } : {}) };
   }) : null;
-  // `named`: what the list call said; `refused`: the ones of them the second read did not confirm.
-  const refused = asked.map((c) => c.thread.id).filter((id) => !ids.includes(id));
-  log.task.info('org threads: answered check', { taskId, sessionId, candidates: listed.length, named: asked.map((c) => c.thread.id), refused, marked: done?.marked ?? null, merged: done?.merged ?? [], left: done?.left ?? [], ms, confirmMs: sure.ms });
+  // `named`: what the list call said; `refused`: the ones the second read read and did not confirm; `unread`:
+  // named past CONFIRM_MAX, or with the check's time gone; `late`: named, and its time ran out before the write.
+  const read = new Set((sure?.read ?? []).map((c) => c.thread.id));
+  const refused = [...read].filter((id) => !ids.includes(id));
+  const unread = asked.map((c) => c.thread.id).filter((id) => !read.has(id));
+  const late = asked.length > 0 && (!sure || (ids.length > 0 && !done));
+  log.task.info('org threads: answered check', { taskId, sessionId, candidates: listed.length, named: asked.map((c) => c.thread.id), refused, unread, ...(late ? { late: true } : {}), marked: done?.marked ?? null, merged: done?.merged ?? [], left: done?.left ?? [], ms, confirmMs: sure?.ms ?? 0 });
   return done?.marked ? 1 : 0;
 }
 

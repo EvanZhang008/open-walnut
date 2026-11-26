@@ -204,7 +204,10 @@ describe('the second read of a question the list call named (2026-11-26: the one
     expect(readConfirm(yes('**the 7:10 from the Central Station**  reaches the coast at 8:42,'), REAL)).toBe(true)
     expect(readConfirm(yes('The 7:10 from the central station ... the only train before nine'), REAL)).toBe(true)
     expect(readConfirm('\u201creaches the coast at 8:42\u201d => YES', REAL)).toBe(true)
-    // A short answer in another script is still a quote of the reply.
+    // The quote on a line of its own, the verdict on the next (blank lines aside): the model at times writes it so.
+    expect(readConfirm('He asks for a train.\nThe reply names one.\n\n"the 7:10 from the central station"\n\n=> YES', REAL)).toBe(true)
+    expect(readConfirm('**"the 7:10 from the central station"**\n=> YES', REAL)).toBe(true)
+    // A short answer in another script weighs enough: it is still a quote of the reply.
     expect(readConfirm('"\u8fd8\u6ca1\u5168\u505a\u5b8c\u3002" => YES', '\u8fd8\u6ca1\u5168\u505a\u5b8c\u3002\u5df2\u7ecf\u4e0a\u7ebf\u7684\u662f\u4e24\u4e2a\u5c0f\u4fee\u590d\u3002')).toBe(true)
   })
 
@@ -213,7 +216,14 @@ describe('the second read of a question the list call named (2026-11-26: the one
     expect(readConfirm(`"${Q_TRAIN}" => YES`, REAL)).toBe(false)
     expect(readConfirm('"The early train gets there in time" => YES', REAL)).toBe(false)
     expect(readConfirm('"The 7:10 from the central station ... leaves from platform two" => YES', REAL)).toBe(false)
+    // A word or two, scattered letters, or pieces out of the reply's order prove nothing.
     expect(readConfirm('"the" => YES', REAL)).toBe(false)
+    expect(readConfirm('"Saturday" => YES', REAL)).toBe(false)
+    expect(readConfirm('"t...h...e...c...o...a...s...t...a...t...8...4" => YES', REAL)).toBe(false)
+    expect(readConfirm('"the only train before nine ... The 7:10 from the central station" => YES', REAL)).toBe(false)
+    // A quote inside a line of reasoning is no evidence: only the verdict line's, or a line right above it that holds nothing else.
+    expect(readConfirm('The reply names "the 7:10 from the central station".\n=> YES', REAL)).toBe(false)
+    expect(readConfirm('"the 7:10 from the central station"\nThat settles it.\n=> YES', REAL)).toBe(false)
     expect(readConfirm('"-" => YES', REAL)).toBe(false)
     expect(readConfirm('=> YES', REAL)).toBe(false)
     expect(readConfirm('"-" => NO', REAL)).toBe(false)

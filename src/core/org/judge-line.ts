@@ -24,17 +24,30 @@ export function verdictWord(answer: string, allowed: RegExp, unsure: string): st
 /**
  * The words a judge rests its verdict on: what it quotes on the line that holds its verdict (the
  * last with an arrow), or on the nearest line above when that one quotes nothing (it at times puts
- * the arrow on a line of its own); the whole answer when it wrote no arrow. Pure.
+ * the arrow on a line of its own); the whole answer when it wrote no arrow. `strict`, for a judge
+ * whose reasoning lines may quote the text too: only the verdict line, or the line right above it
+ * (blank lines aside) when that one holds nothing but the quote; none with no arrow. Pure.
  */
-export function quotedEvidence(answer: string): string[] {
+export function quotedEvidence(answer: string, strict = false): string[] {
   const quotes = (text: string): string[] => [...text.matchAll(QUOTED)].map((m) => (m[1] ?? m[2] ?? '').trim()).filter((q) => q && q !== '-');
   const lines = answer.split('\n');
   let at = lines.length - 1;
   while (at >= 0 && !lines[at].replace(QUOTED, ' ').includes('=>')) at--;
-  if (at < 0) return quotes(answer);
+  if (at < 0) return strict ? [] : quotes(answer);
+  const verdictAt = at;
   for (; at >= 0; at--) {
     const found = quotes(lines[at]);
-    if (found.length) return found;
+    if (!strict) {
+      if (found.length) return found;
+      continue;
+    }
+    if (at === verdictAt) {
+      if (found.length) return found;
+      continue;
+    }
+    if (!lines[at].trim()) continue;
+    // The first written line above: it counts only when the quote is all it holds.
+    return found.length && !/[\p{L}\p{N}]/u.test(lines[at].replace(QUOTED, ' ')) ? found : [];
   }
   return [];
 }
