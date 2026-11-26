@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { setUpLocalWitnesses, forgetLocalWitnesses } from '../../../../src/core/leader/switch/local-witnesses.js'
-import { startPermitRuntime, type PermitRuntime } from '../../../../src/core/leader/switch/runtime.js'
+import { lagRoundsOf, startPermitRuntime, type PermitRuntime, type WitnessHealth } from '../../../../src/core/leader/switch/runtime.js'
 import { leaderPermitAtBoot, LeaderBootRefused } from '../../../../src/core/leader/switch/boot.js'
 import { assertOutwardDoor, leaderPermitActive, outwardDoorsOpen, setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
@@ -42,7 +42,7 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-const start = async (id: string, trial = false, more: { lockPath?: string; commitHandover?: number } = {}) => {
+const start = async (id: string, trial = false, more: { lockPath?: string; commitHandover?: number; witnessHealth?: WitnessHealth; log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void } = {}) => {
   const r = await startPermitRuntime({ home: home(id), holderId: id, settings, trial, ...more })
   runtimes.push(r)
   return r
@@ -306,6 +306,36 @@ describe('boot decisions', () => {
     expect(outwardDoorsOpen()).toBe(false)
     expect(() => assertOutwardDoor('mail-send', 'op-3')).toThrow(/stopping/)
   })
+})
+
+describe('a witness that takes none of the leader\'s renewals', () => {
+  it('is said once (a log line, a Health item) after a lease of renewals, brought back by a grant once its record ran out, and recovers', async () => {
+    const told: string[] = []
+    const lines: Array<{ msg: string; data?: Record<string, unknown> }> = []
+    const witnessHealth: WitnessHealth = { behind: (w, n, why) => told.push(`behind ${w} ${n} ${why}`), back: (w) => told.push(`back ${w}`) }
+    const r = await start('machine-a', false, { witnessHealth, log: (_l, msg, data) => lines.push({ msg, data }) })
+    expect(r.mayAct()).toBe(true)
+    const w3 = settings.witnesses[2]!
+    fs.renameSync(w3.dir, `${w3.dir}.off`)
+    const rounds = lagRoundsOf(settings.params)
+    // A lease of renewals with no answer from w3: said once, and once only however long it lasts.
+    await until('w3 reported behind', () => told.length > 0, 15_000)
+    expect(told).toEqual([`behind w3 ${rounds} no answer`])
+    expect(lines.filter((l) => /took none of this leader's last renewals/.test(l.msg)).map((l) => l.data?.witness)).toEqual(['w3'])
+    // Back once A's record there ran out (well past a record's length): it holds nothing live, so it takes no renew,
+    // only A's grant (client.ts behind); then it is not behind any more.
+    await new Promise((res) => setTimeout(res, 4_000))
+    expect(told).toHaveLength(1)
+    fs.renameSync(`${w3.dir}.off`, w3.dir)
+    await until('w3 back', () => told.includes('back w3'), 15_000)
+    expect(r.mayAct()).toBe(true)
+    const c = openPermitClient('reader', settings.witnesses, settings.params, () => true)
+    const read = await readStanding(c)
+    const at3 = read.replies.find((x) => x.witness === 'w3')
+    expect(at3?.held?.by).toBe('machine-a')
+    expect(at3?.grantable).toBe(false)
+    expect(told).toEqual([`behind w3 ${rounds} no answer`, 'back w3'])
+  }, 40_000)
 })
 
 describe('outward sends: op ids registered first', () => {

@@ -607,3 +607,205 @@ describe('planned stop of a process whose lease ran out but was never cleared', 
     expect(w.violations[0]!.who.sort()).toEqual(['B', 'C'])
   })
 })
+
+describe('a witness that missed the holder\'s first record (the remote rehearsal\'s standby-behind red, 2026-11-26)', () => {
+  /**
+   * The holder took the permission on two witnesses while w3 was out of its reach (a door-only host that dialed the
+   * new leader only after its grant stood, a witness down at that moment), or w3 was out of reach for longer than a
+   * record is held. w3 then holds a record that ran out there: it never takes a renew (a renew stands only on a live
+   * record of its writer's process or on a live handover to it), so every renew stands on w1 and w2 alone and one more
+   * witness down leaves no majority. The holder brings w3 back with a grant, which w3 takes because nothing is live there.
+   */
+  function missed(start: 'grant' | 'handover' | 'cut') {
+    const w = world()
+    const a = w.addMachine('A', W)
+    if (start === 'handover') {
+      const b = w.addMachine('B', W)
+      b.c.requestGrant()
+      w.run(1_000)
+      b.c.handover('A')
+      w.run(2_000)
+    }
+    if (start === 'cut') {
+      a.c.requestGrant()
+      w.run(1_000)
+    }
+    w.partition('A', 'w3')
+    if (start === 'grant') a.c.requestGrant()
+    pilot(w, 'A', { wantsLead: false, tickMs: 1_000 })
+    w.run(10_000)
+    expect(a.c.mayAct()).toBe(true)
+    // Back in reach once what w3 holds (the handover, A's own grant, or nothing) is no longer live there.
+    const back = 10_000 + witnessHoldMs(w.params) + 5_000
+    w.at(back, () => w.partition('A', 'w3', false))
+    sample(w, 10, 200_000)
+    // Two renew periods after it is back (the pilot's ticks wander by up to a second each).
+    w.run(back + 2 * w.params.renewEveryMs + 3_000)
+    const read = (id: string) => w.witnesses.get(id)!.w!.handle({ type: 'read' })
+    return { w, a, read }
+  }
+
+  for (const start of ['grant', 'handover', 'cut'] as const) {
+    it(`${start === 'cut' ? 'cut off for longer than a record is held' : `after a ${start} that stood without it`}, w3 holds the holder's record again within two renews`, () => {
+      const { w, a, read } = missed(start)
+      // A live record of this very process at every witness (a record of A that ran out there is no better than none).
+      const ownAtEvery = () => {
+        for (const id of W) {
+          const r = read(id)
+          expect(r.held?.by, id).toBe('A')
+          expect(r.held?.nonce, id).toBe(a.c.incarnation())
+          expect(r.held?.kind, id).not.toBe('handover')
+          expect(r.grantable, id).toBe(false)
+        }
+      }
+      ownAtEvery()
+      // And it stays so: the renews that follow stand on all three.
+      w.run(200_000)
+      ownAtEvery()
+      expect(w.violations).toEqual([])
+      expect(a.c.mayAct()).toBe(true)
+    })
+  }
+
+  it('the failed trial: the old leader\'s own witness restarts with its server and still holds the handover when the grant stands on the other two', () => {
+    // The remote rehearsal's shape (2026-11-26, r2c loop 1): A hands over to B; B's trial fails and B never leads; A's
+    // server restarts, and its own witness (w3 here) restarts with it, so it counts the handover's hold from then. A's
+    // new process asks a grant once the handover ran out at w1 and w2: it stands there, and w3, its handover still live,
+    // refuses it ('held'). Once w3's handover ran out there, it refuses every renew of A ('not-holder').
+    const w = world()
+    const a = w.addMachine('A', W)
+    a.c.requestGrant()
+    w.run(1_000)
+    a.c.handover('B')
+    w.run(2_000)
+    w.restartMachine('A', W, 0)
+    w.crashWitness('w3', 12_000)
+    const ask = witnessHoldMs(w.params) + 3_000
+    w.at(ask, () => { a.c.read(); w.after(500, () => { a.c.requestGrant() }) })
+    w.run(ask + 2_000)
+    const a2 = w.machines.get('A')!
+    expect(a2.c.mayAct()).toBe(true)
+    expect(w.witnesses.get('w3')!.w!.handle({ type: 'read' }).held?.kind).toBe('handover')
+    pilot(w, 'A', { wantsLead: false, tickMs: 1_000 })
+    // w3's handover runs out 12 s later there than at the others; then two renew periods.
+    const by = ask + 12_000 + 2 * w.params.renewEveryMs + 3_000
+    sample(w, 10, by)
+    w.run(by)
+    for (const id of W) {
+      const r = w.witnesses.get(id)!.w!.handle({ type: 'read' })
+      expect(r.held?.by, id).toBe('A')
+      expect(r.held?.nonce, id).toBe(a2.c.incarnation())
+      expect(r.grantable, id).toBe(false)
+    }
+    expect(w.violations).toEqual([])
+  })
+
+  /** A holds on w1 and w2 since t=0, w3 out of its reach; w3 is back (holding nothing) and has answered a read. */
+  function behindW3() {
+    const w = world()
+    const a = w.addMachine('A', W)
+    w.partition('A', 'w3')
+    a.c.requestGrant()
+    w.run(1_000)
+    expect(a.c.mayAct()).toBe(true)
+    const back = witnessHoldMs(w.params) + 5_000
+    for (let t = 10_000; t < back; t += 10_000) w.at(t, () => { a.c.renew() })
+    w.at(back, () => { w.partition('A', 'w3', false); a.c.read() })
+    w.run(back + 1_000)
+    expect(a.c.witnessesBehind()).toEqual(['w3'])
+    let now = back + 1_000
+    const step = () => { now += 1_000; w.run(now) }
+    const read = (id: string) => w.witnesses.get(id)!.w!.handle({ type: 'read' })
+    return { w, a, step, read }
+  }
+
+  it('a registration always rides a renew; outcomes wait one round unless the caller must carry them now', () => {
+    const { w, a, step, read } = behindW3()
+    // A registration: a renew (no witness checks a registration on a grant).
+    const reg = a.c.registerOps(['op-1']).record!
+    expect(reg.kind).toBe('renew')
+    expect(reg.ops?.register).toEqual(['op-1'])
+    step()
+    expect(a.c.opStatus('op-1')).toBe('registered')
+    a.c.beginSend('op-1')
+    a.c.reportOutcome('op-1', true)
+    // The last renew before a handover carries the outcome whatever is behind.
+    const before = a.c.renew(undefined, { carryOutcomes: true })!
+    expect(before.kind).toBe('renew')
+    expect(before.ops?.sent).toEqual(['op-1'])
+    step()
+    expect(a.c.witnessesBehind()).toEqual(['w3'])
+    // A periodic renew with nothing that must ride: the grant, with no ops; the renew after it takes w3 too.
+    const g = a.c.renew()!
+    expect(g.kind).toBe('grant')
+    expect(g.ops).toBeUndefined()
+    step()
+    expect(a.c.witnessesBehind()).toEqual([])
+    const r = a.c.renew()!
+    expect(r.kind).toBe('renew')
+    step()
+    for (const id of W) {
+      expect(read(id).held?.number, id).toBe(r.number)
+      expect(read(id).grantable, id).toBe(false)
+    }
+    expect(w.violations).toEqual([])
+  })
+
+  it('a steady stream of outcomes does not hold the grant back for ever', () => {
+    const { w, a, step } = behindW3()
+    const kinds: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const id = `op-${i}`
+      a.c.registerOps([id])
+      step()
+      a.c.beginSend(id)
+      a.c.reportOutcome(id, true)
+      kinds.push(a.c.renew()!.kind)
+      step()
+    }
+    expect(kinds[0]).toBe('grant')
+    expect(a.c.witnessesBehind()).toEqual([])
+    expect(w.violations).toEqual([])
+  })
+
+  it('never two grants in a row: behind again right after one, the next proposal is a plain renew', () => {
+    const { a, step } = behindW3()
+    expect(a.c.renew()!.kind).toBe('grant')
+    // Its answers lost on the way back: w3 is still behind as far as A knows.
+    a.c.read()
+    expect(a.c.renew()!.kind).toBe('renew')
+    step()
+    expect(a.c.renew()!.kind).toBe('renew')
+  })
+
+  it('witnessesLagging: a witness that holds none of the holder\'s last N renewals, with its last answer, until it holds one', () => {
+    const w = world()
+    const a = w.addMachine('A', W)
+    a.c.requestGrant()
+    w.run(1_000)
+    w.partition('A', 'w3')
+    let now = 1_000
+    const renewRound = () => { a.c.renew(); now += 1_000; w.run(now) }
+    for (let i = 0; i < 4; i++) renewRound()
+    // Four renewals sent, the newest not counted (its answers may be on their way): three missed so far.
+    expect(a.c.witnessesLagging(4)).toEqual([])
+    expect(a.c.witnessesLagging(3)).toEqual([{ witness: 'w3', why: 'no answer' }])
+    renewRound()
+    expect(a.c.witnessesLagging(4)).toEqual([{ witness: 'w3', why: 'no answer' }])
+    // Back while A's record there is still live: it takes the next renew, and is not lagging after the one after it.
+    w.partition('A', 'w3', false)
+    renewRound()
+    renewRound()
+    expect(a.c.witnessesLagging(4)).toEqual([])
+    expect(w.violations).toEqual([])
+  })
+
+  it('a witness of another list answering grantable is not behind (it takes no grant of this list)', () => {
+    const { a } = behindW3()
+    const reply = { witness: 'w3', re: 'read' as const, ok: true, held: null, list: ['w1', 'w2', 'w3'], joint: null, cfg: 'some-older-config', epoch: 0, progress: null, ops: [], grantable: true }
+    a.c.receive(reply)
+    expect(a.c.witnessesBehind()).toEqual([])
+    a.c.receive({ ...reply, cfg: a.c.config().cfg })
+    expect(a.c.witnessesBehind()).toEqual(['w3'])
+  })
+})

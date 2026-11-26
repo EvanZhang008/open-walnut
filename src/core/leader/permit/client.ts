@@ -55,6 +55,9 @@ export type ProposalOutcome = 'chosen' | 'short' | 'open'
 
 const RELEASED = 'permit client released for a planned stop: it proposes nothing more'
 
+/** The witness holds this process's record number `n` (its answer to that very proposal). */
+const sameRecordOf = (h: PermitRecord, n: number, c: PermitClient): boolean => h.number === n && h.by === c.id && h.nonce === c.incarnation()
+
 export class PermitClient {
   readonly id: string
   private list: string[]
@@ -87,6 +90,21 @@ export class PermitClient {
   private readonly ops: OpBook
   /** Grants proposed since this incarnation last had a record chosen: the back-off grows with it. */
   private grantTries = 0
+  /**
+   * Witnesses of the list that last answered holding nothing live for anyone (grantable): out of this process's reach
+   * when its grant or its commit on a handover stood, or for longer than a record is held, so what they hold ran out
+   * there. They never take a renew again (judge: a renew stands only on a live record of its writer's process or on a
+   * live handover to it), only a grant. renew() sends that grant while this process holds.
+   */
+  private behind = new Set<string>()
+  /** The last proposal was renew()'s grant for the witnesses behind: the next one is a plain renew. */
+  private repairedLast = false
+  /** The numbers of this process's renews (and renew()'s grants) sent while it held, newest last: at most 64. */
+  private ownRounds: number[] = []
+  /** Per witness: the highest number of a record of this very process it was seen holding. */
+  private ownSeen = new Map<string, number>()
+  /** Per witness: why it refused this process's last proposal it answered ('no answer' when it never did). */
+  private refusedWhy = new Map<string, string>()
 
   constructor(private readonly opts: ClientOptions) {
     if (!opts.id) throw new Error('permit client: a machine id cannot be empty (the empty holder means nobody)')
@@ -226,10 +244,40 @@ export class PermitClient {
   }
 
   /** Extend this machine's permission. null while a handover is open (the old holder never renews then), or once released. */
-  renew(progress?: PermitRecord['progress']): PermitRecord | null {
+  renew(progress?: PermitRecord['progress'], o: { carryOutcomes?: boolean } = {}): PermitRecord | null {
     if (this.frozen || this.stopped || this.releasing) return null
     const ops = this.ops.changes()
-    return this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}), ...(ops ? { ops } : {}) })
+    // A witness behind takes a grant only. The others take this process's grant as its renew (judge: a grant on the
+    // writer's own live record). A grant carries no op changes (no witness checks a registration on one): never in
+    // place of a registration, nor of outcomes the caller must have carried now (the last renew before a handover);
+    // other outcomes ride the renew that follows it. Every other proposal at most: a witness that would take the
+    // renew and not the grant (a live handover to this machine) is never left out twice in a row.
+    const mustRide = !!ops?.register || (o.carryOutcomes && !!ops)
+    const holding = this.mayAct()
+    const repair = !mustRide && this.witnessesBehind().length > 0 && !this.repairedLast && holding
+    this.repairedLast = repair
+    const r = repair
+      ? this.propose({ kind: 'grant', holder: this.id, ...(progress ? { progress } : {}) })
+      : this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}), ...(ops ? { ops } : {}) })
+    if (holding) this.ownRounds = [...this.ownRounds, r.number].slice(-64)
+    return r
+  }
+
+  /**
+   * The witnesses of the list that hold none of this process's last `rounds` renewals (the newest one, whose answers
+   * may still be on their way, not counted): the permission stands on the others alone. With the reason each last
+   * gave ('no answer' when it gave none). Empty until this process sent that many while it held.
+   */
+  witnessesLagging(rounds: number): Array<{ witness: string; why: string }> {
+    const counted = this.ownRounds.slice(0, -1).slice(-rounds)
+    if (rounds < 1 || counted.length < rounds) return []
+    const members = [...new Set([...this.list, ...(this.joint ?? [])])].sort()
+    return members.filter((w) => counted.every((n) => n > (this.ownSeen.get(w) ?? 0))).map((w) => ({ witness: w, why: this.refusedWhy.get(w) ?? 'no answer' }))
+  }
+
+  /** The witnesses of the list (or of the pair's new list) that last answered holding nothing live for anyone (see `behind`). */
+  witnessesBehind(): string[] {
+    return [...this.behind].filter((w) => this.list.includes(w) || !!this.joint?.includes(w)).sort()
   }
 
   /** Ask for the permission when the old one ran out (see mayAskForTakeover for the automatic rule). */
@@ -418,6 +466,18 @@ export class PermitClient {
     if (reply.held && reply.held.number > this.top) this.top = reply.held.number
     // Every answer says where its witness stands and what op ids it holds.
     this.evidence.note(reply)
+    // Behind only by the configuration this process judges by: a witness of another list or generation takes no
+    // grant of this one either (wrong-list), so it is no reason to send one.
+    const sameConfig = reply.cfg === this.cfg && reply.epoch === this.epoch && !!reply.list && sameList(reply.list, this.list)
+      && (reply.joint ? sameList(reply.joint, this.joint) : this.joint === null)
+    if (reply.grantable && sameConfig) this.behind.add(reply.witness)
+    else this.behind.delete(reply.witness)
+    const h = reply.held
+    if (h && h.by === this.id && h.nonce === this.nonce && h.kind !== 'handover') this.ownSeen.set(reply.witness, Math.max(h.number, this.ownSeen.get(reply.witness) ?? 0))
+    if (reply.re !== 'read') {
+      if (h && sameRecordOf(h, reply.re, this)) this.refusedWhy.delete(reply.witness)
+      else this.refusedWhy.set(reply.witness, reply.reason ?? 'refused')
+    }
     this.ops.learn(reply.ops)
     if (reply.re === 'read') {
       this.reads.set(reply.witness, reply)

@@ -147,7 +147,26 @@ export interface RuntimeOptions {
    */
   onFirstLead?: () => void
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+  /** Where a witness that takes none of this leader's renewals is told (default: Walnut Health, home-busy-health.ts). */
+  witnessHealth?: WitnessHealth
 }
+
+/** A witness that took none of the leader's last renewals for a lease (`behind`), and the same one taking them again. */
+export interface WitnessHealth {
+  behind(witness: string, rounds: number, why: string): void
+  back(witness: string): void
+}
+
+const healthOfWitnesses: WitnessHealth = {
+  behind: (witness, rounds, why) => { void import('../home-busy-health.js').then((m) => m.noteWitnessBehind(witness, rounds, why)).catch(() => {}) },
+  back: (witness) => { void import('../home-busy-health.js').then((m) => m.noteWitnessBack(witness)).catch(() => {}) },
+}
+
+/**
+ * How many renewals in a row a witness may miss before the leader says so: a lease's worth (validMs / renewEveryMs,
+ * 4 with the defaults), so a witness that misses one round or two (a slow link, a restart) is never reported.
+ */
+export const lagRoundsOf = (p: PermitParams): number => Math.max(2, Math.ceil(p.validMs / p.renewEveryMs))
 
 type Want = 'renew' | 'grant' | 'none'
 
@@ -219,7 +238,9 @@ function splitOwnRecords(h: PermitHandle, read: { standing: PermitRecord | null 
   const mineAbove = (n: number) => answers.some((a) => leadsOn(a.held) && a.held!.number > n)
   // More than a minority of the witnesses never held record `n` of another machine while it stood: those that hold a
   // lower number, and those that hold a record of this machine above it (this machine never lands a record on another
-  // machine's record that stood: a grant only through this rule, everything else only on its own records).
+  // machine's record that stood: a grant only through this rule, or while it leads on a record that ran out at that
+  // witness (client.ts renew, a witness behind), so a majority holds this machine's own; everything else only on its
+  // own records).
   const neverStood = (n: number) => answers.filter((a) => (a.held?.number ?? 0) < n || (a.held!.number > n && a.held!.by === me && a.held!.kind !== 'handover')).length > list.length - majorityOf(list)
   const own = (r: PermitReply) => {
     const x = r.held
@@ -470,6 +491,26 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       schedule(waitingRoundMs(settings.params))
     }
   }
+  // Witnesses that took none of this leader's last renewals for a lease: said once each (a log line and a Health item)
+  // until one takes them again. The permission stands on the others; one more of them lost and nobody leads.
+  const lagRounds = lagRoundsOf(settings.params)
+  const lagging = new Set<string>()
+  const witnessHealth = opts.witnessHealth ?? healthOfWitnesses
+  const checkLag = () => {
+    const now = new Map(h.client.witnessesLagging(lagRounds).map((l) => [l.witness, l.why]))
+    for (const [witness, lagWhy] of now) {
+      if (lagging.has(witness)) continue
+      lagging.add(witness)
+      log('warn', 'leader permit: a witness took none of this leader\'s last renewals; the permission stands on the other witnesses alone', { witness, rounds: lagRounds, answer: lagWhy })
+      witnessHealth.behind(witness, lagRounds, lagWhy)
+    }
+    for (const witness of [...lagging]) {
+      if (now.has(witness)) continue
+      lagging.delete(witness)
+      log('info', 'leader permit: the witness takes this leader\'s renewals again', { witness })
+      witnessHealth.back(witness)
+    }
+  }
   const loop = async () => {
     if (stopped) return
     observe()
@@ -477,6 +518,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     if (state === 'leading') {
       const r = await proposeAndWait(h, (c) => c.renew(), Math.min(5_000, settings.params.renewEveryMs))
       if (stopped || state !== 'leading') return
+      checkLag()
       if (r?.outcome === 'chosen') { learn(); note('lease', { record: r.record.number }) }
       else {
         const read = await readStanding(h)
@@ -555,7 +597,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     for (const end = Date.now() + 1_000; inflight.size && Date.now() < end;) await tick(50)
     // One renew first: it carries the outcomes of sends that ended since the last one (a
     // frozen holder renews no more, so they would stay unknown at the new leader).
-    await proposeAndWait(h, (c) => c.renew(), 3_000)
+    await proposeAndWait(h, (c) => c.renew(undefined, { carryOutcomes: true }), 3_000)
     const r = await proposeAndWait(h, (c) => c.handover(to), 8_000)
     if (r?.outcome === 'chosen') {
       handoverRecord = r.record
