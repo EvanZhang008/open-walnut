@@ -68,7 +68,10 @@ final class DirectorsUITests: XCTestCase {
     private func afterPress(_ app: XCUIApplication, _ id: String) -> String {
         let drawer = app.segmentedControls["chat.drawer.viewSwitch"].exists
         let row = element(app, "chat.drawer.director.\(id)").exists
-        let opened = element(app, "chat.orgFirstMessage.field").exists || element(app, "org.node.page").exists
+        // A VP's chat this fixture does not serve falls back to the Personal AI with this notice
+        // (CI run 45758431154: the VP's press acted as a tap and only the notice told it).
+        let gone = app.staticTexts["That chat is no longer available."].exists
+        let opened = gone || element(app, "chat.orgFirstMessage.field").exists || element(app, "org.node.page").exists
         return "after the press the drawer is \(drawer ? "out" : "gone"), the row \(row ? "shown" : "gone"), "
             + (opened ? "and the row's chat opened: the press acted as a tap" : "and no chat opened")
     }
@@ -106,11 +109,16 @@ final class DirectorsUITests: XCTestCase {
         XCTAssertTrue(element(app, "chat.drawer.director.d3").waitForNonExistence(timeout: 10), "the removed Director stayed")
         XCTAssertEqual(org.writes(.patch).last?["director"] as? String, "no")
         XCTAssertEqual(org.patchedIds.last, "d3")
+        // The Remove re-reads the org, and that read redraws the list: a row redrawn under a finger
+        // loses the long-press menu it was about to show, and the press acts as a tap (ChatDrawer
+        // loadOrg). On CI the VP's press was taken as a tap and opened its chat (run 45758431154,
+        // failure hierarchy: "That chat is no longer available."), so the press waits for that read.
+        XCTAssertTrue(waitFor { [org] in org.readOrgSinceLastWrite }, "the drawer never read the org again after the Remove")
 
         // Long press on the VP: New Director… asks a name and (it leads two) a project.
         longPress(app.buttons["chat.drawer.org.project:walnut"])
         let new = app.buttons["New Director…"]
-        XCTAssertTrue(new.waitForExistence(timeout: 5), "no New Director on a VP's long press")
+        XCTAssertTrue(new.waitForExistence(timeout: 5), "no New Director on a VP's long press; \(afterPress(app, "d3"))")
         attach(app, "ios-directors-vp-longpress")
         new.tap()
         let field = element(app, "chat.newDirector.field")
@@ -178,6 +186,13 @@ final class DirectorsFixture: @unchecked Sendable {
     private var layout = "fold"
     private var log: [(Write, [String: Any])] = []
     private(set) var patchedIds: [String] = []
+    private var orgReadAfterWrite = false
+
+    /// True once the app read the org tree after the last write it sent (its reload after a Remove).
+    var readOrgSinceLastWrite: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return orgReadAfterWrite
+    }
 
     func writes(_ kind: Write) -> [[String: Any]] {
         lock.lock(); defer { lock.unlock() }
@@ -190,6 +205,7 @@ final class DirectorsFixture: @unchecked Sendable {
         let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         switch (method, path) {
         case ("GET", "/api/v1/org"):
+            orgReadAfterWrite = true
             return (200, ["tree": tree()])
         case ("GET", "/api/v1/org/settings"):
             return (200, settings())
@@ -209,6 +225,7 @@ final class DirectorsFixture: @unchecked Sendable {
                 let id = String(path.dropFirst("/api/v1/tasks/".count))
                 log.append((.patch, json))
                 patchedIds.append(id)
+                orgReadAfterWrite = false
                 if json["director"] as? String == "no" { removed.insert(id) }
                 var r = row(id, id, project: "Walnut")
                 r["director"] = json["director"]
