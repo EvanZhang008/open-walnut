@@ -40,4 +40,20 @@ describe('boot draws in slices', () => {
     const src = read('web/src/hooks/useThreadMarks.ts');
     expect(src).toMatch(/if \(derivedOnce\.current\) derive\(\);\s*else raf = requestAnimationFrame\(\(\) => \{ raf = 0; first = setTimeout\(derive, 0\); \}\);/);
   });
+
+  it('a Back or Forward during the sliced mount is caught up after the commit', () => {
+    // BrowserRouter listens for popstate only from its commit; a popstate during the transition was
+    // lost, the address changed and the page did not (2026-11-26, settings-panes.spec C47).
+    const main = read('web/src/main.tsx');
+    const router = main.slice(main.indexOf('<BrowserRouter'), main.indexOf('</BrowserRouter>'));
+    expect(router).toContain('<RouterLocationResync />');
+    const resync = main.slice(main.indexOf('function RouterLocationResync'), main.indexOf('function MountCommitted'));
+    // A passive effect: the router's listener (a layout effect) is in place when it replays.
+    expect(resync).toMatch(/useEffect\(/);
+    expect(resync).not.toMatch(/useLayoutEffect\(/);
+    expect(resync).toContain("new PopStateEvent('popstate'");
+    // Only a popstate heard during the mount is replayed, never an address set by replaceState.
+    expect(resync).toMatch(/if \(!missed\) return;/);
+    expect(main).toMatch(/watchMountPopstate\(\);\s*startTransition\(\(\) => renderApp\(generation\)\)/);
+  });
 });

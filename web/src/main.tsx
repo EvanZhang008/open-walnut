@@ -6,9 +6,9 @@ import './utils/trace-dispatchers';
 // Second: starts loading the app this window shows (App, or a pop-out's own view) while the
 // rest of this entry evaluates (boot-shell.ts).
 import { isPopoutWindow, loadPluginLoader, shellReady } from './boot-shell';
-import { StrictMode, startTransition, useLayoutEffect, type ComponentType } from 'react';
+import { StrictMode, startTransition, useEffect, useLayoutEffect, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 import { AppErrorBoundary } from './components/common/AppErrorBoundary';
 import { errorText } from './utils/error-text';
 import { ConfirmProvider } from './hooks/useConfirm';
@@ -156,6 +156,37 @@ function startWebPlugins(): void {
   });
 }
 
+/**
+ * Catches up a Back or Forward the router missed while the tree mounted. The first mount is a
+ * transition drawn in slices (about a second at the user's density), and BrowserRouter listens for
+ * popstate only from its commit: a Back pressed meanwhile changed the address but not the page
+ * (2026-11-26, settings-panes.spec C47). After the commit (a passive effect, so the router's own
+ * listener, set in a layout effect, is already there) a URL that differs from the router's location
+ * is replayed as one popstate, which the router reads from window.location as it does any Back.
+ */
+function RouterLocationResync(): null {
+  const location = useLocation();
+  useEffect(() => {
+    const missed = popstateDuringMount;
+    stopWatchingMountPopstate();
+    // Only a Back or Forward the router could not hear is replayed: an address another part of
+    // the app set with history.replaceState stays its own business.
+    if (!missed) return;
+    const here = window.location;
+    if (here.pathname === location.pathname && here.search === location.search && here.hash === location.hash) return;
+    window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    // Only the first mount can miss one: later popstates reach the router's listener directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
+/** Set by a popstate between the first render and the router's commit (watchMountPopstate). */
+let popstateDuringMount = false;
+const notePopstate = (): void => { popstateDuringMount = true; };
+function watchMountPopstate(): void { window.addEventListener('popstate', notePopstate); }
+function stopWatchingMountPopstate(): void { window.removeEventListener('popstate', notePopstate); }
+
 /** Ends the boot's react-mount phase at the tree's first commit (a later remount ends nothing). */
 let mountCommitted = false;
 function MountCommitted(): null {
@@ -300,6 +331,7 @@ function bootApp(): void {
               <Shell />
             </AppErrorBoundary>
           </ConfirmProvider>
+          <RouterLocationResync />
         </BrowserRouter>
         <MountCommitted />
       </StrictMode>,
@@ -308,6 +340,7 @@ function bootApp(): void {
     // A transition: React draws the whole tree in slices of a few ms, so a key or a click during
     // the mount goes first. Drawn at once it was one task of 1.2 to 1.3 s on a 4x slower CPU at
     // the user's density (2026-11-16, task 9bceb9f2). The late-prefs remount below stays urgent.
+    watchMountPopstate();
     startTransition(() => renderApp(generation));
     // The prefs read at boot timed out and answered later (ui-prefs-sync.ts): mount once more
     // on them, unless that would lose unsaved text or the console has gone (signed out).
