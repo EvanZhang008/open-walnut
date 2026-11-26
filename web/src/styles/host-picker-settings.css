@@ -21,15 +21,8 @@
   min-width: 0;
   max-width: 10em;
 }
-/* A bare text node in a flex button never ellipsizes (WebKit or Chromium): the span does. */
-.sps-host-tab-label {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 10em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* A long name ends in an ellipsis: the Chip's own label (.wn-chip-label, choice-controls.css)
+   cuts it, inside the tab's 10em. */
 .session-path-selector .sps-host-hint { flex: none; }
 
 /* ── Picker: the one note row above the list (readiness / connect / listing / off) ── */

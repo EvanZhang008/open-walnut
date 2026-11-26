@@ -749,7 +749,7 @@ function SideQuestionDrawerBody({
                       </span>
                     )}
                   >
-                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
+                    {sideThreadLabel(t)}
                   </Chip>
                   {/* Not rendered for a pending row: there is no server-side thread to
                       file yet, and the id would be the optimistic one. */}
@@ -803,7 +803,7 @@ function SideQuestionDrawerBody({
                     title={`${sideThreadLabel(t)}: open it (read-only until restored)`}
                     trailing={t.promotedTaskId && <span className="side-thread-chip-badge">{'✓task'}</span>}
                   >
-                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
+                    {sideThreadLabel(t)}
                   </Chip>
                   <button
                     className="side-thread-chip-archive"

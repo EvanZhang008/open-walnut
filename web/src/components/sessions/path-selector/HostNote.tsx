@@ -64,7 +64,7 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
             leading={dot && <HostStatusDot dot={dot} host={tab.key} decorative />}
             trailing={tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
           >
-            <span className="sps-host-tab-label">{tab.label}</span>
+            {tab.label}
           </Chip>
         );
       })}

@@ -21220,13 +21220,9 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   max-height: 90px;
   overflow-y: auto;
 }
-/* The thread picks are the shared Chip (controls/Chip.tsx); here only their width. */
+/* The thread picks are the shared Chip (controls/Chip.tsx); here only their width: the Chip's own
+   label ends a long name in an ellipsis, and the open thread shows its question whole. */
 .side-thread-chip { max-width: 220px; }
-.side-thread-chip-title {
-  overflow: hidden;
-  text-overflow: ellipsis; /* meta: a capped chip in the side threads' chip strip; the open thread shows its question whole */
-  white-space: nowrap;
-}
 /* Chip + its archive affordance. A wrapper rather than a nested button (invalid
    HTML), so the × can be its own control while looking like part of the pill. */
 .side-thread-chip-wrap {

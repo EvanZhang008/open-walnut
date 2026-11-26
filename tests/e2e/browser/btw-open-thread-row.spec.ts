@@ -95,7 +95,7 @@ test('btw opens its kept thread at every column width, and the panel and its con
   await clampColumn(page, 480, { exact: true });
   await page.waitForTimeout(150);
   await openBtw(page, panel, popover);
-  await expect(popover.locator('.side-thread-chip-title')).toHaveText('Report table status options');
+  await expect(popover.locator('.side-thread-chip:not(.side-thread-chip-new) .wn-chip-label')).toHaveText('Report table status options');
   expect(await rowShapes(page), 'the controls row kept changing with btw open').toHaveLength(1);
   const threadBox = popover.locator('.side-question-composer textarea');
   await threadBox.fill('a follow-up typed in the thread');

@@ -327,7 +327,9 @@ test.describe('twelve hosts', () => {
     }
 
     const facts = await tabs.evaluateAll((els) => els.map((el) => {
-      const label = el.querySelector('.sps-host-tab-label') as HTMLElement
+      // The Chip's own label cuts the name (18510bbab3 moved the tabs onto Chip: a span of the tab's
+      // own inside it was an inline box, whose clip never applied).
+      const label = el.querySelector('.wn-chip-label') as HTMLElement
       const dot = el.querySelector('.sps-host-dot')
       const cs = getComputedStyle(label)
       return {
