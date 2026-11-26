@@ -9,8 +9,8 @@
  *   2. A write's step gets a copy of its own: changing it in place (and throwing, or not) never
  *      changes what a reader holds; neither does a caller changing the thread a write hands back.
  *   3. A write here, and a write of the file by another writer, are seen by the next read.
- *   4. With WALNUT_THREADS_FREEZE_READS=1 a shared read is frozen, so a reader that changes it throws
- *      in tests; the store's own read paths run on such reads.
+ *   4. With WALNUT_THREADS_FREEZE_READS=1 (every test run's default) a shared read is frozen, so a
+ *      reader that changes it throws in tests; the store's own read paths run on such reads.
  *
  * How the readers are kept from changing what they read (the audit of 2026-11-25): every caller of
  * readThreads only reads it, copies before it sorts (`[...threads].sort`), or builds new objects
@@ -75,8 +75,11 @@ beforeEach(async () => {
   _setThreadsExportEveryForTesting(0)
 })
 
+// The run's own setting (on by default: tests/setup/threads-freeze-reads.ts), back after each test.
+const FREEZE_SETTING = process.env.WALNUT_THREADS_FREEZE_READS
 afterEach(() => {
-  delete process.env.WALNUT_THREADS_FREEZE_READS
+  if (FREEZE_SETTING === undefined) delete process.env.WALNUT_THREADS_FREEZE_READS
+  else process.env.WALNUT_THREADS_FREEZE_READS = FREEZE_SETTING
 })
 
 afterAll(async () => {

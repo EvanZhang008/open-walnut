@@ -24,6 +24,7 @@ import { currentLastWords } from './sessions/last-words.js';
 import { personMarkedNeeds } from './sessions/person-needs.js';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
+import { rethrowFrozenWrite } from './org/frozen-read.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { createLateGather } from './session-channel/late-gather.js';
@@ -206,6 +207,7 @@ async function timedRead<T>(took: Record<string, number>, what: string, work: ()
 
 async function safely<T>(what: string, fn: () => Promise<T>, fallback: T): Promise<T> {
   try { return await fn(); } catch (err) {
+    rethrowFrozenWrite(err);
     log.task.debug('user-status: a fact source was unreadable, deriving without it', { source: what, error: errText(err) });
     return fallback;
   }

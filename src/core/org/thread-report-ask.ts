@@ -54,6 +54,7 @@ import { log } from '../../logging/index.js';
 import { oneCardNow } from './one-card.js';
 import { replyTagNow, replyTagOn } from './reply-card-switch.js';
 import { threadAskText } from './thread-task-ask.js';
+import { rethrowFrozenWrite } from './frozen-read.js';
 import type { ThreadDecision } from './thread-held-decision.js';
 
 /** The question kept on the place, for the record. */
@@ -310,7 +311,8 @@ export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgTh
     const placed = ask && !needsThreadOf(list, taskAskWords(ask)) ? ask : null;
     if (placed ? list.some((t) => t.reportAsk?.id === placed.id) || !askThreadFor(list, undefined, placed.since) : !list.some((t) => t.reportAsk)) return false;
     return await store.placeTaskAsk(task.id, placed);
-  } catch {
+  } catch (err) {
+    rethrowFrozenWrite(err);
     return false;
   }
 }

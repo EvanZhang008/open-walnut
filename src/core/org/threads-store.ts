@@ -22,7 +22,8 @@ import {
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
-import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, freezeReadForTests, jsonNodes, threadsJsonFile as threadsFile, VIEW_KEEP_MS } from './threads-sync.js';
+import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile, VIEW_KEEP_MS } from './threads-sync.js';
+import { freezeReadForTests, rethrowFrozenWrite } from './frozen-read.js';
 import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerView, pointerTaskIds } from './thread-task-ask.js';
 import { heldCandidate, ownThreadTaskIds } from './thread-subject-pairs.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
@@ -129,7 +130,8 @@ export async function nodeView<T extends OrgThread>(taskId: string, threads: rea
       return task ? [{ thread: c.thread as OrgThread, task, carries: c.carries }] : [];
     });
     return { threads: withHeldAsk(node, view.threads), carried };
-  } catch {
+  } catch (err) {
+    rethrowFrozenWrite(err);
     return plain(threads);
   }
 }

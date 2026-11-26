@@ -27,6 +27,7 @@ import { dbNodes, dirtyNodes, dropExpired, loadNode, markDirty, nodeRow, replace
 import { mergeThreadsConflict } from './threads-merge.js'
 import { CLOSED_KEEP_MS, normalizeThreads, ThreadError, type OrgThread, type ThreadsFile } from './threads-model.js'
 import { registerMemoryHolder } from '../observability/memory-ledger.js'
+import { freezeReadForTests } from './frozen-read.js'
 
 export const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -407,22 +408,6 @@ function sharedView(node: string): ThreadsFile {
  */
 function storedNow(node: string): ThreadsFile {
   return liveEntry(node)?.view ?? current(node).file
-}
-
-/**
- * A test run with WALNUT_THREADS_FREEZE_READS=1 freezes every shared read, so a reader that
- * changes what it read throws there instead of changing it for every other reader
- * (tests/core/org/threads-shared-read.test.ts). Never in a server: nothing is frozen at run time.
- */
-export function freezeReadForTests<T>(file: T): T {
-  if (TEST_PROCESS && process.env.WALNUT_THREADS_FREEZE_READS === '1') deepFreeze(file)
-  return file
-}
-
-function deepFreeze(v: unknown): void {
-  if (!v || typeof v !== 'object' || Object.isFrozen(v)) return
-  Object.freeze(v)
-  for (const k of Object.keys(v)) deepFreeze((v as Record<string, unknown>)[k])
 }
 
 /** One clock for every view: a view not read for VIEW_KEEP_MS is let go (its text stays). */

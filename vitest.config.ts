@@ -99,7 +99,7 @@ export default defineConfig({
       'tests/setup/temp-tree-rm.ts',
       'tests/setup/worker-watchdog.ts',
       // toEqual on bytes compares bytes: see the file.
-      'tests/setup/byte-equality.ts', 'tests/setup/outage-repeat-reset.ts', 'tests/setup/quiet-retry-off.ts',
+      'tests/setup/byte-equality.ts', 'tests/setup/outage-repeat-reset.ts', 'tests/setup/quiet-retry-off.ts', 'tests/setup/threads-freeze-reads.ts',
       // A test's starts never depend on this machine's size: see the file.
       'tests/setup/host-slots-pin.ts',
     ],
