@@ -13,6 +13,11 @@
  *   in  : { id, texts: string[], recallK? }  texts arrive prefixed + truncated
  *   out : { id, buf: ArrayBuffer, dims, recall? }  Int8Array rows, one per text
  *         { id, error: string }
+ *   in  : { id, rescore: { vec: ArrayBuffer, ids: number[] } }  the semantic
+ *         rescore (query lane): vec is the query's Int8 vector, ids the pool's docs
+ *   out : { id, rescore: { ids: number[], cos: number[] } }  max cosine per doc
+ *         over its doc_vec rows (rows of another length skipped; a doc with no
+ *         usable vector is absent), or { id, error }
  *   in  : { id, probe: { model } }  `walnut __selftest`: load the library the way
  *         a job does and run `model` (a one-node ONNX graph) on its onnxruntime
  *   out : { id, probe: { pipeline, y } }
@@ -26,11 +31,19 @@
  * top-K docIds. Runs HERE because the scan is sync CPU the host event loop
  * must never pay; the worker reads the index through its own READONLY
  * connection and caches the matrix briefly (a recall lane tolerates staleness).
+ *
+ * Semantic rescore (rescore job): the pool's vectors are read HERE for the same
+ * reason. On a big index every doc_vec row spills to an overflow page, so the
+ * read is ~2 random page reads per vector, 800 to 2200 vectors per query: cold
+ * I/O that measured 270-480 ms per call on the host thread in production. It
+ * never loads the model, and reuses one readonly connection.
  */
 
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import Database from '../sqlite.js';
+import Database, { type Database as SqliteDb } from '../sqlite.js';
+import { readMaxCosines } from './doc-vec-cosine.js';
 
 const requireModule = createRequire(import.meta.url);
 
@@ -46,7 +59,7 @@ interface WorkerConfig {
    *  pipeline API doesn't support last-token pooling, so that path drops to
    *  AutoTokenizer/AutoModel and pools by attention mask manually). */
   pooling?: 'mean' | 'last';
-  /** Index db file for the recall lane; absent = recall disabled. */
+  /** Index db file for the recall lane and the rescore; absent = both disabled. */
   dbPath?: string;
   /** Which embedder lane started this worker (embedder.ts makeLane). */
   lane?: 'query' | 'passage';
@@ -239,33 +252,68 @@ interface VecMatrix {
 
 let matrix: VecMatrix | null = null;
 
+/**
+ * The worker's one READONLY connection to the index, kept open across jobs:
+ * WAL supports readers in other processes, and this worker must never be able
+ * to write or lock the host's handle. Reopened when the file at dbPath is no
+ * longer the one it opened (a rebuilt or replaced index), and after any error.
+ */
+let indexConn: { db: SqliteDb; dev: number; ino: number } | null = null;
+
+function indexDb(): SqliteDb | null {
+  if (!config.dbPath) return null;
+  const st = fs.statSync(config.dbPath);
+  if (indexConn && (indexConn.dev !== st.dev || indexConn.ino !== st.ino)) dropIndexDb();
+  if (!indexConn) {
+    indexConn = { db: new Database(config.dbPath, { readonly: true, fileMustExist: true }), dev: st.dev, ino: st.ino };
+  }
+  return indexConn.db;
+}
+
+function dropIndexDb(): void {
+  try { indexConn?.db.close(); } catch { /* reopened on the next job either way */ }
+  indexConn = null;
+}
+
 function loadMatrix(): VecMatrix | null {
   if (!config.dbPath) return null;
   if (matrix && Date.now() - matrix.loadedAt < MATRIX_TTL_MS) return matrix;
   try {
-    // Own READONLY connection: WAL supports readers in other processes, and
-    // this worker must never be able to write or lock the host's handle.
-    const db = new Database(config.dbPath, { readonly: true, fileMustExist: true });
-    try {
-      const rows = db.prepare(
-        'SELECT doc_id, vec FROM doc_vec WHERE seq = 0',
-      ).all() as Array<{ doc_id: number; vec: Buffer }>;
-      const ids: number[] = [];
-      const mat = new Int8Array(rows.length * config.dims);
-      let n = 0;
-      for (const row of rows) {
-        if (row.vec.byteLength !== config.dims) continue; // model changed mid-flight
-        mat.set(new Int8Array(row.vec.buffer, row.vec.byteOffset, config.dims), n * config.dims);
-        ids.push(row.doc_id);
-        n++;
-      }
-      matrix = { ids, mat: mat.subarray(0, n * config.dims), loadedAt: Date.now() };
-      return matrix;
-    } finally {
-      db.close();
+    const db = indexDb();
+    if (!db) return null;
+    const rows = db.prepare(
+      'SELECT doc_id, vec FROM doc_vec WHERE seq = 0',
+    ).all() as Array<{ doc_id: number; vec: Buffer }>;
+    const ids: number[] = [];
+    const mat = new Int8Array(rows.length * config.dims);
+    let n = 0;
+    for (const row of rows) {
+      if (row.vec.byteLength !== config.dims) continue; // model changed mid-flight
+      mat.set(new Int8Array(row.vec.buffer, row.vec.byteOffset, config.dims), n * config.dims);
+      ids.push(row.doc_id);
+      n++;
     }
+    matrix = { ids, mat: mat.subarray(0, n * config.dims), loadedAt: Date.now() };
+    return matrix;
   } catch {
+    dropIndexDb();
     return null; // recall is an enhancement — no matrix, no recall
+  }
+}
+
+interface RescoreJob { id: number; rescore: { vec: ArrayBuffer; ids: number[] } }
+
+/** The rescore job's reply (protocol above). Synchronous: no model, no await. */
+function rescore(job: RescoreJob): object {
+  if (stopping) return { id: job.id, error: 'embed worker stopping' };
+  try {
+    const db = indexDb();
+    if (!db) return { id: job.id, error: 'no index db for the rescore' };
+    const best = readMaxCosines(db, new Int8Array(job.rescore.vec), job.rescore.ids);
+    return { id: job.id, rescore: { ids: [...best.keys()], cos: [...best.values()] } };
+  } catch (err) {
+    dropIndexDb();
+    return { id: job.id, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -351,10 +399,14 @@ async function probe(job: Probe): Promise<void> {
   }
 }
 
-process.on('message', (msg: Job | Probe | { stop: true }) => {
+process.on('message', (msg: Job | Probe | RescoreJob | { stop: true }) => {
   if ('stop' in msg) {
     stopping = true;
     exitIfDrained();
+    return;
+  }
+  if ('rescore' in msg) {
+    reply(rescore(msg));
     return;
   }
   if ('probe' in msg) {

@@ -10,6 +10,8 @@
 // The host forks this as a child process (embedder.ts) and talks to it over IPC.
 const send = (msg) => { if (process.connected) process.send(msg, undefined, undefined, () => {}); };
 const DIMS = 4;
+const { rescoreReply } = require('./rescore-job.cjs');
+const workerData = JSON.parse(process.env.HYBRID_SEARCH_EMBED_WORKER_CONFIG || '{}');
 const STALL_MS = 1000;
 
 let served = 0;
@@ -17,6 +19,8 @@ let served = 0;
 process.on('message', (msg) => {
   // The host's stop request (embedder.ts terminate): exit at once.
   if (msg && msg.stop) process.exit(0);
+  // The rescore reads vectors, no model: always answered at once.
+  if (msg && msg.rescore) { send(rescoreReply(msg, workerData)); return; }
   const { id, texts } = msg;
   const buf = new Int8Array(texts.length * DIMS);
   for (let i = 0; i < texts.length; i++) buf[i * DIMS] = 127;

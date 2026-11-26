@@ -57,7 +57,8 @@ import {
   W_RECENCY,
   type KeywordHit,
 } from './query.js';
-import { cosineInt8, createEmbedder, embedFailureKind, type Embedder } from './embedder.js';
+import { createEmbedder, embedFailureKind, type Embedder, type RescoreStats } from './embedder.js';
+import { readMaxCosines } from './doc-vec-cosine.js';
 import {
   passagesForDoc,
   DEFAULT_PASSAGE_POLICY,
@@ -69,6 +70,7 @@ export type { Doc, DocChangeListener, MissingVecCursor, UpsertResult, IndexStats
 export type { ReplicaDoc, ReplicaImportResult, ReplicaStateRow, ReplicaTagRow, ReplicaVecState } from './replica.js';
 export { tokenize, TOKENIZER_VERSION, DEFAULT_DF_THRESHOLD, MISSING_VEC_SCAN_LIMIT };
 export { cosineInt8, createEmbedder } from './embedder.js';
+export type { RescoreStats } from './embedder.js';
 export { docStampsOfKind } from './db.js';
 export {
   passagesForDoc,
@@ -375,6 +377,9 @@ export interface SearchIndex {
    *  False when there is no embedder, it is suspended, or it did not answer
    *  within `deadlineMs` (default 60 s). */
   warmQueryWorker(deadlineMs?: number): Promise<boolean>;
+  /** How this process's semantic rescores ended (answered, or why keyword order), or null
+   *  when the rescore runs in-thread (an index the worker cannot see) or no embedder. */
+  rescoreStats(): RescoreStats | null;
   /** The semantic lane's model for a caller's own short texts, not docs of the index, on its
    *  workers ONLY while they already run: neither call ever starts one (a model copy is about
    *  2 GB). `running()` says which lane runs now; `query` answers a vector within `deadlineMs`
@@ -575,9 +580,14 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
    *  mixed pools, well under 0.1 on same-topic near-duplicate pools). */
   const SPAN_REF = 0.15;
 
-  const selectVecs = (ids: number[]) => db.prepare(
-    `SELECT doc_id, vec FROM doc_vec WHERE doc_id IN (${ids.map(() => '?').join(',')})`,
-  ).all(...ids) as Array<{ doc_id: number; vec: Buffer }>;
+  /** How long the query worker gets to read the pool's vectors (Embedder.rescore).
+   *  Its own budget, not the embed deadline: that one (150 ms) is already
+   *  spent by the query embed (~140 ms), and the read is cold I/O (two random
+   *  page reads per vector, 800-2200 vectors) measured at 80-145 ms on a cold
+   *  copy and 270-480 ms in production under memory pressure. The host loop is
+   *  free while it waits, so a wait costs only this query's latency; 1 s covers
+   *  the worst measured read twice over and still bounds a stuck worker. */
+  const RESCORE_BUDGET_MS = 1000;
 
   // Slow-query warn throttle (see SLOW_QUERY_LOG_MIN_GAP_MS). Per index handle,
   // which is one per process — the fan-out this collapses is within one request.
@@ -666,6 +676,8 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       );
       seg.keywordMs = performance.now() - t0;
       seg.poolSize = pool.length;
+      /** Keyword order, labelled why the rescore did not run. */
+      const keywordOrder = (why: string) => pool.slice(0, Math.min(limit, seg.poolSize)).map((h) => toScored(h, why));
       const recallK = searchOptions.kinds?.length ? RECALL_K_KIND_FILTERED : RECALL_K;
       lastQueryAt = Date.now();
       const tEmbed = performance.now();
@@ -676,7 +688,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       if (!reply || closed) {
         // A suspended embedder (memory pressure) skipped the rescore on purpose.
         const why = embedder.isSuspended() ? 'skipped' : 'timeout';
-        return publish(why, pool.slice(0, limit).map((h) => toScored(h, why)));
+        return publish(why, keywordOrder(why));
       }
       const tRescore = performance.now();
       const queryVec = reply.vec;
@@ -730,14 +742,23 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
         return publish('ok', [] as ScoredHit[]);
       }
       // Max cosine over a doc's chunk vectors: the best-matching passage
-      // speaks for the doc.
-      const bestCos = new Map<number, number>();
-      for (const row of selectVecs(pool.map((h) => h.docId))) {
-        const vec = new Int8Array(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength);
-        if (vec.length !== queryVec.length) continue; // model changed mid-flight
-        const cos = cosineInt8(queryVec, vec);
-        const prev = bestCos.get(row.doc_id);
-        if (prev === undefined || cos > prev) bestCos.set(row.doc_id, cos);
+      // speaks for the doc. The query worker reads them when it can open the
+      // index (a file); that read is cold I/O the host loop must never pay, so
+      // a worker that cannot answer leaves keyword order, never a read here.
+      // Only an index no other process can see (:memory:) reads in-thread.
+      const poolIds = pool.map((h) => h.docId);
+      let bestCos: Map<number, number>;
+      if (embedder.rescore) {
+        const best = await embedder.rescore(queryVec, poolIds, RESCORE_BUDGET_MS);
+        lastQueryAt = Date.now();
+        if (!best || closed) {
+          seg.rescoreMs = performance.now() - tRescore;
+          const why = embedder.isSuspended() ? 'skipped' : 'timeout';
+          return publish(why, keywordOrder(why));
+        }
+        bestCos = best;
+      } else {
+        bestCos = readMaxCosines(db, queryVec, poolIds);
       }
       if (bestCos.size === 0) {
         // No candidate has vectors yet (fresh index mid-backfill): keyword
@@ -999,6 +1020,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     optimize: () => optimizeIndex(db),
     stopEmbedder: async () => { embedderStopped = true; await embedder?.dispose(); },
+    rescoreStats: () => embedder?.rescoreStats?.() ?? null,
     suspendEmbedder: async () => { await embedder?.suspend(); },
     releasePassageWorker: async () => (embedder ? embedder.releasePassageWorker() : false),
     resumeEmbedder: () => { embedder?.resume(); },

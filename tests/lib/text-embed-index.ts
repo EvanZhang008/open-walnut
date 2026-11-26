@@ -34,6 +34,9 @@ export interface TextKnobs {
   crashJobs?: number;
   jobFile?: string;
   poisonFile?: string;
+  rescoreHoldMs?: number;
+  rescoreError?: boolean;
+  rescoreLog?: string;
 }
 
 export interface TextIndexHandle {

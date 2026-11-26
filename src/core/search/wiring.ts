@@ -43,6 +43,7 @@ import { clearTaskSearchRequeue, setTaskSearchRequeue } from './task-requeue.js'
 import { listPersonWordsTasks } from '../sessions/user-asks.js';
 import { EventNames, type EventBus } from '../event-bus.js';
 import { memoryPressureShedding, onMemoryPressureChange } from '../memory-pressure.js';
+import { registerSampleNote } from '../observability/memory-ledger.js';
 import { taskStoreSnapshot } from '../task-manager.js';
 import { listSessionsForTasks } from '../session-tracker.js';
 import { markdownToDoc, sessionToDoc } from './serializers.js';
@@ -244,6 +245,13 @@ export function currentEmbedModelId(): string | null {
 }
 
 let handle: SearchIndex | null = null;
+// How the semantic rescores of this process ended (the query worker reads the vectors, and a
+// fallback leaves keyword order): on every `memory sample` line, so a rescore that keeps
+// falling back (a worker that cannot open the index, timeouts, memory pressure) is seen.
+registerSampleNote('searchRescore', () => {
+  const s = handle?.rescoreStats();
+  return s ? `ok=${s.ok} suspended=${s.suspended} disposed=${s.disposed} unavailable=${s.unavailable} timeout=${s.timeout} failed=${s.failed}` : '';
+});
 /** The handle was opened with an embedder. Without one a pass "drains" at once
  *  (nothing can be embedded), so its floor proves nothing and is never saved. */
 let handleEmbeds = false;

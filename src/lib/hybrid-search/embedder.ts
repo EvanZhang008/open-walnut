@@ -17,7 +17,10 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { cosineInt8 } from './doc-vec-cosine.js';
 import type { LogFn, WorkerLauncher } from './index.js';
+
+export { cosineInt8 };
 
 export interface EmbedderRuntimeConfig {
   modelId: string;
@@ -34,7 +37,8 @@ export interface EmbedderRuntimeConfig {
    *  caller must pass where its build put the worker entry. */
   workerPath?: string | URL;
   /** Index db file for the worker's own READONLY connection (semantic recall
-   *  lane). Omitted for :memory: indexes — another process can't see them. */
+   *  lane and the rescore). Omitted for :memory: indexes — another process
+   *  can't see them, and the embedder then has no rescore(). */
   dbPath?: string;
   /** How long a cached reply may still serve its RECALL list (default 20s).
    *  Test seam / tuning knob; the cached VECTOR has no expiry. */
@@ -62,6 +66,26 @@ export interface QueryEmbedding {
   source?: 'worker' | 'cache' | 'cache-vec';
 }
 
+/**
+ * How Embedder.rescore calls ended: answered, or why they fell back to keyword order. A worker
+ * that cannot open the index (permissions, a build missing a file) answers every rescore with an
+ * error, so semantic ranking would stay off without a word; these counts ride the server's
+ * periodic sample line and each new reason warns once per process.
+ */
+export interface RescoreStats {
+  ok: number;
+  /** Memory pressure suspended the workers. */
+  suspended: number;
+  /** The embedder was stopped (shutdown). */
+  disposed: number;
+  /** No query worker could be started. */
+  unavailable: number;
+  /** The worker did not answer within the budget. */
+  timeout: number;
+  /** The worker answered an error (it could not open or read the index) or no answer. */
+  failed: number;
+}
+
 export interface Embedder {
   /** Embed one query (optionally with doc-level KNN recall). Resolves null
    *  when the deadline expires or the worker is unavailable — callers degrade
@@ -70,6 +94,16 @@ export interface Embedder {
   /** Embed passages (backfill path, no deadline). Throws on worker failure so
    *  the backfill loop can stop instead of writing garbage. */
   embedPassages(texts: string[]): Promise<Int8Array[]>;
+  /** The semantic rescore's vector read, done by the QUERY worker on its own
+   *  readonly connection so the host thread never pays its cold I/O: max
+   *  cosine of `vec` per doc of `ids` (a doc with no usable vector is absent).
+   *  Null when the worker is unavailable, suspended or disposed, it failed, or
+   *  `budgetMs` ran out; the caller then keeps keyword order, never reading the
+   *  vectors itself. Present only when the index is a file the worker can open
+   *  (config.dbPath). */
+  rescore?(vec: Int8Array, ids: number[], budgetMs: number): Promise<Map<number, number> | null>;
+  /** How the rescores of this process ended (present with rescore). */
+  rescoreStats?(): Readonly<RescoreStats>;
   /** Give the model memory back (machine memory pressure): stop both workers
    *  (a run in flight finishes first) and spawn none until resume(). Queries
    *  degrade to a cached vector or keyword order; passages reject. */
@@ -126,6 +160,8 @@ interface WorkerMessage {
   dims?: number;
   error?: string;
   recall?: RecallHit[];
+  /** A rescore job's answer (embed-worker.ts protocol). */
+  rescore?: { ids: number[]; cos: number[] };
 }
 
 /**
@@ -163,9 +199,17 @@ interface WorkerReply {
 }
 
 interface Pending {
-  resolve: (reply: WorkerReply) => void;
+  resolve: (msg: WorkerMessage) => void;
   reject: (err: Error) => void;
-  count: number;
+}
+
+/** An embed job's reply as rows, one per text it sent. */
+function embedReply(msg: WorkerMessage, count: number): WorkerReply {
+  if (!msg.buf || !msg.dims) throw embedError('embed worker returned no data', 'replied');
+  const flat = new Int8Array(msg.buf);
+  const rows: Int8Array[] = [];
+  for (let i = 0; i < count; i++) rows.push(flat.slice(i * msg.dims, (i + 1) * msg.dims));
+  return { rows, recall: msg.recall ?? [] };
 }
 
 /**
@@ -185,26 +229,18 @@ function trackWorker(w: ChildProcess): void {
   });
 }
 
-export function cosineInt8(a: Int8Array, b: Int8Array): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / Math.sqrt(na * nb);
-}
-
 /** One worker + its in-flight bookkeeping. The embedder runs TWO of these —
  *  a QUERY lane and a PASSAGE lane, each reaped when idle, so an
  *  interactive query embed can never queue behind a backfill/re-embed
  *  inference (measured: one 2KB passage is ~0.5-1s on a busy machine, which
  *  alone eats an interactive deadline; a batch used to be 22s). */
 interface Lane {
-  submit(texts: string[], recallK?: number): { id: number; promise: Promise<WorkerReply> } | null;
+  /** Send one job (embed-worker.ts protocol); resolves with the worker's
+   *  reply, rejects on an error reply or a worker gone. Null: no worker. */
+  submit(job: object): { id: number; promise: Promise<WorkerMessage> } | null;
+  /** Drop a job the caller stopped waiting for: its late reply is ignored,
+   *  and nothing of it stays behind. */
+  forget(id: number): void;
   /** No job in flight. */
   idle(): boolean;
   /** A worker (with its model) exists right now. */
@@ -362,29 +398,22 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
       let markClosed!: () => void;
       closedOf.set(w, new Promise<void>((resolve) => { markClosed = resolve; }));
       w.on('message', (msg: WorkerMessage) => {
-        // Only a SUCCESSFUL reply proves health. Resetting on error replies (or
-        // counting any reply) lets a worker that answers a few batches and then
-        // dies on a poison input reload the model forever without ever tripping
-        // the 3-strike containment.
-        if (msg.error === undefined) crashes = 0;
+        // Only a SUCCESSFUL EMBED reply proves health. Resetting on error
+        // replies (or counting any reply) lets a worker that answers a few
+        // batches and then dies on a poison input reload the model forever
+        // without ever tripping the 3-strike containment; a rescore answer
+        // needs no model, so it proves nothing about one either.
+        if (msg.error === undefined && msg.buf) crashes = 0;
         const p = pending.get(msg.id);
-        if (!p) return; // terminated: failAllPending already settled it
+        if (!p) return; // terminated, or forgotten by a caller that gave up
         pending.delete(msg.id);
         if (pending.size === 0 && worker === w) hold(w, false);
-        if (msg.error !== undefined || !msg.buf || !msg.dims) {
+        if (msg.error !== undefined) {
           // A worker asked to stop refuses new jobs: that is the stop, not the input.
-          p.reject(embedError(
-            msg.error ?? 'embed worker returned no data',
-            msg.error === 'embed worker stopping' ? 'terminated' : 'replied',
-          ));
+          p.reject(embedError(msg.error, msg.error === 'embed worker stopping' ? 'terminated' : 'replied'));
           return;
         }
-        const flat = new Int8Array(msg.buf);
-        const rows: Int8Array[] = [];
-        for (let i = 0; i < p.count; i++) {
-          rows.push(flat.slice(i * msg.dims, (i + 1) * msg.dims));
-        }
-        p.resolve({ rows, recall: msg.recall ?? [] });
+        p.resolve(msg);
       });
       let gone = false;
       const onGone = (code: number | null, signal: NodeJS.Signals | null): void => {
@@ -423,14 +452,14 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     }
 
     return {
-      submit(texts, recallK) {
+      submit(job) {
         const w = getWorker();
         if (!w) return null;
         const id = nextId++;
-        const promise = new Promise<WorkerReply>((resolve, reject) => {
-          pending.set(id, { resolve, reject, count: texts.length });
+        const promise = new Promise<WorkerMessage>((resolve, reject) => {
+          pending.set(id, { resolve, reject });
           if (holdOpen) hold(w, true);
-          w.send({ id, texts, ...(recallK ? { recallK } : {}) }, (err) => {
+          w.send({ ...job, id }, (err) => {
             if (!err || !pending.has(id)) return;
             pending.delete(id);
             if (pending.size === 0 && worker === w) hold(w, false);
@@ -438,6 +467,10 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
           });
         });
         return { id, promise };
+      },
+      forget(id) {
+        if (!pending.delete(id)) return;
+        if (pending.size === 0 && worker) hold(worker, false);
       },
       idle() {
         return pending.size === 0;
@@ -534,6 +567,53 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
     }
   }
 
+  const rescoreStats: RescoreStats = { ok: 0, suspended: 0, disposed: 0, unavailable: 0, timeout: 0, failed: 0 };
+  /** Fallback reasons already warned about (a failure by its message, at most a few kept). */
+  const rescoreWarned = new Set<string>();
+  function rescoreMiss(reason: Exclude<keyof RescoreStats, 'ok'>, error?: string): null {
+    rescoreStats[reason] += 1;
+    const key = reason === 'failed' ? `failed:${error ?? ''}` : reason;
+    if (!rescoreWarned.has(key) && rescoreWarned.size < 16) {
+      rescoreWarned.add(key);
+      log('warn', 'hybrid-search: semantic rescore fell back to keyword order', {
+        reason, ...(error ? { error } : {}), counts: { ...rescoreStats },
+      });
+    }
+    return null;
+  }
+
+  /** Embedder.rescore: one job on the query lane, given up at budgetMs. */
+  async function rescore(vec: Int8Array, ids: number[], budgetMs: number): Promise<Map<number, number> | null> {
+    if (disposed) return rescoreMiss('disposed');
+    if (suspended) return rescoreMiss('suspended');
+    if (ids.length === 0) return new Map();
+    // A copy: the vector may be a view into a larger buffer (a cached reply).
+    const job = queryLane.submit({ rescore: { vec: vec.slice().buffer, ids } });
+    if (!job) return rescoreMiss('unavailable');
+    job.promise.catch(() => {}); // settled after the budget ran out ≠ unhandled
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // REF'd for the same reason as embedQuery's deadline timer.
+      const msg = await Promise.race([
+        job.promise,
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), budgetMs); }),
+      ]);
+      if (disposed) return rescoreMiss('disposed');
+      if (msg === null) return rescoreMiss('timeout');
+      if (!msg.rescore) return rescoreMiss('failed', 'the worker answered no rescore');
+      const best = new Map<number, number>();
+      msg.rescore.ids.forEach((id, i) => best.set(id, msg.rescore!.cos[i]));
+      rescoreStats.ok += 1;
+      return best;
+    } catch (err) {
+      return rescoreMiss('failed', err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timer);
+      queryLane.forget(job.id);
+      armQueryReaper();
+    }
+  }
+
   return {
     async embedQuery(text, deadlineMs = 150, recallK) {
       const prefixed = (config.queryPrefix ?? '') + text.slice(0, MAX_EMBED_CHARS);
@@ -558,9 +638,10 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
       // queries on 2026-09-28 lost the 150ms deadline.
       let promise = inflight.get(cacheKey);
       if (!promise) {
-        const job = queryLane.submit([prefixed], wantRecall);
+        const job = queryLane.submit({ texts: [prefixed], ...(wantRecall ? { recallK: wantRecall } : {}) });
         if (!job) return rescue();
-        promise = job.promise.then((reply) => {
+        promise = job.promise.then((msg) => {
+          const reply = embedReply(msg, 1);
           if (!disposed) remember(cacheKey, { vec: reply.rows[0], recall: reply.recall, at: Date.now() });
           return reply;
         });
@@ -594,14 +675,16 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
 
     async embedPassages(texts) {
       const prefixed = texts.map((t) => (config.passagePrefix ?? '') + t.slice(0, MAX_EMBED_CHARS));
-      const job = passageLane.submit(prefixed);
+      const job = passageLane.submit({ texts: prefixed });
       if (!job) return Promise.reject(embedError('embed worker unavailable', 'unavailable'));
       try {
-        return (await job.promise).rows;
+        return embedReply(await job.promise, prefixed.length).rows;
       } finally {
         armPassageReaper();
       }
     },
+
+    ...(config.dbPath ? { rescore, rescoreStats: () => ({ ...rescoreStats }) } : {}),
 
     async releasePassageWorker() {
       if (disposed || !passageLane.running() || !passageLane.idle()) return false;

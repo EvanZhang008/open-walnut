@@ -15,6 +15,7 @@ const workerData = JSON.parse(process.env.HYBRID_SEARCH_EMBED_WORKER_CONFIG || '
 const send = (msg) => { if (process.connected) process.send(msg, undefined, undefined, () => {}); };
 const fs = require('node:fs');
 const DIMS = 4;
+const { rescoreReply } = require('./rescore-job.cjs');
 // Knobs ride in the model id ("fake/busy:{json}"): the host forwards only its
 // own config fields to a worker.
 const modelId = (workerData && workerData.modelId) || '';
@@ -43,6 +44,7 @@ process.on('message', (msg) => {
     exitIfDrained();
     return;
   }
+  if (msg && msg.rescore) { send(stopping ? { id: msg.id, error: 'embed worker stopping' } : rescoreReply(msg, workerData)); return; }
   const { id, texts } = msg;
   if (stopping) {
     send({ id, error: 'embed worker stopping' });

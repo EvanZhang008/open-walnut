@@ -71,7 +71,8 @@ index.close();
 | `vector-reuse.ts` | keeps the vectors of unchanged passages across a content change |
 | `missing-vectors.ts` | the backfill's work queue: docs without vectors, bounded per call |
 | `query.ts` | lanes, df threshold, gated-pair phrase recall, scoring |
-| `embedder.ts` | worker lifecycle, deadlines, crash containment, `cosineInt8` |
-| `embed-worker.ts` | child-process query/passage embedding (ONNX, int8) |
+| `embedder.ts` | worker lifecycle, deadlines, crash containment, the rescore job |
+| `embed-worker.ts` | child-process query/passage embedding (ONNX, int8), recall KNN, the rescore's vector read |
+| `doc-vec-cosine.ts` | `cosineInt8` and the rescore's max-cosine-per-doc read (worker and in-thread) |
 | `chunk.ts` | passage extraction (head passage / paragraph chunks) |
 | `replica.ts` | index-to-index copy: source states and exports, the copy's import and stamps |

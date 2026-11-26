@@ -14,10 +14,14 @@
  *   poisonFile while this file exists, a job whose text contains its content
  *            exits the process, as crashOn does. Deleting it fixes the cause
  *            without a knob change: a changed model id wipes doc_vec at open.
+ *   rescoreHoldMs  how long a rescore job takes (a cold vector read)
+ *   rescoreError   every rescore job gets an error reply
+ *   rescoreLog     one line per rescore job: its doc ids, comma-separated
  */
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { textVec } = require('./text-vec.cjs');
+const { rescoreReply } = require('./rescore-job.cjs');
 
 const workerData = JSON.parse(process.env.HYBRID_SEARCH_EMBED_WORKER_CONFIG || '{}');
 const modelId = (workerData && workerData.modelId) || '';
@@ -31,6 +35,18 @@ const exitIfDrained = () => { if (stopping && active === 0) process.exit(0); };
 
 process.on('message', (msg) => {
   if (msg && msg.stop) { stopping = true; exitIfDrained(); return; }
+  if (msg && msg.rescore) {
+    if (stopping) { send({ id: msg.id, error: 'embed worker stopping' }); return; }
+    if (opts.rescoreLog) fs.appendFileSync(opts.rescoreLog, msg.rescore.ids.join(',') + '\n');
+    if (opts.rescoreError) { send({ id: msg.id, error: 'rescore failed' }); return; }
+    active++;
+    setTimeout(() => {
+      send(rescoreReply(msg, workerData));
+      active--;
+      exitIfDrained();
+    }, opts.rescoreHoldMs || 0);
+    return;
+  }
   const { id, texts } = msg;
   if (stopping) { send({ id, error: 'embed worker stopping' }); return; }
   if (opts.crashOn && texts.some((t) => t.includes(opts.crashOn))) process.exit(1);
