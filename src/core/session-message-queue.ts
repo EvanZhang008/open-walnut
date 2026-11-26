@@ -424,7 +424,9 @@ export async function sendMessageToSession(
     await refuseOrgDeliveryWhileOff(sessionId, opts?.source, opts?.taskId);
     // Its task is moving to another host: the row is held here and goes with the task.
     const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
-    const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;
+    // Or a leader switch holds it (stopped in the data home, its records not yet in place): the switch releases it.
+    const { heldBySwitch } = await import('./leader/switch/session-hold.js');
+    const heldForMove = movingFrom({ sessionId }) || heldBySwitch(areaRecord) ? MOVE_HELD_REASON : undefined;
     // A message lined up for after the running turn waits in the queue, parked, until that turn ends.
     const { AFTER_TURN_REASON, holdsForRunningTurn, noteAfterTurnHold } = await import('./sessions/queue-after-turn.js');
     const heldForTurn = !heldForMove && opts?.afterTurn === true && opts?.interrupt !== true && await holdsForRunningTurn(sessionId)

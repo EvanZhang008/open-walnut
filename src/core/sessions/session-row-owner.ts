@@ -58,6 +58,8 @@ export const SESSION_FIELD_OWNER = {
   // host only reads them, from its copy): the switch's marks on the old and the new session.
   engineSwitch: L, 'supersededBy': L /* quoted, so the replaced-session guard does not read this key as a write of the mark */, leftContext: L,
   resumedBySwitch: L,
+  // A leader switch's plan for a session in the data home (core/leader/switch/home-sessions.ts): the leader's own.
+  leaderSwitch: L,
   title: L, archived: L, archive_reason: L, human_note: L, output_mode: L, threadAnchors: L, threadMeta: L,
   pinnedMessages: L, passageComments: L, summary: L, summaryGeneratedAt: L, recap: L, recapAt: L, overview: L,
   overviewAt: L,

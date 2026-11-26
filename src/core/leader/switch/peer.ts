@@ -19,7 +19,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import type { BatchOutcome } from '../../standby/index.js'
+import type { BatchOutcome, CarrySource } from '../../standby/index.js'
+import { carryTargetDir } from '../../standby/target-files.js'
 import type { DaemonLink } from '../../standby/remote-transport.js'
 import type { MachinePlace } from './settings.js'
 import { readSwitchFile, switchFolder, targetStateName, writeSwitchFile } from './ticket.js'
@@ -41,6 +42,10 @@ export interface SwitchPeer {
   batch(home: string): Promise<BatchOutcome>
   /** A verify pass of that folder (the copy rebuilt from its chunks where it drifted): how many paths had drifted. */
   verify(): Promise<{ drift: number }>
+  /** One batch of a second place (the sessions' engine records, session-carry.ts) into `<standbyDir>/carry`. */
+  carryBatch(src: CarrySource): Promise<BatchOutcome>
+  /** A verify pass of `<standbyDir>/carry`. */
+  carryVerify(): Promise<{ drift: number }>
   /** Why this link cannot carry a switch now (the other machine's daemon lacks a command), or null. */
   ready(): Promise<string | null>
   /** A file under `<standbyDir>/switch/`, durable when this returns. `null` stands for "none" (a check report cleared). */
@@ -83,6 +88,16 @@ export class LocalPeer implements SwitchPeer {
   async verify(): Promise<{ drift: number }> {
     const { verifyStandby } = await import('../../standby/index.js')
     return { drift: (await verifyStandby(this.standbyDir)).drift.length }
+  }
+
+  async carryBatch(src: CarrySource): Promise<BatchOutcome> {
+    const { snapshotTo } = await import('../../standby/index.js')
+    return snapshotTo(src.root, carryTargetDir(this.standbyDir), { place: src.place, stagingDir: src.stagingDir })
+  }
+
+  async carryVerify(): Promise<{ drift: number }> {
+    const { verifyStandby } = await import('../../standby/index.js')
+    return { drift: (await verifyStandby(carryTargetDir(this.standbyDir))).drift.length }
   }
 
   async ready(): Promise<string | null> { return null }
@@ -169,6 +184,8 @@ export class DaemonPeer implements SwitchPeer {
       linkWaitMs?: number
       /** The batches' target; its link is `via()` (peerFor), so a held link carries them too. */
       target: import('../../standby/remote-transport.js').RemoteStandbyTarget
+      /** The carry's target (`<standbyDir>/carry`), made on first use, its link `via()` too. */
+      carryTarget: () => import('../../standby/remote-transport.js').RemoteStandbyTarget
     },
   ) {
     this.target = o.target
@@ -266,6 +283,22 @@ export class DaemonPeer implements SwitchPeer {
     return { drift: (await this.target.verify()).verify.drift.length }
   }
 
+  async carryBatch(src: CarrySource): Promise<BatchOutcome> {
+    const { takeBatch } = await import('../../standby/index.js')
+    return takeBatch({ home: src.root, place: src.place, transport: this.carryTarget(), stagingDir: src.stagingDir })
+  }
+
+  async carryVerify(): Promise<{ drift: number }> {
+    return { drift: (await this.carryTarget().verify()).verify.drift.length }
+  }
+
+  /** The carry's target there, over this peer's own link (held in a switch stop) like the batches'. */
+  private carry: import('../../standby/remote-transport.js').RemoteStandbyTarget | null = null
+  private carryTarget(): import('../../standby/remote-transport.js').RemoteStandbyTarget {
+    this.carry ??= this.o.carryTarget()
+    return this.carry
+  }
+
   async ready(): Promise<string | null> {
     let c: DaemonLink
     try { c = await this.conn() } catch (err) { return `the daemon on ${this.o.host} does not answer: ${err instanceof Error ? err.message : String(err)}` }
@@ -328,6 +361,7 @@ export class DaemonPeer implements SwitchPeer {
     this.closed = true
     this.letGo = true
     this.target.close()
+    this.carry?.close()
     this.held?.release()
     this.held = null
   }
@@ -355,7 +389,8 @@ export async function peerFor(o: { to: MachinePlace; standby: { dir?: string; ho
     // The batches ride the peer's own link (held through a switch stop, else the pool's).
     let peer: DaemonPeer | null = null
     const target = new RemoteStandbyTarget({ connect: () => peer!.via(), dir: o.to.standbyDir, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), spoolDir: path.join(o.home, 'tmp', 'standby-spool'), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}) })
-    peer = new DaemonPeer(o.to, o.to.standbyDir, { host, connect: () => connect(host), home: o.home, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}), target })
+    const carryTarget = () => new RemoteStandbyTarget({ connect: () => peer!.via(), dir: carryTargetDir(o.to.standbyDir), ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), spoolDir: path.join(o.home, 'tmp', 'standby-carry-spool'), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}) })
+    peer = new DaemonPeer(o.to, o.to.standbyDir, { host, connect: () => connect(host), home: o.home, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}), target, carryTarget })
     return peer
   }
   if (path.resolve(o.standby.dir) !== path.resolve(o.to.standbyDir)) return { refused: `this leader's standby copy goes to ${o.standby.dir}, not to ${o.to.id}'s standby_dir ${o.to.standbyDir}` }

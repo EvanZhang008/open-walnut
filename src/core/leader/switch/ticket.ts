@@ -84,6 +84,11 @@ export interface FinalMark {
   released: true
   /** When the old leader's server began its stop (its doors closed): the downtime starts. */
   stoppedAt: string
+  /**
+   * The engine records of the sessions in the data home (session-carry.ts): the carry's batch that found nothing changed,
+   * and the old home's engine folder name. Absent from an older leader's mark: its sessions in the home do not move.
+   */
+  carry?: { batch: number; homeFolder: string }
   at: string
 }
 

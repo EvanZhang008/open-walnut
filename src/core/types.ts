@@ -3012,7 +3012,34 @@ export interface SessionAutoRecoverState {
  * reached), so the line it carried never ran. Restart recovery sends that line again
  * (`resend`) instead of the resume note (2026-11-05).
  */
-export type RestartLossCause = 'machine_reboot' | 'server_restart' | 'host_restart' | 'start_died';
+export type RestartLossCause = 'machine_reboot' | 'server_restart' | 'host_restart' | 'start_died' | 'leader_switch';
+
+/**
+ * A session in the leader's data home at a leader switch (core/leader/switch/home-sessions.ts). The old leader writes it
+ * at its switch stop, before its final batch: whether the session moves with the leader (`move`: the new leader runs it
+ * on its own machine, in the same place of its home) or ends there (`end`, with `why`), and how its CLI was stopped.
+ */
+export interface LeaderSwitchSessionStamp {
+  switchId: string;
+  plan: 'move' | 'end';
+  /** Plain words: why it ends (plan 'end'), or what kept it from moving after all. */
+  why?: string;
+  /** Where it ran: the old leader's machine id, its data home, the session's folder (under that home). */
+  from: { machine: string; home: string; cwd: string };
+  /** The folder relative to the home ('' is the home itself). */
+  rel: string;
+  /** What its CLI was doing when the stop ended it: a turn (resumed after, as after a restart), idle, or not running. */
+  stopped: 'turn' | 'idle' | 'none';
+  /** Its daemon supervised a session cron of it (daemon-cron-runtime.ts): the new leader starts it even when idle. */
+  supervised?: boolean;
+  /** The stop's id at the daemon (a rollback re-enables its cron supervision with it). */
+  stopRequestId?: string;
+  at: string;
+  /** The new leader's side, set at its promotion and once the records are in place. */
+  moved?: { machine: string; home: string; cwd: string; at: string; records?: 'pending' | 'placed' | 'missing'; carry?: { standbyDir: string; homeFolder: string } };
+  /** This switch rolled back and the session was settled again on the old leader. */
+  rolledBack?: string;
+}
 
 /** Work the dead process was carrying, read from the stream fold at its death. */
 export type RestartLostWork = 'turn' | 'background' | 'wakeup' | 'cron' | 'team';
@@ -4283,7 +4310,10 @@ export interface SessionRecord {
   /** Walnut moved this session to another folder: out of one that was gone (sessions/folder-gone.ts),
    *  or, `why: 'own-folder'`, a VP's or lead's out of a repository into its own task directory
    *  (sessions/org-own-folder.ts). `told` once a message into the session has carried the notice. */
-  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean; why?: 'gone' | 'own-folder' };
+  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean; why?: 'gone' | 'own-folder' | 'leader-switch'; fromMachine?: string; toMachine?: string };
+  /** A leader switch's plan for this session, whose folder is in the leader's data home
+   *  (core/leader/switch/home-sessions.ts): written by the old leader at its switch stop, carried by the final batch. */
+  leaderSwitch?: LeaderSwitchSessionStamp;
   /** The folder a person named when starting this VP's or lead's session: kept by its later spawns,
    *  which otherwise move it to its own task directory (sessions/org-own-folder.ts). */
   cwdByPerson?: string;

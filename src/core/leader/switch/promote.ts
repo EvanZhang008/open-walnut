@@ -52,6 +52,12 @@ export interface PromoteInput {
   reverseStandbyHost?: string
   /** This machine's host key in that config, when it has one: its sessions there become its own daemon's (session-hosts.ts). */
   ownHostKey?: string
+  /**
+   * The sessions in the data home (session-hosts.ts, home-sessions.ts): both machines' ids and the old home's engine
+   * folder as the final mark names it. Given by the switch's
+   * target job, once their records came (target-job.ts carryRefusal); without it none of them moves.
+   */
+  homeSessions?: { fromMachine: string; toMachine: string; homeFolder: string }
   /** Called once the copy is the home, before any path in it is rewritten (also again on a resume): the trial's facts of the copy. */
   beforeRewrite?: (home: string) => Promise<void>
   /** The account home dirs of the old and the new machine (paths under the old one move). */
@@ -69,7 +75,7 @@ export interface PromoteResult {
   ledgerRows: number
   /** Every file the path rewrite changed, with the rules that named it. */
   rewritten: RewriteDone[]
-  /** Sessions whose host the switch between machines moved (session-hosts.ts); none for a copy this machine reaches. */
+  /** Sessions whose host the switch between machines moved, and those in the data home that moved or ended (session-hosts.ts). */
   sessionHosts?: SessionHostsResult
   alreadyDone: boolean
 }
@@ -203,8 +209,14 @@ export async function promoteCopy(o: PromoteInput): Promise<PromoteResult> {
     ...(o.reverseStandbyHost ? { reverseStandbyHost: o.reverseStandbyHost } : {}),
   })
   const ledgerRows = rewritten.filter((d) => d.rules.includes(LEDGER_RULE)).reduce((n, d) => n + d.values, 0)
-  // Between machines the old one is a host now: its own daemon's sessions are on it, by its host key.
-  const sessionHosts = o.reverseStandbyHost ? moveSessionHosts(o.home, o.switchId, { oldMachine: o.reverseStandbyHost, ...(o.ownHostKey ? { newMachine: o.ownHostKey } : {}) }) : undefined
+  // Between machines the old one is a host now: its own daemon's sessions are on it, by its host key. The sessions in
+  // the data home follow the leader instead (or end), between machines or on one.
+  const sessionHosts = o.reverseStandbyHost || o.homeSessions
+    ? moveSessionHosts(o.home, o.switchId, {
+      ...(o.reverseStandbyHost ? { oldMachine: o.reverseStandbyHost } : {}), ...(o.ownHostKey ? { newMachine: o.ownHostKey } : {}),
+      ...(o.homeSessions ? { homes: { from: o.previousHome, to: o.home, fromMachine: o.homeSessions.fromMachine, toMachine: o.homeSessions.toMachine, carry: { standbyDir: o.standbyDir, homeFolder: o.homeSessions.homeFolder } } } : {}),
+    })
+    : undefined
   writePromoted(o.home, { switchId: o.switchId, state: 'promoted', from: o.previousHome, at: new Date().toISOString() })
   return { ...(fs.existsSync(before) ? { movedAside: before } : {}), ledgerRows, rewritten, ...(sessionHosts ? { sessionHosts } : {}), alreadyDone: done }
 }

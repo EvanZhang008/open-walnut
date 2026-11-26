@@ -157,6 +157,11 @@ export interface RunPlacementDeps {
   /** This server's Walnut home. */
   localHome(): Promise<string>;
   /**
+   * Why a host's Walnut folder `there` takes no work, or null: the old leader's handed-over data home after a leader
+   * switch (core/leader/switch/moved-home.ts handedOverHomeOnHost). Optional: none checks nothing.
+   */
+  handedOverHome?(host: string, there: string): Promise<string | null>;
+  /**
    * Why a remote host cannot take work now (asleep or unreachable: its link was lost), with its
    * name, or null when it can or that is not known (a link never made here may be dialled).
    */
@@ -259,7 +264,12 @@ export async function hostBlocker(
     const lacks = work.tags.filter((t) => !c.tags.includes(t));
     if (lacks.length) return `it does not have ${lacks.join(', ')}`;
   }
-  if (!await walnutHomeOn(host, deps)) return 'its Walnut home is not known yet';
+  const there = await walnutHomeOn(host, deps);
+  if (!there) return 'its Walnut home is not known yet';
+  if (host !== LOCAL_HOST && deps.handedOverHome) {
+    const handed = await deps.handedOverHome(host, there);
+    if (handed) return handed;
+  }
   const engine = await deps.engineOn(host, launch);
   // The run's session id is already promised: the engine there must take it, or, with none, issue its own.
   if (await deps.takesMintedId(engine) !== !!opts.preassignedSessionId) {
@@ -496,6 +506,10 @@ function realDeps(): RunPlacementDeps {
       return c ? c.hasCapability(cap) : null;
     },
     remoteHome: async (host) => (await conn(host))?.remoteHome ?? null,
+    handedOverHome: async (host, there) => {
+      const [{ handedOverHomeOnHost }, { WALNUT_HOME }] = await Promise.all([import('../leader/switch/moved-home.js'), import('../../constants.js')]);
+      return handedOverHomeOnHost(WALNUT_HOME, host, there);
+    },
     closed: async (host) => {
       const grants = await import('../hosts/exec-grants.js');
       if (!grants.isHostClosed(host)) return false;

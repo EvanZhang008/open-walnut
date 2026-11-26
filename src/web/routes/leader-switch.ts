@@ -176,6 +176,61 @@ async function hostStepsContext(settings: import('../../core/leader/switch/setti
   return { home: WALNUT_HOME, walnutId, machineId: me, self, target, commitWindowMs: settings.commitWindowMs, switchId, log: (level, msg, data) => log.web[level](msg, data) }
 }
 
+/** How long the stop of the sessions in the data home may take: within the commit window, at most 30 s. */
+function homeStopBudgetMs(commitDeadline: number, promoteTrialMs: number): number {
+  return Math.min(30_000, Math.max(5_000, Math.floor((commitDeadline - Date.now() - promoteTrialMs) / 4)))
+}
+
+/**
+ * The switch stop's first step (core/leader/switch/home-sessions.ts stopHomeSessions) with this server's own store and
+ * runtime, and the carry of those sessions' records that the final batch then sends (session-carry.ts).
+ */
+async function stopSessionsInHome(home: string, sw: import('../../core/leader/switch/final-stop.js').HandedOverSwitch, machine: string): Promise<
+  { ok: true; carry: { source: () => Promise<import('../../core/standby/scan.js').CarrySource>; homeFolder: string } } | { ok: false }
+> {
+  const [{ stopHomeSessions }, { homeStopDeps }, { carrySource, homeEngineFolder }, { PROMOTE_TRIAL_MS }, { listSessions }] = await Promise.all([
+    import('../../core/leader/switch/home-sessions.js'), import('../../core/leader/switch/home-session-runtime.js'),
+    import('../../core/leader/switch/session-carry.js'), import('../../core/leader/switch/catch-up.js'), import('../../core/session-tracker.js'),
+  ])
+  try {
+    const r = await stopHomeSessions({ switchId: sw.switchId, home, machine, budgetMs: homeStopBudgetMs(sw.commitDeadline, PROMOTE_TRIAL_MS), deps: await homeStopDeps(home) })
+    const data = { switchId: sw.switchId, rows: r.rows, moves: r.moves, ends: r.ends.length, stopped: r.stopped, ms: r.ms, others: r.others.slice(0, 10) }
+    if (!r.ok) {
+      log.web.warn('leader switch: a session in the data home did not stop; this server does not stop, the switch waits for its stop again', { ...data, why: r.why })
+      return { ok: false }
+    }
+    log.web.info('leader switch: the sessions in the data home are stopped for the switch', data)
+    if (r.others.length) log.web.warn('leader switch: processes that are no Walnut session still work in the data home (they are not stopped; what they write after the final batch stays in the old home)', { switchId: sw.switchId, processes: r.others.slice(0, 20) })
+    // The selection now, when no session of the home can start any more (the marker refuses one): the final batch's.
+    const records = await listSessions()
+    return { ok: true, carry: { source: () => carrySource(home, { records }), homeFolder: homeEngineFolder(home) ?? '' } }
+  } catch (err) {
+    log.web.warn('leader switch: the sessions in the data home could not be stopped; this server does not stop', { switchId: sw.switchId, error: err instanceof Error ? err.message : String(err) })
+    return { ok: false }
+  }
+}
+
+/**
+ * Once this home carries no marker of `switchId` any more (its source job removed it after a take-back), the
+ * sessions its stop ended go on here (home-sessions.ts settleHomeSessionsAfterRollback). Waits at most 15 min;
+ * a server that stops meanwhile settles them at its next lead (web/server.ts).
+ */
+async function settleWhenSwitchGone(home: string, switchId: string): Promise<void> {
+  const [{ readMarker }, { settleHomeSessionsAfterRollback }, { rollbackDeps }, stop] = await Promise.all([
+    import('../../core/leader/switch/records.js'), import('../../core/leader/switch/home-sessions.js'),
+    import('../../core/leader/switch/home-session-runtime.js'), import('../../core/leader/switch/final-stop.js'),
+  ])
+  const open = (id: string) => readMarker(home)?.switchId === id || stop.handedOverSwitch()?.switchId === id
+  for (const until = Date.now() + 15 * 60_000; open(switchId); await new Promise((r) => setTimeout(r, 1_000))) {
+    if (Date.now() > until) return
+  }
+  const n = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: open, deps: await rollbackDeps() }).catch((err: unknown) => {
+    log.web.warn('leader switch: the sessions its stop ended could not be settled after the rollback', { switchId, error: err instanceof Error ? err.message : String(err) })
+    return 0
+  })
+  if (n) log.web.info('leader switch: the sessions its stop ended go on here (the switch rolled back)', { switchId, sessions: n })
+}
+
 /**
  * Takes this server's handover back (a cancel by hand, the stop wait, a target side that did not start):
  * never while its switch stop runs (final-stop.ts beginTakeBack), the console minted for it withdrawn.
@@ -204,6 +259,7 @@ async function takeBackHandover(why: string, o: { begun?: import('../../core/lea
   else stop.endTakeBack(begun.sw, r.ok)
   if (r.ok) {
     const { WALNUT_HOME } = await import('../../constants.js')
+    if (begun.sw) void settleWhenSwitchGone(WALNUT_HOME, begun.sw.switchId)
     await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
     // The host steps of that handover, taken back while this server runs on (none ran: nothing to take back).
     const { undoHostSteps } = await import('../../core/leader/switch/handover-host-steps.js')
@@ -326,6 +382,15 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   // After the answer is on its way, whether or not the caller is still there to read it (a dropped
   // caller must not leave this server taken for a stop that never runs).
   setImmediate(async () => {
+    // First, while this server still holds its sessions' runtime: every session working in the data home stops (its
+    // CLI would write into the old home after the final mark), through this machine's own runtime, and is marked to
+    // move with the leader or end (core/leader/switch/home-sessions.ts). One that does not end in time: no stop.
+    const homeStop = await stopSessionsInHome(WALNUT_HOME, sw, p.machine)
+    if (!homeStop.ok) {
+      abandonSwitchStop(sw)
+      void settleWhenSwitchGone(WALNUT_HOME, switchId)
+      return
+    }
     // The copy link outlives the stop's teardown of every host link (a stopping server dials nothing): the final
     // batch and the mark go over it last, none of it past the commit deadline. Held before the stop starts, within
     // 10 s; without it the stop would find no link for its final batch, so this server does not stop: the switch
@@ -338,13 +403,14 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
       sw.peer.unhold()
       log.web.warn('leader switch: the copy link could not be held for the stop; this server does not stop, the switch waits for its stop again', { switchId, why: notHeld })
       abandonSwitchStop(sw)
+      void settleWhenSwitchGone(WALNUT_HOME, switchId)
       return
     }
     const taken = server.requestSwitchStop({
       windowMs: Math.max(0, sw.commitDeadline - Date.now()),
       abort: (why) => abort.abort(why),
       run: async (writers) => {
-        const r = await finishSwitchStop({ home: WALNUT_HOME, sw, stoppedAt, signal: abort.signal, writers, ...(test ? { test } : {}), log: (level, msg, data) => log.web[level](msg, data) })
+        const r = await finishSwitchStop({ home: WALNUT_HOME, sw, stoppedAt, signal: abort.signal, writers, carry: homeStop.carry, ...(test ? { test } : {}), log: (level, msg, data) => log.web[level](msg, data) })
         // The last command to the other machine is behind it: every host link closes with this process.
         try { (await import('../../providers/daemon-connection.js')).disconnectAllDaemons() } catch { /* none open */ }
         return r.ok
@@ -354,6 +420,7 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
       log.web.warn('leader switch: the switch stop could not start in this process; it waits for its stop again', { switchId })
       sw.peer.unhold()
       abandonSwitchStop(sw)
+      void settleWhenSwitchGone(WALNUT_HOME, switchId)
     }
   })
 })
@@ -472,10 +539,18 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   const link = await switchLink(to, p.machine)
   if ('refused' in link) { res.status(403).json({ ok: false, why: link.refused }); return }
   link.peer.close()
-  if (fwd) { res.json({ ok: true, startedBy: fwd.by }); return }
+  // The sessions in the data home: this machine's runtime must stop them for the switch and refuse new ones there
+  // (home-session-runtime.ts); what the switch does with each is said now, before anything is handed over.
+  const [{ homeStopRuntimeRefusal }, { planHomeSessions, planLine }, { listSessions }] = await Promise.all([
+    import('../../core/leader/switch/home-session-runtime.js'), import('../../core/leader/switch/home-sessions.js'), import('../../core/session-tracker.js'),
+  ])
+  const cannot = await homeStopRuntimeRefusal()
+  if (cannot) { res.status(409).json({ ok: false, why: cannot, code: 'home_stop_unavailable', machine: p.machine }); return }
+  const homeSessions = planLine(planHomeSessions(await listSessions(), WALNUT_HOME))
+  if (fwd) { res.json({ ok: true, startedBy: fwd.by, homeSessions }); return }
   const startedBy = { machine: p.machine, via: 'cli' as const }
   await recordBegin({ switchId, from: p.machine, to, by: startedBy })
-  res.json({ ok: true, startedBy })
+  res.json({ ok: true, startedBy, homeSessions })
 })
 
 leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {

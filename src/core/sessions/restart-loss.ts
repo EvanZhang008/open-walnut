@@ -147,6 +147,8 @@ function describeCause(loss: SessionRestartLoss, host: string | undefined): stri
   const at = (loss.bootAt ?? loss.at).replace('T', ' ').replace(/:\d\d(\.\d+)?Z$/, ' UTC')
   if (loss.cause === 'machine_reboot') return `This computer rebooted (${at})`
   if (loss.cause === 'host_restart') return `The host ${host ?? ''} or its session daemon restarted (seen ${at})`.replace('  ', ' ')
+  // A switch of Walnut's leader to another machine (or one rolled back) stopped the session (core/leader/switch/home-sessions.ts).
+  if (loss.cause === 'leader_switch') return `A switch of Walnut's leader to another machine stopped your session process (${at})`
   return `The Walnut server or its session daemon restarted (${at})`
 }
 

@@ -51,7 +51,7 @@ describe('moveSessionHosts', () => {
     const home = path.join(root, 'home')
     sessionsDb(home, rows)
     const r = moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })
-    expect(r).toEqual({ toOldMachine: 4, toOwnDaemon: 1, alreadyDone: false })
+    expect(r).toEqual({ toOldMachine: 4, toOwnDaemon: 1, homeMoved: 0, homeEnded: 0, alreadyDone: false })
     expect(hosts(home)).toEqual({
       'on-b': null, 'on-b-judged': 'machine-b', 'on-h': 'machine-h',
       'own-empty': 'machine-a', 'own-local': 'machine-a', 'own-null': 'machine-a', 'own-null-judged': 'machine-a',
@@ -66,7 +66,7 @@ describe('moveSessionHosts', () => {
     sessionsDb(home, rows)
     moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })
     const after = hosts(home)
-    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, alreadyDone: true })
+    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, homeMoved: 0, homeEnded: 0, alreadyDone: true })
     expect(hosts(home)).toEqual(after)
     // The switch back is another switch: the same rule the other way.
     expect(moveSessionHosts(home, 's2', { oldMachine: 'machine-b', newMachine: 'machine-a' })).toMatchObject({ toOldMachine: 1, toOwnDaemon: 3 })
@@ -76,9 +76,9 @@ describe('moveSessionHosts', () => {
   it('without the new machine\'s key only the old leader\'s sessions move; without a sessions store nothing happens', () => {
     const home = path.join(root, 'home')
     sessionsDb(home, rows)
-    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 4, toOwnDaemon: 0, alreadyDone: false })
+    expect(moveSessionHosts(home, 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 4, toOwnDaemon: 0, homeMoved: 0, homeEnded: 0, alreadyDone: false })
     expect(hosts(home)['on-b']).toBe('machine-b')
-    expect(moveSessionHosts(path.join(root, 'none'), 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, alreadyDone: false })
+    expect(moveSessionHosts(path.join(root, 'none'), 's1', { oldMachine: 'machine-a' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, homeMoved: 0, homeEnded: 0, alreadyDone: false })
   })
 })
 
@@ -94,7 +94,7 @@ describe('promoteCopy between machines', () => {
     const a = path.join(root, 'a')
     copyWithSessions(path.join(a, 'standby'))
     const r = await promoteCopy({ switchId: 's1', standbyDir: path.join(a, 'standby'), home: path.join(a, 'home'), previousHome: '/old/home', reverseStandbyDir: '/old/standby', reverseStandbyHost: 'machine-a', ownHostKey: 'machine-b' })
-    expect(r.sessionHosts).toEqual({ toOldMachine: 4, toOwnDaemon: 1, alreadyDone: false })
+    expect(r.sessionHosts).toEqual({ toOldMachine: 4, toOwnDaemon: 1, homeMoved: 0, homeEnded: 0, alreadyDone: false })
     expect(hosts(path.join(a, 'home'))['own-null']).toBe('machine-a')
     // A promotion run again (a resume after a kill) keeps them where the first put them.
     const again = await promoteCopy({ switchId: 's1', standbyDir: path.join(a, 'standby'), home: path.join(a, 'home'), previousHome: '/old/home', reverseStandbyDir: '/old/standby', reverseStandbyHost: 'machine-a', ownHostKey: 'machine-b' })
@@ -186,7 +186,7 @@ describe('a row whose host is the leader\'s role, not a machine', () => {
     sessionsDb(home, [...rows, routerRow('router-null', null), routerRow('router-local', '__local__'), workRow])
     expect(isRouterAreaSession(recordOf(home, 'router-null'), area)).toBe(true)
     const r = moveSessionHosts(home, 's1', { oldMachine: 'machine-a', newMachine: 'machine-b' })
-    expect(r).toEqual({ toOldMachine: 5, toOwnDaemon: 1, alreadyDone: false })
+    expect(r).toEqual({ toOldMachine: 5, toOwnDaemon: 1, homeMoved: 0, homeEnded: 0, alreadyDone: false })
     expect(hosts(home)).toMatchObject({ 'router-null': null, 'router-local': '__local__', 'work-null': 'machine-a', 'own-null': 'machine-a', 'on-b': null })
     // router/wake.ts refuses a router task with any row isRouterAreaSession does not take: both are still the area's.
     expect(isRouterAreaSession(recordOf(home, 'router-null'), area)).toBe(true)
@@ -194,7 +194,7 @@ describe('a row whose host is the leader\'s role, not a machine', () => {
     // A switch back leaves them too, and a router row on the new machine's key (an area named after a host) keeps it.
     const back = path.join(root, 'back')
     sessionsDb(back, [routerRow('router-on-b', 'machine-b'), routerRow('router-null', null)])
-    expect(moveSessionHosts(back, 's2', { oldMachine: 'machine-a', newMachine: 'machine-b' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, alreadyDone: false })
+    expect(moveSessionHosts(back, 's2', { oldMachine: 'machine-a', newMachine: 'machine-b' })).toEqual({ toOldMachine: 0, toOwnDaemon: 0, homeMoved: 0, homeEnded: 0, alreadyDone: false })
     expect(hosts(back)).toEqual({ 'router-null': null, 'router-on-b': 'machine-b' })
   })
 

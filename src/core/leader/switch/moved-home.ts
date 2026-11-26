@@ -128,3 +128,29 @@ export async function switchedHereAfterCommit(home: string, permitOf?: () => Per
   }
   return v.kind === 'declare' ? v.switched : null
 }
+
+/**
+ * Why `host` must not take work in its Walnut folder `there`, or null: it is the machine the lead last moved from
+ * (the history's last switch into this home, and `leader_switch.machines` names its host key), and `there` is its
+ * handed-over data home (the promotion record's old home, as written or as its hosts knew it). That home must not
+ * change after the switch's final mark, and its daemon refuses a session there (lib/leader-home-gate.ts): the work
+ * runs on the new leader instead. Never throws (unknown: null; the daemon's own refusal still stands).
+ */
+export async function handedOverHomeOnHost(home: string, host: string, there: string): Promise<string | null> {
+  try {
+    const [{ readHistory }, { readHomeSwitchConfig, machineById }] = await Promise.all([import('./records.js'), import('./settings.js')])
+    const p = readPromoted(home)
+    if (!p || p.state !== 'led') return null
+    const last = readHistory(home).at(-1)
+    if (!last || last.switchId !== p.switchId) return null
+    const settings = readHomeSwitchConfig(home).settings
+    const from = settings ? machineById(settings, last.from) : undefined
+    if (!from || (from.hostKey !== host && from.id !== host)) return null
+    const trim = (x: string) => x.replace(/\/+$/, '') || '/'
+    const homes = [p.from, p.fromHomeOnHosts, ...(p.fromFormerHomes ?? [])].filter((x): x is string => !!x).map(trim)
+    if (!homes.includes(trim(there))) return null
+    return `its Walnut folder ${there} is the data home this Walnut's leader moved away from (switch ${p.switchId} to ${last.to}): nothing may change there any more, so this runs on the new leader instead`
+  } catch {
+    return null
+  }
+}

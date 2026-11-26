@@ -12,7 +12,8 @@
  *      more and the ones running end, the standby's own batches stop
  *   2. the final batch, as the LAST step of stopServer, over its copy link (peer.ts): batches until one
  *      finds nothing changed (a writer that lands after one is in the next), bounded by the commit window
- *   3. a verify pass, then the final mark, its last write to the other machine
+ *   3. a verify pass; then the same for the engine records of the sessions in the data home (session-carry.ts,
+ *      into the carry beside the copy), then the final mark naming both batches, its last write to the other machine
  *   4. its result in its home's local/leader-switch/final-stop.json (never in a batch), then every
  *      host link closes and the process exits
  * A signal during it (a launcher's SIGTERM) ends the batch without a mark and the process within
@@ -21,6 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SwitchPeer } from './peer.js'
+import type { CarrySource } from '../../standby/scan.js'
 import { finalMarkName, type FinalMark } from './ticket.js'
 import { finalStopResultFile, writeDurableJson, type FinalStopResult } from './records.js'
 import { machineById, type LeaderSwitchSettings } from './settings.js'
@@ -159,8 +161,13 @@ const BUSY_RETRY_MS = 1_000
  * Batches of `home` into the peer until one finds nothing changed, then a verify pass. A void batch (a
  * write at the wrong instant) is tried again. Ends with a refusal when `signal` aborts or the deadline passes.
  */
-export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlineAt: number; signal: AbortSignal; test?: FinalBatchTest; now?: () => number; writers?: WritersSettled }): Promise<FinalBatchOutcome> {
+export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlineAt: number; signal: AbortSignal; test?: FinalBatchTest; now?: () => number; writers?: WritersSettled; carry?: CarrySource }): Promise<FinalBatchOutcome> {
   const now = o.now ?? Date.now
+  // The home's batches, or (`carry`) those of the sessions' engine records into the carry beside the copy.
+  const carry = o.carry
+  const send = carry
+    ? { batch: () => o.peer.carryBatch(carry), verify: () => o.peer.carryVerify() }
+    : { batch: () => o.peer.batch(o.home), verify: () => o.peer.verify() }
   let batches = 0
   let last = ''
   /** Batches that stood, and those after the first that still found the home changed (a writer at it since the stop). */
@@ -170,7 +177,7 @@ export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlin
   for (;;) {
     if (o.signal.aborted) return stopped()
     if (now() > o.deadlineAt) return { ok: false, why: lateWhy({ writer: laterChanges > 0, last, batches, writers: o.writers }), batches }
-    const r = await o.peer.batch(o.home).catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err) }))
+    const r = await send.batch().catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err) }))
     batches++
     if (o.signal.aborted) return stopped()
     if (batches === 1) killPoint(o.test?.killAt, 'server-during-final-batch')
@@ -183,7 +190,7 @@ export async function runFinalBatch(o: { home: string; peer: SwitchPeer; deadlin
     stood++
     // The first carries what changed since the last periodic batch; a later one that finds changes found a writer.
     if (!r.commit.unchanged) { last = `${r.commit.written} written, ${r.commit.deleted} deleted`; if (stood > 1) laterChanges++; continue }
-    await o.peer.verify()
+    await send.verify()
     return { ok: true, batch: r.commit.batch, batches }
   }
 }
@@ -212,7 +219,16 @@ function lateWhy(o: { writer: boolean; last: string; batches: number; writers?: 
  * The whole switch stop's last step (stopServer runs it after every store closed): the final batch,
  * the mark, the result beside the home. Never throws: a failure is the result (no mark).
  */
-export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; stoppedAt: string; signal: AbortSignal; test?: FinalBatchTest; writers?: WritersSettled; log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void }): Promise<FinalStopResult> {
+export async function finishSwitchStop(o: {
+  home: string; sw: HandedOverSwitch; stoppedAt: string; signal: AbortSignal; test?: FinalBatchTest; writers?: WritersSettled
+  /**
+   * The engine records of the sessions in the data home (session-carry.ts carrySource, with the selection the stop of
+   * those sessions made): their final batch runs after the home's, and the mark names it. One that does not reach
+   * an unchanged batch in time fails the stop (no mark). None: the mark names no records (the new leader refuses it).
+   */
+  carry?: { source: () => Promise<CarrySource>; homeFolder: string }
+  log: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
+}): Promise<FinalStopResult> {
   const write = (r: FinalStopResult) => { try { writeDurableJson(finalStopResultFile(o.home), r) } catch (err) { o.log('warn', 'leader switch: the switch stop\'s result could not be written', { error: String(err) }) } return r }
   // The final batch ends in time for the new leader's promote, trial and commit before the commit deadline
   // (catch-up.ts timeline): a mark later than that only makes the target roll back at the deadline.
@@ -223,10 +239,25 @@ export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; 
       o.log('warn', 'leader switch: no final mark (the switch rolls back)', { switchId: o.sw.switchId, why: b.why, batches: b.batches })
       return write({ switchId: o.sw.switchId, ok: false, why: b.why, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     }
+    let carried: FinalMark['carry'] | undefined
+    if (o.carry) {
+      const t0 = Date.now()
+      const c = await o.carry.source().then(
+        (source) => runFinalBatch({ home: o.home, peer: o.sw.peer, deadlineAt: markBy, signal: o.signal, carry: source }),
+        (err: unknown) => ({ ok: false as const, why: `the records could not be read: ${err instanceof Error ? err.message : String(err)}`, batches: 0 }),
+      )
+      if (!c.ok) {
+        const why = `the final batch of the sessions' records (the conversations of the sessions in the data home) did not finish: ${c.why}`
+        o.log('warn', 'leader switch: no final mark (the switch rolls back)', { switchId: o.sw.switchId, why, batches: c.batches })
+        return write({ switchId: o.sw.switchId, ok: false, why, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
+      }
+      carried = { batch: c.batch, homeFolder: o.carry.homeFolder }
+      o.log('info', 'leader switch: the sessions\' records sent', { switchId: o.sw.switchId, batch: c.batch, batches: c.batches, ms: Date.now() - t0 })
+    }
     if (o.signal.aborted) return write({ switchId: o.sw.switchId, ok: false, why: 'the switch stop was stopped by a signal before its mark', stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     // The new leader could not promote, try and commit before the deadline: a mark now would only say so later.
     if (Date.now() > markBy) return write({ switchId: o.sw.switchId, ok: false, why: `the final batch ended later than ${PROMOTE_TRIAL_MS / 1000} s before the commit deadline (the new leader's promote, trial and commit): no final mark`, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
-    const mark: FinalMark = { v: 1, switchId: o.sw.switchId, batch: b.batch, unchanged: true, released: true, stoppedAt: o.stoppedAt, at: new Date().toISOString() }
+    const mark: FinalMark = { v: 1, switchId: o.sw.switchId, batch: b.batch, unchanged: true, released: true, stoppedAt: o.stoppedAt, at: new Date().toISOString(), ...(carried ? { carry: carried } : {}) }
     await o.sw.peer.writeFile(finalMarkName(o.sw.switchId), mark)
     o.log('info', 'leader switch: final batch sent and marked; this server exits', { switchId: o.sw.switchId, batch: b.batch, batches: b.batches })
     return write({ switchId: o.sw.switchId, ok: true, batch: b.batch, stoppedAt: o.stoppedAt, at: mark.at })

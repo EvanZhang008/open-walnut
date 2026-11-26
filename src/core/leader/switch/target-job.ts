@@ -16,6 +16,7 @@ import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readMarker, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
 import { SESSION_HOSTS_FILE, SESSION_HOSTS_MARK_TABLE, sessionHostsMarked } from './session-hosts.js'
+import { carryTargetDir } from '../../standby/target-files.js'
 import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, onlineCheck, readCopyFacts } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
@@ -304,12 +305,17 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             await sleep(250)
           }
           s.finalBatch = mark.batch
+          if (mark.carry) s.carry = mark.carry
           s.stoppedAt = mark.stoppedAt
           save('promote', `final mark: batch ${mark.batch}, unchanged; ${s.from} stopped at ${mark.stoppedAt}`)
           await note('promote')
           break
         }
         case 'promote': {
+          // The records of the sessions in the data home came beside the copy (session-carry.ts): the promotion moves
+          // those sessions here only when the carry holds what the mark names, else it refuses (nothing promoted yet).
+          const carryWhy = await carryRefusal(o.standbyDir, s.carry)
+          if (carryWhy) fail(carryWhy)
           // From here no server but the switch's own may start on this home (promotion-wait.ts).
           writeSwitchClaim(s.targetHome, s.id, env)
           // A switch back: the old home's standby (handed-over.ts) may still run there; it ends by itself once
@@ -318,6 +324,7 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           const r = await promoteCopy({
             switchId: s.id, standbyDir: o.standbyDir, home: s.targetHome, previousHome: s.sourceHome, reverseStandbyDir: s.reverseStandbyDir,
             ...(s.reverseStandbyHost ? { reverseStandbyHost: s.reverseStandbyHost } : {}), ...(s.targetHostKey ? { ownHostKey: s.targetHostKey } : {}), ...accountHomes(s), skipLedgerRewrite: skipLedger, afterRename: () => diesAt('during-promote'),
+            homeSessions: { fromMachine: s.from, toMachine: s.to, homeFolder: s.carry!.homeFolder },
             // What the copy held, read on this machine before any rewrite: the trial compares with it (never the old home).
             beforeRewrite: async (home) => {
               if (s.copyFacts) return
@@ -341,9 +348,10 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             facts: s.copyFacts, home: s.targetHome, files, sizesAndRows: !s.offlineChecked,
             roots: moveRoots({ previousHome: s.sourceHome, home: s.targetHome, ...accountHomes(s) }),
             rules: homePathRules({ skipLedgerRewrite: skipLedger }),
-            // Between machines the promotion moved where sessions run (and marked the switch there).
-            // This switch's mark there is the one row it added (none to allow for when the facts were read after it).
-            ...(s.reverseStandbyHost ? { changed: { [SESSION_HOSTS_FILE]: { table: SESSION_HOSTS_MARK_TABLE, addedRows: !factsAfterRewrite && sessionHostsMarked(s.targetHome, s.id) ? 1 : 0 } } } : {}),
+            // The promotion moved where sessions run (between machines; the sessions in the data home on one machine
+            // too) and marked the switch there. This switch's mark there is the one row it added (none to allow for
+            // when the facts were read after it).
+            changed: { [SESSION_HOSTS_FILE]: { table: SESSION_HOSTS_MARK_TABLE, addedRows: !factsAfterRewrite && sessionHostsMarked(s.targetHome, s.id) ? 1 : 0 } },
           })
           if (!off.ok) fail(`self-check of the new home: ${off.problems.join('; ')}`)
           if (!s.offlineChecked) {
@@ -482,4 +490,17 @@ function dropPromotionMark(copy: string, switchId: string): void {
   const file = promotedFile(copy)
   if (readPromoted(copy)?.switchId !== switchId) return
   try { fs.chmodSync(path.dirname(file), 0o700); fs.unlinkSync(file) } catch { /* gone */ }
+}
+
+/**
+ * Why the promotion must not run for the carried records of the sessions in the data home, or null: the final mark
+ * names the batch its carry ended at (final-stop.ts), and this machine's carry (`<standby dir>/carry`) must be at
+ * that batch. A mark that names none, or a carry at another batch, is refused before anything is promoted.
+ */
+export async function carryRefusal(standbyDir: string, carry: TargetState['carry']): Promise<string | null> {
+  if (!carry) return 'the final mark names no batch of the sessions\' records (the old leader runs an older build), so the sessions in its data home could not come with it: switch again once both machines run the same build'
+  const at = await new StandbyTarget(carryTargetDir(standbyDir)).current().then((c) => c.state.current?.batch ?? null, () => null)
+  if (at === null) return `the final mark names batch ${carry.batch} of the sessions' records, but this machine holds no records batch (${carryTargetDir(standbyDir)})`
+  if (at !== carry.batch) return `the final mark names batch ${carry.batch} of the sessions' records, but this machine's last one is batch ${at}`
+  return null
 }

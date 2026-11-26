@@ -364,6 +364,9 @@ export async function offlineRoutineStartOf(job: CronJob, host: string, deps: Of
     }
     const cwd = await walnutHomeOn(host, { localHome: async () => deps.home, remoteHome: (h) => deps.remoteHome(h) });
     if (!cwd) return no('the host\'s Walnut home is not known');
+    // The old leader's handed-over data home after a leader switch takes no work (it must not change any more).
+    const handed = await (await import('../leader/switch/moved-home.js')).handedOverHomeOnHost(deps.home, host, cwd);
+    if (handed) return no(handed);
     // Its conversation, read now: a run with no sample of it (it could not be read) is not handed over.
     let sample: OwnerSample;
     try {

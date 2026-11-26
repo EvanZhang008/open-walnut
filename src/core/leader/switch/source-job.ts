@@ -224,7 +224,7 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
       switch (s.step) {
         case 'preflight': {
           await preflight(s, settings, side, read, out)
-          save('handover', `checks passed; handing over to ${s.to}`)
+          save('handover', `checks passed; handing over to ${s.to}${s.homeSessions ? `; ${s.homeSessions}` : ''}`)
           break
         }
         case 'handover': {
@@ -458,9 +458,12 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   // Who started it, recorded by the leader (console and Walnut Health), and the trust rule for a begin.
   if (running && !problems.length) {
     const b = await src.api('POST', '/api/leader/switch/begin', { to: st.to, switchId: st.id }).catch(() => null)
-    const bj = b?.json as { ok?: boolean; why?: string; startedBy?: StartedBy } | null
+    const bj = b?.json as { ok?: boolean; why?: string; startedBy?: StartedBy; homeSessions?: string } | null
     if (!bj?.ok) problems.push(`the old leader refused the switch: ${bj?.why ?? `status ${b?.status ?? 0}`}`)
-    else if (bj.startedBy) st.startedBy = bj.startedBy
+    else {
+      if (bj.startedBy) st.startedBy = bj.startedBy
+      if (typeof bj.homeSessions === 'string') st.homeSessions = bj.homeSessions
+    }
   }
   // The new leader's own check, on its machine, started by the old leader's server over its copy link:
   // IT reaches a majority of the witnesses with no leader link, holding the old leader's record.

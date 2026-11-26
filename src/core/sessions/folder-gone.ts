@@ -196,8 +196,12 @@ export async function clearFolderGone(sessionId: string | null | undefined): Pro
 }
 
 /** The notice the session reads in its next message, once. */
-export function folderMovedNotice(moved: { from: string; to: string }, kind: 'kept' | 'fresh' | 'own-folder', extra?: { recorded?: string }): string {
-  const body = kind === 'own-folder'
+export function folderMovedNotice(moved: { from: string; to: string; fromMachine?: string; toMachine?: string }, kind: 'kept' | 'fresh' | 'own-folder' | 'leader-switch', extra?: { recorded?: string }): string {
+  const body = kind === 'leader-switch'
+    ? `Walnut's leader moved from ${moved.fromMachine ?? 'the old machine'} to ${moved.toMachine ?? 'this machine'}, and this conversation moved with it: `
+      + `your working folder ${moved.from} on ${moved.fromMachine ?? 'the old machine'} is now ${moved.to} on ${moved.toMachine ?? 'this machine'}, the same place in Walnut's data folder, with this conversation's history. `
+      + `Paths under ${moved.from} are not on this machine: use the same path under ${moved.to}. Checkpoints of edits made before the move cannot be rewound here.`
+    : kind === 'own-folder'
     ? `Walnut moved this conversation from ${moved.from} to ${moved.to}, this task's own directory, which survives reboots. `
       + `A VP or lead runs in a folder of its own, so no repository's instruction files (CLAUDE.md, AGENTS.md, its memory) load into every request. `
       + `Nothing in ${moved.from} changed: read it by its absolute path when you need to, and hand work in it to a team (task_send, task_create).`
@@ -589,7 +593,7 @@ export async function pendingFolderMovedNotice(sessionId: string): Promise<{ tex
       }
     }
     return {
-      text: folderMovedNotice(moved, moved.why === 'own-folder' ? 'own-folder' : 'kept'),
+      text: folderMovedNotice(moved, moved.why === 'own-folder' ? 'own-folder' : moved.why === 'leader-switch' ? 'leader-switch' : 'kept'),
       markTold: async () => {
         await updateSessionRecordConditionally(
           sessionId,

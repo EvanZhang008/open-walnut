@@ -51,6 +51,7 @@ import { randomUUID } from 'node:crypto'
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
 import type { RestartLossCause, SessionRecord, SessionRestartLoss, StatusReason } from './types.js'
+import { heldBySwitch } from './leader/switch/session-hold.js'
 import type { SessionSnapshot } from '../providers/daemon-fold.js'
 import { isInfraSessionError } from './session-error-kind.js'
 import {
@@ -79,7 +80,7 @@ export { AUTO_RECOVER_SOURCE, resolveAutoRecoverConfig }
 export type { AutoRecoverConfig, AutoRecoverDeps, AutoRecoverTask } from './sessions/auto-recover-env.js'
 
 /** Why schedule() did not take a session on. */
-export type SkipReason = 'disabled' | 'already-tracked' | 'already-decided' | 'archived' | 'not-infra' | 'no-task' | 'not-interactive' | 'session-budget'
+export type SkipReason = 'disabled' | 'already-tracked' | 'already-decided' | 'archived' | 'not-infra' | 'no-task' | 'not-interactive' | 'session-budget' | 'leader-switch'
 
 /** An unstamped record the startup reconciler just marked holds its phase this
  *  long, so its own hand-back cannot beat the classification that follows. */
@@ -199,6 +200,8 @@ export class SessionAutoRecover {
     if (!this.enabled) return { ok: false, reason: 'disabled' }
     if (this.tracked(record.claudeSessionId)) return { ok: false, reason: 'already-tracked' }
     if (record.archived) return { ok: false, reason: 'archived' }
+    // A leader switch stopped it in the data home: resumed once the switch settles (leader/switch/session-hold.ts).
+    if (heldBySwitch(record)) return { ok: false, reason: 'leader-switch' }
     // This death was decided already (a runtime site re-reports it every tick).
     const prior = record.restartLoss
     if (prior && prior.state !== 'pending' && prior.state !== 'resumed' && !isLive(record)
@@ -492,7 +495,8 @@ export class SessionAutoRecover {
     const taskDir = await this.deps.taskDir(taskId, record.host)
     let finalCause = cause
     let bootAt: string | undefined
-    if (isLocalHost(record.host) && cause !== 'host_restart') {
+    // A leader switch's stop is its own cause: the machine the session resumes on did not reboot under it.
+    if (isLocalHost(record.host) && cause !== 'host_restart' && cause !== 'leader_switch') {
       const boot = this.deps.bootTimeMs()
       // The machine booted after this session last did anything: the reboot,
       // not a server restart, is what killed it.
@@ -552,7 +556,7 @@ export class SessionAutoRecover {
       this.enqueue(sid, record.host, resumePriority(loss, beforeActive), this.deps.now() + this.cfg.delayMs)
       this.deps.emitNote(sid, taskId, finalCause === 'start_died'
         ? 'Start recovery: this session\'s process ended before it read its first message (a loaded machine, or a host that could not be reached). Walnut sends that message again by itself.'
-        : `Restart recovery: ${finalCause === 'machine_reboot' ? 'the computer rebooted' : 'a restart'} killed this session while its work was in flight (${lost.join(', ')}). It will resume automatically.`)
+        : `Restart recovery: ${finalCause === 'machine_reboot' ? 'the computer rebooted' : finalCause === 'leader_switch' ? 'a leader switch' : 'a restart'} killed this session while its work was in flight (${lost.join(', ')}). It will resume automatically.`)
       return
     }
     if (verdict === 'cwd_missing') {
@@ -585,7 +589,7 @@ export class SessionAutoRecover {
     for (const rec of await this.deps.listSessions()) {
       const loss = rec.restartLoss
       const sid = rec.claudeSessionId
-      if (!loss || this.tracked(sid) || rec.archived) continue
+      if (!loss || this.tracked(sid) || rec.archived || heldBySwitch(rec)) continue
       // A start death's own start was out when the server stopped: its outcome is
       // read afresh (live: back; held again or nothing: started again or given up).
       const startOut = loss.cause === 'start_died' && loss.state === 'sent'

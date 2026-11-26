@@ -88,6 +88,8 @@ export interface SwitchState {
   rollbackWhy?: string
   sourceHomeOnHosts?: { home: string; formerHomes: string[] }
   serviceRole?: RoleStep
+  /** What the switch does with the sessions in the data home, as the old leader said at the preflight (home-sessions.ts planLine). */
+  homeSessions?: string
 }
 
 export interface TargetState {
@@ -111,6 +113,8 @@ export interface TargetState {
   /** The handover stood at a majority this machine reaches by its own ways (the old leader then stops). */
   handoverSeen?: boolean
   finalBatch?: number
+  /** What the final mark names of the carried records of the sessions in the data home (session-carry.ts). */
+  carry?: { batch: number; homeFolder: string }
   commit?: number
   stoppedAt?: string
   readyAt?: string
