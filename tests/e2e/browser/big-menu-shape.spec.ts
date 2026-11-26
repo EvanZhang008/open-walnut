@@ -124,6 +124,17 @@ test('the session menu: Session and Task sections, Delete task last', async ({ p
   await details.click()
   await expect(session.getByTestId('session-kebab-meta')).toBeVisible()
   expect(d.rows.at(-1)).toMatchObject({ danger: true, label: 'Delete task' })
+  // The Pin row's Others flyout, in both its lists: every row draws its icon (2026-11-26: Customize
+  // menu… and Done stood bare under tier rows that drew one).
+  const bare = (flyout: Locator) => flyout.locator('.task-pin-opt').evaluateAll((rows) => rows
+    .filter((r) => !r.querySelector('svg')).map((r) => (r as HTMLElement).innerText.trim()))
+  await menu.getByTestId('kebab-pin-more').click()
+  const flyout = page.getByTestId('task-pin-flyout')
+  await expect(flyout.getByTestId('kebab-pin-customize')).toBeVisible()
+  expect(await bare(flyout), 'Pin to > Others: rows without an icon').toEqual([])
+  await flyout.getByTestId('kebab-pin-customize').click()
+  await expect(flyout.getByTestId('kebab-pin-customize-done')).toBeVisible()
+  expect(await bare(flyout), 'Pin to > Others > Customize: rows without an icon').toEqual([])
 })
 
 test('the task row menu, by its ⋮ and by right-click: one menu, the same shape', async ({ page }) => {

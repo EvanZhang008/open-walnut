@@ -411,7 +411,9 @@ menu, a long right-click menu) has one shape (`web/src/utils/menu-shape.ts`):
    rows, a narrow header's "..." rows, the sync rows and the board card menu drew only words): the
    phone and desktop session menus share one row (`SessionMenuRow`), and a row that stands in for a
    header button (a header's More menu, the session header's "...") shows that button's own icon
-   (`MirroredIcon`). Only an info line, a pick list's option, a row led by its switch and a group of
+   (`MirroredIcon`); one that stands in for a chip of words only (Terminal, Board) names its own
+   icon (`HEADER_ITEM_ICONS`), and a flyout's own action rows (Pin to's "Customize menu…" and Done)
+   draw one like the rows above them. Only an info line, a pick list's option, a row led by its switch and a group of
    chips draw none. The Display panel (Filter, Layout) uses the same heading and chevron.
 
 ContextMenu has 2 and 4 by construction (`normalizeContextMenuItems`). `tests/web/menu-shape.test.ts`

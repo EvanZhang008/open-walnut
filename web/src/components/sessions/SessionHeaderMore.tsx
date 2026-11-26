@@ -18,8 +18,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { ICON_MINIMIZE } from '../common/Icons';
+import { ICON_FILE, ICON_FOLDER_OUTLINE, ICON_MINIMIZE, ICON_TERMINAL } from '../common/Icons';
 import { MirroredIcon } from '../common/MirroredIcon';
+import { TAG_ICON } from './SessionHeaderLabels';
+import { APPS_ICON, BOARD_ICON, FORK_ICON, PLAN_ICON, THREADS_ICON } from './SessionMenuRow';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { HEADER_TOOL_CLASS, TASK_SLOT_SPACER } from './header-record-gate';
 
@@ -217,7 +219,7 @@ function MoreRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTMLE
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}
     >
-      <span className="task-kebab-icon" aria-hidden="true"><MirroredIcon from={itemOf(rowRef.current, id)} /></span>
+      <span className="task-kebab-icon" aria-hidden="true">{HEADER_ITEM_ICONS[id] ?? <MirroredIcon from={itemOf(rowRef.current, id)} fallback={TAG_ICON} />}</span>
       <span className="session-header-more-name">{name}</span>
       {value && <span className="session-header-more-value">{value}</span>}
     </button>
@@ -239,10 +241,20 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
       data-testid={`session-header-more-item-${id}`}
       data-state={value || undefined}
     >
-      <span className="task-kebab-icon" aria-hidden="true">{WINDOW_ICONS[id] ?? <MirroredIcon from={itemOf(rowRef.current, id)} />}</span>
+      <span className="task-kebab-icon" aria-hidden="true">{HEADER_ITEM_ICONS[id] ?? <MirroredIcon from={itemOf(rowRef.current, id)} fallback={TAG_ICON} />}</span>
       <span className="session-header-more-name">{label}</span>
     </button>
   );
 }
 
-const WINDOW_ICONS: Record<string, ReactNode> = { minimize: ICON_MINIMIZE };
+/**
+ * Each header item's icon in the "..." menu, the same as its row in the session menu: the chips draw
+ * only their words on the header line, so their row needs its own (2026-11-26: Terminal and Board
+ * drew an empty icon slot). An item not listed here (a plugin's pinned fact, Last activity) shows
+ * the icon its real button draws, or a tag when it draws none. tests/web/menu-row-icons.test.ts
+ * checks that every chip and window item is listed.
+ */
+const HEADER_ITEM_ICONS: Record<string, ReactNode> = {
+  plan: PLAN_ICON, fork: FORK_ICON, changed: ICON_FILE, files: ICON_FOLDER_OUTLINE, terminal: ICON_TERMINAL,
+  board: BOARD_ICON, threads: THREADS_ICON, app: APPS_ICON, minimize: ICON_MINIMIZE,
+};

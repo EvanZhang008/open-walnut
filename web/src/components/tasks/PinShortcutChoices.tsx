@@ -23,6 +23,7 @@
  * and the menu stays.
  */
 import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_CHECK, ICON_SLIDERS } from '@/components/common/Icons';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
@@ -215,6 +216,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
         data-testid="kebab-pin-customize-done"
         onClick={(e) => { e.stopPropagation(); setCustomizing(false); }}
       >
+        <span className="task-pin-opt-icon" aria-hidden="true">{ICON_CHECK}</span>
         <span className="task-kebab-project-opt-name wn-title">Done</span>
       </button>
     </>
@@ -245,6 +247,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
         data-testid="kebab-pin-customize"
         onClick={(e) => { e.stopPropagation(); setCustomizing(true); }}
       >
+        <span className="task-pin-opt-icon" aria-hidden="true">{ICON_SLIDERS}</span>
         <span className="task-kebab-project-opt-name wn-title">Customize menu…</span>
       </button>
     </>

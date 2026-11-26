@@ -21,7 +21,7 @@ import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_LOCATE, ICON_MINIMIZE
 import { WatchMenuItem } from '../tasks/WatchToggle';
 import { TAG_ICON } from './SessionHeaderLabels';
 import { KebabGroup } from './KebabGroup';
-import { BOARD_ICON, PLAN_ICON, SessionMenuRow as Row, THREADS_ICON } from './SessionMenuRow';
+import { APPS_ICON, BOARD_ICON, PLAN_ICON, SessionMenuRow as Row, THREADS_ICON } from './SessionMenuRow';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
 import { PanelCountRow, SessionViewItems, ViewsBadge, type SessionViewItemsProps } from './SessionKebabSection';
@@ -38,11 +38,6 @@ const OPEN_ICON = (
 const WINDOW_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M3 9h18" />
-  </svg>
-);
-const APPS_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="3" y="3" width="18" height="18" rx="3" /><path d="M12 8v8M8 12h8" />
   </svg>
 );
 

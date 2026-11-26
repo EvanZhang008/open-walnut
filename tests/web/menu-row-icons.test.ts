@@ -92,7 +92,8 @@ describe('menu rows: one drawn icon and one line of words', () => {
 
   // 2026-11-26: the phone's session rows, a narrow header's "..." rows, the sync rows and the board
   // card menu drew their words with no icon at all, beside rows that had one. Every action row of a
-  // menu (a task-kebab-item or chat-plus-menu-item element) holds a drawn icon. Not action rows: an
+  // menu (a task-kebab-item, chat-plus-menu-item or task-pin-opt element) holds a drawn icon; the Pin
+  // flyout's Customize and Done rows once stood bare under tier rows that drew one. Not action rows: an
   // info line, a pick list's option (its check mark is its sign), a row led by its switch, a group.
   const NOT_ACTION_ROW = /\btask-kebab-info\b|\bwn-pick-row\b|role="(?:option|menuitemradio|group)"|<ToggleSwitch\b/;
   const DRAWS_ICON = /task-kebab-icon|chat-plus-menu-key|wn-context-menu-icon|<svg\b|<Icon\b|\bICON_\w+|\b[A-Z][A-Z_]*_ICON\b|\w+Icon\b|\.icon\b|data-fit-icon/;
@@ -121,7 +122,15 @@ describe('menu rows: one drawn icon and one line of words', () => {
     const fit = files.find((f) => f.rel === 'components/common/HeaderFit.tsx')!.src;
     expect(fit).toMatch(/icon:\s*<MirroredIcon from=\{it\.el\}/);
     const more = files.find((f) => f.rel === 'components/sessions/SessionHeaderMore.tsx')!.src;
-    expect(more.match(/<MirroredIcon\b/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(more.match(/<MirroredIcon\b[^>]*\bfallback=/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    // A narrow session header's chips draw only their words, so copying finds nothing: every chip
+    // and window item names its own icon (2026-11-26: Terminal and Board drew an empty slot).
+    const fitSrc = files.find((f) => f.rel === 'components/sessions/useSessionHeaderFit.ts')!.src;
+    const items = [...fitSrc.matchAll(/^\s*(\w+): \{ kind: '(chip|window)'/gm)].map((m) => m[1]);
+    expect(items.length, 'the scan finds the header items').toBeGreaterThanOrEqual(8);
+    const map = /const HEADER_ITEM_ICONS[^=]*=\s*\{([\s\S]*?)\};/.exec(more)?.[1] ?? '';
+    const named = new Set([...map.matchAll(/(\w+):/g)].map((m) => m[1]));
+    expect(items.filter((id) => !named.has(id)), 'header items without an icon in the "..." menu (HEADER_ITEM_ICONS)').toEqual([]);
     // So every button a header can put away draws one: FitButton takes an icon, and a hand-made
     // one (data-fit-button) holds its own.
     const bare: string[] = [];
