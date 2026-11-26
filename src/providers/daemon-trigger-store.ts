@@ -401,11 +401,20 @@ export function createDaemonTriggerStore<W extends TriggerSocket>(deps: DaemonTr
     let to: W[]
     if (ws) { sendEvent(ws, 'trigger.checked', fields); to = [ws] }
     else to = sendTriggerEventTo(entry.home, 'trigger.checked', fields)
-    if (!to.length) return to
+    // A trigger made here that its Walnut's set does not name yet (offline-host-core.ts, until its
+    // drain and the push after it): the server drops the report, having no routine to keep it in, yet
+    // answers the ping after it. So it is never marked, and goes again with the next run once the set
+    // names it (2026-11-26: five triggers made while the Mac was away lost 1 to 23 of their checks each).
+    if (!to.length || !serverSetNames(entry)) return to
     const wire = (entry.checksOnWire ??= new Map())
     const before = wire.get(fields.atMs)?.to.filter((s: object) => checkWire.open(s) && !to.includes(s as W)) ?? []
     wire.set(fields.atMs, { sentAt: now, to: [...before, ...to] })
     return to
+  }
+
+  /** Whether the set its Walnut's server pushed names this trigger (a hold made here is not in it). */
+  function serverSetNames(entry: ArmedTrigger): boolean {
+    return triggerScopes.get(entry.home)?.configured.some((def) => def.id === entry.def.id) === true
   }
 
   /** Drop the kept reports a server read; true when the kept list changed (the caller persists it). */
