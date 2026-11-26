@@ -1306,6 +1306,10 @@ first (clouddev, a load of about 40 on 48 cores, commit 783e6a9019, 2026-11-26, 
 | small | unslowed | false | 11.7 s (main), 10.5 s (main, back), 12.8 s (measure) | 3.4 s, 1.1 s |
 | small | 20 Mbit/s | false | 12.9 s | 2.2 s |
 
+The step-6 runs the same day (commits 0d0a109fb4 and efe59a6105, a load of 20 to 40, each switch after its standby
+caught up): `true` 12.8 s (main), 8.0 s (back), 16.5 s unslowed and 13.0 s at 20 Mbit/s, the standby caught up 8.2 s and
+20.3 s before the two; `false` 14.0 s, 13.6 s, 22.0 s and 12.8 s, caught up 14.3 s and 37.4 s before.
+
 The same at a load of about 50 (commit 49e4c30ec3, 2026-11-25, `false`): 18.1 s, 19.8 s back, 20.9 s unslowed and
 14.7 s at 20 Mbit/s; every host connected after 7.1 s, 1.9 s and 3.2 s.
 
