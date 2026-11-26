@@ -36,9 +36,6 @@ const KNOWN: Record<string, string> = {
   'integrations/mail/sort-rules-lines.ts: const pattern = new RegExp(`(^|[\\\\s{,-])${escape(key)}\\\\s*:`)':
     'a field name escaped to a literal: no quantifier or group comes from input, so it costs line length x key length',
   'integrations/mail/unsubscribe-link.ts: const href = attributeValue(attrs.match(HREF))': 'HREF is a regex literal constant',
-  'integrations/mail/untrusted.ts: const CONTROL_CHARACTERS = new RegExp(': 'a constant character class',
-  'integrations/mail/untrusted.ts: const ANGLE_VARIANTS = new RegExp("[\\\\uFF1C\\\\u2039\\\\u3008]", "gu")': 'a constant character class',
-  'integrations/mail/untrusted.ts: const ANGLE_VARIANTS_CLOSE = new RegExp("[\\\\uFF1E\\\\u203A\\\\u3009]", "gu")': 'a constant character class',
   'lib/linear-regex/index.ts: new RegExp(source, ignoreCase ? \'i\' : \'\')':
     'validation only: the pattern is compiled to learn whether it is valid, never run',
   'lib/linear-regex/index.ts: ? new RegExp(source, ignoreCase ? \'i\' : \'\') : null':
