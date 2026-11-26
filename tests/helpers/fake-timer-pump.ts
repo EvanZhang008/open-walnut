@@ -50,9 +50,14 @@ export async function pumpFakeTimers(cond: () => boolean, maxFakeMs: number, max
  * real loop turn, so a spin of microtasks may end first, and a fake clock moved before the timer
  * exists never fires it (2026-11-10: a rewind test spun 200 microtasks, moved the clock, and then
  * hung to its timeout on a loaded runner, failing twice in a day).
+ *
+ * `armed` names THE timer the test is about to move the clock past, when the code arms others on
+ * the way to it: "any timer" then returns at the first one, the clock moves before the wanted
+ * timer exists, and the test hangs the same way (2026-11-26: a respawn built its session prompt,
+ * whose host lookups armed their own timers, before the rewind deadline it was waiting for).
  */
-export async function waitForFakeTimer(maxRealMs = 10_000): Promise<number> {
+export async function waitForFakeTimer(maxRealMs = 10_000, armed: () => boolean = () => vi.getTimerCount() > 0): Promise<number> {
   const deadline = realNow() + maxRealMs
-  while (vi.getTimerCount() === 0 && realNow() < deadline) await realTurn()
+  while (!armed() && realNow() < deadline) await realTurn()
   return vi.getTimerCount()
 }

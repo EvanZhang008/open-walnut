@@ -76,8 +76,8 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
   getConfig: vi.fn(async () => ({})),
 }));
 
-// Pre-warm the modules the method dynamic-imports, so the fake-timer test's
-// microtask spin is enough for it to reach the bounded read.
+// Pre-warm the modules the method dynamic-imports, so the fake-timer tests
+// reach the bounded read in few real turns.
 import '../../src/core/transcript-chain.js';
 import '../../src/core/session-file-reader.js';
 import { log } from '../../src/logging/index.js';
@@ -297,7 +297,9 @@ describe('recordDeathWindowResumeCut', () => {
     vi.useFakeTimers();
     try {
       const reinit = sessionRunner.reinitialize(sid);
-      expect(await waitForFakeTimer()).toBeGreaterThan(0);
+      // The respawn arms other timers first (the session prompt it builds looks up the hosts),
+      // so wait for THIS one: the deadline is armed just before the probe is raced against it.
+      expect(await waitForFakeTimer(10_000, () => probeMock.mock.calls.length > 0)).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(5_001);
       await reinit;
       await vi.advanceTimersByTimeAsync(10);            // drain the ok-callback work
