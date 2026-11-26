@@ -18,7 +18,7 @@ import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/s
 import { readSwitchState, readTargetState, type SwitchState, type TargetState } from '../../src/core/leader/switch/flow.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
 import { instanceIdAt } from '../../src/core/device-store.js'
-import { Checks, KILL_POINTS, StandbyNotCaughtUp, catchUpBoundMs, caughtUpBeforeSwitch, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, serverLog, startLoad, status, untilCaughtUp, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
+import { Checks, KILL_POINTS, NOT_CAUGHT_UP, PreflightRefusedCaughtUp, StandbyNotCaughtUp, catchUpBoundMs, caughtUpBeforeSwitch, caughtUpSaid, switchOnCaughtUp, type CaughtUp, checkCarried, checkOneLeader, checkNoOldPaths, cronDoorCalls, seed, serverLog, startLoad, status, untilCaughtUp, waitFor, waitForBatch, writeFiller, type Check, type FillerPlace, type Seeded } from './rehearsal.js'
 import { inProcessDaemonLabel, makeRemoteWorld, type InProcessDaemonSetting, type RemoteWorld } from './remote-world.js'
 import { REPO, type Machine } from './world.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
@@ -264,7 +264,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     c.add('boot: A\'s standby batches reach B\'s standby folder over A\'s link to B\'s daemon (standby.host)', b1 > 0, `batch ${b1}; ${w.links.copy.accepted()} connection(s) through the copy link`)
 
     const catchUpMs = catchUpBoundMs(opts.fillerGb)
-    const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log, catchUpMs }
+    const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log, catchUpMs, seen: null }
     // The command run on B while B is no host of A yet (no host service of this Walnut there): refused, naming A.
     if (want('forwarded')) await forwardNoLink(ctx)
     if (want('main')) {
@@ -277,6 +277,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
       // A standby that did not catch up before a switch is its own failure, never a failed switch: no switch was tried.
       await run(ctx).catch((err: unknown) => {
         if (err instanceof StandbyNotCaughtUp) c.add(`${name}: the standby caught up before its switch (no switch was tried)`, false, err.message)
+        else if (err instanceof PreflightRefusedCaughtUp) c.add(`${name}: the switch's preflight takes the standby the rehearsal saw caught up`, false, err.message)
         else c.add(`${name}: ran to its end`, false, err instanceof Error ? err.stack ?? err.message : String(err))
       })
       await everyWitnessHoldsLeader(ctx, name, walnutId)
@@ -321,7 +322,7 @@ async function mainScenario(c: Checks, w: RemoteWorld, roles: Roles, s: Seeded, 
   const sw = await switchCmd(w, A, ['--to', B.id], JOB_SESSION_ENV)
   const acked = await load.stop()
   log(sw.out)
-  if (sw.code === 1 && NOT_CAUGHT_UP.test(sw.out)) { c.add('main: the standby caught up before the switch A -> B (the switch\'s preflight refused it as behind)', false, last(sw.out, 2)); return }
+  if (sw.code === 1 && NOT_CAUGHT_UP.test(sw.out)) { c.add('main: switch A -> B: its preflight takes the standby the rehearsal saw caught up', false, last(sw.out, 2)); return }
   const tgt = await targetDone(sw.state)
   // From here B leads: A opens no new connection to B's daemon (the copy link) or to H's (B drives H now).
   const fromA = { copy: w.links.copy.accepted(), aToH: w.links.aToH.accepted() }
@@ -457,6 +458,8 @@ interface Ctx {
   c: Checks; w: RemoteWorld; roles: Roles; carried: { tasks: Seeded['tasks']; notes: Seeded['notes']; pluginFiles: Seeded['pluginFiles'] }; times: Record<string, string>; log: (s: string) => void
   /** How long a standby may take to catch up before a switch (rehearsal.ts catchUpBoundMs, by the home's size). */
   catchUpMs: number
+  /** The last caught-up standby the rehearsal saw before a switch: a preflight that refuses it is the switch's failure. */
+  seen: Extract<CaughtUp, { ok: true }> | null
 }
 
 /** The kill points in the target job (on the new leader's machine): resumed there by hand; the rest in the source job, resumed with --resume. */
@@ -487,6 +490,7 @@ async function writeAndBatch(x: Ctx, label: string): Promise<void> {
   }
   const cu = await untilCaughtUp(roles.leader, roles.other.standbyDir, { boundMs: x.catchUpMs })
   if (!cu.ok) throw new StandbyNotCaughtUp(cu.why)
+  x.seen = cu
 }
 
 /** The resume a person runs on the new leader's machine for a target job that died there: its own job, its own env. */
@@ -519,8 +523,8 @@ async function oneLeader(x: Ctx, label: string, expected: Machine, ms = 150_000)
 
 /**
  * The switch leader -> other: the command on the leader; `during` runs while it runs; roles turn round when it
- * completed. Refused by its preflight as not caught up: StandbyNotCaughtUp (the scenario waited for it to catch up
- * first, so the standby fell behind again), unless `notCaughtUp: 'return'` (the caller waits and tries again).
+ * completed. Refused by its preflight as not caught up after the rehearsal saw the standby caught up:
+ * PreflightRefusedCaughtUp, the switch's failure; unless `notCaughtUp: 'return'` (the caller waits and tries again).
  */
 async function runSwitch(x: Ctx, label: string, o: { env?: Record<string, string>; during?: (from: Machine, to: Machine) => Promise<void>; notCaughtUp?: 'throw' | 'return' } = {}): Promise<{ code: number | null; out: string; state: SwitchState | null; target: TargetState | null }> {
   const { w, roles } = x
@@ -530,7 +534,12 @@ async function runSwitch(x: Ctx, label: string, o: { env?: Record<string, string
   if (o.during) await o.during(from, to)
   const r = await run
   x.log(`${label}:\n${r.out}`)
-  if (r.code === 1 && NOT_CAUGHT_UP.test(r.out) && o.notCaughtUp !== 'return') throw new StandbyNotCaughtUp(`the switch's preflight refused it: ${last(r.out, 1)}`)
+  // Every scenario waits for its standby first (writeAndBatch): the switch's own refusal after it is the switch's failure.
+  if (r.code === 1 && NOT_CAUGHT_UP.test(r.out) && o.notCaughtUp !== 'return') {
+    throw x.seen
+      ? new PreflightRefusedCaughtUp(`the rehearsal saw the standby caught up (${caughtUpSaid(x.seen)}) and the switch's preflight refused it as not caught up: ${last(r.out, 1)}`)
+      : new StandbyNotCaughtUp(`the switch's preflight refused it, and the rehearsal had not seen the standby caught up: ${last(r.out, 1)}`)
+  }
   // A source job that died (exit 4) is resumed by the caller at once: waiting for the target job first would
   // outlast the old leader's stop wait, and its server would take the handover back before the resume.
   if (r.code === 4 && !o.during) return r
@@ -539,9 +548,6 @@ async function runSwitch(x: Ctx, label: string, o: { env?: Record<string, string
   if (r.state?.step === 'done' && t?.step === 'done') { roles.leader = to; roles.other = from }
   return r
 }
-
-/** A preflight refusal because the standby is behind: the old leader's catch-up, or the candidate's check of a batch still under way. */
-const NOT_CAUGHT_UP = /not caught up/
 
 // ---- the command on the machine that will lead (candidate-command.ts, leader-relay.ts) ----
 
@@ -831,6 +837,7 @@ async function twoDown(x: Ctx): Promise<void> {
   const O = roles.other
   const cu = await untilCaughtUp(L, O.standbyDir, { boundMs: x.catchUpMs })
   if (!cu.ok) throw new StandbyNotCaughtUp(cu.why)
+  x.seen = cu
   const down = ['w-k', otherWitness(w, L)] as const
   const homes = [L, ...(fs.existsSync(O.home) ? [O] : [])]
   const switchFiles = () => { try { return fs.readdirSync(path.join(O.standbyDir, 'switch')).sort() } catch { return [] } }
@@ -1022,25 +1029,16 @@ function catchUps(m: Machine, since: number): string[] {
     .map((l) => `${String(l.message).replace('leader switch: the standby ', '')} in ${((Number(l.ms) || 0) / 1000).toFixed(1)} s (${(l.batches as Array<{ ok: boolean; ms: number; sentBytes: number }> | undefined)?.map((b) => `${(b.ms / 1000).toFixed(1)} s/${(b.sentBytes / 1_048_576).toFixed(1)} MB${b.ok ? '' : ' void'}`).join(', ') ?? ''})`)
 }
 
-/**
- * The switch, its standby caught up first. A switch its preflight refuses as not caught up (the standby fell behind
- * again, or a batch over a slow link is still under way) is a refusal with nothing stopped: the standby is waited for
- * again (untilCaughtUp) and the switch tried again, all within the run's bound. Its end is `notCaughtUp`: the
- * standby never caught up, which is not a failed switch.
- */
-async function switchWhenCaughtUp(x: Ctx, label: string): Promise<{ r: Awaited<ReturnType<typeof runSwitch>>; refused: number } | { notCaughtUp: string; refused: number }> {
+/** The measured switch, on the standby the rehearsal saw caught up (rehearsal.ts switchOnCaughtUp: who failed, the standby or the switch). */
+function switchWhenCaughtUp(x: Ctx, label: string, seen: Extract<CaughtUp, { ok: true }>) {
   const from = x.roles.leader
   const to = x.roles.other
-  const deadline = Date.now() + x.catchUpMs
-  let refused = 0
-  for (;;) {
-    const r = await runSwitch(x, label, { notCaughtUp: 'return' })
-    if (r.code !== 1 || !NOT_CAUGHT_UP.test(r.out)) return { r, refused }
-    refused++
-    x.log(`${label}: refused (the standby not caught up), waiting for it to catch up again`)
-    const cu = await untilCaughtUp(from, to.standbyDir, { boundMs: Math.max(0, deadline - Date.now()) })
-    if (!cu.ok) return { notCaughtUp: `the switch's preflight refused it ${refused} time(s) as not caught up (the last: ${last(r.out, 1)}); then ${cu.why}`, refused }
-  }
+  return switchOnCaughtUp({
+    seen,
+    trySwitch: () => runSwitch(x, label, { notCaughtUp: 'return' }),
+    waitAgain: (boundMs) => { x.log(`${label}: refused (not caught up), waiting for the standby again`); return untilCaughtUp(from, to.standbyDir, { boundMs }) },
+    deadline: Date.now() + x.catchUpMs,
+  })
 }
 
 /**
@@ -1092,18 +1090,23 @@ async function measure(x: Ctx): Promise<void> {
         copy.setMode('slow', { delayMs: 0, bytesPerSec: 2_500_000 })
         const cu = await untilCaughtUp(from, to.standbyDir, { boundMs: x.catchUpMs })
         if (!cu.ok) throw new StandbyNotCaughtUp(`with the copy link at 20 Mbit/s: ${cu.why}`)
+        x.seen = cu
       }
       times[`standby caught up before ${label}`] = `after ${((Date.now() - t0) / 1000).toFixed(1)} s (bound ${(x.catchUpMs / 1000).toFixed(0)} s)`
-      sw = await switchWhenCaughtUp(x, `measure ${how}`)
+      sw = await switchWhenCaughtUp(x, `measure ${how}`, x.seen!)
     } catch (err) {
       if (!(err instanceof StandbyNotCaughtUp)) throw err
-      sw = { notCaughtUp: err.message, refused: 0 }
+      sw = { kind: 'not-caught-up', why: err.message, refused: 0 }
     } finally {
       copy.setMode('pass')
     }
-    if ('notCaughtUp' in sw) {
+    if (sw.kind === 'not-caught-up') {
       times[`standby caught up before ${label}`] = `not within ${(x.catchUpMs / 1000).toFixed(0)} s`
-      c.add(`measure ${label}: the standby caught up before the switch (the switch was not tried, or refused only for that)`, false, sw.notCaughtUp)
+      c.add(`measure ${label}: the standby caught up before the switch (no switch was tried, or refused and never caught up again)`, false, sw.why)
+      continue
+    }
+    if (sw.kind === 'refused-after-caught-up') {
+      c.add(`measure: switch ${label} completes (its preflight takes the standby the rehearsal saw caught up)`, false, sw.why)
       continue
     }
     const { r, refused } = sw

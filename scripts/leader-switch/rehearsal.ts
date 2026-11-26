@@ -58,7 +58,8 @@ export async function waitForBatch(dir: string, since: number, timeoutMs = 120_0
 /**
  * How long a rehearsal waits for a standby to catch up before it starts a switch: a small home's batches take
  * seconds; a home of `gb` GB of filler sends the whole home in its first batch, and the first batch the other
- * way after a switch is the whole home again (20 GB: 13 to 18 min unslowed).
+ * way after a switch is the whole home again (measured unslowed: 20.5 GB in 12 to 13 min, a tracked home's 28 to
+ * 33 GB with its git objects in 16 to 20 min).
  */
 export function catchUpBoundMs(gb = 0): number {
   return gb > 0 ? Math.max(1_800_000, gb * 180_000) : 180_000
@@ -67,9 +68,64 @@ export function catchUpBoundMs(gb = 0): number {
 /** The standby was not caught up when a switch was to start: the switch was not tried, so this is no failed switch. */
 export class StandbyNotCaughtUp extends Error {}
 
+/**
+ * The rehearsal saw the standby caught up (by the switch's own test, untilCaughtUp), and the switch's preflight
+ * still refused it as not caught up: a failure of the switch (its catch-up, or the candidate's check), never of
+ * the standby.
+ */
+export class PreflightRefusedCaughtUp extends Error {}
+
+/** A preflight refusal because the standby is behind: the old leader's catch-up, or the candidate's check of a batch still under way. */
+export const NOT_CAUGHT_UP = /not caught up/
+
+/** What the rehearsal saw last of a caught-up standby, for a refusal that follows it. */
+export const caughtUpSaid = (r: Extract<CaughtUp, { ok: true }>) => `batch ${r.batch}, ${(r.batchMs / 1000).toFixed(1)} s`
+
+export type CaughtUpSwitch<R> =
+  | { kind: 'ran'; r: R; refused: number }
+  | { kind: 'not-caught-up'; why: string; refused: number }
+  | { kind: 'refused-after-caught-up'; why: string; refused: number }
+
+/**
+ * A switch started on a standby the rehearsal saw caught up (`seen`). Refused by its preflight as not caught up
+ * (the standby fell behind again meanwhile, a batch over a slow link), it waits again (`waitAgain`, within what is
+ * left until `deadline`) and tries again; refused that way `maxRefusals` times, each after the rehearsal saw it
+ * caught up, it is the switch's failure (`refused-after-caught-up`, with the batch the rehearsal saw); a wait that
+ * runs out is the standby's (`not-caught-up`). Any other answer is the switch's own result (`ran`).
+ */
+export async function switchOnCaughtUp<R extends { code: number | null; out: string }>(o: {
+  seen: Extract<CaughtUp, { ok: true }>
+  trySwitch: () => Promise<R>
+  waitAgain: (boundMs: number) => Promise<CaughtUp>
+  deadline: number
+  maxRefusals?: number
+  now?: () => number
+}): Promise<CaughtUpSwitch<R>> {
+  const now = o.now ?? Date.now
+  const max = o.maxRefusals ?? 2
+  let seen = o.seen
+  let refused = 0
+  for (;;) {
+    const r = await o.trySwitch()
+    if (r.code !== 1 || !NOT_CAUGHT_UP.test(r.out)) return { kind: 'ran', r, refused }
+    refused++
+    const line = r.out.trim().split('\n').at(-1) ?? ''
+    if (refused >= max) return { kind: 'refused-after-caught-up', refused, why: `the rehearsal saw the standby caught up (${caughtUpSaid(seen)}) and the switch's preflight still refused it as not caught up, ${refused} time(s); the last: ${line}` }
+    const cu = await o.waitAgain(Math.max(0, o.deadline - now()))
+    if (!cu.ok) return { kind: 'not-caught-up', refused, why: `the switch's preflight refused it as not caught up (the last: ${line}); then ${cu.why}` }
+    seen = cu
+  }
+}
+
 export type CaughtUp =
   | { ok: true; batch: number; batchMs: number; waitedMs: number }
   | { ok: false; why: string; waitedMs: number }
+
+/**
+ * A log line's time is when it was written, a little after its batch ended: a batch's start is taken this much
+ * earlier still, so one that began just before `since` is never counted as begun after it (review round 1).
+ */
+const LOG_SLACK_MS = 1_000
 
 type CommittedBatch = { start: number; end: number; batch: number; ms: number; sentBytes: number }
 /** What has been read of each log file: its bytes so far (a whole line each) and the batches in them. */
@@ -101,7 +157,7 @@ function committedBatches(m: Machine): CommittedBatch[] {
             const l = JSON.parse(line) as { time: string; batch?: number; totalMs?: number; sentBytes?: number }
             const end = Date.parse(l.time)
             const ms = Number(l.totalMs)
-            if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') seen.batches.push({ start: end - ms, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
+            if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') seen.batches.push({ start: end - ms - LOG_SLACK_MS, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
           } catch { /* not a log line */ }
         }
       } finally {

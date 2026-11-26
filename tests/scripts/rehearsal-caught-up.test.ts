@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Checks, caughtUpBeforeSwitch, catchUpBoundMs, untilCaughtUp } from '../../scripts/leader-switch/rehearsal.js'
+import { Checks, caughtUpBeforeSwitch, catchUpBoundMs, switchOnCaughtUp, untilCaughtUp, type CaughtUp } from '../../scripts/leader-switch/rehearsal.js'
 import type { Machine } from '../../scripts/leader-switch/world.js'
 import { snapshotTo } from '../../src/core/standby/index.js'
 
@@ -74,7 +74,7 @@ describe('the rehearsal waits until the standby caught up before a switch', () =
 
   it('a batch that fits later is waited for within the bound', async () => {
     const { m, standby, log } = await world()
-    const since = Date.now() - 1_000
+    const since = Date.now() - 5_000
     setTimeout(() => log(1, Date.now(), 500), 300)
     const r = await untilCaughtUp(m, standby, { since, boundMs: 10_000 })
     expect(r.ok).toBe(true)
@@ -88,6 +88,55 @@ describe('the rehearsal waits until the standby caught up before a switch', () =
     expect(c.all).toHaveLength(1)
     expect(c.all[0]!.name).toBe('kill after-handover: the standby caught up before the switch (no switch was tried)')
     expect(c.all[0]!.detail).toMatch(/^standby not caught up: /)
+  })
+
+  // Review round 1, minor 5: a log line is written a little after its batch ended, so end - totalMs is a little late.
+  it('a batch that began just before the writes is not counted as begun after them (the log line\'s slack)', async () => {
+    const { m, standby, log } = await world()
+    const since = Date.now() - 10_000
+    // end - totalMs is 200 ms after `since`, but the line was written after the batch ended: it may have begun before.
+    log(1, since + 4_200, 4_000)
+    expect((await untilCaughtUp(m, standby, { since, boundMs: 0 })).ok).toBe(false)
+    log(1, since + 6_000, 4_000)
+    expect((await untilCaughtUp(m, standby, { since, boundMs: 0 })).ok).toBe(true)
+  })
+
+  // Review round 1, M2: a preflight that refuses a standby the rehearsal saw caught up is the switch's failure, not
+  // "the standby did not catch up, no switch was tried"; only a wait that runs out is the standby's.
+  describe('who failed: the standby or the switch', () => {
+    const seen = { ok: true as const, batch: 7, batchMs: 3_000, waitedMs: 0 }
+    const refusal = { code: 1, out: 'leader: the standby on machine-b is not caught up, so the final batch would not fit in the commit window: ...' }
+    const ok = (batch: number): CaughtUp => ({ ok: true, batch, batchMs: 2_000, waitedMs: 10 })
+
+    it('refused once, caught up again, switched: the switch ran', async () => {
+      let n = 0
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => (++n === 1 ? refusal : { code: 0, out: 'Switched' }), waitAgain: async () => ok(8), deadline: Date.now() + 60_000 })
+      expect(r).toMatchObject({ kind: 'ran', refused: 1, r: { code: 0 } })
+    })
+
+    it('refused after each time the rehearsal saw it caught up: the switch failed, naming the batch it saw', async () => {
+      const waits: number[] = []
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async (ms) => { waits.push(ms); return ok(8) }, deadline: Date.now() + 60_000 })
+      expect(r.kind).toBe('refused-after-caught-up')
+      expect(r.refused).toBe(2)
+      expect(waits).toHaveLength(1)
+      const why = r.kind === 'ran' ? '' : r.why
+      expect(why).toMatch(/the rehearsal saw the standby caught up \(batch 8, 2\.0 s\) and the switch's preflight still refused it as not caught up, 2 time\(s\)/)
+      expect(why).not.toMatch(/^standby not caught up/)
+    })
+
+    it('refused, then the standby never caught up again within the bound: the standby\'s failure', async () => {
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => refusal, waitAgain: async () => ({ ok: false, why: 'standby not caught up: within 0.0 s ...', waitedMs: 0 }), deadline: Date.now() })
+      expect(r.kind).toBe('not-caught-up')
+      expect(r.kind === 'ran' ? '' : r.why).toMatch(/then standby not caught up: within 0\.0 s/)
+    })
+
+    it('any other refusal or failure is the switch\'s own result, never retried', async () => {
+      let n = 0
+      const r = await switchOnCaughtUp({ seen, trySwitch: async () => { n++; return { code: 1, out: 'leader: only 1 of 3 witnesses answered' } }, waitAgain: async () => ok(9), deadline: Date.now() + 60_000 })
+      expect(r).toMatchObject({ kind: 'ran', refused: 0 })
+      expect(n).toBe(1)
+    })
   })
 
   it('the bound grows with the home: 180 s small, 30 min or 3 min per GB with filler', () => {
