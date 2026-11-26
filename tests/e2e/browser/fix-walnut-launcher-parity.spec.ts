@@ -35,13 +35,13 @@ test('fix walnut inherits the launcher tier instead of carrying its own', async 
   // server would fill with ITS default) and that the task lands where the
   // launcher's default says. The model half of the parity (folder launch memory,
   // not a forced Auto) is covered by the draft launch-memory specs.
-  // The repair entry ("Customize Walnut") lives in the Ask Walnut drawer; the
+  // The repair entry ("Fix Walnut") lives in the Ask Walnut drawer; the
   // shared fixture boots with the chat closed (it remembers a closed chat).
   await openChatOnLoad(page)
   await page.goto('/')
 
   const drawer = await openAskWalnutDrawer(page)
-  const chip = drawer.getByRole('button', { name: /customize walnut/i })
+  const chip = drawer.getByRole('button', { name: /fix walnut/i })
   await expect(chip).toBeVisible({ timeout: 15_000 })
   await chip.click()
 

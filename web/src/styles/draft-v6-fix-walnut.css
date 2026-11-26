@@ -1,0 +1,26 @@
+/* Fix Walnut in the v6 draft (DraftFixWalnutRow.tsx). Every look comes from the draft's own classes
+   (the button family's small key, the Where field, the host chip, the line); this file only lays
+   them out. */
+
+/* The key under Recent and, beside it, where the session runs (metadata: it may cut, the folder
+   is in its title). A fixed height; in Quick chat the slot stays, invisible and inert. */
+.draft-v6-fix {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  min-width: 0;
+}
+.draft-v6-fix[inert] { visibility: hidden; }
+.draft-v6-fix-where { font-size: var(--font-size-sm); color: var(--fg-muted); }
+
+/* The repair draft's target, in the Where row's place: one field across, its × inside on the right. */
+.draft-v6-row.draft-v6-fix-row { grid-template-columns: minmax(0, 1fr); }
+.draft-v6-field.draft-v6-fix-target { padding-right: 44px; }
+.draft-v6-fix-dir { font-weight: 600; }
+.draft-v6-field.draft-v6-fix-target > .draft-v6-fix-leave { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); }
+.draft-v6-field.draft-v6-fix-target:hover { border-color: var(--border); } /* read-only: no hover cue */
+/* The repair line is read whole: a second line grows up into the gap, as a refusal's does. */
+.draft-v6-row-slot > .draft-v6-line.draft-v6-fix-line { height: auto; min-height: 28px; white-space: normal; }
+.draft-v6-line.draft-v6-fix-line .draft-v6-line-text { overflow: visible; }

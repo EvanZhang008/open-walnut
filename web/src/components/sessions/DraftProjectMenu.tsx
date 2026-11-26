@@ -2,7 +2,7 @@
  * The "Repo or package" field's menu (experiment `project_first_start`, v6; named for the code a
  * start works on, Evan 2026-11-23): a search, the ones used last, then the repos and packages (a
  * project with a code source), then the projects with no code (they work in a folder), "None" (the
- * Inbox) and "Customize Walnut" (a session in Walnut's own code) where the owner offers it. Each
+ * Inbox) and "Fix Walnut" (a session in Walnut's own code) where the owner offers it. Each
  * row says what its Auto makes and where; a pick restores the project's last place
  * (useDraftWhere.pickProject). Mounted per open, so the search starts empty.
  */
@@ -94,7 +94,7 @@ export function DraftProjectMenu({ where, onDone, onCustomizeWalnut }: { where: 
             title="Open a session in Walnut's own source code to change or fix Walnut" onClick={() => { onDone(); onCustomizeWalnut(); }}>
             <span className="draft-v6-project-icon"><span aria-hidden="true">{ICONS.ICON_SLIDERS}</span></span>
             <span className="draft-v6-option-text">
-              <span className="draft-v6-option-name wn-title wn-pick-name">Customize Walnut</span>
+              <span className="draft-v6-option-name wn-title wn-pick-name">Fix Walnut</span>
               <span className="draft-v6-option-line">A session in Walnut's own code, to change or fix it</span>
             </span>
           </button>

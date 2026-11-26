@@ -26,7 +26,7 @@
  * WKWebView, and the caret landing in the draft is part of the claim.
  *
  * The quick-action row under the cards belongs to the tab that is up: Start Task
- * offers "Customize Walnut", which turns the draft into the repair draft and says
+ * offers "Fix Walnut", which turns the draft into the repair draft and says
  * where Walnut's code lives; Ask Walnut offers Walnut's seeds. Line icons, never
  * emoji. The fixture server
  * runs from this checkout, so its `selfRepair.source` is that checkout; the npm
@@ -319,14 +319,14 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 })
 
-// ── "Customize Walnut": the way into Walnut's own source ─────────────────────
+// ── "Fix Walnut": the way into Walnut's own source ─────────────────────
 
-const FIX_TITLE = 'Customize Walnut'
+const FIX_TITLE = 'Fix Walnut'
 const NPM_CLONE_DIR = '/tmp/pw-npm-home/open-walnut'
 const NPM_REPO_URL = 'https://example.invalid/open-walnut.git'
 const npmInstall: SelfRepair = { available: true, source: null, cloneDir: NPM_CLONE_DIR, repoUrl: NPM_REPO_URL }
 
-test('Customize Walnut turns the first draft into a repair draft in Walnut\'s own source', async ({ page, baseURL }) => {
+test('Fix Walnut turns the first draft into a repair draft in Walnut\'s own source', async ({ page, baseURL }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   // The fixture server runs from this checkout: that checkout is the source.
@@ -341,8 +341,8 @@ test('Customize Walnut turns the first draft into a repair draft in Walnut\'s ow
   // action under the two cards; the Walnut seeds belong to the other tab. Every
   // chip and card carries a line icon.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
-  await expect(customizeChip(page)).toHaveText('Customize Walnut', { timeout: 15_000 })
-  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Customize Walnut'])
+  await expect(customizeChip(page)).toHaveText('Fix Walnut', { timeout: 15_000 })
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Fix Walnut'])
   await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(1)
   expect(await quickActions(page).innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
   expect(await drafts(page).locator('.draft-intent-cards').innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
@@ -379,7 +379,7 @@ test('Customize Walnut turns the first draft into a repair draft in Walnut\'s ow
   expect(errors).toEqual([])
 })
 
-test('each tab has its own quick actions: Ask Walnut the seeds, Start Task Customize Walnut', async ({ page, baseURL }) => {
+test('each tab has its own quick actions: Ask Walnut the seeds, Start Task Fix Walnut', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await openFirstScreen(page, baseURL!)
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
@@ -399,9 +399,9 @@ test('each tab has its own quick actions: Ask Walnut the seeds, Start Task Custo
   await draftComposer(page).fill('')
   await expect(quickActions(page)).toBeVisible()
   await shot(page, 'ask-walnut-tab-quick-actions')
-  // Back on Start Task: Customize Walnut again, and taking it makes the repair draft.
+  // Back on Start Task: Fix Walnut again, and taking it makes the repair draft.
   await drafts(page).locator('.draft-intent-card').first().click()
-  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Customize Walnut'])
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Fix Walnut'])
   await customizeChip(page).click()
   await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
   await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
@@ -430,7 +430,7 @@ test('an npm install sees where the clone will land, and Start targets it', asyn
   expect(starts[0].cwd).toBe(NPM_CLONE_DIR)
 })
 
-test('an npm install also gets Customize Walnut in the Ask Walnut drawer', async ({ page, baseURL }) => {
+test('an npm install also gets Fix Walnut in the Ask Walnut drawer', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await selfRepairAs(page, npmInstall, null)
   // Past first-run setup: Claude Code here is checked and signed in, so the slot is the Ask slot,
@@ -448,7 +448,7 @@ test('an npm install also gets Customize Walnut in the Ask Walnut drawer', async
   await expect(draftHint(page)).toContainText(`into ${NPM_CLONE_DIR} first`)
 })
 
-test('no repair possible here: no Customize Walnut chip and no drawer entry', async ({ page, baseURL }) => {
+test('no repair possible here: no Fix Walnut chip and no drawer entry', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   const configRead = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/config' && r.request().method() === 'GET')
   await selfRepairAs(page, { ...npmInstall, available: false, reason: 'no-git' }, null)

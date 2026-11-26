@@ -95,7 +95,7 @@
 }
 
 /* Composer seeds in the walnut tab's empty body: plain `.btn btn-sm` keys (buttons.css),
-   which read as keys even floating alone in the body; Customize Walnut is one of them. */
+   which read as keys even floating alone in the body; Fix Walnut is one of them. */
 .draft-walnut-suggests {
   display: flex;
   flex-wrap: wrap;

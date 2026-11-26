@@ -280,8 +280,10 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   // Case-insensitive: the chat pill spells it "fix walnut" and the removed
   // readout spelled it "🔧 Fix Walnut", so a casing change must not evade this.
   // Scoped to the panel, so the (legitimate) chat pill can't satisfy it either —
-  // and a chip whose folder basename is literally "walnut" does not match.
-  await expect(panel.getByText(/fix\s+walnut/i)).toHaveCount(0)
+  // and a chip whose folder basename is literally "walnut" does not match. The one Fix Walnut in a
+  // draft is its quick action under the cards (the repair entry, named in the user's words since
+  // 2026-11-25), so every other match is a removed chip coming back.
+  await expect(panel.getByText(/fix\s+walnut/i)).toHaveCount(await panel.getByTestId('draft-customize-walnut').count())
   // The composer keeps its own placeholder too (the repair copy belonged to the
   // removed chip).
   await expect(draftComposer(page)).toHaveAttribute('placeholder', 'What should this task do?')

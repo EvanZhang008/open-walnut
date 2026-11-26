@@ -22,6 +22,9 @@ import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { DraftModeTiles, QuickChatBlock } from './DraftModeTiles';
 import { DraftWhereRow, type RowMenu } from './DraftWhereRow';
 import { DraftLowerRow, type TryChip } from './DraftLowerRow';
+import { DraftFixWalnutRow, DraftFixWalnutSlot } from './DraftFixWalnutRow';
+import { isFixWalnutDraft, leaveFixWalnut } from './draft-fix-walnut';
+import type { WalnutRepairTarget } from '@/pages/repair-target';
 import { useDraftWhere, type DraftRowUpdate } from './useDraftWhere';
 import { DraftTaskMatches, useTaskMatches } from './DraftTaskMatches';
 import '@/styles/draft-v6.css';
@@ -33,7 +36,7 @@ const NARROW_PX = 760;
 export function DraftV6Body({
   draft, panelRef, composer, notices, startWhy, onUpdate, onPathChange, onWalnutToggle, blockedRef, shiftEnterRef, onBlocked, openWhereNonce,
   tryChips, composerText, getComposer, openMenuNonce, onTaskFieldChange, onReturnFieldToWalnut, onSaveAsTask, saveBusy, quickTitle, quickLine,
-  onCustomizeWalnut, onOpenAsk,
+  onCustomizeWalnut, onOpenAsk, repairTarget,
 }: {
   draft: DraftColumn;
   panelRef: RefObject<HTMLDivElement | null>;
@@ -65,14 +68,32 @@ export function DraftV6Body({
   /** Another console agent's draft names it in the Quick chat block. */
   quickTitle?: string;
   quickLine?: string;
-  /** "Customize Walnut": the Project menu's last row turns this draft into the repair draft. */
+  /** "Fix Walnut": the Project menu's last row turns this draft into the repair draft. */
   onCustomizeWalnut?: () => void;
   /** Quick chat's Recent chats open a chat in the Ask Walnut slot. */
   onOpenAsk?: (taskId: string) => void;
+  /** Walnut's own source: with onCustomizeWalnut, the Fix Walnut row under Recent. */
+  repairTarget?: WalnutRepairTarget | null;
 }) {
   const walnut = !!draft.walnut;
-  const where = useDraftWhere(draft, { onUpdate, onPathChange });
-  blockedRef.current = walnut ? null : where.blocked;
+  // Fix Walnut (DraftFixWalnutRow.tsx): the repair draft keeps this layout; any place picked (Recent,
+  // a mode switch) takes it back to a plain draft first.
+  const repair = isFixWalnutDraft(draft);
+  const target = repair ? repairTarget ?? { dir: draft.cwd, cloneNeeded: false, repoUrl: '' } : repairTarget;
+  const leaveRepair = () => { onUpdate(draft.id, leaveFixWalnut); getComposer()?.focus({ preventScroll: true }); };
+  // Both ways a pick writes the draft (a project or Auto, a folder): out of the repair first.
+  const rowUpdate: DraftRowUpdate = repair ? (id, fn) => onUpdate(id, (d) => fn(leaveFixWalnut(d))) : onUpdate;
+  // A folder pick takes its engine and model from the draft it lands on: the plain one, not the repair.
+  const rowPath: typeof onPathChange = repair
+    ? (id, path) => { const plain = leaveFixWalnut(draft); onUpdate(id, leaveFixWalnut); onPathChange(id, path, plain.meta); }
+    : onPathChange;
+  const rowWhere = useDraftWhere(draft, { onUpdate: rowUpdate, onPathChange: rowPath });
+  // Start never starts a repair from a project's code source (projectStartEligible), so it reads the
+  // draft's workspace: the notice and the chip say so whatever the project's mode reads.
+  const where = repair ? { ...rowWhere, readsWorkspace: true } : rowWhere;
+  // The server files a repair under Walnut: its task source is Walnut's.
+  const lowerDraft = repair ? { ...draft, project: 'Walnut' } : draft;
+  blockedRef.current = walnut || repair ? null : where.blocked;
   const isBlocked = !!blockedRef.current;
   useEffect(() => { onBlocked?.(isBlocked); }, [isBlocked, onBlocked]);
   const [menu, setMenu] = useState<RowMenu>(null);
@@ -97,7 +118,7 @@ export function DraftV6Body({
 
   return (
     <div ref={bodyRef} className={`draft-v6-body${narrow ? ' is-narrow' : ''}${isBlocked ? ' is-blocked' : ''}`} data-testid="draft-v6">
-      <DraftModeTiles walnut={walnut} onPick={onWalnutToggle} />
+      <DraftModeTiles walnut={walnut} onPick={(w) => { if (w && repair) leaveRepair(); onWalnutToggle(w); }} />
       <div className="draft-v6-col">
         <div className="draft-v6-gap">
           <div className="draft-v6-notices">
@@ -108,11 +129,13 @@ export function DraftV6Body({
                 Start reads it (startReadsDraftWorkspace): a start from a project's code source
                 makes its own workspace and reads none of this. */}
             {!walnut && where.readsWorkspace && (
-              <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />
+              <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={lowerDraft.project} />
             )}
           </div>
         </div>
-        {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : (
+        {walnut ? <QuickChatBlock title={quickTitle} line={quickLine} /> : repair && target ? (
+          <DraftFixWalnutSlot target={target} hostName={where.hostName(where.hostKey)} startError={startError} onLeave={leaveRepair} />
+        ) : (
           <DraftWhereRow draft={draft} where={where} boundsRef={bodyRef} narrow={narrow} menu={menu} setMenu={setMenu}
             startError={startError} onUpdate={onUpdate} onCustomizeWalnut={onCustomizeWalnut} />
         )}
@@ -120,9 +143,12 @@ export function DraftV6Body({
           {composer}
           {startWhy && <div className="draft-v6-start-why" role="alert" data-testid="draft-v6-start-why">{startWhy}</div>}
         </div>
-        <DraftLowerRow draft={draft} where={where} walnut={walnut} narrow={narrow} tryChips={tryChips} composerText={composerText}
+        <DraftLowerRow draft={lowerDraft} where={where} walnut={walnut} narrow={narrow} tryChips={tryChips} composerText={composerText}
           getComposer={getComposer} openMenuNonce={openMenuNonce} onTaskFieldChange={onTaskFieldChange} onReturnFieldToWalnut={onReturnFieldToWalnut}
-          onSaveAsTask={onSaveAsTask} saveBusy={saveBusy} onMoreRecent={() => setMenu({ kind: 'project' })} onOpenAsk={onOpenAsk} />
+          onSaveAsTask={onSaveAsTask} saveBusy={saveBusy} onMoreRecent={() => { if (repair) leaveRepair(); setMenu({ kind: 'project' }); }} onOpenAsk={onOpenAsk} />
+        {target && (repair || onCustomizeWalnut) && (
+          <DraftFixWalnutRow target={target} on={repair} hidden={walnut} onClick={repair ? leaveRepair : () => onCustomizeWalnut?.()} />
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 /**
- * Where a "Customize Walnut" draft points, and what its hint says.
+ * Where a "Fix Walnut" draft points, and what its hint says.
  *
  * Load-bearing because the old gate was `installDir` (a source checkout only), so
  * an npm install never got a repair entry at all although the server could clone

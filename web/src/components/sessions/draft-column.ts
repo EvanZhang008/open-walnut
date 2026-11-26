@@ -140,9 +140,12 @@ export interface DraftColumn {
   createCwd?: boolean;
   /** Launch intent. 'fix-walnut' → the server wraps the message in its repair
    *  briefing (and titles/files the task as a repair) and runs it in Walnut's own
-   *  source. Set by the Ask Walnut drawer's "Customize Walnut" and by a plain draft's
-   *  "Customize Walnut" chip (both through MainPage's repair seed). */
+   *  source. Set by the Ask Walnut drawer's "Fix Walnut" and by a plain draft's
+   *  "Fix Walnut" chip (both through MainPage's repair seed). */
   intent?: 'fix-walnut';
+  /** What a plain draft stood on before its Fix Walnut key made it the repair draft, given back
+   *  when it leaves (draft-fix-walnut.ts). */
+  fixWalnutPrev?: { cwd: string; host: string | null; hostLabel?: string; cwdPinned?: boolean; openedCwd?: string; openedHost?: string | null; engine?: QuickStartTaskMeta['engine']; model?: string };
   /** This draft is BOUND to an existing task (task row ▶ Start on a title-only
    *  task): the launch reuses that task instead of minting a new one, so there is
    *  nothing to "create for later" — it already IS a task. Coexists with

@@ -137,6 +137,7 @@ import { sendsFolderProject, stampFolderDetection, withDetectedOwner } from '@/c
 import { forgetDraftWhere } from '@/components/sessions/useDraftWhere';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
+import { withFixWalnutPrev } from '@/components/sessions/draft-fix-walnut';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { homeRowFloorVars, loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelAloneWidth, todoPanelBasisPx, todoPanelWidth, usersSessionWidth, type QuickQuestionSlot } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
@@ -252,7 +253,7 @@ interface DraftSeed {
   /** Preselect this model (fork: the source session's). Applied like pinTier —
    *  WITHOUT metaTouched, so it reads as a default, not a user edit. */
   model?: string;
-  /** Launch intent ("Customize Walnut"): forwarded to quick-start on Start, where it
+  /** Launch intent ("Fix Walnut"): forwarded to quick-start on Start, where it
    *  turns the launch into a repair (server-side briefing + task title/project).
    *  Only ever set together with a pinned `cwd`. */
   intent?: 'fix-walnut';
@@ -283,7 +284,7 @@ function mapDrafts(prev: DraftColumn[], fn: (d: DraftColumn) => DraftColumn): Dr
 
 /**
  * Rewrite an existing draft row with a seed: openDraftColumn's reuse of a pristine
- * leftmost draft, and "Customize Walnut" turning the draft it sits on into the repair
+ * leftmost draft, and "Fix Walnut" turning the draft it sits on into the repair
  * draft. One rule set for both, so a reused column and a converted one launch alike.
  */
 function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: ProjectDefaultLookup): DraftColumn {
@@ -297,7 +298,7 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
   // Task like every fresh column, the user re-picks Ask Walnut if that
   // is what they want). On a reuse this is normally unreachable (the toggle
   // marks the draft userTouched, so a seed opens a fresh column instead);
-  // "Customize Walnut" from the Ask Walnut tab takes it.
+  // "Fix Walnut" from the Ask Walnut tab takes it.
   if (next.walnut) {
     next = leaveWalnutDraft(next);
     delete next.walnut;
@@ -333,7 +334,7 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
     delete next.taskId; delete next.boundTaskTitle; delete next.orgLead;
   }
   // The launch TARGET (folder + intent) rides on any seed that carries
-  // one, not just a task/fork rebind. "Customize Walnut" is the seed with a
+  // one, not just a task/fork rebind. "Fix Walnut" is the seed with a
   // folder and no binding: while this branch skipped it, clicking Fix
   // Walnut with a pristine draft leftmost reused that draft and left it a
   // plain "New Session" pointing nowhere: the repair briefing never
@@ -893,7 +894,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   // Where a repair runs (repair-target.ts): Walnut's own source, or on an npm
   // install the clone a first repair makes. null = no repair possible here (cloud
-  // replica, no git), and then every Customize Walnut entry hides. Fetched
+  // replica, no git), and then every Fix Walnut entry hides. Fetched
   // once; the API layer shares the answer for the page lifetime.
   const [selfRepairInfo, setSelfRepairInfo] = useState<SelfRepairInfo | null>(null);
   useEffect(() => { void fetchSelfRepair().then(setSelfRepairInfo); }, []);
@@ -2175,6 +2176,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       ...(meta.engine ? { engine: meta.engine } : {}),
       ...(meta.model ? { model: meta.model } : {}),
       ...(meta.effort ? { effort: meta.effort } : {}),
+      ...(meta.intent ? { intent: meta.intent } : {}),
+      ...(meta.images?.length ? { images: meta.images } : {}),
+      ...(meta.taskMeta ? { taskMeta: meta.taskMeta } : {}),
+      ...(meta.workspace ? { workspace: meta.workspace } : {}),
       // A start from a project names a host only when the person picked one for it (the project's own otherwise).
       ...(meta.fromProject ? { fromProject: true, project: meta.fromProject.project, host: meta.fromProject.host, workspaceInputs: meta.fromProject.workspaceInputs } : {}),
     }).then((result) => {
@@ -2222,7 +2227,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode; engine?: SessionEngine; model?: string; effort?: SessionEffort; fromProject?: ProjectStartRequest } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode; engine?: SessionEngine; model?: string; effort?: SessionEffort; fromProject?: ProjectStartRequest; intent?: 'fix-walnut'; images?: ImageAttachment[]; taskMeta?: Parameters<typeof quickStartSession>[0]['taskMeta']; workspace?: Parameters<typeof quickStartSession>[0]['workspace'] } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -2306,7 +2311,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openDraftColumn({ pinTier: tier });
   }, [openDraftColumn]);
 
-  // "Customize Walnut" (the drawer entry) → a DRAFT COLUMN pre-armed on Walnut's own checkout
+  // "Fix Walnut" (the drawer entry) → a DRAFT COLUMN pre-armed on Walnut's own checkout
   // (server-authoritative), carrying the repair intent. The user only describes
   // what's broken; `handleDraftStart` forwards `intent` to quick-start, which is
   // what makes the server wrap the message in its repair briefing.
@@ -2339,7 +2344,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setDraftColumns(prev => mapDraft(prev, draftId, withoutRepairEngine));
   }, [openDraftColumn]);
 
-  // "Customize Walnut" quick action on a plain draft: THIS draft becomes the repair
+  // "Fix Walnut" quick action on a plain draft: THIS draft becomes the repair
   // draft, through the same rewrite a reused column gets (rebindDraftToSeed) and
   // the same engine rule as the drawer's entry. The chip shows only while the
   // composer is empty and only when a target exists.
@@ -2350,7 +2355,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       draftId, dir: target.dir, cloneNeeded: target.cloneNeeded,
     });
     setDraftColumns(prev => mapDraft(prev, draftId,
-      d => withoutRepairEngine(rebindDraftToSeed(d, repairDraftSeed(target), draftProjectDefault))));
+      d => withFixWalnutPrev(d, withoutRepairEngine(rebindDraftToSeed(d, repairDraftSeed(target), draftProjectDefault)))));
   }, [draftProjectDefault]);
 
   // Auto-open session panel when a quick-start or fork session resolves.
@@ -3155,6 +3160,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(metaSnapshot?.mode ? { mode: metaSnapshot.mode } : {}),
         // Retry starts from the project again, never in the source's folder itself.
         ...(opts?.fromProject ? { fromProject: opts.fromProject } : {}),
+        // And a Fix Walnut launch stays one: without the intent a retry would skip the clone of
+        // Walnut's source and lose the repair briefing.
+        ...(qsp.intent ? { intent: qsp.intent } : {}),
       };
 
       // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
@@ -3205,6 +3213,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         pendingQuickStartMetaRef.current = {
           ...pendingQuickStartMetaRef.current,
           ...(sentEngine ? { engine: sentEngine } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}),
+          // The screenshots and task fields too: a retry is the same launch, not a poorer one.
+          ...(images?.length ? { images } : {}), ...(taskMeta ? { taskMeta } : {}),
+          // And its isolated workspace: a retry never runs in the folder itself instead.
+          ...(opts?.workspace ? { workspace: opts.workspace } : {}),
         };
       }
 
@@ -4071,7 +4083,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     gateError={draftGateErrors[sid]}
                     onGateErrorClear={clearDraftGateError}
                     restoreImages={draftRestoreImages[sid]}
-                    // "Customize Walnut" quick action + where a repair draft runs.
+                    // "Fix Walnut" quick action + where a repair draft runs.
                     onCustomizeWalnut={walnutRepairTarget ? handleCustomizeWalnut : undefined}
                     onOpenAsk={openRecentAsk}
                     repairTarget={walnutRepairTarget}

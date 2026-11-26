@@ -460,7 +460,7 @@ export function AskWalnutDrawer({
                 onClick={act(onFixWalnut)}
                 title="Open a session in Walnut's own source code to change or fix Walnut"
               >
-                <span className="ask-walnut-drawer-link-ic" aria-hidden="true">{ICON_SLIDERS}</span> Customize Walnut
+                <span className="ask-walnut-drawer-link-ic" aria-hidden="true">{ICON_SLIDERS}</span> Fix Walnut
               </button>
             )}
           </div>

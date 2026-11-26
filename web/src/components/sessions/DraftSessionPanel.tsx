@@ -127,11 +127,10 @@ const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 const WALNUT_PLACEHOLDER = 'Ask a quick question…';
 /** The general agent's draft name: the header, the mode card and the send button's title. */
 const QUICK_QUESTION = 'Quick question';
-/** "Customize Walnut" (the repair draft): the guidance the old chat-anchored repair bar carried. The draft
- *  otherwise looks exactly like an ordinary new session, so nothing would tell the
- *  user their sentence is about to be read as a bug report. */
+/** Fix Walnut (the repair draft): a few words that say the sentence is read as a change to Walnut; the
+ *  hint (older layout) or the line over the target (v6) says where and how. */
 const REPAIR_PLACEHOLDER =
-  'Describe what to change or fix, e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.';
+  'What should change in Walnut?';
 
 /** The Ask Walnut tab's quick actions: Walnut's one-tap composer seeds.
  *  Prefill only, never auto-send: the user finishes the sentence (or edits it)
@@ -463,7 +462,7 @@ interface Props {
   onGateErrorClear?: (draftId: string) => void;
   /** Images of a refused Start, put back into the composer once on mount. */
   restoreImages?: ImageAttachment[];
-  /** "Customize Walnut" quick action: the owner turns THIS draft into the repair
+  /** "Fix Walnut" quick action: the owner turns THIS draft into the repair
    *  draft. Omit (no repair target on this install) and the chip never renders. */
   onCustomizeWalnut?: (draftId: string) => void;
   /** The new task draft's Quick chat (experiment project_first_start): a recent chat opens in the Ask Walnut slot. */
@@ -572,12 +571,12 @@ export function DraftSessionPanel({
   // (tasks, schedule) give way to the agent's own description.
   const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
   const askLabel = askAgent ? `${QUICK_QUESTION} · ${askAgent.name}` : walnutLabel || QUICK_QUESTION;
-  // "Customize Walnut": pre-armed on Walnut's own checkout with the repair intent. No
+  // "Fix Walnut": pre-armed on Walnut's own checkout with the repair intent. No
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
   const showTabs = !isFork && !isRepair && !!onWalnutToggle;
   // The v6 layout (experiment project_first_start, DraftV6Panel.tsx): a plain new draft only.
-  const v6s = useDraftV6(!!onProjectStart && showTabs && !isBound && !ownFolder && !plainChat && !draft.orgLead);
+  const v6s = useDraftV6(!!onProjectStart && (showTabs || (isRepair && !!onWalnutToggle)) && !isBound && !ownFolder && !plainChat && !draft.orgLead);
   const { v6 } = v6s;
 
   // The permission mode the launch will carry, and the pill that shows it. The
@@ -1055,7 +1054,7 @@ export function DraftSessionPanel({
               {/* A plain draft makes a task (its "Save as task" makes nothing else), so
                   it says so; a BOUND draft adds a session to an existing task and
                   creates none, so it keeps "New session" beside its "for:" line. */}
-              {isFork ? 'Fork session' : isRepair ? 'Customize Walnut' : isWalnut ? askLabel : isBound ? 'New session' : 'New task'}
+              {isFork ? 'Fork session' : isRepair ? 'Fix Walnut' : isWalnut ? askLabel : isBound ? 'New session' : 'New task'}
             </span>
             <span className="badge session-panel-badge">Draft</span>
             {isBound && (
@@ -1101,7 +1100,7 @@ export function DraftSessionPanel({
           tryChips={WALNUT_SUGGESTS.map((t) => ({ label: t.label, icon: t.icon, onClick: () => { if (!text.trim()) setPrefill((p) => ({ text: t.text, nonce: p.nonce + 1 })); } }))}
           composerText={text} getComposer={getComposer} openMenuNonce={openMenuNonce}
           onTaskFieldChange={showDraftMenu ? onTaskFieldChange : undefined} onReturnFieldToWalnut={showDraftMenu ? onReturnFieldToWalnut : undefined}
-          onSaveAsTask={() => { void onSaveAsTask(draft.id, text); }} saveBusy={saveBusy} onOpenAsk={onOpenAsk}
+          onSaveAsTask={() => { void onSaveAsTask(draft.id, text); }} saveBusy={saveBusy} onOpenAsk={onOpenAsk} repairTarget={repairTarget}
           {...(onCustomizeWalnut ? { onCustomizeWalnut: () => { onCustomizeWalnut(draft.id); focusComposer(); } } : {})}
           {...(askAgent ? { quickTitle: `Ask ${askAgent.name}.`, quickLine: askAgent.description || `A session with ${askAgent.name}.` } : {})} />
       ) : (<>
@@ -1166,7 +1165,7 @@ export function DraftSessionPanel({
                 nothing to do with the one task this column is about. */}
             {intro}
             {/* The quick-action row under the cards belongs to the tab that is
-                up: Ask Walnut shows the Walnut seeds; Start Task shows "Customize
+                up: Ask Walnut shows the Walnut seeds; Start Task shows "Fix
                 Walnut", a coding session in Walnut's own source (an npm install
                 gets the clone on Start), which turns THIS draft into the repair
                 draft. Both show only while there is nothing typed to lose; the
@@ -1197,7 +1196,7 @@ export function DraftSessionPanel({
                   onClick={() => { onCustomizeWalnut(draft.id); focusComposer(); }}
                 >
                   <span className="session-action-chip-ic" aria-hidden="true">{ICONS.ICON_SLIDERS}</span>
-                  Customize Walnut
+                  Fix Walnut
                 </button>
               </div>
             )}

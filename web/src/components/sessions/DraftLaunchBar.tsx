@@ -43,7 +43,7 @@
  *   the chips the user set and More, and no folder/project pills. Bound, fork
  *   and pinned-walnut drafts get neither (the owner omits onTaskFieldChange): a
  *   bound draft's task already exists and its header shows the real task's
- *   kebab; a fork inherits the source task's meta. A repair (Customize Walnut)
+ *   kebab; a fork inherits the source task's meta. A repair (Fix Walnut)
  *   gets More without its Project row: the server files it under 'Walnut'. The folder
  *   picker (SessionPathSelector) picks only a folder and a host (user,
  *   2026-10-29: the engine and Pin rows it used to carry moved out); it hands
@@ -179,7 +179,7 @@ export function DraftLaunchBar({
   // Ask Walnut: folder and project are server-owned facts (WALNUT_HOME /
   // 'Walnut'), so the pills render read-only, the same treatment as a fork.
   const isWalnut = !!draft.walnut;
-  // Customize Walnut: the server files the repair under 'Walnut' whatever the
+  // Fix Walnut: the server files the repair under 'Walnut' whatever the
   // client sends, so its More edits the task fields but offers no project.
   const isRepair = draft.intent === 'fix-walnut';
   const projectMenu = decisionsOn && !isRepair;
