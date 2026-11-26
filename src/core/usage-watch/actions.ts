@@ -7,8 +7,8 @@ import { lastShipOf, recordShip } from './ships.js'
 import { readRange, usageReport, targetEvents, type ReportRow } from './report.js'
 import { callerSide, ownFaults } from './agg.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
-import { isPlaceKey, pageTargetProblem, placeUseOf } from './page-uses.js'
-import { readPageUses } from './store.js'
+import { isCountedPlace, pageTargetProblem, placeUseOf } from './page-uses.js'
+import { readPageUseKeys } from './store.js'
 import { visitKeyOfTarget } from '../page-places.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
@@ -135,7 +135,7 @@ async function countedPlaces(now: number): Promise<Set<string>> {
     const { readVisits } = await import('../page-visits.js')
     for (const k of Object.keys((await readVisits()).keys)) out.add(k)
   } catch { /* unreadable: the app's own places still count */ }
-  for (const r of readPageUses(now - 28 * 86_400_000)) out.add(r.key)
+  for (const key of readPageUseKeys(now - 28 * 86_400_000)) out.add(key)
   return out
 }
 
@@ -210,7 +210,7 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       const rep = usageReport(range, { now, ...(target ? { target } : {}) })
       // A page's uses are its visits, kept apart from the rows (page-uses.ts).
       const placeKey = target ? visitKeyOfTarget(target) : null
-      const placeUse = placeKey && isPlaceKey(placeKey) ? placeUseOf(placeKey, rep.from, now) : null
+      const placeUse = placeKey && isCountedPlace(placeKey) ? placeUseOf(placeKey, rep.from, now) : null
       const rows = rep.rows.sort((a, b) => problemScore(b) - problemScore(a) || b.calls - a.calls).slice(0, 15)
       return {
         range, from: new Date(rep.from).toISOString(), recorded: rep.recorded,

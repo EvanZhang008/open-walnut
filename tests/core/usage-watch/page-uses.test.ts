@@ -122,9 +122,25 @@ describe('a page target names a place whose visits are counted', () => {
     expect(pageTargetProblem('page:weather', new Set(['page:weather']))).toBeNull()
     const ctx = { callerTask: 't1', taskInfo: async (id: string) => ({ id, title: id, complete: false }), now: T0 }
     await expect(runUsageWatchAction({ action: 'set', targets: ['op:task_get', 'page:scroll-to-bottom-btn'] }, ctx)).rejects.toMatchObject({ code: 'bad_target' })
+    // An app's or a plugin pane's key holds a ~ (2026-11-26 review: the target pattern refused them).
+    await expect(runUsageWatchAction({ action: 'set', targets: ['page:app:walnut-notes~main', 'page:settings:mail~rules'] }, ctx)).resolves.toBeTruthy()
     // A page opened once (Page use's own record) is one a watch may name.
     await recordVisits(['page:weather'], new Date(T0))
     await expect(runUsageWatchAction({ action: 'set', targets: ['page:weather', 'page:home'] }, ctx)).resolves.toBeTruthy()
+  })
+
+  // 2026-11-26 review: a plugin's page, taken when set for the visits Page use counted, was judged as an
+  // older target ("names no page Walnut counts visits of"), and its errors could count twice.
+  it('a page a visit was counted for is judged, rung and reported as a place, the same as the app\'s own', async () => {
+    vi.useFakeTimers({ now: T0 + H, toFake: ['Date'] })
+    for (let i = 0; i < 3; i++) await recordVisits(['page:weather'], new Date(T0 + H + i))
+    recordPageLine('[uncaught] TypeError: z is undefined', 'at w (http://127.0.0.1/assets/weather-1a2b.js:1:2)', 1, '/weather')
+    live()
+    const v = judgeWatch(watchOf(['page:weather']), T0 + 5 * H)
+    expect(v.summary).toBe('Failed: page:weather: 3 uses, 1 page error')
+    const ctx = { callerTask: 't1', taskInfo: async (id: string) => ({ id, title: id, complete: false }), now: T0 + 5 * H }
+    const rep = await runUsageWatchAction({ action: 'report', target: 'page:weather', range: '24h' }, ctx) as { page?: unknown }
+    expect(rep.page).toEqual({ visits: 3, errors: 1 })
   })
 
   it('every part counted in the app is listed, and every page of the app\'s own routes and apps', () => {
@@ -162,7 +178,7 @@ describe('a watch that passed on a page target of no use', () => {
     const again = rejudgeEnded(passed(['page:home']), { visitDays: (k) => (k === 'page:home' ? days : undefined) })
     expect(again?.state).toBe('passed')
     expect(again?.results[0]).toMatchObject({ uses: 12, byDay: 12 })
-    expect(again?.summary).toContain('12 of its visits counted by the day')
+    expect(again?.summary).toContain('12 of its visits counted by the day (whole days, the day it was set included')
     expect(rejudgeEnded(passed(['page:draft-v6']), {})).toMatchObject({ state: 'too_little_use', summary: expect.stringMatching(/^No use, cannot judge: page:draft-v6: 0 uses/) })
     // One that passed with use is left.
     expect(rejudgeEnded({ ...passed(['page:home']), result: [{ target: 'page:home', uses: 3, ok: true, notes: [] }] })).toBeNull()

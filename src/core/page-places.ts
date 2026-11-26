@@ -17,7 +17,7 @@ export const VISIT_KEY_RE = /^(page|settings|app|part):[A-Za-z0-9._~-]{1,72}$/
  * to a counting call and every counting call to this list.
  */
 export const PAGE_PARTS: ReadonlyArray<{ key: string; label: string }> = [
-  { key: 'part:session-panel', label: 'Session panel (a session opened)' },
+  { key: 'part:session-panel', label: 'Session panel on Home (each session shown in a column)' },
   { key: 'part:task-detail', label: 'Task detail (a task opened)' },
 ]
 

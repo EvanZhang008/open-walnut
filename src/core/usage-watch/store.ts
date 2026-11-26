@@ -305,6 +305,11 @@ export function readPageUses(sinceHour: number, key?: string): Array<{ hour: num
     : d.prepare('SELECT hour, key, visits, errors FROM page_uses WHERE hour >= ?').all(sinceHour)) as Array<{ hour: number; key: string; visits: number; errors: number }>)
 }
 
+/** The places a page row was kept of from `sinceHour` on. */
+export function readPageUseKeys(sinceHour: number): string[] {
+  return withStore([], (d) => (d.prepare('SELECT DISTINCT key FROM page_uses WHERE hour >= ?').all(sinceHour) as Array<{ key: string }>).map((r) => r.key))
+}
+
 /** The first hour any page row was kept, or null: before it, a page's visits are known only by the day. */
 export function firstPageUseHour(): number | null {
   return withStore(null, (d) => {

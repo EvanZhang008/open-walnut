@@ -15,7 +15,7 @@ import { ASLEEP_CODE, pageKindIsPagesOwn, pageRequestOf } from './normalize.js'
 import { RECORDED_NON_OPS } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
 import { visitKeyOfTarget } from '../page-places.js'
-import { isPlaceKey, placeUseOf } from './page-uses.js'
+import { isCountedPlace, placeUseOf } from './page-uses.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -93,7 +93,7 @@ export interface JudgeInputs { visitDays?: (key: string) => Record<string, numbe
 
 // An op, or a name real use counts that is no op (a session's Walnut mount: counters.ts RECORDED_NON_OPS,
 // plain `word/word` names that need no escaping).
-export const TARGET_RE = new RegExp(`^(op:(?:[a-z][a-z0-9_]{0,63}|${RECORDED_NON_OPS.join('|')})|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\\/[A-Za-z0-9_\\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/-]{2,120})$`)
+export const TARGET_RE = new RegExp(`^(op:(?:[a-z][a-z0-9_]{0,63}|${RECORDED_NON_OPS.join('|')})|route:(?:(?:GET|POST|PUT|PATCH|DELETE) )?\\/[A-Za-z0-9_\\-/:.*]{0,160}|page:[A-Za-z0-9_ .:/~-]{2,120})$`)
 
 /** Why a target is not one the monitor can watch, or null. */
 export function targetProblem(t: string): string | null {
@@ -118,7 +118,7 @@ export function targetCovers(target: string, kind: UsageKind, name: string): boo
   // A page Walnut counts visits of is judged by its own rows (page-uses.ts); an older target's words
   // name page errors, as before.
   const key = visitKeyOfTarget(target)
-  if (key && isPlaceKey(key)) return false
+  if (key && isCountedPlace(key)) return false
   return kind === 'page' && name.includes(target.slice(5)) && pageKindIsPagesOwn(name)
 }
 
@@ -206,8 +206,9 @@ function mergedFor(target: string, since: number, until: number): Agg {
  */
 function judgePageTarget(target: string, since: number, until: number, inputs: JudgeInputs): TargetResult {
   const key = visitKeyOfTarget(target)
-  const place = key !== null && isPlaceKey(key)
-  const use = key ? placeUseOf(key, since, until, inputs.visitDays?.(key)) : { visits: 0, errors: 0, byDay: 0 }
+  const days = key ? inputs.visitDays?.(key) : undefined
+  const place = key !== null && isCountedPlace(key, days)
+  const use = key && place ? placeUseOf(key, since, until, days) : { visits: 0, errors: 0, byDay: 0 }
   const errors = use.errors + (place ? 0 : mergedFor(target, since, until).calls)
   const notes: string[] = []
   if (errors > 0) notes.push(`${errors} page error${errors === 1 ? '' : 's'}`)
@@ -216,7 +217,7 @@ function judgePageTarget(target: string, since: number, until: number, inputs: J
   const theirs = place ? 0 : pageRequestsOf(target.slice(5), since, until)
   if (theirs > 0) notes.push(`${theirs} request${theirs === 1 ? '' : 's'} that went wrong on the way (never reached the server, never sent, or timed out on its route or server; not counted)`)
   if (!place) notes.push('names no page Walnut counts visits of')
-  else if (use.byDay > 0) notes.push(`${use.byDay} of its visits counted by the day (before visits were kept by the hour)`)
+  else if (use.byDay > 0) notes.push(`${use.byDay} of its visits counted by the day (whole days, the day it was set included: before visits were kept by the hour)`)
   return { target, uses: use.visits, ok, notes, ...(use.byDay ? { byDay: use.byDay } : {}) }
 }
 

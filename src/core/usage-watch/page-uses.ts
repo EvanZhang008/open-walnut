@@ -10,10 +10,11 @@
  *   - an error thrown on a page, or a request its browser refused, counts on the place its address
  *     names (the log line's path), never a request that went wrong on its way;
  *   - before this file kept a place's hours, its visits are known by the day (Page use's own days).
+ * A replica (the companion) keeps no store: its visits stay its own (record.ts flushUsage drops them).
  * The verdict (watches.ts judgeWatch) never passes a target with no use.
  */
 import { CORE_PAGE_KEYS, PAGE_PARTS, VISIT_KEY_RE, pageKeyForPath, visitKeyOfTarget } from '../page-places.js'
-import { firstPageUseHour, readPageUses } from './store.js'
+import { firstPageUseHour, readPageUseKeys, readPageUses } from './store.js'
 
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
@@ -51,15 +52,31 @@ export function takePageUses(): Array<{ hour: number; key: string; visits: numbe
 
 export function _resetPageUsesForTesting(): void {
   pending = new Map()
+  seen = null
+}
+
+/** A page of the app's own, a part, a Settings pane or an app: a place by its key alone. */
+export function isPlaceKey(key: string): boolean {
+  return CORE_PAGE_KEYS.includes(key) || PAGE_PARTS.some((p) => p.key === key) || /^(settings|app):/.test(key)
+}
+
+const SEEN_EVERY_MS = 60_000
+let seen: { at: number; keys: Set<string> } | null = null
+
+/** The places real use kept a row of in its four weeks, read again at most once a minute. */
+function seenPlaces(now = Date.now()): Set<string> {
+  if (!seen || now - seen.at > SEEN_EVERY_MS) seen = { at: now, keys: new Set(readPageUseKeys(now - 28 * DAY_MS)) }
+  return seen.keys
 }
 
 /**
- * Whether a key is a place Walnut counts visits of: a page of the app's own, a part, a Settings pane
- * or an app. A `page:` target naming anything else (a component, an error's words) is an older
- * target, judged by the page errors its words name, as before.
+ * Whether a key is a place whose visits are counted: one by its key alone (isPlaceKey), or one a visit
+ * was counted for (a plugin's page): real use kept a row of it, or Page use has its days. The same
+ * answer when a watch is set, judged, rung and reported. A `page:` target naming anything else (a
+ * component, an error's words) is an older target, judged by the page errors its words name, as before.
  */
-export function isPlaceKey(key: string): boolean {
-  return CORE_PAGE_KEYS.includes(key) || PAGE_PARTS.some((p) => p.key === key) || /^(settings|app):/.test(key)
+export function isCountedPlace(key: string, days?: Record<string, number>): boolean {
+  return isPlaceKey(key) || days !== undefined || seenPlaces().has(key)
 }
 
 /** The days a span touches, `YYYY-MM-DD` (UTC). */
@@ -94,6 +111,7 @@ export function placeUseOf(key: string, since: number, until: number, days?: Rec
     const first = firstPageUseHour()
     // The day page rows began holds hourly rows: days are read only up to its start, never both.
     const cut = first === null ? until : Math.min(until, Math.floor(first / DAY_MS) * DAY_MS)
+    // Whole days: the day the watch was set counts whole, visits before it included.
     if (cut > since) for (const day of daysOf(since, cut)) out.byDay += days[day] ?? 0
     out.visits += out.byDay
   }
@@ -109,7 +127,7 @@ export function pageTargetProblem(target: string, known: ReadonlySet<string>): s
   const key = visitKeyOfTarget(target)
   const forms = 'page:<page> (page:home, page:org), page:<part> (page:session-panel, page:task-detail), page:settings:<pane id> or page:app:<app id>'
   if (!key) return `"${target.slice(0, 80)}" names no page: use ${forms}`
-  if (isPlaceKey(key) || known.has(key)) return null
+  if (isCountedPlace(key) || known.has(key)) return null
   const pages = [...new Set([...CORE_PAGE_KEYS, ...[...known].filter((k) => k.startsWith('page:'))])].sort()
   return `"${target.slice(0, 80)}" is no page Walnut counts visits of, so its watch could never see a use. Name ${forms}; pages: ${pages.join(', ')}`
 }

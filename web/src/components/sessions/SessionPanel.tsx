@@ -527,8 +527,10 @@ export const SessionPanel = memo(function SessionPanel(props: SessionPanelProps)
     log.info('session-panel', 'following the replacing session (the host does not)', { sessionId: oldId, newSessionId: newId, hostSessionId: sessionId });
     setFollowed({ from: sessionId, to: newId });
   }, [onSessionReplaced, sessionId]);
-  // Page use and real use count each session opened in a panel (src/core/page-places.ts PAGE_PARTS).
-  useEffect(() => { recordVisit('part:session-panel'); }, [sessionId]);
+  // Page use and real use count each session shown in a Home column (src/core/page-places.ts PAGE_PARTS);
+  // the other places a chat shows (Ask Walnut, Notes, Org, a popout) are their own pages' use.
+  const homeColumn = props.viewPlace === 'home-column';
+  useEffect(() => { if (homeColumn) recordVisit('part:session-panel'); }, [sessionId, homeColumn]);
   return <SessionPanelBody {...props} sessionId={shown} onSessionReplaced={replaced} />;
 });
 
