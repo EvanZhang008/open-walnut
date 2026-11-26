@@ -310,8 +310,12 @@ function withDeadline<T>(p: Promise<T>, ms: number, onTimeout: () => T): Promise
 export interface RollbackDeps {
   list(): Promise<SessionRecord[]>
   save(sid: string, patch: Partial<SessionRecord>): Promise<void>
-  /** Cron supervision of `sid` on again (daemon cron.supervision; the switch's stop left no fence). */
-  reenable(sid: string): Promise<void>
+  /**
+   * Cron supervision of `sid` on again (daemon cron.supervision; the switch's stop left no fence). Throws when it
+   * could not be asked (the runtime not connected: tried again); resolves with the runtime's refusal, which asking
+   * again would not change, or nothing when it is on.
+   */
+  reenable(sid: string): Promise<string | void>
   /** Restart recovery's pass over pending losses (session-auto-recover.ts resumeUnfinished). */
   resume(): Promise<void>
   /** Release the messages held for the move (engine-switch-io.ts releaseMoveHeldRows). */
@@ -321,6 +325,8 @@ export interface RollbackDeps {
 export interface RollbackSettle {
   /** Sessions settled now. */
   settled: number
+  /** Settled sessions whose runtime refused to turn their cron supervision on again (named, not held for it). */
+  unsupervised: Array<{ sid: string; title?: string; why: string }>
   /** Sessions not settled yet (still held), with why: the caller tries again. */
   failed: Array<{ sid: string; title?: string; why: string }>
 }
@@ -334,13 +340,14 @@ export interface RollbackSettle {
  */
 export async function settleHomeSessionsAfterRollback(o: { home: string; isOpenSwitch: (switchId: string) => boolean; deps: RollbackDeps; now?: () => number }): Promise<RollbackSettle> {
   const at = new Date((o.now ?? Date.now)()).toISOString()
-  const out: RollbackSettle = { settled: 0, failed: [] }
+  const out: RollbackSettle = { settled: 0, unsupervised: [], failed: [] }
   for (const { rec } of homeSessionRows(await o.deps.list(), o.home)) {
     const st = rec.leaderSwitch
     if (!st || st.rolledBack || st.moved || o.isOpenSwitch(st.switchId)) continue
     if (st.supervised) {
       try {
-        await o.deps.reenable(rec.claudeSessionId)
+        const refused = await o.deps.reenable(rec.claudeSessionId)
+        if (refused) out.unsupervised.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: refused })
       } catch (err) {
         out.failed.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: `its cron supervision could not be turned on again: ${err instanceof Error ? err.message : String(err)}` })
         continue

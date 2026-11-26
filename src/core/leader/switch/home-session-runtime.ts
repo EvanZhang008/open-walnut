@@ -60,7 +60,7 @@ export function stopTargetOf(rec: Pick<SessionRecord, 'claudeSessionId' | 'acpRu
 export function stopAnswer(reply: Record<string, unknown>, describe: (r: Record<string, unknown>) => string): { ok: true } | { ok: false; why: string } {
   if (reply.ok === true && (reply.stopped === true || reply.noop === true)) return { ok: true }
   if (reply.ok === true && reply.held !== true && reply.reason === 'not_owned' && reply.detail === 'not_journaled') return { ok: true }
-  if (reply.ok === true && reply.held === true) {
+  if (reply.ok === true && reply.held === true && reply.detail === 'no_owner_record') {
     return { ok: false, why: `this machine's session runtime holds it (${String(reply.kind ?? 'a process')}${typeof reply.pid === 'number' ? ` ${reply.pid}` : ''}) with no record of who started it, so it would not stop it: end it by hand, then run the switch again` }
   }
   return { ok: false, why: reply.ok === false ? String(reply.error ?? 'refused') : describe(reply) }
@@ -104,7 +104,8 @@ export async function rollbackDeps(): Promise<RollbackDeps> {
       if (!conn?.connected) throw new Error('this machine\'s session runtime is not connected')
       // The switch's stop turned supervision off with no fence (the handed-over home refused starts): none to name.
       const reply = await conn.send('cron.supervision', { sid, enabled: true }, 5_000)
-      if (reply.ok !== true) throw new Error(String(reply.error ?? 'supervision not re-enabled'))
+      // The runtime's own refusal (no saved launch settings, say): asking again would not change it.
+      if (reply.ok !== true) return `the runtime would not turn its cron supervision on again: ${String(reply.error ?? 'refused')}`
     },
     resume: async () => {
       // Restart recovery's pass over pending losses (a boot runs it again after its reconcile: a tracked one is skipped).
@@ -182,6 +183,12 @@ export function settleAfterRollback(home: string, isOpenSwitch: (switchId: strin
     await untilDone(async () => {
       const r = await settleHomeSessionsAfterRollback({ home, isOpenSwitch, deps: await rollbackDeps() })
       if (r.settled) log.session.info('leader switch: the sessions a rolled-back switch stopped go on here', { sessions: r.settled })
+      if (r.unsupervised.length) {
+        log.session.warn('leader switch: sessions a rolled-back switch stopped go on here without their cron supervision', { sessions: r.unsupervised })
+        const rows = (await (await store()).listSessions()).filter((x) => r.unsupervised.some((u) => u.sid === x.claudeSessionId))
+        const st = rows.find((x) => x.leaderSwitch)?.leaderSwitch
+        if (st) await sessionsNote(home, st.switchId, st.from.machine, 'sessions-settled', `settled without their cron supervision: ${r.unsupervised.map((u) => `${u.title ?? u.sid}: ${u.why}`).join('; ')}`)
+      }
       for (const [switchId, machine] of held) if (!r.failed.length) await sessionsNote(home, switchId, machine, 'sessions-settled')
       if (!r.failed.length) return { done: true }
       // The switch of each held row, for its note.

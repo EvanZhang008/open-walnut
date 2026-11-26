@@ -31,6 +31,8 @@ describe('the runtime\'s answer to the leader_switch stop', () => {
     const held = stopAnswer({ ok: true, stopped: false, held: true, reason: 'not_owned', detail: 'no_owner_record', kind: 'acp', pid: 4242 }, describeIt)
     expect(held).toEqual({ ok: false, why: expect.stringMatching(/holds it \(acp 4242\) with no record of who started it/) })
     expect(stopAnswer({ ok: true, stopped: false, reason: 'not_owned', detail: 'other_walnut' }, describeIt)).toEqual({ ok: false, why: 'refused (not_owned)' })
+    expect(stopAnswer({ ok: true, stopped: false, held: true, kind: 'claude', reason: 'not_owned', detail: 'other_walnut' }, describeIt)).toEqual({ ok: false, why: 'refused (not_owned)' })
+    expect(stopAnswer({ ok: true, stopped: false, held: false, kind: 'claude', reason: 'not_owned', detail: 'not_journaled' }, describeIt)).toEqual({ ok: true })
     expect(stopAnswer({ ok: false, error: 'stop: process did not exit after SIGTERM' }, describeIt)).toEqual({ ok: false, why: 'stop: process did not exit after SIGTERM' })
   })
 })

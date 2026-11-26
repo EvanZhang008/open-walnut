@@ -196,14 +196,14 @@ describe('a rollback', () => {
       home, isOpenSwitch: (id) => id === 'S2',
       deps: { ...s, reenable: async (id) => { calls.push(`reenable ${id}`) }, release: async (id) => { calls.push(`release ${id}`) }, resume: async () => { calls.push('resume') } },
     })
-    expect(r).toEqual({ settled: 2, failed: [] })
+    expect(r).toEqual({ settled: 2, unsupervised: [], failed: [] })
     // Supervision only where it was on; an unsupervised session is released all the same.
     expect(calls).toEqual([`reenable ${sid(1)}`, `release ${sid(1)}`, `release ${sid(4)}`, 'resume'])
     expect(s.byId.get(sid(1))!.leaderSwitch!.rolledBack).toBeTruthy()
     expect(heldBySwitch(s.byId.get(sid(1)))).toBe(false)
     // The open switch's row stays held; settled once (a second pass does nothing).
     expect(heldBySwitch(s.byId.get(sid(2)))).toBe(true)
-    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async () => {}, release: async () => {}, resume: async () => { calls.push('resume2') } } })).toEqual({ settled: 1, failed: [] })
+    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async () => {}, release: async () => {}, resume: async () => { calls.push('resume2') } } })).toEqual({ settled: 1, unsupervised: [], failed: [] })
     expect(calls).toContain('resume2')
   })
 
@@ -218,8 +218,16 @@ describe('a rollback', () => {
     expect(s.byId.get(sid(1))!.leaderSwitch!.rolledBack).toBeUndefined()
     expect(heldBySwitch(s.byId.get(sid(1)))).toBe(true)
     expect(released).toEqual([])
-    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: deps(false) })).toEqual({ settled: 1, failed: [] })
+    expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: deps(false) })).toEqual({ settled: 1, unsupervised: [], failed: [] })
     expect(released).toEqual([sid(1)])
+  })
+
+  it('a re-enable the runtime refuses (asking again would not change it) settles the session, named, instead of holding it for good', async () => {
+    const home = path.join(root, 'home')
+    const s = fakeStore([rec(1, home, { leaderSwitch: { switchId: 'S1', plan: 'move', from: { machine: 'a', home, cwd: home }, rel: '', stopped: 'idle', at: '', supervised: true } as never })])
+    const r = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async () => 'No saved launch settings', release: async () => {}, resume: async () => {} } })
+    expect(r).toEqual({ settled: 1, unsupervised: [{ sid: sid(1), title: 's1', why: 'No saved launch settings' }], failed: [] })
+    expect(heldBySwitch(s.byId.get(sid(1)))).toBe(false)
   })
 
   it('holds a moved row only until its records are placed', () => {
