@@ -19,7 +19,7 @@
  * A card holds while it is the node's summary and answers his newest word there: none while a word
  * of his waits (a message joined only by timing included) or a summary is owed (thread-view.ts).
  */
-import { cardView, summaryOwed, uncheckedJoin } from '../org/thread-view.js';
+import { cardView, sharedAnswers, summaryOwed, uncheckedJoin } from '../org/thread-view.js';
 import type { OrgThread, ThreadPatch } from '../org/threads-model.js';
 import { cutEnd } from '../text-cut.js';
 
@@ -74,20 +74,31 @@ export function keepsCardWords(t: OrgThread, state: OrgThread['state'], named: O
  */
 export const CARDS_RESTATED_MAX = 3;
 
-/** A write that only puts new words on an answered card that still holds: no state moves, nothing closes. Pure. */
-export function restatesCard(t: OrgThread, patch: Pick<ThreadPatch, 'state' | 'reply' | 'close'>): boolean {
-  return !patch.close && !!patch.reply && t.state === 'answered' && (patch.state ?? 'answered') === 'answered' && cardHolds(t);
+/**
+ * A write that only puts new words on a card the question quoted as holding (cardWords, so the
+ * count is of the very cards the rule named): no state moves, nothing closes. Pure.
+ */
+export function restatesCard(t: OrgThread, patch: Pick<ThreadPatch, 'state' | 'reply' | 'close'>, shared: ReadonlySet<string> = NONE): boolean {
+  return !patch.close && !!patch.reply && (patch.state ?? 'answered') === 'answered' && cardWords(t, shared) !== undefined;
 }
 
 /**
- * The writes of one status answer without the list said again: with more than CARDS_RESTATED_MAX
- * writes that restate a card, none of them is made (`restated`: their threads), and his cards keep
- * what they said. Every other write of the answer stays: a state that moves, a close, a title, a
- * card that did not hold. Pure.
+ * The writes of one status answer without the list said again: when it restates more than
+ * CARDS_RESTATED_MAX cards (counted by thread, a close's fallback included: refused, it writes the
+ * same words), none of those words is written (`restated`: their threads), and his cards keep what
+ * they said. Every other write of the answer stays: a state that moves, a close (without that
+ * fallback), a title, a card that did not hold. Pure.
  */
-export function withoutRestated<W extends { id: string; patch: ThreadPatch }>(threads: readonly OrgThread[], writes: readonly W[]): { writes: W[]; restated: string[] } {
+export function withoutRestated<W extends { id: string; patch: ThreadPatch; fallback?: ThreadPatch }>(threads: readonly OrgThread[], writes: readonly W[]): { writes: W[]; restated: string[] } {
   const by = new Map(threads.map((t) => [t.id, t]));
-  const hit = new Set(writes.filter((w) => { const t = by.get(w.id); return !!t && restatesCard(t, w.patch); }));
-  if (hit.size <= CARDS_RESTATED_MAX) return { writes: [...writes], restated: [] };
-  return { writes: writes.filter((w) => !hit.has(w)), restated: [...hit].map((w) => w.id) };
+  const shared = sharedAnswers(threads);
+  const says = (w: W, patch: ThreadPatch | undefined) => { const t = by.get(w.id); return !!t && !!patch && restatesCard(t, patch, shared); };
+  const restated = [...new Set(writes.filter((w) => says(w, w.patch) || says(w, w.fallback)).map((w) => w.id))];
+  if (restated.length <= CARDS_RESTATED_MAX) return { writes: [...writes], restated: [] };
+  const kept = writes.filter((w) => !says(w, w.patch)).map((w) => {
+    if (!says(w, w.fallback)) return w;
+    const { fallback: _f, ...rest } = w;
+    return rest as W;
+  });
+  return { writes: kept, restated };
 }
