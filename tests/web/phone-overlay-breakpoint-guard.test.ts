@@ -20,6 +20,7 @@ const KEEPS: Record<string, string> = {
   'components/sessions/DraftSessionPanel.tsx': 'a new session being written; the desktop shows it as a column',
   'components/sessions/SessionFileExplorer.tsx': 'the open file; the desktop shows it beside the tree (2026-11-07: a resize closed it)',
   'components/chat/AskWalnutSlot.tsx': 'the phone chat page; the desktop shows the same chat in its slot',
+  'pages/MemoryPage.tsx': 'the open memory file; the desktop shows it beside the list',
 }
 /** Owners whose layer closes: the desktop draws it differently or not at all, and it holds no work a close would end. */
 const CLOSES: Record<string, string> = {

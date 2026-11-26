@@ -13977,10 +13977,17 @@ a.task-kebab-info:hover {
     padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
 
-  .memory-list-pane {
-    flex: 0 0 260px !important;
-    width: 260px !important;
+  /* One pane at a time (MemoryPage `data-phone-pane`): the list fills the page, and an open
+     file fills it over the list; the drag handle has nothing to divide. */
+  .memory-split-view[data-phone-pane] > .memory-resize-handle { display: none; }
+  .memory-split-view[data-phone-pane="list"] > .memory-list-pane {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    border-right: none;
   }
+  .memory-split-view[data-phone-pane="list"] > .memory-detail-pane,
+  .memory-split-view[data-phone-pane="file"] > .memory-list-pane { display: none; }
+  .memory-split-view[data-phone-pane="file"] > .memory-detail-pane { flex: 1 1 auto; width: 100%; }
 
   /* The task panel is the phone's home screen: it fills the page. MainPage never
      marks it collapsed on a phone (a panel hidden on the desktop, a synced flag,

@@ -8,6 +8,8 @@ import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { visibleInterval } from '@/utils/page-visibility';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import type { MemoryBrowseTree } from '@/api/memory';
 
 const LS_WIDTH_KEY = 'open-walnut-memory-list-width';
@@ -176,6 +178,23 @@ export function MemoryPage() {
     if (selectedPath) reloadSelected(selectedPath);
   }, [selectedPath, reloadSelected]);
 
+  // A phone shows one pane at a time: the list, or the open file as a layer over it whose Back
+  // returns to the list (2026-11-26 audit: a 110px reader beside the list at 390 wrapped "No file
+  // open" one word a line). The file stays open when the window leaves the phone layout.
+  const phone = usePhoneLayout();
+  usePhoneOverlay({
+    id: 'memory-file',
+    kind: 'file',
+    open: phone && !!selectedPath,
+    bar: { title: selectedPath ? (selectedPath.split('/').pop() ?? selectedPath) : 'Memory' },
+    keepOnBreakpoint: true,
+    onClose: (info) => {
+      if (info.breakpoint) return;
+      setSelectedPath(null);
+      setSearchParams({}, { replace: true });
+    },
+  });
+
   // Auto-select from URL on initial load
   useEffect(() => {
     const urlPath = searchParams.get('path');
@@ -190,7 +209,7 @@ export function MemoryPage() {
   if (error) return <UnavailableState size="pane" title="Couldn't load memory" detail={error} />;
 
   return (
-    <div className="memory-split-view">
+    <div className="memory-split-view" data-phone-pane={phone ? (selectedPath ? 'file' : 'list') : undefined}>
       <div
         className="memory-list-pane"
         ref={listPaneRef}

@@ -91,6 +91,8 @@ const CLASSIFIED: Record<string, 'true' | 'none' | 'pass'> = {
   "components/notes/usePhoneNoteLayer.tsx 'note'": 'none',
   "pages/CalendarPage.tsx 'calendar-tasks'": 'none',
   "apps/mail/MailReader.tsx 'viewer'": 'none',
+  // The open memory file: the desktop shows it beside the list, so a wider window keeps it.
+  "pages/MemoryPage.tsx 'file'": 'true',
 }
 
 const { calls, unread } = readCalls()
