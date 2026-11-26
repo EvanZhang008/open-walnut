@@ -24,6 +24,7 @@ import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import type { TreeAsk } from './same-ask.js';
 import { experimentCache } from './experimental-cache.js';
+import { registerMemoryHolder } from './observability/memory-ledger.js';
 
 const flag = experimentCache('asks_same_by_meaning');
 /** The experiment, read from the config now. */
@@ -85,6 +86,8 @@ export function readMeaningAnswer(answer: string | null | undefined, count: numb
 
 /** Verdicts by the pair of texts (the new ask and the list as numbered): 0 is NONE. */
 const cache = new Map<string, { n: number; at: number }>();
+/** A key is a sha256 in hex. */
+const KEY_CHARS = 64;
 function cacheKey(newAsk: string, list: readonly TreeAsk[]): string {
   const h = createHash('sha256').update(newAsk);
   for (const a of list) h.update('\u0000').update(a.taskId).update('\u0001').update(a.threadId ?? a.letterId ?? '').update('\u0001').update(a.ask);
@@ -101,6 +104,8 @@ function remember(key: string, n: number, now: number): void {
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
   cache.set(key, { n, at: now });
 }
+// At most CACHE_MAX verdicts, each a hash and two numbers (memory-ledger.test.ts: every module cache is on the ledger).
+registerMemoryHolder({ name: 'same-ask-meaning.verdicts', budgetBytes: CACHE_MAX * (KEY_CHARS * 2 + 32), read: () => ({ entries: cache.size, chars: cache.size * KEY_CHARS }) });
 /** Test seam: forget the kept verdicts. */
 export function clearMeaningCache(): void { cache.clear(); }
 
