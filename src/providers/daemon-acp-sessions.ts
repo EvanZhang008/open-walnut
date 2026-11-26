@@ -100,7 +100,7 @@ export function createDaemonAcpSessions<W extends object>(deps: DaemonAcpSession
         const o = cmd as { ownerHome?: unknown; home?: unknown }
         void recordAcpRuntime(params.sid, o.ownerHome ?? o.home)
         sendOk(ws, id, resp.result ?? {})
-      } else sendFrame(ws, { id, ok: false, error: resp.error, errorKind: resp.errorKind })
+      } else sendFrame(ws, { ...resp.refusal, id, ok: false, error: resp.error, errorKind: resp.errorKind })
     })
   }
 

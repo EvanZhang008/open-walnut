@@ -19,6 +19,7 @@ import { initialFoldState, type FoldState } from './daemon-fold.js'
 import type { StreamFoldResult, createStreamFold } from './stream-fold-core.js'
 import { ensureTaskDir, restoreForStart, resumeSourceId } from './task-dir-core.js'
 import { shellQuote } from './host-exec-core.js'
+import { handedOverHomeAt, homeHandedOverRefusal } from '../lib/leader-home-gate.js'
 import { prepareSpawnFiles } from './session-spawn-files.js'
 import { containListeners, type ChildProcessFns, type ChildProcessUse } from './daemon-child-spawn.js'
 import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
@@ -149,9 +150,15 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
         if (error?.code === 'CLAUDE_RUNTIME') return error as Error & { errorKind?: string }
         // Another CLI of this session runs on this host (cli-owner-core.ts).
         if (error?.code === 'SESSION_LIVE' || error?.code === 'SESSION_NOT_OURS') return error as Error & { errorKind?: string }
+        // A working folder in a handed-over data home: the answer names the home and the machine it went to.
+        if (error?.errorKind === 'home_handed_over') return error as Error & { errorKind?: string }
         throw error
       })
     if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' })
+    if (result instanceof Error && result.errorKind === 'home_handed_over') {
+      const { code, reason, home, state, to } = result as Error & ReturnType<typeof homeHandedOverRefusal>
+      return sendError(ws, id, result.message, { errorKind: result.errorKind, code, reason, home, state, ...(to ? { to } : {}) }, 'warn')
+    }
     if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind, ...(result.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : result.errorKind === 'budget_checking' ? { reason: 'budget_checking', code: 'BUDGET_CHECKING' } : result.errorKind === 'session_live' ? { reason: 'session_live', code: 'SESSION_LIVE' } : result.errorKind === 'session_other_walnut' ? { reason: 'session_other_walnut', code: 'SESSION_NOT_OURS' } : {}) })
     addSubscriber(ws, sid, result.offset)
     return sendOk(ws, id, result)
@@ -182,6 +189,14 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
     // sent to a remote Linux host).
     if (!fs.existsSync(cwd)) {
       throw new Error(`start: cwd does not exist on this host (${os.hostname()}): ${cwd}`)
+    }
+    // leader-switch-home-stop-v1: no CLI starts (nor takes a message as a live adopt) in a data home a
+    // leader switch is taking away or took away; the session runs on the new leader (lib/leader-home-gate.ts).
+    const handedOver = await handedOverHomeAt(cwd)
+    if (handedOver) {
+      const refusal = homeHandedOverRefusal('start', handedOver)
+      logMsg('warn', 'start refused: the working folder is in a handed-over data home', { sid, cwd, home: refusal.home, state: refusal.state, to: refusal.to })
+      throw Object.assign(new Error(refusal.error), refusal)
     }
 
     // If a session with this sid already exists (e.g. adopted orphan still

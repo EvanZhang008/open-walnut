@@ -31,6 +31,10 @@ export interface DaemonSessionStopDeps<W extends object> extends DaemonReplies<W
   journaledHome: (sid: string) => string | undefined
   journaledIds: () => Set<string>
   walnutOfHome: (home: string) => string
+  /** The Walnut that started the ACP worker `runtimeId` here (daemon-spawn-journal.ts acpRuntimeOwner), if recorded. */
+  acpRuntimeOwner: (runtimeId: string) => string | undefined
+  /** The runtime's ACP workers (acp-daemon.ts): whether it holds `sid`, and its strict stop. */
+  acp: { holds: (sid: string) => boolean; acpStop: (sid: string, opts: { strict: true }) => Promise<void> }
   servedStopRefusal: (sid: string, home: string) => { reason: string; detail?: string } | null
   isProcessGroupAlive: (pgid: number) => boolean
   killProcessGroup: (pid: number, signal: NodeJS.Signals) => unknown
@@ -52,7 +56,7 @@ export interface DaemonSessionStopDeps<W extends object> extends DaemonReplies<W
 }
 
 export function createDaemonSessionStop<W extends object>(deps: DaemonSessionStopDeps<W>) {
-  const { SERVICE_MODE, SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS, sessions, cliArgvFiles, cronRuntime, daemonBootId, sessionStartGate, sessionStopVersions, journaledHome, journaledIds, walnutOfHome, servedStopRefusal, isProcessGroupAlive, killProcessGroup, readStartTime, commandLineOf, reapSession, persistRegistry, persistRegistryDurable, deriveSessionProtection, hasRecentSchedulerFiring, cancelTurnRetry, wsId, setTimeout, logMsg, sendOk, sendError } = deps
+  const { SERVICE_MODE, SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS, sessions, cliArgvFiles, cronRuntime, daemonBootId, sessionStartGate, sessionStopVersions, journaledHome, journaledIds, walnutOfHome, acpRuntimeOwner, acp, servedStopRefusal, isProcessGroupAlive, killProcessGroup, readStartTime, commandLineOf, reapSession, persistRegistry, persistRegistryDurable, deriveSessionProtection, hasRecentSchedulerFiring, cancelTurnRetry, wsId, setTimeout, logMsg, sendOk, sendError } = deps
 
   // ── Stop session ──
   // A refused stop request must not cancel a start that is already queued.
@@ -62,8 +66,20 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
     if (cmd.stopRequestId !== undefined && (typeof cmd.stopRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cmd.stopRequestId))) {
       return sendError(ws, id, 'stop: invalid stopRequestId')
     }
-    if (cmd.reason !== undefined && !['user', 'maintenance', 'idle', 'orphan'].includes(cmd.reason as string)) {
+    if (cmd.reason !== undefined && !['user', 'maintenance', 'idle', 'orphan', 'leader_switch'].includes(cmd.reason as string)) {
       return sendError(ws, id, 'stop: invalid reason')
+    }
+    // 'leader_switch' (leader-switch-home-stop-v1): the switch stop of the machine handing the leader over ends
+    // every session working in its data home before the final batch. Like 'user' (supervision off under the
+    // stop's fence, so no cron tick or turn retry starts the CLI again in the old home; a rollback re-enables it
+    // with `cron.supervision {enabled: true, stopFence: stopRequestId}`), and it names its fence and its Walnut.
+    // The answer comes only once the process group is gone; a CLI that outlives SIGTERM is an error, never a
+    // force kill. An ACP worker of this daemon is ended through its own strict stop (it would outlive the daemon).
+    if (cmd.reason === 'leader_switch') {
+      if (cmd.stopRequestId === undefined) return sendError(ws, id, 'stop: leader_switch needs a stopRequestId')
+      if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'stop: leader_switch needs the asking Walnut (home)')
+      // An ACP runtime this daemon holds, or one it started and already ended (a retried stop): the worker's stop.
+      if (acp.holds(sid) || (!sessions.has(sid) && acpRuntimeOwner(sid) !== undefined)) return stopAcpForLeaderSwitch(ws, id, sid, cmd.home)
     }
     // owner-home-v1: a stop the server decided on names the asking Walnut, and a
     // session the spawn journal records for another Walnut is refused
@@ -115,7 +131,7 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
 
   /**
    * owner-home-v1: why this daemon will NOT carry out a stop the server decided
-   * on (reason user, maintenance or idle), or null when it may.
+   * on (reason user, maintenance, idle or leader_switch), or null when it may.
    *
    * A pid or a sid in a server's database proves nothing about which Walnut
    * started the session: an ephemeral test server over a copy of the production
@@ -149,6 +165,26 @@ export function createDaemonSessionStop<W extends object>(deps: DaemonSessionSto
     if (journaled) return null
     const human = cmd.initiator === 'human' || (cmd.initiator === undefined && cmd.reason === 'user')
     return human ? null : { reason: 'not_owned', detail }
+  }
+
+  /**
+   * A leader switch's stop of an ACP worker this daemon holds: only the Walnut that started it (its start's
+   * recorded home, acpRuntimeOwner) may, a worker with no record is refused (fail closed: the switch reports it);
+   * then the worker's strict stop under the session's gate (a start of the same runtime waits for it).
+   */
+  async function stopAcpForLeaderSwitch(ws: W, id: number, sid: string, home: string) {
+    const owner = acpRuntimeOwner(sid)
+    const refusal = !owner ? { reason: 'not_owned', detail: 'not_journaled' }
+      : owner !== walnutOfHome(home) ? { reason: 'not_owned', detail: 'other_walnut' } : null
+    if (refusal) {
+      logMsg('info', 'cmdStop: leader switch stop refused for an ACP worker another Walnut started', { sid, ...refusal })
+      return sendOk(ws, id, { stopped: false, ...refusal })
+    }
+    logMsg('info', 'cmdStop: ending an ACP worker for a leader switch', { sid })
+    return sessionStartGate.run(sid, () => acp.acpStop(sid, { strict: true })).then(
+      () => sendOk(ws, id, { stopped: true, kind: 'acp' }),
+      (error) => sendError(ws, id, `stop: ${(error as Error).message}`),
+    )
   }
 
   /**

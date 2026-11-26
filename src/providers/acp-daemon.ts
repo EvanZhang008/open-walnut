@@ -39,6 +39,7 @@ import { VERSION_MS, createHostEngineProbe, findHostBinary, resolveHostAcpArtifa
 import { createEngineSignIn } from './acp-engine-sign-in.js'
 import { firstRpcId, openSurviveChannel, prepareSurviveFiles, readSavedPos, removeSurviveFiles, survivePaths, type SurviveChannel } from './acp-survive.js'
 import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, registryFile, unregisterRun } from './detached-registry.js'
+import { handedOverHomeAt, homeHandedOverRefusal } from '../lib/leader-home-gate.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 // A turn parked on a permission request produces ZERO journal/RPC traffic, so
@@ -80,6 +81,8 @@ interface AcpWorkerEntry<W> {
   lastActivity: number
   state: 'running' | 'dead'
   stopping: boolean
+  /** Its stop answers only once the process group is gone (a Demo's daemon, or a leader switch's stop). */
+  strictStop?: boolean
   aborting: boolean
   terminalVersion: number
   activeCommandId: string | null
@@ -455,7 +458,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (entry.pid && !entry.exited()) {
       signalProcessGroup(entry.pid, 'SIGKILL')
     }
-    if (deps.strictStop?.() && entry.stopping && entry.pid && isProcessGroupAlive(entry.pid)) {
+    if ((deps.strictStop?.() || entry.strictStop) && entry.stopping && entry.pid && isProcessGroupAlive(entry.pid)) {
       exitedGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
     }
     if (entry.survive) {
@@ -572,9 +575,17 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     try { return /^lstart=(.*)$/m.exec(await fs.promises.readFile(registryFile(registryDir, 'acp', sid), 'utf8'))?.[1] ?? null } catch { return null }
   }
 
-  async function acpStart(ws: W, params: AcpStartParams): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string }> {
+  async function acpStart(ws: W, params: AcpStartParams): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string; refusal?: Record<string, unknown> }> {
     const { sid, cwd, providerSessionId, mcpServers } = params
     let { workerCmd, adapterCmd, env } = params
+    // leader-switch-home-stop-v1: no worker starts (nor is handed to a new subscriber) in a data home a leader
+    // switch is taking away or took away; the session runs on the new leader (lib/leader-home-gate.ts).
+    const handedOver = typeof cwd === 'string' && cwd ? await handedOverHomeAt(cwd) : null
+    if (handedOver) {
+      const { error, errorKind, ...refusal } = homeHandedOverRefusal('acpStart', handedOver)
+      log('warn', 'acp: start refused, the working folder is in a handed-over data home', { sid, cwd, home: refusal.home, state: refusal.state, to: refusal.to })
+      return { ok: false, error, errorKind, refusal }
+    }
     if (!(await adopted(sid))) return adoptingRefusal(sid)
     const existing = workers.get(sid)
     if (existing && existing.state === 'running') {
@@ -925,11 +936,18 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
   }
 
-  async function acpStop(sid: string): Promise<void> {
+  /**
+   * `strict` (a leader switch's stop, daemon-session-stop.ts): a worker still being adopted is adopted first (one that
+   * cannot be is an error, never "nothing to stop"), and the answer comes only once its process group is gone; a
+   * group that outlives the wait is an error with no force kill. A Demo's daemon stops every worker this way.
+   */
+  async function acpStop(sid: string, opts: { strict?: boolean } = {}): Promise<void> {
+    if (opts.strict && !(await adopted(sid))) throw new Error(adoptingRefusal(sid).error)
     const entry = workers.get(sid)
     if (!entry || entry.state !== 'running') return awaitExitedGroup(sid)
     entry.stopping = true
-    if (!deps.strictStop?.()) {
+    if (opts.strict) entry.strictStop = true
+    if (!deps.strictStop?.() && !opts.strict) {
       await rpc(entry, 'shutdown')
       setTimeout(() => {
         if (workers.get(sid) !== entry || entry.state !== 'running') return
@@ -979,6 +997,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   function hasWorker(sid: string): boolean {
     const e = workers.get(sid)
     return !!e && e.state === 'running'
+  }
+
+  /** Whether `sid` names a worker of this daemon: running, still being adopted, or a stopped one whose group lives on. */
+  function holds(sid: string): boolean {
+    return workers.has(sid) || keptRows.has(sid) || adopting.has(sid) || exitedGroupAlive(sid)
   }
 
   /** Read only: every worker this daemon holds (demo.quiesce answers with them, so a reset stops each). */
@@ -1424,6 +1447,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     subscribe,
     removeSubscriber,
     hasWorker,
+    holds,
     listWorkers,
     startupRepair,
     holdingWorkers,

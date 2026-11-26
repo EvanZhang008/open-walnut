@@ -1238,6 +1238,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // no copy of the leader's data (WALNUT_COPIES=none) reads and writes its own sessions' rows from
   // it. Optional: without it the leader keeps such a host as it is (a daemon, its gate shown).
   'copyless-service-v1',
+  // 'leader-switch-home-stop-v1' (daemon-session-stop.ts, lib/leader-home-gate.ts handedOverHomeAt): `stop` takes
+  // reason 'leader_switch' (with `stopRequestId` and `home`): like 'user' it turns cron supervision off under that
+  // fence, and answers only once the process group is gone; for an ACP worker this daemon holds it is the
+  // worker's strict stop (no force kill, a worker still being adopted is adopted first). And no session starts
+  // in a handed-over data home: `start` and `acpStart` with a working folder in a home whose
+  // local/leader-switch/handed-over.json exists (either state; unreadable counts) answer
+  // `{ ok: false, errorKind: 'home_handed_over', code: 'HOME_HANDED_OVER', home, state, to? }`. Optional:
+  // an older daemon answers 'invalid reason' to the stop and starts anywhere.
+  'leader-switch-home-stop-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

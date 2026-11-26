@@ -145,6 +145,38 @@ describe('daemon cron runtime with real transcript and durable state', () => {
     expect(second.runtime.deliveryAllowed(sid, null)).toBe(false)
   })
 
+  it('a leader switch stop (disable under its stopRequestId) relaunches nothing, across a restart; the rollback re-enables with that fence', async () => {
+    const { session } = await seed()
+    const first = await lab([session])
+    await first.runtime.tick()
+    expect(first.runtime.get(sid)).toMatchObject({ enabled: true })
+    // daemon-session-stop.ts cmdStop, reason 'leader_switch': supervision off under the switch's fence, then the CLI ends.
+    const stopId = '0c0c0c0c-1111-4222-8333-444444444444'
+    await first.runtime.disable(sid, stopId)
+    live.delete(200)
+    for (let i = 0; i < 4; i++) { now += 60_000; await Promise.all(Array.from({ length: 5 }, () => first.runtime.tick())) }
+    expect(first.start).not.toHaveBeenCalled()
+    await first.runtime.close()
+    // A new runtime on the same state dir (the in-process runtime after the daemon program, or the next boot) adopts nothing.
+    const second = await lab([session])
+    for (let i = 0; i < 4; i++) { now += 60_000; await second.runtime.tick() }
+    expect(second.start).not.toHaveBeenCalled()
+    expect(second.runtime.get(sid)).toMatchObject({ enabled: false, state: 'disabled', stopRequestId: stopId })
+    // A start or re-enable without the fence (or with another one) is refused; the rollback's own fence passes.
+    expect(second.runtime.deliveryAllowed(sid, undefined)).toBe(false)
+    expect(second.runtime.deliveryAllowed(sid, 'ffffffff-1111-4222-8333-444444444444')).toBe(false)
+    await expect(second.runtime.enable(sid, 'ffffffff-1111-4222-8333-444444444444')).rejects.toThrow('superseded by a stop')
+    expect(second.runtime.deliveryAllowed(sid, stopId)).toBe(true)
+    await second.runtime.enable(sid, stopId)
+    expect(second.runtime.get(sid)).toMatchObject({ enabled: true })
+    // Supervision is back: the dead CLI is relaunched with its saved launch.
+    await second.runtime.tick()
+    now += 5000
+    await Promise.all(Array.from({ length: 5 }, () => second.runtime.tick()))
+    expect(second.start).toHaveBeenCalledTimes(1)
+    expect(second.start.mock.calls[0][1].args).toEqual(['claude', '-p', '--permission-mode', 'default', '--resume', sid])
+  })
+
   it('drains a tick waiting on the native gate without letting an old resume reopen a newer pause', async () => {
     const { session } = await seed()
     const l = await lab([session])
