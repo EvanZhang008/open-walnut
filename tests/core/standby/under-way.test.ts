@@ -13,6 +13,7 @@ import { RemoteStandbyTarget } from '../../../src/core/standby/remote-transport.
 import { batchUnderWay, standbyStatus, takeBatch } from '../../../src/core/standby/index.js'
 import { statusFileName } from '../../../src/core/standby/apply-status.js'
 import { INCOMING } from '../../../src/core/standby/receive.js'
+import { staleCopyProblem } from '../../../src/core/leader/switch/target-job.js'
 import { fakeStandbyHost } from './fake-standby-host.js'
 import { sandbox, seedHome, write, type Sandbox } from './helpers.js'
 
@@ -63,7 +64,9 @@ describe('a batch under way at a standby target', () => {
     expect(u!.chunks).toBeGreaterThanOrEqual(1)
     expect(u!.bytes).toBeGreaterThan(0)
     expect(Date.parse(u!.since)).toBeGreaterThan(Date.parse(at!))
-    expect(Date.parse(u!.lastAt)).toBeGreaterThanOrEqual(Date.parse(u!.since))
+    expect(u!.progressAt, 'its chunks are progress').not.toBeNull()
+    expect(Date.parse(u!.progressAt!)).toBeGreaterThanOrEqual(Date.parse(u!.since))
+    expect(Date.parse(u!.lastAt)).toBeGreaterThanOrEqual(Date.parse(u!.progressAt!))
     expect(Date.parse(u!.lastAt)).toBeLessThanOrEqual(before)
     expect(u!.applying).toBe(false)
     // Nothing of the copy moved: the batch is not current until its apply ran.
@@ -74,7 +77,28 @@ describe('a batch under way at a standby target', () => {
     expect(await batchUnderWay(sb.target, await landed())).toBeNull()
   })
 
-  it('an apply job that runs (its status says running) is under way and applying', async () => {
+  // Review round 1, M1: a remote batch's init writes its export into .incoming/ first, a batch that sends nothing
+  // or voids too. That is a start, never progress: the check must not say "its standby runs, wait".
+  it('only an init and its export after the landing: a batch began, nothing arrived, so not "its standby runs"', async () => {
+    sb = await sandbox('under-way-init-only')
+    dbs.push(...seedHome(sb.home).dbs)
+    const l = fakeStandbyHost(sb.root)
+    expect((await batch(remote(l))).ok).toBe(true)
+    const at = await landed()
+    await new Promise((r) => setTimeout(r, 20))
+    // A fresh sender's first step of a batch: init with an export, and nothing after it.
+    await remote(l).current()
+    const incoming = fs.readdirSync(path.join(sb.target, INCOMING))
+    expect(incoming.some((n) => n.startsWith('export-')), incoming.join(', ')).toBe(true)
+    const u = await batchUnderWay(sb.target, at)
+    expect(u).toMatchObject({ chunks: 0, bytes: 0, applying: false, progressAt: null })
+    const now = Date.now()
+    const p = staleCopyProblem({ ageSeconds: 900, committedAt: new Date(now - 900_000).toISOString() }, u, now)
+    expect(p).toMatch(/batches still begin here .* but bring nothing/)
+    expect(p).not.toMatch(/its standby runs|wait for it to land/)
+  })
+
+  it('an apply job that runs (its status says running, its process lives, its heartbeat is fresh) is progress; a dead or silent one is not', async () => {
     sb = await sandbox('under-way-applying')
     dbs.push(...seedHome(sb.home).dbs)
     const l = fakeStandbyHost(sb.root)
@@ -82,11 +106,19 @@ describe('a batch under way at a standby target', () => {
     const at = await landed()
     await new Promise((r) => setTimeout(r, 20))
     const file = path.join(sb.target, INCOMING, statusFileName('job-1'))
-    fs.writeFileSync(file, JSON.stringify({ state: 'running', pid: process.pid, startedAt: new Date().toISOString(), at: new Date().toISOString(), batch: 2 }))
+    const iso = (ms: number) => new Date(ms).toISOString()
+    fs.writeFileSync(file, JSON.stringify({ state: 'running', pid: process.pid, startedAt: iso(Date.now()), at: iso(Date.now()), batch: 2 }))
     const u = await batchUnderWay(sb.target, at)
     expect(u?.applying).toBe(true)
+    expect(u?.progressAt).not.toBeNull()
     expect(u?.chunks).toBe(0)
-    fs.writeFileSync(file, JSON.stringify({ state: 'failed', at: new Date().toISOString(), error: 'x' }))
+    // Its process gone (apply-status.ts runningApply: the pid must live).
+    fs.writeFileSync(file, JSON.stringify({ state: 'running', pid: 2_147_483_646, startedAt: iso(Date.now()), at: iso(Date.now()), batch: 2 }))
+    expect(await batchUnderWay(sb.target, at)).toBeNull()
+    // Its heartbeat older than HEARTBEAT_STALE_MS (45 s).
+    fs.writeFileSync(file, JSON.stringify({ state: 'running', pid: process.pid, startedAt: iso(Date.now() - 120_000), at: iso(Date.now() - 60_000), batch: 2 }))
+    expect(await batchUnderWay(sb.target, at)).toBeNull()
+    fs.writeFileSync(file, JSON.stringify({ state: 'failed', at: iso(Date.now()), error: 'x' }))
     expect(await batchUnderWay(sb.target, at)).toBeNull()
   })
 })

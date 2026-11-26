@@ -70,20 +70,31 @@ const secsSince = (iso: string, now: number) => Math.max(0, Math.round((now - Da
 
 /**
  * The copy's batches stopped coming, or one is still on its way: what the candidate's check says when the last
- * batch landed more than RECENT_BATCH_S ago, or null when it is recent. The copy's own disk tells the two apart
- * (standby/under-way.ts): a batch that is sending is "not caught up yet, its standby runs" (a slow link, the batch
- * after a batch of the whole home: wait), one that sends nothing is "is the standby running?" (the 2026-11-25
- * rehearsal: a 20 Mbit/s batch ran past 300 s, and the check called it not running).
+ * batch landed more than RECENT_BATCH_S ago, or null when it is recent. The copy's own disk tells them apart
+ * (standby/under-way.ts), by progress only (chunks arriving, a running apply), never by a batch's start alone:
+ *
+ *   progress within UNDER_WAY_MOVED_S   "not caught up yet, but its standby runs": wait (a slow link, the batch
+ *                                       after a batch of the whole home; the 2026-11-25 rehearsal: a 20 Mbit/s
+ *                                       batch ran past 300 s, and the check called it not running)
+ *   batches begin, nothing arrives      every remote batch writes its init's export first, a void one too: a
+ *                                       runner whose batches all void reads so, never as "wait"
+ *   no trace at all, or none lately     "is the standby running?"
+ *
+ * `underWay` 'unknown': an older copy state with no landing time (committedAt), where the batch's own moment, by
+ * the leader's clock, would count that batch's own chunks as under way: not looked for.
  */
-export function staleCopyProblem(status: { ageSeconds: number | null; committedAt: string | null }, underWay: BatchUnderWay | null, now = Date.now()): string | null {
+export function staleCopyProblem(status: { ageSeconds: number | null; committedAt: string | null }, underWay: BatchUnderWay | null | 'unknown', now = Date.now()): string | null {
   const landed = sinceLanded(status, now)
   if (landed <= RECENT_BATCH_S) return null
   const head = `the standby copy's last batch landed ${landed} s ago (more than ${RECENT_BATCH_S} s)`
+  if (underWay === 'unknown') return `${head}: is the standby running on the leader? (this copy's state does not say when its batch landed, so a batch under way here is not looked for)`
   if (!underWay) return `${head}, and no batch is under way here (nothing received since it landed): is the standby running on the leader?`
-  const moved = secsSince(underWay.lastAt, now)
-  const got = `${underWay.chunks} chunk(s), ${(underWay.bytes / 1_048_576).toFixed(1)} MB received${underWay.applying ? ', its apply running' : ''}, the last ${moved} s ago`
-  if (moved <= UNDER_WAY_MOVED_S) return `${head}, so the copy is not caught up yet, but its standby runs: a batch has been under way here for ${secsSince(underWay.since, now)} s (since ${underWay.since}; ${got}). A batch over a slow link, or the one after a batch of the whole home, takes this long: wait for it to land, then try again`
-  return `${head}, and the batch that began here at ${underWay.since} has not moved for ${moved} s (${got}): is the standby running on the leader, and does its link to this machine carry?`
+  const got = `${underWay.chunks} chunk(s), ${(underWay.bytes / 1_048_576).toFixed(1)} MB received${underWay.applying ? ', its apply running' : ''}`
+  const moved = underWay.progressAt ? secsSince(underWay.progressAt, now) : null
+  if (moved !== null && moved <= UNDER_WAY_MOVED_S) return `${head}, so the copy is not caught up yet, but its standby runs: a batch has been under way here for ${secsSince(underWay.since, now)} s (since ${underWay.since}; ${got}, the last ${moved} s ago). A batch over a slow link, or the one after a batch of the whole home, takes this long: wait for it to land, then try again`
+  const begun = secsSince(underWay.lastAt, now)
+  if (begun <= UNDER_WAY_MOVED_S) return `${head}, and batches still begin here (the last ${begun} s ago) but bring nothing: ${moved === null ? 'no chunk arrived' : `no chunk arrived and no apply ran for ${moved} s`} since ${underWay.since} (${got}). The leader's batches may all be void: see its Walnut Health and its log ("standby: batch void")`
+  return `${head}, and the batch that began here at ${underWay.since} has not moved for ${moved ?? begun} s (${got}): is the standby running on the leader, and does its link to this machine carry?`
 }
 
 export function targetLockFile(standbyDir: string, switchId: string): string {
@@ -159,7 +170,7 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     const status = await standbyStatus(o.standbyDir)
     if (status.batch === null) problems.push(`the standby copy ${o.standbyDir} holds no complete batch yet`)
     else {
-      const stale = staleCopyProblem(status, sinceLanded(status) > RECENT_BATCH_S ? await batchUnderWay(o.standbyDir, status.committedAt ?? status.takenAt) : null)
+      const stale = staleCopyProblem(status, sinceLanded(status) <= RECENT_BATCH_S ? null : status.committedAt ? await batchUnderWay(o.standbyDir, status.committedAt) : 'unknown')
       if (stale) problems.push(stale)
     }
     const free = freeBytes(self.home)
