@@ -144,6 +144,15 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   // A lead's kebab, so the list below is the longest one a session shows (Board included): the
   // fixture task gets an open subtask in this page's task list only (board-view-helpers.ts).
   await leadForPage(page, TASK_ID)
+  // Every time the bar's kebab leaves the page while the session and the task list load.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __kebabDrops: number }
+    w.__kebabDrops = 0
+    const kebab = (n: Node) => n instanceof Element && (n.matches('.task-quick-actions') || !!n.querySelector('.task-quick-actions'))
+    new MutationObserver((ms) => {
+      for (const m of ms) for (const n of m.removedNodes) if (kebab(n) && (m.target as Element).closest?.('.phone-topbar')) w.__kebabDrops += 1
+    }).observe(document, { childList: true, subtree: true })
+  })
   const errors = await openByDeepLink(page)
   await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText(TASK_TITLE)
   await expect(topbar(page).locator('.phone-topbar-subtitle')).toHaveText(/^(Running|Idle|Stopped|Not available|Needs you|Needs your answer|Needs you: .+)$/)
@@ -159,6 +168,10 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   // It is drawn into the bar once the session has loaded, a moment after the title.
   await expect(kebab).toBeVisible()
   const kb = (await kebab.boundingBox())!
+  // Drawn once: the task list arriving must not take it away and put it back (2026-11-26: the
+  // task rows flipped between the old list and the new one while the list was adopted in a
+  // transition, so the kebab mounted, vanished and mounted again; TasksContext.tsx TaskRows).
+  expect(await page.evaluate(() => (window as unknown as { __kebabDrops: number }).__kebabDrops)).toBe(0)
   expect(kb.width).toBeGreaterThanOrEqual(44)
   expect(kb.height).toBeGreaterThanOrEqual(44)
   await kebab.click()
@@ -207,6 +220,8 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   const t = (await topbar(page).boundingBox())!
   expect(t.height).toBe(91)
   await expectNoHorizontalOverflow(page)
+  // And it stayed the one kebab through the menu, the resize and the keyboard.
+  expect(await page.evaluate(() => (window as unknown as { __kebabDrops: number }).__kebabDrops)).toBe(0)
   expect(errors).toEqual([])
 })
 

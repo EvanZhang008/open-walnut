@@ -87,9 +87,9 @@ const TasksContext = createContext<TasksContextValue | null>(null);
  * whole panel and history again for every agent's status write (about 13 a minute on the
  * user's Mac, 2026-11-16, task 9bceb9f2). A surface that shows ONE task reads it here
  * (useStoreTask) and re-renders only when that row changes. The object is the provider's for
- * its whole life; `latest` is the list its newest render held (set during that render, so a
- * row read in the same render agrees with the context), and the subscribers hear of a new
- * list once that render is on screen (a layout effect, before the frame paints).
+ * its whole life; `latest` is the list on screen (set at commit, in a layout effect, never
+ * during a render that may be thrown away), and the subscribers hear of it in the same effect,
+ * before the frame paints.
  */
 interface TaskRows {
   latest: readonly Task[];
@@ -207,13 +207,19 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     [t.tasks, t.taskGroups, t.hiddenGroups, t.folderMeta, t.loading, t.refreshing, t.error, t.operationError]);
 
   const rows = useState<TaskRows>(() => makeTaskRows(t.tasks, t.loading, t.error))[0];
-  rows.latest = t.tasks;
-  rows.loading = t.loading;
-  rows.error = t.error;
   useLayoutEffect(() => {
     rows.store = value;
   }, [rows, value]);
+  // The rows take a list only once it is on screen. A list adopted in a transition (the task
+  // list's fetch) is rendered next to urgent renders that still hold the old one; written during
+  // render, `latest` flipped between the two, and a row read in between came and went (2026-11-26:
+  // a phone session's top bar kebab mounted, vanished and mounted again while the first list
+  // arrived, phone-session.spec C64).
   useLayoutEffect(() => {
+    if (rows.latest === t.tasks && rows.loading === t.loading && rows.error === t.error) return;
+    rows.latest = t.tasks;
+    rows.loading = t.loading;
+    rows.error = t.error;
     for (const listener of [...rows.listeners]) listener();
   }, [rows, t.tasks, t.loading, t.error]);
 
