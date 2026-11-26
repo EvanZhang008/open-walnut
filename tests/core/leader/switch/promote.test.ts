@@ -152,12 +152,14 @@ describe('leftoverPaths (the trial\'s self-check)', () => {
     }))
     // A store no rule names: a new one, undecided.
     fs.mkdirSync(path.join(home, 'cache'), { recursive: true })
-    fs.writeFileSync(path.join(home, 'cache', 'status-riding.json'), JSON.stringify({ at: '/srv/a/home/x' }))
+    fs.writeFileSync(path.join(home, 'cache', 'status-reconcile.json'), JSON.stringify({ at: '/srv/a/home/x' }))
+    // A message a session was sent rides in the status cache with its words, paths and all: a record, kept.
+    fs.writeFileSync(path.join(home, 'cache', 'status-riding.json'), JSON.stringify({ sessions: { s1: { t1: { turn: { text: 'please read /srv/a/home/notes/x.md' } } } } }))
     const roots = moveRoots({ previousHome: '/srv/a/home', home })
     const r = leftoverPaths(home, roots, homePathRules())
     expect(r.problems).toHaveLength(2)
     expect(r.problems[0]).toMatch(/left old paths where it rewrites them: config.yaml \(notes.extra_dirs\[\]\): \/srv\/a\/home\/notes-extra/)
-    expect(r.problems[1]).toMatch(/no rule decides about .*cache\/status-riding.json \(at\): \/srv\/a\/home\/x/)
+    expect(r.problems[1]).toMatch(/no rule decides about .*cache\/status-reconcile.json \(at\): \/srv\/a\/home\/x/)
   })
 })
 
