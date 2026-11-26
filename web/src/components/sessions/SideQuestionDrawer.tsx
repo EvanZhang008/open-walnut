@@ -736,7 +736,6 @@ function SideQuestionDrawerBody({
                     className="side-thread-chip"
                     pressed={isActive}
                     onClick={() => setActiveSideThread(sessionId, t.id)}
-                    title={sideThreadLabel(t)}
                     leading={pending
                       ? <span className="side-question-spinner side-thread-chip-spinner" />
                       : <ThreadStatusDot threadSessionId={t.threadSessionId} />}
