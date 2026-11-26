@@ -1204,10 +1204,10 @@ sessionsRouter.get('/status', async (req: Request, res: Response, next: NextFunc
 
 // GET /api/sessions/git-status?ids=<provider-id,...>[&refresh=1] — each session's
 // git glance (branch, changed files, +/- lines, unpushed commits, the Changed
-// tab's count), from session-git-status.ts. Cached answers come at once; a
-// session never read waits a moment for its first one, and every later change
-// arrives as a `session:git-status` event. refresh=1 re-reads now (an open
-// Changed tab); maxAge=<s> re-reads only older answers. Registered before /:sessionId so "git-status" is never an ID.
+// tab's count), from session-git-status.ts. It never waits on git: cached answers
+// come at once (null for a session never read), and every newer reading arrives as
+// a `session:git-status` event. refresh=1 re-reads behind (an open Changed tab);
+// maxAge=<s> re-reads only older answers. Registered before /:sessionId so "git-status" is never an ID.
 sessionsRouter.get('/git-status', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const raw = Array.isArray(req.query.ids) ? req.query.ids.join(',') : req.query.ids
@@ -1228,8 +1228,8 @@ sessionsRouter.get('/git-status', async (req: Request, res: Response, next: Next
     // maxAge=<seconds>: re-read only answers older than this (a page keeping its rows watched).
     const maxAge = Number(req.query.maxAge)
     const maxAgeMs = Number.isFinite(maxAge) && maxAge > 0 ? Math.min(maxAge, 3_600) * 1_000 : undefined
-    const { getSessionGitGlances, GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS } = await import('../../core/session-git-status.js')
-    res.json({ glances: await getSessionGitGlances(ids, { waitMs: refresh ? GLANCE_REFRESH_WAIT_MS : GLANCE_COLD_WAIT_MS, refresh, maxAgeMs }) })
+    const { getSessionGitGlances } = await import('../../core/session-git-status.js')
+    res.json({ glances: await getSessionGitGlances(ids, { refresh, maxAgeMs }) })
   } catch (err) {
     next(err)
   }

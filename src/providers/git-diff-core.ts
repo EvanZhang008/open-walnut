@@ -641,6 +641,13 @@ export async function listGitRefs(cwd: string, exec: ExecFn): Promise<GitRefsRes
 // Read-only and lock-free: every git call passes --no-optional-locks, so a
 // glance never takes index.lock under an agent's own `git commit`.
 //
+// Submodules count when their recorded commit moved, never for their own dirty
+// tree (--ignore-submodules=dirty; a submodule the session works in is read as its
+// own repo). Without it diff-index runs a `git status` inside every changed
+// submodule: 2026-11-25, a 28k-file checkout with 2.6k submodules at load 110
+// spawned 859 of them, 11 to 33 s, past the 10 s exec timeout (so its +/- lines
+// were never counted); with it, 4 s and the same totals.
+//
 // Self-contained factory: nothing at module scope is referenced and
 // the body carries no backticks.
 
@@ -708,7 +715,7 @@ export function createGitStatus(deps: GitStatusDeps) {
   }
 
   async function one(top: string): Promise<GitRepoStatus> {
-    var st = await git(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'], top);
+    var st = await git(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--ignore-submodules=dirty'], top);
     if (st.code !== 0) throw new Error('git status failed: ' + (st.stderr || '').trim().slice(0, 200));
     var out: GitRepoStatus = {
       repoRoot: top, branch: null, head: null, upstream: null, ahead: null, behind: null,
@@ -756,7 +763,7 @@ export function createGitStatus(deps: GitStatusDeps) {
         if (empty.code === 0 && empty.stdout.trim()) base = empty.stdout.trim();
       }
       if (base) {
-        var d = await git(['diff-index', '--numstat', '-z', '--no-renames', base], top);
+        var d = await git(['diff-index', '--numstat', '-z', '--no-renames', '--ignore-submodules=dirty', base], top);
         if (d.code === 0) { var s = sumNumstat(d.stdout); out.insertions += s.add; out.deletions += s.del; }
       }
     }

@@ -22,8 +22,19 @@
  *     MIN_INTERVAL_MS), and a finished Changed-tab compute updates its count;
  *   - every change goes out as `session:git-status` to the web, which patches
  *     the rows and the open Changed tab in place.
- * Reads are bounded: one per session at a time, LOCAL_PARALLEL on this machine
- * and HOST_PARALLEL per remote host, and sessions in one repo share a read.
+ * The route never waits on git: it answers from the cache (null for a session
+ * never read) and every newer reading reaches the page as `session:git-status`.
+ * On a loaded host one `git status` of a large checkout takes seconds
+ * (2026-11-25: 4 to 9 s in a 28k-file monorepo with 2.6k submodules at load
+ * 110), so a request that waited for it only held a browser connection.
+ *
+ * Reads are per folder and bounded: one read per folder at a time (every
+ * session in it joins the running one, however long it takes), a finished one
+ * shared for READ_SHARE_MS, LOCAL_PARALLEL on this machine and HOST_PARALLEL per
+ * remote host. A folder inside a repo read once is read as that repo's root
+ * for FOLDER_ROOT_TTL_MS, so sessions in different subfolders of one checkout
+ * share its read. A read that never returns gives up after FOLDER_READ_MAX_MS,
+ * and a session's round of folders ends by ROUND_MAX_MS.
  */
 
 import os from 'node:os';
@@ -58,18 +69,15 @@ const WATCH_MS = 15 * 60_000;
 /** Reads at once on this machine, and per remote host (a hung host never holds up the others). */
 const LOCAL_PARALLEL = 4;
 const HOST_PARALLEL = 2;
-/** Sessions in one repo share a read made this recently. */
+/** Sessions in one folder share a read that started this recently. */
 const READ_SHARE_MS = 5_000;
 const RPC_TIMEOUT_MS = 15_000;
-/**
- * How long the batch route waits for a recompute before it answers with what it has: a later answer
- * reaches the page as GIT_STATUS_EVENT, so a longer wait only holds the request. A refresh (an open
- * Changed tab) waits no longer than a cold row: on a loaded host's large checkout most refreshes run
- * to the cap, so the cap is the route's p95 and stays under a watch's p95 check (2026-11-23: 8 s,
- * 10 slow reads an hour; 2026-11-24: at 3 s the route's p95 was 3,080 ms against 2,000).
- */
-export const GLANCE_COLD_WAIT_MS = 1_500;
-export const GLANCE_REFRESH_WAIT_MS = 1_500;
+/** One folder's read gives up after this (its git may never return); the next ask reads again. */
+const FOLDER_READ_MAX_MS = 60_000;
+/** A session's round of folder reads ends by this, about one RPC's worth (the old one-RPC bound). */
+const ROUND_MAX_MS = RPC_TIMEOUT_MS + 5_000;
+/** How long a folder stays read as the repo root it resolved to. */
+const FOLDER_ROOT_TTL_MS = 5 * 60_000;
 const MAX_DIRS = 8;
 const CACHE_MAX = 500;
 /** Background Changed counts: the gap between two, how soon one is tried again (sooner
@@ -94,7 +102,11 @@ const inflight = new Map<string, Promise<SessionGitGlance>>();
 const watched = new Map<string, number>();
 const activityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lanes = new Map<string, { running: number; waiters: Array<() => void> }>();
-const reads = new Map<string, { at: number; p: Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'> }>();
+type RepoRead = GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade';
+/** Per folder (host + dir): the running read, else the last one and when it started. */
+const folders = new Map<string, { running: Promise<RepoRead> | null; last: { at: number; p: Promise<RepoRead> } | null }>();
+/** A folder read once -> the folder key of its repo's root (the one read it shares), and when. */
+const folderRoot = new Map<string, { key: string; at: number }>();
 const countQueue: string[] = [];
 const countQueued = new Map<string, number>();
 /** Counted sessions due a recount (their repos moved since). */
@@ -242,37 +254,109 @@ async function slot(lane: string, limit: number): Promise<() => void> {
   };
 }
 
-/** Read the repos of these dirs on the host, sharing a read of the same dirs made just now. */
-function readRepos(host: string | undefined, dirs: string[]): Promise<GitRepoStatus[] | 'host_offline' | 'daemon_needs_upgrade'> {
+/** One folder's repos on the host: joins the folder's running read, reuses one started
+ *  within READ_SHARE_MS, else reads it (at most one read per folder at a time). A dir
+ *  known to be a repo root (a Changed group's) is read as itself; any other is read as
+ *  the root it last resolved to, for FOLDER_ROOT_TTL_MS (a plain or uninitialised
+ *  folder may become a repo of its own: `git init`, `submodule update --init`). */
+function readFolder(host: string | undefined, dir: string, isRoot: boolean): Promise<RepoRead> {
   const local = isLocalHost(host);
-  const key = `${local ? '__local__' : host}\u0000${dirs.join('\u0000')}`;
-  const hit = reads.get(key);
-  if (hit && deps.now() - hit.at < READ_SHARE_MS) return hit.p;
+  const lane = local ? '__local__' : host!;
+  const asked = `${lane}\u0000${dir}`;
+  const alias = isRoot ? undefined : folderRoot.get(asked);
+  const key = alias && deps.now() - alias.at < FOLDER_ROOT_TTL_MS ? alias.key : asked;
+  const readDir = key.slice(lane.length + 1);
+  let f = folders.get(key);
+  if (f?.running) return f.running;
+  if (f?.last && deps.now() - f.last.at < READ_SHARE_MS) return f.last.p;
+  if (!f) {
+    f = { running: null, last: null };
+    stamp(folders, key, f);
+  }
+  const held = f;
+  const at = deps.now();
   const p = (async () => {
-    const release = await slot(local ? '__local__' : host!, local ? LOCAL_PARALLEL : HOST_PARALLEL);
+    const release = await slot(lane, local ? LOCAL_PARALLEL : HOST_PARALLEL);
+    // A git that never returns (a hung mount, a read stuck in the kernel) gives up its
+    // folder and its lane place after FOLDER_READ_MAX_MS, so the next ask reads again.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return local ? await deps.readLocal(dirs) : await deps.readRemote(host!, dirs);
+      return await Promise.race([
+        local ? deps.readLocal([readDir]) : deps.readRemote(host!, [readDir]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`git read of ${readDir} took over ${FOLDER_READ_MAX_MS} ms`)), FOLDER_READ_MAX_MS);
+          timer.unref?.();
+        }),
+      ]);
     } finally {
+      if (timer) clearTimeout(timer);
       release();
     }
   })();
-  reads.set(key, { at: deps.now(), p });
-  p.catch(() => { reads.delete(key); });
-  if (reads.size > CACHE_MAX) {
-    for (const [k, v] of reads) if (deps.now() - v.at >= READ_SHARE_MS) reads.delete(k);
-  }
+  held.running = p;
+  p.then((got) => {
+    held.last = { at, p };
+    // A folder inside one repo is read as that repo's root for a while.
+    if (!isRoot && key === asked && Array.isArray(got) && got.length === 1 && got[0]!.repoRoot !== dir) {
+      stamp(folderRoot, asked, { key: `${lane}\u0000${got[0]!.repoRoot}`, at: deps.now() });
+    }
+  }, () => { held.last = null; }).finally(() => { if (held.running === p) held.running = null; });
   return p;
 }
 
-/** The directories to read, the repo the session changed most first. */
-function dirsFor(cwd: string | undefined, peek: { groups: Array<{ repoRoot: string; files: unknown[] }> } | null): string[] {
+/** Read the repos of these dirs on the host, folder by folder, each repo once. The round
+ *  ends by ROUND_MAX_MS (a slow host's folders queue two at a time): a folder still
+ *  reading then counts with its last reading, and the round fails when one has none. */
+async function readRepos(host: string | undefined, dirs: Array<{ dir: string; root: boolean }>): Promise<RepoRead> {
+  const reads = dirs.map(({ dir, root }) => readFolder(host, dir, root));
+  const settled: Array<RepoRead | undefined> = reads.map(() => undefined);
+  // The first failed folder fails the round at once, as one RPC did.
+  const all = Promise.all(reads.map((p, i) => p.then((g) => { settled[i] = g; })));
+  all.catch(() => { /* a failure after the deadline: that folder's own read logged it */ });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let late: boolean;
+  try {
+    late = await Promise.race([
+      all.then(() => false),
+      new Promise<boolean>((r) => { timer = setTimeout(() => r(true), ROUND_MAX_MS); timer.unref?.(); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const got: RepoRead[] = [];
+  for (let i = 0; i < dirs.length; i++) {
+    const g = settled[i] ?? (late ? await lastReading(host, dirs[i]!) : undefined);
+    if (g === undefined) throw new Error(`git read of ${dirs[i]!.dir} still running after ${ROUND_MAX_MS} ms`);
+    got.push(g);
+  }
+  const away = got.find((g): g is 'host_offline' | 'daemon_needs_upgrade' => typeof g === 'string');
+  if (away) return away;
+  const out: GitRepoStatus[] = [];
+  for (const repos of got as GitRepoStatus[][]) {
+    for (const r of repos) if (!out.some((o) => o.repoRoot === r.repoRoot)) out.push(r);
+  }
+  return out;
+}
+
+/** A folder's last finished reading (undefined: none yet). */
+async function lastReading(host: string | undefined, d: { dir: string; root: boolean }): Promise<RepoRead | undefined> {
+  const lane = isLocalHost(host) ? '__local__' : host!;
+  const asked = `${lane}\u0000${d.dir}`;
+  const alias = d.root ? undefined : folderRoot.get(asked);
+  const last = folders.get(alias?.key ?? asked)?.last;
+  return last ? last.p.catch(() => undefined) : undefined;
+}
+
+/** The directories to read, the repo the session changed most first (`root`: a Changed
+ *  group's repo root, read as itself). */
+function dirsFor(cwd: string | undefined, peek: { groups: Array<{ repoRoot: string; files: unknown[] }> } | null): Array<{ dir: string; root: boolean }> {
   const touched = (peek?.groups ?? [])
     .filter((g) => g.repoRoot && g.files.length > 0)
     .sort((a, b) => b.files.length - a.files.length)
-    .map((g) => g.repoRoot);
-  const out: string[] = [];
-  for (const d of [...touched, ...(cwd ? [cwd] : [])]) {
-    if (!out.includes(d)) out.push(d);
+    .map((g) => ({ dir: g.repoRoot, root: true }));
+  const out: Array<{ dir: string; root: boolean }> = [];
+  for (const d of [...touched, ...(cwd ? [{ dir: cwd, root: false }] : [])]) {
+    if (!out.some((o) => o.dir === d.dir)) out.push(d);
     if (out.length >= MAX_DIRS) break;
   }
   return out;
@@ -364,9 +448,9 @@ function isFresh(entry: Entry | undefined, ms: number): boolean {
 
 /**
  * The glance for each session: the cached one at once, a stale one recomputed
- * behind (the web gets the result as an event). A session never read waits up
- * to `waitMs` for its first answer; past that it is null now and arrives as
- * an event. Marks every asked session watched.
+ * behind (the web gets the result as an event); a session never read is null
+ * now. `waitMs` (tests only; the route passes none) waits that long for a cold
+ * or refreshed answer. Marks every asked session watched.
  */
 export async function getSessionGitGlances(
   sessionIds: string[],
@@ -552,7 +636,8 @@ export function _resetSessionGitStatusForTesting(): void {
   for (const t of activityTimers.values()) clearTimeout(t);
   activityTimers.clear();
   lanes.clear();
-  reads.clear();
+  folders.clear();
+  folderRoot.clear();
   countQueue.length = 0;
   countQueued.clear();
   recountDue.clear();

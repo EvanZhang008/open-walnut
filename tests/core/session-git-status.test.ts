@@ -26,6 +26,8 @@ let shedding: boolean;
 let busy: boolean;
 /** Each session transcript's size+mtime signature, as a stat would read it. */
 let sigs: Record<string, string>;
+/** Reads of s1's cwd: one per round of s1's repos (each folder is its own read). */
+const rounds = (): number => readLocal.mock.calls.filter(([dirs]) => (dirs as string[]).includes('/w/task-dir')).length;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -69,7 +71,7 @@ afterEach(() => {
 describe('which repos a session is read in', () => {
   it('the repos it changed (most files first), then its cwd; the Changed count from the cache', async () => {
     const g = await computeSessionGitGlance('s1');
-    expect(readLocal).toHaveBeenCalledWith(['/w/task-dir/big', '/w/task-dir/small', '/w/task-dir']);
+    expect(readLocal.mock.calls.map(([dirs]) => dirs)).toEqual([['/w/task-dir/big'], ['/w/task-dir/small'], ['/w/task-dir']]);
     expect(g.repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir/big', '/w/task-dir/small']);
     expect(g.changedFiles).toBe(3);
     expect(g.unavailable).toBeUndefined();
@@ -117,10 +119,10 @@ describe('when it tells the web', () => {
     expect(emitted.at(-1)!.changedFiles).toBe(5);
     noteSessionChangesComputed('s1', 5);
     expect(emitted.filter((g) => g.changedFiles === 5)).toHaveLength(1);
-    const calls = readLocal.mock.calls.length;
+    const calls = rounds();
     now += 20_000;
     await vi.runOnlyPendingTimersAsync();
-    expect(readLocal.mock.calls.length).toBe(calls + 1);
+    expect(rounds()).toBe(calls + 1);
   });
 });
 
@@ -128,15 +130,15 @@ describe('reads', () => {
   it('a batch serves the cache at once and re-reads only what is stale', async () => {
     const cold = await getSessionGitGlances(['s1'], { waitMs: 1_000 });
     expect(cold.s1?.repos).toHaveLength(2);
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 5_000;
     await getSessionGitGlances(['s1']);
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 30_000;
     const stale = await getSessionGitGlances(['s1']);
     expect(stale.s1?.repos).toHaveLength(2); // served from the cache, re-read behind
     await vi.runOnlyPendingTimersAsync();
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
   });
 
   it('a cold read that takes too long answers null now and the result comes as an event', async () => {
@@ -154,26 +156,26 @@ describe('reads', () => {
     await computeSessionGitGlance('s1');
     now += 3_000;
     await getSessionGitGlances(['s1'], { refresh: true, waitMs: 1_000 });
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 10_000;
     const a = computeSessionGitGlance('s1');
     const b = computeSessionGitGlance('s1');
     expect(a).toBe(b);
     await a;
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
   });
 });
 
 describe('activity of a watched session', () => {
   it('a burst of tool calls is one read, no sooner than 10 s after the last', async () => {
     await getSessionGitGlances(['s1'], { waitMs: 1_000 });
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     for (let i = 0; i < 5; i++) noteSessionActivity('s1');
     await vi.advanceTimersByTimeAsync(3_500);
-    expect(readLocal).toHaveBeenCalledTimes(1); // the 10 s floor holds it
+    expect(rounds()).toBe(1); // the 10 s floor holds it
     now += 10_000;
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
   });
 
   it('a session nobody looked at is never read on activity', async () => {
@@ -187,7 +189,7 @@ describe('activity of a watched session', () => {
     now += 16 * 60_000;
     noteSessionActivity('s1');
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
   });
 });
 
@@ -206,10 +208,105 @@ describe('load', () => {
     sessions.twin = { cwd: '/w/task-dir' };
     peeks.twin = peeks.s1!;
     await Promise.all([computeSessionGitGlance('s1'), computeSessionGitGlance('twin')]);
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 6_000;
     await computeSessionGitGlance('twin');
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
+  });
+
+  // 2026-11-25: one `git status` of a large checkout took 4 to 9 s on a loaded host, and a
+  // second read of the same folder started 5 s after the first, stacking slow gits on one repo.
+  it('a slow git runs once per folder at a time, however long it takes; subfolders of one repo share it', async () => {
+    const running: Record<string, number> = {};
+    const most: Record<string, number> = {};
+    const gates: Array<() => void> = [];
+    let hold = true;
+    const rootOf = (d: string) => (d.startsWith('/w/task-dir/big') ? '/w/task-dir/big' : d);
+    readLocal.mockImplementation((dirs: string[]) => {
+      const d = dirs[0]!;
+      const answer = d === '/w/task-dir' ? [] : [repo(rootOf(d))];
+      if (!hold) return Promise.resolve(answer);
+      running[d] = (running[d] ?? 0) + 1;
+      most[d] = Math.max(most[d] ?? 0, running[d]!);
+      return new Promise((r) => { gates.push(() => { running[d]!--; r(answer); }); });
+    });
+    /** Every slow git ends; later reads answer at once until `hold` is set again. */
+    const openAll = async () => { hold = false; while (gates.length) gates.shift()!(); await vi.advanceTimersByTimeAsync(1); };
+    // A session in a subfolder of `big`, read once: from then on it is read as `big`.
+    sessions.sub = { cwd: '/w/task-dir/big/src' };
+    void computeSessionGitGlance('sub');
+    await vi.advanceTimersByTimeAsync(1);
+    await openAll();
+    readLocal.mockClear();
+    hold = true;
+
+    sessions.twin = { cwd: '/w/task-dir' };
+    peeks.twin = peeks.s1!;
+    now += 60_000;
+    void computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(1);
+    for (let i = 0; i < 3; i++) {
+      now += 60_000; // far past READ_SHARE_MS while the first reads still run
+      void computeSessionGitGlance('twin');
+      void computeSessionGitGlance('sub');
+      await getSessionGitGlances(['s1', 'twin', 'sub'], { refresh: true });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(readLocal.mock.calls.map(([dirs]) => dirs[0]).sort()).toEqual(['/w/task-dir', '/w/task-dir/big', '/w/task-dir/small']);
+    for (const d of Object.keys(most)) expect(most[d]).toBe(1);
+    await openAll();
+    expect((await computeSessionGitGlance('sub')).repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir/big']);
+  });
+
+  it('a git that never returns gives its folder up after 60 s, and the next ask reads again', async () => {
+    readLocal.mockImplementation(() => new Promise(() => { /* stuck in the kernel: a hung mount */ }));
+    const g = computeSessionGitGlance('s1');
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect((await g).unavailable).toBe('error'); // the round ends by its own deadline
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(rounds()).toBe(1);
+    readLocal.mockImplementation(async (dirs: string[]) => dirs.filter((d) => d !== '/w/task-dir').map((d) => repo(d, { files: 1 })));
+    now += 61_000;
+    const again = await computeSessionGitGlance('s1');
+    expect(rounds()).toBe(2);
+    expect(again.repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir/big', '/w/task-dir/small']);
+    expect(again.unavailable).toBeUndefined();
+  });
+
+  it('a slow host ends a round by its deadline with the folders\' last readings', async () => {
+    peeks.remote = { fileCount: 4, groups: ['/h/a', '/h/b', '/h/c', '/h/d'].map((repoRoot) => ({ repoRoot, files: [1] })) };
+    const first = await computeSessionGitGlance('remote');
+    expect(first.repos).toHaveLength(5);
+    readRemote.mockImplementation(() => new Promise(() => { /* 15 s each, two at a time */ }));
+    now += 60_000;
+    let done: SessionGitGlance | undefined;
+    void computeSessionGitGlance('remote').then((g) => { done = g; });
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(done?.repos).toEqual(first.repos);
+    expect(done?.unavailable).toBeUndefined();
+  });
+
+  it('a subfolder is read as its repo root only for a while: it may become a repo of its own', async () => {
+    sessions.sub = { cwd: '/w/task-dir/vendor' };
+    readLocal.mockImplementation(async () => [repo('/w/task-dir')]); // not initialised yet: the parent's
+    expect((await computeSessionGitGlance('sub')).repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir']);
+    // `git submodule update --init`: the folder is its own repo now.
+    readLocal.mockImplementation(async (dirs: string[]) => [repo(dirs[0] === '/w/task-dir/vendor' ? '/w/task-dir/vendor' : '/w/task-dir')]);
+    now += 60_000;
+    expect((await computeSessionGitGlance('sub')).repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir']);
+    now += 5 * 60_000;
+    expect((await computeSessionGitGlance('sub')).repos.map((r) => r.repoRoot)).toEqual(['/w/task-dir/vendor']);
+  });
+
+  it('a Changed group\'s repo root is read as itself, whatever a subfolder resolved to before', async () => {
+    sessions.early = { cwd: '/w/p/lib' };
+    readLocal.mockImplementation(async () => [repo('/w/p')]);
+    await computeSessionGitGlance('early');
+    readLocal.mockImplementation(async (dirs: string[]) => [repo(dirs[0]!)]);
+    sessions.later = { cwd: '/w/p' };
+    peeks.later = { fileCount: 1, groups: [{ repoRoot: '/w/p/lib', files: [1] }] };
+    now += 6_000;
+    expect((await computeSessionGitGlance('later')).repos.map((r) => r.repoRoot)).toEqual(['/w/p/lib', '/w/p']);
   });
 
   it('a failed read is not retried at every ask', async () => {
@@ -218,22 +315,22 @@ describe('load', () => {
     expect(g.unavailable).toBe('error');
     now += 5_000;
     await getSessionGitGlances(['s1']);
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 30_000;
     await getSessionGitGlances(['s1']);
     await vi.runOnlyPendingTimersAsync();
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
   });
 
   it('a page keeping its rows watched re-reads only old answers', async () => {
     await computeSessionGitGlance('s1');
     now += 5 * 60_000;
     await getSessionGitGlances(['s1'], { maxAgeMs: 10 * 60_000 });
-    expect(readLocal).toHaveBeenCalledTimes(1);
+    expect(rounds()).toBe(1);
     now += 6 * 60_000;
     await getSessionGitGlances(['s1'], { maxAgeMs: 10 * 60_000 });
     await vi.runOnlyPendingTimersAsync();
-    expect(readLocal).toHaveBeenCalledTimes(2);
+    expect(rounds()).toBe(2);
   });
 });
 

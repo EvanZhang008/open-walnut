@@ -2,24 +2,18 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { SLOW_READ_MS } from '../../../src/core/usage-watch/record.js'
-import { DEFAULT_CHECKS } from '../../../src/core/usage-watch/watches.js'
 import { SUPERVISION_READ_DEADLINE_MS } from '../../../src/core/sessions/session-supervision.js'
-import { GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS } from '../../../src/core/session-git-status.js'
 
 // 2026-11-23: two polled reads waited on a host longer than the usage watch's slow read: the
 // git glance's refresh held its request 8 s for a recompute that also arrives as an event, and the
 // supervision read went past the page's own 8 s timeout. A wait a read route holds for a host
 // stays under SLOW_READ_MS; a later answer reaches the page another way (an event, the next poll).
+// The git glance route no longer waits at all (tests/web/routes/sessions-git-status-route.test.ts).
 const ROOT = path.resolve(__dirname, '../../..')
 
 describe('read routes answer before the slow-read line', () => {
-  it('the git glance and supervision waits stay under SLOW_READ_MS', () => {
-    for (const ms of [GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS, SUPERVISION_READ_DEADLINE_MS]) expect(ms).toBeLessThan(SLOW_READ_MS)
-  })
-
-  // A wait most requests run into (a refresh on a loaded host's large checkout) is the route's p95.
-  it('the git glance waits stay under a watch\'s default p95 check', () => {
-    for (const ms of [GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS]) expect(ms).toBeLessThan(DEFAULT_CHECKS.max_p95_ms)
+  it('the supervision wait stays under SLOW_READ_MS', () => {
+    expect(SUPERVISION_READ_DEADLINE_MS).toBeLessThan(SLOW_READ_MS)
   })
 
   it('the supervision read deadline is under the page\'s own timeout for it', () => {

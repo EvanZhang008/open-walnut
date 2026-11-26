@@ -165,6 +165,30 @@ describe('createGitStatus', () => {
     for (const argv of calls) expect(argv.slice(0, 2)).toEqual(['git', '--no-optional-locks'])
   })
 
+  // 2026-11-25: a checkout with 2.6k submodules ran a `git status` inside each changed one
+  // (859 processes, 11 to 33 s) to count lines; a submodule's own tree is its own repo's read.
+  it('a submodule counts when its commit moved, never for its own dirty tree', async () => {
+    const lib = repo('sub-lib')
+    write(lib, 'a.txt', '1\n')
+    git(lib, 'add', '.')
+    git(lib, 'commit', '-qm', 'one')
+    const dir = repo('sub-super')
+    write(dir, 'top.txt', 'top\n')
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-qm', 'one')
+    git(dir, '-c', 'protocol.file.allow=always', 'submodule', '-q', 'add', lib, 'lib')
+    git(dir, 'commit', '-qm', 'add lib')
+    const sub = path.join(dir, 'lib')
+    write(sub, 'a.txt', '2\n')
+    write(sub, 'new.txt', 'new\n')
+    const calls: string[][] = []
+    const status = createGitStatus({ exec: (argv, cwd) => { calls.push(argv); return exec(argv, cwd) }, readText })
+    expect((await status.status([dir]))[0]).toMatchObject({ files: 0, insertions: 0, deletions: 0 })
+    git(sub, 'commit', '-qam', 'two')
+    expect((await status.status([dir]))[0]).toMatchObject({ files: 1, untracked: 0 })
+    for (const argv of calls.filter((a) => a.includes('status') || a.includes('diff-index'))) expect(argv).toContain('--ignore-submodules=dirty')
+  })
+
   it('a staged file edited again before the first commit is counted once', async () => {
     const dir = repo('first-commit')
     write(dir, 'a.txt', 'one\n')
