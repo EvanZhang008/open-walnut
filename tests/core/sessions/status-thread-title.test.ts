@@ -331,6 +331,7 @@ describe('the class: every place that sets a thread\'s title as given', () => {
     'src/core/org/choice-thread-model.ts': 'a choice he must make opens its own thread (needs)',
     'src/core/org/letter-thread-model.ts': 'a letter he must answer opens its own thread (needs)',
     'src/core/org/line-threads.ts': 'a task line read as a thread, never stored',
+    'src/core/org/thread-answered-check.ts': 'titledForAll: the card that holds several of his questions is titled by every one, and counts as titled only when the node wrote each title joined',
   }
 
   function walk(dir: string): string[] {
