@@ -110,7 +110,12 @@ test.describe('the panel is a dialog for the keyboard', () => {
     for (let i = 0; i < local.count + 2 && await activeIn(page, '[data-testid="nfc-local-claude"]'); i++) await page.keyboard.press(TAB(browserName))
     await expect(problemRow(page, 'netbox').getByTestId('hpb-retry')).toBeFocused()
     for (let i = 0; i < 40 && await activeIn(page, '[data-testid="nfc-problems"]'); i++) await page.keyboard.press(TAB(browserName))
-    await expect(item).toBeFocused()
+    // Since 9b60109d6c a card with nothing to open is no button and no stop of its own (its words
+    // are already whole): past the problems, Tab lands on that first feed card's first control.
+    const card = await stops(item)
+    expect(card.count, 'the feed card has a control').toBeGreaterThan(0)
+    expect(await item.evaluate((el) => el.contains(document.activeElement)), `past the problems focus is on: ${await activeName(page)}`).toBe(true)
+    expect(await activeName(page)).toBe(card.first)
   })
 
   test('NK-3: the dialog holds on every section, with host rows (All, System) or without them (Needs Action); plain Tab walks the rail buttons, WebKit included', async ({ page }) => {
