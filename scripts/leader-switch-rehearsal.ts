@@ -219,8 +219,14 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
           return [...new Set([p, r].flatMap((x) => [x, x.startsWith('/local/home/') ? x.slice('/local'.length) : x.startsWith('/home/') ? `/local${x}` : x]))]
         }
         const skip = [...new Set(['/proc', '/sys', '/dev', bRoot, ...aPlaces].flatMap(aliases))]
-        // The folder of the evidence folder's task (<task>/evidence/<topic>/<run>): the task's other sessions write there.
-        const taskDir = (() => { const e = flag('--real-evidence'); const d = e ? path.dirname(path.dirname(path.dirname(path.resolve(e)))) : ''; return d.split('/').filter(Boolean).length >= 3 ? d : '' })()
+        // The task folder the evidence is in (<task>/evidence/...): the task's other sessions write there.
+        const taskDir = (() => {
+          const e = flag('--real-evidence')
+          const parts = e ? path.resolve(e).split('/') : []
+          const i = parts.lastIndexOf('evidence')
+          const d = i > 0 ? parts.slice(0, i).join('/') : ''
+          return d.split('/').filter(Boolean).length >= 3 ? d : ''
+        })()
         // The driver's own checkout too: B runs its staged copy, so a file there is A's or another session's.
         // The account's real home (from its user record: Bun's os.userInfo() follows $HOME, and no process of B has
         // it as HOME), which every dev container of this account shares (their npm logs, the Playwright cache).
