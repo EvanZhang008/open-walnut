@@ -120,6 +120,8 @@ export interface TurnSnapshotDeps {
    * snapshot or a restore, and by every git this core starts.
    */
   gitWriteRefused?: (argv: string[], cwd: string) => string | null
+  /** The env a git child runs with so its reads write nothing (lib/leader-home-gate.ts readOnlyGitEnv). */
+  gitReadEnv?: (env: Record<string, string | undefined>, cwd: string) => Record<string, string | undefined>
   /** Off from the start (WALNUT_TURN_SNAPSHOTS=0); a configure cannot turn it on. */
   forceDisabled?: boolean
   /** Budget for ONE snapshot (default 10s). */
@@ -377,7 +379,7 @@ export function createTurnSnapshots(deps: TurnSnapshotDeps) {
         encoding: opts.buffer ? 'buffer' : 'utf-8',
         timeout: Math.max(50, Math.floor(left)),
         maxBuffer: opts.maxBuffer ?? 32 * 1024 * 1024,
-        env: gitEnv(opts.index),
+        env: deps.gitReadEnv ? deps.gitReadEnv(gitEnv(opts.index), opts.cwd) : gitEnv(opts.index),
       }, (e, stdout, stderr) => {
         var outText = opts.buffer ? '' : String(stdout ?? '')
         var errText = stderr == null ? '' : (typeof stderr === 'string' ? stderr : String(stderr))

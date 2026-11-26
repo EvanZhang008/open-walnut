@@ -279,7 +279,7 @@ export function git(args: string, options?: { cwd?: string; timeout?: number; en
     // gitChildEnv, never a bare inherit: an inherited GIT_DIR / GIT_WORK_TREE
     // outranks the cwd above, so a process launched from a git hook (git exports
     // those while running one) would auto-commit the data repo into that repo.
-    env: gitChildEnv(options?.env),
+    env: gitChildEnv(options?.env, process.env, options?.cwd ?? WALNUT_HOME),
   }).trim();
 }
 
@@ -337,7 +337,7 @@ export async function execGitGroup(
       // Strip here, not only in gitAsync: git-maintenance and the plugin paths call
       // this helper directly without an env, and `git branch -D` under an inherited
       // GIT_DIR would delete branches in whatever repo the launcher was holding.
-      env: gitChildEnv(opts.env),
+      env: gitChildEnv(opts.env, process.env, opts.cwd),
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -419,7 +419,7 @@ export async function execGitArgsRaw(
 ): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     refuseGitInQuiet(opts.cwd, args);
-    const childEnv = gitChildEnv(opts.env);
+    const childEnv = gitChildEnv(opts.env, process.env, opts.cwd);
     const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
     const child = spawn(cmd, cmdArgs, {
       cwd: opts.cwd,

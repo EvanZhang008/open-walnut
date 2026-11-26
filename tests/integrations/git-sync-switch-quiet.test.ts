@@ -138,8 +138,16 @@ describe('a handed-over home takes no git write from git sync (lib/leader-home-g
     await expect(execGitGroup('git -c core.x=1 commit -q -m x', { cwd: WALNUT_HOME, timeout: 10_000 })).rejects.toThrow(GitQuiet)
     await expect(execGitArgsRaw(['mktree'], { cwd: WALNUT_HOME, timeout: 10_000, input: '' })).rejects.toThrow(GitQuiet)
     await expect(execGitArgsRaw(['hash-object', '-w', 'new.txt'], { cwd: WALNUT_HOME, timeout: 10_000 })).rejects.toThrow(GitQuiet)
-    // Reads run (a standby answers what its home holds).
+    // Fail-closed (review round 1): the compaction's backup branch and reflog expire, the data remote's set-url, a
+    // config set and a push all write .git.
+    for (const cmd of ['branch backup-x HEAD', 'reflog expire --expire=now --all', 'remote set-url cloud http://x', 'remote add cloud http://x', 'config user.name x', 'push cloud HEAD', 'pack-refs --all', 'commit-graph write']) {
+      expect(() => git(cmd), cmd).toThrow(GitQuiet)
+    }
+        // Reads run (a standby answers what its home holds).
     expect(git('rev-parse --abbrev-ref HEAD')).toBeTruthy()
+    expect(() => git('config --get user.name')).not.toThrow(GitQuiet)
+    expect(() => git('branch --list')).not.toThrow()
+    expect(() => git('remote -v')).not.toThrow()
     expect((await execGitArgsRaw(['hash-object', 'new.txt'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
     // The auto-commit's own pass is refused at its first writing git (as in a switch stop's quiet).
     await expect(commitIfDirty()).rejects.toThrow(GitQuiet)
@@ -152,5 +160,36 @@ describe('a handed-over home takes no git write from git sync (lib/leader-home-g
     git('add -A')
     git('commit -q -m during')
     expect(git('log -1 --format=%s')).toBe('during')
+  })
+})
+
+describe('a read of git sync leaves the home\'s .git as it was (lib/git-env.ts gitChildEnv, lib/leader-home-gate.ts readOnlyGitEnv)', () => {
+  // Same content, a new mtime: a status with optional locks, or a diff of the work tree, refreshes the stat data and
+  // writes .git/index back.
+  const touchSeed = () => {
+    const later = new Date(Date.now() + 60_000)
+    fs.utimesSync(path.join(WALNUT_HOME, 'seed.txt'), later, later)
+    const index = path.join(WALNUT_HOME, '.git', 'index')
+    return { index, before: fs.readFileSync(index), mtime: fs.statSync(index).mtimeMs }
+  }
+
+  it('anywhere: a status (GIT_OPTIONAL_LOCKS=0) does not rewrite .git/index', async () => {
+    const { index, before, mtime } = touchSeed()
+    expect(git('status --porcelain')).toBe('')
+    await execGitGroup('git status --porcelain', { cwd: WALNUT_HOME, timeout: 10_000 })
+    expect(fs.readFileSync(index).equals(before)).toBe(true)
+    expect(fs.statSync(index).mtimeMs).toBe(mtime)
+  })
+
+  it('in a handed-over home: a diff of the work tree does not rewrite it either (diff.autoRefreshIndex=false)', async () => {
+    fs.mkdirSync(path.join(WALNUT_HOME, 'local', 'leader-switch'), { recursive: true })
+    fs.writeFileSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'), JSON.stringify({ switchId: 's', to: 'machine-b', state: 'handed-over', at: new Date().toISOString() }))
+    const { index, before, mtime } = touchSeed()
+    expect((await execGitArgsRaw(['diff', '--stat'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
+    await execGitGroup('git diff --name-only', { cwd: WALNUT_HOME, timeout: 10_000 })
+    git('diff --quiet || true')
+    git('status --porcelain')
+    expect(fs.readFileSync(index).equals(before)).toBe(true)
+    expect(fs.statSync(index).mtimeMs).toBe(mtime)
   })
 })

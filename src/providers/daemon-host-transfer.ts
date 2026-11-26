@@ -27,7 +27,7 @@ import type { createHostResume } from './host-resume-core.js'
 import type { createDaemonCommandDrain } from './daemon-command-drain.js'
 import type { ChildProcessFns } from './daemon-child-spawn.js'
 import { ok, fail, type Answer, type DaemonEnv, type DaemonLog, type DaemonReplies, type DaemonSendEvent } from './daemon-module-deps.js'
-import { daemonGitWriteRefusal } from '../lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, readOnlyGitEnv } from '../lib/leader-home-gate.js'
 
 export interface DaemonHostTransferDeps<W extends object> extends DaemonReplies<W> {
   daemonEnv: DaemonEnv
@@ -99,6 +99,7 @@ export function createDaemonHostTransfer<W extends object>(deps: DaemonHostTrans
     fs, path, crypto, spawn: spawn as unknown as TransferPackDeps['spawn'], env: daemonEnv, home: HOME_DIR,
     // No git write into a Walnut data home under a leader switch (lib/leader-home-gate.ts).
     gitWriteRefused: daemonGitWriteRefusal,
+    gitReadEnv: readOnlyGitEnv,
   })
   const desktopUpdate = createDesktopUpdate({ fs, execFile, spawn, platform: process.platform, home: HOME_DIR, env: daemonEnv, isolated: !IS_PROD_DAEMON_DIR })
   const hostFacts = createHostFacts({

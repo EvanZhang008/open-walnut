@@ -30,6 +30,8 @@ import type { createGitAttribution, CommitHunk, AttrOp, ChosenHunk, FileOwner } 
 export interface GitCommitDeps {
   /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
   gitWriteRefused?: (argv: string[], cwd: string) => string | null
+  /** The env a git child runs with so its reads write nothing (lib/leader-home-gate.ts readOnlyGitEnv). */
+  gitReadEnv?: (env: Record<string, string | undefined>, cwd: string) => Record<string, string | undefined>
   /** child_process.spawn */
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) => {
     pid?: number
@@ -152,6 +154,8 @@ export function createGitCommitCore(deps: GitCommitDeps) {
   function childEnv(extra: Record<string, string | undefined>): Record<string, string | undefined> {
     var env: Record<string, string | undefined> = Object.assign({}, deps.env || {})
     for (var i = 0; i < REDIRECT_VARS.length; i++) delete env[REDIRECT_VARS[i]]
+    // A status or diff never rewrites .git/index (a read stays a read: lib/leader-home-gate.ts).
+    env.GIT_OPTIONAL_LOCKS = '0'
     for (var k in extra) env[k] = extra[k]
     return env
   }
@@ -170,7 +174,7 @@ export function createGitCommitCore(deps: GitCommitDeps) {
       var refused = argv[0] === 'git' && deps.gitWriteRefused ? deps.gitWriteRefused(argv, o.cwd) : null
       if (refused) { resolve({ code: 128, stdout: '', stdoutBuf: Buffer.alloc(0), stderr: refused, timedOut: false }); return }
       try {
-        child = deps.spawn(argv[0], argv.slice(1), { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'], detached: !!o.group })
+        child = deps.spawn(argv[0], argv.slice(1), { cwd: o.cwd, env: argv[0] === 'git' && deps.gitReadEnv ? deps.gitReadEnv(o.env, o.cwd) : o.env, stdio: ['pipe', 'pipe', 'pipe'], detached: !!o.group })
       } catch (err) {
         resolve({ code: -1, stdout: '', stdoutBuf: Buffer.alloc(0), stderr: String((err as Error).message || err), timedOut: false })
         return

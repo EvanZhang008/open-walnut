@@ -38,6 +38,8 @@ export interface PackChild {
 export interface TransferPackDeps {
   /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
   gitWriteRefused?: (argv: string[], cwd: string) => string | null
+  /** The env a git child runs with so its reads write nothing (lib/leader-home-gate.ts readOnlyGitEnv). */
+  gitReadEnv?: (env: Record<string, string | undefined>, cwd: string) => Record<string, string | undefined>
   fs: typeof fsType
   path: typeof pathType
   crypto: typeof cryptoType
@@ -217,7 +219,8 @@ export function createTransferPack(deps: TransferPackDeps) {
       var timer = setTimeout(function () { timedOut = true; stop(); finish(-1) }, o.timeoutMs || GIT_MS)
       if (sink) sink.on('error', function (e: Error) { errText = errText || String(e.message || e); stop() })
       try {
-        child = deps.spawn(argv[0], argv.slice(1), { cwd: o.cwd, env: Object.assign(childEnv(!!o.git), o.env || {}), stdio: ['pipe', 'pipe', 'pipe'] })
+        var env = Object.assign(childEnv(!!o.git), o.env || {})
+        child = deps.spawn(argv[0], argv.slice(1), { cwd: o.cwd, env: o.git && deps.gitReadEnv ? deps.gitReadEnv(env, o.cwd) : env, stdio: ['pipe', 'pipe', 'pipe'] })
       } catch (err) {
         errText = String((err as Error).message || err)
         finish(-1)

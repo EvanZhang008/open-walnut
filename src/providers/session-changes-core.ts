@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import { parseBashFileOps } from '../core/bash-file-ops.js';
 import { restoreArchivedAt } from './transcript-archive.js';
 import { loadChangesCheckpoint, saveChangesCheckpoint } from './changes-checkpoint.js';
+import { leaderHomeMarkAt, readOnlyGitEnv } from '../lib/leader-home-gate.js';
 
 /**
  * Version of what a saved parse state means: the ops collectOpsFromJsonl and
@@ -816,7 +817,9 @@ function makeGitRun(stats: HostLocalComputeStats, exec: typeof execFile = execFi
     const done = (code: number, stdout?: Buffer | string) =>
       resolve({ stdout: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? ''), code });
     try {
-      const child = exec('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer, encoding: 'buffer' },
+      // In a data home under a leader switch its reads must write nothing: no index refresh (lib/leader-home-gate.ts).
+      const marked = leaderHomeMarkAt(cwd) !== null;
+      const child = exec('git', args, { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer, encoding: 'buffer', ...(marked ? { env: readOnlyGitEnv({ ...process.env }, cwd) } : {}) },
         (err, stdout) => done(err ? 1 : 0, stdout));
       if (input !== undefined && child.stdin) {
         child.stdin.on('error', () => { /* git exited early: its exit code says so */ });

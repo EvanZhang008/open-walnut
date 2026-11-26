@@ -1,6 +1,7 @@
 /**
  * One rule for every git that writes: none writes into a data home that a leader switch is taking away or took
- * away. Its marker (local/leader-switch/handed-over.json, core/leader/switch/records.ts) says 'switching' from the
+ * away. Fail-closed: only the read subcommands and read forms listed here count as reads; a read runs with
+ * readOnlyGitEnv so it writes nothing either (no index refresh); a marker that cannot be read refuses. Its marker (local/leader-switch/handed-over.json, core/leader/switch/records.ts) says 'switching' from the
  * switch's start and 'handed-over' once it committed; a handed-over home must stay as it was (the switch-back and
  * the old-home check compare it byte for byte), and during the switch the final batch needs a home that stops
  * changing.
@@ -28,13 +29,21 @@ import path from 'node:path'
 /** The marker's place in a data home (records.ts markerFile builds it from this). */
 export const LEADER_SWITCH_MARKER_REL = path.join('local', 'leader-switch', 'handed-over.json')
 
-/** Git subcommands that may write objects, refs, the index or the work tree of the repo they run in. */
-export const GIT_WRITING_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  'add', 'am', 'apply', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'commit-tree', 'fetch', 'gc', 'hash-object',
-  'index-pack', 'init', 'maintenance', 'merge', 'merge-tree', 'mktag', 'mktree', 'mv', 'notes', 'pack-objects', 'prune',
-  'pull', 'read-tree', 'rebase', 'repack', 'replay', 'reset', 'restore', 'revert', 'rm', 'stash', 'switch', 'symbolic-ref',
-  'tag', 'unpack-objects', 'update-index', 'update-ref', 'worktree', 'write-tree',
+/**
+ * Git subcommands that only read the repo they run in (with GIT_OPTIONAL_LOCKS=0, which every gated spawner sets: a
+ * `status` or `diff` then never refreshes .git/index). The rule is fail-closed: every other subcommand counts as a
+ * write, so one this list has not heard of is refused in a marked home, never let through.
+ */
+export const GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'annotate', 'blame', 'cat-file', 'check-attr', 'check-ignore', 'check-mailmap', 'check-ref-format', 'cherry', 'count-objects',
+  'describe', 'diff', 'diff-files', 'diff-index', 'diff-tree', 'for-each-ref', 'get-tar-commit-id', 'grep', 'help', 'log',
+  'ls-files', 'ls-remote', 'ls-tree', 'merge-base', 'name-rev', 'patch-id', 'range-diff', 'rev-list', 'rev-parse', 'shortlog',
+  'show', 'show-branch', 'show-ref', 'status', 'stripspace', 'var', 'verify-commit', 'verify-pack', 'verify-tag', 'version',
+  'whatchanged',
 ])
+
+/** Subcommands that read in some forms only (gitArgvWrites names each form); any other form writes. */
+const READ_IN_SOME_FORMS = new Set(['apply', 'branch', 'bundle', 'config', 'hash-object', 'notes', 'reflog', 'remote', 'stash', 'symbolic-ref', 'tag', 'worktree'])
 
 /** Options that take the next argument (`git -C dir`, `-c key=value`): skipped to find the subcommand. */
 const OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix'])
@@ -57,26 +66,44 @@ export function gitSubcommand(argv: readonly string[]): string | null {
   return at < 0 ? null : argv[at]!
 }
 
-/** Subcommands whose first word after them makes a read: `stash list`, `worktree list`, `notes show`. */
-const READ_FORMS: Readonly<Record<string, ReadonlySet<string>>> = {
-  stash: new Set(['list', 'show']), worktree: new Set(['list']), notes: new Set(['list', 'show']),
-}
-
-/**
- * Whether the argv may write: by its subcommand, except the read forms (`hash-object` without -w, `stash list`,
- * `worktree list`, `notes list|show`, `symbolic-ref` naming one ref, `tag` listing).
- */
+/** Whether the argv may write. Fail-closed: only the read subcommands and the read forms below do not. */
 export function gitArgvWrites(argv: readonly string[]): boolean {
   const at = subcommandAt(argv)
   if (at < 0) return false
   const sub = argv[at]!
-  if (!GIT_WRITING_SUBCOMMANDS.has(sub)) return false
+  if (GIT_READ_SUBCOMMANDS.has(sub)) return false
+  if (!READ_IN_SOME_FORMS.has(sub)) return true
   const rest = argv.slice(at + 1)
+  const has = (...flags: string[]) => flags.some((f) => rest.includes(f))
   const words = rest.filter((a) => !a.startsWith('-'))
-  if (sub === 'hash-object') return rest.includes('-w')
-  if (READ_FORMS[sub]) return !(words[0] && READ_FORMS[sub]!.has(words[0]))
-  if (sub === 'symbolic-ref') return rest.includes('-d') || rest.includes('--delete') || words.length >= 2
-  if (sub === 'tag') return !(rest.includes('-l') || rest.includes('--list') || words.length === 0)
+  switch (sub) {
+    // Without -w it only prints the id.
+    case 'hash-object': return has('-w')
+    case 'stash': return !(words[0] === 'list' || words[0] === 'show')
+    case 'worktree': return words[0] !== 'list'
+    case 'notes': return !(words[0] === 'list' || words[0] === 'show')
+    // `git reflog` alone is `reflog show`; expire and delete write.
+    case 'reflog': return !(words.length === 0 || words[0] === 'show' || words[0] === 'exists')
+    // One name reads it; two set it; -d deletes.
+    case 'symbolic-ref': return has('-d', '--delete') || words.length !== 1
+    case 'tag': return !(words.length === 0 || has('-l', '--list'))
+    case 'remote': return !(words.length === 0 || words[0] === 'get-url' || words[0] === 'show')
+    case 'bundle': return !(words[0] === 'verify' || words[0] === 'list-heads')
+    // --check and the summaries read; anything that applies writes.
+    case 'apply': return !(has('--check', '--stat', '--numstat', '--summary') && !has('--index', '--cached', '--apply', '-3', '--3way'))
+    case 'branch': {
+      if (has('-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description', '-f', '--force', '-t', '--track')) return true
+      // Listing (no name, or patterns after --list) and --show-current read; a name creates a branch.
+      return !(words.length === 0 || has('-l', '--list', '--show-current', '--contains', '--merged', '--no-merged', '--points-at'))
+    }
+    case 'config': {
+      if (has('--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section', '-e', '--edit')) return true
+      if (words[0] === 'get' || words[0] === 'list') return false
+      if (has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '-l', '--list')) return false
+      // `config <key>` reads it; `config <key> <value>` (or `config set`) writes.
+      return words.length !== 1
+    }
+  }
   return true
 }
 
@@ -95,7 +122,14 @@ export function leaderHomeMarkAt(dir: string): LeaderHomeMark | null {
   for (;;) {
     const file = path.join(at, LEADER_SWITCH_MARKER_REL)
     let text: string | null = null
-    try { text = fs.readFileSync(file, 'utf8') } catch { /* none here */ }
+    try {
+      text = fs.readFileSync(file, 'utf8')
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      // Only a missing file (or a missing folder on the way) is no marker; a marker that cannot be read (EACCES, EIO,
+      // a folder where the file should be) refuses: a wrong refusal costs one snapshot, a wrong pass the old home.
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return { home: at, state: 'handed-over' }
+    }
     if (text !== null) {
       // A marker that cannot be read marks the home as handed over (records.ts readMarker: never "not handed over").
       let state: LeaderHomeMark['state'] = 'handed-over'
@@ -125,4 +159,21 @@ export function serverGitWriteRefusal(argv: readonly string[], cwd: string): str
   if (!gitArgvWrites(argv)) return null
   const mark = leaderHomeMarkAt(gitDirOf(argv, cwd))
   return mark?.state === 'handed-over' ? refusal(argv, mark) : null
+}
+
+/**
+ * The env a git child gets so that its reads leave the repo byte for byte as it was: GIT_OPTIONAL_LOCKS=0 (a status
+ * never writes .git/index back), and in a marked home also diff.autoRefreshIndex=false, since a `git diff` of the work
+ * tree rewrites the index after a touch even with optional locks off (git 2.47). Outside a marked home diffs keep their
+ * refresh (with it off, a file only touched shows as changed). Appends to GIT_CONFIG_COUNT; returns a new env.
+ */
+export function readOnlyGitEnv<T extends Record<string, string | undefined>>(env: T, cwd: string): T {
+  const out: Record<string, string | undefined> = { ...env, GIT_OPTIONAL_LOCKS: '0' }
+  if (cwd && leaderHomeMarkAt(cwd)) {
+    const n = Number(out.GIT_CONFIG_COUNT) > 0 ? Number(out.GIT_CONFIG_COUNT) : 0
+    out[`GIT_CONFIG_KEY_${n}`] = 'diff.autoRefreshIndex'
+    out[`GIT_CONFIG_VALUE_${n}`] = 'false'
+    out.GIT_CONFIG_COUNT = String(n + 1)
+  }
+  return out as T
 }

@@ -51,6 +51,8 @@ export interface WorktreeEntry { path: string; branch?: string }
 export interface WorkspaceCoreDeps {
   /** Why a writing git may not run in that folder now, or null (lib/leader-home-gate.ts daemonGitWriteRefusal: a Walnut data home under a leader switch). */
   gitWriteRefused?: (argv: string[], cwd: string) => string | null
+  /** The env a git child runs with so its reads write nothing (lib/leader-home-gate.ts readOnlyGitEnv). */
+  gitReadEnv?: (env: Record<string, string | undefined>, cwd: string) => Record<string, string | undefined>
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) => WorkspaceChild
   fs: {
     promises: {
@@ -379,6 +381,8 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     var env: Record<string, string | undefined> = Object.assign({}, deps.env)
     for (var i = 0; i < REDIRECT_VARS.length; i++) delete env[REDIRECT_VARS[i]]
     env.GIT_TERMINAL_PROMPT = '0'
+    // A status or diff never rewrites .git/index (a read stays a read: lib/leader-home-gate.ts).
+    env.GIT_OPTIONAL_LOCKS = '0'
     return Object.assign(env, extra || {})
   }
 
@@ -416,7 +420,7 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
       }
       try {
         child = deps.spawn(cmd, args, {
-          cwd: opts.cwd, env: opts.env ?? cleanEnv(), stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: opts.cwd, env: cmd === 'git' && deps.gitReadEnv ? deps.gitReadEnv(opts.env ?? cleanEnv(), opts.cwd || '.') : (opts.env ?? cleanEnv()), stdio: ['pipe', 'pipe', 'pipe'],
           detached: opts.group === true,
         })
       } catch (err) {

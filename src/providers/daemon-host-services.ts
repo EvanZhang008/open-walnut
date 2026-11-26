@@ -26,7 +26,7 @@ import type { createDaemonCommandDrain } from './daemon-command-drain.js'
 import type { ChildProcessFns, ChildProcessUse } from './daemon-child-spawn.js'
 import type { RuntimeTimers } from './daemon-runtime-timers.js'
 import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
-import { daemonGitWriteRefusal } from '../lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, readOnlyGitEnv } from '../lib/leader-home-gate.js'
 
 export interface DaemonHostServicesDeps<W extends object> {
   daemonEnv: DaemonEnv
@@ -180,6 +180,7 @@ export function createDaemonHostServices<W extends object>(deps: DaemonHostServi
     path, homedir: () => HOME_DIR, env: daemonEnv,
     // No git write into a Walnut data home under a leader switch (lib/leader-home-gate.ts).
     gitWriteRefused: daemonGitWriteRefusal,
+    gitReadEnv: readOnlyGitEnv,
     stateDir: WORKSPACE_STATE_DIR,
     // One allowlist per Walnut, its adapters under that Walnut's dir.
     scopeDir: (home) => walnutScope.dirFor(WORKSPACE_STATE_DIR, home),

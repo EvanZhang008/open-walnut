@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { daemonGitWriteRefusal, gitArgvWrites, gitSubcommand, leaderHomeMarkAt, LEADER_SWITCH_MARKER_REL, serverGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, gitArgvWrites, gitSubcommand, leaderHomeMarkAt, LEADER_SWITCH_MARKER_REL, readOnlyGitEnv, serverGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
 import { markerFile } from '../../src/core/leader/switch/records.js'
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-home-gate-'))
@@ -30,11 +30,22 @@ describe('which git argv writes', () => {
     expect(gitSubcommand(['git', '--version'])).toBeNull()
   })
 
-  it('writers by name, the read forms not', () => {
-    for (const w of [['mktree'], ['write-tree'], ['commit', '-m', 'x'], ['add', '-A'], ['update-ref', 'r', 's'], ['hash-object', '-w', 'f'], ['stash', 'push'], ['stash'], ['worktree', 'add', 'd'], ['symbolic-ref', 'HEAD', 'refs/heads/x'], ['tag', 'v1'], ['fetch'], ['gc']]) {
+  it('fail-closed: every subcommand writes but the read ones and the read forms', () => {
+    for (const w of [['mktree'], ['write-tree'], ['commit', '-m', 'x'], ['add', '-A'], ['update-ref', 'r', 's'], ['hash-object', '-w', 'f'], ['stash', 'push'], ['stash'],
+      ['worktree', 'add', 'd'], ['symbolic-ref', 'HEAD', 'refs/heads/x'], ['tag', 'v1'], ['fetch'], ['gc'],
+      // The review's list (round 1): writes outside the old name list.
+      ['push', 'origin', 'main'], ['push', '--set-upstream', 'origin', 'x'], ['branch', 'new'], ['branch', '-D', 'old'], ['branch', '-f', 'x', 'HEAD'],
+      ['config', 'user.name', 'x'], ['config', 'set', 'user.name', 'x'], ['config', '--unset', 'k'], ['remote', 'add', 'cloud', 'u'], ['remote', 'set-url', 'cloud', 'u'],
+      ['reflog', 'expire', '--all'], ['pack-refs', '--all'], ['commit-graph', 'write'], ['multi-pack-index', 'write'], ['bundle', 'unbundle', 'b'], ['fast-import'],
+      ['checkout-index', '-a'], ['update-server-info'], ['submodule', 'update'], ['sparse-checkout', 'set', 'x'], ['replace', 'a', 'b'], ['rerere'],
+      ['apply', 'p.diff'], ['apply', '--check', '--index', 'p.diff'], ['hook', 'run', 'pre-commit'], ['format-patch', '-1'], ['frobnicate']]) {
       expect(gitArgvWrites(['git', ...w]), w.join(' ')).toBe(true)
     }
-    for (const r of [['rev-parse', 'HEAD'], ['hash-object', '-t', 'tree', '/dev/null'], ['stash', 'list'], ['worktree', 'list'], ['symbolic-ref', '--short', 'HEAD'], ['tag', '-l'], ['status'], ['diff', '--cached'], ['cat-file', '-p', 'x'], ['ls-files']]) {
+    for (const r of [['rev-parse', 'HEAD'], ['hash-object', '-t', 'tree', '/dev/null'], ['stash', 'list'], ['worktree', 'list'], ['symbolic-ref', '--short', 'HEAD'],
+      ['tag', '-l'], ['tag'], ['status', '--porcelain'], ['diff', '--cached'], ['cat-file', '-p', 'x'], ['ls-files'], ['config', '--get', 'remote.cloud.url'],
+      ['config', 'user.name'], ['config', '--list'], ['config', 'get', 'user.name'], ['branch'], ['branch', '--list', 'wt/*'], ['branch', '--show-current'],
+      ['remote'], ['remote', '-v'], ['remote', 'get-url', 'cloud'], ['reflog'], ['reflog', 'show', 'HEAD'], ['bundle', 'verify', 'b'], ['apply', '--check', 'p.diff'],
+      ['for-each-ref', 'refs/walnut'], ['log', '-1'], ['--version']]) {
       expect(gitArgvWrites(['git', ...r]), r.join(' ')).toBe(false)
     }
   })
@@ -53,6 +64,17 @@ describe('the marker of a data home', () => {
     expect(leaderHomeMarkAt(home('none'))).toBeNull()
   })
 
+  it('a marker that cannot be read (here: a folder where the file should be) refuses; only a missing one is none', () => {
+    const h = home('unreadable')
+    fs.mkdirSync(path.join(h, LEADER_SWITCH_MARKER_REL), { recursive: true })
+    expect(leaderHomeMarkAt(h)).toEqual({ home: h, state: 'handed-over' })
+    expect(daemonGitWriteRefusal(['git', 'write-tree'], h)).toMatch(/handed over/)
+    // A file where a folder on the way should be (ENOTDIR) is no marker.
+    const f = home('notdir')
+    fs.writeFileSync(path.join(f, 'local'), 'a file')
+    expect(leaderHomeMarkAt(f)).toBeNull()
+  })
+
   it('a daemon refuses a writing git under either state, a server under handed-over only; reads pass; -C counts', () => {
     const switching = home('s', JSON.stringify({ state: 'switching' }))
     const over = home('o', JSON.stringify({ state: 'handed-over' }))
@@ -64,5 +86,16 @@ describe('the marker of a data home', () => {
     expect(daemonGitWriteRefusal(['git', '-C', over, 'add', '-A'], free)).toMatch(/handed over/)
     expect(serverGitWriteRefusal(['commit', '-m', 'x'], switching)).toBeNull()
     expect(serverGitWriteRefusal(['commit', '-m', 'x'], over)).toMatch(/git commit refused/)
+  })
+})
+
+describe('the read env', () => {
+  it('optional locks off everywhere; in a marked home also no diff index refresh, appended to the config already given', () => {
+    const free = home('env-free')
+    const over = home('env-over', JSON.stringify({ state: 'handed-over' }))
+    expect(readOnlyGitEnv({ PATH: '/bin' }, free)).toEqual({ PATH: '/bin', GIT_OPTIONAL_LOCKS: '0' })
+    expect(readOnlyGitEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y' }, path.join(over, 'plugins', 'p'))).toEqual({
+      GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y', GIT_CONFIG_KEY_1: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_1: 'false', GIT_OPTIONAL_LOCKS: '0',
+    })
   })
 })

@@ -28,7 +28,7 @@ import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
 import type { ChildProcessFns, ChildProcessUse } from './daemon-child-spawn.js'
 import type { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
-import { daemonGitWriteRefusal } from '../lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, readOnlyGitEnv } from '../lib/leader-home-gate.js'
 
 export interface DaemonChangesDeps {
   daemonEnv: DaemonEnv
@@ -343,6 +343,7 @@ export function createDaemonChanges<W>(deps: DaemonChangesDeps) {
     path, tmpdir: () => os.tmpdir(), env: daemonEnv,
     // No git write into a Walnut data home under a leader switch (lib/leader-home-gate.ts).
     gitWriteRefused: daemonGitWriteRefusal,
+    gitReadEnv: readOnlyGitEnv,
     attribution: createGitAttribution(),
     randomId: () => crypto.randomBytes(6).toString('hex'),
     killGroup: (pid) => { if (pid > 1) process.kill(-pid, 'SIGKILL') },

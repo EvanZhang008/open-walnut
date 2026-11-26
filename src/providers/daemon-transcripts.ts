@@ -20,7 +20,7 @@ import type { ChildProcessFns } from './daemon-child-spawn.js'
 import type { createWalnutScope } from './walnut-scope-core.js'
 import type { createDaemonChanges } from './daemon-changes.js'
 import { ok, fail, type Answer, type Answers, type DaemonEnv, type DaemonLog } from './daemon-module-deps.js'
-import { daemonGitWriteRefusal } from '../lib/leader-home-gate.js'
+import { daemonGitWriteRefusal, readOnlyGitEnv } from '../lib/leader-home-gate.js'
 
 export interface DaemonTranscriptsDeps<W extends object> {
   daemonEnv: DaemonEnv
@@ -156,6 +156,7 @@ export function createDaemonTranscripts<W extends object>(deps: DaemonTranscript
     tmpDir: path.join(DAEMON_DIR, 'turn-snapshots'),
     // The main agent's session works in the data home: no snapshot of a home under a leader switch (lib/leader-home-gate.ts).
     gitWriteRefused: daemonGitWriteRefusal,
+    gitReadEnv: readOnlyGitEnv,
     settingsPath: path.join(DAEMON_DIR, 'turn-snapshots.json'),
     // Each Walnut's own settings; a session's turn follows its Walnut's (else the unnamed copy).
     settingsPathFor: (home) => path.join(walnutScope.dirFor(DAEMON_DIR, home), 'turn-snapshots.json'),

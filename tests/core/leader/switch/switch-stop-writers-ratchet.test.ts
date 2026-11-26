@@ -483,7 +483,7 @@ describe('the leader\'s clocks, from the source', () => {
  * No git writes into a data home that a leader switch is taking away or took away (src/lib/leader-home-gate.ts).
  * The 2026-11-26 red: the daemon's turn snapshot of the main agent's session (whose cwd is the home) wrote the empty
  * tree object into a handed-over home, which must stay byte for byte as it was. Every git argv literal of src/ that
- * writes is found here; its file is a daemon twin core whose runner asks deps.gitWriteRefused (and whose daemon
+ * may write (the gate's fail-closed rule: all but the read subcommands and read forms) is found here; its file is a daemon twin core whose runner asks deps.gitWriteRefused (and whose daemon
  * module hands it daemonGitWriteRefusal), or runs its git through git-sync.ts's spawners (refuseGitInQuiet with the
  * argv), or names why it never runs in a home. A new writing git anywhere fails here until it is one of those.
  */
@@ -496,13 +496,19 @@ describe('git writes into a data home under a leader switch', () => {
     'src/providers/workspace-core.ts': 'createWorkspaceCore',
   }
   /** Writers outside the twins: through git-sync.ts's gated spawners, or never in a home. */
-  const OTHER_WRITERS: Record<string, ['git-sync' | 'never-a-home', string]> = {
+  const OTHER_WRITERS: Record<string, ['git-sync' | 'never-a-home' | 'not-argv', string]> = {
     'src/integrations/git-sync.ts': ['git-sync', 'the data repo\'s own git: its spawners (checked below)'],
     'src/integrations/git-sync-large-files.ts': ['git-sync', 'the large-file lane runs the GitRunner git-sync.ts hands it (gitArgvRunnerAt)'],
     'src/core/plugins/linked-checkout.ts': ['git-sync', 'a linked plugin checkout, through execGitArgsGroup'],
     'src/core/host-server/host-file-build.ts': ['never-a-home', 'a host server build in its own folder'],
     'src/core/self-repair/walnut-source.ts': ['never-a-home', 'Walnut\'s own source checkout'],
     'src/web/routes/git-bundle-push.ts': ['never-a-home', 'the companion\'s hub repo'],
+    'src/web/routes/git-http.ts': ['never-a-home', 'the companion\'s hub repo (http-backend, gc)'],
+    'src/web/routes/test-host-fixture.ts': ['never-a-home', 'a test host\'s fixture repository'],
+    'src/providers/host-facts-core.ts': ['not-argv', 'a table of tools asked for --version'],
+    'src/providers/host-exec-clt.ts': ['not-argv', 'a list of tool names'],
+    'src/providers/daemon-standalone.ts': ['not-argv', 'the table of answer handlers'],
+    'src/core/plugins/update-status.ts': ['not-argv', 'a list of file suffixes'],
   }
 
   /** Every git argv literal of a file's code: `['git', 'x', ...]`, `git(['x', ...])`, `git(cwd, ['x', ...])`, `run('git', ['x', ...])`. */
@@ -536,9 +542,14 @@ describe('git writes into a data home under a leader switch', () => {
     const modules = sources(path.join(ROOT, 'src', 'providers')).filter((f) => path.basename(f).startsWith('daemon-')).map((f) => code(f))
     for (const [file, factory] of Object.entries(TWIN_GATED)) {
       expect(code(path.join(ROOT, file)), file).toMatch(/deps\.gitWriteRefused\(/)
+      expect(code(path.join(ROOT, file)), file).toMatch(/deps\.gitReadEnv\(/)
       const builds = modules.flatMap((m) => [...m.matchAll(new RegExp(`\\b${factory}\\(\\{`, 'g'))].map((x) => m.slice(x.index!, x.index! + 1500)))
       expect(builds.length, factory).toBeGreaterThan(0)
-      for (const b of builds) expect(b.slice(0, b.indexOf('\n  })') + 1 || undefined), factory).toContain('gitWriteRefused: daemonGitWriteRefusal')
+      for (const b of builds) {
+        const call = b.slice(0, b.indexOf('\n  })') + 1 || undefined)
+        expect(call, factory).toContain('gitWriteRefused: daemonGitWriteRefusal')
+        expect(call, factory).toContain('gitReadEnv: readOnlyGitEnv')
+      }
     }
   })
 
