@@ -60,6 +60,21 @@ final class AskQuestionCardUITests: XCTestCase {
         )
     }
 
+    /// The same drag through the cards, to put the keyboard away: it starts off `field`, the
+    /// answer being typed in (`keyboardAwayDragY`), and goes as far unless that would end over
+    /// the status bar (above the answer it is about 95 pt, well past the touch slop).
+    private func dragCardsToPutTheKeyboardAway(avoiding field: XCUIElement, in app: XCUIApplication) {
+        let frame = id("session.permissionStack", in: app).frame
+        let startY = keyboardAwayDragY(app, in: frame, avoiding: field, preferredY: frame.minY + 0.75 * frame.height)
+        let endY = max(app.frame.minY + 60, startY - 0.40 * frame.height)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: frame.midX, dy: startY)).press(
+            forDuration: 0.05,
+            thenDragTo: origin.withOffset(CGVector(dx: frame.midX, dy: endY)),
+            withVelocity: .slow, thenHoldForDuration: 0.3
+        )
+    }
+
     /// Scroll an element into the tree WITHOUT requiring it to be hittable — a
     /// DISABLED button (Submit before every question is answered) exists and is
     /// on screen but reports `isHittable == false`.
@@ -184,10 +199,13 @@ final class AskQuestionCardUITests: XCTestCase {
         add(typed)
 
         // Drag through the cards (the drag every other test scrolls them with):
-        // the keyboard goes away, all the way.
-        swipeToward(stack, in: app)
+        // the keyboard goes away, all the way. From the cards, not from the answer
+        // itself: a drag that started on the six-line answer moved nothing on CI.
+        let before = firstOther.frame
+        dragCardsToPutTheKeyboardAway(avoiding: firstOther, in: app)
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
-        wait(for: [gone], timeout: 5)
+        let result = XCTWaiter().wait(for: [gone], timeout: 5)
+        XCTAssertEqual(result, .completed, "the drag left the keyboard up; the answer was at \(before), now \(firstOther.frame)")
         XCTAssertTrue(id("askq.harness.composer", in: app).isHittable, "the composer is back once the keyboard is away")
     }
 

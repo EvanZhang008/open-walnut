@@ -1054,8 +1054,12 @@ final class ModelPillHealUITests: XCTestCase {
         // The keyboard covers the tab bar: put it away the way a thumb does.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
         if app.keyboards.element.exists {
-            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+            let window = app.windows.firstMatch
+            let area = window.frame
+            let startY = keyboardAwayDragY(app, in: area, avoiding: field, preferredY: area.minY + 0.3 * area.height)
+            let origin = window.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: area.midX, dy: startY))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: area.midX, dy: area.minY + 0.8 * area.height)))
         }
         XCTAssertTrue(waitUntil(timeout: 5) { !app.keyboards.element.exists }, "the keyboard would not go away")
 

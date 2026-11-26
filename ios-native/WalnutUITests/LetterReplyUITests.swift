@@ -1661,9 +1661,10 @@ final class LetterReplyUITests: XCTestCase {
         // Drag the letter down, from just above the reply box to the bottom of the
         // screen, as a finger does: the reader dismisses the keyboard interactively.
         let window = app.windows.firstMatch
-        let fieldTop = replyField(app).frame.minY
+        let field = replyField(app)
         let origin = window.coordinate(withNormalizedOffset: .zero)
-        let start = origin.withOffset(CGVector(dx: window.frame.midX, dy: max(120, fieldTop - 40)))
+        let startY = keyboardAwayDragY(app, in: window.frame, avoiding: field, preferredY: max(120, field.frame.minY - 40))
+        let start = origin.withOffset(CGVector(dx: window.frame.midX, dy: startY))
         let end = origin.withOffset(CGVector(dx: window.frame.midX, dy: window.frame.maxY - 8))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         _ = waitUntil(timeout: 3) { !app.keyboards.element.exists }
